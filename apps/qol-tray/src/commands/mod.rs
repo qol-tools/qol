@@ -38,6 +38,12 @@ pub const EXPORTED: &[ExportedCommand] = &[
         route: "hotkeys",
         core_action: "hotkeys",
     },
+    ExportedCommand {
+        id: "updates-open",
+        label: "Updates",
+        route: "plugins",
+        core_action: "updates",
+    },
 ];
 
 /// The launcher display label for a command: brand prefix + bare label.

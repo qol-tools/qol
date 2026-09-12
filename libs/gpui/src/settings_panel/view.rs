@@ -9,9 +9,10 @@ use qol_config::object_array::pretty_label;
 
 use super::components::{
     display_layout_stage, display_layout_tile, paint_settings_selection, rail_caption,
-    settings_action_spinner, settings_description, settings_label, settings_label_group,
-    settings_message, settings_page, settings_query_spinner, DisplayLayoutTile, SettingsFeedback,
-    SettingsGroupHeader, SettingsRow, SettingsSelectValue, SettingsToggle,
+    rail_caption_height, settings_action_affordance, settings_action_spinner, settings_description,
+    settings_label, settings_label_group, settings_message, settings_page, settings_query_spinner,
+    DisplayLayoutTile, SettingsFeedback, SettingsGroupHeader, SettingsRow, SettingsSelectValue,
+    SettingsToggle,
 };
 use super::display_layout::{nudge_step, DisplayLayoutState};
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
@@ -28,9 +29,9 @@ use super::rows::{
     SliderHold,
 };
 use super::{
-    CustomPanelCallback, CustomPanelContext, CustomPanelFactory, CustomPanelInvalidator,
-    CustomPanelNotifier, CustomPanelView, PanelSourceGroup, SettingsDestination, SettingsPanel,
-    SettingsRuntime, SourceState,
+    AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
+    CustomPanelInvalidator, CustomPanelNotifier, CustomPanelView, PanelSourceGroup,
+    SettingsDestination, SettingsPanel, SettingsRuntime, SourceState,
 };
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
@@ -54,8 +55,7 @@ const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_milli
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const DISPLAY_LAYOUT_STAGE_PAD: f32 = qol_theme::SPACE_INSET;
-const BAND_TEXT_LINE_HEIGHT: f32 = 20.0;
-const CRUMB_MAX_WIDTH: f32 = 200.0;
+const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PanelFocus {
     Sources,
@@ -71,8 +71,8 @@ fn focus_level(source_menu: bool, sources: usize) -> PanelFocus {
 }
 
 const RAIL_TRANSITION: std::time::Duration = std::time::Duration::from_millis(180);
-const RAIL_CARD_ACCENT: f32 = 1.5;
 const RAIL_DIM: f32 = 0.5;
+const RAIL_SECTION_OPACITY: f32 = 0.55;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TransitionAction {
@@ -217,7 +217,6 @@ impl SampleSignal {
 pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
     stack: Vec<Level>,
-    subtitle: Option<String>,
     runtime: SettingsRuntime,
     runtime_queries: Vec<String>,
     sources: Vec<SourceState>,
@@ -231,6 +230,8 @@ pub(super) struct SettingsPanelView {
     rail_transition: TransitionTracker,
     deck_transition: TransitionTracker,
     deck_motion: Option<DeckMotion>,
+    closing: bool,
+    render_level: std::cell::Cell<usize>,
     height_cap: f32,
     height_revision: u64,
     height_cache: HeightCache,
@@ -263,10 +264,11 @@ pub(super) struct SettingsPanelView {
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     display_layout_stage: Rc<Cell<(f32, f32)>>,
     display_layout_press: Option<(String, Point<Pixels>)>,
+    attention: std::collections::HashSet<String>,
+    attention_error_logged: bool,
 }
 
 pub(super) struct SettingsPanelState {
-    pub(super) subtitle: Option<String>,
     pub(super) rows: Vec<Row>,
     pub(super) sections: Vec<RowSection>,
     pub(super) sources: Vec<SourceState>,
@@ -377,8 +379,9 @@ impl SettingsPanelView {
             source_menu: has_many_sources,
             rail_transition: TransitionTracker::default(),
             deck_transition: TransitionTracker::default(),
+            closing: false,
+            render_level: std::cell::Cell::new(usize::MAX),
             deck_motion: None,
-            subtitle: state.subtitle,
             height_cap: state.height_cap,
             height_revision: 0,
             height_cache: HeightCache::default(),
@@ -408,6 +411,8 @@ impl SettingsPanelView {
             body_bounds: Rc::new(Cell::new(None)),
             display_layout_stage: Rc::new(Cell::new((0.0, 0.0))),
             display_layout_press: None,
+            attention: std::collections::HashSet::new(),
+            attention_error_logged: false,
         };
         let parent = cx.weak_entity();
         let parent_for_change = parent.clone();
@@ -464,7 +469,8 @@ impl SettingsPanelView {
     }
 
     fn level(&self) -> &Level {
-        self.stack.last().expect("stack never empty")
+        let index = self.render_level.get().min(self.stack.len() - 1);
+        &self.stack[index]
     }
 
     fn level_mut(&mut self) -> &mut Level {
@@ -657,6 +663,39 @@ impl SettingsPanelView {
     }
 
     fn pop_card(&mut self, cx: &mut Context<Self>) {
+        if self.closing {
+            self.closing = false;
+            self.finish_pop(cx);
+        }
+        if self.stack.len() < 2 {
+            return;
+        }
+        if self.custom_view().is_some() {
+            self.finish_pop(cx);
+            return;
+        }
+        self.closing = true;
+        self.deck_transition
+            .state_changed(true, std::time::Instant::now());
+        self.deck_motion = Some(DeckMotion::Pop);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx.background_executor().timer(deck::TRANSITION).await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if !this.closing {
+                        return;
+                    }
+                    this.closing = false;
+                    this.finish_pop(cx);
+                });
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_pop(&mut self, cx: &mut Context<Self>) {
         if self.stack.len() > 1 && self.level().object_array.is_some() {
             self.sync_object_array_to_root();
         }
@@ -670,9 +709,6 @@ impl SettingsPanelView {
                 "phase=card-pop depth={}",
                 self.stack.len() - 1
             );
-            self.deck_transition
-                .state_changed(true, std::time::Instant::now());
-            self.deck_motion = Some(DeckMotion::Pop);
             let visible = self.current_visible_rows();
             let selected = self.level().selected;
             self.level_mut().selected = clamp_selected(&visible, selected);
@@ -949,6 +985,18 @@ impl SettingsPanelView {
         initial_delay: Option<std::time::Duration>,
         cx: &mut Context<Self>,
     ) {
+        let attention = self.panel.attention.clone();
+        if self.runtime_queries.is_empty() && attention.is_none() {
+            return;
+        }
+        self.pause_runtime_poll();
+        let generation = self.runtime_poll_generation;
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.sampler_stop = Some(stop.clone());
+        let visible = self.poll_visible.clone();
+        if let Some(feed) = attention {
+            self.start_attention_poll(feed, generation, stop.clone(), visible.clone(), cx);
+        }
         if self.runtime_queries.is_empty() {
             return;
         }
@@ -960,8 +1008,6 @@ impl SettingsPanelView {
                 .or_insert(RowQueryState::Loading { since });
         }
         self.notify_after_loading_grace(cx);
-        self.pause_runtime_poll();
-        let generation = self.runtime_poll_generation;
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
         let apply_tick = queries
@@ -969,10 +1015,7 @@ impl SettingsPanelView {
             .map(|query| runtime.query_interval(query))
             .min()
             .unwrap_or(runtime.poll_interval);
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let samples = SampledQueryResults::default();
-        self.sampler_stop = Some(stop.clone());
-        let visible = self.poll_visible.clone();
         self.frame_paced_samples =
             (apply_tick <= FRAME_PACED_QUERY_INTERVAL).then(|| samples.clone());
         let frame_paced = self.frame_paced_samples.is_some();
@@ -1031,6 +1074,76 @@ impl SettingsPanelView {
             }
         })
         .detach();
+    }
+
+    fn start_attention_poll(
+        &mut self,
+        feed: AttentionFeed,
+        generation: u64,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        cx: &mut Context<Self>,
+    ) {
+        let interval = feed.runtime.poll_interval;
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                loop {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    if !visible.load(std::sync::atomic::Ordering::Relaxed) {
+                        async_cx
+                            .background_executor()
+                            .timer(FRAME_PACED_QUERY_INTERVAL)
+                            .await;
+                        continue;
+                    }
+                    let runtime = feed.runtime.clone();
+                    let query = feed.query.clone();
+                    let result = async_cx
+                        .background_spawn(async move { runtime.query(&query) })
+                        .await;
+                    let applied = this
+                        .update(&mut async_cx, |this, cx| {
+                            if this.runtime_poll_generation != generation {
+                                return false;
+                            }
+                            if this.apply_attention(result) {
+                                cx.notify();
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !applied {
+                        break;
+                    }
+                    async_cx.background_executor().timer(interval).await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn apply_attention(&mut self, result: Result<serde_json::Value, String>) -> bool {
+        match result {
+            Ok(value) => {
+                self.attention_error_logged = false;
+                let attention = super::attention_plugin_ids(&value);
+                if attention == self.attention {
+                    return false;
+                }
+                self.attention = attention;
+                true
+            }
+            Err(error) => {
+                if !self.attention_error_logged {
+                    self.attention_error_logged = true;
+                    eprintln!("[settings] attention feed unavailable: {error}");
+                }
+                false
+            }
+        }
     }
 
     /// A query that never answers produces no sample and therefore no redraw,
@@ -1270,6 +1383,10 @@ impl SettingsPanelView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing {
+            self.closing = false;
+            self.finish_pop(cx);
+        }
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
         if self.current_source_is_custom() && self.body_has_focus() {
@@ -2999,12 +3116,32 @@ impl SettingsPanelView {
             true => crate::scrollbar::OVERFLOW_FADE_HEIGHT.max(FILTER_OVERLAY_HEIGHT),
             false => crate::scrollbar::OVERFLOW_FADE_HEIGHT,
         };
-        self.level().body_scroll.follow(child, px(margin));
+        let lead = self.body_lead_index(selected);
+        self.level().body_scroll.follow(child, lead, px(margin));
     }
 
     fn resync_scroll(&mut self) {
         self.level().body_scroll.refollow();
         self.sync_scroll();
+    }
+
+    fn body_sections(&self) -> (Vec<Vec<usize>>, Vec<bool>) {
+        let groups = self.body_groups();
+        let headers = groups
+            .iter()
+            .map(|(title, _, rows)| {
+                let labels = rows
+                    .iter()
+                    .map(|index| self.level().rows[*index].label.as_str())
+                    .collect::<Vec<_>>();
+                !header_is_redundant(title, &labels)
+            })
+            .collect::<Vec<_>>();
+        let sections = groups
+            .into_iter()
+            .map(|(_, _, rows)| rows)
+            .collect::<Vec<_>>();
+        (sections, headers)
     }
 
     fn body_child_index(&self, row: usize) -> Option<usize> {
@@ -3014,19 +3151,16 @@ impl SettingsPanelView {
                 .iter()
                 .position(|index| *index == row);
         }
-        let groups = self.body_groups();
-        let headers = groups
-            .iter()
-            .map(|(title, rows)| {
-                let labels = rows
-                    .iter()
-                    .map(|index| self.level().rows[*index].label.as_str())
-                    .collect::<Vec<_>>();
-                !header_is_redundant(title, &labels)
-            })
-            .collect::<Vec<_>>();
-        let sections = groups.into_iter().map(|(_, rows)| rows).collect::<Vec<_>>();
+        let (sections, headers) = self.body_sections();
         body_child_offset(&sections, &headers, row)
+    }
+
+    fn body_lead_index(&self, row: usize) -> Option<usize> {
+        if self.level().display_layout.is_some() {
+            return None;
+        }
+        let (sections, headers) = self.body_sections();
+        body_header_child_offset(&sections, &headers, row)
     }
 
     fn display_value(&self, index: usize) -> String {
@@ -3182,7 +3316,12 @@ impl SettingsPanelView {
     }
 
     fn paint_selection<E: Styled + ParentElement>(&self, row: E) -> E {
-        self.kit.row_state(row, crate::kit::RowState::Current)
+        let state = if self.rail_source_level() {
+            crate::kit::RowState::Current
+        } else {
+            crate::kit::RowState::CurrentQuiet
+        };
+        self.kit.row_state(row, state)
     }
 
     fn paint_body_selection<E: Styled + ParentElement>(&self, row: E) -> E {
@@ -3400,40 +3539,13 @@ impl SettingsPanelView {
     }
 
     fn render_action_value(&self, index: usize) -> Div {
-        let variant = self.level().rows[index].variant.as_deref();
-        let (background, text) = match variant {
-            Some("ghost") => (rgb(self.palette.dropdown_bg), self.palette.label_text),
-            Some("danger") => (
-                rgba(qol_color::with_alpha(self.palette.state_off, 0x29)),
-                self.palette.state_off,
-            ),
-            Some("primary") | None | Some(_) => {
-                (rgb(self.palette.row_bg_selected), self.palette.section_text)
-            }
-        };
-        let mut control = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(qol_theme::SPACE_TIGHT));
-        if self.action_is_busy(index) {
-            control = control.child(
-                settings_action_spinner(("settings-action-spinner", index), self.palette)
-                    .size(px(12.)),
-            );
-        }
-        control
-            .px(px(qol_theme::SPACE_INSET))
-            .py(px(qol_theme::SPACE_TIGHT))
-            .rounded(px(qol_theme::RADIUS_CONTROL))
-            .when(variant == Some("ghost"), |control| {
-                control.shadow(crate::kit::raised_shadow(self.palette.section_text))
-            })
-            .bg(background)
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(text))
-            .child(self.display_value(index))
+        settings_action_affordance(
+            ("settings-action-spinner", index),
+            self.display_value(index),
+            self.level().rows[index].variant.as_deref(),
+            self.action_is_busy(index),
+            self.palette,
+        )
     }
 
     fn action_is_busy(&self, index: usize) -> bool {
@@ -3679,11 +3791,17 @@ impl SettingsPanelView {
             ))
     }
 
-    fn render_source_menu_item(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_source_menu_item(
+        &self,
+        index: usize,
+        quiet: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let label = self.plugin_title(index);
         let active = index == self.selected_source;
         let mut item = div()
             .id(("settings-source", index))
+            .when(quiet, |item| item.opacity(RAIL_SECTION_OPACITY))
             .relative()
             .flex()
             .items_center()
@@ -3718,8 +3836,55 @@ impl SettingsPanelView {
         }))
     }
 
-    fn render_rail_plugin_caption(&self) -> impl IntoElement {
-        rail_caption("QoL Plugin Settings").id("settings-rail-plugin-caption")
+    fn render_rail_plugin_caption(&self, quiet: bool) -> impl IntoElement {
+        let plugins = self
+            .panel
+            .sources
+            .iter()
+            .filter(|source| source.group == PanelSourceGroup::Plugin)
+            .count();
+        let detail = match plugins {
+            1 => "1 installed".to_string(),
+            count => format!("{count} installed"),
+        };
+        rail_caption(
+            "Plugins",
+            Some(SharedString::from(detail)),
+            self.rail_source_level() && !quiet,
+        )
+        .when(quiet, |caption| caption.opacity(RAIL_SECTION_OPACITY))
+        .id("settings-rail-plugin-caption")
+    }
+
+    fn rail_item_dot_spacer(&self, dot: Option<Div>) -> AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .w_full()
+            .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
+            .px(px(qol_theme::SPACE_CELL))
+            .children(dot)
+            .into_any_element()
+    }
+
+    fn rail_caption_dot_spacer(&self) -> AnyElement {
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .w_full()
+            .h(px(rail_caption_height()))
+            .px(px(qol_theme::SPACE_CELL))
+            .into_any_element()
+    }
+
+    fn render_rail_dot(&self) -> Div {
+        let halo = self.kit.washes.halo_attention.packed();
+        self.kit.status_dot(self.palette.status_warning, halo)
     }
 
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -4951,6 +5116,7 @@ impl Render for SettingsPanelView {
         #[cfg(debug_assertions)]
         let build_started = std::time::Instant::now();
         self.palette = settings_panel_runtime();
+        self.kit = crate::kit::kit();
         self.poll_visible.store(
             window.is_window_active(),
             std::sync::atomic::Ordering::Relaxed,
@@ -4960,50 +5126,58 @@ impl Render for SettingsPanelView {
         }
         self.fit_lists();
         self.reconcile_focus(window, cx);
-        let rail: Vec<AnyElement> = if self.rail_is_open() {
-            let mut rail = vec![rail_caption("QoL Settings")
-                .id("settings-rail-core-caption")
-                .into_any_element()];
+        let (rail, rail_dots): (Vec<AnyElement>, Vec<AnyElement>) = if self.rail_is_open() {
             let groups = self
                 .panel
                 .sources
                 .iter()
                 .map(|source| source.group)
                 .collect::<Vec<_>>();
+            let active_group = groups.get(self.selected_source).copied();
+            let quiet = |index: usize| match (active_group, groups.get(index)) {
+                (Some(active), Some(group)) => *group != active,
+                _ => false,
+            };
+            let mut rail = vec![rail_caption(
+                "Core",
+                self.panel.version.clone(),
+                self.rail_source_level() && !quiet(0),
+            )
+            .when(quiet(0), |caption| caption.opacity(RAIL_SECTION_OPACITY))
+            .id("settings-rail-core-caption")
+            .into_any_element()];
+            let mut rail_dots = vec![self.rail_caption_dot_spacer()];
             let separators = rail_group_breaks(&groups);
             for index in 0..self.sources.len() {
                 if separators.contains(&index) {
-                    rail.push(self.render_rail_plugin_caption().into_any_element());
-                }
-                rail.push(self.render_source_menu_item(index, cx).into_any_element());
-            }
-            rail
-        } else {
-            Vec::new()
-        };
-        let mut items: Vec<AnyElement> = Vec::new();
-        if self.level().display_layout.is_some() {
-            items.extend(self.render_display_layout_card(cx));
-        } else if let Some(draft_body) = self.render_object_array_card_draft(cx) {
-            items.push(draft_body.into_any_element());
-        } else {
-            for (title, rows) in self.body_groups() {
-                let labels: Vec<&str> = rows
-                    .iter()
-                    .map(|index| self.level().rows[*index].label.as_str())
-                    .collect();
-                if !header_is_redundant(&title, &labels) {
-                    items.push(
-                        self.render_group_header(&title, rows.len())
+                    rail.push(
+                        self.render_rail_plugin_caption(quiet(index))
                             .into_any_element(),
                     );
+                    rail_dots.push(self.rail_caption_dot_spacer());
                 }
-                for index in rows {
-                    items.push(self.render_row(index, cx).into_any_element());
-                }
+                rail.push(
+                    self.render_source_menu_item(index, quiet(index), cx)
+                        .into_any_element(),
+                );
+                let attention = self
+                    .attention
+                    .contains(self.sources[index].plugin_id.as_str());
+                let dot = attention.then(|| self.render_rail_dot());
+                rail_dots.push(self.rail_item_dot_spacer(dot));
             }
-        }
+            (rail, rail_dots)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let items = self.body_items(cx);
         let custom_view = self.custom_view().map(|custom| custom.view.clone());
+        let revealed = (self.closing && custom_view.is_none() && self.stack.len() > 1).then(|| {
+            self.render_level.set(self.stack.len() - 2);
+            let items = self.body_items(cx);
+            self.render_level.set(usize::MAX);
+            items
+        });
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "SETTINGS_FRAME",
@@ -5040,18 +5214,47 @@ impl Render for SettingsPanelView {
                 cx,
                 window.viewport_size().width.to_f64() as f32,
                 rail,
+                rail_dots,
                 items,
+                revealed,
                 custom_view,
             ))
             .when_some(self.save_error.clone(), |root, message| {
                 root.child(self.render_failure_bar(message))
             })
-            .child(self.render_hint_bar())
+            .child(self.render_hint_bar(cx))
             .child(self.resize_canvas())
     }
 }
 
 impl SettingsPanelView {
+    fn body_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut items: Vec<AnyElement> = Vec::new();
+        if self.level().display_layout.is_some() {
+            items.extend(self.render_display_layout_card(cx));
+        } else if let Some(draft_body) = self.render_object_array_card_draft(cx) {
+            items.push(draft_body.into_any_element());
+        } else {
+            for (title, detail, rows) in self.body_groups() {
+                let labels: Vec<&str> = rows
+                    .iter()
+                    .map(|index| self.level().rows[*index].label.as_str())
+                    .collect();
+                if !header_is_redundant(&title, &labels) {
+                    let here = self.body_has_focus() && rows.contains(&self.level().selected);
+                    items.push(
+                        self.render_group_header(&title, detail.as_deref(), here)
+                            .into_any_element(),
+                    );
+                }
+                for index in rows {
+                    items.push(self.render_row(index, cx).into_any_element());
+                }
+            }
+        }
+        items
+    }
+
     fn render_card(
         &self,
         level_index: usize,
@@ -5120,16 +5323,19 @@ impl SettingsPanelView {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_content(
         &self,
         cx: &mut Context<Self>,
         width: f32,
         rail: Vec<AnyElement>,
+        rail_dots: Vec<AnyElement>,
         items: Vec<AnyElement>,
+        revealed: Option<Vec<AnyElement>>,
         custom_view: Option<AnyView>,
     ) -> Div {
-        let depth = self.stack.len() - 1;
-        let card = self
+        let mut depth = self.stack.len() - 1;
+        let mut card = self
             .render_card(self.stack.len() - 1, items, custom_view)
             .on_mouse_down(
                 MouseButton::Left,
@@ -5141,15 +5347,31 @@ impl SettingsPanelView {
                     }
                 }),
             );
-        let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
-        if !self.rail_is_open() {
-            let slide = if self.deck_transition.snapped {
-                None
-            } else {
-                deck::slide(self.deck_transition.step, self.deck_motion, depth, width)
+        let drawer = revealed.map(|items| {
+            let slide = DeckSlide {
+                step: self.deck_transition.step,
+                from: deck::resting(depth),
+                to: width,
+                from_depth: depth,
             };
-            let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
-            if depth == 0 {
+            let leaving = std::mem::replace(
+                &mut card,
+                self.render_card(self.stack.len() - 2, items, None),
+            );
+            depth -= 1;
+            (leaving, slide)
+        });
+        let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
+        let settled = self.deck_transition.snapped
+            || !transition_in_flight(self.deck_transition.started, std::time::Instant::now());
+        let slide = if drawer.is_some() || settled {
+            None
+        } else {
+            deck::slide(self.deck_transition.step, self.deck_motion, depth, width)
+        };
+        let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
+        if !self.rail_is_open() {
+            if depth == 0 && drawer.is_none() {
                 let card = match slide {
                     Some(slide) => card
                         .absolute()
@@ -5168,12 +5390,13 @@ impl SettingsPanelView {
                 };
                 return base.child(card);
             }
-            return base.child(self.render_deck(depth, card, slide));
+            return base.child(self.render_deck(depth, card, slide, drawer));
         }
         let entering = !self.rail_source_level();
         let progress = move |delta: f32| if entering { delta } else { 1.0 - delta };
         let step = self.rail_transition.step;
-        let snapped = self.rail_transition.snapped;
+        let snapped = self.rail_transition.snapped
+            || !transition_in_flight(self.rail_transition.started, std::time::Instant::now());
         let ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_in_out);
         let rail_column = div()
             .id("settings-section-rail")
@@ -5185,6 +5408,17 @@ impl SettingsPanelView {
             .w(px(super::PANEL_RAIL_WIDTH))
             .p(px(qol_theme::SPACE_INSET))
             .children(rail);
+        let rail_attention = div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .bottom_0()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .w(px(super::PANEL_RAIL_WIDTH))
+            .p(px(qol_theme::SPACE_INSET))
+            .children(rail_dots);
         let scrim = div()
             .absolute()
             .inset_0()
@@ -5207,8 +5441,8 @@ impl SettingsPanelView {
                 })
                 .into_any_element()
         };
-        base.relative().child(rail_column).child(match depth {
-            0 => {
+        let card_layer = match depth {
+            0 if drawer.is_none() => {
                 let card = card
                     .absolute()
                     .right_0()
@@ -5222,19 +5456,33 @@ impl SettingsPanelView {
                     .shadow(crate::kit::float_shadow(self.palette.section_text));
                 let accent = crate::kit::accent_left_edge(
                     qol_theme::RADIUS_CARD,
-                    RAIL_CARD_ACCENT,
+                    deck::CARD_ACCENT,
                     self.palette.row_border_selected,
                 );
                 if snapped {
                     let reached = progress(1.0);
-                    card.child(
-                        accent
-                            .rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                            .border_l(px(RAIL_CARD_ACCENT * reached)),
-                    )
-                    .left(px(super::PANEL_RAIL_WIDTH))
-                    .rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                    .into_any_element()
+                    let base = super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached;
+                    let card = card
+                        .child(
+                            accent
+                                .rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                                .border_l(px(deck::CARD_ACCENT * reached)),
+                        )
+                        .rounded_l(px(qol_theme::RADIUS_CARD * reached));
+                    match slide {
+                        Some(slide) => card
+                            .with_animation(
+                                ("settings-card-deck-slide", slide.step),
+                                deck_ease(),
+                                move |card, delta| {
+                                    card.left(px(base
+                                        + slide.from
+                                        + (slide.to - slide.from) * delta))
+                                },
+                            )
+                            .into_any_element(),
+                        None => card.left(px(base)).into_any_element(),
+                    }
                 } else {
                     card.child(accent.with_animation(
                         ("settings-card-accent", step),
@@ -5242,12 +5490,12 @@ impl SettingsPanelView {
                         move |edge, delta| {
                             let reached = progress(delta);
                             edge.rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                                .border_l(px(RAIL_CARD_ACCENT * reached))
+                                .border_l(px(deck::CARD_ACCENT * reached))
                         },
                     ))
                     .with_animation(("settings-card-slide", step), ease(), move |card, delta| {
                         let reached = progress(delta);
-                        card.left(px(super::PANEL_RAIL_WIDTH))
+                        card.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
                             .rounded_l(px(qol_theme::RADIUS_CARD * reached))
                     })
                     .into_any_element()
@@ -5255,63 +5503,57 @@ impl SettingsPanelView {
             }
             _ => {
                 let deck = self
-                    .render_deck(depth, card, None)
+                    .render_deck(depth, card, slide, drawer)
                     .absolute()
                     .right_0()
                     .top_0()
                     .bottom_0();
-                deck.left(px(super::PANEL_RAIL_WIDTH)).into_any_element()
+                if snapped {
+                    let reached = progress(1.0);
+                    deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                        .into_any_element()
+                } else {
+                    deck.with_animation(
+                        ("settings-card-slide", step),
+                        ease(),
+                        move |deck, delta| {
+                            let reached = progress(delta);
+                            deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                        },
+                    )
+                    .into_any_element()
+                }
             }
-        })
+        };
+        base.relative()
+            .child(rail_column)
+            .child(rail_attention)
+            .child(card_layer)
     }
 
-    fn render_deck(&self, depth: usize, card: Div, slide: Option<DeckSlide>) -> Div {
-        deck::render(self.palette, depth, card, slide, "settings-card-deck-slide")
-    }
-
-    fn panel_row_total(&self) -> usize {
-        self.current_visible_rows().len()
+    fn render_deck(
+        &self,
+        depth: usize,
+        card: Div,
+        slide: Option<DeckSlide>,
+        closing: Option<(Div, DeckSlide)>,
+    ) -> Div {
+        deck::render(
+            self.palette,
+            depth,
+            card,
+            slide,
+            "settings-card-deck-slide",
+            closing,
+        )
     }
 
     fn hairline(&self) -> Rgba {
         rgba(self.kit.washes.hairline.packed())
     }
 
-    /// Lays the whole path out as one trail, `qol Settings › Plugin › Card`:
-    /// ancestors stay muted, the current page is bright and bold, and the
-    /// separator only ever sits between two crumbs.
-    fn crumb_elements(&self, trail: Vec<String>) -> Vec<Div> {
-        let last = trail.len().saturating_sub(1);
-        let separator = rgba(crate::kit::alpha(self.palette.status_muted, 0x70));
-        let mut crumbs = Vec::with_capacity(trail.len() * 2);
-        for (index, label) in trail.into_iter().enumerate() {
-            if index > 0 {
-                crumbs.push(
-                    div()
-                        .flex_none()
-                        .px(px(qol_theme::SPACE_INSET))
-                        .text_color(separator)
-                        .child("\u{203A}"),
-                );
-            }
-            let crumb = if index == last {
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(self.palette.section_text))
-            } else {
-                div()
-                    .max_w(px(CRUMB_MAX_WIDTH))
-                    .text_color(rgb(self.palette.status_muted))
-            };
-            crumbs.push(crumb.truncate().child(label));
-        }
-        crumbs
-    }
-
     fn render_band(&self, cx: &App) -> Div {
-        let total = self.panel_row_total();
         let trail = self.trail(cx);
-        let subtitle_fits = self.stack.len() == 1;
         div()
             .flex_none()
             .flex()
@@ -5325,35 +5567,7 @@ impl SettingsPanelView {
             .border_color(self.hairline())
             .bg(rgb(self.palette.rail_bg))
             .panel_drag_area()
-            .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(qol_theme::SPACE_STACK))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .text_size(px(qol_theme::TEXT_TITLE))
-                            .line_height(px(BAND_TEXT_LINE_HEIGHT))
-                            .children(self.crumb_elements(trail)),
-                    )
-                    .when(subtitle_fits, |group| {
-                        group.children(self.subtitle.clone().map(|subtitle| {
-                            div()
-                                .truncate()
-                                .text_size(px(qol_theme::TEXT_MICRO))
-                                .text_color(rgb(self.palette.status_muted))
-                                .child(subtitle)
-                        }))
-                    }),
-            )
-            .when(!self.current_source_is_custom(), |band| {
-                band.child(self.kit.count_chip(total, plural(total, "setting")))
-            })
+            .child(super::components::settings_crumb_trail(trail, self.palette))
     }
 
     fn render_filter_field(&self) -> Div {
@@ -5416,7 +5630,7 @@ impl SettingsPanelView {
             .child(self.render_filter_field())
     }
 
-    fn body_groups(&self) -> Vec<(String, Vec<usize>)> {
+    fn body_groups(&self) -> Vec<(String, Option<String>, Vec<usize>)> {
         if !self.filtering() {
             return (0..self.level().sections.len())
                 .filter(|section| {
@@ -5424,9 +5638,13 @@ impl SettingsPanelView {
                 })
                 .map(|section| {
                     let visible = self.section_filtered_rows(section);
-                    (self.section_title(section), visible)
+                    (
+                        self.section_title(section),
+                        self.section_detail(section),
+                        visible,
+                    )
                 })
-                .filter(|(_, rows)| !rows.is_empty())
+                .filter(|(_, _, rows)| !rows.is_empty())
                 .collect();
         }
         let mut groups = Vec::new();
@@ -5440,9 +5658,17 @@ impl SettingsPanelView {
             if rows.is_empty() {
                 continue;
             }
-            groups.push((self.plugin_title(source), rows));
+            groups.push((self.plugin_title(source), None, rows));
         }
         groups
+    }
+
+    fn section_detail(&self, section: usize) -> Option<String> {
+        self.level()
+            .sections
+            .get(section)
+            .and_then(|section| section.description.clone())
+            .filter(|detail| !detail.is_empty())
     }
 
     fn section_title(&self, section: usize) -> String {
@@ -5491,13 +5717,18 @@ impl SettingsPanelView {
             })
     }
 
-    fn render_group_header(&self, title: &str, count: usize) -> impl IntoElement {
+    fn render_group_header(
+        &self,
+        title: &str,
+        detail: Option<&str>,
+        here: bool,
+    ) -> impl IntoElement {
         SettingsGroupHeader::new(
             title.to_string(),
-            count,
-            plural(count, "setting"),
+            detail.map(|detail| SharedString::from(detail.to_string())),
             self.palette,
         )
+        .current(here)
     }
 
     fn enter_hint(&self) -> Option<&'static str> {
@@ -5524,8 +5755,20 @@ impl SettingsPanelView {
         }
     }
 
-    fn render_hint_bar(&self) -> Div {
+    fn render_hint_bar(&self, cx: &App) -> Div {
         if self.current_source_is_custom() && self.body_has_focus() {
+            if let Some(hints) = self.custom_view().and_then(|custom| custom.hint_pairs(cx)) {
+                return self
+                    .kit
+                    .hint_bar()
+                    .children(
+                        hints
+                            .into_iter()
+                            .map(|(key, label)| self.kit.hint(key, label)),
+                    )
+                    .child(div().flex_1())
+                    .child(self.kit.hint("esc", "back"));
+            }
             return self
                 .kit
                 .hint_bar()
@@ -6060,6 +6303,31 @@ fn body_child_offset(
         }
         match visible.iter().position(|index| *index == row) {
             Some(position) => return Some(child + position),
+            None => child += visible.len(),
+        }
+    }
+    None
+}
+
+fn body_header_child_offset(
+    sections: &[impl AsRef<[usize]>],
+    headers: &[bool],
+    row: usize,
+) -> Option<usize> {
+    let mut child = 0;
+    for (section_index, section) in sections.iter().enumerate() {
+        let visible = section.as_ref();
+        if visible.is_empty() {
+            continue;
+        }
+        let header = headers.get(section_index).copied().unwrap_or(true);
+        let head = child;
+        if header {
+            child += 1;
+        }
+        match visible.iter().position(|index| *index == row) {
+            Some(0) if header => return Some(head),
+            Some(_) => return None,
             None => child += visible.len(),
         }
     }
@@ -7205,6 +7473,47 @@ mod tests {
         assert_eq!(
             super::body_child_offset(&sections, &[true, true, true], 5),
             None
+        );
+    }
+
+    #[test]
+    fn the_first_row_of_a_group_scrolls_its_head_into_view() {
+        let sections = [vec![0usize, 1], Vec::new(), vec![2, 3, 4]];
+        let headers = [true, true, true];
+
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 0),
+            Some(0),
+            "the first row of the first group leads with that group's head"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 2),
+            Some(3),
+            "a later group leads with its own head"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 1),
+            None,
+            "a row inside a group has no head to reveal"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 4),
+            None
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 9),
+            None,
+            "a row that is not on the page leads with nothing"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &[false, true, false], 0),
+            None,
+            "a group drawn without a head has nothing to reveal"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &[false, true, true], 2),
+            Some(2),
+            "a dropped head above shifts the head that is revealed"
         );
     }
 

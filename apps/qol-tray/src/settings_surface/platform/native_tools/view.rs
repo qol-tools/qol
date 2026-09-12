@@ -23,7 +23,6 @@ use qol_gpui::text_edit::{self, TextField};
 use qol_gpui::theme::settings_panel_runtime;
 
 use crate::hotkeys::HotkeyBinding;
-use crate::settings_surface::CoreTool;
 use crate::shortcuts::model::Shortcut;
 
 use super::data::{self, ActionOption, PluginOption, RegistrationError};
@@ -44,13 +43,6 @@ const ADD_HOTKEY_DESTINATION: SettingsDestination = SettingsDestination::from_st
 const EDIT_HOTKEY_DESTINATION: SettingsDestination =
     SettingsDestination::from_static("Edit Hotkey");
 
-fn plural(count: usize, noun: &str) -> String {
-    if count == 1 {
-        noun.to_string()
-    } else {
-        format!("{noun}s")
-    }
-}
 const ROW_HEIGHT: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 
 enum Mode {
@@ -109,18 +101,13 @@ pub(super) struct NativeToolsView {
 
 impl NativeToolsView {
     pub(super) fn new(
-        target: CoreTool,
+        tool: ToolKind,
+        initial_editor: bool,
         dismisser: SurfaceDismisser,
         on_back: Option<CustomPanelCallback>,
         notify: CustomPanelNotifier,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (tool, initial_editor) = match target {
-            CoreTool::AddHotkey => (ToolKind::Hotkeys, true),
-            CoreTool::AddShortcut => (ToolKind::Shortcuts, true),
-            CoreTool::Hotkeys => (ToolKind::Hotkeys, false),
-            CoreTool::Shortcuts => (ToolKind::Shortcuts, false),
-        };
         let sequence = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -813,6 +800,7 @@ impl NativeToolsView {
                 self.page(editor),
                 slide,
                 "native-tools-editor-slide",
+                None,
             ))
             .into_any_element()
     }
@@ -836,19 +824,20 @@ impl NativeToolsView {
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let count = self.item_count();
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
             .gap(px(qol_theme::SPACE_TIGHT))
-            .child(SettingsGroupHeader::new(
-                self.list_title(),
-                count,
-                plural(count, self.item_noun()),
-                settings_panel_runtime(),
-            ))
+            .child(
+                SettingsGroupHeader::new(
+                    self.list_title(),
+                    Some(self.list_detail().into()),
+                    settings_panel_runtime(),
+                )
+                .current(self.body_focused),
+            )
             .child(self.render_rows(cx))
             .into_any_element()
     }
@@ -860,10 +849,10 @@ impl NativeToolsView {
         }
     }
 
-    fn item_noun(&self) -> &'static str {
+    fn list_detail(&self) -> &'static str {
         match self.tool {
-            ToolKind::Shortcuts => "shortcut",
-            ToolKind::Hotkeys => "hotkey",
+            ToolKind::Shortcuts => "Names you can run from the launcher.",
+            ToolKind::Hotkeys => "Keys you press to run something.",
         }
     }
 
@@ -1198,19 +1187,20 @@ impl NativeToolsView {
     }
 
     fn editor_body(&self) -> Div {
-        let count = self.editor_field_count();
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
             .gap(px(qol_theme::SPACE_TIGHT))
-            .child(SettingsGroupHeader::new(
-                self.editor_title(),
-                count,
-                plural(count, "field"),
-                settings_panel_runtime(),
-            ))
+            .child(
+                SettingsGroupHeader::new(
+                    self.editor_title(),
+                    Some(self.editor_detail().into()),
+                    settings_panel_runtime(),
+                )
+                .current(self.body_focused),
+            )
     }
 
     fn read_only_field(&self, index: usize, label: &'static str, value: &str) -> AnyElement {
@@ -1219,6 +1209,14 @@ impl NativeToolsView {
             .child(settings_label(label, palette))
             .child(settings_description(value.to_string(), palette))
             .into_any_element()
+    }
+
+    fn editor_detail(&self) -> &'static str {
+        match (&self.mode, self.tool) {
+            (Mode::Shortcut(draft), _) if draft.managed.is_some() => "What this plugin runs.",
+            (_, ToolKind::Shortcuts) => "What this name runs.",
+            (_, ToolKind::Hotkeys) => "What these keys run.",
+        }
     }
 
     fn editor_field_count(&self) -> usize {

@@ -26,6 +26,7 @@ pub enum RowState {
     Resting,
     Hover,
     Current,
+    CurrentQuiet,
     NeedsAttention,
     Invalid,
     Disabled,
@@ -62,6 +63,8 @@ pub enum ActionCircleState {
     Armed,
     Disabled,
 }
+
+pub const SECTION_MARK_WIDTH: f32 = 10.0;
 
 #[derive(Clone, Copy)]
 pub struct Kit {
@@ -114,7 +117,7 @@ impl Kit {
             .child(
                 div()
                     .flex_none()
-                    .w(px(10.0))
+                    .w(px(SECTION_MARK_WIDTH))
                     .h(px(2.0))
                     .bg(rgb(self.palette.accent)),
             )
@@ -206,6 +209,11 @@ impl Kit {
                 self.washes.wash_selected,
                 Some(self.washes.hairline),
                 Some(self.palette.accent),
+            ),
+            RowState::CurrentQuiet => (
+                self.washes.wash_selected,
+                Some(self.washes.hairline),
+                Some(self.palette.text_muted),
             ),
             RowState::NeedsAttention => {
                 (self.washes.wash_attention, None, Some(self.palette.warning))
@@ -708,15 +716,15 @@ fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
 pub fn float_shadow(text_primary: u32) -> Vec<BoxShadow> {
     vec![
         BoxShadow {
-            color: rgba(alpha(text_primary, 0x14)).into(),
+            color: rgba(alpha(text_primary, 0x0d)).into(),
             offset: point(px(0.0), px(1.0)),
             blur_radius: px(2.0),
             spread_radius: px(0.0),
         },
         BoxShadow {
-            color: rgba(alpha(text_primary, 0x21)).into(),
-            offset: point(px(0.0), px(12.0)),
-            blur_radius: px(30.0),
+            color: rgba(alpha(text_primary, 0x14)).into(),
+            offset: point(px(0.0), px(8.0)),
+            blur_radius: px(20.0),
             spread_radius: px(0.0),
         },
     ]

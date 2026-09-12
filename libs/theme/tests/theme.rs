@@ -203,6 +203,7 @@ fn settings_panel_palette_derives_status_tones_from_system_roles() {
     assert_eq!(palette.status_success, DARK_SYSTEM.success);
     assert_eq!(palette.status_danger, DARK_SYSTEM.danger);
     assert_eq!(palette.status_warning, DARK_SYSTEM.warning);
+    assert_eq!(palette.status_warning_ink, DARK_SYSTEM.warning_ink);
     assert_eq!(palette.status_muted, DARK_SYSTEM.text_muted);
     assert_eq!(palette.transparent_rgba, 0x00000000);
     assert_eq!(palette.qr_dark, DARK_REFERENCE.black);
@@ -1736,7 +1737,7 @@ const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 14] = [
     (
         "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_BAND_HEIGHT",
-        HEIGHT_BAND,
+        HEIGHT_SETTING_ROW,
     ),
     (
         "libs/gpui/src/settings_panel/mod.rs",
@@ -2166,14 +2167,14 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 29] = [
     ("libs/gpui/src/gamepad/view.rs", ".shadow(", 1),
     ("libs/gpui/src/gamepad/view.rs", ".text_color(", 17),
     ("libs/gpui/src/gamepad/view.rs", ".text_size(", 17),
-    ("libs/gpui/src/settings_panel/view.rs", ".bg(", 20),
+    ("libs/gpui/src/settings_panel/view.rs", ".bg(", 19),
     ("libs/gpui/src/settings_panel/view.rs", ".border(", 1),
     ("libs/gpui/src/settings_panel/view.rs", ".border_color(", 5),
-    ("libs/gpui/src/settings_panel/view.rs", ".font_weight(", 6),
-    ("libs/gpui/src/settings_panel/view.rs", ".rounded(", 11),
-    ("libs/gpui/src/settings_panel/view.rs", ".shadow(", 5),
-    ("libs/gpui/src/settings_panel/view.rs", ".text_color(", 33),
-    ("libs/gpui/src/settings_panel/view.rs", ".text_size(", 28),
+    ("libs/gpui/src/settings_panel/view.rs", ".font_weight(", 4),
+    ("libs/gpui/src/settings_panel/view.rs", ".rounded(", 10),
+    ("libs/gpui/src/settings_panel/view.rs", ".shadow(", 4),
+    ("libs/gpui/src/settings_panel/view.rs", ".text_color(", 30),
+    ("libs/gpui/src/settings_panel/view.rs", ".text_size(", 27),
 ];
 
 #[test]

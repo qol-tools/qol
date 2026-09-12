@@ -28,3 +28,7 @@ pub(in crate::settings_surface) fn apply_theme(_native: &str, _accent: &str) -> 
 }
 
 pub(in crate::settings_surface) fn prewarm() {}
+
+pub(in crate::settings_surface) fn wait_until_ready(_timeout: std::time::Duration) -> bool {
+    false
+}

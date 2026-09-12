@@ -36,6 +36,7 @@ pub(crate) async fn download_asset(url: &str, dest: &Path, events: &EventBus) ->
             .unwrap_or(0);
         if percent != last_percent {
             events.send(DaemonEvent::UpdateProgress { percent });
+            super::super::record_update_progress(percent);
             last_percent = percent;
         }
     }

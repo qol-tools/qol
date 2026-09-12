@@ -205,6 +205,9 @@ pub fn try_execute_action_with_input_result(
             "hotkeys-add" => Some(crate::settings_surface::request_core_tool(
                 crate::settings_surface::CoreTool::AddHotkey,
             )),
+            "updates" => Some(crate::settings_surface::request_core_tool(
+                crate::settings_surface::CoreTool::Updates,
+            )),
             _ => None,
         };
         if let Some(requested) = requested {

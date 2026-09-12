@@ -209,7 +209,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     } else {
         Some(latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?)
     };
-    let verified_asset = if let Some(version) = expected_version {
+    let verified_asset = if let Some(version) = expected_version.as_deref() {
         let release =
             release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
         Some(release_integrity::verified_asset(
@@ -243,7 +243,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
             .join(qol_conventions::artifact::TRAY_HOST_BINARY_NAME);
         verify_host_update(
             &binary,
-            expected_version,
+            expected_version.as_deref(),
             qol_artifact::ArtifactExpectation::with_compatible_target,
         )?;
         replace_app_bundle(&bundle, &current_bundle)

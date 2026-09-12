@@ -79,6 +79,9 @@ pub(crate) async fn start_ui_server(
     )?;
     if !crate::dev_generation::is_shadow() {
         start_sync_loop(&app_state);
+        if crate::updates::checks_enabled() {
+            start_update_loop(&app_state);
+        }
         #[cfg(feature = "dev")]
         start_dev_discovery(&app_state);
         #[cfg(feature = "dev")]
@@ -379,6 +382,42 @@ fn start_sync_loop(app_state: &AppState) {
             }
         }
     });
+}
+
+fn start_update_loop(app_state: &AppState) {
+    let state = app_state.clone();
+    tokio::spawn(async move {
+        let mut shutdown_rx = state.shutdown_tx.subscribe();
+        loop {
+            refresh_updates(&state, false).await;
+            tokio::select! {
+                _ = shutdown_rx.recv() => return,
+                _ = tokio::time::sleep(crate::updates::CHECK_INTERVAL) => {}
+            }
+        }
+    });
+}
+
+async fn refresh_updates(state: &AppState, force: bool) {
+    let checked = if force {
+        crate::updates::check_for_updates_force().await
+    } else {
+        crate::updates::check_for_updates().await
+    };
+    if let Err(error) = checked {
+        log::debug!("Update check failed: {}", error);
+    }
+    let catalog_state = state.clone();
+    let refreshed =
+        tokio::task::spawn_blocking(move || plugin_services::list_plugins(&catalog_state, force))
+            .await;
+    if let Ok(Err((status, message))) = refreshed {
+        log::warn!(
+            "Plugin catalog refresh failed ({}): {}",
+            status.as_u16(),
+            message
+        );
+    }
 }
 
 #[cfg(feature = "dev")]

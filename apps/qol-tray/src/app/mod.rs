@@ -384,6 +384,7 @@ fn app_init_inner(
     if is_first_run() {
         std::thread::spawn(show_first_run_welcome);
     }
+    std::thread::spawn(confirm_host_update);
     if let Some(route) = PENDING_COLD_ROUTE.get() {
         let route = route.clone();
         std::thread::spawn(move || open_pending_cold_route(&route));
@@ -394,6 +395,7 @@ fn app_init_inner(
 async fn async_init_inner(
     #[cfg(feature = "dev")] core_log_controls: qol_tray::logging::CoreControlsHandle,
 ) -> Result<InitResult> {
+    qol_tray::updates::note_tray_start();
     let shadow_generation = qol_tray::dev_generation::is_shadow();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
     let update_check = if shadow_generation || rolling_restart {
@@ -809,6 +811,22 @@ fn show_first_run_welcome() {
     }
 
     qol_tray::surfaces::native_notifications::show_first_run();
+}
+
+fn confirm_host_update() {
+    let Some(from_version) = qol_tray::updates::consume_update_confirmation() else {
+        return;
+    };
+    log::info!("qol-tray updated from v{}", from_version);
+    let _ = qol_tray::settings_surface::wait_until_ready(Duration::from_secs(30));
+    qol_tray::surfaces::show_plugin_notification(
+        "qol-tray updated",
+        &format!("Now running v{}", qol_tray::updates::current_version()),
+        qol_runtime::protocol::NotificationLevel::Info,
+        None,
+        None,
+        None,
+    );
 }
 
 async fn check_for_updates() -> bool {

@@ -100,21 +100,42 @@ pub(super) async fn check_update() -> Json<serde_json::Value> {
     let available = crate::updates::check_for_updates_force()
         .await
         .unwrap_or(false);
-    let latest = crate::updates::latest_version().map(String::from);
+    let latest = crate::updates::latest_version();
     Json(serde_json::json!({ "available": available, "latest": latest }))
 }
 
-pub(super) async fn self_update(State(state): State<AppState>) -> impl IntoResponse {
+pub(super) fn start_self_update(
+    state: &AppState,
+    confirm_after_restart: bool,
+) -> Result<(), String> {
+    let lease = crate::updates::claim_host_update()?;
+    let marker = if confirm_after_restart {
+        crate::updates::write_pending_update_marker()
+    } else {
+        None
+    };
     let events = state.daemon.events.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::updates::download_and_install(events.clone()).await {
-            log::error!("Self-update failed: {}", e);
+        if let Err(error) = crate::updates::run_host_update(lease, events.clone()).await {
+            if let Some(marker) = marker {
+                let _ = std::fs::remove_file(marker);
+            }
             events.send(crate::daemon::DaemonEvent::UpdateFailed {
-                message: e.to_string(),
+                message: crate::updates::plain_update_failure(&error),
             });
         }
     });
-    StatusCode::ACCEPTED
+    Ok(())
+}
+
+pub(super) async fn self_update(State(state): State<AppState>) -> impl IntoResponse {
+    match start_self_update(&state, false) {
+        Ok(()) => StatusCode::ACCEPTED,
+        Err(message) => {
+            log::warn!("Self-update refused: {}", message);
+            StatusCode::CONFLICT
+        }
+    }
 }
 
 async fn shutdown(State(state): State<AppState>) -> StatusCode {

@@ -8,7 +8,11 @@ mod stream;
 mod view;
 
 pub mod components;
-pub use components::{settings_action_spinner, settings_busy_message, settings_query_spinner};
+pub use components::{
+    settings_action_affordance, settings_action_spinner, settings_busy_message,
+    settings_description, settings_query_spinner, settings_value_text, SettingsGroupHeader,
+    SettingsRow, SettingsValueTone,
+};
 pub use form_nav::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,
 };
@@ -42,7 +46,7 @@ const PANEL_QR_CODE_HEIGHT: f32 = 180.0;
 const PANEL_QR_URL_HEIGHT: f32 = 20.0;
 const PANEL_SECTION_HEADER_HEIGHT: f32 = 26.0;
 const PANEL_COLUMN_GAP: f32 = qol_theme::SPACE_TIGHT;
-const PANEL_BAND_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
+const PANEL_BAND_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
 const PANEL_GROUP_HEADER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_HINT_BAR_HEIGHT: f32 = qol_theme::HEIGHT_HINT_BAR;
 const PANEL_FILTER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
@@ -76,6 +80,8 @@ pub struct SettingsPanel {
     pub sources: Vec<PanelSource>,
     pub heading: String,
     pub focus: Option<String>,
+    pub attention: Option<AttentionFeed>,
+    pub version: Option<SharedString>,
 }
 
 impl SettingsPanel {
@@ -95,6 +101,8 @@ impl SettingsPanel {
             }],
             heading,
             focus: None,
+            attention: None,
+            version: None,
         }
     }
 
@@ -116,11 +124,13 @@ impl SettingsPanel {
 pub type CustomPanelCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 type CustomBreadcrumbReader = Rc<dyn Fn(&App) -> Vec<SettingsDestination>>;
+type CustomHintsReader = Rc<dyn Fn(&App) -> Option<Vec<(SharedString, SharedString)>>>;
 
 pub struct CustomPanelView {
     view: AnyView,
     focus_handle: gpui::FocusHandle,
     breadcrumbs: CustomBreadcrumbReader,
+    hints: CustomHintsReader,
     _observation: gpui::Subscription,
 }
 
@@ -141,11 +151,18 @@ impl CustomPanelView {
                 .map(|entity| entity.read(cx).settings_breadcrumbs())
                 .unwrap_or_default()
         });
+        let hints_observed = entity.downgrade();
+        let hints: CustomHintsReader = Rc::new(move |cx| {
+            hints_observed
+                .upgrade()
+                .and_then(|entity| entity.read(cx).settings_hints())
+        });
         let observation = cx.observe(&entity, move |_, cx| on_change(cx));
         Self {
             view: entity.into(),
             focus_handle,
             breadcrumbs,
+            hints,
             _observation: observation,
         }
     }
@@ -155,6 +172,10 @@ impl CustomPanelView {
             .iter()
             .map(|destination| destination.label().to_string())
             .collect()
+    }
+
+    fn hint_pairs(&self, cx: &App) -> Option<Vec<(SharedString, SharedString)>> {
+        (self.hints)(cx)
     }
 }
 
@@ -178,6 +199,32 @@ pub type CustomPanelFactory = Rc<dyn Fn(CustomPanelContext, &mut App) -> CustomP
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
 type ActionHandler =
     dyn Fn(&str, serde_json::Value) -> Result<Option<serde_json::Value>, String> + Send + Sync;
+
+#[derive(Clone)]
+pub struct AttentionFeed {
+    pub runtime: SettingsRuntime,
+    pub query: String,
+}
+
+pub fn attention_plugin_ids(value: &serde_json::Value) -> std::collections::HashSet<String> {
+    let Some(object) = value.as_object() else {
+        return std::collections::HashSet::new();
+    };
+    object
+        .iter()
+        .filter(|(_, value)| attention_value_is_truthy(value))
+        .map(|(plugin_id, _)| plugin_id.clone())
+        .collect()
+}
+
+fn attention_value_is_truthy(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Bool(flag) => *flag,
+        serde_json::Value::Number(number) => number.as_f64().is_some_and(|value| value != 0.0),
+        serde_json::Value::String(text) => !text.is_empty(),
+        _ => false,
+    }
+}
 
 #[derive(Clone)]
 pub struct SettingsRuntime {
@@ -217,7 +264,6 @@ struct ActivePanel {
 
 pub struct PreparedSettingsPanel {
     panel: SettingsPanel,
-    subtitle: Option<String>,
     rows: Vec<Row>,
     sections: Vec<RowSection>,
     sources: Vec<SourceState>,
@@ -596,15 +642,10 @@ fn prepare_panel(
     panel: SettingsPanel,
     runtimes: Vec<SettingsRuntime>,
 ) -> anyhow::Result<PreparedSettingsPanel> {
-    let focused_index = panel.focused_index();
-    let mut subtitle = None;
     let mut prepared_sources = Vec::new();
-    for (source_index, (source, runtime)) in panel.sources.iter().zip(runtimes).enumerate() {
+    for (source, runtime) in panel.sources.iter().zip(runtimes) {
         match prepare_source(source, runtime) {
             Ok(prepared) => {
-                if source_index == focused_index {
-                    subtitle = prepared.description.clone();
-                }
                 prepared_sources.push(prepared);
             }
             Err(error) if panel.sources.len() > 1 => {
@@ -636,7 +677,6 @@ fn prepare_panel(
     }
     Ok(PreparedSettingsPanel {
         panel,
-        subtitle,
         rows,
         sections,
         sources,
@@ -646,7 +686,6 @@ fn prepare_panel(
 struct PreparedSource {
     rows: Vec<Row>,
     sections: Vec<RowSection>,
-    description: Option<String>,
     state: SourceState,
 }
 
@@ -658,7 +697,6 @@ fn prepare_source(
         return Ok(PreparedSource {
             rows: Vec::new(),
             sections: Vec::new(),
-            description: None,
             state: SourceState {
                 plugin_id: source.plugin_id.clone(),
                 values: serde_json::json!({}),
@@ -683,7 +721,6 @@ fn prepare_source(
     let rows = rows_from_resolved(&resolved, 0);
     let sections = sections_from_resolved(&resolved, &rows, 0);
     Ok(PreparedSource {
-        description: resolved.description.clone(),
         rows,
         sections,
         state: SourceState {
@@ -723,7 +760,6 @@ fn size_prepared_panel(
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
-            subtitle: prepared.subtitle,
             rows: prepared.rows,
             sections: prepared.sections,
             sources: prepared.sources,
@@ -1111,6 +1147,51 @@ mod tests {
     }
 
     #[test]
+    fn attention_payload_names_only_truthy_sources() {
+        let payload = serde_json::json!({
+            "plugin-alt-tab": true,
+            "plugin-lights": false,
+            "plugin-launcher": 0,
+            "plugin-cli-sessions": 3,
+            "plugin-voice": "",
+            "plugin-shot": "1.63.1 -> 1.64.0",
+            "plugin-pointz": null,
+            "plugin-removeapp": [],
+            "plugin-keyremap": {},
+        });
+
+        let ids = super::attention_plugin_ids(&payload);
+
+        assert!(ids.contains("plugin-alt-tab"));
+        assert!(ids.contains("plugin-cli-sessions"));
+        assert!(ids.contains("plugin-shot"));
+        assert_eq!(ids.len(), 3);
+        for absent in [
+            "plugin-lights",
+            "plugin-launcher",
+            "plugin-voice",
+            "plugin-pointz",
+            "plugin-removeapp",
+            "plugin-keyremap",
+        ] {
+            assert!(!ids.contains(absent), "{absent} is not attention");
+        }
+    }
+
+    #[test]
+    fn attention_payload_outside_an_object_names_nothing() {
+        for payload in [
+            serde_json::Value::Null,
+            serde_json::json!(true),
+            serde_json::json!(2),
+            serde_json::json!("updates"),
+            serde_json::json!(["plugin-lights"]),
+        ] {
+            assert!(super::attention_plugin_ids(&payload).is_empty());
+        }
+    }
+
+    #[test]
     fn custom_sources_do_not_require_a_settings_contract() {
         let source = PanelSource {
             plugin_id: "__core-shortcuts".into(),
@@ -1147,6 +1228,8 @@ mod tests {
             ],
             heading: "Settings".into(),
             focus: None,
+            attention: None,
+            version: None,
         };
 
         let prepared = super::prepare_panel(

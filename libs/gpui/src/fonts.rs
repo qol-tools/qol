@@ -4,7 +4,7 @@ use gpui::App;
 
 pub(crate) const SANS_MEDIUM: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Medium.ttf");
 
-const FACES: [&[u8]; 7] = [
+const FACES: [&[u8]; 8] = [
     include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
     SANS_MEDIUM,
     include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf"),
@@ -12,6 +12,7 @@ const FACES: [&[u8]; 7] = [
     include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"),
     include_bytes!("../assets/fonts/IBMPlexMono-Medium.ttf"),
     include_bytes!("../assets/fonts/IBMPlexMono-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/SairaSemiCondensed-SemiBold.ttf"),
 ];
 
 pub fn install(cx: &App) {

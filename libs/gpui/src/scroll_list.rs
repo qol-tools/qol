@@ -29,6 +29,28 @@ pub fn follow_offset_y(
     }
 }
 
+pub fn follow_offset_y_with_lead(
+    viewport: gpui::Bounds<gpui::Pixels>,
+    item: gpui::Bounds<gpui::Pixels>,
+    lead: Option<gpui::Bounds<gpui::Pixels>>,
+    current: gpui::Pixels,
+    margin: gpui::Pixels,
+) -> gpui::Pixels {
+    let offset = follow_offset_y(viewport, item, current, margin);
+    let Some(lead) = lead else {
+        return offset;
+    };
+    let top_limit = viewport.top() + margin;
+    if lead.top() + offset >= top_limit {
+        return offset;
+    }
+    let revealed = top_limit - lead.top();
+    if item.bottom() + revealed > viewport.bottom() - margin {
+        return offset;
+    }
+    revealed
+}
+
 impl SelectionScroll {
     pub fn new() -> Self {
         Self::default()
@@ -38,7 +60,7 @@ impl SelectionScroll {
         &self.handle
     }
 
-    pub fn follow(&self, selected: Option<usize>, edge_margin: gpui::Pixels) {
+    pub fn follow(&self, selected: Option<usize>, lead: Option<usize>, edge_margin: gpui::Pixels) {
         if self.followed.get() == selected {
             return;
         }
@@ -54,7 +76,8 @@ impl SelectionScroll {
         match self.handle.bounds_for_item(index) {
             Some(item) if viewport.size.height > gpui::px(0.) => {
                 let mut offset = self.handle.offset();
-                offset.y = follow_offset_y(viewport, item, offset.y, edge_margin);
+                let lead = lead.and_then(|lead| self.handle.bounds_for_item(lead));
+                offset.y = follow_offset_y_with_lead(viewport, item, lead, offset.y, edge_margin);
                 self.handle.set_offset(offset);
             }
             _ => self.handle.scroll_to_item(index),
@@ -264,20 +287,20 @@ mod tests {
     fn selection_scroll_reissues_only_when_the_selection_moves() {
         let scroll = SelectionScroll::new();
 
-        scroll.follow(Some(4), gpui::px(0.));
+        scroll.follow(Some(4), None, gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(4));
 
-        scroll.follow(Some(4), gpui::px(0.));
+        scroll.follow(Some(4), None, gpui::px(0.));
         assert_eq!(
             scroll.followed.get(),
             Some(4),
             "a repeat render is not a move"
         );
 
-        scroll.follow(Some(9), gpui::px(0.));
+        scroll.follow(Some(9), None, gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(9));
 
-        scroll.follow(None, gpui::px(0.));
+        scroll.follow(None, None, gpui::px(0.));
         assert_eq!(
             scroll.followed.get(),
             None,
@@ -288,11 +311,11 @@ mod tests {
     #[test]
     fn rewinding_lets_the_same_index_be_followed_again() {
         let scroll = SelectionScroll::new();
-        scroll.follow(Some(3), gpui::px(0.));
+        scroll.follow(Some(3), None, gpui::px(0.));
         scroll.rewind();
         assert_eq!(scroll.followed.get(), None);
 
-        scroll.follow(Some(3), gpui::px(0.));
+        scroll.follow(Some(3), None, gpui::px(0.));
         assert_eq!(scroll.followed.get(), Some(3));
     }
 
@@ -382,19 +405,64 @@ mod tests {
     }
 
     #[test]
+    fn follow_offset_reveals_the_head_above_the_first_row_of_a_group() {
+        assert_eq!(
+            follow_offset_y_with_lead(
+                viewport(),
+                item(100., 52.),
+                Some(item(40., 52.)),
+                px(-70.),
+                px(40.)
+            ),
+            px(0.),
+            "a selection whose head is cut off scrolls up until the head clears the margin"
+        );
+    }
+
+    #[test]
+    fn follow_offset_keeps_a_visible_head_where_it_is() {
+        assert_eq!(
+            follow_offset_y_with_lead(
+                viewport(),
+                item(150., 52.),
+                Some(item(90., 52.)),
+                px(-30.),
+                px(40.)
+            ),
+            px(-30.),
+            "a head already inside the limits changes nothing"
+        );
+    }
+
+    #[test]
+    fn follow_offset_drops_a_head_that_would_push_the_selection_out() {
+        assert_eq!(
+            follow_offset_y_with_lead(
+                viewport(),
+                item(600., 52.),
+                Some(item(0., 400.)),
+                px(0.),
+                px(40.)
+            ),
+            px(-292.),
+            "the selection wins when the head is too tall to show with it"
+        );
+    }
+
+    #[test]
     fn a_zero_margin_follow_defers_to_scroll_to_item() {
         let scroll = SelectionScroll::new();
-        scroll.follow(Some(2), px(0.));
+        scroll.follow(Some(2), None, px(0.));
         assert_eq!(scroll.followed.get(), Some(2));
     }
 
     #[test]
     fn refollow_lets_the_same_index_be_followed_again_without_rewinding() {
         let scroll = SelectionScroll::new();
-        scroll.follow(Some(3), px(40.));
+        scroll.follow(Some(3), None, px(40.));
         scroll.refollow();
         assert_eq!(scroll.followed.get(), None, "refollow clears the latch");
-        scroll.follow(Some(3), px(40.));
+        scroll.follow(Some(3), None, px(40.));
         assert_eq!(scroll.followed.get(), Some(3));
     }
 

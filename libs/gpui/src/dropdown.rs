@@ -8,6 +8,7 @@ pub const DROPDOWN_MAX_VISIBLE: usize = 10;
 pub const ROW_H: f32 = 26.0;
 const MENU_ID: &str = "dropdown-menu";
 const MENU_MIN_WIDTH: f32 = 214.0;
+const MENU_MAX_WIDTH: f32 = 280.0;
 const SWATCH_SIZE: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -175,7 +176,13 @@ impl Dropdown {
                             .bg(rgb(accent)),
                     );
                 }
-                row = row.child(item.label.clone());
+                row = row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(item.label.clone()),
+                );
                 if selected {
                     row = row
                         .bg(rgb(style.bg_selected))
@@ -207,6 +214,7 @@ impl Dropdown {
             .flex()
             .flex_col()
             .min_w(px(MENU_MIN_WIDTH))
+            .max_w(px(MENU_MAX_WIDTH))
             .p(px(qol_theme::SPACE_SNUG))
             .rounded(px(qol_theme::RADIUS_CARD))
             .border_1()

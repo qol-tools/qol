@@ -24,8 +24,9 @@ pub const TEXT_CAPTION: f32 = 13.5;
 pub const TEXT_BODY: f32 = 15.0;
 pub const TEXT_TITLE: f32 = 18.0;
 pub const TEXT_DISPLAY: f32 = 20.0;
+pub const TEXT_MASTHEAD: f32 = 34.0;
 
-pub const TEXT_SCALE: [f32; 7] = [
+pub const TEXT_SCALE: [f32; 8] = [
     TEXT_IDENTITY,
     TEXT_NANO,
     TEXT_MICRO,
@@ -33,6 +34,7 @@ pub const TEXT_SCALE: [f32; 7] = [
     TEXT_BODY,
     TEXT_TITLE,
     TEXT_DISPLAY,
+    TEXT_MASTHEAD,
 ];
 
 pub const HEIGHT_INLINE: f32 = 28.0;
@@ -90,6 +92,10 @@ pub const SPACE_LADDER: [f32; 7] = [
 
 pub fn font_ui() -> &'static str {
     "IBM Plex Sans"
+}
+
+pub fn font_display() -> &'static str {
+    "Saira SemiCondensed"
 }
 
 pub fn font_mono() -> &'static str {
@@ -1283,6 +1289,7 @@ pub struct SettingsPanelPalette {
     pub status_success: u32,
     pub status_danger: u32,
     pub status_warning: u32,
+    pub status_warning_ink: u32,
     pub status_muted: u32,
     pub qr_dark: u32,
     pub qr_light: u32,
@@ -1313,6 +1320,7 @@ impl SettingsPanelPalette {
             status_success: system.success,
             status_danger: system.danger,
             status_warning: system.warning,
+            status_warning_ink: system.warning_ink,
             status_muted: system.text_muted,
             qr_dark: DARK_TRAY_INTERNAL.config_qr_dark,
             qr_light: DARK_TRAY_INTERNAL.config_qr_light,

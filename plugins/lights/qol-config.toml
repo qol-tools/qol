@@ -4,9 +4,11 @@ description = "Zigbee light control."
 
 [section.connection]
 label = "Connection"
+description = "The coordinator this computer talks to and the lights it found."
 
 [section.controls]
 label = "Controls"
+description = "What every paired light does right now."
 
 [field.coordinator_status]
 type = "status"

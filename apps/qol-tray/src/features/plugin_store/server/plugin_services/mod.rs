@@ -26,6 +26,10 @@ pub(super) async fn update_plugin(state: &AppState, id: &str) -> UninstallResult
     operations::update_plugin(state, id).await
 }
 
+pub(super) async fn run_plugin_update(state: &AppState, id: &str) -> UninstallResult {
+    operations::run_plugin_update(state, id).await
+}
+
 pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallResult {
     operations::uninstall_plugin(state, id).await
 }

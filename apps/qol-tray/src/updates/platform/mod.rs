@@ -30,6 +30,6 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     active::download_and_install(events).await
 }
 
-fn detect_install_kind() -> InstallKind {
+pub(crate) fn detect_install_kind() -> InstallKind {
     active::detect_install_kind()
 }

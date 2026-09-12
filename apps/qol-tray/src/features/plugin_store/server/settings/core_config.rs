@@ -73,7 +73,14 @@ fn set_core_config_inner(state: &AppState, body: axum::body::Bytes) -> HttpResul
 fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> HttpResult<()> {
     let result = match field {
         "theme" => crate::features::theme::save_selected_theme_key(&as_str(field, value)?),
-        "accent" => crate::features::theme::save_selected_accent_key(&as_str(field, value)?),
+        "accent" => {
+            let previous = crate::features::theme::current_accent_key();
+            let result = crate::features::theme::save_selected_accent_key(&as_str(field, value)?);
+            if result.is_ok() && crate::features::theme::current_accent_key() != previous {
+                super::theme_handlers::apply_theme_to_running_surfaces(state);
+            }
+            result
+        }
         "native_theme" => {
             let previous = crate::features::theme::current_native_theme_key();
             let result =

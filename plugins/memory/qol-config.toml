@@ -4,6 +4,7 @@ description = "Recall recorded answers across different question wordings."
 
 [section.answers]
 label = "Answers"
+description = "How qol memory decides what a question is asking for."
 
 [field.verify_answers]
 type = "boolean"

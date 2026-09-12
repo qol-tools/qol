@@ -8,6 +8,7 @@ mod notifications_handlers;
 mod plugin_config_handlers;
 mod shortcut_handlers;
 mod theme_handlers;
+mod update_handlers;
 
 use axum::{
     routing::{get, post},
@@ -70,6 +71,10 @@ pub(super) fn routes() -> Router<AppState> {
             axum::routing::put(theme_handlers::set_native_theme),
         )
         .route("/core/queries/{query}", get(theme_handlers::get_core_query))
+        .route(
+            "/core/actions/{action}",
+            post(update_handlers::post_core_action),
+        )
         .route("/core/config", get(core_config::get_core_config))
         .route(
             "/core/config",

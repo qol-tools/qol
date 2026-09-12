@@ -4,6 +4,7 @@ description = "Core qol settings."
 
 [section.appearance]
 label = "Appearance"
+description = "How qol looks on this machine."
 
 [field.native_theme]
 type = "select"
@@ -44,6 +45,7 @@ violet = "Violet"
 
 [section.host]
 label = "Host"
+description = "What qol is allowed to change on this computer."
 
 [field.profile]
 type = "select"
@@ -61,6 +63,7 @@ default = false
 
 [section.notifications]
 label = "Notifications"
+description = "How qol tells you something happened."
 
 [field.handler]
 type = "select"

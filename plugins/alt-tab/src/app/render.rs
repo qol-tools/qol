@@ -156,7 +156,7 @@ impl Render for AltTabApp {
 
         let (panel_w, panel_h) = (layout.width, layout.height);
 
-        self.grid_scroll.follow(d.selected_index, px(0.));
+        self.grid_scroll.follow(d.selected_index, None, px(0.));
         let grid_scroll = self.grid_scroll.handle().clone();
         let render_context = CardRenderContext {
             snap: &snap,

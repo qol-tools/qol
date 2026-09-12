@@ -14,6 +14,7 @@ pub const DIMMED_OPACITY: f32 = 0.5;
 const TOGGLE_TRACK_WIDTH: f32 = 40.0;
 const TOGGLE_TRACK_HEIGHT: f32 = qol_theme::HEIGHT_INLINE - 4.0;
 const FIELD_MIN_WIDTH: f32 = 180.0;
+const VALUE_MAX_WIDTH: f32 = 280.0;
 const FIELD_MAX_WIDTH: f32 = 320.0;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -33,6 +34,7 @@ pub struct SettingsRow {
     selected: bool,
     focused: bool,
     dimmed: bool,
+    attention: bool,
     children: Vec<AnyElement>,
     on_click: Option<ClickHandler>,
 }
@@ -58,6 +60,7 @@ impl SettingsRow {
             selected: false,
             focused: true,
             dimmed: false,
+            attention: false,
             children: Vec::new(),
             on_click: None,
         }
@@ -71,6 +74,11 @@ impl SettingsRow {
 
     pub fn dimmed(mut self, dimmed: bool) -> Self {
         self.dimmed = dimmed;
+        self
+    }
+
+    pub fn attention(mut self, attention: bool) -> Self {
+        self.attention = attention;
         self
     }
 
@@ -122,6 +130,8 @@ impl RenderOnce for SettingsRow {
         }
         if self.selected && self.focused {
             row = paint_settings_selection(row, self.palette);
+        } else if self.attention {
+            row = paint_settings_attention(row, self.palette);
         }
         if let Some(on_click) = self.on_click {
             row = row
@@ -131,6 +141,13 @@ impl RenderOnce for SettingsRow {
         }
         row
     }
+}
+
+fn masthead_rule() -> gpui::Div {
+    div()
+        .flex_none()
+        .h(px(1.0))
+        .bg(rgba(kit().washes.hairline.packed()))
 }
 
 pub fn paint_settings_selection<E: Styled + ParentElement>(
@@ -159,59 +176,107 @@ pub fn paint_settings_selection<E: Styled + ParentElement>(
         )
 }
 
+fn paint_settings_attention<E: Styled + ParentElement>(row: E, palette: SettingsPanelPalette) -> E {
+    let shared = kit();
+    row.relative()
+        .ml(px(-qol_theme::SPACE_PAD))
+        .pl(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
+        .rounded_none()
+        .rounded_r(px(qol_theme::RADIUS_CARD))
+        .bg(rgba(shared.washes.wash_attention.packed()))
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(qol_theme::SPACE_MARK))
+                .bg(rgb(palette.status_warning)),
+        )
+}
+
 #[derive(IntoElement)]
 pub struct SettingsGroupHeader {
     title: SharedString,
-    count: usize,
-    noun: SharedString,
+    detail: Option<SharedString>,
+    current: bool,
     palette: SettingsPanelPalette,
 }
 
 impl SettingsGroupHeader {
     pub fn new(
         title: impl Into<SharedString>,
-        count: usize,
-        noun: impl Into<SharedString>,
+        detail: Option<SharedString>,
         palette: SettingsPanelPalette,
     ) -> Self {
         Self {
             title: title.into(),
-            count,
-            noun: noun.into(),
+            detail,
+            current: false,
             palette,
         }
+    }
+
+    pub fn titled(title: impl Into<SharedString>, palette: SettingsPanelPalette) -> Self {
+        Self {
+            title: title.into(),
+            detail: None,
+            current: false,
+            palette,
+        }
+    }
+
+    pub fn current(mut self, current: bool) -> Self {
+        self.current = current;
+        self
     }
 }
 
 impl RenderOnce for SettingsGroupHeader {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let shared = kit();
-        div()
+        let name = if self.current {
+            self.palette.section_text
+        } else {
+            self.palette.status_muted
+        };
+        let detail_ink = if self.current {
+            self.palette.status_accent
+        } else {
+            self.palette.status_muted
+        };
+        let block = div()
             .flex_none()
             .flex()
-            .flex_row()
-            .items_end()
-            .justify_between()
-            .gap(px(qol_theme::SPACE_CELL))
-            .h(px(qol_theme::HEIGHT_CONTROL))
-            .ml(px(-qol_theme::SPACE_PAD))
-            .mr(px(-qol_theme::SPACE_PAD))
-            .pl(px(qol_theme::SPACE_INSET))
-            .pr(px(qol_theme::SPACE_PAD))
+            .flex_col()
+            .w_full()
+            .gap(px(qol_theme::SPACE_STACK))
+            .pt(px(qol_theme::SPACE_PAD))
             .pb(px(qol_theme::SPACE_SNUG))
-            .border_b(px(1.0))
-            .border_color(rgba(shared.washes.hairline.packed()))
-            .bg(rgba(shared.washes.fill_resting.packed()))
+            .font_family(SharedString::from(qol_theme::font_display()))
+            .font_weight(FontWeight::SEMIBOLD)
             .child(
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(self.palette.label_text))
-                    .child(self.title.to_string().to_uppercase()),
-            )
-            .child(kit().count_chip_small(self.count, self.noun))
+                    .text_size(px(qol_theme::TEXT_DISPLAY))
+                    .line_height(gpui::relative(1.15))
+                    .text_color(rgb(name))
+                    .child(SharedString::from(self.title.to_lowercase())),
+            );
+        let block = match self.detail {
+            None => block,
+            Some(detail) => block.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_NANO))
+                    .line_height(gpui::relative(1.2))
+                    .text_color(rgb(detail_ink))
+                    .child(SharedString::from(detail.to_lowercase())),
+            ),
+        };
+        block.child(masthead_rule().w_full().mt(px(qol_theme::SPACE_SNUG)))
     }
 }
 
@@ -240,7 +305,7 @@ impl RenderOnce for SettingsToggle {
                 .p(px(qol_theme::SPACE_STACK))
                 .rounded_full()
                 .bg(rgb(if self.active {
-                    self.palette.state_on
+                    self.palette.row_border_selected
                 } else {
                     self.palette.dropdown_bg
                 }))
@@ -290,17 +355,20 @@ impl RenderOnce for SettingsSelectValue {
             .gap(px(qol_theme::SPACE_INSET))
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
+            .min_w(px(FIELD_MIN_WIDTH))
+            .max_w(px(VALUE_MAX_WIDTH))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .bg(rgb(self.palette.dropdown_bg))
             .text_size(px(qol_theme::TEXT_BODY))
             .text_color(rgb(self.palette.label_text))
             .children(
                 self.accent
-                    .map(|accent| div().w_2().h_2().rounded_full().bg(rgb(accent))),
+                    .map(|accent| div().flex_none().w_2().h_2().rounded_full().bg(rgb(accent))),
             )
-            .child(self.text)
+            .child(div().flex_1().min_w_0().truncate().child(self.text))
             .child(
                 div()
+                    .flex_none()
                     .text_size(px(qol_theme::TEXT_CAPTION))
                     .text_color(rgb(self.palette.status_muted))
                     .child("▾"),
@@ -564,6 +632,64 @@ pub fn settings_value_group() -> gpui::Div {
         .gap(px(qol_theme::SPACE_INSET))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsValueTone {
+    Normal,
+    Muted,
+    Attention,
+    Danger,
+    Success,
+}
+
+pub fn settings_value_text(
+    text: impl Into<SharedString>,
+    tone: SettingsValueTone,
+    palette: SettingsPanelPalette,
+) -> gpui::Div {
+    let value = kit().value(text);
+    match tone {
+        SettingsValueTone::Normal => value,
+        SettingsValueTone::Muted => value.text_color(rgb(palette.status_muted)),
+        SettingsValueTone::Attention => value.text_color(rgb(palette.status_warning_ink)),
+        SettingsValueTone::Danger => value.text_color(rgb(palette.status_danger)),
+        SettingsValueTone::Success => value.text_color(rgb(palette.status_success)),
+    }
+}
+
+pub fn settings_action_affordance(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    variant: Option<&str>,
+    busy: bool,
+    palette: SettingsPanelPalette,
+) -> gpui::Div {
+    let (background, text) = match variant {
+        Some("ghost") => (rgb(palette.dropdown_bg), palette.label_text),
+        Some("danger") => (rgba(alpha(palette.state_off, 0x29)), palette.state_off),
+        Some("primary") | None | Some(_) => (rgb(palette.row_bg_selected), palette.section_text),
+    };
+    let mut control = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(qol_theme::SPACE_TIGHT));
+    if busy {
+        control = control.child(settings_action_spinner(id, palette).size(px(12.)));
+    }
+    control
+        .px(px(qol_theme::SPACE_INSET))
+        .py(px(qol_theme::SPACE_TIGHT))
+        .rounded(px(qol_theme::RADIUS_CONTROL))
+        .when(variant == Some("ghost"), |control| {
+            control.shadow(crate::kit::raised_shadow(palette.section_text))
+        })
+        .bg(background)
+        .text_size(px(qol_theme::TEXT_CAPTION))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(text))
+        .child(label.into())
+}
+
 pub fn settings_dropdown_style(palette: SettingsPanelPalette) -> DropdownStyle {
     DropdownStyle {
         bg: palette.dropdown_bg,
@@ -575,11 +701,97 @@ pub fn settings_dropdown_style(palette: SettingsPanelPalette) -> DropdownStyle {
     }
 }
 
-pub fn rail_caption(label: impl Into<SharedString>) -> gpui::Div {
-    kit()
-        .section(label)
-        .h(px(qol_theme::HEIGHT_CONTROL))
+const CRUMB_MAX_WIDTH: f32 = 200.0;
+const CRUMB_LINE_HEIGHT: f32 = 20.0;
+
+pub fn settings_crumb_trail(trail: Vec<String>, palette: SettingsPanelPalette) -> gpui::Div {
+    let last = trail.len().saturating_sub(1);
+    let separator = rgba(crate::kit::alpha(palette.status_muted, 0x70));
+    let mut crumbs = Vec::with_capacity(trail.len() * 2);
+    for (index, label) in trail.into_iter().enumerate() {
+        if index > 0 {
+            crumbs.push(
+                div()
+                    .flex_none()
+                    .px(px(qol_theme::SPACE_TIGHT))
+                    .text_color(separator)
+                    .child("/"),
+            );
+        }
+        let crumb = if index == last {
+            div().text_color(rgb(palette.section_text))
+        } else {
+            div()
+                .max_w(px(CRUMB_MAX_WIDTH))
+                .text_color(rgb(palette.status_muted))
+        };
+        crumbs.push(crumb.truncate().child(label.to_lowercase()));
+    }
+    div()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_center()
+        .font_family(SharedString::from(qol_theme::font_display()))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(qol_theme::TEXT_CAPTION))
+        .line_height(px(CRUMB_LINE_HEIGHT))
+        .children(crumbs)
+}
+
+pub fn rail_caption_height() -> f32 {
+    qol_theme::HEIGHT_BAND
+}
+
+pub fn rail_caption(
+    label: impl Into<SharedString>,
+    detail: Option<SharedString>,
+    focused: bool,
+) -> gpui::Div {
+    let kit = kit();
+    let label: SharedString = label.into();
+    let block = div()
+        .flex_none()
+        .relative()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .w_full()
+        .h(px(rail_caption_height()))
+        .gap(px(qol_theme::SPACE_STACK))
         .px(px(qol_theme::SPACE_CELL))
+        .font_family(SharedString::from(qol_theme::font_display()))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(
+            div()
+                .truncate()
+                .text_size(px(qol_theme::TEXT_MASTHEAD))
+                .line_height(gpui::relative(1.15))
+                .text_color(rgb(kit.palette.text_primary))
+                .child(SharedString::from(label.to_lowercase())),
+        );
+    let block = match detail {
+        None => block,
+        Some(detail) => block.child(
+            div()
+                .truncate()
+                .text_size(px(qol_theme::TEXT_NANO))
+                .line_height(gpui::relative(1.2))
+                .text_color(rgb(if focused {
+                    kit.palette.accent_ink
+                } else {
+                    kit.palette.text_muted
+                }))
+                .child(SharedString::from(detail.to_uppercase())),
+        ),
+    };
+    block.child(
+        masthead_rule()
+            .absolute()
+            .bottom_0()
+            .left(px(qol_theme::SPACE_CELL))
+            .right(px(qol_theme::SPACE_CELL)),
+    )
 }
 
 pub fn settings_page() -> gpui::Div {

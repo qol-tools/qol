@@ -409,7 +409,7 @@ impl SessionsView {
         let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
         if body_visible {
-            self.list_scroll.follow(highlight, px(0.));
+            self.list_scroll.follow(highlight, None, px(0.));
         }
         let row_els: Vec<_> = rows
             .iter()

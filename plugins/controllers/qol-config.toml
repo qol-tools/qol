@@ -4,6 +4,7 @@ description = "Connected game controllers, active drivers, and available capabil
 
 [section.controllers]
 label = "Controllers"
+description = "Which pads this computer can see and whether they need a fix."
 
 [section.input_test]
 label = "Input Test"

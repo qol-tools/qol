@@ -9,7 +9,6 @@ struct ThemeSettings {
     accent: Option<String>,
     theme: Option<String>,
     native_theme: Option<String>,
-    native_accent: Option<String>,
 }
 
 fn update_settings(update: impl FnOnce(&mut ThemeSettings)) -> Result<()> {
@@ -123,37 +122,12 @@ pub fn current_accent_key() -> String {
     resolved_accent_key()
 }
 
-pub fn save_selected_native_accent_key(key: &str) -> Result<()> {
-    let key = validated_accent_key(key)?.to_string();
-    update_settings(|settings| settings.native_accent = Some(key))
-}
-
-pub fn clear_selected_native_accent_key() -> Result<()> {
-    update_settings(|settings| settings.native_accent = None)
-}
-
-pub fn selected_native_accent_key() -> Result<Option<String>> {
-    let settings: ThemeSettings = crate::file_io::load_json_or_default(&settings_path()?)
-        .context("failed to load theme settings")?;
-    match settings.native_accent.as_deref() {
-        Some(key) => Ok(Some(validated_accent_key(key)?.to_string())),
-        None => Ok(None),
-    }
-}
-
 pub fn native_accent_wire() -> String {
-    selected_native_accent_key()
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "-".to_string())
+    resolved_accent_key()
 }
 
 pub fn apply_accent_env(command: &mut Command) {
-    if let Ok(Some(key)) = selected_native_accent_key() {
-        command.env(qol_conventions::ENV_THEME_ACCENT, key);
-    } else {
-        command.env_remove(qol_conventions::ENV_THEME_ACCENT);
-    }
+    command.env(qol_conventions::ENV_THEME_ACCENT, resolved_accent_key());
 }
 
 fn settings_path() -> Result<std::path::PathBuf> {
@@ -258,19 +232,14 @@ mod tests {
     }
 
     #[test]
-    fn selected_native_accent_round_trips_and_wires_dash_by_default() {
+    fn native_surfaces_wire_the_one_selected_accent() {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        assert_eq!(native_accent_wire(), "-");
+        assert_eq!(native_accent_wire(), current_accent_key());
 
-        save_selected_native_accent_key("blue").unwrap();
+        save_selected_accent_key("blue").unwrap();
 
-        assert_eq!(
-            selected_native_accent_key().unwrap().as_deref(),
-            Some("blue")
-        );
         assert_eq!(native_accent_wire(), "blue");
-        assert!(save_selected_native_accent_key("not-a-preset").is_err());
     }
 }

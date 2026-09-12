@@ -1,5 +1,7 @@
 mod platform;
 
+use std::time::Duration;
+
 use qol_runtime::protocol::NotificationLayout;
 
 const HOST_ARGUMENT: &str = "__qol-settings-surface-host";
@@ -10,6 +12,7 @@ pub(crate) enum CoreTool {
     AddShortcut,
     Hotkeys,
     Shortcuts,
+    Updates,
 }
 
 impl CoreTool {
@@ -19,6 +22,7 @@ impl CoreTool {
             Self::AddShortcut => "__core-shortcuts-add",
             Self::Hotkeys => "__core-hotkeys",
             Self::Shortcuts => "__core-shortcuts",
+            Self::Updates => "__core-updates",
         }
     }
 
@@ -28,6 +32,7 @@ impl CoreTool {
             "__core-shortcuts-add" => Some(Self::AddShortcut),
             "__core-hotkeys" => Some(Self::Hotkeys),
             "__core-shortcuts" => Some(Self::Shortcuts),
+            "__core-updates" => Some(Self::Updates),
             _ => None,
         }
     }
@@ -38,6 +43,7 @@ impl CoreTool {
             Self::AddShortcut => "shortcuts/add",
             Self::Hotkeys => "hotkeys",
             Self::Shortcuts => "shortcuts",
+            Self::Updates => "plugins",
         }
     }
 
@@ -45,6 +51,7 @@ impl CoreTool {
         match self {
             Self::AddHotkey | Self::Hotkeys => "__core-hotkeys",
             Self::AddShortcut | Self::Shortcuts => "__core-shortcuts",
+            Self::Updates => "__core-updates",
         }
     }
 }
@@ -127,6 +134,10 @@ pub fn prewarm() {
     platform::prewarm();
 }
 
+pub fn wait_until_ready(timeout: Duration) -> bool {
+    platform::wait_until_ready(timeout)
+}
+
 pub fn run_from_current_args() -> Option<anyhow::Result<()>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     requested_boot(&args).map(platform::run)
@@ -200,6 +211,7 @@ mod tests {
             CoreTool::AddShortcut,
             CoreTool::Hotkeys,
             CoreTool::Shortcuts,
+            CoreTool::Updates,
         ] {
             assert_eq!(CoreTool::from_wire_id(tool.wire_id()), Some(tool));
             assert!(tool.wire_id().starts_with("__core-"));

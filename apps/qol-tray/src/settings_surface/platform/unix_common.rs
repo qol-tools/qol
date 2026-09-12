@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{mpsc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
@@ -9,8 +9,8 @@ use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::settings_panel::SettingsActivation;
 use qol_gpui::settings_panel::{
-    CustomPanelNoticeTone, CustomPanelNotifier, PanelSource, PanelSourceGroup, SettingsPanel,
-    SettingsRuntime, SettingsWindowHost,
+    AttentionFeed, CustomPanelNoticeTone, CustomPanelNotifier, PanelSource, PanelSourceGroup,
+    SettingsPanel, SettingsRuntime, SettingsWindowHost,
 };
 use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
@@ -65,6 +65,47 @@ pub(in crate::settings_surface) fn request(plugin_id: &str) -> anyhow::Result<bo
 const PREWARM_WATCH_WINDOW: Duration = Duration::from_secs(30);
 const PREWARM_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 
+struct HostReadiness {
+    ready: Mutex<bool>,
+    signal: Condvar,
+}
+
+impl HostReadiness {
+    const fn new() -> Self {
+        Self {
+            ready: Mutex::new(false),
+            signal: Condvar::new(),
+        }
+    }
+
+    fn mark_ready(&self) {
+        let mut ready = self.ready.lock().unwrap_or_else(PoisonError::into_inner);
+        if *ready {
+            return;
+        }
+        *ready = true;
+        self.signal.notify_all();
+    }
+
+    fn wait(&self, timeout: Duration) -> bool {
+        let ready = self.ready.lock().unwrap_or_else(PoisonError::into_inner);
+        if *ready {
+            return true;
+        }
+        let (ready, _) = self
+            .signal
+            .wait_timeout_while(ready, timeout, |ready| !*ready)
+            .unwrap_or_else(PoisonError::into_inner);
+        *ready
+    }
+}
+
+static SETTINGS_HOST_READY: HostReadiness = HostReadiness::new();
+
+pub(in crate::settings_surface) fn wait_until_ready(timeout: Duration) -> bool {
+    SETTINGS_HOST_READY.wait(timeout)
+}
+
 pub(in crate::settings_surface) fn prewarm() {
     if crate::dev_generation::is_shadow() {
         return;
@@ -75,28 +116,30 @@ pub(in crate::settings_surface) fn prewarm() {
         loop {
             let token_ready =
                 crate::features::plugin_store::server::security::current_token().is_some();
-            if token_ready
-                && spawn_replacement_after_handover(
+            if token_ready {
+                if spawn_replacement_after_handover(
                     core_daemon::send_ping(&config()),
                     handover_broken,
-                )
-            {
-                let outcome = if spawn_host(None).is_ok() {
-                    if handover_broken {
-                        "challenged"
+                ) {
+                    let outcome = if spawn_host(None).is_ok() {
+                        if handover_broken {
+                            "challenged"
+                        } else {
+                            "spawned"
+                        }
                     } else {
-                        "spawned"
-                    }
+                        "spawn_failed"
+                    };
+                    #[cfg(not(debug_assertions))]
+                    let _ = &outcome;
+                    qol_runtime::probe!(
+                        "SURFACE_ACTIVATION",
+                        "plugin=none phase=prewarm outcome={outcome}"
+                    );
+                    handover_broken = false;
                 } else {
-                    "spawn_failed"
-                };
-                #[cfg(not(debug_assertions))]
-                let _ = &outcome;
-                qol_runtime::probe!(
-                    "SURFACE_ACTIVATION",
-                    "plugin=none phase=prewarm outcome={outcome}"
-                );
-                handover_broken = false;
+                    SETTINGS_HOST_READY.mark_ready();
+                }
             }
             if std::time::Instant::now() >= deadline {
                 return;
@@ -763,6 +806,7 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
     for (tool, heading) in [
         (super::super::CoreTool::Shortcuts, "Shortcuts"),
         (super::super::CoreTool::Hotkeys, "Hotkeys"),
+        (super::super::CoreTool::Updates, "Updates"),
     ] {
         sources.push(PanelSource {
             plugin_id: tool.wire_id().to_string(),
@@ -811,6 +855,11 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
             sources,
             heading: qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME.to_string(),
             focus: None,
+            attention: Some(AttentionFeed {
+                runtime: SettingsRuntime::tray_core(),
+                query: "attention".to_string(),
+            }),
+            version: Some(format!("Version {}", crate::updates::current_version()).into()),
         },
         runtimes,
     ))
@@ -967,7 +1016,10 @@ mod tests {
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
 
-    use super::{config, notice_timeout, parse_request, spawn_replacement_after_handover, Command};
+    use super::{
+        config, notice_timeout, parse_request, spawn_replacement_after_handover, Command,
+        HostReadiness,
+    };
 
     #[test]
     fn notice_timeout_gives_failure_a_fixed_lifetime_and_success_the_tone_default() {
@@ -1213,5 +1265,32 @@ mod tests {
             spawn_replacement_after_handover(true, true),
             "a host that accepted the kill but never died must still get a challenger"
         );
+    }
+
+    #[test]
+    fn readiness_wait_returns_at_once_when_already_marked() {
+        let readiness = HostReadiness::new();
+        readiness.mark_ready();
+        assert!(readiness.wait(std::time::Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn readiness_wait_wakes_when_another_thread_marks_it() {
+        use std::sync::Arc;
+
+        let readiness = Arc::new(HostReadiness::new());
+        let marker = Arc::clone(&readiness);
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            marker.mark_ready();
+        });
+        assert!(readiness.wait(std::time::Duration::from_secs(5)));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn readiness_wait_times_out_without_a_mark() {
+        let readiness = HostReadiness::new();
+        assert!(!readiness.wait(std::time::Duration::from_millis(20)));
     }
 }

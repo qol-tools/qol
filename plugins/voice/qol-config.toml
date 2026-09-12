@@ -4,6 +4,7 @@ description = "Enable speech recognition and route completed turns to a live ter
 
 [section.activation]
 label = "Voice"
+description = "Whether qol listens on this computer at all."
 
 [field.voice_enabled]
 type = "boolean"
@@ -15,6 +16,7 @@ default = false
 
 [section.session]
 label = "Session"
+description = "What the running session is hearing right now."
 actions = ["start_listening", "stop_listening"]
 
 [field.session_status]
@@ -37,6 +39,7 @@ empty_message = "Speak while Voice is listening to see your transcript."
 
 [section.audio]
 label = "Audio Input"
+description = "Which microphone the session listens to."
 
 [field.input_device]
 type = "select"
@@ -52,6 +55,7 @@ default = "System Default"
 
 [section.routing]
 label = "Terminal Routing"
+description = "Where finished speech is typed."
 
 [field.terminal_target]
 type = "select"
@@ -80,6 +84,7 @@ submit = "Insert and submit"
 
 [section.recognition]
 label = "Speech Recognition"
+description = "Which engine turns speech into text."
 
 [field.stt_enabled]
 type = "boolean"
@@ -158,6 +163,7 @@ default = ""
 
 [section.segmentation]
 label = "Utterance Segmentation"
+description = "When qol decides you have started and stopped talking."
 
 [field.threshold]
 type = "number"

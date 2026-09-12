@@ -201,7 +201,7 @@ items = []
     fn daemon_command_injects_saved_theme_accent() {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
-        crate::features::theme::save_selected_native_accent_key("blue").unwrap();
+        crate::features::theme::save_selected_accent_key("blue").unwrap();
         let plugin = minimal_plugin(root.path());
         let command = daemon_command(&plugin, &daemon_config(), Path::new("/bin/true"), None);
 
@@ -213,18 +213,21 @@ items = []
     }
 
     #[test]
-    fn daemon_command_omits_accent_env_without_native_accent() {
+    fn daemon_command_falls_back_to_the_theme_accent() {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
-        crate::features::theme::save_selected_accent_key("blue").unwrap();
         let plugin = minimal_plugin(root.path());
         let command = daemon_command(&plugin, &daemon_config(), Path::new("/bin/true"), None);
 
-        assert!(
-            !command.get_envs().any(|(key, value)| key
-                == OsStr::new(qol_conventions::ENV_THEME_ACCENT)
-                && value.is_some()),
-            "web-only accent selection must not inject ENV_THEME_ACCENT",
+        let (_, value) = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(qol_conventions::ENV_THEME_ACCENT))
+            .expect("daemon spawns must inherit an accent");
+        assert_eq!(
+            value,
+            Some(OsStr::new(
+                crate::features::theme::current_accent_key().as_str()
+            ))
         );
     }
 

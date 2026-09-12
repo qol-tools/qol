@@ -10,7 +10,6 @@ use crate::dev::state::DiscoveredPluginInfo;
 use crate::plugins::{ActionType, PluginId, PluginLoader, PluginManager};
 use axum::extract::FromRef;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "dev")]
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -33,6 +32,29 @@ pub(super) const MOCK_TARGET_SELF_RECOMPILE: &str = "self_recompile";
 #[cfg(feature = "dev")]
 pub(super) const MOCK_TARGET_PLUGIN_BUILD: &str = "plugin_build";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PluginUpdateState {
+    Queued,
+    Updating,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PluginUpdateJob {
+    pub(super) state: PluginUpdateState,
+    pub(super) reason: Option<String>,
+}
+
+impl PluginUpdateJob {
+    pub(super) fn blocks_start(&self, from_queue: bool) -> bool {
+        match self.state {
+            PluginUpdateState::Queued => !from_queue,
+            PluginUpdateState::Updating => true,
+            PluginUpdateState::Failed => false,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct AppState {
     pub(super) plugins_dir: PathBuf,
@@ -44,6 +66,7 @@ pub(super) struct AppState {
     pub(super) installed_cache: InstalledCache,
     pub(super) plugins_cache: Arc<RwLock<Option<PluginCache>>>,
     pub(super) plugins_revalidating: Arc<AtomicBool>,
+    pub(super) plugin_updates: Arc<Mutex<HashMap<String, PluginUpdateJob>>>,
     #[cfg(feature = "dev")]
     pub(super) daemon_health:
         tokio::sync::watch::Receiver<crate::plugins::daemon_health::HealthSnapshot>,
@@ -91,6 +114,7 @@ impl AppState {
             installed_cache: Arc::new(Mutex::new(None)),
             plugins_cache: Arc::new(RwLock::new(super::super::github::read_cache())),
             plugins_revalidating: Arc::new(AtomicBool::new(false)),
+            plugin_updates: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "dev")]
             dev_state: Arc::new(crate::dev::state::DevState::new()),
             #[cfg(feature = "dev")]
@@ -110,6 +134,90 @@ impl AppState {
             }
         }
         Ok((state, plugins_dir))
+    }
+
+    pub(super) fn plugin_update_jobs(&self) -> HashMap<String, PluginUpdateJob> {
+        match self.plugin_updates.lock() {
+            Ok(jobs) => jobs.clone(),
+            Err(error) => {
+                log::error!("Plugin update job map is poisoned: {}", error);
+                HashMap::new()
+            }
+        }
+    }
+
+    pub(super) fn mark_plugin_queued(&self, id: &str) {
+        self.store_plugin_update(
+            id,
+            PluginUpdateJob {
+                state: PluginUpdateState::Queued,
+                reason: None,
+            },
+        );
+    }
+
+    pub(super) fn fail_plugin_update(&self, id: &str, reason: String) {
+        self.store_plugin_update(
+            id,
+            PluginUpdateJob {
+                state: PluginUpdateState::Failed,
+                reason: Some(reason),
+            },
+        );
+    }
+
+    pub(super) fn clear_plugin_update(&self, id: &str) {
+        match self.plugin_updates.lock() {
+            Ok(mut jobs) => {
+                jobs.remove(id);
+            }
+            Err(error) => log::error!("Plugin update job map is poisoned: {}", error),
+        }
+    }
+
+    pub(super) fn begin_plugin_update(&self, id: &str) -> Result<(), String> {
+        self.start_plugin_update(id, false)
+    }
+
+    pub(super) fn begin_queued_plugin_update(&self, id: &str) -> Result<(), String> {
+        self.start_plugin_update(id, true)
+    }
+
+    pub(super) fn any_plugin_update_active(&self) -> bool {
+        self.plugin_update_jobs().values().any(|job| {
+            matches!(
+                job.state,
+                PluginUpdateState::Queued | PluginUpdateState::Updating
+            )
+        })
+    }
+
+    fn start_plugin_update(&self, id: &str, from_queue: bool) -> Result<(), String> {
+        let mut jobs = self.plugin_updates.lock().map_err(|error| {
+            log::error!("Plugin update job map is poisoned: {}", error);
+            "The update state is unavailable".to_string()
+        })?;
+        let already_running = jobs.get(id).is_some_and(|job| job.blocks_start(from_queue));
+        if already_running {
+            return Err(crate::updates::UPDATE_ALREADY_RUNNING.to_string());
+        }
+        jobs.insert(
+            id.to_string(),
+            PluginUpdateJob {
+                state: PluginUpdateState::Updating,
+                reason: None,
+            },
+        );
+        Ok(())
+    }
+
+    fn store_plugin_update(&self, id: &str, job: PluginUpdateJob) {
+        match self.plugin_updates.lock() {
+            Ok(mut jobs) => {
+                jobs.insert(id.to_string(), job);
+            }
+            Err(error) => log::error!("Plugin update job map is poisoned: {}", error),
+        }
     }
 }
 
@@ -304,9 +412,25 @@ pub(super) struct RuntimeGpuiPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::ExecuteActionResult;
     #[cfg(feature = "dev")]
     use super::RecompileSelfRequest;
+    use super::{ExecuteActionResult, PluginUpdateJob, PluginUpdateState};
+
+    fn job(state: PluginUpdateState) -> PluginUpdateJob {
+        PluginUpdateJob {
+            state,
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn plugin_update_jobs_block_duplicate_starts() {
+        assert!(!job(PluginUpdateState::Failed).blocks_start(false));
+        assert!(!job(PluginUpdateState::Queued).blocks_start(true));
+        assert!(job(PluginUpdateState::Queued).blocks_start(false));
+        assert!(job(PluginUpdateState::Updating).blocks_start(false));
+        assert!(job(PluginUpdateState::Updating).blocks_start(true));
+    }
 
     #[test]
     fn action_response_adds_daemon_data_only_when_present() {

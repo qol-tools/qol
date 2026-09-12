@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use gpui::App;
+use gpui::{App, SharedString};
 
 pub type CustomPanelInvalidator = Rc<dyn Fn(&mut App)>;
 
@@ -35,6 +35,10 @@ impl SettingsDestination {
 
 pub trait CustomSettingsBreadcrumbs {
     fn settings_breadcrumbs(&self) -> Vec<SettingsDestination>;
+
+    fn settings_hints(&self) -> Option<Vec<(SharedString, SharedString)>> {
+        None
+    }
 }
 
 const fn require_visible_text(bytes: &[u8]) {

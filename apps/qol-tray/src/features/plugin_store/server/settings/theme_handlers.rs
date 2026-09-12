@@ -15,7 +15,16 @@ struct CoreQueryResponse {
     value: String,
 }
 
-pub(in super::super) async fn get_core_query(Path(query): Path<String>) -> impl IntoResponse {
+pub(in super::super) async fn get_core_query(
+    Path(query): Path<String>,
+    State(state): State<AppState>,
+) -> Response {
+    if query == super::update_handlers::UPDATES_QUERY {
+        return super::update_handlers::get_updates(state).await;
+    }
+    if query == super::update_handlers::ATTENTION_QUERY {
+        return super::update_handlers::get_attention(state).await;
+    }
     blocking("core query", move || get_core_query_inner(&query)).await
 }
 
@@ -217,6 +226,12 @@ mod tests {
         assert!(get_core_query_inner("accent").is_ok());
         assert!(get_core_query_inner("os_do_not_disturb").is_ok());
         assert!(get_core_query_inner("unknown").is_err());
+    }
+
+    #[test]
+    fn delegated_queries_stay_out_of_the_legacy_inner_table() {
+        assert!(get_core_query_inner(super::super::update_handlers::UPDATES_QUERY).is_err());
+        assert!(get_core_query_inner(super::super::update_handlers::ATTENTION_QUERY).is_err());
     }
 
     #[tokio::test]
