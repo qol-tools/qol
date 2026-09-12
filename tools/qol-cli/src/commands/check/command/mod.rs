@@ -1,12 +1,14 @@
 use anyhow::{bail, Context, Result};
 use qol_process::CancellationToken;
-use std::io;
-use std::process::{Child, Command, ExitStatus};
+use std::io::{self, Read, Write};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const TERMINATION_GRACE: Duration = Duration::from_secs(2);
+const CAPTURE_STDERR_LIMIT: usize = 64 * 1024;
+const CAPTURE_BUFFER: usize = 8192;
 
 mod platform;
 
@@ -53,20 +55,132 @@ pub(super) fn run(
     cancellation: &impl CancellationState,
     containment: Containment,
     verbose: bool,
-) -> Result<()> {
+) -> (Option<i32>, Result<()>) {
     if cancellation.is_cancelled() {
-        bail!("check cancelled before command start");
+        return (
+            None,
+            Err(anyhow::anyhow!("check cancelled before command start")),
+        );
     }
-    let owner = CommandOwner::acquire(containment)?;
-    crate::progress::run_status_with(
+    let owner = match CommandOwner::acquire(containment) {
+        Ok(owner) => owner,
+        Err(error) => return (None, Err(error)),
+    };
+    let mut exit = None;
+    let result = crate::progress::run_status_with(
         command,
         verbose,
         |command| owner.spawn(command),
         |child| {
             let outcome = wait_for_exit(child, &owner, cancellation);
+            if let Ok(status) = &outcome {
+                exit = Some(*status);
+            }
             recover_wait_failure(child, &owner, outcome)
         },
-    )
+    );
+    (exit.and_then(|status| status.code()), result)
+}
+
+pub(super) enum CapturedOutcome {
+    Exited(ExitStatus),
+    Failed(anyhow::Error),
+}
+
+pub(super) struct CapturedOutput {
+    pub(super) stdout: Vec<u8>,
+    pub(super) stderr: Vec<u8>,
+    pub(super) outcome: CapturedOutcome,
+}
+
+pub(super) fn run_captured(
+    command: &mut Command,
+    input: &[u8],
+    cancellation: &impl CancellationState,
+    containment: Containment,
+) -> CapturedOutput {
+    if cancellation.is_cancelled() {
+        return captured_failure(anyhow::anyhow!("check cancelled before command start"));
+    }
+    let owner = match CommandOwner::acquire(containment) {
+        Ok(owner) => owner,
+        Err(error) => return captured_failure(error),
+    };
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match owner.spawn(command) {
+        Ok(child) => child,
+        Err(error) => return captured_failure(error),
+    };
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|pipe| thread::spawn(move || read_capture(pipe, None)));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|pipe| thread::spawn(move || read_capture(pipe, Some(CAPTURE_STDERR_LIMIT))));
+    let payload = input.to_vec();
+    let stdin_writer = child
+        .stdin
+        .take()
+        .map(|mut pipe| thread::spawn(move || pipe.write_all(&payload)));
+    let outcome = wait_for_exit(&mut child, &owner, cancellation);
+    let outcome = recover_wait_failure(&mut child, &owner, outcome);
+    let stdout = join_capture(stdout_reader);
+    let stderr = join_capture(stderr_reader);
+    if let Some(writer) = stdin_writer {
+        let _ = writer.join();
+    }
+    match outcome {
+        Ok(status) => CapturedOutput {
+            stdout,
+            stderr,
+            outcome: CapturedOutcome::Exited(status),
+        },
+        Err(error) => CapturedOutput {
+            stdout,
+            stderr,
+            outcome: CapturedOutcome::Failed(error),
+        },
+    }
+}
+
+fn captured_failure(error: anyhow::Error) -> CapturedOutput {
+    CapturedOutput {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        outcome: CapturedOutcome::Failed(error),
+    }
+}
+
+fn read_capture<R: Read>(mut reader: R, limit: Option<usize>) -> Vec<u8> {
+    let mut collected = Vec::new();
+    let mut buffer = vec![0_u8; CAPTURE_BUFFER];
+    loop {
+        let count = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(_) => break,
+        };
+        match limit {
+            Some(limit) if collected.len() >= limit => {}
+            Some(limit) => {
+                let remaining = limit - collected.len();
+                collected.extend_from_slice(&buffer[..count.min(remaining)]);
+            }
+            None => collected.extend_from_slice(&buffer[..count]),
+        }
+    }
+    collected
+}
+
+fn join_capture(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
 }
 
 impl CommandOwner {
@@ -338,7 +452,8 @@ mod tests {
         });
         let mut command = stubborn_group_command(&leader, &descendant);
 
-        let error = run(&mut command, &cancellation, Containment::Preferred, false).unwrap_err();
+        let (_, error) = run(&mut command, &cancellation, Containment::Preferred, false);
+        let error = error.unwrap_err();
 
         trigger_thread.join().unwrap();
         assert!(
@@ -360,8 +475,8 @@ mod tests {
         let root = std::path::PathBuf::from(root);
         let token = CancellationToken::install().unwrap();
         let mut command = stubborn_group_command(&root.join("leader"), &root.join("descendant"));
-        let result = run(&mut command, &token, Containment::Preferred, false);
-        fs::write(root.join("terminal"), format!("{result:?}")).unwrap();
+        let (exit, result) = run(&mut command, &token, Containment::Preferred, false);
+        fs::write(root.join("terminal"), format!("{exit:?} {result:?}")).unwrap();
     }
 
     #[cfg(unix)]
@@ -436,7 +551,8 @@ mod tests {
             ])
             .env("QOL_CHECK_ESCAPED_SESSION_MARKER", &marker);
 
-        let error = run(&mut command, &cancellation, Containment::Required, false).unwrap_err();
+        let (_, error) = run(&mut command, &cancellation, Containment::Required, false);
+        let error = error.unwrap_err();
 
         trigger_thread.join().unwrap();
         assert!(
@@ -444,6 +560,116 @@ mod tests {
             "unexpected error: {error:#}"
         );
         assert!(!qol_process::is_pid_alive(read_pid(&marker)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_steps_report_a_zero_exit_code() {
+        let cancellation = FakeCancellation::default();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+
+        let (exit_code, result) = run(&mut command, &cancellation, Containment::Preferred, false);
+
+        assert_eq!(exit_code, Some(0));
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_steps_report_their_exit_code() {
+        let cancellation = FakeCancellation::default();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 7"]);
+
+        let (exit_code, result) = run(&mut command, &cancellation, Containment::Preferred, false);
+
+        assert_eq!(exit_code, Some(7));
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_run_returns_stdout_and_exit_status() {
+        let cancellation = FakeCancellation::default();
+        let mut command = Command::new("sh");
+        command.args(["-c", "cat"]);
+
+        let output = run_captured(
+            &mut command,
+            b"formatted source",
+            &cancellation,
+            Containment::Preferred,
+        );
+
+        match output.outcome {
+            CapturedOutcome::Exited(status) => assert!(status.success()),
+            CapturedOutcome::Failed(error) => panic!("unexpected failure: {error:#}"),
+        }
+        assert_eq!(output.stdout, b"formatted source".as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_run_reports_a_nonzero_exit_and_stderr() {
+        let cancellation = FakeCancellation::default();
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf problem >&2; exit 3"]);
+
+        let output = run_captured(&mut command, b"", &cancellation, Containment::Preferred);
+
+        match output.outcome {
+            CapturedOutcome::Exited(status) => assert_eq!(status.code(), Some(3)),
+            CapturedOutcome::Failed(error) => panic!("unexpected failure: {error:#}"),
+        }
+        assert_eq!(output.stderr, b"problem".as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_run_rejects_a_cancelled_token_before_spawn() {
+        let cancellation = FakeCancellation::default();
+        cancellation.cancelled.store(true, Ordering::Release);
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+
+        let output = run_captured(&mut command, b"", &cancellation, Containment::Preferred);
+
+        match output.outcome {
+            CapturedOutcome::Failed(error) => assert!(error.to_string().contains("cancelled")),
+            CapturedOutcome::Exited(status) => panic!("expected cancellation, got {status}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_run_cancellation_reaps_the_owned_group() {
+        let root = tempfile::tempdir().unwrap();
+        let leader = root.path().join("leader");
+        let descendant = root.path().join("descendant");
+        let cancellation = FakeCancellation::default();
+        let trigger = cancellation.clone();
+        let leader_for_trigger = leader.clone();
+        let trigger_thread = thread::spawn(move || {
+            wait_for_path(&leader_for_trigger);
+            trigger.cancelled.store(true, Ordering::Release);
+            thread::sleep(Duration::from_millis(50));
+            trigger.escalated.store(true, Ordering::Release);
+        });
+        let mut command = stubborn_group_command(&leader, &descendant);
+
+        let output = run_captured(&mut command, b"", &cancellation, Containment::Preferred);
+        trigger_thread.join().unwrap();
+
+        match output.outcome {
+            CapturedOutcome::Failed(error) => assert!(
+                error.to_string().contains("cancelled"),
+                "unexpected error: {error:#}"
+            ),
+            CapturedOutcome::Exited(status) => panic!("expected cancellation, got {status}"),
+        }
+        assert!(!qol_process::is_group_alive(read_pid(&leader)));
+        assert!(!qol_process::is_pid_alive(read_pid(&descendant)));
     }
 
     #[cfg(unix)]

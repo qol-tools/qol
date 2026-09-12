@@ -151,12 +151,16 @@ fn app() -> HeadlessApp {
             command(
                 "check",
                 "Run affected workspace checks.",
-                "qol check [--staged|--lint]",
-                "--staged checks the exact staged tree instead of the working tree.",
+                "qol check [--staged|--lint] [--base REV] [--report PATH] [--format-owned PATH]",
+                "--staged checks the exact staged tree instead of the working tree. --base REV pins the comparison base for affected planning. --report PATH publishes the machine report. Repeatable --format-owned PATH formats exactly the named Rust source files before full worktree checks.",
                 "Check plan and command progress on stdout; diagnostics on stderr.",
-                "Exits non-zero when planning or a selected check fails.",
+                "Exits non-zero when planning, formatting, or a selected check fails, or when the source changes mid-run.",
             )
-            .detail("--lint runs clippy only over uncommitted changes plus dependents, with its own lint cache."),
+            .detail("--lint runs clippy only over uncommitted changes plus dependents, with its own lint cache.")
+            .detail("--format-owned validates every named file and the formatter before any write, never follows modules, and records before/after hashes, keeping completed rewrites when a later file fails.")
+            .detail("A --report destination is refused when it is a tracked source path, a symlink, a directory, or an existing file that is not a prior qol-check report.")
+            .detail("Publication is recorded in the run-directory report and starts as pending until the external rename succeeds, and a failed publication never leaves a verified report behind.")
+            .detail("Full checks fingerprint the source before and after, and a mismatch marks the run stale instead of passing."),
         )
         .command(command(
             "clean",
@@ -208,6 +212,7 @@ fn app() -> HeadlessApp {
             )
             .detail(format!("The agent surface is {agent_tools}."))
             .detail("spawn launches a tagged harness for a registered tool or reuses its live match under the same key.")
+            .detail("Agent assignment binds a dispatch to a named agent_profiles entry with a closed role and explicit image_input or visual_review requirements; configuring any profile enables enforcement unless enforce_agent_profiles is false, and the profile's declared tool and model must match the launch while allowed_models still governs spending.")
             .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
             .detail("next prints the exact command for each open round; resume re-attaches to a pending round and waits without submitting.")
             .detail("read, send, wait, and focus remain human diagnostics.")
@@ -224,23 +229,23 @@ fn app() -> HeadlessApp {
                 "capability",
                 "Report whether a lane can be spawned, optionally at a named tier.",
                 "qol sessions capability [--tier TOKEN]",
-                "Answers whether spawning a lane is possible right now: lane_spawn is true when a registered tool is installed and a model is resolvable, and --tier TOKEN narrows that to models whose id carries the token, so a caller asks for a tier without naming a vendor or a model. Each tool row reports its launch program, whether that program is installed, the models its catalog lists, and the subset matching the tier. A tool whose harness exposes no model catalog reports no models and answers only the untiered question.",
+                "Answers whether spawning a lane is possible right now: lane_spawn is true when a registered tool is installed and a model is resolvable, and --tier TOKEN narrows that to models whose id carries the token, so a caller asks for a tier without naming a vendor or a model. Each tool row reports its launch program, whether that program is installed, the models its catalog lists, and the subset matching the tier. A tool whose harness exposes no model catalog reports no models and answers only the untiered question. The same JSON lists the configured agent_profiles sorted by preference with their tool, model, roles, image_input and visual_review declarations plus spend_allowed against allowed_models, so a caller can choose a profile within budget without any vendor ranking being baked in.",
                 "Capability JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when a flag is invalid or the spawn model config cannot be read.",
             ))
             .subcommand(command(
                 "spawn",
                 "Launch a tagged tool session or reuse its live match.",
-                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--no-resume]",
-                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, surface, model, and title. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab; an explicit --model overrides the spawned session's model, with spawn_model in the same file as the fallback. --title names the new tab (the lane key by default); --task delivers the first round at spawn time so the round is already open when the command returns. Resume is automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out, and the spawn JSON reports resume and resume_detail.",
+                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--no-resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]",
+                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, surface, model, and title, plus agent_assignment and agent_status when the dispatch is constrained. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab; an explicit --model overrides the spawned session's model, with spawn_model in the same file as the fallback, while a selected agent profile supplies its declared model and refuses a conflicting --model or --tool. --title names the new tab (the lane key by default); --task delivers the first round at spawn time so the round is already open when the command returns. Resume is automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out, and the spawn JSON reports resume and resume_detail; a constrained resume cannot promote a prior session without a compatible recorded assignment and asks for resume=false instead. --agent-profile names an agent_profiles entry, --task-role is required for every constrained assignment even when --requires is empty, and --requires is a comma-separated list drawn from image_input and visual_review: image_input needs a native declaration and visual_review needs native plus allow. Configuring any profile enables enforcement unless enforce_agent_profiles is false, and a lane set inherits top-level assignment fields while refusing a field set both top-level and on a lane.",
                 "Spawn JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero on orchestration, identity, capability, readiness, or task delivery failure.",
             ))
             .subcommand(command(
                 "fork",
                 "Launch a detached architect that never reports back.",
-                "qol sessions fork --tool TOOL --cwd PATH --key KEY --model MODEL (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION]",
-                "Launches a new terminal that owns the brief end to end and reports to the user in its own terminal, not back to the caller. Use it when a second problem surfaces mid-session and chasing it would cost the thread already being held. A fork is the root of a new tree, not a lane: no round is opened on it, no completion signal is embedded in its launch, and bridge refuses it by name. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. --model is required so a fork launches at a deliberately chosen tier rather than inheriting the caller's, and --effort is passed to tools that take one (claude: low, medium, high, xhigh, max). A key already held by a live session is refused because a fork always starts fresh.",
+                "qol sessions fork --tool TOOL --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]",
+                "Launches a new terminal that owns the brief end to end and reports to the user in its own terminal, not back to the caller. Use it when a second problem surfaces mid-session and chasing it would cost the thread already being held. A fork is the root of a new tree, not a lane: no round is opened on it, no completion signal is embedded in its launch, and bridge refuses it by name. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. --model is optional: an explicit value wins, then the selected agent profile's declared model, then spawn_model in sessions.toml, and a value that conflicts with the selected profile is refused. --effort is passed to tools that take one (claude: low, medium, high, xhigh, max). --agent-profile binds the fork to an agent_profiles entry; --task-role and --requires declare the role and capabilities, and the resolved assignment is recorded with the fork. A key already held by a live session is refused because a fork always starts fresh.",
                 "Fork JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero on validation, key conflict, readiness, or launch failure.",
             ))
@@ -255,8 +260,8 @@ fn app() -> HeadlessApp {
             .subcommand(command(
                 "submit",
                 "Deliver one bounded task and return with the round open.",
-                "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]",
-                "Submits exactly once with a generated completion signal and returns immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. Refuses when a round is already pending on that session; pass the reviewed completion_marker as --acknowledge-marker to start the next round. Wait for the completion with `qol sessions bridge <session>` (no task) or resume.",
+                "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]",
+                "Submits exactly once with a generated completion signal and returns immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. Refuses when a round is already pending on that session; pass the reviewed completion_marker as --acknowledge-marker to start the next round. --agent-profile, --task-role and --requires declare a constrained round; omitted, they inherit the assignment recorded against the session, and in every case the recorded profile is revalidated against current policy before the task is dispatched. A constrained submit to a session with no recorded identity is refused instead of relabelling it. Wait for the completion with `qol sessions bridge <session>` (no task) or resume.",
                 "Submit JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero on validation or delivery failure; the round is open only when delivery is observed.",
             ))
@@ -272,7 +277,7 @@ fn app() -> HeadlessApp {
                 "next",
                 "Print the exact next command for each open bridge round.",
                 "qol sessions next [<session>] [--json]",
-                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target already printed its completion signal prints phase=collect with the resume command that collects it; a round whose target went idle without its completion signal prints resume --kickstart; a round whose target's terminal is gone prints discard; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle.",
+                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target already printed its completion signal prints phase=collect with the resume command that collects it; a round whose target went idle without its completion signal prints resume --kickstart; a round whose target's terminal is gone prints discard; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle. Every row also carries agent_status and the recorded agent_assignment when one exists, so a reviewer sees what policy was checked for the dispatch.",
                 "Round phases and commands on stdout.",
                 "Exits non-zero when the bridge state cannot be read.",
             ))

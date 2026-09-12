@@ -293,3 +293,4 @@ fn git_config_path(root: &Path, name: &str, value: &Path) {
     );
 }
 mod reuse;
+mod target_lock;

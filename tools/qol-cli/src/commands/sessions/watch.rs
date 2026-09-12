@@ -82,6 +82,7 @@ struct WatchedRound {
     transcript_paths: Vec<std::path::PathBuf>,
     transcript_pinned: bool,
     transcript_owned_seen: bool,
+    agent_assignment: Option<super::agent_policy::AgentAssignment>,
 }
 
 impl WatchedRound {
@@ -113,6 +114,7 @@ impl WatchedRound {
             transcript_paths: round.transcript_paths,
             transcript_pinned: false,
             transcript_owned_seen: false,
+            agent_assignment: round.agent_assignment,
         })
     }
 
@@ -444,6 +446,7 @@ fn complete_seen_round(
             round.label.as_deref(),
             markerless,
             &cleaned,
+            round.agent_assignment.as_ref(),
         );
         WakeDelivery {
             delivered: false,
@@ -674,6 +677,7 @@ fn poll_round(
                             round.label.as_deref(),
                             markerless,
                             &clean_screen(full_screen),
+                            round.agent_assignment.as_ref(),
                         );
                         WakeDelivery {
                             delivered: false,
@@ -695,6 +699,7 @@ fn poll_round(
                                 round.autoclose,
                                 round.label.as_deref(),
                                 markerless,
+                                round.agent_assignment.as_ref(),
                             ),
                             sleep,
                         )?
@@ -803,6 +808,7 @@ fn poll_round(
                         "",
                         false,
                         round.label.as_deref(),
+                        round.agent_assignment.as_ref(),
                     ),
                 };
                 let delivery = deliver_wake(
@@ -904,6 +910,7 @@ fn poll_round(
                         &round.marker,
                         round.autoclose,
                         round.label.as_deref(),
+                        round.agent_assignment.as_ref(),
                     )
                 };
                 return complete_seen_round(
@@ -977,6 +984,7 @@ fn poll_round(
                             &round.marker,
                             round.autoclose,
                             round.label.as_deref(),
+                            round.agent_assignment.as_ref(),
                         )
                     };
                     return complete_seen_round(
@@ -1059,6 +1067,7 @@ fn poll_round(
                 &round.marker,
                 &clean_screen(screen_tail(&report)),
                 round.label.as_deref(),
+                round.agent_assignment.as_ref(),
             )
         };
         let outcome = if finished_turn {
@@ -1829,6 +1838,7 @@ fn wake_message(
     marker: &str,
     autoclose: bool,
     label: Option<&str>,
+    assignment: Option<&super::agent_policy::AgentAssignment>,
 ) -> String {
     match event {
         "completed" => {
@@ -1841,6 +1851,7 @@ fn wake_message(
                 autoclose,
                 label,
                 false,
+                assignment,
             )
         }
         "gone" => format!(
@@ -1880,6 +1891,7 @@ enum MarkerlessReason {
     Faulted(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn markerless_wake_message(
     reason: MarkerlessReason,
     trace_dir: &std::path::Path,
@@ -1888,6 +1900,7 @@ fn markerless_wake_message(
     marker: &str,
     cleaned: &str,
     label: Option<&str>,
+    assignment: Option<&super::agent_policy::AgentAssignment>,
 ) -> String {
     let cause = match &reason {
         MarkerlessReason::FinishedTurn => {
@@ -1904,7 +1917,7 @@ fn markerless_wake_message(
         "{cause}\nThe attached report is the receipt; review it like a normal report and resubmit if the work is incomplete."
     );
     lane_report_wake_message(
-        &sentence, cleaned, trace_dir, locks, session, marker, true, label,
+        &sentence, cleaned, trace_dir, locks, session, marker, true, label, assignment,
     )
 }
 
@@ -1918,6 +1931,7 @@ fn lane_report_wake_message(
     marker: &str,
     markerless: bool,
     label: Option<&str>,
+    assignment: Option<&super::agent_policy::AgentAssignment>,
 ) -> String {
     match evidence::publish(
         trace_dir,
@@ -1927,6 +1941,7 @@ fn lane_report_wake_message(
         label,
         markerless,
         cleaned.as_bytes(),
+        assignment,
     ) {
         Ok(published) => format!(
             "{sentence}\n\nReport: {}\nReceipt: {}",
@@ -1961,6 +1976,7 @@ fn completion_message(
     autoclose: bool,
     label: Option<&str>,
     markerless: bool,
+    assignment: Option<&super::agent_policy::AgentAssignment>,
 ) -> String {
     let sentence = if autoclose {
         format!(
@@ -1971,7 +1987,7 @@ fn completion_message(
     };
     let cleaned = clean_screen(screen);
     lane_report_wake_message(
-        &sentence, &cleaned, trace_dir, locks, session, marker, markerless, label,
+        &sentence, &cleaned, trace_dir, locks, session, marker, markerless, label, assignment,
     )
 }
 
@@ -1984,6 +2000,7 @@ fn publish_silent_evidence(
     label: Option<&str>,
     markerless: bool,
     cleaned: &str,
+    assignment: Option<&super::agent_policy::AgentAssignment>,
 ) {
     if let Err(failure) = evidence::publish(
         trace_dir,
@@ -1993,6 +2010,7 @@ fn publish_silent_evidence(
         label,
         markerless,
         cleaned.as_bytes(),
+        assignment,
     ) {
         probe_evidence_failure(session, true, &failure);
         eprintln!(
@@ -3288,6 +3306,7 @@ mod tests {
             marker,
             true,
             None,
+            None,
         );
         assert!(
             !closable.contains("session_loop_close") && !closable.contains("Review it"),
@@ -3305,6 +3324,7 @@ mod tests {
             "done",
             marker,
             false,
+            None,
             None,
         );
         assert!(
@@ -3346,6 +3366,7 @@ mod tests {
             &screen,
             marker,
             false,
+            None,
             None,
         );
         assert_eq!(
@@ -3397,6 +3418,7 @@ mod tests {
             marker,
             false,
             None,
+            None,
         );
         assert!(wake.contains("Report:"), "the wake is a pointer: {wake:?}");
         assert!(
@@ -3440,6 +3462,7 @@ mod tests {
             marker,
             false,
             None,
+            None,
         );
         assert!(
             wake.len() < 2048,
@@ -3468,6 +3491,7 @@ mod tests {
             screen,
             "QOL_BRIDGE_DONE_round",
             false,
+            None,
             None,
         );
         assert!(
@@ -3532,6 +3556,7 @@ mod tests {
             marker,
             false,
             label,
+            None,
         );
         let report_path = wake_pointer(&wake, "Report");
         assert_eq!(
@@ -3568,6 +3593,7 @@ mod tests {
             session,
             marker,
             body,
+            None,
             None,
         );
         let report_path = wake_pointer(&wake, "Report");
@@ -3612,6 +3638,7 @@ mod tests {
             session,
             marker,
             body,
+            None,
             None,
         );
         let report_path = wake_pointer(&wake, "Report");

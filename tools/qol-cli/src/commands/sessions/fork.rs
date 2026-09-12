@@ -9,9 +9,10 @@ use qol_terminal_sessions::cli::{CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::TerminalSessionService;
 use serde::{Deserialize, Serialize};
 
+use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
 use super::spawn::{
-    config_spawn_cap, config_surface, resolve_spawn_cap, spawn_detached, SpawnCapConfig,
-    SpawnLedger, SpawnLocks,
+    config_dispatch_policy, config_spawn_cap, config_surface, resolve_spawn_cap, spawn_detached,
+    SpawnCapConfig, SpawnLedger, SpawnLocks,
 };
 
 const BRIEF_MAX_BYTES: usize = 256 * 1024;
@@ -32,6 +33,8 @@ pub(super) struct ForkRecord {
     pub(super) created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) agent_assignment: Option<AgentAssignment>,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,6 +54,9 @@ pub(super) struct ForkOutcome {
     pub(super) parent: Option<String>,
     pub(super) elapsed_ms: u128,
     pub(super) instruction: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) agent_assignment: Option<AgentAssignment>,
+    pub(super) agent_status: AgentStatus,
 }
 
 pub(super) struct ForkStore {
@@ -204,20 +210,42 @@ pub(super) fn fork(
     cwd: &str,
     key: &str,
     surface: Option<&str>,
-    model: &str,
+    model: Option<&str>,
     effort: Option<&str>,
     title: Option<&str>,
     brief: &str,
     parent: Option<&str>,
     cap: Option<&SpawnCapConfig>,
+    dispatch: &AgentDispatch,
 ) -> Result<ForkOutcome> {
     validate_brief(brief)?;
     let tool_id = CliToolId::new(tool.to_owned())
         .map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
     let extra = effort_args(&tool_id, effort)?;
+    let admission = dispatch.admit_launch(tool, model)?;
+    let Some(model) = admission.model.as_deref() else {
+        bail!(
+            "a fork needs --model, a selected profile model, or spawn_model in sessions.toml so the tier is one this host may launch"
+        );
+    };
     let created_at = now_seconds();
     let brief_path = forks.write_brief(key, created_at, brief)?;
     let prompt = fork_prompt(&brief_path, parent);
+    let mut record = ForkRecord {
+        key: key.to_owned(),
+        tool: tool.to_owned(),
+        model: model.to_owned(),
+        effort: effort.map(str::to_owned),
+        surface: surface.unwrap_or(super::spawn::SURFACE_TAB).to_owned(),
+        cwd: cwd.to_owned(),
+        session: String::new(),
+        title: title.unwrap_or(key).to_owned(),
+        brief: brief_path.display().to_string(),
+        created_at,
+        parent: parent.map(str::to_owned),
+        agent_assignment: admission.assignment.clone(),
+    };
+    forks.record(&record)?;
     let launched = spawn_detached(
         terminals,
         interpreter,
@@ -233,20 +261,12 @@ pub(super) fn fork(
         config_surface()?,
         cap,
         &prompt,
+        admission.assignment.as_ref(),
     )?;
-    let record = ForkRecord {
-        key: key.to_owned(),
-        tool: tool.to_owned(),
-        model: model.to_owned(),
-        effort: effort.map(str::to_owned),
-        surface: launched.surface.to_owned(),
-        cwd: launched.cwd.clone(),
-        session: launched.session.clone(),
-        title: launched.title.clone(),
-        brief: brief_path.display().to_string(),
-        created_at,
-        parent: parent.map(str::to_owned),
-    };
+    record.surface = launched.surface.to_owned();
+    record.cwd = launched.cwd.clone();
+    record.session = launched.session.clone();
+    record.title = launched.title.clone();
     forks.record(&record)?;
     qol_runtime::probe!(
         "CLI_SESSION_FORK",
@@ -271,16 +291,18 @@ pub(super) fn fork(
         parent: record.parent.clone(),
         elapsed_ms: launched.elapsed_ms,
         instruction: "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.".to_owned(),
+        agent_assignment: record.agent_assignment.clone(),
+        agent_status: AgentStatus::of(record.agent_assignment.as_ref()),
     })
 }
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
-    super::spawn::enforce_allowed_model(&parsed.model)?;
     if parsed.help {
         println!("{}", help());
         return Ok(());
     }
+    let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
     let brief = match (&parsed.brief, &parsed.brief_file) {
         (Some(_), Some(_)) => bail!("pass --brief or --brief-file, not both"),
         (Some(brief), None) => brief.clone(),
@@ -299,12 +321,13 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &parsed.cwd,
         &parsed.key,
         parsed.surface.as_deref(),
-        &parsed.model,
+        parsed.model.as_deref(),
         parsed.effort.as_deref(),
         parsed.title.as_deref(),
         &brief,
         parsed.parent.as_deref(),
         resolve_spawn_cap(config_spawn_cap()?).as_ref(),
+        &dispatch,
     )?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
     Ok(())
@@ -336,16 +359,29 @@ pub(super) struct ForkArgs {
     pub(super) cwd: String,
     pub(super) key: String,
     pub(super) surface: Option<String>,
-    pub(super) model: String,
+    pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
     pub(super) title: Option<String>,
     pub(super) brief: Option<String>,
     pub(super) brief_file: Option<String>,
     pub(super) parent: Option<String>,
+    pub(super) agent_profile: Option<String>,
+    pub(super) task_role: Option<super::agent_policy::AgentRole>,
+    pub(super) requires: Option<Vec<super::agent_policy::AgentRequirement>>,
+}
+
+impl ForkArgs {
+    fn assignment_request(&self) -> super::agent_policy::AssignmentRequest {
+        super::agent_policy::AssignmentRequest {
+            agent_profile: self.agent_profile.clone(),
+            task_role: self.task_role,
+            requires: self.requires.clone(),
+        }
+    }
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork --tool TOOL --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--model defaults to spawn_model in sessions.toml and is refused unless allowed_models permits it, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork --tool TOOL --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
@@ -367,7 +403,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
             "--cwd" => parsed.cwd = flag_value(args, &mut index, "--cwd")?,
             "--key" => parsed.key = flag_value(args, &mut index, "--key")?,
             "--surface" => parsed.surface = Some(flag_value(args, &mut index, "--surface")?),
-            "--model" => parsed.model = flag_value(args, &mut index, "--model")?,
+            "--model" => parsed.model = Some(flag_value(args, &mut index, "--model")?),
             "--effort" => parsed.effort = Some(flag_value(args, &mut index, "--effort")?),
             "--title" => parsed.title = Some(flag_value(args, &mut index, "--title")?),
             "--brief" => parsed.brief = Some(flag_value(args, &mut index, "--brief")?),
@@ -375,6 +411,23 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
                 parsed.brief_file = Some(flag_value(args, &mut index, "--brief-file")?)
             }
             "--parent" => parsed.parent = Some(flag_value(args, &mut index, "--parent")?),
+            "--agent-profile" => {
+                parsed.agent_profile = Some(flag_value(args, &mut index, "--agent-profile")?)
+            }
+            "--task-role" => {
+                let token = flag_value(args, &mut index, "--task-role")?;
+                let role = super::agent_policy::AgentRole::from_token(&token).ok_or_else(|| {
+                    anyhow!(
+                        "unknown task role `{token}`; expected one of {}",
+                        super::agent_policy::role_catalog()
+                    )
+                })?;
+                parsed.task_role = Some(role);
+            }
+            "--requires" => {
+                let value = flag_value(args, &mut index, "--requires")?;
+                parsed.requires = Some(super::agent_policy::parse_requires(&value)?);
+            }
             other => bail!("unknown fork flag `{other}`\n\n{}", help()),
         }
         index += 1;
@@ -385,15 +438,6 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
     if parsed.key.is_empty() {
         bail!(
             "fork requires --key so the detached tree is findable later\n\n{}",
-            help()
-        );
-    }
-    if parsed.model.is_empty() {
-        parsed.model = super::spawn::config_spawn_model()?.unwrap_or_default();
-    }
-    if parsed.model.is_empty() {
-        bail!(
-            "fork requires --model or a spawn_model in sessions.toml so the tier is one this host may launch\n\n{}",
             help()
         );
     }
@@ -435,9 +479,25 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(parsed.tool, "claude");
-        assert_eq!(parsed.model, "opus");
+        assert_eq!(parsed.model.as_deref(), Some("opus"));
         assert_eq!(parsed.effort.as_deref(), Some("xhigh"));
         assert_eq!(parsed.brief.as_deref(), Some("the lockfile goes stale"));
+
+        let profile_only = parse_args(&args(&[
+            "--cwd",
+            "/work",
+            "--key",
+            "chase-lockfile",
+            "--agent-profile",
+            "worker",
+            "--brief",
+            "the lockfile goes stale",
+        ]))
+        .unwrap();
+        assert_eq!(
+            profile_only.model, None,
+            "a selected profile supplies the model, so the parse must not require one"
+        );
 
         for (missing, expected) in [
             (args(&["--key", "k", "--model", "opus"]), "--cwd"),
@@ -517,6 +577,7 @@ mod tests {
                     brief: brief.display().to_string(),
                     created_at,
                     parent: None,
+                    agent_assignment: None,
                 })
                 .unwrap();
         }
@@ -533,5 +594,82 @@ mod tests {
             "newer"
         );
         assert!(store.find_session("v1:kitty:absent:1").unwrap().is_none());
+    }
+
+    #[test]
+    fn fork_args_read_the_agent_assignment_flags() {
+        let parsed = parse_args(&args(&[
+            "--cwd",
+            "/work",
+            "--key",
+            "chase",
+            "--model",
+            "opus",
+            "--brief",
+            "chase it",
+            "--agent-profile",
+            "worker",
+            "--task-role",
+            "debug",
+            "--requires",
+            "image_input,visual_review",
+        ]))
+        .unwrap();
+        let request = parsed.assignment_request();
+        assert_eq!(request.agent_profile.as_deref(), Some("worker"));
+        assert_eq!(
+            request.task_role,
+            Some(super::super::agent_policy::AgentRole::Debug)
+        );
+        assert_eq!(
+            request.requires,
+            Some(vec![
+                super::super::agent_policy::AgentRequirement::ImageInput,
+                super::super::agent_policy::AgentRequirement::VisualReview,
+            ])
+        );
+
+        let empty = parse_args(&args(&[
+            "--cwd",
+            "/work",
+            "--key",
+            "k",
+            "--brief",
+            "b",
+            "--requires",
+            "",
+        ]))
+        .unwrap();
+        assert_eq!(empty.requires, Some(Vec::new()));
+        assert!(!empty.assignment_request().is_unconstrained());
+
+        let error = parse_args(&args(&[
+            "--cwd",
+            "/work",
+            "--key",
+            "k",
+            "--model",
+            "opus",
+            "--brief",
+            "b",
+            "--task-role",
+            "supervisor",
+        ]))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("supervisor"), "{error}");
+        assert!(parse_args(&args(&[
+            "--cwd",
+            "/work",
+            "--key",
+            "k",
+            "--model",
+            "opus",
+            "--brief",
+            "b",
+            "--requires",
+            "sight",
+        ]))
+        .is_err());
     }
 }

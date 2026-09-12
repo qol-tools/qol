@@ -93,7 +93,10 @@ impl StagedStorage {
         std::fs::create_dir_all(&source_storage).with_context(|| {
             format!("creating staged check storage {}", source_storage.display())
         })?;
-        let lock = open_storage_lock(&source_storage.join("run.lock"))?;
+        let lock = acquire_lock(
+            &source_storage.join("run.lock"),
+            "another `qol check --staged` is already using this repository",
+        )?;
         Ok(Self {
             root: isolated_worktree_root(source_root)?,
             cargo_target: source_storage.join("cargo-target"),
@@ -125,7 +128,7 @@ fn isolated_worktree_root(source_root: &Path) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn open_storage_lock(path: &Path) -> Result<StorageLock> {
+pub(super) fn acquire_lock(path: &Path, busy: &str) -> Result<StorageLock> {
     let lock = OpenOptions::new()
         .create(true)
         .read(true)
@@ -135,9 +138,7 @@ fn open_storage_lock(path: &Path) -> Result<StorageLock> {
         .with_context(|| format!("opening staged check lock {}", path.display()))?;
     match lock.try_lock() {
         Ok(()) => Ok(StorageLock(lock)),
-        Err(TryLockError::WouldBlock) => {
-            bail!("another `qol check --staged` is already using this repository")
-        }
+        Err(TryLockError::WouldBlock) => bail!("{busy}"),
         Err(TryLockError::Error(error)) => {
             Err(error).with_context(|| format!("locking staged check storage {}", path.display()))
         }

@@ -5,7 +5,8 @@ use anyhow::{anyhow, bail, Result};
 use qol_terminal_sessions::cli::{CliModelCatalog, CliSessionInterpreter, CliToolId};
 use serde::Serialize;
 
-use super::spawn::config_spawn_model;
+use super::agent_policy::{AgentRole, ImageInput, VisualReview};
+use super::spawn::config_dispatch_policy;
 
 const USAGE: &str = "qol sessions capability [--tier TOKEN]";
 
@@ -19,11 +20,30 @@ struct ToolCapability {
 }
 
 #[derive(Serialize)]
+struct ProfileCapability {
+    name: String,
+    tool: String,
+    model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    roles: Vec<AgentRole>,
+    image_input: ImageInput,
+    visual_review: VisualReview,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preference: Option<i64>,
+    spend_allowed: bool,
+}
+
+#[derive(Serialize)]
 struct Capability {
     tier: Option<String>,
     lane_spawn: bool,
     spawn_model: Option<String>,
     tools: Vec<ToolCapability>,
+    agent_enforcement: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_agent_profile: Option<String>,
+    profiles: Vec<ProfileCapability>,
 }
 
 fn parse_args(args: &[OsString]) -> Result<Option<String>> {
@@ -119,20 +139,48 @@ fn lane_spawn(tools: &[ToolCapability], tier: Option<&str>, spawn_model: Option<
     })
 }
 
+fn profile_capability(
+    name: &str,
+    profile: &super::agent_policy::AgentProfileSpec,
+    allowed_models: &[String],
+) -> ProfileCapability {
+    ProfileCapability {
+        name: name.to_owned(),
+        tool: profile.tool.clone(),
+        model: profile.model.clone(),
+        provider: profile.provider.clone(),
+        roles: profile.roles.clone(),
+        image_input: profile.image_input,
+        visual_review: profile.visual_review,
+        preference: profile.preference,
+        spend_allowed: allowed_models.is_empty()
+            || allowed_models
+                .iter()
+                .any(|allowed| allowed == &profile.model),
+    }
+}
+
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let tier = parse_args(args)?;
     let interpreter = CliSessionInterpreter::system();
-    let spawn_model = config_spawn_model()?;
+    let policy = config_dispatch_policy()?;
     let tools = interpreter
         .launchable_tools()
         .iter()
         .map(|tool| tool_capability(&interpreter, tool, tier.as_deref()))
         .collect::<Vec<_>>();
+    let mut profiles = Vec::new();
+    for (name, profile) in policy.agent.profiles_by_preference() {
+        profiles.push(profile_capability(name, profile, &policy.allowed_models));
+    }
     let capability = Capability {
-        lane_spawn: lane_spawn(&tools, tier.as_deref(), spawn_model.as_deref()),
+        lane_spawn: lane_spawn(&tools, tier.as_deref(), policy.default_model.as_deref()),
         tier,
-        spawn_model,
+        spawn_model: policy.default_model.clone(),
         tools,
+        agent_enforcement: policy.agent.enforcement(),
+        default_agent_profile: policy.agent.default_profile_name().map(str::to_owned),
+        profiles,
     };
     println!("{}", serde_json::to_string(&capability)?);
     Ok(())
@@ -203,5 +251,30 @@ mod tests {
         assert!(parse_args(&["--tier".into()]).is_err());
         assert!(parse_args(&["--tier".into(), "--json".into()]).is_err());
         assert!(parse_args(&["--unknown".into()]).is_err());
+    }
+
+    #[test]
+    fn a_profile_capability_reports_its_declarations_and_spend_eligibility() {
+        let profile = super::super::agent_policy::AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: Some("informational".to_owned()),
+            roles: vec![AgentRole::Implement, AgentRole::Review],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            preference: Some(10),
+        };
+        let in_budget = profile_capability("worker", &profile, &["flash".to_owned()]);
+        assert_eq!(in_budget.name, "worker");
+        assert_eq!(in_budget.model, "flash");
+        assert_eq!(in_budget.provider.as_deref(), Some("informational"));
+        assert_eq!(in_budget.image_input, ImageInput::Native);
+        assert_eq!(in_budget.visual_review, VisualReview::Allow);
+        assert_eq!(in_budget.preference, Some(10));
+        assert!(in_budget.spend_allowed);
+
+        let over_budget = profile_capability("worker", &profile, &["other".to_owned()]);
+        assert!(!over_budget.spend_allowed);
+        assert!(profile_capability("worker", &profile, &[]).spend_allowed);
     }
 }

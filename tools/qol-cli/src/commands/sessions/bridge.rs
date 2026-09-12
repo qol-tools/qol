@@ -17,6 +17,7 @@ use qol_terminal_sessions::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
 use super::spawn::{SpawnLedger, SpawnLocks};
 
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
@@ -72,6 +73,17 @@ pub(super) struct BridgeOutcome {
     pub(super) stall_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) recovery_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) agent_assignment: Option<AgentAssignment>,
+    pub(super) agent_status: AgentStatus,
+}
+
+impl BridgeOutcome {
+    pub(super) fn with_agent(mut self, assignment: Option<AgentAssignment>) -> Self {
+        self.agent_status = AgentStatus::of(assignment.as_ref());
+        self.agent_assignment = assignment;
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -88,6 +100,7 @@ pub(super) struct PendingRound {
     pub(super) label: Option<String>,
     pub(super) started_at: Option<SystemTime>,
     pub(super) transcript_paths: Vec<PathBuf>,
+    pub(super) agent_assignment: Option<AgentAssignment>,
 }
 
 struct PendingBridgeLock {
@@ -138,6 +151,8 @@ struct StoredCheckpoint {
     started_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     transcript_paths: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_assignment: Option<AgentAssignment>,
 }
 
 impl From<StoredCheckpoint> for BridgeCheckpoint {
@@ -167,6 +182,7 @@ impl From<StoredCheckpoint> for PendingRound {
             label: stored.label,
             started_at: stored.started_at_ms.map(system_time_from_millis),
             transcript_paths: stored.transcript_paths,
+            agent_assignment: stored.agent_assignment,
         }
     }
 }
@@ -223,6 +239,7 @@ impl PendingBridgeStore {
             .context("pending bridge checkpoint is invalid")
     }
 
+    #[cfg(test)]
     pub(super) fn start(
         &self,
         binding: &SessionBinding,
@@ -234,6 +251,7 @@ impl PendingBridgeStore {
         self.start_with_label(binding, marker, driver, autoclose, group, None, false)
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn start_with_label(
         &self,
@@ -244,6 +262,30 @@ impl PendingBridgeStore {
         group: Option<&str>,
         label: Option<&str>,
         silent_wake: bool,
+    ) -> Result<SystemTime> {
+        self.start_with_assignment(
+            binding,
+            marker,
+            driver,
+            autoclose,
+            group,
+            label,
+            silent_wake,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn start_with_assignment(
+        &self,
+        binding: &SessionBinding,
+        marker: &str,
+        driver: &str,
+        autoclose: bool,
+        group: Option<&str>,
+        label: Option<&str>,
+        silent_wake: bool,
+        assignment: Option<&AgentAssignment>,
     ) -> Result<SystemTime> {
         let _lock = self.lock(binding)?;
         if self
@@ -267,8 +309,18 @@ impl PendingBridgeStore {
             false,
             Some(system_time_millis(started_at)),
             silent_wake,
+            assignment,
         )?;
         Ok(started_at)
+    }
+
+    pub(super) fn recorded_assignment(
+        &self,
+        binding: &SessionBinding,
+    ) -> Result<Option<AgentAssignment>> {
+        Ok(self
+            .load(binding)?
+            .and_then(|checkpoint| checkpoint.agent_assignment))
     }
 
     pub(super) fn observe(
@@ -298,6 +350,7 @@ impl PendingBridgeStore {
             false,
             checkpoint.started_at_ms,
             checkpoint.silent_wake,
+            checkpoint.agent_assignment.as_ref(),
         )
     }
 
@@ -328,6 +381,7 @@ impl PendingBridgeStore {
             false,
             checkpoint.started_at_ms,
             checkpoint.silent_wake,
+            checkpoint.agent_assignment.as_ref(),
         )
     }
 
@@ -353,6 +407,7 @@ impl PendingBridgeStore {
             false,
             checkpoint.started_at_ms,
             checkpoint.silent_wake,
+            checkpoint.agent_assignment.as_ref(),
         )
     }
 
@@ -383,6 +438,7 @@ impl PendingBridgeStore {
             false,
             checkpoint.started_at_ms,
             checkpoint.silent_wake,
+            checkpoint.agent_assignment.as_ref(),
         )?;
         Ok(true)
     }
@@ -413,6 +469,7 @@ impl PendingBridgeStore {
             false,
             checkpoint.started_at_ms,
             checkpoint.silent_wake,
+            checkpoint.agent_assignment.as_ref(),
         )
     }
 
@@ -432,6 +489,7 @@ impl PendingBridgeStore {
         closed: bool,
         started_at_ms: Option<i64>,
         silent_wake: bool,
+        assignment: Option<&AgentAssignment>,
     ) -> Result<()> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
@@ -450,6 +508,7 @@ impl PendingBridgeStore {
             label: label.map(str::to_owned),
             started_at_ms,
             transcript_paths: paths.to_vec(),
+            agent_assignment: assignment.cloned(),
         })?;
         fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
         fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
@@ -512,6 +571,7 @@ impl PendingBridgeStore {
                 true,
                 current.started_at_ms,
                 current.silent_wake,
+                current.agent_assignment.as_ref(),
             )?;
         }
         Ok(())
@@ -534,6 +594,7 @@ impl PendingBridgeStore {
                 label: checkpoint.label,
                 started_at: checkpoint.started_at_ms.map(system_time_from_millis),
                 transcript_paths: checkpoint.transcript_paths,
+                agent_assignment: checkpoint.agent_assignment,
             }))
     }
 
@@ -591,6 +652,7 @@ impl PendingBridgeStore {
                 label: checkpoint.label,
                 started_at: checkpoint.started_at_ms.map(system_time_from_millis),
                 transcript_paths: checkpoint.transcript_paths,
+                agent_assignment: checkpoint.agent_assignment,
             })
             .collect::<Vec<_>>();
         rounds.sort_by(|left, right| left.session.cmp(&right.session));
@@ -847,6 +909,7 @@ pub(super) fn execute(
     trace_dir: &std::path::Path,
     acknowledge_marker: Option<&str>,
     cancel: Option<&AtomicBool>,
+    dispatch: &AgentDispatch,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
     let _owner = pending.acquire_owner(binding)?;
@@ -895,6 +958,9 @@ pub(super) fn execute(
         );
     }
 
+    let assignment = dispatch
+        .admit_submit(super::spawn::recorded_assignment(ledger, pending, binding)?.as_ref())?;
+
     let (changed_tx, changed_rx) = mpsc::sync_channel(1);
     let subscription = interpreter
         .subscribe(
@@ -909,13 +975,19 @@ pub(super) fn execute(
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
     let joined = session_is_pi(interpreter, &target);
-    let prompt = bridge_prompt(task, &marker, role, joined);
-    let started_at = pending.start(
+    let prompt = prompt_with_assignment(
+        bridge_prompt(task, &marker, role, joined),
+        assignment.as_ref(),
+    );
+    let started_at = pending.start_with_assignment(
         binding,
         &marker.token,
         &driver_token(terminals),
         false,
         None,
+        None,
+        false,
+        assignment.as_ref(),
     )?;
     pending.record_transcript_paths(
         binding,
@@ -1035,7 +1107,7 @@ pub(super) fn execute(
         outcome.reads
     );
     drop(subscription);
-    Ok(outcome)
+    Ok(outcome.with_agent(assignment))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1047,6 +1119,9 @@ pub(super) fn submit(
     pending: &PendingBridgeStore,
     acknowledge_marker: Option<&str>,
     resume: bool,
+    ledger: &SpawnLedger,
+    dispatch: &AgentDispatch,
+    resolved: Option<&AgentAssignment>,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
     let _owner = pending.acquire_owner(binding)?;
@@ -1058,6 +1133,11 @@ pub(super) fn submit(
     }
     let target = resolve_target(terminals, binding)?;
     let autoclose = target.spawn_identity.is_some();
+    let assignment = match resolved {
+        Some(assignment) => Some(assignment.clone()),
+        None => dispatch
+            .admit_submit(super::spawn::recorded_assignment(ledger, pending, binding)?.as_ref())?,
+    };
     if let Some(marker) = acknowledge_marker {
         pending.acknowledge(binding, marker, true)?;
     } else if pending.pending_round(binding)?.is_some() {
@@ -1065,20 +1145,29 @@ pub(super) fn submit(
             "a round is already pending for `{binding}`; wait for it with `qol sessions bridge` (no task) before submitting another"
         );
     }
+    if let Some(assignment) = assignment.as_ref() {
+        ledger.rebind_session(&binding.token(), assignment)?;
+    }
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
     let joined = session_is_pi(interpreter, &target);
-    let prompt = if resume {
-        resume_lane_prompt(task, &marker, joined)
-    } else {
-        bridge_prompt(task, &marker, role, joined)
-    };
-    let _started_at = pending.start(
+    let prompt = prompt_with_assignment(
+        if resume {
+            resume_lane_prompt(task, &marker, joined)
+        } else {
+            bridge_prompt(task, &marker, role, joined)
+        },
+        assignment.as_ref(),
+    );
+    let _started_at = pending.start_with_assignment(
         binding,
         &marker.token,
         &driver_token(terminals),
         autoclose,
         None,
+        None,
+        false,
+        assignment.as_ref(),
     )?;
     pending.record_transcript_paths(
         binding,
@@ -1150,7 +1239,8 @@ pub(super) fn submit(
         screen,
         1,
         Instant::now(),
-    ))
+    )
+    .with_agent(assignment))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1233,6 +1323,8 @@ fn resume_owned(
                     recovered_from_watch_snapshot: true,
                     stall_reason: None,
                     recovery_command: None,
+                    agent_assignment: round.agent_assignment.clone(),
+                    agent_status: AgentStatus::of(round.agent_assignment.as_ref()),
                 });
             }
             Err(error) => return Err(error).context("bridge screen read failed"),
@@ -1251,7 +1343,8 @@ fn resume_owned(
             screen,
             1,
             started,
-        ));
+        )
+        .with_agent(round.agent_assignment.clone()));
     }
     let target = resolve_target(terminals, binding).map_err(|error| {
         if session_gone(terminals, binding) {
@@ -1369,7 +1462,7 @@ fn resume_owned(
         }
     }
     drop(subscription);
-    Ok(outcome)
+    Ok(outcome.with_agent(round.agent_assignment.clone()))
 }
 
 fn settle_and_deliver_group(
@@ -1579,6 +1672,8 @@ pub(super) fn wait_for_completion(
         next_command: format!("qol sessions next {}", binding.token()),
         recovered_from_watch_snapshot: false,
         recovery_command: outcome.stalled.then(|| recovery_command(&binding.token())),
+        agent_assignment: None,
+        agent_status: AgentStatus::Unconstrained,
     })
 }
 
@@ -1608,6 +1703,8 @@ fn outcome(
         elapsed_ms: started.elapsed().as_millis(),
         next_command: format!("qol sessions next {}", binding.token()),
         recovered_from_watch_snapshot: false,
+        agent_assignment: None,
+        agent_status: AgentStatus::Unconstrained,
     }
 }
 
@@ -1822,6 +1919,31 @@ pub(super) fn bridge_prompt(
             marker.left, marker.right
         ),
     }
+}
+
+pub(super) fn prompt_with_assignment(
+    prompt: String,
+    assignment: Option<&AgentAssignment>,
+) -> String {
+    let Some(assignment) = assignment else {
+        return prompt;
+    };
+    let requirements = if assignment.requires.is_empty() {
+        "none".to_owned()
+    } else {
+        assignment
+            .requires
+            .iter()
+            .map(|requirement| requirement.token())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "[qol agent assignment] profile `{}`, role `{}`, requirements: {requirements}, visual_review: {}. The directive is configuration-declared, and the assignment was checked against current policy before this round was delivered; it is not a sandbox.\n{prompt}",
+        assignment.profile,
+        assignment.task_role.token(),
+        assignment.visual_review.token()
+    )
 }
 
 pub(super) fn validate_task(task: &str) -> Result<()> {
@@ -2710,6 +2832,7 @@ mod tests {
             root.path(),
             None,
             None,
+            &AgentDispatch::unconfigured(),
         )
         .unwrap();
 
@@ -2762,6 +2885,9 @@ mod tests {
             &pending,
             None,
             false,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &AgentDispatch::unconfigured(),
+            None,
         )
         .unwrap();
         assert!(outcome.submitted);
@@ -2787,6 +2913,9 @@ mod tests {
             &pending,
             None,
             false,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &AgentDispatch::unconfigured(),
+            None,
         )
         .unwrap();
         assert!(outcome.submitted);
@@ -2981,6 +3110,7 @@ mod tests {
             root.path(),
             None,
             None,
+            &AgentDispatch::unconfigured(),
         )
         .unwrap();
         assert!(outcome.completed);
@@ -3008,6 +3138,9 @@ mod tests {
             &pending,
             None,
             false,
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &AgentDispatch::unconfigured(),
+            None,
         )
         .unwrap();
         assert!(outcome.submitted);
@@ -3951,6 +4084,35 @@ mod tests {
         assert!(
             store.owner_pid(&binding).is_none(),
             "a released attach must report no owner"
+        );
+    }
+
+    #[test]
+    fn a_constrained_prompt_carries_the_assignment_directive() {
+        let assignment = AgentAssignment {
+            profile: "worker".to_owned(),
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![super::super::agent_policy::AgentRole::Implement],
+            image_input: super::super::agent_policy::ImageInput::Native,
+            visual_review: super::super::agent_policy::VisualReview::Allow,
+            task_role: super::super::agent_policy::AgentRole::Implement,
+            requires: vec![super::super::agent_policy::AgentRequirement::ImageInput],
+            evidence_basis: "configuration_declared".to_owned(),
+        };
+        let prompt = prompt_with_assignment("body".to_owned(), Some(&assignment));
+        assert!(prompt.starts_with("[qol agent assignment]"), "{prompt}");
+        assert!(prompt.contains("profile `worker`"), "{prompt}");
+        assert!(prompt.contains("role `implement`"), "{prompt}");
+        assert!(prompt.contains("requirements: image_input"), "{prompt}");
+        assert!(prompt.contains("visual_review: allow"), "{prompt}");
+        assert!(prompt.ends_with("body"), "{prompt}");
+        assert!(prompt.contains("not a sandbox"), "{prompt}");
+        assert_eq!(
+            prompt_with_assignment("body".to_owned(), None),
+            "body",
+            "an unconstrained prompt keeps its exact previous shape"
         );
     }
 }

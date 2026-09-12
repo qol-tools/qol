@@ -10,6 +10,9 @@ use qol_terminal_sessions::{
     TerminalSessionService, TextInput,
 };
 
+use agent_policy::{AgentDispatch, AgentRole, AgentStatus, AssignmentRequest};
+
+mod agent_policy;
 mod bridge;
 mod capability;
 mod close;
@@ -149,8 +152,9 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--background] [--resume]
-  qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions fork --tool TOOL --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
@@ -180,14 +184,33 @@ Details:
   one so retries are idempotent. The surface default comes from the
   spawn_surface setting in ~/.config/qol-tray/sessions.toml, then tab. An
   explicit --model override names the spawned session's model (appended to
-  the harness launch as --model); the spawn_model setting in the same file is
-  the fallback. --title names the new tab (the lane key by default), and
+  the harness launch as --model); a selected agent profile's declared model is
+  the default, and the spawn_model setting in the same file is the fallback.
+  --title names the new tab (the lane key by default), and
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,
   completion_marker, and next_command. Resume is automatic when the spawn
   ledger holds a session id for the key (same tool and cwd), so a respawned
   lane continues the prior session; --no-resume opts out; the spawn JSON
   reports resume and resume_detail.
+  Agent assignment binds a dispatch to a named agent_profiles entry in the
+  same sessions.toml. --agent-profile names it, --task-role (scout, implement,
+  architect, review, debug) is required for every constrained assignment even
+  when --requires is empty, and --requires is a comma-separated list drawn
+  from image_input and visual_review where an empty value means no
+  requirements while an omitted flag means none were declared; a fork's
+  --model is optional because a selected profile's declared model is the
+  default when the caller supplies none, while an explicit conflicting model
+  stays an error. image_input needs a native declaration
+  and visual_review needs native plus allow. Configuring any agent_profiles
+  entry enables enforcement unless enforce_agent_profiles is false, an
+  explicit agent_profile or default_agent_profile is then required, and the
+  profile's tool and model must match the launch while allowed_models still
+  governs spending. The resolved, immutable assignment is reported as
+  agent_assignment with agent_status constrained, and a lane set inherits
+  top-level assignment fields while refusing a field set twice. Sessions
+  without a recorded assignment report agent_status unconstrained and are
+  never claimed eligible for declared visual requirements.
   submit delivers one bounded task and returns immediately with the round
   recorded and open, so several lanes can run in parallel before any of them
   is awaited; it refuses when a round is already pending on that session.
@@ -214,7 +237,8 @@ Details:
   resume --kickstart when the target went idle without emitting its
   completion signal, discard when the target's terminal is gone, then a
   review instruction with the acknowledge-marker bridge template once
-  complete.
+  complete. Every row also carries agent_status and the recorded
+  agent_assignment when one exists, so a reviewer sees what was checked.
   resume re-attaches to the one pending round and waits for its completion
   marker without submitting anything; its timeout defaults to 24h. With
   --kickstart it first nudges the interrupted session to continue or emit
@@ -268,14 +292,25 @@ fn service() -> Result<TerminalSessionService> {
 fn list(output_format: OutputFormat) -> Result<()> {
     let facts = service()?.discover().context("session discovery failed")?;
     let interpreter = CliSessionInterpreter::system();
-    let mut rows = facts
-        .iter()
-        .filter_map(|session| {
-            let binding = session.binding().ok()?;
-            let descriptor = interpreter.describe(session);
-            Some(contract::session_row(session, &binding, &descriptor))
-        })
-        .collect::<Vec<_>>();
+    let ledger = spawn::SpawnLedger::system().ok();
+    let pending = bridge::PendingBridgeStore::system().ok();
+    let mut rows = Vec::with_capacity(facts.len());
+    for session in &facts {
+        let Ok(binding) = session.binding() else {
+            continue;
+        };
+        let descriptor = interpreter.describe(session);
+        let assignment = match (&ledger, &pending) {
+            (Some(ledger), Some(pending)) => spawn::recorded_assignment(ledger, pending, &binding)?,
+            _ => None,
+        };
+        rows.push(contract::session_row(
+            session,
+            &binding,
+            &descriptor,
+            assignment.as_ref(),
+        ));
+    }
     rows.sort_by(|left, right| left.session.cmp(&right.session));
     match output_format {
         OutputFormat::Json => println!(
@@ -327,10 +362,11 @@ fn send(args: &[OsString]) -> Result<()> {
 }
 
 fn run_submit(args: &[OsString]) -> Result<()> {
-    let (binding_token, task, acknowledge_marker) = parse_submit_args(args)?;
+    let (binding_token, task, acknowledge_marker, request) = parse_submit_args(args)?;
     let binding = SessionBinding::from_str(&binding_token)
         .map_err(|error| anyhow!("invalid session token `{binding_token}`: {error}"))?;
     let terminals = service()?;
+    let dispatch = AgentDispatch::new(spawn::config_dispatch_policy()?, request);
     let outcome = bridge::submit(
         &terminals,
         &CliSessionInterpreter::system(),
@@ -339,6 +375,9 @@ fn run_submit(args: &[OsString]) -> Result<()> {
         &bridge::PendingBridgeStore::system()?,
         acknowledge_marker.as_deref(),
         false,
+        &spawn::SpawnLedger::system()?,
+        &dispatch,
+        None,
     )?;
     println!(
         "{}",
@@ -347,8 +386,10 @@ fn run_submit(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String>)> {
-    let usage = "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT]";
+fn parse_submit_args(
+    args: &[OsString],
+) -> Result<(String, String, Option<String>, AssignmentRequest)> {
+    let usage = "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]";
     let binding = args
         .first()
         .and_then(|argument| argument.to_str())
@@ -356,6 +397,7 @@ fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String
         .to_owned();
     let mut task = None;
     let mut acknowledge_marker = None;
+    let mut request = AssignmentRequest::default();
     let mut index = 1;
     while index < args.len() {
         let argument = args[index]
@@ -382,11 +424,39 @@ fn parse_submit_args(args: &[OsString]) -> Result<(String, String, Option<String
                 );
                 index += 2;
             }
+            "--agent-profile" => {
+                request.agent_profile = Some(flag_value(args, index, "--agent-profile", usage)?);
+                index += 2;
+            }
+            "--task-role" => {
+                let token = flag_value(args, index, "--task-role", usage)?;
+                request.task_role = Some(AgentRole::from_token(&token).ok_or_else(|| {
+                    anyhow!(
+                        "unknown task role `{token}`; expected one of {}",
+                        agent_policy::role_catalog()
+                    )
+                })?);
+                index += 2;
+            }
+            "--requires" => {
+                let value = flag_value(args, index, "--requires", usage)?;
+                request.requires = Some(agent_policy::parse_requires(&value)?);
+                index += 2;
+            }
             other => bail!("unknown submit flag `{other}`\nusage: {usage}"),
         }
     }
     let task = task.ok_or_else(|| anyhow!("usage: {usage}"))?;
-    Ok((binding, task, acknowledge_marker))
+    Ok((binding, task, acknowledge_marker, request))
+}
+
+fn flag_value(args: &[OsString], index: usize, flag: &str, usage: &str) -> Result<String> {
+    let value = args
+        .get(index + 1)
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.starts_with("--"))
+        .ok_or_else(|| anyhow!("{flag} requires a value\nusage: {usage}"))?;
+    Ok(value.to_owned())
 }
 
 fn run_bridge(args: &[OsString]) -> Result<()> {
@@ -401,6 +471,10 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
     let pending = bridge::PendingBridgeStore::system()?;
     let ledger = spawn::SpawnLedger::system()?;
     let locks = spawn::SpawnLocks::system()?;
+    let dispatch = AgentDispatch::new(
+        spawn::config_dispatch_policy()?,
+        AssignmentRequest::default(),
+    );
     let mut outcome = match parsed.task.as_deref() {
         Some(task) => bridge::execute(
             &terminals,
@@ -414,6 +488,7 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
             &bridge::trace_dir(),
             parsed.acknowledge_marker.as_deref(),
             None,
+            &dispatch,
         )?,
         None => {
             if parsed.acknowledge_marker.is_some() {
@@ -625,9 +700,10 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
             }
             for row in &rows {
                 println!(
-                    "phase={} session={}",
+                    "phase={} session={} agent_status={}",
                     row["phase"].as_str().unwrap_or_default(),
                     row["session"].as_str().unwrap_or_default(),
+                    row["agent_status"].as_str().unwrap_or_default(),
                 );
                 println!("{}", row["instruction"].as_str().unwrap_or_default());
                 let command = row["command"].as_str().unwrap_or_default();
@@ -665,6 +741,8 @@ fn next_rows(
             rows.push(serde_json::json!({
                 "phase": "attached",
                 "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
                 "command": "",
                 "instruction": format!("Another bridge process (pid {pid}) is already attached to this session and is waiting for its completion signal. Do not start a bridge, resume, or new task for this session; let that process return."),
             }));
@@ -681,6 +759,8 @@ fn next_rows(
             rows.push(serde_json::json!({
                 "phase": "gone",
                 "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
                 "command": format!("qol sessions discard {}", round.session),
                 "instruction": "The implementation terminal is gone, so this round cannot resume or be reviewed here. Run the command to drop the orphaned checkpoint, then start a fresh round on a live session.",
             }));
@@ -695,6 +775,8 @@ fn next_rows(
             rows.push(serde_json::json!({
                 "phase": "review",
                 "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
                 "completion_marker": round.completion_marker,
                 "command": format!(
                     "qol sessions bridge {} --acknowledge-marker {} -- <next bounded correction task>",
@@ -729,6 +811,8 @@ fn next_rows(
             rows.push(serde_json::json!({
                 "phase": "collect",
                 "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
                 "completion_marker": round.completion_marker,
                 "command": format!(
                     "qol sessions resume {} --timeout-ms {}",
@@ -746,6 +830,8 @@ fn next_rows(
             rows.push(serde_json::json!({
                 "phase": "stalled",
                 "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
                 "command": format!(
                     "qol sessions resume {} --kickstart --timeout-ms {}",
                     round.session,
@@ -757,6 +843,8 @@ fn next_rows(
             rows.push(serde_json::json!({
                 "phase": "waiting",
                 "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
                 "command": format!(
                     "qol sessions resume {} --timeout-ms {}",
                     round.session,
@@ -963,6 +1051,8 @@ mod tests {
         BackendId, SessionCapabilities, SessionId, TerminalBackend, TerminalError, TerminalSnapshot,
     };
     use std::sync::Arc;
+
+    use super::agent_policy::{AgentAssignment, ImageInput, VisualReview};
 
     #[derive(Clone)]
     struct FakeSessionBackend {
@@ -1490,6 +1580,44 @@ mod tests {
         assert_eq!(parsed.0, "v1:kitty:7:123");
         assert_eq!(parsed.1, "implement the fix");
         assert_eq!(parsed.2.as_deref(), Some("QOL_BRIDGE_DONE_previous"));
+        assert!(parsed.3.is_unconstrained());
+
+        let assigned = parse_submit_args(&[
+            "v1:kitty:7:123".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--agent-profile".into(),
+            "worker".into(),
+            "--task-role".into(),
+            "implement".into(),
+            "--requires".into(),
+            "image_input".into(),
+        ])
+        .unwrap();
+        assert_eq!(assigned.3.agent_profile.as_deref(), Some("worker"));
+        assert_eq!(assigned.3.task_role, Some(AgentRole::Implement));
+        assert!(!assigned.3.is_unconstrained());
+        let empty = parse_submit_args(&[
+            "v1:kitty:7:123".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--requires".into(),
+            "".into(),
+        ])
+        .unwrap();
+        assert_eq!(empty.3.requires, Some(Vec::new()));
+        assert!(
+            !empty.3.is_unconstrained(),
+            "an explicit empty requires value still constrains the round"
+        );
+        assert!(parse_submit_args(&[
+            "v1:kitty:7:123".into(),
+            "--task".into(),
+            "implement the fix".into(),
+            "--task-role".into(),
+            "supervisor".into(),
+        ])
+        .is_err());
 
         let unknown = parse_submit_args(&[
             "v1:kitty:7:123".into(),
@@ -1570,5 +1698,53 @@ mod tests {
         ));
         assert!(!marker_present("QOL_BRIDGE_DONE_abc", "no_underscore"));
         assert!(!marker_present("abc", "QOL_BRIDGE_DONE_abc"));
+    }
+
+    #[test]
+    fn next_rows_report_the_recorded_agent_assignment() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        let assignment = AgentAssignment {
+            profile: "worker".to_owned(),
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            task_role: AgentRole::Implement,
+            requires: Vec::new(),
+            evidence_basis: "configuration_declared".to_owned(),
+        };
+        store
+            .start_with_assignment(
+                &live,
+                "QOL_BRIDGE_DONE_live",
+                "v1:fake:8:800",
+                false,
+                None,
+                None,
+                false,
+                Some(&assignment),
+            )
+            .unwrap();
+        let (terminals, _) = fake_terminals_showing(
+            vec![fake_facts("2", 200)],
+            Some("lane report body\nQOL_BRIDGE_DONE_live"),
+        );
+
+        let rows = next_rows(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store,
+            &store.pending_rounds().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["phase"], "collect");
+        assert_eq!(rows[0]["agent_status"], "constrained");
+        assert_eq!(rows[0]["agent_assignment"]["profile"], "worker");
+        assert_eq!(rows[0]["agent_assignment"]["model"], "flash");
     }
 }

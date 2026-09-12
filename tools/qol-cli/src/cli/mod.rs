@@ -158,16 +158,30 @@ mod tests {
     }
 
     #[test]
-    fn contextual_check_help_advertises_staged_and_lint_modes() {
+    fn contextual_check_help_advertises_modes_and_verification_flags() {
         let args = parse_cli(["help", "check"].into_iter().map(OsString::from).collect());
         let execution = contract_execution(&args).unwrap().unwrap();
-        assert!(execution.stdout.contains("qol check [--staged|--lint]"));
+        assert!(execution.stdout.contains(
+            "qol check [--staged|--lint] [--base REV] [--report PATH] [--format-owned PATH]"
+        ));
         assert!(execution
             .stdout
             .contains("--staged checks the exact staged tree instead of the working tree."));
         assert!(execution.stdout.contains(
             "--lint runs clippy only over uncommitted changes plus dependents, with its own lint cache."
         ));
+        assert!(execution.stdout.contains("--format-owned PATH"));
+        assert!(execution.stdout.contains("--base REV"));
+        assert!(execution.stdout.contains("--report PATH"));
+        assert!(execution
+            .stdout
+            .contains("A --report destination is refused when it is a tracked source path"));
+        assert!(execution
+            .stdout
+            .contains("a failed publication never leaves a verified report behind"));
+        assert!(execution
+            .stdout
+            .contains("starts as pending until the external rename succeeds"));
     }
 
     #[test]

@@ -14,6 +14,11 @@ use qol_terminal_sessions::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::agent_policy::{
+    self, Admission, AgentAssignment, AgentDispatch, AgentPolicy, AgentProfileSpec,
+    AgentRequirement, AgentRole, AgentStatus, AssignmentRequest, DispatchPolicy, RecordedIdentity,
+};
+
 pub(super) const SURFACE_TAB: &str = "tab";
 pub(super) const SURFACE_OS_WINDOW: &str = "os-window";
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -52,6 +57,9 @@ pub(super) struct SpawnOutcome {
     pub(super) resume: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) resume_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) agent_assignment: Option<AgentAssignment>,
+    pub(super) agent_status: AgentStatus,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -66,6 +74,22 @@ pub(super) struct LaneSpec {
     pub(super) title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) silent_wake: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) agent_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) task_role: Option<AgentRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) requires: Option<Vec<AgentRequirement>>,
+}
+
+impl LaneSpec {
+    pub(super) fn assignment_request(&self) -> AssignmentRequest {
+        AssignmentRequest {
+            agent_profile: self.agent_profile.clone(),
+            task_role: self.task_role,
+            requires: self.requires.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -119,6 +143,12 @@ struct SpawnConfigFile {
     spawn_cpu_weight: Option<u32>,
     spawn_io_weight: Option<u32>,
     spawn_cpu_quota: Option<String>,
+    #[serde(default)]
+    agent_profiles: std::collections::BTreeMap<String, AgentProfileSpec>,
+    #[serde(default)]
+    default_agent_profile: Option<String>,
+    #[serde(default)]
+    enforce_agent_profiles: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,43 +379,50 @@ fn sessions_config_candidates() -> Vec<std::path::PathBuf> {
     candidates
 }
 
-pub(super) fn config_spawn_model() -> Result<Option<String>> {
+pub(super) fn config_dispatch_policy() -> Result<DispatchPolicy> {
     let Some(path) = sessions_config_path() else {
-        return Ok(None);
+        return Ok(DispatchPolicy::default());
     };
-    config_spawn_model_at(&path)
+    config_dispatch_policy_at(&path)
 }
 
-fn config_spawn_model_at(path: &Path) -> Result<Option<String>> {
+fn config_dispatch_policy_at(path: &Path) -> Result<DispatchPolicy> {
     let encoded = match fs::read_to_string(path) {
         Ok(encoded) => encoded,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("failed to read spawn model config"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DispatchPolicy::default());
+        }
+        Err(error) => return Err(error).context("failed to read the sessions policy config"),
     };
     let config: SpawnConfigFile =
         toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(config.spawn_model)
+    let allowed_models = allowed_models_from(config.allowed_models, config.spawn_model.clone());
+    let agent = AgentPolicy::build(
+        config.agent_profiles,
+        config.default_agent_profile,
+        config.enforce_agent_profiles,
+    )?;
+    Ok(DispatchPolicy {
+        agent,
+        default_model: config.spawn_model,
+        allowed_models,
+    })
 }
 
-pub(super) fn config_allowed_models() -> Result<Vec<String>> {
-    let Some(path) = sessions_config_path() else {
-        return Ok(Vec::new());
-    };
-    config_allowed_models_at(&path)
+pub(super) enum DispatchPolicySource {
+    System,
+    #[cfg(test)]
+    Fixed(Box<DispatchPolicy>),
 }
 
-fn config_allowed_models_at(path: &Path) -> Result<Vec<String>> {
-    let encoded = match fs::read_to_string(path) {
-        Ok(encoded) => encoded,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error).context("failed to read allowed model config"),
-    };
-    let config: SpawnConfigFile =
-        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(allowed_models_from(
-        config.allowed_models,
-        config.spawn_model,
-    ))
+impl DispatchPolicySource {
+    pub(super) fn load(&self) -> Result<DispatchPolicy> {
+        match self {
+            DispatchPolicySource::System => config_dispatch_policy(),
+            #[cfg(test)]
+            DispatchPolicySource::Fixed(policy) => Ok((**policy).clone()),
+        }
+    }
 }
 
 fn allowed_models_from(allowed: Option<Vec<String>>, spawn_model: Option<String>) -> Vec<String> {
@@ -393,46 +430,6 @@ fn allowed_models_from(allowed: Option<Vec<String>>, spawn_model: Option<String>
         Some(allowed) if !allowed.is_empty() => allowed,
         _ => spawn_model.into_iter().collect(),
     }
-}
-
-pub(super) fn enforce_allowed_model_with(model: &str, allowed: &[String]) -> Result<()> {
-    if allowed.is_empty() || allowed.iter().any(|entry| entry == model) {
-        return Ok(());
-    }
-    bail!(
-        "model {model} is not one this host may launch. sessions.toml allows: {}. Model tiers are billed per token, so only the person paying picks one: ask them to widen allowed_models rather than passing another tier",
-        allowed.join(", ")
-    )
-}
-
-pub(super) fn enforce_allowed_model(model: &str) -> Result<()> {
-    enforce_allowed_model_with(model, &config_allowed_models()?)
-}
-
-pub(super) fn resolve_model_with(
-    flag: Option<&str>,
-    config: Option<String>,
-) -> Result<Option<String>> {
-    Ok(match flag {
-        Some(model) => Some(model.to_owned()),
-        None => config,
-    })
-}
-
-pub(super) fn resolve_allowed_model_with(
-    flag: Option<&str>,
-    config: Option<String>,
-    allowed: &[String],
-) -> Result<Option<String>> {
-    let model = resolve_model_with(flag, config)?;
-    if let Some(model) = model.as_deref() {
-        enforce_allowed_model_with(model, allowed)?;
-    }
-    Ok(model)
-}
-
-pub(super) fn resolve_model(flag: Option<&str>) -> Result<Option<String>> {
-    resolve_model_with(flag, config_spawn_model()?)
 }
 
 pub(super) fn require_model_for_launch(model: Option<&str>) -> Result<()> {
@@ -466,6 +463,10 @@ pub(super) struct SpawnRecord {
     pub(super) cwd: String,
     pub(super) model: Option<String>,
     pub(super) external_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) agent_assignment: Option<AgentAssignment>,
     pub(super) created_at: u64,
     pub(super) last_seen: u64,
 }
@@ -496,13 +497,11 @@ impl SpawnLedger {
         model: Option<&str>,
         external_id: Option<&str>,
     ) -> Result<()> {
-        fs::create_dir_all(&self.dir).context("failed to create spawn record directory")?;
-        let path = self.file_for(key, cwd);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let previous = fs::read_to_string(&path)
+        let previous = fs::read_to_string(self.file_for(key, cwd))
             .ok()
             .and_then(|encoded| serde_json::from_str::<SpawnRecord>(&encoded).ok());
         let record = SpawnRecord {
@@ -518,16 +517,79 @@ impl SpawnLedger {
                     .as_ref()
                     .and_then(|record| record.external_id.clone())
             }),
+            session: previous.as_ref().and_then(|record| record.session.clone()),
+            agent_assignment: previous
+                .as_ref()
+                .and_then(|record| record.agent_assignment.clone()),
             created_at: previous
                 .as_ref()
                 .map(|record| record.created_at)
                 .unwrap_or(now),
             last_seen: now,
         };
+        self.write_record(key, cwd, &record)
+    }
+
+    fn write_record(&self, key: &SpawnKey, cwd: &str, record: &SpawnRecord) -> Result<()> {
+        fs::create_dir_all(&self.dir).context("failed to create spawn record directory")?;
+        let path = self.file_for(key, cwd);
         let temporary = path.with_extension("tmp");
-        let encoded = serde_json::to_string(&record)?;
+        let encoded = serde_json::to_string(record)?;
         fs::write(&temporary, encoded).context("failed to write spawn record")?;
         fs::rename(&temporary, &path).context("failed to publish spawn record")
+    }
+
+    pub(super) fn bind_session(
+        &self,
+        key: &SpawnKey,
+        cwd: &str,
+        session: &str,
+        assignment: Option<&AgentAssignment>,
+    ) -> Result<()> {
+        let Some(mut record) = self.load(key, cwd)? else {
+            bail!(
+                "spawn record for key `{key}` is missing, so its session identity cannot be bound"
+            );
+        };
+        record.session = Some(session.to_owned());
+        record.agent_assignment = assignment.cloned();
+        self.write_record(key, cwd, &record)
+    }
+
+    pub(super) fn rebind_session(&self, session: &str, assignment: &AgentAssignment) -> Result<()> {
+        let Some(mut record) = self.find_by_session(session)? else {
+            return Ok(());
+        };
+        record.agent_assignment = Some(assignment.clone());
+        let key = SpawnKey::new(record.key.clone())
+            .map_err(|error| anyhow!("spawn record carries an invalid key: {error}"))?;
+        self.write_record(&key, &record.cwd, &record)
+    }
+
+    pub(super) fn find_by_session(&self, session: &str) -> Result<Option<SpawnRecord>> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("failed to read spawn record directory"),
+        };
+        for entry in entries {
+            let path = entry
+                .context("failed to read spawn record directory")?
+                .path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let Ok(encoded) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(record) = serde_json::from_str::<SpawnRecord>(&encoded) else {
+                continue;
+            };
+            if record.session.as_deref() == Some(session) {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
     }
 
     pub(super) fn load(&self, key: &SpawnKey, cwd: &str) -> Result<Option<SpawnRecord>> {
@@ -737,12 +799,36 @@ fn canonicalize_cwd_at(base: &Path, requested: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+pub(super) fn recorded_identity(
+    ledger: &SpawnLedger,
+    pending: &super::bridge::PendingBridgeStore,
+    binding: &SessionBinding,
+) -> Result<RecordedIdentity> {
+    let record = ledger.find_by_session(&binding.token())?;
+    let ledger_assignment = record
+        .as_ref()
+        .and_then(|record| record.agent_assignment.clone());
+    let checkpoint_assignment = pending.recorded_assignment(binding)?;
+    let model = checkpoint_assignment
+        .as_ref()
+        .or(ledger_assignment.as_ref())
+        .map(|assignment| assignment.model.clone())
+        .or_else(|| record.as_ref().and_then(|record| record.model.clone()));
+    let assignment = checkpoint_assignment.or(ledger_assignment);
+    Ok(RecordedIdentity { assignment, model })
+}
+
+pub(super) fn recorded_assignment(
+    ledger: &SpawnLedger,
+    pending: &super::bridge::PendingBridgeStore,
+    binding: &SessionBinding,
+) -> Result<Option<AgentAssignment>> {
+    Ok(recorded_identity(ledger, pending, binding)?.assignment)
+}
+
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
-    let model = resolve_model(parsed.model.as_deref())?;
-    if let Some(model) = model.as_deref() {
-        enforce_allowed_model(model)?;
-    }
+    let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
     let cap = resolve_spawn_cap(config_spawn_cap()?);
     if let Some(cap) = &cap {
         qol_runtime::probe!(
@@ -757,10 +843,10 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     let surface = config_surface()?;
     let locks = SpawnLocks::system()?;
     let encoded = if parsed.lanes.is_empty() {
-        let outcome = run_with(&terminals, parsed, model, surface, &locks, cap)?;
+        let outcome = run_with(&terminals, parsed, &dispatch, surface, &locks, cap)?;
         serde_json::to_string(&outcome).context("failed to serialize spawn outcome")?
     } else {
-        let outcome = run_lanes_with(&terminals, parsed, model, surface, &locks, cap)?;
+        let outcome = run_lanes_with(&terminals, parsed, &dispatch, surface, &locks, cap)?;
         serde_json::to_string(&outcome).context("failed to serialize lane set outcome")?
     };
     println!("{encoded}");
@@ -770,7 +856,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 fn run_lanes_with(
     terminals: &TerminalSessionService,
     parsed: SpawnArgs,
-    model: Option<String>,
+    dispatch: &AgentDispatch,
     config: Option<SpawnSurface>,
     locks: &SpawnLocks,
     cap: Option<SpawnCapConfig>,
@@ -782,7 +868,7 @@ fn run_lanes_with(
         &parsed.cwd,
         &parsed.lanes,
         parsed.surface.as_deref(),
-        model.as_deref(),
+        parsed.model.as_deref(),
         config,
         cap.as_ref(),
         locks,
@@ -792,6 +878,7 @@ fn run_lanes_with(
         &super::bridge::PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
         None,
+        dispatch,
     )?;
     for (lane, spawned) in parsed.lanes.iter().zip(&outcome.lanes) {
         if lane.silent_wake.unwrap_or(false) {
@@ -804,11 +891,12 @@ fn run_lanes_with(
 fn run_with(
     terminals: &TerminalSessionService,
     parsed: SpawnArgs,
-    model: Option<String>,
+    dispatch: &AgentDispatch,
     config: Option<SpawnSurface>,
     locks: &SpawnLocks,
     cap: Option<SpawnCapConfig>,
 ) -> Result<SpawnOutcome> {
+    let ledger = SpawnLedger::system()?;
     let outcome = spawn_or_reuse(
         terminals,
         &CliSessionInterpreter::system(),
@@ -816,12 +904,12 @@ fn run_with(
         &parsed.cwd,
         parsed.key.as_deref(),
         parsed.surface.as_deref(),
-        model.as_deref(),
+        parsed.model.as_deref(),
         parsed.title.as_deref(),
         config,
         cap.as_ref(),
         locks,
-        &SpawnLedger::system()?,
+        &ledger,
         parsed.background,
         true,
         parsed.silent_wake,
@@ -831,6 +919,7 @@ fn run_with(
         &super::bridge::PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
         None,
+        dispatch,
     )?;
     if parsed.silent_wake {
         spawn_silent_wake_watcher(&outcome.session)?;
@@ -851,6 +940,7 @@ fn spawn_silent_wake_watcher(session: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn deliver_task(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -859,6 +949,9 @@ pub(super) fn deliver_task(
     pending: &super::bridge::PendingBridgeStore,
     resumed: bool,
     cancel: Option<&AtomicBool>,
+    ledger: &SpawnLedger,
+    dispatch: &AgentDispatch,
+    assignment: Option<&AgentAssignment>,
 ) -> Result<SpawnOutcome> {
     let binding = outcome
         .session
@@ -873,6 +966,9 @@ pub(super) fn deliver_task(
         pending,
         None,
         resumed,
+        ledger,
+        dispatch,
+        assignment,
     )?;
     outcome.task_submitted = Some(true);
     outcome.completion_marker = Some(submitted.completion_marker);
@@ -923,6 +1019,7 @@ fn wait_until_live(
     }
 }
 
+#[derive(Debug)]
 struct SpawnArgs {
     tool: String,
     cwd: String,
@@ -936,10 +1033,23 @@ struct SpawnArgs {
     resume: Option<bool>,
     group: Option<String>,
     lanes: Vec<LaneSpec>,
+    agent_profile: Option<String>,
+    task_role: Option<AgentRole>,
+    requires: Option<Vec<AgentRequirement>>,
+}
+
+impl SpawnArgs {
+    fn assignment_request(&self) -> AssignmentRequest {
+        AssignmentRequest {
+            agent_profile: self.agent_profile.clone(),
+            task_role: self.task_role,
+            requires: self.requires.clone(),
+        }
+    }
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --lanes takes a JSON array of {key, task, title?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -951,6 +1061,9 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut silent_wake = false;
     let mut resume = None;
     let mut group = None;
+    let mut agent_profile = None;
+    let mut task_role = None;
+    let mut requires = None;
     let mut lanes = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -1006,10 +1119,29 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 group = Some(flag_value(args, index, "--group", usage)?);
                 index += 2;
             }
+            "--agent-profile" => {
+                agent_profile = Some(flag_value(args, index, "--agent-profile", usage)?);
+                index += 2;
+            }
+            "--task-role" => {
+                let token = flag_value(args, index, "--task-role", usage)?;
+                task_role = Some(AgentRole::from_token(&token).ok_or_else(|| {
+                    anyhow!(
+                        "unknown task role `{token}`; expected one of {}",
+                        agent_policy::role_catalog()
+                    )
+                })?);
+                index += 2;
+            }
+            "--requires" => {
+                let value = flag_value(args, index, "--requires", usage)?;
+                requires = Some(agent_policy::parse_requires(&value)?);
+                index += 2;
+            }
             "--lanes" => {
                 let value = flag_value(args, index, "--lanes", usage)?;
                 lanes = serde_json::from_str(&value).with_context(|| {
-                    format!("--lanes expects a JSON array of {{key, task, title?}} objects, got `{value}`")
+                    format!("--lanes expects a JSON array of {{key, task, title?, agent_profile?, task_role?, requires?}} objects, got `{value}`")
                 })?;
                 index += 2;
             }
@@ -1037,6 +1169,9 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         resume,
         group,
         lanes,
+        agent_profile,
+        task_role,
+        requires,
     })
 }
 
@@ -1112,6 +1247,7 @@ pub(super) fn spawn_lanes(
     pending: &super::bridge::PendingBridgeStore,
     trace_dir: &std::path::Path,
     cancel: Option<&AtomicBool>,
+    dispatch: &AgentDispatch,
 ) -> Result<LaneSetOutcome> {
     if lanes.is_empty() {
         bail!("`lanes` is empty; give one entry per lane, each with its own key and bounded task");
@@ -1134,8 +1270,44 @@ pub(super) fn spawn_lanes(
         None if lanes.len() > 1 => Some(generated_group(lanes)),
         None => None,
     };
-    let mut outcomes = Vec::with_capacity(lanes.len());
+    let mut lane_dispatches = Vec::with_capacity(lanes.len());
+    let snapshot = terminals.snapshot().context("session discovery failed")?;
     for lane in lanes {
+        let request = dispatch
+            .request
+            .merged_with(&lane.key, &lane.assignment_request())?;
+        let lane_dispatch = dispatch.with_request(request);
+        super::bridge::validate_task(&lane.task)
+            .map_err(|error| anyhow!("lane `{}` fails group preflight: {error:#}", lane.key))?;
+        let prepared = prepare_spawn(
+            interpreter,
+            tool,
+            Some(lane.key.as_str()),
+            surface,
+            lane.title.as_deref(),
+            config,
+        )?;
+        let _plan = plan_lane(
+            interpreter,
+            snapshot.sessions(),
+            &prepared,
+            cwd,
+            model,
+            resume,
+            ledger,
+            pending,
+            &lane_dispatch,
+        )
+        .map_err(|error| {
+            anyhow!(
+                "lane `{}` fails group preflight; no lane of this set was launched: {error:#}",
+                lane.key
+            )
+        })?;
+        lane_dispatches.push(lane_dispatch);
+    }
+    let mut outcomes = Vec::with_capacity(lanes.len());
+    for (lane, lane_dispatch) in lanes.iter().zip(&lane_dispatches) {
         let outcome = spawn_or_reuse(
             terminals,
             interpreter,
@@ -1158,10 +1330,11 @@ pub(super) fn spawn_lanes(
             pending,
             trace_dir,
             cancel,
+            lane_dispatch,
         )
-        .with_context(|| {
-            format!(
-                "lane `{}` failed to spawn; {} lane(s) of this set are already live and keep running",
+        .map_err(|error| {
+            anyhow!(
+                "lane `{}` failed after preflight because the live session state changed; {} lane(s) of this set are already live and keep running: {error:#}",
                 lane.key,
                 outcomes.len()
             )
@@ -1227,6 +1400,7 @@ pub(super) fn spawn_or_reuse(
     pending: &super::bridge::PendingBridgeStore,
     trace_dir: &std::path::Path,
     cancel: Option<&AtomicBool>,
+    dispatch: &AgentDispatch,
 ) -> Result<SpawnOutcome> {
     if background && task.is_none() {
         bail!(
@@ -1237,8 +1411,23 @@ pub(super) fn spawn_or_reuse(
     let _guard = locks.acquire(&prepared.key)?;
     let result = (|| {
         let snapshot = terminals.snapshot().context("session discovery failed")?;
-        match decide(interpreter, snapshot.sessions(), &prepared.identity) {
-            SpawnDecision::Launch => {
+        let plan = plan_lane(
+            interpreter,
+            snapshot.sessions(),
+            &prepared,
+            cwd,
+            model,
+            resume,
+            ledger,
+            pending,
+            dispatch,
+        )?;
+        match plan {
+            LanePlan::Launch {
+                admission,
+                resume_decision,
+            } => {
+                let model = admission.model.as_deref();
                 if background && group.is_none() {
                     let live = snapshot
                         .sessions()
@@ -1254,13 +1443,6 @@ pub(super) fn spawn_or_reuse(
                 require_model_for_launch(model)?;
                 let mut launch = wrap_launch(&prepared.launch, cap);
                 let requested_cwd = canonicalize_cwd(cwd)?;
-                let resume_decision = decide_resume(
-                    resume,
-                    ledger.load(&prepared.key, &requested_cwd.to_string_lossy())?.as_ref(),
-                    &prepared.tool_id,
-                    &requested_cwd.to_string_lossy(),
-                    interpreter,
-                );
                 match &resume_decision {
                     ResumeDecision::Apply { external_id, args } => {
                         launch.args.extend(args.iter().cloned());
@@ -1289,22 +1471,24 @@ pub(super) fn spawn_or_reuse(
                     && task.is_some()
                     && pending.has_key_history(prepared.key.as_str())?;
                 if background {
-                    let round_task =
-                        task.expect("the background guard above guarantees a task");
+                    let round_task = task.expect("the background guard above guarantees a task");
                     super::bridge::validate_task(round_task)?;
                     let marker = super::bridge::CompletionMarker::generate();
-                    let joined = prepared.identity.tool.as_str()
-                        == qol_terminal_sessions::cli::PI_TOOL_ID;
-                    let prompt = if resumed {
-                        super::bridge::resume_lane_prompt(round_task, &marker, joined)
-                    } else {
-                        super::bridge::bridge_prompt(
-                            round_task,
-                            &marker,
-                            super::bridge::Role::Lane,
-                            joined,
-                        )
-                    };
+                    let joined =
+                        prepared.identity.tool.as_str() == qol_terminal_sessions::cli::PI_TOOL_ID;
+                    let prompt = super::bridge::prompt_with_assignment(
+                        if resumed {
+                            super::bridge::resume_lane_prompt(round_task, &marker, joined)
+                        } else {
+                            super::bridge::bridge_prompt(
+                                round_task,
+                                &marker,
+                                super::bridge::Role::Lane,
+                                joined,
+                            )
+                        },
+                        admission.assignment.as_ref(),
+                    );
                     launch.args.push(prompt);
                     let request = SpawnRequest {
                         identity: prepared.identity.clone(),
@@ -1327,6 +1511,7 @@ pub(super) fn spawn_or_reuse(
                         group,
                         trace_dir,
                         cancel,
+                        &admission,
                     )?;
                     outcome.resume = Some(resume_decision.status());
                     outcome.resume_detail = Some(resume_decision.detail());
@@ -1350,6 +1535,7 @@ pub(super) fn spawn_or_reuse(
                         &prepared.title,
                         autoclose,
                         cancel,
+                        &admission,
                     )?;
                     outcome.resume = Some(resume_decision.status());
                     outcome.resume_detail = Some(resume_decision.detail());
@@ -1363,30 +1549,36 @@ pub(super) fn spawn_or_reuse(
                             pending,
                             resumed,
                             cancel,
+                            ledger,
+                            dispatch,
+                            admission.assignment.as_ref(),
                         ),
                         None => Ok(outcome),
                     }
                 }
             }
-            SpawnDecision::Reuse(facts) => {
+            LanePlan::Reuse { facts, admission } => {
                 qol_runtime::probe!(
                     "CLI_SESSION_SPAWN",
                     "event=reuse key={} tool={}",
                     prepared.identity.key,
                     prepared.identity.tool
                 );
-                let outcome = outcome_from_facts(
-                    &facts,
+                let binding = facts
+                    .binding()
+                    .context("spawned session cannot bind to a stable token")?;
+                let model = admission.model.as_deref();
+                let mut outcome = outcome_from_facts(
+                    facts.as_ref(),
                     interpreter,
                     true,
                     model.map(str::to_owned),
                     &prepared.title,
                 )?;
-                let binding = facts
-                    .binding()
-                    .context("spawned session cannot bind to a stable token")?;
+                outcome.agent_assignment = admission.assignment.clone();
+                outcome.agent_status = admission.status();
                 pending.set_role(&binding, super::bridge::Role::Lane)?;
-                let descriptor = interpreter.describe(&facts);
+                let descriptor = interpreter.describe(facts.as_ref());
                 ledger.record(
                     &prepared.key,
                     &prepared.tool_id,
@@ -1394,6 +1586,12 @@ pub(super) fn spawn_or_reuse(
                     &facts.cwd,
                     model,
                     descriptor.external_id.as_deref(),
+                )?;
+                ledger.bind_session(
+                    &prepared.key,
+                    &facts.cwd,
+                    &binding.token(),
+                    admission.assignment.as_ref(),
                 )?;
                 match task {
                     Some(round_task) => deliver_task(
@@ -1404,38 +1602,12 @@ pub(super) fn spawn_or_reuse(
                         pending,
                         false,
                         cancel,
+                        ledger,
+                        dispatch,
+                        admission.assignment.as_ref(),
                     ),
                     None => Ok(outcome),
                 }
-            }
-            SpawnDecision::Conflict(found) => {
-                qol_runtime::probe!(
-                    "CLI_SESSION_SPAWN",
-                    "event=conflict key={} requested_tool={} found_tool={}",
-                    prepared.identity.key,
-                    prepared.identity.tool,
-                    found
-                );
-                bail!(
-                    "spawn key `{}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key",
-                    prepared.key
-                )
-            }
-            SpawnDecision::WrongHarness { described } => bail!(
-                "spawn key `{}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
-                prepared.key, prepared.identity.tool
-            ),
-            SpawnDecision::Ambiguous(count) => {
-                qol_runtime::probe!(
-                    "CLI_SESSION_SPAWN",
-                    "event=ambiguous key={} matches={}",
-                    prepared.identity.key,
-                    count
-                );
-                bail!(
-                    "spawn key `{}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key",
-                    prepared.key
-                )
             }
         }
     })();
@@ -1632,6 +1804,7 @@ fn launch_background(
     group: Option<&str>,
     trace_dir: &std::path::Path,
     cancel: Option<&AtomicBool>,
+    admission: &Admission,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -1665,8 +1838,14 @@ fn launch_background(
     let binding = facts
         .binding()
         .context("spawned session cannot bind to a stable token")?;
+    ledger.bind_session(
+        &identity.key,
+        &facts.cwd,
+        &binding.token(),
+        admission.assignment.as_ref(),
+    )?;
     pending.set_role(&binding, super::bridge::Role::Lane)?;
-    pending.start_with_label(
+    pending.start_with_assignment(
         &binding,
         marker,
         &super::bridge::driver_token(terminals),
@@ -1674,6 +1853,7 @@ fn launch_background(
         group,
         Some(identity.key.as_str()),
         silent_wake,
+        admission.assignment.as_ref(),
     )?;
     pending.record_transcript_paths(&binding, &interpreter.transcript_paths(&facts))?;
     if let Some(group) = group {
@@ -1691,6 +1871,8 @@ fn launch_background(
     outcome.task_submitted = Some(true);
     outcome.completion_marker = Some(marker.to_owned());
     outcome.next_command = Some(format!("qol sessions next {}", binding.token()));
+    outcome.agent_assignment = admission.assignment.clone();
+    outcome.agent_status = admission.status();
     outcome.elapsed_ms = started.elapsed().as_millis();
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -1714,6 +1896,7 @@ fn launch_ready(
     title: &str,
     autoclose: bool,
     cancel: Option<&AtomicBool>,
+    admission: &Admission,
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
@@ -1747,10 +1930,18 @@ fn launch_ready(
     let binding = facts
         .binding()
         .context("spawned session cannot bind to a stable token")?;
+    ledger.bind_session(
+        &identity.key,
+        &facts.cwd,
+        &binding.token(),
+        admission.assignment.as_ref(),
+    )?;
     pending.set_role(&binding, super::bridge::Role::Lane)?;
     let mut outcome =
         outcome_from_facts(&facts, interpreter, false, model.map(str::to_owned), title)?;
     outcome.autoclose = autoclose;
+    outcome.agent_assignment = admission.assignment.clone();
+    outcome.agent_status = admission.status();
     outcome.elapsed_ms = started.elapsed().as_millis();
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -1792,6 +1983,7 @@ pub(super) fn spawn_detached(
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
     prompt: &str,
+    assignment: Option<&AgentAssignment>,
 ) -> Result<DetachedLaunch> {
     require_model_for_launch(model)?;
     let prepared = prepare_spawn(interpreter, tool, Some(key), surface, title, config)?;
@@ -1841,6 +2033,7 @@ pub(super) fn spawn_detached(
     let binding = facts
         .binding()
         .context("spawned session cannot bind to a stable token")?;
+    ledger.bind_session(&prepared.key, &facts.cwd, &binding.token(), assignment)?;
     Ok(DetachedLaunch {
         session: binding.token(),
         cwd: facts.cwd.clone(),
@@ -1951,6 +2144,8 @@ fn outcome_from_facts(
         autoclose: false,
         resume: None,
         resume_detail: None,
+        agent_assignment: None,
+        agent_status: AgentStatus::Unconstrained,
     })
 }
 
@@ -1986,8 +2181,127 @@ fn decide(
     }
 }
 
+fn require_current_prior_policy(
+    dispatch: &AgentDispatch,
+    prior: &AgentAssignment,
+    key: &SpawnKey,
+) -> Result<()> {
+    dispatch.verify_prior_assignment(prior).map_err(|error| {
+        anyhow!(
+            "the prior session for key `{key}` no longer satisfies current policy; pass resume=false for a fresh session: {error:#}"
+        )
+    })
+}
+
+enum LanePlan {
+    Launch {
+        admission: Admission,
+        resume_decision: ResumeDecision,
+    },
+    Reuse {
+        facts: Box<SessionFacts>,
+        admission: Admission,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_lane(
+    interpreter: &CliSessionInterpreter,
+    sessions: &[SessionFacts],
+    prepared: &SpawnContext,
+    requested_cwd: &str,
+    model: Option<&str>,
+    resume: Option<bool>,
+    ledger: &SpawnLedger,
+    pending: &super::bridge::PendingBridgeStore,
+    dispatch: &AgentDispatch,
+) -> Result<LanePlan> {
+    match decide(interpreter, sessions, &prepared.identity) {
+        SpawnDecision::Launch => {
+            let admission = dispatch.admit_launch(prepared.tool_id.as_str(), model)?;
+            require_model_for_launch(admission.model.as_deref())?;
+            let requested_cwd = canonicalize_cwd(requested_cwd)?;
+            let cwd = requested_cwd.to_string_lossy();
+            let prior_record = ledger.load(&prepared.key, &cwd)?;
+            let resume_decision = decide_resume(
+                resume,
+                prior_record.as_ref(),
+                &prepared.tool_id,
+                &cwd,
+                interpreter,
+            );
+            if matches!(&resume_decision, ResumeDecision::Apply { .. }) {
+                let prior = prior_record.and_then(|record| record.agent_assignment);
+                match (admission.assignment.as_ref(), prior) {
+                    (Some(assignment), Some(prior)) => {
+                        if prior.profile != assignment.profile {
+                            bail!(
+                                "a prior session for key `{}` was assigned agent profile `{}`, and this constrained resume selects `{}`; a resume never promotes a different profile. Pass resume=false for a fresh session",
+                                prepared.key,
+                                prior.profile,
+                                assignment.profile
+                            );
+                        }
+                        require_current_prior_policy(dispatch, &prior, &prepared.key)?;
+                    }
+                    (Some(_), None) => bail!(
+                        "a prior session for key `{}` has no recorded agent assignment, so this constrained resume cannot promote it. Pass resume=false for a fresh session",
+                        prepared.key
+                    ),
+                    (None, Some(prior)) => {
+                        require_current_prior_policy(dispatch, &prior, &prepared.key)?;
+                    }
+                    (None, None) => {}
+                }
+            }
+            Ok(LanePlan::Launch {
+                admission,
+                resume_decision,
+            })
+        }
+        SpawnDecision::Reuse(facts) => {
+            let binding = facts
+                .binding()
+                .context("spawned session cannot bind to a stable token")?;
+            let recorded = recorded_identity(ledger, pending, &binding)?;
+            let admission = dispatch.admit_reuse(prepared.tool_id.as_str(), model, &recorded)?;
+            Ok(LanePlan::Reuse { facts, admission })
+        }
+        SpawnDecision::Conflict(found) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=conflict key={} requested_tool={} found_tool={}",
+                prepared.identity.key,
+                prepared.identity.tool,
+                found
+            );
+            bail!(
+                "spawn key `{}` is already held by tool `{found}`; a key cannot span tools - pick a distinct key",
+                prepared.key
+            )
+        }
+        SpawnDecision::WrongHarness { described } => bail!(
+            "spawn key `{}` is tagged for `{}` but the live session is described as `{described}`; refusing to reuse it",
+            prepared.key, prepared.identity.tool
+        ),
+        SpawnDecision::Ambiguous(count) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_SPAWN",
+                "event=ambiguous key={} matches={}",
+                prepared.identity.key,
+                count
+            );
+            bail!(
+                "spawn key `{}` matches {count} live sessions; the key is ambiguous - close the duplicates or pick a distinct key",
+                prepared.key
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::agent_policy::{ImageInput, VisualReview};
     use super::*;
     use std::collections::VecDeque;
     use std::str::FromStr;
@@ -2281,6 +2595,7 @@ mod tests {
             pending,
             &std::path::PathBuf::from("."),
             None,
+            &AgentDispatch::unconfigured(),
         )
     }
 
@@ -2305,6 +2620,12 @@ mod tests {
             "--resume".into(),
             "--group".into(),
             "research".into(),
+            "--agent-profile".into(),
+            "worker".into(),
+            "--task-role".into(),
+            "implement".into(),
+            "--requires".into(),
+            "image_input,visual_review".into(),
         ])
         .unwrap();
         assert_eq!(parsed.tool, "codex");
@@ -2317,6 +2638,61 @@ mod tests {
         assert!(parsed.background);
         assert_eq!(parsed.resume, Some(true));
         assert_eq!(parsed.group.as_deref(), Some("research"));
+        assert_eq!(parsed.agent_profile.as_deref(), Some("worker"));
+        assert_eq!(parsed.task_role, Some(AgentRole::Implement));
+        assert_eq!(
+            parsed.requires,
+            Some(vec![
+                AgentRequirement::ImageInput,
+                AgentRequirement::VisualReview
+            ])
+        );
+        assert_eq!(
+            parsed.assignment_request().task_role,
+            Some(AgentRole::Implement)
+        );
+
+        let empty = parse_args(&[
+            "--tool".into(),
+            "pi".into(),
+            "--cwd".into(),
+            "/tmp".into(),
+            "--requires".into(),
+            "".into(),
+        ])
+        .unwrap();
+        assert_eq!(empty.requires, Some(Vec::new()));
+        assert!(
+            !empty.assignment_request().is_unconstrained(),
+            "an explicit empty requires value still constrains the dispatch"
+        );
+        assert_eq!(
+            parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into(),])
+                .unwrap()
+                .requires,
+            None
+        );
+
+        let error = parse_args(&[
+            "--tool".into(),
+            "pi".into(),
+            "--cwd".into(),
+            "/tmp".into(),
+            "--task-role".into(),
+            "supervisor".into(),
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("supervisor"), "{error}");
+        assert!(parse_args(&[
+            "--tool".into(),
+            "pi".into(),
+            "--cwd".into(),
+            "/tmp".into(),
+            "--requires".into(),
+            "sight".into(),
+        ])
+        .is_err());
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
@@ -2330,6 +2706,9 @@ mod tests {
         assert!(!parsed.background);
         assert_eq!(parsed.resume, None);
         assert_eq!(parsed.group, None);
+        assert_eq!(parsed.agent_profile, None);
+        assert_eq!(parsed.task_role, None);
+        assert_eq!(parsed.requires, None);
 
         let parsed = parse_args(&[
             "--tool".into(),
@@ -2350,13 +2729,26 @@ mod tests {
             "--cwd".into(),
             ".".into(),
             "--lanes".into(),
-            r#"[{"key":"a","task":"first"},{"key":"b","task":"second","title":"B"}]"#.into(),
+            r#"[{"key":"a","task":"first"},{"key":"b","task":"second","title":"B","agent_profile":"worker","task_role":"debug","requires":["visual_review"]}]"#.into(),
         ])
         .unwrap();
         assert_eq!(parsed.lanes.len(), 2);
         assert_eq!(parsed.lanes[0].key, "a");
         assert_eq!(parsed.lanes[0].task, "first");
         assert_eq!(parsed.lanes[1].title.as_deref(), Some("B"));
+        assert_eq!(parsed.lanes[1].agent_profile.as_deref(), Some("worker"));
+        assert_eq!(parsed.lanes[1].task_role, Some(AgentRole::Debug));
+        assert_eq!(
+            parsed.lanes[1].requires,
+            Some(vec![AgentRequirement::VisualReview])
+        );
+        assert_eq!(
+            parsed.lanes[1]
+                .assignment_request()
+                .agent_profile
+                .as_deref(),
+            Some("worker")
+        );
         assert!(parsed.key.is_none());
     }
 
@@ -2372,8 +2764,7 @@ mod tests {
             "--lanes".into(),
             r#"[{"key":"a","task":"first"}]"#.into(),
         ])
-        .err()
-        .expect("a lane set beside a single lane is refused")
+        .expect_err("a lane set beside a single lane is refused")
         .to_string();
         assert!(error.contains("--lanes carries every lane"), "{error}");
     }
@@ -2385,6 +2776,9 @@ mod tests {
             task: "work".to_owned(),
             title: None,
             silent_wake: None,
+            agent_profile: None,
+            task_role: None,
+            requires: None,
         };
         let set = [lane("a"), lane("b")];
         assert_eq!(generated_group(&set), generated_group(&set));
@@ -2538,6 +2932,8 @@ mod tests {
             cwd: cwd.to_owned(),
             model: Some("flash-x".to_owned()),
             external_id: external_id.map(str::to_owned),
+            session: None,
+            agent_assignment: None,
             created_at: 1,
             last_seen: 1,
         };
@@ -2872,26 +3268,34 @@ mod tests {
     }
 
     #[test]
-    fn spawn_model_config_parses_and_missing_file_stays_absent() {
+    fn the_dispatch_policy_loader_parses_models_and_missing_files_stay_absent() {
         let root = tempfile::TempDir::new().unwrap();
         let path = root.path().join("sessions.toml");
-        assert_eq!(config_spawn_model_at(&path).unwrap(), None);
+        let missing = config_dispatch_policy_at(&path).unwrap();
+        assert!(missing.default_model.is_none());
+        assert!(missing.allowed_models.is_empty());
 
         fs::write(&path, "spawn_model = \"flash-x\"\n").unwrap();
-        assert_eq!(
-            config_spawn_model_at(&path).unwrap().as_deref(),
-            Some("flash-x")
-        );
+        let explicit = config_dispatch_policy_at(&path).unwrap();
+        assert_eq!(explicit.default_model.as_deref(), Some("flash-x"));
+        assert_eq!(explicit.allowed_models, vec!["flash-x".to_owned()]);
 
         fs::write(
             &path,
             "spawn_surface = \"tab\"\nspawn_model = \"flash-y\"\n",
         )
         .unwrap();
+        let with_surface = config_dispatch_policy_at(&path).unwrap();
+        assert_eq!(with_surface.default_model.as_deref(), Some("flash-y"));
+
+        fs::write(&path, "spawn_model = \"   \"\n").unwrap();
+        let blank = config_dispatch_policy_at(&path).unwrap();
         assert_eq!(
-            config_spawn_model_at(&path).unwrap().as_deref(),
-            Some("flash-y")
+            blank.default_model.as_deref(),
+            Some("   "),
+            "a blank configured model stays visible so require_model_for_launch can reject it"
         );
+        assert_eq!(blank.allowed_models, vec!["   ".to_owned()]);
     }
 
     #[test]
@@ -3150,22 +3554,40 @@ mod tests {
     }
 
     #[test]
-    fn model_resolution_prefers_the_explicit_override_over_config() {
-        assert_eq!(
-            resolve_model_with(Some("flash-x"), Some("flash-y".to_owned())).unwrap(),
-            Some("flash-x".to_owned())
+    fn a_legacy_assignment_prefers_the_explicit_model_over_the_config_default() {
+        let dispatch = AgentDispatch::new(
+            DispatchPolicy {
+                agent: AgentPolicy::default(),
+                default_model: Some("flash-y".to_owned()),
+                allowed_models: Vec::new(),
+            },
+            AssignmentRequest::default(),
         );
         assert_eq!(
-            resolve_model_with(None, Some("flash-y".to_owned())).unwrap(),
-            Some("flash-y".to_owned())
+            dispatch
+                .admit_launch("pi", Some("flash-x"))
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("flash-x")
         );
-        assert_eq!(resolve_model_with(None, None).unwrap(), None);
+        assert_eq!(
+            dispatch.admit_launch("pi", None).unwrap().model.as_deref(),
+            Some("flash-y")
+        );
+        assert_eq!(
+            AgentDispatch::unconfigured()
+                .admit_launch("pi", None)
+                .unwrap()
+                .model,
+            None
+        );
     }
 
     #[test]
     fn a_model_outside_the_allowed_list_is_refused_by_name() {
         let allowed = vec!["deepseek-v4-flash".to_owned()];
-        let error = enforce_allowed_model_with("deepseek-v4-pro", &allowed)
+        let error = agent_policy::enforce_allowed_model("deepseek-v4-pro", &allowed)
             .expect_err("a tier the host does not allow must not launch");
         let message = error.to_string();
         assert!(message.contains("deepseek-v4-pro"), "{message}");
@@ -3175,9 +3597,9 @@ mod tests {
     #[test]
     fn an_allowed_model_launches_and_an_empty_list_restricts_nothing() {
         let allowed = vec!["deepseek-v4-flash".to_owned(), "kimi-k2".to_owned()];
-        assert!(enforce_allowed_model_with("deepseek-v4-flash", &allowed).is_ok());
-        assert!(enforce_allowed_model_with("kimi-k2", &allowed).is_ok());
-        assert!(enforce_allowed_model_with("deepseek-v4-pro", &[]).is_ok());
+        assert!(agent_policy::enforce_allowed_model("deepseek-v4-flash", &allowed).is_ok());
+        assert!(agent_policy::enforce_allowed_model("kimi-k2", &allowed).is_ok());
+        assert!(agent_policy::enforce_allowed_model("deepseek-v4-pro", &[]).is_ok());
     }
 
     #[test]
@@ -3634,9 +4056,16 @@ mod tests {
             "lane-1".into(),
         ])
         .unwrap();
-        let error = run_with(&terminals, parsed, None, None, &locks, None)
-            .unwrap_err()
-            .to_string();
+        let error = run_with(
+            &terminals,
+            parsed,
+            &AgentDispatch::unconfigured(),
+            None,
+            &locks,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("--model"), "{error}");
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
 
@@ -3654,7 +4083,7 @@ mod tests {
         let outcome = run_with(
             &terminals,
             parsed,
-            Some("flash-x".to_owned()),
+            &AgentDispatch::unconfigured(),
             None,
             &locks,
             None,
@@ -3673,7 +4102,15 @@ mod tests {
             "lane-1".into(),
         ])
         .unwrap();
-        let outcome = run_with(&terminals, parsed, None, None, &locks, None).unwrap();
+        let outcome = run_with(
+            &terminals,
+            parsed,
+            &AgentDispatch::unconfigured(),
+            None,
+            &locks,
+            None,
+        )
+        .unwrap();
         assert!(outcome.reused);
         assert_eq!(outcome.cwd, cwd);
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
@@ -4730,5 +5167,1150 @@ mod tests {
             .load(&SpawnKey::new("lane-fresh").unwrap(), "/work")
             .unwrap()
             .is_none());
+    }
+
+    fn worker_dispatch(
+        agent_profile: Option<&str>,
+        task_role: Option<AgentRole>,
+        requires: Option<Vec<AgentRequirement>>,
+    ) -> AgentDispatch {
+        let spec = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: Some("informational".to_owned()),
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            preference: None,
+        };
+        let policy = AgentPolicy::build(
+            std::collections::BTreeMap::from([("worker".to_owned(), spec)]),
+            None,
+            None,
+        )
+        .unwrap();
+        AgentDispatch::new(
+            DispatchPolicy {
+                agent: policy,
+                default_model: None,
+                allowed_models: vec!["flash".to_owned()],
+            },
+            AssignmentRequest {
+                agent_profile: agent_profile.map(str::to_owned),
+                task_role,
+                requires,
+            },
+        )
+    }
+
+    fn other_dispatch() -> AgentDispatch {
+        let spec = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Unknown,
+            visual_review: VisualReview::Deny,
+            preference: None,
+        };
+        let policy = AgentPolicy::build(
+            std::collections::BTreeMap::from([("other".to_owned(), spec)]),
+            None,
+            None,
+        )
+        .unwrap();
+        AgentDispatch::new(
+            DispatchPolicy {
+                agent: policy,
+                default_model: None,
+                allowed_models: vec!["flash".to_owned()],
+            },
+            AssignmentRequest {
+                agent_profile: Some("other".to_owned()),
+                task_role: Some(AgentRole::Implement),
+                requires: None,
+            },
+        )
+    }
+
+    fn opted_out_dispatch() -> AgentDispatch {
+        let spec = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            preference: None,
+        };
+        let policy = AgentPolicy::build(
+            std::collections::BTreeMap::from([("worker".to_owned(), spec)]),
+            None,
+            Some(false),
+        )
+        .unwrap();
+        AgentDispatch::new(
+            DispatchPolicy {
+                agent: policy,
+                default_model: None,
+                allowed_models: vec!["flash".to_owned()],
+            },
+            AssignmentRequest::default(),
+        )
+    }
+
+    fn managed_lane(key: &str, task_role: Option<AgentRole>) -> LaneSpec {
+        LaneSpec {
+            key: key.to_owned(),
+            task: "work".to_owned(),
+            title: None,
+            silent_wake: None,
+            agent_profile: Some("worker".to_owned()),
+            task_role,
+            requires: None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_spawn_dispatched(
+        terminals: &TerminalSessionService,
+        ledger: &SpawnLedger,
+        pending: &super::super::bridge::PendingBridgeStore,
+        locks: &SpawnLocks,
+        cwd: &str,
+        key: &str,
+        model: Option<&str>,
+        background: bool,
+        task: Option<&str>,
+        dispatch: &AgentDispatch,
+    ) -> Result<SpawnOutcome> {
+        spawn_or_reuse(
+            terminals,
+            &CliSessionInterpreter::system(),
+            "pi",
+            cwd,
+            Some(key),
+            None,
+            model,
+            None,
+            None,
+            None,
+            locks,
+            ledger,
+            background,
+            true,
+            false,
+            None,
+            task,
+            None,
+            pending,
+            &std::path::PathBuf::from("."),
+            None,
+            dispatch,
+        )
+    }
+
+    fn managed_workdir(root: &tempfile::TempDir) -> String {
+        fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn a_grouped_set_with_an_invalid_second_lane_launches_nothing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let lanes = vec![
+            managed_lane("lane-a", Some(AgentRole::Implement)),
+            managed_lane("lane-b", Some(AgentRole::Review)),
+        ];
+        let dispatch = worker_dispatch(None, None, None);
+
+        let error = spawn_lanes(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            "pi",
+            &cwd,
+            &lanes,
+            None,
+            None,
+            None,
+            None,
+            &locks(&root),
+            &ledger,
+            None,
+            None,
+            &pending,
+            root.path(),
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("lane-b"), "{error}");
+        assert!(error.contains("review"), "{error}");
+        assert_eq!(
+            backend.spawn_count.load(AtomicOrdering::Relaxed),
+            0,
+            "a policy-incompatible lane must start no terminal without a group"
+        );
+        assert!(pending.pending_rounds().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_constrained_launch_records_the_assignment_on_the_outcome_checkpoint_and_ledger() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, _) = harness(vec![vec![]]);
+        let dispatch = worker_dispatch(
+            Some("worker"),
+            Some(AgentRole::Implement),
+            Some(vec![AgentRequirement::ImageInput]),
+        );
+
+        let outcome = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-managed",
+            None,
+            true,
+            Some("implement the fix"),
+            &dispatch,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.agent_status, AgentStatus::Constrained);
+        assert_eq!(outcome.model.as_deref(), Some("flash"));
+        let assignment = outcome.agent_assignment.as_ref().unwrap();
+        assert_eq!(assignment.profile, "worker");
+        assert_eq!(assignment.task_role, AgentRole::Implement);
+        assert_eq!(assignment.requires, vec![AgentRequirement::ImageInput]);
+        assert_eq!(assignment.evidence_basis, "configuration_declared");
+
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        assert_eq!(
+            pending
+                .recorded_assignment(&binding)
+                .unwrap()
+                .unwrap()
+                .profile,
+            "worker"
+        );
+        assert_eq!(
+            ledger
+                .find_by_session(&outcome.session)
+                .unwrap()
+                .unwrap()
+                .agent_assignment
+                .unwrap()
+                .profile,
+            "worker"
+        );
+    }
+
+    #[test]
+    fn a_reused_lane_reports_its_bound_model_even_for_a_legacy_call() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let dispatch = worker_dispatch(Some("worker"), Some(AgentRole::Implement), None);
+
+        run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-bound",
+            None,
+            true,
+            Some("implement the fix"),
+            &dispatch,
+        )
+        .unwrap();
+
+        let reused = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-bound",
+            None,
+            false,
+            None,
+            &opted_out_dispatch(),
+        )
+        .unwrap();
+        assert!(reused.reused);
+        assert_eq!(reused.model.as_deref(), Some("flash"));
+        assert_eq!(reused.agent_status, AgentStatus::Constrained);
+        assert_eq!(reused.agent_assignment.as_ref().unwrap().profile, "worker");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let conflict = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-bound",
+            Some("pro"),
+            false,
+            None,
+            &opted_out_dispatch(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(conflict.contains("flash"), "{conflict}");
+        assert!(conflict.contains("pro"), "{conflict}");
+    }
+
+    #[test]
+    fn constrained_reuse_of_an_unmanaged_session_is_refused() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+
+        run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-legacy",
+            Some("flash"),
+            true,
+            Some("implement the fix"),
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap();
+
+        let dispatch = worker_dispatch(Some("worker"), Some(AgentRole::Implement), None);
+        let error = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-legacy",
+            None,
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("resume=false"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_constrained_resume_cannot_promote_a_prior_session_without_a_recorded_assignment() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let key = SpawnKey::new("lane-resume").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                Some("prior-session-id"),
+            )
+            .unwrap();
+
+        let dispatch = worker_dispatch(Some("worker"), Some(AgentRole::Implement), None);
+        let error = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-resume",
+            None,
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("resume=false"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_constrained_resume_requires_a_compatible_recorded_profile() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let key = SpawnKey::new("lane-resume-profile").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                Some("prior-session-id"),
+            )
+            .unwrap();
+        let prior = AgentAssignment {
+            profile: "worker".to_owned(),
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Unknown,
+            visual_review: VisualReview::Deny,
+            task_role: AgentRole::Implement,
+            requires: Vec::new(),
+            evidence_basis: "configuration_declared".to_owned(),
+        };
+        ledger
+            .bind_session(&key, &cwd, "v1:kitty:spawn-prior:10", Some(&prior))
+            .unwrap();
+
+        let conflicting = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-resume-profile",
+            None,
+            false,
+            None,
+            &other_dispatch(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(conflicting.contains("other"), "{conflicting}");
+        assert!(conflicting.contains("worker"), "{conflicting}");
+        assert!(conflicting.contains("resume=false"), "{conflicting}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+
+        let compatible = worker_dispatch(Some("worker"), Some(AgentRole::Implement), None);
+        let launched = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-resume-profile",
+            None,
+            false,
+            None,
+            &compatible,
+        )
+        .unwrap();
+        assert!(!launched.reused);
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert!(
+            request.launch.args.contains(&"--session".to_owned()),
+            "{:?}",
+            request.launch.args
+        );
+        assert!(
+            request.launch.args.contains(&"prior-session-id".to_owned()),
+            "{:?}",
+            request.launch.args
+        );
+    }
+
+    #[test]
+    fn the_spawn_ledger_binds_a_session_to_its_assignment_and_reads_old_records() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let key = SpawnKey::new("lane-bound").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                Some("flash"),
+                None,
+            )
+            .unwrap();
+        let assignment = AgentAssignment {
+            profile: "worker".to_owned(),
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Unknown,
+            visual_review: VisualReview::Deny,
+            task_role: AgentRole::Implement,
+            requires: Vec::new(),
+            evidence_basis: "configuration_declared".to_owned(),
+        };
+
+        ledger
+            .bind_session(&key, "/work", "v1:kitty:7:100", Some(&assignment))
+            .unwrap();
+        let found = ledger.find_by_session("v1:kitty:7:100").unwrap().unwrap();
+        assert_eq!(found.session.as_deref(), Some("v1:kitty:7:100"));
+        assert_eq!(found.agent_assignment, Some(assignment.clone()));
+        assert!(ledger.find_by_session("v1:kitty:8:200").unwrap().is_none());
+
+        ledger
+            .rebind_session("v1:kitty:7:100", &assignment)
+            .unwrap();
+        assert_eq!(
+            ledger
+                .find_by_session("v1:kitty:7:100")
+                .unwrap()
+                .unwrap()
+                .agent_assignment,
+            Some(assignment)
+        );
+
+        let legacy_key = SpawnKey::new("legacy").unwrap();
+        ledger
+            .record(
+                &legacy_key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/legacy",
+                Some("flash"),
+                None,
+            )
+            .unwrap();
+        fs::write(
+            ledger.file_for(&legacy_key, "/legacy"),
+            r#"{"key":"legacy","tool":"pi","surface":"tab","cwd":"/legacy","model":null,"external_id":null,"created_at":1,"last_seen":2}"#,
+        )
+        .unwrap();
+        let parsed = ledger.load(&legacy_key, "/legacy").unwrap().unwrap();
+        assert!(parsed.session.is_none());
+        assert!(parsed.agent_assignment.is_none());
+        assert!(ledger.find_by_session("v1:kitty:9:300").unwrap().is_none());
+    }
+
+    fn plain_lane(key: &str) -> LaneSpec {
+        LaneSpec {
+            key: key.to_owned(),
+            task: "work".to_owned(),
+            title: None,
+            silent_wake: None,
+            agent_profile: None,
+            task_role: None,
+            requires: None,
+        }
+    }
+
+    fn two_profile_dispatch(selected: &str) -> AgentDispatch {
+        let worker = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            preference: None,
+        };
+        let other = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Unknown,
+            visual_review: VisualReview::Deny,
+            preference: None,
+        };
+        let policy = AgentPolicy::build(
+            std::collections::BTreeMap::from([
+                ("worker".to_owned(), worker),
+                ("other".to_owned(), other),
+            ]),
+            None,
+            None,
+        )
+        .unwrap();
+        AgentDispatch::new(
+            DispatchPolicy {
+                agent: policy,
+                default_model: None,
+                allowed_models: vec!["flash".to_owned()],
+            },
+            AssignmentRequest {
+                agent_profile: Some(selected.to_owned()),
+                task_role: Some(AgentRole::Implement),
+                requires: None,
+            },
+        )
+    }
+
+    fn profile_dispatch(
+        model: &str,
+        image_input: ImageInput,
+        visual_review: VisualReview,
+        allowed_models: Vec<String>,
+        requires: Option<Vec<AgentRequirement>>,
+    ) -> AgentDispatch {
+        let spec = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: model.to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input,
+            visual_review,
+            preference: None,
+        };
+        let policy = AgentPolicy::build(
+            std::collections::BTreeMap::from([("worker".to_owned(), spec)]),
+            None,
+            None,
+        )
+        .unwrap();
+        AgentDispatch::new(
+            DispatchPolicy {
+                agent: policy,
+                default_model: None,
+                allowed_models,
+            },
+            AssignmentRequest {
+                agent_profile: Some("worker".to_owned()),
+                task_role: Some(AgentRole::Implement),
+                requires,
+            },
+        )
+    }
+
+    fn prior_assignment(
+        profile: &str,
+        model: &str,
+        requires: Vec<AgentRequirement>,
+    ) -> AgentAssignment {
+        AgentAssignment {
+            profile: profile.to_owned(),
+            tool: "pi".to_owned(),
+            model: model.to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            task_role: AgentRole::Implement,
+            requires,
+            evidence_basis: "configuration_declared".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_grouped_set_with_a_reused_lane_identity_mismatch_launches_nothing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let live = FakeBackend::facts("lane-b", "lane-b", "pi", &cwd);
+        let live_token = live.binding().unwrap().token();
+        let (terminals, backend) = harness(vec![vec![live]]);
+        let key = SpawnKey::new("lane-b").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                None,
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &key,
+                &cwd,
+                &live_token,
+                Some(&prior_assignment("other", "flash", Vec::new())),
+            )
+            .unwrap();
+
+        let lanes = [plain_lane("lane-a"), plain_lane("lane-b")];
+        let error = spawn_lanes(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            "pi",
+            &cwd,
+            &lanes,
+            None,
+            None,
+            None,
+            None,
+            &locks(&root),
+            &ledger,
+            None,
+            None,
+            &pending,
+            root.path(),
+            None,
+            &two_profile_dispatch("worker"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("lane-b"), "{error}");
+        assert!(error.contains("worker"), "{error}");
+        assert!(error.contains("other"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+        assert!(pending.pending_rounds().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_grouped_set_with_a_resumed_lane_prior_mismatch_launches_nothing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let key = SpawnKey::new("lane-b").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                Some("prior-session-id"),
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &key,
+                &cwd,
+                "v1:kitty:spawn-prior:10",
+                Some(&prior_assignment("other", "flash", Vec::new())),
+            )
+            .unwrap();
+
+        let lanes = [plain_lane("lane-a"), plain_lane("lane-b")];
+        let error = spawn_lanes(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            "pi",
+            &cwd,
+            &lanes,
+            None,
+            None,
+            None,
+            None,
+            &locks(&root),
+            &ledger,
+            None,
+            None,
+            &pending,
+            root.path(),
+            None,
+            &two_profile_dispatch("worker"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("lane-b"), "{error}");
+        assert!(error.contains("resume=false"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+        assert!(pending.pending_rounds().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_constrained_resume_rejects_a_same_profile_redeclared_model() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let key = SpawnKey::new("lane-redeclared").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                Some("prior-session-id"),
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &key,
+                &cwd,
+                "v1:kitty:spawn-prior:10",
+                Some(&prior_assignment("worker", "flash", Vec::new())),
+            )
+            .unwrap();
+        let dispatch = profile_dispatch(
+            "upgraded",
+            ImageInput::Native,
+            VisualReview::Allow,
+            vec!["flash".to_owned(), "upgraded".to_owned()],
+            None,
+        );
+
+        let error = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-redeclared",
+            None,
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("flash"), "{error}");
+        assert!(error.contains("upgraded"), "{error}");
+        assert!(error.contains("resume=false"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_constrained_resume_rejects_a_revoked_visual_permission() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let key = SpawnKey::new("lane-revoked").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                Some("prior-session-id"),
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &key,
+                &cwd,
+                "v1:kitty:spawn-prior:10",
+                Some(&prior_assignment(
+                    "worker",
+                    "flash",
+                    vec![AgentRequirement::VisualReview],
+                )),
+            )
+            .unwrap();
+        let dispatch = profile_dispatch(
+            "flash",
+            ImageInput::Unknown,
+            VisualReview::Deny,
+            vec!["flash".to_owned()],
+            None,
+        );
+
+        let error = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-revoked",
+            None,
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("visual_review"), "{error}");
+        assert!(error.contains("resume=false"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_fork_with_a_selected_profile_takes_the_profile_model_and_rejects_a_conflict() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let forks = super::super::fork::ForkStore::with_dir(root.path().join("forks"));
+        let dispatch = worker_dispatch(Some("worker"), Some(AgentRole::Implement), None);
+
+        let outcome = super::super::fork::fork(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &ledger,
+            &locks(&root),
+            &forks,
+            "pi",
+            &cwd,
+            "lane-fork-profile",
+            None,
+            None,
+            None,
+            None,
+            "chase the stale lockfile",
+            None,
+            None,
+            &dispatch,
+        )
+        .unwrap();
+        assert_eq!(outcome.model, "flash");
+        assert_eq!(outcome.agent_status, AgentStatus::Constrained);
+        assert_eq!(outcome.agent_assignment.as_ref().unwrap().profile, "worker");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+
+        let conflict = super::super::fork::fork(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &ledger,
+            &locks(&root),
+            &forks,
+            "pi",
+            &cwd,
+            "lane-fork-conflict",
+            None,
+            Some("pro"),
+            None,
+            None,
+            "chase the stale lockfile",
+            None,
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(conflict.contains("flash"), "{conflict}");
+        assert!(conflict.contains("pro"), "{conflict}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_token_bound_record_without_an_assignment_keeps_its_recorded_model() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let dispatch = AgentDispatch::unconfigured();
+
+        let launched = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-bound-model",
+            Some("flash"),
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap();
+        assert!(launched.agent_assignment.is_none());
+        assert_eq!(launched.agent_status, AgentStatus::Unconstrained);
+        let record = ledger.find_by_session(&launched.session).unwrap().unwrap();
+        assert!(record.agent_assignment.is_none());
+        assert_eq!(record.model.as_deref(), Some("flash"));
+
+        let reused = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-bound-model",
+            None,
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap();
+        assert!(reused.reused);
+        assert_eq!(reused.model.as_deref(), Some("flash"));
+        assert!(reused.agent_assignment.is_none());
+
+        let conflict = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks,
+            &cwd,
+            "lane-bound-model",
+            Some("pro"),
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(conflict.contains("flash"), "{conflict}");
+        assert!(conflict.contains("pro"), "{conflict}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_token_bound_ledger_assignment_is_used_when_the_checkpoint_has_none() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let binding = SessionBinding::from_str("v1:kitty:7:100").unwrap();
+        let key = SpawnKey::new("lane-ledger-only").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                Some("flash"),
+                None,
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &key,
+                "/work",
+                &binding.token(),
+                Some(&prior_assignment("worker", "flash", Vec::new())),
+            )
+            .unwrap();
+
+        let identity = recorded_identity(&ledger, &pending, &binding).unwrap();
+        assert_eq!(
+            identity.assignment.as_ref().unwrap().profile,
+            "worker",
+            "the token-bound ledger assignment is used when the checkpoint has none"
+        );
+        assert_eq!(identity.model.as_deref(), Some("flash"));
+    }
+
+    #[test]
+    fn a_checkpoint_assignment_takes_precedence_over_the_ledger_record() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let binding = SessionBinding::from_str("v1:kitty:8:200").unwrap();
+        let key = SpawnKey::new("lane-precedence").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                Some("ledger-model"),
+                None,
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &key,
+                "/work",
+                &binding.token(),
+                Some(&prior_assignment(
+                    "ledger-profile",
+                    "ledger-model",
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+        pending
+            .start_with_assignment(
+                &binding,
+                "QOL_BRIDGE_DONE_precedence",
+                "",
+                false,
+                None,
+                None,
+                false,
+                Some(&prior_assignment(
+                    "checkpoint-profile",
+                    "checkpoint-model",
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+
+        let identity = recorded_identity(&ledger, &pending, &binding).unwrap();
+        let assignment = identity.assignment.expect("the checkpoint assignment wins");
+        assert_eq!(assignment.profile, "checkpoint-profile");
+        assert_eq!(identity.model.as_deref(), Some("checkpoint-model"));
+    }
+
+    #[test]
+    fn a_ledger_only_managed_session_is_reused_under_its_recorded_assignment() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let live = FakeBackend::facts("lane-managed-ledger", "lane-managed-ledger", "pi", &cwd);
+        let live_token = live.binding().unwrap().token();
+        let (terminals, backend) = harness(vec![vec![live]]);
+        let key = SpawnKey::new("lane-managed-ledger").unwrap();
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                None,
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &key,
+                &cwd,
+                &live_token,
+                Some(&prior_assignment("worker", "flash", Vec::new())),
+            )
+            .unwrap();
+        let dispatch = worker_dispatch(Some("worker"), Some(AgentRole::Implement), None);
+
+        let reused = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-managed-ledger",
+            None,
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap();
+
+        assert!(reused.reused);
+        assert_eq!(reused.agent_status, AgentStatus::Constrained);
+        assert_eq!(
+            reused.agent_assignment.as_ref().unwrap().profile,
+            "worker",
+            "the ledger-only identity is recovered instead of refusing the managed session"
+        );
+        assert_eq!(reused.model.as_deref(), Some("flash"));
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
     }
 }

@@ -32,10 +32,9 @@ pub(crate) struct McpSessionServer {
     pending: super::bridge::PendingBridgeStore,
     locks: super::spawn::SpawnLocks,
     ledger: super::spawn::SpawnLedger,
-    spawn_model: Option<String>,
-    allowed_models: Vec<String>,
     spawn_surface: Option<SpawnSurface>,
     spawn_cap: Option<super::spawn::SpawnCapConfig>,
+    policy: super::spawn::DispatchPolicySource,
     round_timeout: Duration,
     watcher: super::watch_owner::ClientWatcher,
     reports_dir: std::path::PathBuf,
@@ -54,10 +53,9 @@ impl McpSessionServer {
             pending: super::bridge::PendingBridgeStore::system()?,
             locks: super::spawn::SpawnLocks::system()?,
             ledger: super::spawn::SpawnLedger::system()?,
-            spawn_model: super::spawn::config_spawn_model()?,
-            allowed_models: super::spawn::config_allowed_models()?,
             spawn_surface: super::spawn::config_surface()?,
             spawn_cap: super::spawn::resolve_spawn_cap(super::spawn::config_spawn_cap()?),
+            policy: super::spawn::DispatchPolicySource::System,
             round_timeout: Duration::from_millis(super::bridge::TIMEOUT_MAX_MS),
             watcher,
             reports_dir: qol_config::data_subdir("sessions")
@@ -78,10 +76,9 @@ impl McpSessionServer {
             pending,
             locks: super::spawn::SpawnLocks::with_dir(root.path().join("spawn-locks")),
             ledger: super::spawn::SpawnLedger::with_dir(root.path().join("spawn-records")),
-            spawn_model: None,
-            allowed_models: Vec::new(),
             spawn_surface: None,
             spawn_cap: None,
+            policy: super::spawn::DispatchPolicySource::Fixed(Box::default()),
             round_timeout: TEST_ROUND_TIMEOUT,
             watcher: super::watch_owner::ClientWatcher::with_dir(
                 root.path().join("watch-state"),
@@ -105,10 +102,9 @@ impl McpSessionServer {
             pending: super::bridge::PendingBridgeStore::with_dir(dir.clone()),
             locks: super::spawn::SpawnLocks::with_dir(dir.join("spawn-locks")),
             ledger: super::spawn::SpawnLedger::with_dir(dir.join("spawn-records")),
-            spawn_model: None,
-            allowed_models: Vec::new(),
             spawn_surface: None,
             spawn_cap: None,
+            policy: super::spawn::DispatchPolicySource::Fixed(Box::default()),
             round_timeout: TEST_ROUND_TIMEOUT,
             watcher: super::watch_owner::ClientWatcher::with_dir(
                 dir.join("watch-state"),
@@ -118,6 +114,12 @@ impl McpSessionServer {
             forks: super::fork::ForkStore::with_dir(dir.join("forks")),
             _pending_root: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_policy(mut self, policy: super::agent_policy::DispatchPolicy) -> Self {
+        self.policy = super::spawn::DispatchPolicySource::Fixed(Box::new(policy));
+        self
     }
 
     #[cfg(test)]
@@ -215,14 +217,23 @@ impl McpSessionServer {
             .terminals
             .discover()
             .map_err(|error| format!("discovery failed: {error}"))?;
-        let rows = facts
-            .iter()
-            .filter_map(|session| {
-                let binding = session.binding().ok()?;
-                let descriptor = self.interpreter.describe(session);
-                Some(super::contract::session_row(session, &binding, &descriptor))
-            })
-            .collect::<Vec<_>>();
+        let mut rows = Vec::with_capacity(facts.len());
+        for session in &facts {
+            let Ok(binding) = session.binding() else {
+                continue;
+            };
+            let descriptor = self.interpreter.describe(session);
+            let assignment =
+                super::spawn::recorded_assignment(&self.ledger, &self.pending, &binding).map_err(
+                    |error| format!("failed to read the recorded agent assignment: {error}"),
+                )?;
+            rows.push(super::contract::session_row(
+                session,
+                &binding,
+                &descriptor,
+                assignment.as_ref(),
+            ));
+        }
         serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
     }
 
@@ -293,12 +304,11 @@ impl McpSessionServer {
             })
             .transpose()?
             .unwrap_or(false);
-        let model = super::spawn::resolve_allowed_model_with(
-            model_flag.as_deref(),
-            self.spawn_model.clone(),
-            &self.allowed_models,
-        )
-        .map_err(|error| error.to_string())?;
+        let request = assignment_request(&arguments, "session_spawn")?;
+        let dispatch = super::agent_policy::AgentDispatch::new(
+            self.policy.load().map_err(|error| error.to_string())?,
+            request,
+        );
         let outcome = super::spawn::spawn_or_reuse(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -306,7 +316,7 @@ impl McpSessionServer {
             cwd,
             Some(key),
             surface.as_deref(),
-            model.as_deref(),
+            model_flag.as_deref(),
             title.as_deref(),
             self.spawn_surface,
             self.spawn_cap.as_ref(),
@@ -321,6 +331,7 @@ impl McpSessionServer {
             &self.pending,
             &self.reports_dir,
             cancel,
+            &dispatch,
         )
         .map_err(|error| error.to_string())?;
         if outcome.task_submitted == Some(true) {
@@ -361,12 +372,11 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `resume` must be a boolean".to_owned())
             })
             .transpose()?;
-        let model = super::spawn::resolve_allowed_model_with(
-            model_flag.as_deref(),
-            self.spawn_model.clone(),
-            &self.allowed_models,
-        )
-        .map_err(|error| error.to_string())?;
+        let request = assignment_request(arguments, "session_spawn")?;
+        let dispatch = super::agent_policy::AgentDispatch::new(
+            self.policy.load().map_err(|error| error.to_string())?,
+            request,
+        );
         let outcome = super::spawn::spawn_lanes(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -374,7 +384,7 @@ impl McpSessionServer {
             cwd,
             &lanes,
             surface.as_deref(),
-            model.as_deref(),
+            model_flag.as_deref(),
             self.spawn_surface,
             self.spawn_cap.as_ref(),
             &self.locks,
@@ -384,6 +394,7 @@ impl McpSessionServer {
             &self.pending,
             &self.reports_dir,
             cancel,
+            &dispatch,
         )
         .map_err(|error| error.to_string())?;
         for lane in &outcome.lanes {
@@ -397,7 +408,7 @@ impl McpSessionServer {
     fn tool_fork(&self, arguments: Value) -> Result<String, String> {
         let cwd = string_argument(&arguments, "cwd")?;
         let key = string_argument(&arguments, "key")?;
-        let model = string_argument(&arguments, "model")?;
+        let model = optional_string(&arguments, "model", "session_fork")?;
         let brief = string_argument(&arguments, "brief")?;
         let tool = optional_string(&arguments, "tool", "session_fork")?;
         let effort = optional_string(&arguments, "effort", "session_fork")?;
@@ -411,6 +422,11 @@ impl McpSessionServer {
         }
         let parent = Some(super::bridge::driver_token(self.terminals.as_ref()))
             .filter(|token| !token.is_empty());
+        let request = assignment_request(&arguments, "session_fork")?;
+        let dispatch = super::agent_policy::AgentDispatch::new(
+            self.policy.load().map_err(|error| error.to_string())?,
+            request,
+        );
         let outcome = super::fork::fork(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -421,12 +437,13 @@ impl McpSessionServer {
             cwd,
             key,
             surface.as_deref(),
-            model,
+            model.as_deref(),
             effort.as_deref(),
             title.as_deref(),
             brief,
             parent.as_deref(),
             self.spawn_cap.as_ref(),
+            &dispatch,
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
@@ -455,6 +472,11 @@ impl McpSessionServer {
             })
             .transpose()?
             .unwrap_or(false);
+        let request = assignment_request(&arguments, "session_submit")?;
+        let dispatch = super::agent_policy::AgentDispatch::new(
+            self.policy.load().map_err(|error| error.to_string())?,
+            request,
+        );
         let outcome = super::bridge::submit(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -463,6 +485,9 @@ impl McpSessionServer {
             &self.pending,
             acknowledge_marker,
             resume,
+            &self.ledger,
+            &dispatch,
+            None,
         )
         .map_err(|error| error.to_string())?;
         if outcome.submitted {
@@ -606,6 +631,13 @@ pub(super) fn execute_loop_close(
         .fields()
         .map_err(|error| anyhow!("{error}"))?;
     let mut receipt = render_close_receipt(fields, outcome);
+    let agent_assignment = pending.recorded_assignment(command.binding)?;
+    receipt["agent_status"] = json!(super::agent_policy::AgentStatus::of(
+        agent_assignment.as_ref()
+    ));
+    if let Some(assignment) = &agent_assignment {
+        receipt["agent_assignment"] = serde_json::to_value(assignment).unwrap_or(Value::Null);
+    }
     pending.acknowledge(command.binding, command.completion_marker, command.accepted)?;
     if command.accepted {
         let close = super::close::close_spawned_terminal(terminals, command.binding)?;
@@ -897,7 +929,7 @@ fn parse_json_line(line: &str) -> Result<Option<Value>, Value> {
 }
 
 fn help_text() -> String {
-    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session (the sessions.toml\n  `spawn_model` entry is the fallback; the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`). An optional `group` string registers the lane as a member\n  of a grouped-research set; when every member completes, its fragments are\n  concatenated under the sessions data dir and the initiator receives one\n  combined wake instead of one wake per lane.\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop; each completed sibling gets a terse entry in the\n  receipt's `sibling_lanes` field, and its final report is written to\n  a file under the sessions data dir whose path that entry carries.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names())
+    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session unless a selected agent\n  profile declares one (the sessions.toml `spawn_model` entry is the fallback;\n  the reuse path needs no model), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`). An optional `group` string registers the lane as a member\n  of a grouped-research set; when every member completes, its fragments are\n  concatenated under the sessions data dir and the initiator receives one\n  combined wake instead of one wake per lane. `agent_profile`,\n  `task_role` and `requires` bind a dispatch to a user-owned agent_profiles\n  entry: the sessions policy is read fresh for every call, configuring any\n  profile enables enforcement unless enforce_agent_profiles is false, a\n  constrained assignment needs a resolvable profile and an explicit role, and\n  the resolved immutable assignment is returned as `agent_assignment` with\n  `agent_status` (constrained or unconstrained). session_submit inherits the\n  profile, role and requirements recorded against a session when they are\n  omitted, revalidates them against current policy, and refuses a constrained\n  dispatch to a session with no recorded identity.\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop; each completed sibling gets a terse entry in the\n  receipt's `sibling_lanes` field, and its final report is written to\n  a file under the sessions data dir whose path that entry carries.\n  session_close remains the standalone closer for spawned sessions.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names())
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -932,6 +964,55 @@ fn binding_argument(arguments: &Value, name: &str) -> Result<SessionBinding, Str
     value
         .parse()
         .map_err(|_| format!("invalid session token `{value}`"))
+}
+
+fn assignment_request(
+    arguments: &Value,
+    tool: &str,
+) -> Result<super::agent_policy::AssignmentRequest, String> {
+    let agent_profile = optional_string(arguments, "agent_profile", tool)?;
+    let task_role = match arguments.get("task_role") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let token = value
+                .as_str()
+                .ok_or_else(|| format!("{tool} `task_role` must be a string"))?;
+            let role = super::agent_policy::AgentRole::from_token(token).ok_or_else(|| {
+                format!(
+                    "unknown task_role `{token}`; expected one of {}",
+                    super::agent_policy::role_catalog()
+                )
+            })?;
+            Some(role)
+        }
+    };
+    let requires = match arguments.get("requires") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let entries = value.as_array().ok_or_else(|| {
+                format!("{tool} `requires` must be an array of requirement strings")
+            })?;
+            let mut requires = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let token = entry
+                    .as_str()
+                    .ok_or_else(|| format!("{tool} `requires` entries must be strings"))?;
+                requires.push(
+                    super::agent_policy::AgentRequirement::from_token(token).ok_or_else(|| {
+                        format!(
+                            "unknown requirement `{token}`; expected image_input or visual_review"
+                        )
+                    })?,
+                );
+            }
+            Some(requires)
+        }
+    };
+    Ok(super::agent_policy::AssignmentRequest {
+        agent_profile,
+        task_role,
+        requires,
+    })
 }
 
 pub(super) fn poll_until_settled(
@@ -2433,9 +2514,63 @@ mod tests {
                 "loop_closed": true,
                 "outcome": "paused",
                 "final_report": "## What landed\n\nThe feature landed.\n\n## Before\n\nThe loop stopped at round boundaries.\n\n## Now\n\nThe loop continues through acceptance.\n\n## Verification\n\nFocused tests pass.\n\n## Remaining\n\nNone.",
+                "agent_status": "unconstrained",
             })
         );
         assert!(backend.closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loop_close_receipt_carries_a_managed_assignment() {
+        use super::super::agent_policy::{AgentAssignment, AgentRole, ImageInput, VisualReview};
+
+        let (server, _backend) = server(Vec::new(), false, false);
+        let binding: SessionBinding = token().parse().unwrap();
+        let assignment = AgentAssignment {
+            profile: "worker".to_owned(),
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            task_role: AgentRole::Implement,
+            requires: Vec::new(),
+            evidence_basis: "configuration_declared".to_owned(),
+        };
+        server
+            .pending
+            .start_with_assignment(
+                &binding,
+                "QOL_BRIDGE_DONE_final",
+                "",
+                false,
+                None,
+                None,
+                false,
+                Some(&assignment),
+            )
+            .unwrap();
+        server
+            .pending
+            .observe(&binding, "QOL_BRIDGE_DONE_final", true)
+            .unwrap();
+        let response = tool_call(&server, "session_loop_close", close_arguments("paused"));
+        assert_eq!(response["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(receipt["agent_status"], "constrained");
+        assert_eq!(receipt["agent_assignment"]["profile"], "worker");
+        assert_eq!(receipt["agent_assignment"]["model"], "flash");
+        assert_eq!(
+            receipt["agent_assignment"]["evidence_basis"],
+            "configuration_declared"
+        );
+        assert_eq!(
+            receipt["final_report"],
+            "## What landed\n\nThe feature landed.\n\n## Before\n\nThe loop stopped at round boundaries.\n\n## Now\n\nThe loop continues through acceptance.\n\n## Verification\n\nFocused tests pass.\n\n## Remaining\n\nNone."
+        );
     }
 
     #[test]
@@ -2761,6 +2896,150 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned()
+    }
+
+    fn managed_policy() -> super::super::agent_policy::DispatchPolicy {
+        use super::super::agent_policy::{
+            AgentPolicy, AgentProfileSpec, AgentRole, DispatchPolicy, ImageInput, VisualReview,
+        };
+        let spec = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Unknown,
+            visual_review: VisualReview::Deny,
+            preference: None,
+        };
+        DispatchPolicy {
+            agent: AgentPolicy::build(
+                std::collections::BTreeMap::from([("worker".to_owned(), spec)]),
+                None,
+                None,
+            )
+            .unwrap(),
+            default_model: None,
+            allowed_models: vec!["flash".to_owned()],
+        }
+    }
+
+    #[test]
+    fn a_constrained_mcp_spawn_takes_the_profile_model_and_returns_the_assignment() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf())
+            .with_policy(managed_policy());
+        let mut arguments = spawn_arguments("pi", "mcp-managed", None, &cwd);
+        arguments["task"] = json!("implement the fix");
+        arguments["agent_profile"] = json!("worker");
+        arguments["task_role"] = json!("implement");
+
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["agent_status"], "constrained");
+        assert_eq!(outcome["agent_assignment"]["profile"], "worker");
+        assert_eq!(outcome["model"], "flash");
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            launch.args[..2],
+            vec!["--model".to_owned(), "flash".to_owned()],
+            "a selected profile supplies the model when the caller passes none"
+        );
+    }
+
+    #[test]
+    fn a_constrained_mcp_spawn_refuses_an_unknown_role_before_launching() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf())
+            .with_policy(managed_policy());
+        let mut arguments = spawn_arguments("pi", "mcp-managed-bad", None, &cwd);
+        arguments["task"] = json!("implement the fix");
+        arguments["agent_profile"] = json!("worker");
+        arguments["task_role"] = json!("review");
+
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], true);
+        let message = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains("review"), "{message}");
+        assert!(message.contains("worker"), "{message}");
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn a_constrained_mcp_submit_refuses_an_unmanaged_session() {
+        let (server, backend) = server(Vec::new(), false, false);
+        let server = server.with_policy(managed_policy());
+        let response = tool_call(
+            &server,
+            "session_submit",
+            json!({
+                "session": token(),
+                "task": "implement the bounded change",
+                "agent_profile": "worker",
+                "task_role": "implement",
+            }),
+        );
+        assert_eq!(response["result"]["isError"], true);
+        let message = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains("constrained submit"), "{message}");
+        assert!(backend.sent.lock().unwrap().is_empty());
+        assert!(server.pending.pending_rounds().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_mcp_fork_model_outside_the_allowlist_is_refused_before_launching() {
+        use super::super::agent_policy::{AgentPolicy, DispatchPolicy};
+
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf()).with_policy(
+            DispatchPolicy {
+                agent: AgentPolicy::default(),
+                default_model: None,
+                allowed_models: vec!["flash".to_owned()],
+            },
+        );
+        let response = tool_call(
+            &server,
+            "session_fork",
+            json!({
+                "cwd": spawn_cwd(&root),
+                "key": "mcp-fork",
+                "model": "pro",
+                "brief": "chase the stale lockfile",
+            }),
+        );
+        assert_eq!(response["result"]["isError"], true);
+        let message = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains("pro"), "{message}");
+        assert!(message.contains("flash"), "{message}");
+        assert_eq!(
+            backend
+                .spawn_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "the MCP fork path must enforce the spending allowlist before any launch"
+        );
     }
 
     #[test]

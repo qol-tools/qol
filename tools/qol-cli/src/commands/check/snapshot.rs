@@ -2,7 +2,7 @@ mod git;
 mod storage;
 
 use self::git::{command_output, command_success, git_stdout, git_stdout_allow_empty, output_text};
-use self::storage::{StagedStorage, StorageLock};
+use self::storage::{acquire_lock, StagedStorage, StorageLock};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -39,6 +39,30 @@ pub(super) enum Materialization {
     Created,
     Reused,
     Recreated,
+}
+
+pub(super) struct TargetLock {
+    _lock: StorageLock,
+}
+
+impl TargetLock {
+    pub(super) fn acquire(
+        target: &Path,
+        cancellation: &qol_process::CancellationToken,
+    ) -> Result<Self> {
+        std::fs::create_dir_all(target).with_context(|| {
+            format!(
+                "failed to create the check target directory {}",
+                target.display()
+            )
+        })?;
+        let busy = format!("another `qol check` is already using {}", target.display());
+        let lock = acquire_lock(&target.join(".qol-check.lock"), &busy)?;
+        if cancellation.is_cancelled() {
+            bail!("check cancelled while serializing {}", target.display());
+        }
+        Ok(Self { _lock: lock })
+    }
 }
 
 #[derive(PartialEq, Eq)]

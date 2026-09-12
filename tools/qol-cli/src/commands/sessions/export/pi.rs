@@ -287,6 +287,9 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
       if (params.model != null) args.push("--model", params.model);
       if (params.group != null) args.push("--group", params.group);
       if (params.resume === true) args.push("--resume");
+      if (params.agent_profile != null) args.push("--agent-profile", params.agent_profile);
+      if (params.task_role != null) args.push("--task-role", params.task_role);
+      if (Array.isArray(params.requires)) args.push("--requires", params.requires.join(","));
       if (Array.isArray(params.lanes)) {
         args.push("--lanes", JSON.stringify(params.lanes));
         const stdout = await run(args, 180_000, undefined, signal);
@@ -314,10 +317,14 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
 "#;
 
 const EXECUTE_FORK: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
-      const args = ["fork", "--tool", params.tool ?? "claude", "--cwd", params.cwd, "--key", params.key, "--model", params.model];
+      const args = ["fork", "--tool", params.tool ?? "claude", "--cwd", params.cwd, "--key", params.key];
+      if (params.model != null) args.push("--model", params.model);
       if (params.effort != null) args.push("--effort", params.effort);
       if (params.title != null) args.push("--title", params.title);
       if (params.surface != null) args.push("--surface", params.surface);
+      if (params.agent_profile != null) args.push("--agent-profile", params.agent_profile);
+      if (params.task_role != null) args.push("--task-role", params.task_role);
+      if (Array.isArray(params.requires)) args.push("--requires", params.requires.join(","));
       args.push("--brief", params.brief);
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
@@ -329,6 +336,9 @@ const EXECUTE_FORK: &str = r#"    async execute(_toolCallId, params, signal, _on
 const EXECUTE_SUBMIT: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const args = ["submit", params.session, "--task", params.task];
       if (params.acknowledge_marker != null) args.push("--acknowledge-marker", params.acknowledge_marker);
+      if (params.agent_profile != null) args.push("--agent-profile", params.agent_profile);
+      if (params.task_role != null) args.push("--task-role", params.task_role);
+      if (Array.isArray(params.requires)) args.push("--requires", params.requires.join(","));
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
       reviewFollowUpSent = false;
@@ -801,6 +811,31 @@ mod tests {
         assert!(LOOP_SETUP
             .contains("pi.sendUserMessage(FINAL_REPORT_FOLLOW_UP, { deliverAs: \"followUp\" })"));
         assert!(!source.contains("FINAL_REPORT_FOLLOW_UP}\n\n${loopFinalReport}"));
+    }
+
+    #[test]
+    fn pi_adapters_forward_the_agent_assignment_fields() {
+        let source = pi_extension().expect("render");
+        assert!(source.contains("\"--agent-profile\", params.agent_profile"));
+        assert!(source.contains("\"--task-role\", params.task_role"));
+        assert!(source.contains("\"--requires\", params.requires.join(\",\")"));
+        assert!(
+            EXECUTE_SPAWN.contains("JSON.stringify(params.lanes)"),
+            "lane entries carry their own assignment fields through the shared lane schema"
+        );
+    }
+
+    #[test]
+    fn pi_adapters_keep_the_requires_flag_explicit_when_it_is_empty() {
+        for template in [EXECUTE_SPAWN, EXECUTE_FORK, EXECUTE_SUBMIT] {
+            assert!(
+                template.contains("if (Array.isArray(params.requires)) args.push(\"--requires\", params.requires.join(\",\"));"),
+                "an empty requires array must still be forwarded as an explicit empty value: {template}"
+            );
+        }
+        assert!(EXECUTE_FORK
+            .contains("if (params.model != null) args.push(\"--model\", params.model);"));
+        assert!(!EXECUTE_FORK.contains("\"--model\", params.model];"));
     }
 
     #[test]

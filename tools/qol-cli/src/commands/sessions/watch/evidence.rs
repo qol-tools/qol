@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 use qol_terminal_sessions::SpawnKey;
 
+use super::super::agent_policy::AgentAssignment;
 use super::super::spawn::SpawnLocks;
 
 pub(super) const SCHEMA_VERSION: u32 = 1;
@@ -69,6 +70,8 @@ struct Receipt {
     completed_at: String,
     markerless: bool,
     report: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_assignment: Option<AgentAssignment>,
 }
 
 fn identity_digest(session: &str, marker: &str) -> String {
@@ -110,6 +113,7 @@ fn published_at(report: &Path) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn publish(
     trace_dir: &Path,
     locks: &SpawnLocks,
@@ -118,6 +122,7 @@ pub(super) fn publish(
     label: Option<&str>,
     markerless: bool,
     report_bytes: &[u8],
+    assignment: Option<&AgentAssignment>,
 ) -> std::result::Result<Published, Failure> {
     let report = report_path(trace_dir, session, marker);
     let receipt = receipt_path(trace_dir, session, marker);
@@ -149,6 +154,7 @@ pub(super) fn publish(
             completed_at: published_at(&report),
             markerless,
             report: report.display().to_string(),
+            agent_assignment: assignment.cloned(),
         };
         let encoded = serde_json::to_string(&body)
             .context("failed to serialize the completion receipt")
@@ -184,6 +190,7 @@ mod tests {
             label,
             markerless,
             body.as_bytes(),
+            None,
         )
     }
 
@@ -402,6 +409,59 @@ mod tests {
         assert_eq!(failure.stage, Stage::Report);
         assert!(failure.report.is_none());
         assert!(!receipt_path(dir.path(), session, marker).exists());
+    }
+
+    #[test]
+    fn a_receipt_carries_the_recorded_agent_assignment_and_reads_old_files() {
+        use super::super::super::agent_policy::{AgentRole, ImageInput, VisualReview};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let locks = locks(dir.path());
+        let session = "v1:pi:7:100";
+        let marker = "QOL_BRIDGE_DONE_a";
+        let assignment = AgentAssignment {
+            profile: "worker".to_owned(),
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Unknown,
+            visual_review: VisualReview::Deny,
+            task_role: AgentRole::Implement,
+            requires: Vec::new(),
+            evidence_basis: "configuration_declared".to_owned(),
+        };
+        let published = publish(
+            dir.path(),
+            &locks,
+            session,
+            marker,
+            None,
+            false,
+            b"report body",
+            Some(&assignment),
+        )
+        .unwrap();
+        let receipt = receipt_of(&published);
+        assert_eq!(receipt["agent_assignment"]["profile"], "worker");
+        assert_eq!(receipt["agent_assignment"]["model"], "flash");
+        assert_eq!(
+            receipt["agent_assignment"]["evidence_basis"],
+            "configuration_declared"
+        );
+
+        let legacy = serde_json::json!({
+            "schema_version": 1,
+            "label": serde_json::Value::Null,
+            "session": session,
+            "completion_marker": marker,
+            "completed_at": "2000-01-01T00:00:00+00:00",
+            "markerless": false,
+            "report": published.report.display().to_string(),
+        });
+        let parsed = serde_json::from_str::<Receipt>(&legacy.to_string()).unwrap();
+        assert!(parsed.agent_assignment.is_none());
+        assert!(receipt_matches(&parsed, session, marker, &published.report));
     }
 
     #[test]

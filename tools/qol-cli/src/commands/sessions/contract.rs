@@ -3,6 +3,7 @@ use qol_terminal_sessions::{SessionBinding, SessionCapabilities, SessionFacts};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use super::agent_policy::{AgentAssignment, AgentStatus};
 use super::spawn::surface_token;
 
 #[derive(Serialize)]
@@ -29,12 +30,16 @@ pub(crate) struct SessionRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) spawn_identity: Option<SpawnIdentityRow>,
     pub(crate) capabilities: Vec<String>,
+    pub(crate) agent_status: AgentStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) agent_assignment: Option<AgentAssignment>,
 }
 
 pub(crate) fn session_row(
     session: &SessionFacts,
     binding: &SessionBinding,
     descriptor: &CliSessionDescriptor,
+    assignment: Option<&AgentAssignment>,
 ) -> SessionRow {
     SessionRow {
         session: binding.token(),
@@ -56,6 +61,8 @@ pub(crate) fn session_row(
                 surface: surface_token(identity.surface).to_owned(),
             }),
         capabilities: capability_names(&session.capabilities),
+        agent_status: AgentStatus::of(assignment),
+        agent_assignment: assignment.cloned(),
     }
 }
 
@@ -99,7 +106,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_spawn",
             label: "Spawn a tool session",
-            description: "Launch a tagged harness for a registered tool in a new terminal tab, or reuse the single live session already carrying the key when its tool matches. The key makes retries idempotent: a key held by a different tool conflicts, multiple matches are ambiguous, and a launched session is returned only once it is live, tagged, and described as the requested tool. Surface is tab or os-window; the default comes from the spawn_surface config, then tab. Delivery is background-only: the task is embedded in the launch and the round is open when the call returns; lanes always close when the watcher confirms completion, and sessions without a spawn identity are never closed. Decide up front how many lanes the work needs: one lane takes key and task, while a set takes `lanes`, one entry per lane, and comes back as a single combined report instead of one wake per lane.",
+            description: "Launch a tagged harness for a registered tool in a new terminal tab, or reuse the single live session already carrying the key when its tool matches. The key makes retries idempotent: a key held by a different tool conflicts, multiple matches are ambiguous, and a launched session is returned only once it is live, tagged, and described as the requested tool. Surface is tab or os-window; the default comes from the spawn_surface config, then tab. Delivery is background-only: the task is embedded in the launch and the round is open when the call returns; lanes always close when the watcher confirms completion, and sessions without a spawn identity are never closed. Pass agent_profile, task_role and requires to bind the lane to a user-owned agent profile: configuring any agent_profiles entry in sessions.toml enables enforcement unless enforce_agent_profiles is false, a constrained launch then needs a resolvable profile and an explicit role, and the resolved immutable assignment comes back as agent_assignment with agent_status. Decide up front how many lanes the work needs: one lane takes key and task, while a set takes `lanes`, one entry per lane, and comes back as a single combined report instead of one wake per lane.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -122,7 +129,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model override for the spawned session. Omit it: the spawn_model config already names the tier this host launches at, and allowed_models refuses anything else, because tiers are billed per token and only the person paying picks one",
+                        "description": "Model override for the spawned session. Omit it: a selected agent profile's declared model is the default, then the spawn_model config, and allowed_models refuses anything else, because tiers are billed per token and only the person paying picks one",
                     },
                     "title": {
                         "type": "string",
@@ -151,6 +158,23 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                                     "type": "string",
                                     "description": "Tab title for this lane; defaults to its key",
                                 },
+                                "agent_profile": {
+                                    "type": "string",
+                                    "description": "Named agent_profiles entry for this lane; a top-level agent_profile is inherited instead, and setting both is refused",
+                                },
+                                "task_role": {
+                                    "type": "string",
+                                    "description": "Role this lane performs: scout, implement, architect, review, or debug",
+                                    "enum": ["scout", "implement", "architect", "review", "debug"],
+                                },
+                                "requires": {
+                                    "type": "array",
+                                    "description": "Capabilities this lane needs: image_input, visual_review, or both",
+                                    "items": {
+                                        "type": "string",
+                                        "enum": ["image_input", "visual_review"],
+                                    },
+                                },
                             },
                             "required": ["key", "task"],
                         },
@@ -167,6 +191,23 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "boolean",
                         "description": "skip the parent wake message; the lane report and a receipt json are still written and the lane terminal still closes",
                     },
+                    "agent_profile": {
+                        "type": "string",
+                        "description": "Named agent_profiles entry from sessions.toml. The profile declares the tool, model, permitted roles, and image/trust declarations; the resolved assignment is reported as agent_assignment.",
+                    },
+                    "task_role": {
+                        "type": "string",
+                        "description": "Role this assignment performs: scout, implement, architect, review, or debug. Required for every constrained assignment even when requires is empty, and the profile must permit it.",
+                        "enum": ["scout", "implement", "architect", "review", "debug"],
+                    },
+                    "requires": {
+                        "type": "array",
+                        "description": "Capabilities this assignment needs: image_input, visual_review, or both. image_input needs a native declaration; visual_review needs native image input plus an allow declaration.",
+                        "items": {
+                            "type": "string",
+                            "enum": ["image_input", "visual_review"],
+                        },
+                    },
                 },
                 "required": ["tool", "cwd"],
             }),
@@ -174,7 +215,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_fork",
             label: "Fork a detached architect",
-            description: "Launch a detached architect that owns a problem end to end and never reports back. Use it when a second problem surfaces mid-session and chasing it yourself would cost you the thread you are already holding: fork it away and carry on. The fork is the root of a new tree, not a lane - no round is opened on it, no completion marker is embedded in its launch, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. A fork carries its own model and, where the tool supports one, its own effort level, so a problem that needs a stronger tier than the forking session gets one. The fork is recorded and listable; nothing else links it back.",
+            description: "Launch a detached architect that owns a problem end to end and never reports back. Use it when a second problem surfaces mid-session and chasing it yourself would cost you the thread you are already holding: fork it away and carry on. The fork is the root of a new tree, not a lane - no round is opened on it, no completion marker is embedded in its launch, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. A fork carries its own model and, where the tool supports one, its own effort level, so a problem that needs a stronger tier than the forking session gets one. The fork is recorded and listable; nothing else links it back. Pass agent_profile, task_role and requires to bind the detached architect to a user-owned agent profile; the profile supplies the default model when the fork passes none, an explicit model that conflicts with the profile is refused, and the resolved assignment is recorded with the fork.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -192,7 +233,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Required model for the fork; assess the problem and pick the tier that can finish it rather than inheriting your own",
+                        "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, and allowed_models still governs spending.",
                     },
                     "effort": {
                         "type": "string",
@@ -212,14 +253,31 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "description": "tab or os-window; defaults to the spawn_surface config, then tab",
                         "enum": ["tab", "os-window"],
                     },
+                    "agent_profile": {
+                        "type": "string",
+                        "description": "Named agent_profiles entry; the profile declares the tool, model, permitted roles, and image/trust declarations, and supplies the default model when the fork passes none",
+                    },
+                    "task_role": {
+                        "type": "string",
+                        "description": "Role this detached architect performs: scout, implement, architect, review, or debug",
+                        "enum": ["scout", "implement", "architect", "review", "debug"],
+                    },
+                    "requires": {
+                        "type": "array",
+                        "description": "Capabilities the fork needs: image_input, visual_review, or both",
+                        "items": {
+                            "type": "string",
+                            "enum": ["image_input", "visual_review"],
+                        },
+                    },
                 },
-                "required": ["cwd", "key", "model", "brief"],
+                "required": ["cwd", "key", "brief"],
             }),
         },
         ToolSpec {
             name: "session_submit",
             label: "Submit a task without waiting",
-            description: "Deliver one bounded task to a session and return immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. The generated completion signal is embedded in the submitted prompt. Refuses when a round is already pending on that session. Wait for the completion with session_bridge on the same session (omit its task), then review and close the loop as usual. Submitted rounds close the lane terminal automatically when the watcher confirms completion: lanes always close, and sessions without a spawn identity are never closed.",
+            description: "Deliver one bounded task to a session and return immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. The generated completion signal is embedded in the submitted prompt. Refuses when a round is already pending on that session. Wait for the completion with session_bridge on the same session (omit its task), then review and close the loop as usual. Submitted rounds close the lane terminal automatically when the watcher confirms completion: lanes always close, and sessions without a spawn identity are never closed. Pass agent_profile, task_role and requires for a constrained round; omit them to inherit the profile recorded against the session, and current policy is revalidated before the task is dispatched.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -234,6 +292,23 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     "acknowledge_marker": {
                         "type": "string",
                         "description": "Completion marker from the last reviewed completed bridge; required to submit a new round instead of recovering the prior response",
+                    },
+                    "agent_profile": {
+                        "type": "string",
+                        "description": "Named agent_profiles entry; omit it to inherit the profile recorded against the session, and a different profile is refused because a live session keeps its recorded identity",
+                    },
+                    "task_role": {
+                        "type": "string",
+                        "description": "Role this round performs: scout, implement, architect, review, or debug; omit it to inherit the recorded role",
+                        "enum": ["scout", "implement", "architect", "review", "debug"],
+                    },
+                    "requires": {
+                        "type": "array",
+                        "description": "Capabilities this round needs: image_input, visual_review, or both; omit it to inherit the recorded requirements, and current policy is revalidated either way",
+                        "items": {
+                            "type": "string",
+                            "enum": ["image_input", "visual_review"],
+                        },
                     },
                 },
                 "required": ["session", "task"],
@@ -328,6 +403,7 @@ pub(crate) fn mcp_tool_specs() -> Vec<qol_mcp::ToolSpec> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::agent_policy::{AgentRequirement, AgentRole, ImageInput, VisualReview};
     use super::*;
 
     #[test]
@@ -534,7 +610,7 @@ mod tests {
         let binding = facts.binding().unwrap();
         let descriptor =
             qol_terminal_sessions::cli::CliSessionInterpreter::system().describe(&facts);
-        let row = session_row(&facts, &binding, &descriptor);
+        let row = session_row(&facts, &binding, &descriptor, None);
         let value = serde_json::to_value(&row).unwrap();
         assert_eq!(
             value["spawn_identity"],
@@ -563,7 +639,7 @@ mod tests {
         let binding = facts.binding().unwrap();
         let descriptor =
             qol_terminal_sessions::cli::CliSessionInterpreter::system().describe(&facts);
-        let row = session_row(&facts, &binding, &descriptor);
+        let row = session_row(&facts, &binding, &descriptor, None);
         let value = serde_json::to_value(&row).unwrap();
         assert!(value.get("spawn_identity").is_none());
     }
@@ -593,5 +669,116 @@ mod tests {
                 spec.name
             );
         }
+    }
+
+    #[test]
+    fn the_agent_surface_declares_profiles_roles_and_requirements() {
+        let specs = tool_specs();
+        for name in ["session_spawn", "session_fork", "session_submit"] {
+            let spec = specs.iter().find(|spec| spec.name == name).unwrap();
+            let properties = spec.input_schema["properties"].as_object().unwrap();
+            for field in ["agent_profile", "task_role", "requires"] {
+                assert!(properties.contains_key(field), "{name}: missing {field}");
+            }
+            assert_eq!(
+                properties["task_role"]["enum"],
+                json!(["scout", "implement", "architect", "review", "debug"])
+            );
+            assert_eq!(
+                properties["requires"]["items"]["enum"],
+                json!(["image_input", "visual_review"])
+            );
+            let required = spec.input_schema["required"].as_array().unwrap();
+            for field in ["agent_profile", "task_role", "requires"] {
+                assert!(
+                    !required.iter().any(|value| value == field),
+                    "{name}: {field} must stay optional"
+                );
+            }
+        }
+        let spawn = specs
+            .iter()
+            .find(|spec| spec.name == "session_spawn")
+            .unwrap();
+        let lane_items = &spawn.input_schema["properties"]["lanes"]["items"]["properties"];
+        for field in ["agent_profile", "task_role", "requires"] {
+            assert!(
+                lane_items.get(field).is_some(),
+                "lanes item missing {field}"
+            );
+        }
+        let fork = specs
+            .iter()
+            .find(|spec| spec.name == "session_fork")
+            .unwrap();
+        assert!(
+            !fork.input_schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "model"),
+            "a selected profile supplies the fork model, so the schema must not require it"
+        );
+    }
+
+    #[test]
+    fn a_session_row_reports_agent_status_and_the_recorded_assignment() {
+        let facts = SessionFacts {
+            id: qol_terminal_sessions::SessionId::new(
+                qol_terminal_sessions::BackendId::new("fake").unwrap(),
+                "9",
+            )
+            .unwrap(),
+            root_pid: 44,
+            cwd: "/work".to_owned(),
+            title: "Terminal".to_owned(),
+            at_prompt: true,
+            reported_cmd: None,
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: SessionCapabilities::ALL,
+            spawn_identity: None,
+        };
+        let binding = facts.binding().unwrap();
+        let descriptor =
+            qol_terminal_sessions::cli::CliSessionInterpreter::system().describe(&facts);
+        let assignment = AgentAssignment {
+            profile: "worker".to_owned(),
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            task_role: AgentRole::Implement,
+            requires: vec![AgentRequirement::VisualReview],
+            evidence_basis: "configuration_declared".to_owned(),
+        };
+
+        let plain = serde_json::to_value(session_row(&facts, &binding, &descriptor, None)).unwrap();
+        assert_eq!(plain["agent_status"], "unconstrained");
+        assert!(plain.get("agent_assignment").is_none());
+        assert_eq!(plain["capabilities"], json!(["read", "focus", "input"]));
+
+        let managed = serde_json::to_value(session_row(
+            &facts,
+            &binding,
+            &descriptor,
+            Some(&assignment),
+        ))
+        .unwrap();
+        assert_eq!(managed["agent_status"], "constrained");
+        assert_eq!(managed["agent_assignment"]["profile"], "worker");
+        assert_eq!(managed["agent_assignment"]["image_input"], "native");
+        assert_eq!(managed["agent_assignment"]["visual_review"], "allow");
+        assert_eq!(
+            managed["agent_assignment"]["requires"],
+            json!(["visual_review"])
+        );
+        assert_eq!(
+            managed["agent_assignment"]["evidence_basis"],
+            "configuration_declared"
+        );
+        assert_eq!(managed["capabilities"], plain["capabilities"]);
     }
 }
