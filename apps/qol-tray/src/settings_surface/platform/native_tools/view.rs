@@ -86,6 +86,7 @@ pub(super) struct NativeToolsView {
     tool: ToolKind,
     initial_editor: bool,
     mode: Mode,
+    closing: Option<Mode>,
     editor_text: TextField,
     editor_text_key: Option<(usize, ShortcutActionKind, bool)>,
     shortcuts: Vec<Shortcut>,
@@ -125,6 +126,7 @@ impl NativeToolsView {
             tool,
             initial_editor,
             mode: Mode::List,
+            closing: None,
             editor_text: TextField::new(),
             editor_text_key: None,
             shortcuts: Vec::new(),
@@ -228,6 +230,7 @@ impl NativeToolsView {
 
     fn open_editor(&mut self, mode: Mode) {
         self.menu = None;
+        self.closing = None;
         self.mode = mode;
         self.editor_text_key = None;
         self.editor_step = self.editor_step.wrapping_add(1);
@@ -255,13 +258,20 @@ impl NativeToolsView {
         }
     }
 
-    fn close_editor(&mut self) {
+    fn close_editor(&mut self, cx: &mut Context<Self>) {
         self.cancel_capture();
         self.menu = None;
-        self.mode = Mode::List;
         self.editor_text_key = None;
+        let leaving = std::mem::replace(&mut self.mode, Mode::List);
+        if matches!(leaving, Mode::List) {
+            return;
+        }
         self.editor_step = self.editor_step.wrapping_add(1);
-        self.editor_motion = Some(deck::Motion::Pop);
+        self.closing = Some(leaving);
+        deck::after_transition(cx, |view, cx| {
+            view.closing = None;
+            cx.notify();
+        });
     }
 
     fn sync_editor_text(&mut self) {
@@ -446,7 +456,7 @@ impl NativeToolsView {
                                 .position(|shortcut| shortcut.id == selected_id)
                                 .map_or(0, |item| item + 1);
                             view.shortcut_list.sync(view.shortcuts.len() + 1);
-                            view.close_editor();
+                            view.close_editor(cx);
                             view.report(
                                 if editing {
                                     "Shortcut saved"
@@ -509,7 +519,7 @@ impl NativeToolsView {
                                 .position(|hotkey| hotkey.id == selected_id)
                                 .map_or(0, |item| item + 1);
                             view.hotkey_list.sync(view.hotkeys.len() + 1);
-                            view.close_editor();
+                            view.close_editor(cx);
                             view.report(
                                 if editing {
                                     "Hotkey saved"
@@ -634,7 +644,7 @@ impl NativeToolsView {
         let depth = usize::from(!matches!(self.mode, Mode::List));
         match escape_step(depth, false, self.on_back.is_some()) {
             EscapeStep::CloseFilter => {}
-            EscapeStep::PopCard => self.close_editor(),
+            EscapeStep::PopCard => self.close_editor(cx),
             EscapeStep::AscendRail | EscapeStep::Dismiss => self.go_back(window, cx),
         }
     }
@@ -778,30 +788,40 @@ impl NativeToolsView {
             .into_any_element();
         }
         let editor = match &self.mode {
-            Mode::List => return self.page(self.render_list(cx)).into_any_element(),
-            Mode::Shortcut(draft) => self.render_shortcut_editor(window, draft, cx),
-            Mode::Hotkey(draft) => self.render_hotkey_editor(draft, cx),
+            Mode::List => None,
+            Mode::Shortcut(draft) => Some(self.render_shortcut_editor(window, draft, cx)),
+            Mode::Hotkey(draft) => Some(self.render_hotkey_editor(draft, cx)),
         };
-        let slide = deck::slide(
-            self.editor_step,
-            self.editor_motion,
-            EDITOR_DEPTH,
-            self.body_width.get(),
-        );
+        let leaving = match &self.closing {
+            Some(Mode::Shortcut(draft)) => Some(self.render_shortcut_editor(window, draft, cx)),
+            Some(Mode::Hotkey(draft)) => Some(self.render_hotkey_editor(draft, cx)),
+            _ => None,
+        };
+        let width = self.body_width.get();
+        let deck = match (editor, leaving) {
+            (None, None) => return self.page(self.render_list(cx)).into_any_element(),
+            (None, Some(card)) => deck::reveal(
+                settings_panel_runtime(),
+                self.page(self.render_list(cx)),
+                self.page(card),
+                deck::exit(self.editor_step, EDITOR_DEPTH, width),
+            ),
+            (Some(editor), _) => deck::render(
+                settings_panel_runtime(),
+                EDITOR_DEPTH,
+                self.page(editor),
+                deck::slide(self.editor_step, self.editor_motion, EDITOR_DEPTH, width),
+                "native-tools-editor-slide",
+                None,
+            ),
+        };
         div()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_row()
             .items_start()
-            .child(deck::render(
-                settings_panel_runtime(),
-                EDITOR_DEPTH,
-                self.page(editor),
-                slide,
-                "native-tools-editor-slide",
-                None,
-            ))
+            .child(deck)
             .into_any_element()
     }
 

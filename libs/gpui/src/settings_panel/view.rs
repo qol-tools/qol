@@ -678,20 +678,13 @@ impl SettingsPanelView {
         self.deck_transition
             .state_changed(true, std::time::Instant::now());
         self.deck_motion = Some(DeckMotion::Pop);
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                async_cx.background_executor().timer(deck::TRANSITION).await;
-                let _ = this.update(&mut async_cx, |this, cx| {
-                    if !this.closing {
-                        return;
-                    }
-                    this.closing = false;
-                    this.finish_pop(cx);
-                });
+        deck::after_transition(cx, |this, cx| {
+            if !this.closing {
+                return;
             }
-        })
-        .detach();
+            this.closing = false;
+            this.finish_pop(cx);
+        });
         cx.notify();
     }
 
@@ -5349,12 +5342,7 @@ impl SettingsPanelView {
                 }),
             );
         let drawer = revealed.map(|items| {
-            let slide = DeckSlide {
-                step: self.deck_transition.step,
-                from: deck::resting(depth),
-                to: width,
-                from_depth: depth,
-            };
+            let slide = deck::exit(self.deck_transition.step, depth, width);
             let leaving = std::mem::replace(
                 &mut card,
                 self.render_card(self.stack.len() - 2, items, None),

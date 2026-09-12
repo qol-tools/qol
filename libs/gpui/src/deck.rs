@@ -35,6 +35,29 @@ pub fn resting(depth: usize) -> f32 {
     }
 }
 
+pub fn exit(step: usize, depth: usize, width: f32) -> Slide {
+    Slide {
+        step,
+        from: resting(depth),
+        to: width,
+        from_depth: depth,
+    }
+}
+
+pub fn after_transition<V: 'static>(
+    cx: &mut Context<V>,
+    finish: impl FnOnce(&mut V, &mut Context<V>) + 'static,
+) {
+    cx.spawn(move |view: WeakEntity<V>, cx: &mut AsyncApp| {
+        let mut async_cx = cx.clone();
+        async move {
+            async_cx.background_executor().timer(TRANSITION).await;
+            let _ = view.update(&mut async_cx, finish);
+        }
+    })
+    .detach();
+}
+
 pub fn slide(step: usize, motion: Option<Motion>, depth: usize, width: f32) -> Option<Slide> {
     let to = resting(depth);
     let (from, from_depth) = match motion {
@@ -95,6 +118,10 @@ fn step_between(start: f32, end: f32, delta: f32) -> f32 {
     start + (end - start) * delta
 }
 
+fn stage() -> Div {
+    div().relative().flex_1().min_w_0().h_full()
+}
+
 fn card_edges(card: Div, palette: SettingsPanelPalette, hairline: Rgba) -> Div {
     card.bg(rgb(palette.window_bg))
         .border_t(px(1.))
@@ -125,6 +152,12 @@ pub fn drawer(palette: SettingsPanelPalette, card: Div, slide: Slide) -> AnyElem
         move |card, delta| card.left(px(slide.from + (slide.to - slide.from) * delta)),
     )
     .into_any_element()
+}
+
+pub fn reveal(palette: SettingsPanelPalette, page: Div, card: Div, slide: Slide) -> Div {
+    stage()
+        .child(page.absolute().inset_0())
+        .child(drawer(palette, card, slide))
 }
 
 pub fn render(
@@ -165,11 +198,7 @@ pub fn render(
         .or_else(|| closing.as_ref().map(|(_, slide)| *slide))
         .filter(|slide| slide.from_depth != depth);
     let leaving = closing.map(|(card, slide)| drawer(palette, card, slide));
-    div()
-        .relative()
-        .flex_1()
-        .min_w_0()
-        .h_full()
+    stage()
         .children(
             slivers_for(depth)
                 .into_iter()
@@ -212,7 +241,7 @@ pub fn render(
 
 #[cfg(test)]
 mod tests {
-    use super::{front_offset, slide, sliver_start, slivers_for, Motion, Slide, Sliver};
+    use super::{exit, front_offset, slide, sliver_start, slivers_for, Motion, Slide, Sliver};
 
     #[test]
     fn slivers_follow_the_one_window_depth_geometry() {
@@ -265,6 +294,20 @@ mod tests {
                 inset: 0.0,
             }
         );
+    }
+
+    #[test]
+    fn a_leaving_card_starts_where_it_rests_and_ends_off_the_body() {
+        assert_eq!(
+            exit(4, 1, 520.0),
+            Slide {
+                step: 4,
+                from: 10.0,
+                to: 520.0,
+                from_depth: 1,
+            }
+        );
+        assert_eq!(exit(5, 0, 520.0).from, 0.0);
     }
 
     #[test]
