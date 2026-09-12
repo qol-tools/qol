@@ -150,30 +150,20 @@ fn masthead_rule() -> gpui::Div {
         .bg(rgba(kit().washes.hairline.packed()))
 }
 
-pub fn paint_settings_selection<E: Styled + ParentElement>(
-    row: E,
-    palette: SettingsPanelPalette,
-) -> E {
-    let shared = kit();
+pub fn paint_settings_selection<E: Styled>(row: E, palette: SettingsPanelPalette) -> E {
     row.relative()
-        .ml(px(-qol_theme::SPACE_PAD))
-        .pl(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
+        .mx(px(-qol_theme::SPACE_PAD))
+        .px(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
         .rounded_none()
-        .rounded_r(px(qol_theme::RADIUS_CARD))
-        .bg(rgba(shared.washes.wash_selected.packed()))
-        .border(px(1.0))
-        .border_color(rgba(shared.washes.hairline.packed()))
-        .border_l(px(0.0))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(px(qol_theme::SPACE_MARK))
-                .bg(rgb(palette.row_border_selected)),
-        )
+        .bg(rgb(palette.fill_current))
+}
+
+pub fn paint_rail_selection<E: Styled>(row: E, palette: SettingsPanelPalette, focused: bool) -> E {
+    row.bg(rgb(if focused {
+        palette.fill_current
+    } else {
+        palette.fill_current_quiet
+    }))
 }
 
 fn paint_settings_attention<E: Styled + ParentElement>(row: E, palette: SettingsPanelPalette) -> E {
@@ -693,7 +683,7 @@ pub fn settings_action_affordance(
 pub fn settings_dropdown_style(palette: SettingsPanelPalette) -> DropdownStyle {
     DropdownStyle {
         bg: palette.dropdown_bg,
-        bg_selected: palette.row_bg_selected,
+        bg_selected: palette.fill_current,
         border: palette.row_border_selected,
         text: palette.label_text,
         text_selected: palette.section_text,

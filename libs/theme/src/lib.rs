@@ -356,6 +356,10 @@ impl SystemPalette {
 
 const ACCENT_FILL_MIX: u32 = 80;
 
+const RAIL_FILL_MIX: u32 = 450;
+
+const ON_FILL_INK_MIX: u32 = 900;
+
 const fn mix_channel_const(from: u32, to: u32, permille: u32) -> u32 {
     (from * (1000 - permille) + to * permille + 500) / 1000
 }
@@ -1281,6 +1285,8 @@ pub struct SettingsPanelPalette {
     pub rail_text: u32,
     pub rail_text_muted: u32,
     pub rail_active_text: u32,
+    pub fill_current: u32,
+    pub fill_current_quiet: u32,
     pub dropdown_bg: u32,
     pub state_on: u32,
     pub state_off: u32,
@@ -1312,6 +1318,12 @@ impl SettingsPanelPalette {
             rail_text,
             rail_text_muted,
             rail_active_text: system.text_primary,
+            fill_current: mix_const(system.accent_fill_base, system.accent, RAIL_FILL_MIX),
+            fill_current_quiet: mix_const(
+                system.accent_fill_base,
+                system.text_muted,
+                RAIL_FILL_MIX,
+            ),
             dropdown_bg: system.surface_raised,
             state_on: system.success,
             state_off: system.danger,
@@ -1326,6 +1338,18 @@ impl SettingsPanelPalette {
             qr_light: DARK_TRAY_INTERNAL.config_qr_light,
             live_color_fallback: DARK_TRAY_INTERNAL.config_live_color_fallback,
             transparent_rgba: 0x00000000,
+        }
+    }
+
+    pub fn on_fill(self) -> Self {
+        let ink = mix_const(self.fill_current, self.rail_active_text, ON_FILL_INK_MIX);
+        Self {
+            label_text: self.rail_active_text,
+            status_muted: ink,
+            dropdown_bg: self.fill_current,
+            row_bg_selected: self.fill_current,
+            row_border_selected: self.rail_active_text,
+            ..self
         }
     }
 }

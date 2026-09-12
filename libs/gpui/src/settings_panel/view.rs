@@ -3315,13 +3315,8 @@ impl SettingsPanelView {
         self.paint_body_selection(row)
     }
 
-    fn paint_selection<E: Styled + ParentElement>(&self, row: E) -> E {
-        let state = if self.rail_source_level() {
-            crate::kit::RowState::Current
-        } else {
-            crate::kit::RowState::CurrentQuiet
-        };
-        self.kit.row_state(row, state)
+    fn paint_selection<E: Styled>(&self, row: E) -> E {
+        super::components::paint_rail_selection(row, self.palette, self.rail_source_level())
     }
 
     fn paint_body_selection<E: Styled + ParentElement>(&self, row: E) -> E {
@@ -3344,7 +3339,7 @@ impl SettingsPanelView {
     /// Replaces a query-backed value with a spinner or an unavailable marker
     /// while its plugin has not answered. Status rows keep their own tone and
     /// error text once unavailable, but draw the same loading spinner.
-    fn render_query_state_cell(&self, index: usize) -> Option<Div> {
+    fn render_query_state_cell(&self, index: usize, palette: SettingsPanelPalette) -> Option<Div> {
         let cell = || {
             div()
                 .flex()
@@ -3358,7 +3353,7 @@ impl SettingsPanelView {
         match self.row_query_state(index) {
             RowQueryState::Loading { .. } => Some(cell().child(settings_query_spinner(
                 ("settings-query-spinner", index),
-                self.palette,
+                palette,
             ))),
             RowQueryState::Unavailable(_)
                 if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
@@ -3367,7 +3362,7 @@ impl SettingsPanelView {
                     cell().child(
                         div()
                             .text_size(px(qol_theme::TEXT_CAPTION))
-                            .text_color(rgb(self.palette.status_muted))
+                            .text_color(rgb(palette.status_muted))
                             .child("unavailable"),
                     ),
                 )
@@ -3376,14 +3371,14 @@ impl SettingsPanelView {
         }
     }
 
-    fn render_value_cell(&self, index: usize) -> Div {
-        if let Some(cell) = self.render_query_state_cell(index) {
+    fn render_value_cell(&self, index: usize, palette: SettingsPanelPalette) -> Div {
+        if let Some(cell) = self.render_query_state_cell(index, palette) {
             return cell;
         }
         match &self.level().rows[index].control {
-            RowControl::Toggle(active) => return self.render_toggle_value(*active),
+            RowControl::Toggle(active) => return self.render_toggle_value(*active, palette),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
-                return self.render_select_value(index);
+                return self.render_select_value(index, palette);
             }
             RowControl::Number {
                 value,
@@ -3391,13 +3386,13 @@ impl SettingsPanelView {
                 max,
                 step,
                 ..
-            } => return self.render_number_value(index, *value, *min, *max, *step),
+            } => return self.render_number_value(index, palette, *value, *min, *max, *step),
             RowControl::Action { active, .. }
                 if self.level().rows[index].variant.as_deref() == Some("toggle") =>
             {
-                return self.render_toggle_value(*active);
+                return self.render_toggle_value(*active, palette);
             }
-            RowControl::Action { .. } => return self.render_action_value(index),
+            RowControl::Action { .. } => return self.render_action_value(index, palette),
             RowControl::TextList(values) => {
                 return self
                     .kit
@@ -3406,7 +3401,7 @@ impl SettingsPanelView {
             RowControl::Unsupported { reason, .. } => {
                 return div()
                     .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.status_muted))
+                    .text_color(rgb(palette.status_muted))
                     .child(format!("Unsupported: {reason}"));
             }
             RowControl::Text(_)
@@ -3427,13 +3422,13 @@ impl SettingsPanelView {
             return cell.child(StatusIndicator::new(
                 ("settings-status", index),
                 self.display_value(index),
-                rgb(status_tone_color(self.palette, tone)),
+                rgb(status_tone_color(palette, tone)),
             ));
         }
         if self.action_is_busy(index) {
             cell = cell.child(settings_action_spinner(
                 ("settings-action-spinner", index),
-                self.palette,
+                palette,
             ));
         }
         if let Some(color) = self.swatch_color(index) {
@@ -3461,13 +3456,13 @@ impl SettingsPanelView {
             )
     }
 
-    fn render_toggle_value(&self, active: bool) -> Div {
-        div().child(SettingsToggle::new(active, self.palette))
+    fn render_toggle_value(&self, active: bool, palette: SettingsPanelPalette) -> Div {
+        div().child(SettingsToggle::new(active, palette))
     }
 
-    fn render_select_value(&self, index: usize) -> Div {
+    fn render_select_value(&self, index: usize, palette: SettingsPanelPalette) -> Div {
         div().child(
-            SettingsSelectValue::new(self.display_value(index), self.palette)
+            SettingsSelectValue::new(self.display_value(index), palette)
                 .accent(self.option_accent(index)),
         )
     }
@@ -3475,6 +3470,7 @@ impl SettingsPanelView {
     fn render_number_value(
         &self,
         index: usize,
+        palette: SettingsPanelPalette,
         value: f64,
         min: Option<f64>,
         max: Option<f64>,
@@ -3503,7 +3499,7 @@ impl SettingsPanelView {
                     .h(px(4.))
                     .rounded_full()
                     .overflow_hidden()
-                    .bg(rgb(self.palette.panel_border))
+                    .bg(rgb(palette.panel_border))
                     .child(
                         div()
                             .absolute()
@@ -3512,7 +3508,7 @@ impl SettingsPanelView {
                             .h_full()
                             .w(px(fill))
                             .rounded_full()
-                            .bg(rgb(self.palette.row_border_selected)),
+                            .bg(rgb(palette.row_border_selected)),
                     ),
             );
         }
@@ -3525,26 +3521,26 @@ impl SettingsPanelView {
                 .px(px(qol_theme::SPACE_INSET))
                 .py(px(qol_theme::SPACE_TIGHT))
                 .rounded(px(qol_theme::RADIUS_CONTROL))
-                .bg(rgb(self.palette.dropdown_bg))
+                .bg(rgb(palette.dropdown_bg))
                 .text_size(px(qol_theme::TEXT_BODY))
-                .text_color(rgb(self.palette.label_text))
+                .text_color(rgb(palette.label_text))
                 .child(self.display_value(index))
                 .children(number_unit(&self.level().rows[index].id).map(|unit| {
                     div()
                         .text_size(px(qol_theme::TEXT_CAPTION))
-                        .text_color(rgb(self.palette.status_muted))
+                        .text_color(rgb(palette.status_muted))
                         .child(unit)
                 })),
         )
     }
 
-    fn render_action_value(&self, index: usize) -> Div {
+    fn render_action_value(&self, index: usize, palette: SettingsPanelPalette) -> Div {
         settings_action_affordance(
             ("settings-action-spinner", index),
             self.display_value(index),
             self.level().rows[index].variant.as_deref(),
             self.action_is_busy(index),
-            self.palette,
+            palette,
         )
     }
 
@@ -3606,6 +3602,12 @@ impl SettingsPanelView {
         };
         let card_chips = self.object_array_card_chips(index);
         let has_chips = card_chips.is_some();
+        let selected = index == self.level().selected;
+        let row_palette = if selected && self.body_has_focus() {
+            self.palette.on_fill()
+        } else {
+            self.palette
+        };
         let label_group = match card_chips {
             Some(chips) => div()
                 .flex()
@@ -3618,14 +3620,13 @@ impl SettingsPanelView {
             None => settings_label_group(
                 label,
                 row.description.clone().map(SharedString::from),
-                self.palette,
+                row_palette,
             ),
         };
-        let selected = index == self.level().selected;
         let mut value_cell = if has_chips {
             None
         } else {
-            Some(self.render_value_cell(index))
+            Some(self.render_value_cell(index, row_palette))
         };
         if selected {
             if let Some(ActiveControl::Dropdown(dropdown)) = &self.level().active_control {
@@ -3805,10 +3806,10 @@ impl SettingsPanelView {
             .relative()
             .flex()
             .items_center()
-            .w_full()
+            .w(px(super::PANEL_RAIL_WIDTH))
+            .ml(px(-qol_theme::SPACE_INSET))
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
-            .px(px(qol_theme::SPACE_CELL))
-            .rounded(px(qol_theme::RADIUS_CONTROL))
+            .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
             .child(
                 div()
                     .truncate()

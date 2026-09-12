@@ -1617,6 +1617,56 @@ fn the_settings_panel_rail_stays_readable_in_both_themes() {
 }
 
 #[test]
+fn the_selected_rail_row_carries_its_label_in_every_accent() {
+    let modes = [
+        (
+            "light",
+            ThemeMode::Light,
+            LIGHT_SYSTEM,
+            LIGHT_ACCENT_PRESETS,
+        ),
+        ("dark", ThemeMode::Dark, DARK_SYSTEM, DARK_ACCENT_PRESETS),
+    ];
+
+    for (mode, theme, system, presets) in modes {
+        for preset in presets {
+            let rail = SettingsPanelPalette::from_theme(
+                theme,
+                system.with_accent_pair(preset.rgb, preset.ink),
+            );
+            for (name, fill) in [
+                ("selected", rail.fill_current),
+                ("selected while away", rail.fill_current_quiet),
+            ] {
+                let ratio = contrast_ratio(rail.rail_active_text, fill);
+                assert!(
+                    ratio >= ACCENT_INK_FLOOR,
+                    "{mode} {} {name} filled row = {ratio:.2}, floor {ACCENT_INK_FLOOR}",
+                    preset.key
+                );
+            }
+            let on_fill = rail.on_fill();
+            for (name, ink) in [
+                ("label", on_fill.label_text),
+                ("description", on_fill.status_muted),
+            ] {
+                let ratio = contrast_ratio(ink, rail.fill_current);
+                assert!(
+                    ratio >= ACCENT_INK_FLOOR,
+                    "{mode} {} {name} on the fill = {ratio:.2}, floor {ACCENT_INK_FLOOR}",
+                    preset.key
+                );
+            }
+            assert_ne!(
+                rail.fill_current, rail.rail_bg,
+                "{mode} {} selected rail row has to read against the rail",
+                preset.key
+            );
+        }
+    }
+}
+
+#[test]
 fn the_selected_row_fill_follows_the_active_accent() {
     for base in [LIGHT_SYSTEM, DARK_SYSTEM] {
         let brass = base.with_accent(0xb8860b);
@@ -2171,7 +2221,7 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 29] = [
     ("libs/gpui/src/settings_panel/view.rs", ".border(", 1),
     ("libs/gpui/src/settings_panel/view.rs", ".border_color(", 5),
     ("libs/gpui/src/settings_panel/view.rs", ".font_weight(", 4),
-    ("libs/gpui/src/settings_panel/view.rs", ".rounded(", 10),
+    ("libs/gpui/src/settings_panel/view.rs", ".rounded(", 9),
     ("libs/gpui/src/settings_panel/view.rs", ".shadow(", 4),
     ("libs/gpui/src/settings_panel/view.rs", ".text_color(", 30),
     ("libs/gpui/src/settings_panel/view.rs", ".text_size(", 27),
