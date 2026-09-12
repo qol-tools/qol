@@ -66,16 +66,8 @@ impl LauncherView {
                 self.state.sync_result_window(result_count);
                 cx.notify();
             }
-            InputEffect::QueryChanged => {
-                self.state.clear_launch_error();
-                self.state.reset_results_position();
-                self.schedule_query_render(cx);
-            }
-            InputEffect::FlowQueryChanged => {
-                self.state.clear_launch_error();
-                self.state.reset_results_position();
-                self.schedule_flow_query(cx);
-                cx.notify();
+            InputEffect::QueryChanged | InputEffect::FlowQueryChanged => {
+                self.dispatch_query_change(cx)
             }
             InputEffect::BoostUp | InputEffect::BoostDown => {
                 let delta = if matches!(effect, InputEffect::BoostUp) {
@@ -163,10 +155,22 @@ impl LauncherView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        if self.state.query.paste(&text) {
-            self.state.clear_launch_error();
-            self.state.reset_results_position();
+        match self.state.apply_paste(&text) {
+            InputEffect::QueryChanged | InputEffect::FlowQueryChanged => {
+                self.dispatch_query_change(cx)
+            }
+            _ => {}
+        }
+    }
+
+    fn dispatch_query_change(&mut self, cx: &mut Context<Self>) {
+        self.state.clear_launch_error();
+        self.state.reset_results_position();
+        if self.state.flow.is_some() {
+            self.schedule_flow_query(cx);
             cx.notify();
+        } else {
+            self.schedule_query_render(cx);
         }
     }
 

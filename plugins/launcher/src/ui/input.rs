@@ -223,6 +223,18 @@ impl LauncherState {
         }
     }
 
+    pub fn apply_paste(&mut self, text: &str) -> InputEffect {
+        if !self.query.paste(text) {
+            return InputEffect::Ignore;
+        }
+        self.clear_launch_error();
+        if self.flow.is_some() {
+            InputEffect::FlowQueryChanged
+        } else {
+            InputEffect::QueryChanged
+        }
+    }
+
     fn move_up(&mut self) {
         if self.scroll_list.selected == 0 {
             self.previous_selected = None;
@@ -552,6 +564,28 @@ mod tests {
             query: "rows".to_string(),
             row_actions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn pasting_into_a_flow_query_reports_a_flow_query_change() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+
+        assert_eq!(
+            state.apply_paste("recent bug findings in qol-monorepo"),
+            InputEffect::FlowQueryChanged
+        );
+        assert_eq!(state.query.text(), "recent bug findings in qol-monorepo");
+    }
+
+    #[test]
+    fn pasting_outside_a_flow_reports_a_query_change_and_a_rejected_paste_is_ignored() {
+        let mut state = LauncherState::new();
+
+        assert_eq!(state.apply_paste("firefox"), InputEffect::QueryChanged);
+        assert_eq!(state.query.text(), "firefox");
+        assert_eq!(state.apply_paste(""), InputEffect::Ignore);
+        assert_eq!(state.query.text(), "firefox");
     }
 
     #[test]
