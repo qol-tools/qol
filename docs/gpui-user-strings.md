@@ -22,21 +22,21 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 
 | String | Location | Used for |
 |---|---|---|
-| `Save` | settings_panel/view.rs:2947 | panel footer button |
-| `+ Add` | settings_panel/view.rs:2692 | list add button |
-| `On` / `Off` | settings_panel/view.rs:1872 | toggle row |
-| `No matching results.` | settings_panel/view.rs:2429 | options filter empty state |
-| `Unsupported: {reason}` | settings_panel/view.rs:1812 | unsupported field row |
-| `{} found` / `{visible}/{}` | settings_panel/view.rs:1691,1694 | list count footer |
-| `{count} items` | settings_panel/view.rs:3844 | list count |
-| `{primary} +{}` | settings_panel/view.rs:3794 | shortcut display |
+| `Save` | settings_panel/view/structured_list_editor.rs (render_draft_save) | structured-list entry save action |
+| `+ Add` | settings_panel/view/mod.rs:2692 | list add button |
+| `On` / `Off` | settings_panel/view/mod.rs:1872 | toggle row |
+| `No matching results.` | settings_panel/view/mod.rs:2429 | options filter empty state |
+| `Unsupported: {reason}` | settings_panel/view/mod.rs:1812 | unsupported field row |
+| `{} found` / `{visible}/{}` | settings_panel/view/mod.rs:1691,1694 | list count footer |
+| `{count} items` | settings_panel/view/mod.rs:3844 | list count |
+| `{primary} +{}` | settings_panel/view/list_card.rs (list_action_affordance) | list-item action label |
 | `action `{action}` is unavailable` | settings_panel/mod.rs:225 | settings action error |
-| `{edit}_` / `{text}_` | settings_panel/view.rs:1620,2881 | in-edit text cursor suffix |
-| `{step}` / `{value:.0}` / `#{}` / `#{value}` | settings_panel/view.rs:3610,3668,3678,246 | slider readouts |
-| `{}` | settings_panel/view.rs:3670 | slider value fallback |
-| `px` / `ms` / `{:.0}%` | settings_panel/view.rs:3694,3697,3734 | unit suffixes |
-| `true` / `false` | settings_panel/view.rs:3762 | read-only toggle value |
-| `{r:02x}{g:02x}{b:02x}` / `#{:06x}` | color_wheel.rs:454, settings_panel/view.rs:1570 | hex color field |
+| `{edit}_` / `{text}_` | settings_panel/view/mod.rs:1620,2881 | in-edit text cursor suffix |
+| `{step}` / `{value:.0}` / `#{}` / `#{value}` | settings_panel/view/mod.rs:3610,3668,3678,246 | slider readouts |
+| `{}` | settings_panel/view/mod.rs:3670 | slider value fallback |
+| `px` / `ms` / `{:.0}%` | settings_panel/view/mod.rs:3694,3697,3734 | unit suffixes |
+| `true` / `false` | settings_panel/view/mod.rs:3762 | read-only toggle value |
+| `{r:02x}{g:02x}{b:02x}` / `#{:06x}` | color_wheel.rs:454, settings_panel/view/mod.rs:1570 | hex color field |
 | `{:.2}` / `{:+.2}` | gamepad/view.rs:302,364 | stick/trigger values |
 | `{} of {} · Enter to switch` / `Live native input` | gamepad/view.rs:102,107 | device selector |
 | `Waiting for movement` | gamepad/view.rs:215 | calibration hint |
@@ -145,7 +145,7 @@ Status as of 2026-08-21, after the cleanup pass (commits 35a95cf1b, d2239d9fa, 1
 
 **Fixed**
 
-1. Ellipsis style. Every user-visible string now uses the real ellipsis escape. The first pass covered only the two sites listed in this inventory; a follow-up caught the shared settings kit (`qol-gpui/src/settings_panel/view.rs` loading / Waiting / working) and qol-shot's platform recording notifications, which this inventory had missed.
+1. Ellipsis style. Every user-visible string now uses the real ellipsis escape. The first pass covered only the two sites listed in this inventory; a follow-up caught the shared settings kit (`qol-gpui/src/settings_panel/view/mod.rs` loading / Waiting / working) and qol-shot's platform recording notifications, which this inventory had missed.
 2. Escape key cap. Named keys read `Esc` everywhere. Two more sites turned up beyond the ones listed here: alt-tab's second (debug-overlay) header bar, and removeapp's `("esc", "back")` hint, so the claim that removeapp was already capitalized was wrong. Single-letter caps (`d`, `T`, `a`) keep their case: it tells you which key to press.
 3. `Capture area` duplication, folded into `CAPTURE_AREA_LABEL`.
 4. `Could not open screenshot editor` duplication, folded into `EDITOR_OPEN_FAILED_TOAST`.

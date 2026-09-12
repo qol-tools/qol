@@ -1922,13 +1922,16 @@ fn in_settings_scope(relative: &str) -> bool {
         .any(|prefix| relative.starts_with(prefix))
 }
 
-const RECIPE_OWNERS: [&str; 5] = [
+const RECIPE_OWNERS: [&str; 4] = [
     "libs/gpui/src/kit.rs",
-    "libs/gpui/src/settings_panel/components.rs",
     "libs/gpui/src/dropdown.rs",
     "libs/gpui/src/deck.rs",
     "libs/gpui/src/hint_bar.rs",
 ];
+
+fn is_component_recipe_owner(relative: &str) -> bool {
+    relative.starts_with("libs/gpui/src/settings_panel/components/")
+}
 
 fn compact_line(line: &str) -> String {
     line.chars()
@@ -2179,7 +2182,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 29] = [
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 41] = [
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
@@ -2217,14 +2220,86 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 29] = [
     ("libs/gpui/src/gamepad/view.rs", ".shadow(", 1),
     ("libs/gpui/src/gamepad/view.rs", ".text_color(", 17),
     ("libs/gpui/src/gamepad/view.rs", ".text_size(", 17),
-    ("libs/gpui/src/settings_panel/view.rs", ".bg(", 19),
-    ("libs/gpui/src/settings_panel/view.rs", ".border(", 1),
-    ("libs/gpui/src/settings_panel/view.rs", ".border_color(", 5),
-    ("libs/gpui/src/settings_panel/view.rs", ".font_weight(", 4),
-    ("libs/gpui/src/settings_panel/view.rs", ".rounded(", 9),
-    ("libs/gpui/src/settings_panel/view.rs", ".shadow(", 4),
-    ("libs/gpui/src/settings_panel/view.rs", ".text_color(", 30),
-    ("libs/gpui/src/settings_panel/view.rs", ".text_size(", 27),
+    (
+        "libs/gpui/src/settings_panel/view/display_layout_card.rs",
+        ".text_color(",
+        2,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/display_layout_card.rs",
+        ".text_size(",
+        2,
+    ),
+    ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 3),
+    (
+        "libs/gpui/src/settings_panel/view/list_card.rs",
+        ".rounded(",
+        1,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/list_card.rs",
+        ".shadow(",
+        1,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/list_card.rs",
+        ".text_color(",
+        3,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/list_card.rs",
+        ".text_size(",
+        3,
+    ),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 10),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
+    (
+        "libs/gpui/src/settings_panel/view/mod.rs",
+        ".border_color(",
+        5,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/mod.rs",
+        ".font_weight(",
+        3,
+    ),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".rounded(", 5),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".shadow(", 2),
+    (
+        "libs/gpui/src/settings_panel/view/mod.rs",
+        ".text_color(",
+        13,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/mod.rs",
+        ".text_size(",
+        10,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
+        ".bg(",
+        1,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
+        ".rounded(",
+        1,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
+        ".shadow(",
+        1,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
+        ".text_color(",
+        6,
+    ),
+    (
+        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
+        ".text_size(",
+        6,
+    ),
 ];
 
 #[test]
@@ -2234,7 +2309,10 @@ fn settings_surfaces_compose_shared_components() {
     let mut actuals: Vec<((String, &str), usize)> = Vec::new();
 
     for (relative, path) in surface_sources(&workspace) {
-        if !in_settings_scope(&relative) || RECIPE_OWNERS.contains(&relative.as_str()) {
+        if !in_settings_scope(&relative)
+            || RECIPE_OWNERS.contains(&relative.as_str())
+            || is_component_recipe_owner(&relative)
+        {
             continue;
         }
         let contents = fs::read_to_string(&path).expect("read gpui source");
@@ -2278,7 +2356,7 @@ fn settings_surfaces_compose_shared_components() {
 
     assert!(
         problems.is_empty(),
-        "Settings surfaces compose recipes from kit.rs and settings_panel/components.rs; \
+        "Settings surfaces compose recipes from kit.rs and settings_panel/components/; \
 leaf styling stays with the recipe owners. apps/qol-tray/src/settings_surface/ must be at zero, \
 every other settings-scope file keeps its exact counts in LEAF_STYLING_DEBT.\n{}",
         problems.join("\n")
@@ -2295,7 +2373,7 @@ fn settings_surfaces_take_colour_from_the_settings_palette() {
     for (relative, path) in surface_sources(&workspace) {
         if !in_settings_scope(&relative)
             || relative == "libs/gpui/src/kit.rs"
-            || relative == "libs/gpui/src/settings_panel/components.rs"
+            || is_component_recipe_owner(&relative)
         {
             continue;
         }
@@ -2316,7 +2394,7 @@ fn settings_surfaces_take_colour_from_the_settings_palette() {
     assert!(
         problems.is_empty(),
         "Colour in settings scope comes from SettingsPanelPalette fields, kit.washes or a kit \
-recipe; only kit.rs and settings_panel/components.rs may read kit.palette.\n{}",
+recipe; only kit.rs and settings_panel/components/ may read kit.palette.\n{}",
         problems.join("\n")
     );
 }
@@ -2344,8 +2422,8 @@ fn settings_surfaces_have_one_focus_owner() {
         calls.join("\n")
     );
     assert!(
-        calls[0].starts_with("libs/gpui/src/settings_panel/view.rs:"),
-        "the one window.focus call lives in settings_panel/view.rs, found {}",
+        calls[0].starts_with("libs/gpui/src/settings_panel/view/mod.rs:"),
+        "the one window.focus call lives in settings_panel/view/mod.rs, found {}",
         calls[0]
     );
 }
@@ -2452,9 +2530,9 @@ fn settings_surfaces_build_spinners_through_components() {
     assert!(
         calls
             .iter()
-            .all(|call| call.starts_with("libs/gpui/src/settings_panel/components.rs:")),
+            .all(|call| call.starts_with("libs/gpui/src/settings_panel/components/mod.rs:")),
         "Settings surfaces build spinners through the components recipes, so Spinner::new and \
-         Busy::new live only in settings_panel/components.rs:\n{}",
+         Busy::new live only in settings_panel/components/mod.rs:\n{}",
         calls.join("\n")
     );
 }
