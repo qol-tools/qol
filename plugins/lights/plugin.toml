@@ -73,6 +73,7 @@ args = ["preset_8"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [action.pair]

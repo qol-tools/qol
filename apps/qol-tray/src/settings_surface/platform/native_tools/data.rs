@@ -25,6 +25,8 @@ pub(super) struct PluginOption {
 pub(super) struct ActionOption {
     pub(super) id: String,
     pub(super) label: String,
+    #[serde(default)]
+    pub(super) picture: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

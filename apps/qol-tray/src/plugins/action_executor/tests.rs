@@ -72,6 +72,7 @@ fn make_catalog_plugin(
             args: Some(args),
             config_key: None,
             checked: false,
+            picture: None,
         },
     );
     plugin

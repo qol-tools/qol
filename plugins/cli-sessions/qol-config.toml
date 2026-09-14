@@ -24,5 +24,7 @@ section = "detection"
 config_key = "service_commands"
 label = "Service commands"
 description = "Command names treated as long-running services even when they hold no listening socket. One command per row."
+card_description = "Commands that count as services."
+item_label = "command"
 default = []
 placeholder = "e.g. cargo watch"

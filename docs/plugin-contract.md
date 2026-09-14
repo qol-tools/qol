@@ -100,9 +100,10 @@ Sections:
   catalog. `label` is required. `kind` defaults to `run` and may be `run`,
   `settings`, or `toggle-config`. `args` supplies runtime argv for `run` and
   `settings` actions; omit it to use `[id]`. `toggle-config` entries require
-  `config_key` and are not executable/hotkey-bindable. Dashboard actions,
-  hotkey choices, shortcut validation, and runtime argv resolution use this
-  catalog first.
+  `config_key` and are not executable/hotkey-bindable. `picture` optionally
+  names a picture spec (section 2.2) drawn on the action's card. Dashboard
+  actions, hotkey choices, shortcut validation, and runtime argv resolution
+  use this catalog first.
 - `[menu]` (`MenuConfig`): `label`, optional `icon`, and `items` (may be `[]`).
   `MenuItem` is tagged on `type`: `action {id,label,action,config_key?}`,
   `checkbox {id,label,checked?,action,config_key?}`, `separator`,
@@ -213,7 +214,8 @@ Schema in `libs/config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
 - `[field.<id>]`: required `type` (`FieldKind`, snake_case: `boolean`, `string`,
   `number`, `select`, `string_array`, `object_array`, `object_map`, `color`,
   `action`, `list`, `status`, `qr_code`, `display_layout`), plus `config_key`, `label`,
-  `description`, `placeholder`, `section`, `default`, `show_when`, `align`, `span`.
+  `description`, `placeholder`, `section`, `default`, `lookup_label`, `show_when`, `align`,
+  `span`.
 
 Per-kind rules (validated, not ignored):
 
@@ -230,6 +232,29 @@ Per-kind rules (validated, not ignored):
   path in `config.json`; defaults to the field id (so renaming a field id silently
   moves storage unless you pin `config_key`).
 - `show_when { field, equals }` conditionally renders a field.
+- Card copy: `card_description` is the card sub header (a sentence in sentence
+  case with a period, at most 36 characters) and is required on every field that
+  opens a card: `select`, `object_array`, `object_map`, a `string_array` with no
+  `options` and no `query`, `list`, `display_layout`, `gamepad`, `qr_code`.
+  `item_label` (at most 24 characters) is required on `object_array`,
+  `object_map` and card-opening `string_array` fields. `lookup_label` (at most
+  24 characters) is required on every `select` with a `query` and names what
+  the lookup is still finding; until the query answers, its card shows a
+  waiting tile named "Looking for {lookup_label}". `option_pictures` maps
+  every `select` option (from `options` and `option_labels`) to a picture spec.
+  A nested `string_array` under `item.fields` or `entry_fields` whose key does
+  not end in `_mods` needs a `[field.<id>.lists.<key>]` entry carrying
+  `item_label` and `card_description`; the description may use the literal
+  placeholder `{entry}`.
+- A picture spec is `name` or `name:argument`; `qol_config::contract::PICTURE_NAMES`
+  lists every name. Arguments: `icon-corner` (`left`/`right`), `aa` (8..=48),
+  `desktop-theme` (`bone`/`slate`), `web-theme` (`slate`/`midnight`), `swatch`
+  (`amber`/`green`/`cyan`/`magenta`/`blue`/`violet`), `letters` (1 to 3 chars, no
+  whitespace), `preset` (two integers 0..=100 joined by a comma), `format` (1 to
+  5 chars, no whitespace), `terminal-session` (1 to 24 chars), `local-engine`
+  (1 to 12 chars); every other name takes no argument. A looked-up option object
+  may carry `"picture": "<spec>"` next to `value`, `label` and `accent`; without
+  one the panel draws a letter tile.
 
 ```toml
 schema_version = 1

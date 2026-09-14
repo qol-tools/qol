@@ -62,6 +62,7 @@ pub(super) struct SelectOption {
     pub(super) value: String,
     pub(super) label: String,
     pub(super) accent: Option<u32>,
+    pub(super) picture: Option<String>,
 }
 
 impl SelectOption {
@@ -70,6 +71,7 @@ impl SelectOption {
             value: value.into(),
             label: label.into(),
             accent: None,
+            picture: None,
         }
     }
 }
@@ -614,13 +616,17 @@ fn seeded_options(field: &ResolvedField) -> Vec<SelectOption> {
                 .get(option)
                 .cloned()
                 .unwrap_or_else(|| option.clone());
-            SelectOption::plain(option, label)
+            let mut seeded_option = SelectOption::plain(option, label);
+            seeded_option.picture = field.option_pictures.get(option).cloned();
+            seeded_option
         })
         .collect::<Vec<_>>();
     if field.query.is_some() {
         for (option, label) in &field.option_labels {
             if !seeded.iter().any(|candidate| &candidate.value == option) {
-                seeded.push(SelectOption::plain(option, label));
+                let mut extra = SelectOption::plain(option, label);
+                extra.picture = field.option_pictures.get(option).cloned();
+                seeded.push(extra);
             }
         }
     }
@@ -639,6 +645,9 @@ fn merge_options(
             .find(|candidate| candidate.value == option.value)
         {
             seeded.accent = option.accent;
+            if option.picture.is_some() {
+                seeded.picture = option.picture.clone();
+            }
             continue;
         }
         merged.push(option.clone());
@@ -1206,9 +1215,15 @@ fn options_from_value(value: &serde_json::Value) -> Vec<SelectOption> {
                 value,
                 label,
                 accent: option_accent(item),
+                picture: option_picture(item),
             })
         })
         .collect()
+}
+
+fn option_picture(item: &serde_json::Value) -> Option<String> {
+    let picture = item.get("picture")?.as_str()?;
+    qol_config::contract::is_picture_spec(picture).then(|| picture.to_string())
 }
 
 fn option_accent(item: &serde_json::Value) -> Option<u32> {
@@ -1251,10 +1266,10 @@ mod tests {
     use super::{
         apply_runtime_query, begin_list_item_action, clear_slider_hold, filtered_list_items,
         list_item_actions, list_items, list_slider_value, merged_config, option_accent,
-        primary_list_item_action, row_action, row_is_visible, row_streams, row_value_json,
-        rows_from_resolved, runtime_query_names, sections_from_resolved, selected_list_item,
-        set_config_value, stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem,
-        ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
+        options_from_value, primary_list_item_action, row_action, row_is_visible, row_streams,
+        row_value_json, rows_from_resolved, runtime_query_names, sections_from_resolved,
+        selected_list_item, set_config_value, stream_gated, visible_row_indices, FieldDefault,
+        ListActions, ListItem, ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -1704,6 +1719,9 @@ query = "audio_sources"
 
 [field.mic.option_labels]
 default = "System Default"
+
+[field.mic.option_pictures]
+default = "mic-default"
 "#;
         let spec = qol_config::contract::parse_spec_str(QUERY_SPEC).unwrap();
         let cases = [
@@ -1731,7 +1749,8 @@ default = "System Default"
                     {
                         "value": "alsa_input.foo",
                         "label": "Built-in Mic",
-                        "accent": { "red": 130, "green": 170, "blue": 255 }
+                        "accent": { "red": 130, "green": 170, "blue": 255 },
+                        "picture": "usb-mic"
                     }
                 ])),
             );
@@ -1758,6 +1777,12 @@ default = "System Default"
                         .find(|option| option.value == "alsa_input.foo")
                         .unwrap();
                     assert_eq!(dynamic.accent, Some(0x82aaff));
+                    let seeded = options
+                        .iter()
+                        .find(|option| option.value == "default")
+                        .unwrap();
+                    assert_eq!(seeded.picture.as_deref(), Some("mic-default"));
+                    assert_eq!(dynamic.picture.as_deref(), Some("usb-mic"));
                     assert_eq!(*index, expected_index, "overrides: {overrides}");
                 }
                 other => panic!("expected select, got {other:?}"),
@@ -1785,6 +1810,23 @@ default = "System Default"
         ];
         for (input, expected) in cases {
             assert_eq!(option_accent(&input), expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn option_pictures_reject_unknown_specs() {
+        let cases = [
+            (
+                serde_json::json!({"value": "usb", "picture": "usb-mic"}),
+                Some("usb-mic"),
+            ),
+            (serde_json::json!({"value": "usb", "picture": "nope"}), None),
+            (serde_json::json!({"value": "usb", "picture": 7}), None),
+            (serde_json::json!({"value": "usb"}), None),
+        ];
+        for (input, expected) in cases {
+            let options = options_from_value(&serde_json::json!([input.clone()]));
+            assert_eq!(options[0].picture.as_deref(), expected, "input: {input}");
         }
     }
 

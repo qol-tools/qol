@@ -158,7 +158,7 @@ pub fn dark_accent_preset(key: &str) -> Option<AccentPreset> {
         .find(|preset| preset.key == key)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeMode {
     Dark,
     Light,
@@ -358,8 +358,6 @@ const ACCENT_FILL_MIX: u32 = 80;
 
 const RAIL_FILL_MIX: u32 = 450;
 
-const ON_FILL_INK_MIX: u32 = 900;
-
 const fn mix_channel_const(from: u32, to: u32, permille: u32) -> u32 {
     (from * (1000 - permille) + to * permille + 500) / 1000
 }
@@ -514,6 +512,19 @@ pub fn runtime_theme() -> Theme {
             .ok()
             .as_deref(),
     )
+}
+
+pub fn runtime_accent_key() -> &'static str {
+    let override_accent = RUNTIME_THEME_OVERRIDE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .map(|(_, accent)| accent.clone());
+    let key = match override_accent {
+        Some(accent) => accent,
+        None => std::env::var(qol_conventions::ENV_THEME_ACCENT).ok(),
+    };
+    preset_accent_key(runtime_theme().mode, key.as_deref())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1274,6 +1285,193 @@ impl ToastPalette {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingsGround {
+    pub bg: u32,
+    pub ink: u32,
+    pub soft: u32,
+    pub faint: u32,
+    pub well: CssRgba,
+    pub edge: CssRgba,
+    pub mark: u32,
+    pub on_mark: u32,
+    pub lift: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingsGrounds {
+    pub pane: SettingsGround,
+    pub rail: SettingsGround,
+    pub band: SettingsGround,
+    pub band_hover: SettingsGround,
+    pub menu: SettingsGround,
+    pub attention: SettingsGround,
+    pub invalid: SettingsGround,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DesktopThemePreview {
+    pub pane: u32,
+    pub rail: u32,
+    pub edge: u32,
+    pub ink: u32,
+    pub soft: u32,
+    pub band: u32,
+    pub accent: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WebThemePreview {
+    pub bg: u32,
+    pub surface: u32,
+    pub raised: u32,
+    pub border: u32,
+    pub text: u32,
+    pub muted: u32,
+}
+
+const GROUND_LIFT_MIX: u32 = 50;
+const GROUND_HOVER_LIFT_MIX: u32 = 80;
+const GROUND_SOFT_MIX: u32 = 820;
+const GROUND_FAINT_MIX: u32 = 660;
+const GROUND_SOFT_FLOOR: f64 = 4.5;
+const GROUND_FAINT_FLOOR: f64 = 3.0;
+const GROUND_WELL_ALPHA: u16 = 140;
+const GROUND_EDGE_ALPHA: u16 = 240;
+
+pub fn accent_swatch(mode: ThemeMode, accent_key: &str) -> Option<u32> {
+    match mode {
+        ThemeMode::Dark => dark_accent_preset(accent_key).map(|preset| preset.rgb),
+        ThemeMode::Light => light_accent_preset(accent_key).map(|preset| preset.rgb),
+    }
+}
+
+pub fn preset_accent_key(mode: ThemeMode, key: Option<&str>) -> &'static str {
+    let preset = key.and_then(|key| match mode {
+        ThemeMode::Dark => dark_accent_preset(key),
+        ThemeMode::Light => light_accent_preset(key),
+    });
+    preset.map_or(PROD_ACCENT_KEY, |preset| preset.key)
+}
+
+pub fn desktop_theme_preview(mode: ThemeMode, accent_key: &str) -> DesktopThemePreview {
+    let system = match mode {
+        ThemeMode::Dark => DARK_SYSTEM,
+        ThemeMode::Light => LIGHT_SYSTEM,
+    };
+    let accent = accent_swatch(mode, accent_key)
+        .or_else(|| accent_swatch(mode, PROD_ACCENT_KEY))
+        .expect("the mode default accent exists");
+    DesktopThemePreview {
+        pane: system.surface_elevated,
+        rail: system.surface_rail,
+        edge: system.border_subtle,
+        ink: system.text_primary,
+        soft: system.text_muted,
+        band: mix_const(system.accent_fill_base, accent, RAIL_FILL_MIX),
+        accent,
+    }
+}
+
+pub fn web_theme_preview(theme_key: &str) -> Option<WebThemePreview> {
+    match theme_key {
+        "slate" => Some(WebThemePreview {
+            bg: DARK_TRAY_RAMP.slate_975,
+            surface: DARK_TRAY_RAMP.slate_900,
+            raised: DARK_TRAY_RAMP.slate_800,
+            border: DARK_TRAY_INTERNAL.border_default_2,
+            text: DARK_TRAY_RAMP.slate_400,
+            muted: DARK_TRAY_INTERNAL.border_strong,
+        }),
+        "midnight" => {
+            let preset = tray_theme_preset(theme_key)?;
+            Some(WebThemePreview {
+                bg: preset.system.surface_canvas,
+                surface: preset.system.surface_elevated,
+                raised: preset.system.surface_raised,
+                border: preset.system.border_subtle,
+                text: preset.system.text_secondary,
+                muted: preset.system.text_faint,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn surface_ground(
+    bg: u32,
+    ink: u32,
+    soft: u32,
+    mark: u32,
+    system: SystemPalette,
+    washes: WashPalette,
+) -> SettingsGround {
+    SettingsGround {
+        bg,
+        ink,
+        soft,
+        faint: system.text_muted,
+        well: washes.fill_resting,
+        edge: washes.hairline,
+        mark,
+        on_mark: bg,
+        lift: mix_const(bg, ink, GROUND_LIFT_MIX),
+    }
+}
+
+fn mixed_ground(bg: u32, ink: u32) -> SettingsGround {
+    SettingsGround {
+        bg,
+        ink,
+        soft: floored_mix(bg, ink, GROUND_SOFT_MIX, GROUND_SOFT_FLOOR),
+        faint: floored_mix(bg, ink, GROUND_FAINT_MIX, GROUND_FAINT_FLOOR),
+        well: css_rgba_milli(ink, GROUND_WELL_ALPHA),
+        edge: css_rgba_milli(ink, GROUND_EDGE_ALPHA),
+        mark: ink,
+        on_mark: bg,
+        lift: mix_const(bg, ink, GROUND_HOVER_LIFT_MIX),
+    }
+}
+
+fn floored_mix(bg: u32, ink: u32, permille: u32, floor: f64) -> u32 {
+    let mut p = permille;
+    while p <= 1000 {
+        let candidate = mix_const(bg, ink, p);
+        if contrast_ratio(candidate, bg) >= floor {
+            return candidate;
+        }
+        p += 10;
+    }
+    ink
+}
+
+pub fn relative_luminance(rgb: u32) -> f64 {
+    let channel = |c: u32| {
+        let c = c as f64 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let r = channel((rgb >> 16) & 0xff);
+    let g = channel((rgb >> 8) & 0xff);
+    let b = channel(rgb & 0xff);
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+pub fn contrast_ratio(a: u32, b: u32) -> f64 {
+    let (hi, lo) = {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        if la > lb {
+            (la, lb)
+        } else {
+            (lb, la)
+        }
+    };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettingsPanelPalette {
     pub window_bg: u32,
     pub panel_border: u32,
@@ -1287,6 +1485,7 @@ pub struct SettingsPanelPalette {
     pub rail_active_text: u32,
     pub fill_current: u32,
     pub fill_current_quiet: u32,
+    pub grounds: SettingsGrounds,
     pub dropdown_bg: u32,
     pub state_on: u32,
     pub state_off: u32,
@@ -1304,9 +1503,12 @@ pub struct SettingsPanelPalette {
 }
 
 impl SettingsPanelPalette {
-    pub fn from_theme(_mode: ThemeMode, system: SystemPalette) -> Self {
+    pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
+        let washes = WashPalette::for_mode(mode, system);
         let (rail_bg, rail_text, rail_text_muted) =
             (system.surface_rail, system.text_rail, system.text_rail);
+        let fill_current = mix_const(system.accent_fill_base, system.accent, RAIL_FILL_MIX);
+        let band = mixed_ground(fill_current, system.text_primary);
         Self {
             window_bg: system.surface_elevated,
             panel_border: system.border_subtle,
@@ -1318,12 +1520,64 @@ impl SettingsPanelPalette {
             rail_text,
             rail_text_muted,
             rail_active_text: system.text_primary,
-            fill_current: mix_const(system.accent_fill_base, system.accent, RAIL_FILL_MIX),
+            fill_current,
             fill_current_quiet: mix_const(
                 system.accent_fill_base,
                 system.text_muted,
                 RAIL_FILL_MIX,
             ),
+            grounds: SettingsGrounds {
+                pane: surface_ground(
+                    system.surface_elevated,
+                    system.text_primary,
+                    system.text_secondary,
+                    system.accent,
+                    system,
+                    washes,
+                ),
+                rail: surface_ground(
+                    system.surface_rail,
+                    system.text_primary,
+                    system.text_rail,
+                    system.accent,
+                    system,
+                    washes,
+                ),
+                band,
+                band_hover: mixed_ground(band.lift, system.text_primary),
+                menu: surface_ground(
+                    system.surface_raised,
+                    system.text_primary,
+                    system.text_secondary,
+                    system.accent,
+                    system,
+                    washes,
+                ),
+                attention: surface_ground(
+                    mix_const(
+                        system.surface_elevated,
+                        system.warning,
+                        washes.wash_attention.alpha_milli as u32,
+                    ),
+                    system.text_primary,
+                    system.text_secondary,
+                    system.warning,
+                    system,
+                    washes,
+                ),
+                invalid: surface_ground(
+                    mix_const(
+                        system.surface_elevated,
+                        system.danger,
+                        washes.wash_invalid.alpha_milli as u32,
+                    ),
+                    system.text_primary,
+                    system.text_secondary,
+                    system.danger,
+                    system,
+                    washes,
+                ),
+            },
             dropdown_bg: system.surface_raised,
             state_on: system.success,
             state_off: system.danger,
@@ -1338,18 +1592,6 @@ impl SettingsPanelPalette {
             qr_light: DARK_TRAY_INTERNAL.config_qr_light,
             live_color_fallback: DARK_TRAY_INTERNAL.config_live_color_fallback,
             transparent_rgba: 0x00000000,
-        }
-    }
-
-    pub fn on_fill(self) -> Self {
-        let ink = mix_const(self.fill_current, self.rail_active_text, ON_FILL_INK_MIX);
-        Self {
-            label_text: self.rail_active_text,
-            status_muted: ink,
-            dropdown_bg: self.fill_current,
-            row_bg_selected: self.fill_current,
-            row_border_selected: self.rail_active_text,
-            ..self
         }
     }
 }

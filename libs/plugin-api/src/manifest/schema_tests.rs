@@ -189,6 +189,42 @@ fn parse_action_catalog_entries() {
 }
 
 #[test]
+fn parse_action_picture_and_default() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Pictures"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [action.open]
+        label = "Open"
+        picture = "next-window"
+
+        [action.settings]
+        label = "Settings"
+        kind = "settings"
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert_eq!(
+        manifest.actions["open"].picture.as_deref(),
+        Some("next-window")
+    );
+    assert!(manifest.actions["settings"].picture.is_none());
+
+    let declared = manifest.executable_actions();
+    assert_eq!(declared[0].id, "open");
+    assert_eq!(declared[0].picture.as_deref(), Some("next-window"));
+    assert_eq!(declared[1].id, "settings");
+    assert!(declared[1].picture.is_none());
+}
+
+#[test]
 fn executable_actions_prefer_action_catalog_over_menu_items() {
     let toml = r#"
         [plugin]

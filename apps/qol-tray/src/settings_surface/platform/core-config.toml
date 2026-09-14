@@ -11,28 +11,39 @@ type = "select"
 label = "Desktop theme"
 section = "appearance"
 default = "bone"
+card_description = "Colours for native qol windows."
 options = ["bone", "slate"]
 
 [field.native_theme.option_labels]
 bone = "Bone"
 slate = "Slate"
 
+[field.native_theme.option_pictures]
+bone = "desktop-theme:bone"
+slate = "desktop-theme:slate"
+
 [field.theme]
 type = "select"
 label = "Web UI theme"
 section = "appearance"
 default = "slate"
+card_description = "Colours for qol in the browser."
 options = ["slate", "midnight"]
 
 [field.theme.option_labels]
 slate = "Slate"
 midnight = "Midnight"
 
+[field.theme.option_pictures]
+slate = "web-theme:slate"
+midnight = "web-theme:midnight"
+
 [field.accent]
 type = "select"
 label = "Accent"
 section = "appearance"
 default = "amber"
+card_description = "The colour of focus and selection."
 options = ["amber", "green", "cyan", "magenta", "blue", "violet"]
 
 [field.accent.option_labels]
@@ -43,6 +54,14 @@ magenta = "Magenta"
 blue = "Blue"
 violet = "Violet"
 
+[field.accent.option_pictures]
+amber = "swatch:amber"
+green = "swatch:green"
+cyan = "swatch:cyan"
+magenta = "swatch:magenta"
+blue = "swatch:blue"
+violet = "swatch:violet"
+
 [section.host]
 label = "Host"
 description = "What qol is allowed to change on this computer."
@@ -52,7 +71,9 @@ type = "select"
 label = "Profile"
 section = "host"
 query = "profiles"
+lookup_label = "profiles"
 default = "default"
+card_description = "The profile this device loads."
 
 [field.residency]
 type = "boolean"
@@ -70,12 +91,18 @@ type = "select"
 label = "Notification handler"
 section = "notifications"
 default = "qol"
+card_description = "Where qol notifications appear."
 options = ["qol", "os", "both"]
 
 [field.handler.option_labels]
 qol = "qol toasts"
 os = "Operating system"
 both = "Both"
+
+[field.handler.option_pictures]
+qol = "qol-toasts"
+os = "system-bubbles"
+both = "both-notices"
 
 [field.do_not_disturb]
 type = "status"

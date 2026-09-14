@@ -43,6 +43,7 @@ query = "list_devices"
 row_label = "{name}"
 row_subtitle = "{address}"
 empty_message = "No devices paired. Click Pair Device to start."
+card_description = "The lights the coordinator found."
 
 [field.toggle_power]
 type = "action"

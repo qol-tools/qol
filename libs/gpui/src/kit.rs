@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
-    FontWeight, SharedString,
+    FontWeight, Rgba, SharedString,
 };
 use qol_theme::{SystemPalette, ThemeMode, WashPalette};
 
@@ -747,13 +747,17 @@ pub fn raised_shadow(text_primary: u32) -> Vec<BoxShadow> {
     ]
 }
 
-pub fn accent_left_edge(radius: f32, width: f32, accent: u32) -> Div {
+pub fn left_edge(radius: f32, width: f32, color: Rgba) -> Div {
     div()
         .absolute()
         .inset_0()
         .rounded_l(px(radius))
         .border_l(px(width))
-        .border_color(rgb(accent))
+        .border_color(color)
+}
+
+pub fn accent_left_edge(radius: f32, width: f32, accent: u32) -> Div {
+    left_edge(radius, width, rgb(accent))
 }
 
 pub const RAIL_SCRIM_START: f32 = 0.32;

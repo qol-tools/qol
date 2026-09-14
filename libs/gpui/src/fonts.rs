@@ -4,7 +4,7 @@ use gpui::App;
 
 pub(crate) const SANS_MEDIUM: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Medium.ttf");
 
-const FACES: [&[u8]; 8] = [
+pub(crate) const FACES: [&[u8]; 8] = [
     include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
     SANS_MEDIUM,
     include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf"),

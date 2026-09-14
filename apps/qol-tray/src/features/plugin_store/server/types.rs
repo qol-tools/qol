@@ -299,6 +299,8 @@ pub(super) struct PluginAction {
     pub(super) id: String,
     pub(super) label: String,
     pub(super) kind: ActionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) picture: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

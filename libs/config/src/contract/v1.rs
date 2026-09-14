@@ -64,6 +64,16 @@ pub struct FieldSpec {
     #[serde(default)]
     pub option_labels: IndexMap<String, String>,
     #[serde(default)]
+    pub option_pictures: IndexMap<String, String>,
+    #[serde(default)]
+    pub card_description: Option<String>,
+    #[serde(default)]
+    pub item_label: Option<String>,
+    #[serde(default)]
+    pub lookup_label: Option<String>,
+    #[serde(default)]
+    pub lists: IndexMap<String, NestedListSpec>,
+    #[serde(default)]
     pub key_label: Option<String>,
     #[serde(default)]
     pub item: Option<ItemSpec>,
@@ -135,6 +145,14 @@ pub struct ShowWhenSpec {
 pub struct ItemSpec {
     #[serde(default)]
     pub fields: IndexMap<String, FieldKind>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct NestedListSpec {
+    #[serde(default)]
+    pub item_label: Option<String>,
+    #[serde(default)]
+    pub card_description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

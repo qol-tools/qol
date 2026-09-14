@@ -162,6 +162,7 @@ mod tests {
                 value: binding.token(),
                 label: "Old name · Codex".to_owned(),
                 accent: None,
+                picture: None,
             }),
             on_change: Mutex::new(None),
         });

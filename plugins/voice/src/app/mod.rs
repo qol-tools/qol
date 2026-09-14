@@ -113,16 +113,31 @@ fn parse_id(input: &serde_json::Value, field: &str) -> Result<u64> {
         .ok_or_else(|| anyhow::anyhow!("request_assistant_turn requires numeric `{field}`"))
 }
 
+fn option(value: String, label: String, picture: Option<&str>) -> serde_json::Value {
+    let mut option = serde_json::json!({
+        "value": value,
+        "label": label,
+    });
+    if let Some(picture) = picture {
+        option["picture"] = serde_json::Value::String(picture.to_owned());
+    }
+    option
+}
+
+fn provider_picture(provider: &str) -> Option<&'static str> {
+    match provider {
+        "sherpa-onnx" => Some("local-engine:onnx"),
+        "candle-whisper" => Some("local-engine:candle"),
+        "websocket" => Some("remote-engine"),
+        _ => None,
+    }
+}
+
 fn audio_sources() -> Result<serde_json::Value> {
     let devices = crate::listen::audio_input_devices()?;
     let options = devices
         .into_iter()
-        .map(|device| {
-            serde_json::json!({
-                "value": device.id,
-                "label": device.label,
-            })
-        })
+        .map(|device| option(device.id, device.label, device.picture.as_deref()))
         .collect::<Vec<_>>();
     Ok(serde_json::json!(options))
 }
@@ -134,6 +149,7 @@ fn stt_models() -> Result<serde_json::Value> {
             serde_json::json!({
                 "value": model.path.to_string_lossy(),
                 "label": model.name,
+                "picture": "model",
             })
         })
         .collect::<Vec<_>>();
@@ -143,17 +159,19 @@ fn stt_models() -> Result<serde_json::Value> {
 fn stt_providers() -> Result<serde_json::Value> {
     let mut options = Vec::new();
     if crate::transcribe::resolve_descriptor("auto").is_ok() {
-        options.push(serde_json::json!({
-            "value": "auto",
-            "label": "Automatic",
-        }));
+        options.push(option(
+            "auto".to_owned(),
+            "Automatic".to_owned(),
+            Some("prefer-local"),
+        ));
     }
     options.extend(
         crate::transcribe::transcriber_descriptors().map(|provider| {
-            serde_json::json!({
-                "value": provider.id,
-                "label": provider.name,
-            })
+            option(
+                provider.id.to_owned(),
+                provider.name.to_owned(),
+                provider_picture(provider.id),
+            )
         }),
     );
     Ok(serde_json::json!(options))

@@ -5,7 +5,10 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
 
-use super::super::components::{settings_action_spinner, settings_label, SettingsRow};
+use super::super::components::{
+    settings_action_spinner, settings_label, settings_value_text, RowGround, SettingsRow,
+    SettingsValueTone,
+};
 use super::super::rows::{
     begin_list_item_action, filtered_list_items, list_item_actions, list_slider_value,
     primary_list_item_action, selected_list_item, ListActions, ListItem, ListSlider, Row,
@@ -393,8 +396,16 @@ impl SettingsPanelView {
     }
 
     pub(super) fn open_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        let (label, config_key, source) = match self.level().rows.get(row_index) {
-            Some(row) => (row.label.clone(), row.config_key.clone(), row.source),
+        let (label, config_key, source, description) = match self.level().rows.get(row_index) {
+            Some(row) => (
+                row.label.clone(),
+                row.config_key.clone(),
+                row.source,
+                self.sources[row.source]
+                    .copy
+                    .get(&row.id)
+                    .and_then(|copy| copy.card_description.clone()),
+            ),
             None => return,
         };
         let Some(destination) = self.card_destination(&label, cx) else {
@@ -425,6 +436,7 @@ impl SettingsPanelView {
             filter,
             list.selected,
             destination.clone(),
+            description,
         );
         self.push_card(destination, child);
         self.sync_scroll();
@@ -436,10 +448,12 @@ impl SettingsPanelView {
         slider: &ListSlider,
         item: &super::super::rows::ListItem,
         value: f64,
+        row: RowGround,
         cx: &mut Context<Self>,
     ) -> Div {
         let fill = slider_fraction(value, Some(slider.spec.min), Some(slider.spec.max)) * 72.0;
         let percent = slider_percent_label(slider.spec.min, slider.spec.max, value);
+        let ground = row.rest(self.palette);
         let item_id = item.id.clone();
         let track_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
         let bounds_for_down = track_bounds.clone();
@@ -462,7 +476,7 @@ impl SettingsPanelView {
                     .h(px(4.))
                     .rounded_full()
                     .overflow_hidden()
-                    .bg(rgb(self.palette.panel_border))
+                    .bg(rgba(ground.well.packed()))
                     .child(
                         div()
                             .absolute()
@@ -471,7 +485,7 @@ impl SettingsPanelView {
                             .h_full()
                             .w(px(fill))
                             .rounded_full()
-                            .bg(rgb(self.palette.row_border_selected)),
+                            .bg(rgb(ground.mark)),
                     )
                     .child(
                         canvas(
@@ -562,6 +576,7 @@ impl SettingsPanelView {
                 .into_any_element();
         };
         let selected = index == self.level().selected;
+        let row = RowGround::of(selected, self.body_has_focus());
         let mut line = SettingsRow::rule(("settings-list-card-item", index), self.palette)
             .selected(selected, self.body_has_focus())
             .child(
@@ -569,13 +584,14 @@ impl SettingsPanelView {
                     .flex_1()
                     .min_w(px(0.)),
             )
-            .child(self.render_list_card_value(item))
-            .child(self.render_list_card_action(index, origin_row, item, selected, cx));
+            .child(self.render_list_card_value(item, row))
+            .child(self.render_list_card_action(index, origin_row, item, selected, row, cx));
         if let Some((slider, value)) = slider.as_deref().and_then(|slider| {
             list_card_slider_value(slider, actions, items, filter, index)
                 .map(|value| (slider, value))
         }) {
-            line = line.child(self.render_list_slider_element(origin_row, slider, item, value, cx));
+            line = line
+                .child(self.render_list_slider_element(origin_row, slider, item, value, row, cx));
         }
         line.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
@@ -587,20 +603,29 @@ impl SettingsPanelView {
         .into_any_element()
     }
 
-    fn render_list_card_value(&self, item: &ListItem) -> Div {
+    fn render_list_card_value(&self, item: &ListItem, row: RowGround) -> Div {
         let text = list_item_value_text(item);
-        let color = if item.error.is_some() {
-            self.palette.state_off
-        } else if item.badge.is_some() {
-            status_tone_color(self.palette, item.effective_badge_tone())
+        if item.error.is_some() {
+            return div()
+                .flex_none()
+                .text_size(px(qol_theme::TEXT_BODY))
+                .text_color(rgb(self.palette.state_off))
+                .child(text);
+        }
+        if item.badge.is_some() {
+            let color = status_tone_color(self.palette, item.effective_badge_tone());
+            return div()
+                .flex_none()
+                .text_size(px(qol_theme::TEXT_BODY))
+                .text_color(rgb(color))
+                .child(text);
+        }
+        let tone = if text.is_empty() {
+            SettingsValueTone::Muted
         } else {
-            self.palette.label_text
+            SettingsValueTone::Normal
         };
-        div()
-            .flex_none()
-            .text_size(px(qol_theme::TEXT_BODY))
-            .text_color(rgb(color))
-            .child(text)
+        settings_value_text(text, tone, row, self.palette)
     }
 
     fn render_list_card_action(
@@ -609,6 +634,7 @@ impl SettingsPanelView {
         origin_row: usize,
         item: &ListItem,
         selected: bool,
+        row: RowGround,
         cx: &mut Context<Self>,
     ) -> Div {
         let Some(RowControl::List { actions, .. }) =
@@ -633,24 +659,27 @@ impl SettingsPanelView {
         };
         let action_count = list_item_actions(actions, item).len();
         let label = list_action_affordance(&action.label, action_count);
+        let ground = row.rest(self.palette);
+        let background = match row {
+            RowGround::Band => rgba(ground.well.packed()),
+            RowGround::Pane if selected => rgb(self.palette.row_bg_selected),
+            RowGround::Pane => rgb(self.palette.dropdown_bg),
+        };
+        let text = match row {
+            RowGround::Band => ground.ink,
+            RowGround::Pane if selected => self.palette.state_on,
+            RowGround::Pane => self.palette.label_text,
+        };
         let mut affordance = div()
             .id(("settings-list-card-action", index))
             .px(px(qol_theme::SPACE_TIGHT))
             .rounded(px(qol_theme::RADIUS_TIGHT))
-            .bg(if selected {
-                rgb(self.palette.row_bg_selected)
-            } else {
-                rgb(self.palette.dropdown_bg)
-            })
-            .when(!selected, |control| {
+            .bg(background)
+            .when(row == RowGround::Pane && !selected, |control| {
                 control.shadow(crate::kit::raised_shadow(self.palette.section_text))
             })
             .text_size(px(qol_theme::TEXT_CAPTION))
-            .text_color(rgb(if selected {
-                self.palette.state_on
-            } else {
-                self.palette.label_text
-            }))
+            .text_color(rgb(text))
             .child(label);
         if !item.pending {
             affordance = affordance
@@ -843,6 +872,7 @@ fn list_card_level(
     filter: &str,
     selected_slot: usize,
     destination: SettingsDestination,
+    description: Option<String>,
 ) -> Level {
     let ListCardOrigin {
         label,
@@ -854,7 +884,7 @@ fn list_card_level(
     let rows = list_card_child_rows(label, config_key, source, items, &visible);
     let section = RowSection {
         label: label.to_string(),
-        description: None,
+        description,
         rows: (0..rows.len()).collect(),
         source,
     };
@@ -875,6 +905,9 @@ fn list_card_level(
         display_layout: None,
         list_card: true,
         live_card: false,
+        choose: None,
+        entries: None,
+        form: None,
     }
 }
 
@@ -884,6 +917,10 @@ fn list_card_sync(root_rows: &mut [Row], level: &mut Level) {
     };
     let selected = level.selected;
     let selected_id = level.rows.get(selected).map(|row| row.id.clone());
+    let description = level
+        .sections
+        .first()
+        .and_then(|section| section.description.clone());
     let (label, config_key, source) = {
         let Some(parent) = root_rows.get(origin_row) else {
             return;
@@ -921,7 +958,7 @@ fn list_card_sync(root_rows: &mut [Row], level: &mut Level) {
     let rows = list_card_child_rows(&label, &config_key, source, items, &visible);
     let section = RowSection {
         label: label.clone(),
-        description: None,
+        description,
         rows: (0..rows.len()).collect(),
         source,
     };
@@ -1087,6 +1124,7 @@ mod tests {
             filter,
             list.selected,
             SettingsDestination::from_static("Devices"),
+            None,
         );
         (root.rows, child)
     }
@@ -1244,6 +1282,7 @@ mod tests {
             filter,
             list.selected,
             SettingsDestination::from_static("Devices"),
+            None,
         );
         (root.rows, child)
     }

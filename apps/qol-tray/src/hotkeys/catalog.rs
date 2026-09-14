@@ -253,6 +253,7 @@ mod tests {
                 args: Some(vec!["glide-left".to_string()]),
                 config_key: None,
                 checked: false,
+                picture: None,
             },
         );
 

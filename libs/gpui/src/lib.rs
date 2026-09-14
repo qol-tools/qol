@@ -18,6 +18,7 @@ pub mod keepalive;
 pub mod kit;
 pub mod monitor;
 pub mod phantom_nav;
+pub mod pictures;
 pub mod placement;
 pub mod platform;
 pub mod popup_window;

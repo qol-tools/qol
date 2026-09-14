@@ -19,19 +19,33 @@ pub struct Slide {
     pub from_depth: usize,
 }
 
-pub fn front_offset(depth: usize) -> f32 {
-    if depth > 1 {
-        18.0
-    } else {
-        10.0
-    }
+pub type SliverClick = std::rc::Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
+pub struct DeckFrame {
+    pub depth: usize,
+    pub slide: Option<Slide>,
+    pub closing: Option<(Div, Slide)>,
+    pub animation_id: &'static str,
+    pub marks: Vec<Option<f32>>,
+    pub on_sliver: Option<SliverClick>,
 }
 
 pub fn resting(depth: usize) -> f32 {
     if depth == 0 {
         0.0
     } else {
-        front_offset(depth)
+        9.0 * depth as f32 + 1.0
+    }
+}
+
+pub fn edge_alpha(depth: usize, index: usize) -> f32 {
+    (0.5 * 0.62_f32.powi(depth.saturating_sub(1).saturating_sub(index) as i32)).max(0.08)
+}
+
+pub fn rail_opacity(depth: usize) -> f32 {
+    match depth {
+        0 | 1 => 0.5,
+        _ => (0.5 * 0.65_f32.powi(depth as i32 - 1)).max(0.12),
     }
 }
 
@@ -62,7 +76,7 @@ pub fn slide(step: usize, motion: Option<Motion>, depth: usize, width: f32) -> O
     let to = resting(depth);
     let (from, from_depth) = match motion {
         Some(Motion::Push) => (width, depth.saturating_sub(1)),
-        Some(Motion::Pop) => (front_offset(depth + 1), depth + 1),
+        Some(Motion::Pop) => (resting(depth + 1), depth + 1),
         None => (to, depth),
     };
     (from != to).then_some(Slide {
@@ -81,26 +95,13 @@ struct Sliver {
 }
 
 fn slivers_for(depth: usize) -> Vec<Sliver> {
-    match depth {
-        0 => Vec::new(),
-        1 => vec![Sliver {
-            left: 0.0,
+    (0..depth)
+        .map(|index| Sliver {
+            left: 9.0 * index as f32,
             width: 12.0,
-            inset: 8.0,
-        }],
-        _ => vec![
-            Sliver {
-                left: 0.0,
-                width: 10.0,
-                inset: 14.0,
-            },
-            Sliver {
-                left: 9.0,
-                width: 10.0,
-                inset: 7.0,
-            },
-        ],
-    }
+            inset: 7.0 * (depth - index) as f32,
+        })
+        .collect()
 }
 
 fn sliver_start(from_depth: usize, index: usize, target: Sliver) -> Sliver {
@@ -118,6 +119,21 @@ fn step_between(start: f32, end: f32, delta: f32) -> f32 {
     start + (end - start) * delta
 }
 
+fn with_alpha(color: u32, opacity: f32) -> Rgba {
+    let mut color = rgb(color);
+    color.a = opacity;
+    color
+}
+
+fn blend(start: Rgba, end: Rgba, delta: f32) -> Rgba {
+    Rgba {
+        r: start.r + (end.r - start.r) * delta,
+        g: start.g + (end.g - start.g) * delta,
+        b: start.b + (end.b - start.b) * delta,
+        a: start.a + (end.a - start.a) * delta,
+    }
+}
+
 fn stage() -> Div {
     div().relative().flex_1().min_w_0().h_full()
 }
@@ -129,6 +145,7 @@ fn card_edges(card: Div, palette: SettingsPanelPalette, hairline: Rgba) -> Div {
         .border_b(px(1.))
         .border_color(hairline)
         .rounded_l(px(qol_theme::RADIUS_CARD))
+        .occlude()
 }
 
 /// The card that is on its way out. It keeps its own content while it slides
@@ -160,21 +177,65 @@ pub fn reveal(palette: SettingsPanelPalette, page: Div, card: Div, slide: Slide)
         .child(drawer(palette, card, slide))
 }
 
-pub fn render(
-    palette: SettingsPanelPalette,
-    depth: usize,
-    card: Div,
-    slide: Option<Slide>,
+fn animate_sliver<E: Styled + IntoElement + 'static>(
+    stub: E,
     animation_id: &'static str,
-    closing: Option<(Div, Slide)>,
-) -> Div {
+    index: usize,
+    shrink: Slide,
+    start: Sliver,
+    target: Sliver,
+) -> AnyElement {
+    stub.with_animation(
+        (
+            SharedString::from(format!("{animation_id}-sliver-{index}")),
+            shrink.step,
+        ),
+        Animation::new(TRANSITION).with_easing(ease_out_quint()),
+        move |stub, delta| {
+            stub.left(px(step_between(start.left, target.left, delta)))
+                .w(px(step_between(start.width, target.width, delta)))
+                .top(px(step_between(start.inset, target.inset, delta)))
+                .bottom(px(step_between(start.inset, target.inset, delta)))
+        },
+    )
+    .into_any_element()
+}
+
+pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div {
     let hairline = rgba(crate::kit::kit().washes.hairline.packed());
-    let accent = || {
-        crate::kit::accent_left_edge(
+    let DeckFrame {
+        depth,
+        slide,
+        closing,
+        animation_id,
+        marks,
+        on_sliver,
+    } = frame;
+    let accent = rgb(palette.row_border_selected);
+    let pop = closing
+        .as_ref()
+        .map(|(_, slide)| *slide)
+        .filter(|slide| slide.from_depth == depth + 1);
+    let front_edge = match pop {
+        Some(pop) => {
+            let start = with_alpha(palette.status_muted, edge_alpha(pop.from_depth, depth));
+            crate::kit::left_edge(qol_theme::RADIUS_CARD, CARD_ACCENT, accent)
+                .with_animation(
+                    (
+                        SharedString::from(format!("{animation_id}-front-edge")),
+                        pop.step,
+                    ),
+                    Animation::new(TRANSITION).with_easing(ease_out_quint()),
+                    move |edge, delta| edge.border_color(blend(start, accent, delta)),
+                )
+                .into_any_element()
+        }
+        None => crate::kit::accent_left_edge(
             qol_theme::RADIUS_CARD,
             CARD_ACCENT,
             palette.row_border_selected,
         )
+        .into_any_element(),
     };
     let front = card_edges(
         card.absolute().right_0().top_0().bottom_0(),
@@ -183,7 +244,7 @@ pub fn render(
     )
     .left(px(resting(depth)))
     .shadow(crate::kit::float_shadow(palette.section_text))
-    .child(accent());
+    .child(front_edge);
     let front = match slide {
         Some(slide) => front
             .with_animation(
@@ -204,6 +265,78 @@ pub fn render(
                 .into_iter()
                 .enumerate()
                 .map(|(index, sliver)| {
+                    let born = shrink
+                        .map(|shrink| slivers_for(shrink.from_depth).get(index).is_none())
+                        .unwrap_or(false);
+                    let start = shrink.map(|shrink| sliver_start(shrink.from_depth, index, sliver));
+                    let edge_end = with_alpha(palette.status_muted, edge_alpha(depth, index));
+                    let edge = match shrink {
+                        Some(shrink) => {
+                            let edge_start = if born {
+                                accent
+                            } else {
+                                with_alpha(
+                                    palette.status_muted,
+                                    edge_alpha(shrink.from_depth, index),
+                                )
+                            };
+                            crate::kit::left_edge(qol_theme::RADIUS_CARD, CARD_ACCENT, edge_end)
+                                .with_animation(
+                                    (
+                                        SharedString::from(format!(
+                                            "{animation_id}-sliver-{index}-edge"
+                                        )),
+                                        shrink.step,
+                                    ),
+                                    Animation::new(TRANSITION).with_easing(ease_out_quint()),
+                                    move |edge, delta| {
+                                        edge.border_color(blend(edge_start, edge_end, delta))
+                                    },
+                                )
+                                .into_any_element()
+                        }
+                        None => {
+                            crate::kit::left_edge(qol_theme::RADIUS_CARD, CARD_ACCENT, edge_end)
+                                .into_any_element()
+                        }
+                    };
+                    let mark = marks.get(index).copied().flatten().map(|y| {
+                        let mark_end =
+                            with_alpha(palette.status_muted, 0.9 * edge_alpha(depth, index));
+                        let base = div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(y - 14.0 - sliver.inset))
+                            .h(px(qol_theme::HEIGHT_INLINE));
+                        match shrink {
+                            Some(shrink) => {
+                                let mark_start = with_alpha(
+                                    palette.status_muted,
+                                    if born {
+                                        0.0
+                                    } else {
+                                        0.9 * edge_alpha(shrink.from_depth, index)
+                                    },
+                                );
+                                base.bg(mark_end)
+                                    .with_animation(
+                                        (
+                                            SharedString::from(format!(
+                                                "{animation_id}-sliver-{index}-mark"
+                                            )),
+                                            shrink.step,
+                                        ),
+                                        Animation::new(TRANSITION).with_easing(ease_out_quint()),
+                                        move |mark, delta| {
+                                            mark.bg(blend(mark_start, mark_end, delta))
+                                        },
+                                    )
+                                    .into_any_element()
+                            }
+                            None => base.bg(mark_end).into_any_element(),
+                        }
+                    });
                     let stub = card_edges(
                         div()
                             .absolute()
@@ -214,25 +347,31 @@ pub fn render(
                         palette,
                         hairline,
                     )
-                    .child(accent());
-                    let Some(shrink) = shrink else {
-                        return stub.into_any_element();
-                    };
-                    let start = sliver_start(shrink.from_depth, index, sliver);
-                    stub.with_animation(
-                        (
-                            SharedString::from(format!("{animation_id}-sliver-{index}")),
-                            shrink.step,
-                        ),
-                        Animation::new(TRANSITION).with_easing(ease_out_quint()),
-                        move |stub, delta| {
-                            stub.left(px(step_between(start.left, sliver.left, delta)))
-                                .w(px(step_between(start.width, sliver.width, delta)))
-                                .top(px(step_between(start.inset, sliver.inset, delta)))
-                                .bottom(px(step_between(start.inset, sliver.inset, delta)))
-                        },
-                    )
-                    .into_any_element()
+                    .overflow_hidden()
+                    .children(mark)
+                    .child(edge);
+                    if let Some(on_sliver) = on_sliver.as_ref() {
+                        let on_sliver = on_sliver.clone();
+                        let stub = stub
+                            .id(("settings-deck-sliver", index))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                on_sliver(index, window, cx)
+                            });
+                        match (shrink, start) {
+                            (Some(shrink), Some(start)) => {
+                                animate_sliver(stub, animation_id, index, shrink, start, sliver)
+                            }
+                            _ => stub.into_any_element(),
+                        }
+                    } else {
+                        match (shrink, start) {
+                            (Some(shrink), Some(start)) => {
+                                animate_sliver(stub, animation_id, index, shrink, start, sliver)
+                            }
+                            _ => stub.into_any_element(),
+                        }
+                    }
                 }),
         )
         .child(front)
@@ -241,37 +380,61 @@ pub fn render(
 
 #[cfg(test)]
 mod tests {
-    use super::{exit, front_offset, slide, sliver_start, slivers_for, Motion, Slide, Sliver};
+    use super::{
+        edge_alpha, exit, rail_opacity, resting, slide, sliver_start, slivers_for, Motion, Slide,
+        Sliver,
+    };
 
     #[test]
-    fn slivers_follow_the_one_window_depth_geometry() {
+    fn slivers_follow_the_card_step_geometry() {
         assert_eq!(slivers_for(0), Vec::new());
         assert_eq!(
             slivers_for(1),
             vec![Sliver {
                 left: 0.0,
                 width: 12.0,
-                inset: 8.0
+                inset: 7.0,
             }]
         );
-        let depth_two = slivers_for(2);
         assert_eq!(
-            depth_two,
+            slivers_for(2),
             vec![
                 Sliver {
                     left: 0.0,
-                    width: 10.0,
-                    inset: 14.0
+                    width: 12.0,
+                    inset: 14.0,
                 },
                 Sliver {
                     left: 9.0,
-                    width: 10.0,
-                    inset: 7.0
+                    width: 12.0,
+                    inset: 7.0,
                 },
             ]
         );
-        assert_eq!(slivers_for(3), depth_two);
-        assert_eq!(slivers_for(7), depth_two);
+        assert_eq!(
+            slivers_for(3),
+            vec![
+                Sliver {
+                    left: 0.0,
+                    width: 12.0,
+                    inset: 21.0,
+                },
+                Sliver {
+                    left: 9.0,
+                    width: 12.0,
+                    inset: 14.0,
+                },
+                Sliver {
+                    left: 18.0,
+                    width: 12.0,
+                    inset: 7.0,
+                },
+            ]
+        );
+        let depth_five = slivers_for(5);
+        assert_eq!(depth_five.len(), 5);
+        assert_eq!(depth_five[0].inset, 35.0);
+        assert_eq!(depth_five[4].left, 36.0);
     }
 
     #[test]
@@ -308,6 +471,7 @@ mod tests {
             }
         );
         assert_eq!(exit(5, 0, 520.0).from, 0.0);
+        assert_eq!(exit(6, 2, 520.0).from, 19.0);
     }
 
     #[test]
@@ -320,7 +484,7 @@ mod tests {
         assert_eq!(pop.from_depth, 2);
         assert_eq!(pop.step, 8);
         assert_eq!(push.from, 520.0);
-        assert_eq!(pop.from, 18.0);
+        assert_eq!(pop.from, 19.0);
         assert!(push.from > pop.from);
         assert_eq!(push.to, pop.to);
         assert_eq!(
@@ -333,7 +497,27 @@ mod tests {
             })
         );
         assert_eq!(slide(10, None, 2, 520.0), None);
-        assert_eq!(front_offset(1), 10.0);
-        assert_eq!(front_offset(2), 18.0);
+        assert_eq!(resting(0), 0.0);
+        assert_eq!(resting(1), 10.0);
+        assert_eq!(resting(2), 19.0);
+        assert_eq!(resting(3), 28.0);
+    }
+
+    #[test]
+    fn edge_alpha_fades_steeply_to_a_floor() {
+        assert_eq!(edge_alpha(1, 0), 0.5);
+        assert!((edge_alpha(2, 0) - 0.31).abs() < 1e-6);
+        assert!((edge_alpha(3, 0) - 0.1922).abs() < 1e-4);
+        assert_eq!(edge_alpha(5, 0), 0.08);
+    }
+
+    #[test]
+    fn rail_opacity_follows_the_ramp() {
+        assert_eq!(rail_opacity(0), 0.5);
+        assert_eq!(rail_opacity(1), 0.5);
+        assert!((rail_opacity(2) - 0.325).abs() < 1e-6);
+        assert!((rail_opacity(3) - 0.21125).abs() < 1e-6);
+        assert!((rail_opacity(4) - 0.1373).abs() < 1e-4);
+        assert_eq!(rail_opacity(5), 0.12);
     }
 }

@@ -35,6 +35,8 @@ pub fn capture_state_path() -> std::path::PathBuf {
 pub struct AudioDevice {
     pub value: String,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]

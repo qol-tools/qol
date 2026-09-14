@@ -6,13 +6,14 @@ use gpui::*;
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
-    settings_label, settings_label_group, settings_page, settings_value_group,
+    settings_label, settings_label_group, settings_page, settings_value_group, RowGround,
+    SettingsHint,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
-    settings_busy_message, settings_description, settings_value_text, CustomPanelCallback,
-    CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
-    SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
+    settings_busy_message, settings_description, settings_value_text, CustomHints,
+    CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
+    EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::theme::{settings_panel_runtime, SettingsPanelPalette};
@@ -406,7 +407,11 @@ impl UpdatesView {
             .flex()
             .items_center()
             .px(px(qol_theme::SPACE_INSET))
-            .child(settings_description(text.to_string(), palette))
+            .child(settings_description(
+                text.to_string(),
+                RowGround::of(false, self.body_focused),
+                palette,
+            ))
     }
 
     fn render_row(
@@ -440,6 +445,7 @@ impl UpdatesView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = settings_panel_runtime();
+        let ground = RowGround::of(self.selected == index, self.body_focused);
         let row = SettingsRow::setting(("updates-summary", index), palette)
             .selected(self.selected == index, self.body_focused)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -465,7 +471,11 @@ impl UpdatesView {
                     .children(summary.dot.map(|dot| summary_dot(dot, palette)))
                     .child(settings_label(summary.label.clone(), palette)),
             )
-            .child(settings_description(summary.description.clone(), palette));
+            .child(settings_description(
+                summary.description.clone(),
+                ground,
+                palette,
+            ));
         row.child(label)
             .child(
                 settings_value_group().children(summary.action_label.map(|label| {
@@ -474,6 +484,7 @@ impl UpdatesView {
                         label,
                         None,
                         false,
+                        ground,
                         palette,
                     )
                 })),
@@ -483,6 +494,7 @@ impl UpdatesView {
 
     fn render_check(&self, index: usize, check: &CheckRow, cx: &mut Context<Self>) -> AnyElement {
         let palette = settings_panel_runtime();
+        let ground = RowGround::of(self.selected == index, self.body_focused);
         let row = SettingsRow::setting("updates-checked", palette)
             .selected(self.selected == index, self.body_focused)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -493,6 +505,7 @@ impl UpdatesView {
         row.child(settings_label_group(
             check.label,
             Some(check.description.clone().into()),
+            ground,
             palette,
         ))
         .child(
@@ -505,6 +518,7 @@ impl UpdatesView {
                 .child(settings_value_text(
                     check.value.clone(),
                     value_tone(check.tone),
+                    ground,
                     palette,
                 ))
                 .children(check.action_label.map(|label| {
@@ -513,6 +527,7 @@ impl UpdatesView {
                         label,
                         None,
                         false,
+                        ground,
                         palette,
                     )
                 })),
@@ -528,6 +543,7 @@ impl UpdatesView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = settings_panel_runtime();
+        let ground = RowGround::of(self.selected == index, self.body_focused);
         let row = SettingsRow::setting(("updates-target", index), palette)
             .selected(self.selected == index, self.body_focused)
             .attention(target.attention)
@@ -539,6 +555,7 @@ impl UpdatesView {
         row.child(settings_label_group(
             target.name.clone(),
             target.description.clone().map(Into::into),
+            ground,
             palette,
         ))
         .child(
@@ -551,6 +568,7 @@ impl UpdatesView {
                 .child(settings_value_text(
                     target.value.clone(),
                     value_tone(target.tone),
+                    ground,
                     palette,
                 ))
                 .children(target.action_label.map(|label| {
@@ -559,6 +577,7 @@ impl UpdatesView {
                         label,
                         None,
                         false,
+                        ground,
                         palette,
                     )
                 })),
@@ -572,20 +591,18 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
         Vec::new()
     }
 
-    fn settings_hints(&self) -> Option<Vec<(SharedString, SharedString)>> {
+    fn settings_hints(&self) -> Option<CustomHints> {
         let (rows, _) = self.page_rows();
-        let mut hints = Vec::new();
+        let mut left = Vec::new();
         if let Some(label) = rows.get(self.selected).and_then(PageRow::action_label) {
-            hints.push((
-                SharedString::from("\u{21b5}"),
-                SharedString::from(label.to_lowercase()),
-            ));
+            left.push(SettingsHint::new("\u{21b5}", label.to_lowercase()));
         }
-        hints.push((
-            SharedString::from("\u{2191}\u{2193}"),
-            SharedString::from("move"),
-        ));
-        Some(hints)
+        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        Some(CustomHints {
+            question: None,
+            left,
+            right: Vec::new(),
+        })
     }
 }
 

@@ -1,20 +1,23 @@
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, ElementId, FontWeight, SharedString};
+use gpui::{div, px, rgb, rgba, ElementId, FontWeight, Rgba, SharedString};
 
 use crate::dropdown::DropdownStyle;
 use crate::kit::{alpha, kit};
 use crate::spinner::{Busy, Spinner};
-use crate::theme::SettingsPanelPalette;
+use crate::theme::{SettingsGround, SettingsPanelPalette};
 
 mod display_layout_tile;
 mod feedback;
 mod group_header;
+mod hint_bar;
 mod key_combination;
+mod modifier_chip;
 mod number_field;
 mod qr_code;
 mod row;
 mod select_value;
 mod text_field;
+mod tile;
 mod toggle;
 
 pub use display_layout_tile::{
@@ -23,18 +26,86 @@ pub use display_layout_tile::{
 };
 pub use feedback::SettingsFeedback;
 pub use group_header::SettingsGroupHeader;
+pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
+pub use modifier_chip::SettingsModifierChip;
 pub(super) use number_field::number_field;
 pub(super) use qr_code::qr_code_display;
 pub use row::SettingsRow;
 pub use select_value::SettingsSelectValue;
 pub use text_field::SettingsTextField;
+pub use tile::{
+    choose_hints, choose_step, settings_tile_rows, tile_arts, tile_grid_gap, tile_layout,
+    SettingsTile, TileArt, TileLayout, TILE_HEIGHT,
+};
 pub use toggle::SettingsToggle;
 
 pub const DIMMED_OPACITY: f32 = 0.5;
 const FIELD_MIN_WIDTH: f32 = 180.0;
+const TEXT_FIELD_MIN_WIDTH: f32 = 220.0;
 const VALUE_MAX_WIDTH: f32 = 280.0;
 const FIELD_MAX_WIDTH: f32 = 320.0;
+const TILE_SPINNER_SIZE: f32 = 44.0;
+
+pub const SETTINGS_ROW_GROUP: &str = "settings-row";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowGround {
+    Pane,
+    Band,
+}
+
+impl RowGround {
+    pub fn of(selected: bool, focused: bool) -> Self {
+        if selected && focused {
+            Self::Band
+        } else {
+            Self::Pane
+        }
+    }
+
+    pub fn rest(self, palette: SettingsPanelPalette) -> SettingsGround {
+        match self {
+            Self::Pane => palette.grounds.pane,
+            Self::Band => palette.grounds.band,
+        }
+    }
+
+    pub fn hover(self, palette: SettingsPanelPalette) -> Option<SettingsGround> {
+        match self {
+            Self::Pane => None,
+            Self::Band => Some(palette.grounds.band_hover),
+        }
+    }
+}
+
+fn ground_text<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {
+    let element = element.text_color(rest);
+    match hover {
+        Some(color) => {
+            element.group_hover(SETTINGS_ROW_GROUP, move |style| style.text_color(color))
+        }
+        None => element,
+    }
+}
+
+fn ground_bg<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {
+    let element = element.bg(rest);
+    match hover {
+        Some(color) => element.group_hover(SETTINGS_ROW_GROUP, move |style| style.bg(color)),
+        None => element,
+    }
+}
+
+fn ground_border<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {
+    let element = element.border_color(rest);
+    match hover {
+        Some(color) => {
+            element.group_hover(SETTINGS_ROW_GROUP, move |style| style.border_color(color))
+        }
+        None => element,
+    }
+}
 
 fn masthead_rule() -> gpui::Div {
     div()
@@ -48,7 +119,7 @@ pub fn paint_settings_selection<E: Styled>(row: E, palette: SettingsPanelPalette
         .mx(px(-qol_theme::SPACE_PAD))
         .px(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
         .rounded_none()
-        .bg(rgb(palette.fill_current))
+        .bg(rgb(palette.grounds.band.bg))
 }
 
 pub fn paint_rail_selection<E: Styled>(row: E, palette: SettingsPanelPalette, focused: bool) -> E {
@@ -90,13 +161,22 @@ pub fn settings_label(text: impl Into<SharedString>, palette: SettingsPanelPalet
 
 pub fn settings_description(
     text: impl Into<SharedString>,
+    row: RowGround,
     palette: SettingsPanelPalette,
 ) -> gpui::Div {
-    div()
-        .truncate()
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .text_color(rgb(palette.status_muted))
-        .child(text.into())
+    let ground = row.rest(palette);
+    let (rest, hover) = match row {
+        RowGround::Pane => (ground.faint, None),
+        RowGround::Band => (ground.soft, row.hover(palette).map(|hover| hover.soft)),
+    };
+    ground_text(
+        div()
+            .truncate()
+            .text_size(px(qol_theme::TEXT_MICRO))
+            .child(text.into()),
+        rgb(rest),
+        hover.map(rgb),
+    )
 }
 
 pub fn settings_value_group() -> gpui::Div {
@@ -107,6 +187,29 @@ pub fn settings_value_group() -> gpui::Div {
         .items_center()
         .justify_end()
         .gap(px(qol_theme::SPACE_INSET))
+}
+
+pub fn settings_mono_label(
+    text: impl Into<SharedString>,
+    row: RowGround,
+    palette: SettingsPanelPalette,
+) -> gpui::Div {
+    let ground = row.rest(palette);
+    let (rest, hover) = match row {
+        RowGround::Pane => (ground.soft, None),
+        RowGround::Band => (ground.ink, row.hover(palette).map(|hover| hover.ink)),
+    };
+    ground_text(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .font_family(SharedString::from(qol_theme::font_mono()))
+            .text_size(px(qol_theme::TEXT_CAPTION))
+            .child(text.into()),
+        rgb(rest),
+        hover.map(rgb),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,12 +224,27 @@ pub enum SettingsValueTone {
 pub fn settings_value_text(
     text: impl Into<SharedString>,
     tone: SettingsValueTone,
+    row: RowGround,
     palette: SettingsPanelPalette,
 ) -> gpui::Div {
     let value = kit().value(text);
+    let ground = row.rest(palette);
+    let hover = row.hover(palette);
     match tone {
-        SettingsValueTone::Normal => value,
-        SettingsValueTone::Muted => value.text_color(rgb(palette.status_muted)),
+        SettingsValueTone::Normal => {
+            let (rest, hover) = match row {
+                RowGround::Pane => (ground.soft, None),
+                RowGround::Band => (ground.ink, hover.map(|hover| hover.ink)),
+            };
+            ground_text(value, rgb(rest), hover.map(rgb))
+        }
+        SettingsValueTone::Muted => {
+            let (rest, hover) = match row {
+                RowGround::Pane => (ground.faint, None),
+                RowGround::Band => (ground.soft, hover.map(|hover| hover.soft)),
+            };
+            ground_text(value, rgb(rest), hover.map(rgb))
+        }
         SettingsValueTone::Attention => value.text_color(rgb(palette.status_warning_ink)),
         SettingsValueTone::Danger => value.text_color(rgb(palette.status_danger)),
         SettingsValueTone::Success => value.text_color(rgb(palette.status_success)),
@@ -138,12 +256,22 @@ pub fn settings_action_affordance(
     label: impl Into<SharedString>,
     variant: Option<&str>,
     busy: bool,
+    row: RowGround,
     palette: SettingsPanelPalette,
 ) -> gpui::Div {
-    let (background, text) = match variant {
-        Some("ghost") => (rgb(palette.dropdown_bg), palette.label_text),
-        Some("danger") => (rgba(alpha(palette.state_off, 0x29)), palette.state_off),
-        Some("primary") | None | Some(_) => (rgb(palette.row_bg_selected), palette.section_text),
+    let ground = row.rest(palette);
+    let hover = row.hover(palette);
+    let band = row == RowGround::Band;
+    let (background, text) = if band && variant != Some("danger") {
+        (rgba(ground.well.packed()), ground.ink)
+    } else {
+        match variant {
+            Some("ghost") => (rgb(palette.dropdown_bg), palette.label_text),
+            Some("danger") => (rgba(alpha(palette.state_off, 0x29)), palette.state_off),
+            Some("primary") | None | Some(_) => {
+                (rgb(palette.row_bg_selected), palette.section_text)
+            }
+        }
     };
     let mut control = div()
         .flex()
@@ -153,18 +281,30 @@ pub fn settings_action_affordance(
     if busy {
         control = control.child(settings_action_spinner(id, palette).size(px(12.)));
     }
-    control
+    let control = control
         .px(px(qol_theme::SPACE_INSET))
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded(px(qol_theme::RADIUS_CONTROL))
-        .when(variant == Some("ghost"), |control| {
+        .when(variant == Some("ghost") && !band, |control| {
             control.shadow(crate::kit::raised_shadow(palette.section_text))
         })
-        .bg(background)
         .text_size(px(qol_theme::TEXT_CAPTION))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(text))
-        .child(label.into())
+        .font_weight(FontWeight::SEMIBOLD);
+    let control = if variant == Some("danger") {
+        control.bg(background)
+    } else {
+        ground_bg(
+            control,
+            background,
+            hover.map(|hover| rgba(hover.well.packed())),
+        )
+    };
+    let element = if variant == Some("danger") {
+        div().text_color(rgb(text))
+    } else {
+        ground_text(div(), rgb(text), hover.map(|hover| rgb(hover.ink)))
+    };
+    control.child(element.child(label.into()))
 }
 
 pub fn settings_dropdown_style(palette: SettingsPanelPalette) -> DropdownStyle {
@@ -285,6 +425,7 @@ pub fn settings_page() -> gpui::Div {
 pub fn settings_label_group(
     label: impl Into<SharedString>,
     description: Option<SharedString>,
+    row: RowGround,
     palette: SettingsPanelPalette,
 ) -> gpui::Div {
     div()
@@ -294,7 +435,7 @@ pub fn settings_label_group(
         .flex_col()
         .gap(px(qol_theme::SPACE_STACK))
         .child(settings_label(label, palette))
-        .children(description.map(|text| settings_description(text, palette)))
+        .children(description.map(|text| settings_description(text, row, palette)))
 }
 
 pub fn settings_message(
@@ -321,8 +462,20 @@ fn settings_message_frame(color: u32) -> gpui::Div {
 }
 
 /// Spinner recipe for a query-backed value that has not answered yet.
-pub fn settings_query_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Spinner {
-    Spinner::new(id, rgb(palette.status_muted))
+pub fn settings_query_spinner(
+    id: impl Into<ElementId>,
+    row: RowGround,
+    palette: SettingsPanelPalette,
+) -> Spinner {
+    let color = match row {
+        RowGround::Pane => palette.grounds.pane.faint,
+        RowGround::Band => palette.grounds.band.soft,
+    };
+    Spinner::new(id, rgb(color))
+}
+
+pub fn settings_tile_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Spinner {
+    Spinner::new(id, rgb(palette.grounds.pane.faint)).size(px(TILE_SPINNER_SIZE))
 }
 
 /// Spinner recipe for a pending action inside a settings surface.
@@ -341,4 +494,17 @@ pub fn settings_busy_message(
         text,
         rgb(palette.status_muted),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RowGround;
+
+    #[test]
+    fn row_ground_is_band_only_with_selection_and_body_focus() {
+        assert_eq!(RowGround::of(false, false), RowGround::Pane);
+        assert_eq!(RowGround::of(false, true), RowGround::Pane);
+        assert_eq!(RowGround::of(true, false), RowGround::Pane);
+        assert_eq!(RowGround::of(true, true), RowGround::Band);
+    }
 }

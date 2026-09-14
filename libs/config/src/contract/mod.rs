@@ -1,10 +1,14 @@
 mod cross_validate;
+mod pictures;
 mod row_action;
 mod runtime;
 mod v1;
 
 pub use cross_validate::validate_contracts;
 pub use indexmap::IndexMap;
+pub use pictures::{
+    audio_device_picture, is_picture_spec, AudioDirection, CARD_DESCRIPTION_MAX, PICTURE_NAMES,
+};
 pub use row_action::{
     interpolate_row_template, resolve_row_actions, resolve_slider_action, ResolvedRowAction,
 };
@@ -14,6 +18,6 @@ pub use runtime::{
 };
 pub use v1::{
     parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, FieldAlign, FieldDefault, FieldKind,
-    FieldSpec, ItemSpec, NumberConstraints, ParseSpecError, RowActionSpec, RowSliderSpec,
-    SectionSpec,
+    FieldSpec, ItemSpec, NestedListSpec, NumberConstraints, ParseSpecError, RowActionSpec,
+    RowSliderSpec, SectionSpec,
 };

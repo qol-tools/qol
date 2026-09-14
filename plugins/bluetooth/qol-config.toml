@@ -25,6 +25,8 @@ description = "Which Bluetooth adapter qol uses. Automatic follows the system de
 section = "devices"
 default = ""
 query = "adapter_options"
+lookup_label = "adapters"
+card_description = "The Bluetooth adapter qol uses."
 
 [field.search]
 type = "action"
@@ -49,6 +51,7 @@ row_label = "{name}"
 row_subtitle = "{detail}"
 search = true
 empty_message = "No paired devices. Start search to discover nearby devices."
+card_description = "Devices nearby and already paired."
 
 [[field.devices.row_actions]]
 action = "connect_device"
@@ -155,6 +158,7 @@ query = "host_fixes"
 row_label = "{title}"
 row_subtitle = "{detail}"
 empty_message = "Nothing to report about this computer's Bluetooth stack."
+card_description = "What the Bluetooth stack reports."
 
 [field.host_findings.row_action]
 action = "apply_host_fix"

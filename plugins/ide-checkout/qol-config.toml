@@ -23,6 +23,8 @@ config_key = "apps"
 key_label = "App ID"
 label = "Applications"
 section = "apps"
+card_description = "Apps that open checked-out paths."
+item_label = "application"
 
 [field.apps.default.idea]
 paths = ["/opt/homebrew/bin/idea", "/usr/local/bin/idea", "/snap/bin/idea-ultimate", "/snap/bin/intellij-idea-ultimate", "~/.local/share/JetBrains/Toolbox/scripts/idea"]
@@ -39,3 +41,7 @@ paths = ["/opt/homebrew/bin/zed", "/usr/bin/zed", "~/.local/bin/zed"]
 [field.apps.entry_fields]
 name = "string"
 paths = "string_array"
+
+[field.apps.lists.paths]
+item_label = "path"
+card_description = "Where to look for {entry}."

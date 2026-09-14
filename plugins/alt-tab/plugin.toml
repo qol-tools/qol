@@ -15,15 +15,18 @@ command = "alt-tab"
 
 [action.open]
 label = "Alt Tab (Open/Next)"
+picture = "next-window"
 args = ["--show"]
 
 [action.open-reverse]
 label = "Alt Tab (Previous)"
+picture = "previous-window"
 args = ["--show-reverse"]
 
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["--settings"]
 
 [daemon]

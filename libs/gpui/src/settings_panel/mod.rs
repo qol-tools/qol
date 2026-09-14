@@ -1,4 +1,5 @@
 mod display_layout;
+mod entry_form;
 mod form_nav;
 mod navigation;
 mod object_array_row;
@@ -16,7 +17,9 @@ pub use components::{
 pub use form_nav::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,
 };
-pub use navigation::{CustomPanelInvalidator, CustomSettingsBreadcrumbs, SettingsDestination};
+pub use navigation::{
+    CustomHints, CustomPanelInvalidator, CustomSettingsBreadcrumbs, SettingsDestination,
+};
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -124,7 +127,7 @@ impl SettingsPanel {
 pub type CustomPanelCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 type CustomBreadcrumbReader = Rc<dyn Fn(&App) -> Vec<SettingsDestination>>;
-type CustomHintsReader = Rc<dyn Fn(&App) -> Option<Vec<(SharedString, SharedString)>>>;
+type CustomHintsReader = Rc<dyn Fn(&App) -> Option<CustomHints>>;
 
 pub struct CustomPanelView {
     view: AnyView,
@@ -174,7 +177,7 @@ impl CustomPanelView {
             .collect()
     }
 
-    fn hint_pairs(&self, cx: &App) -> Option<Vec<(SharedString, SharedString)>> {
+    fn hints(&self, cx: &App) -> Option<CustomHints> {
         (self.hints)(cx)
     }
 }
@@ -269,12 +272,21 @@ pub struct PreparedSettingsPanel {
     sources: Vec<SourceState>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct FieldCopy {
+    pub(super) card_description: Option<String>,
+    pub(super) item_label: Option<String>,
+    pub(super) lookup_label: Option<String>,
+    pub(super) lists: std::collections::BTreeMap<String, qol_config::contract::NestedListSpec>,
+}
+
 pub(super) struct SourceState {
     pub(super) plugin_id: String,
     pub(super) values: serde_json::Value,
     pub(super) path: Option<std::path::PathBuf>,
     pub(super) runtime: SettingsRuntime,
     pub(super) daemon_port: Option<u16>,
+    pub(super) copy: std::collections::BTreeMap<String, FieldCopy>,
 }
 
 struct PreparedPanel {
@@ -703,6 +715,7 @@ fn prepare_source(
                 path: None,
                 runtime,
                 daemon_port: None,
+                copy: std::collections::BTreeMap::new(),
             },
         });
     }
@@ -717,6 +730,27 @@ fn prepare_source(
     let values = persistence::load_values(&base, path.as_deref());
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
+    let copy: std::collections::BTreeMap<String, FieldCopy> = resolved
+        .fields
+        .iter()
+        .chain(
+            resolved
+                .sections
+                .iter()
+                .flat_map(|section| section.fields.iter()),
+        )
+        .map(|field| {
+            (
+                field.id.clone(),
+                FieldCopy {
+                    card_description: field.card_description.clone(),
+                    item_label: field.item_label.clone(),
+                    lookup_label: field.lookup_label.clone(),
+                    lists: field.lists.clone(),
+                },
+            )
+        })
+        .collect();
     let daemon_port = persistence::daemon_port(&base);
     let rows = rows_from_resolved(&resolved, 0);
     let sections = sections_from_resolved(&resolved, &rows, 0);
@@ -729,6 +763,7 @@ fn prepare_source(
             path,
             runtime,
             daemon_port,
+            copy,
         },
     })
 }

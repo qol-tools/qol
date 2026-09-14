@@ -136,6 +136,7 @@ pub struct DeclaredAction {
     pub id: String,
     pub label: String,
     pub kind: ActionType,
+    pub picture: Option<String>,
 }
 
 impl PluginManifest {
@@ -176,6 +177,7 @@ impl PluginManifest {
                 id: id.clone(),
                 label: action.label.clone(),
                 kind: action.kind,
+                picture: action.picture.clone(),
             })
             .collect()
     }
@@ -243,6 +245,8 @@ pub struct ActionDeclaration {
     pub config_key: Option<String>,
     #[serde(default)]
     pub checked: bool,
+    #[serde(default)]
+    pub picture: Option<String>,
 }
 
 fn default_action_kind() -> ActionType {
@@ -404,6 +408,7 @@ fn collect_legacy_menu_executable_actions(items: &[MenuItem], actions: &mut Vec<
                 id: id.clone(),
                 label: label.clone(),
                 kind: *action,
+                picture: None,
             }),
             MenuItem::Submenu { items, .. } => {
                 collect_legacy_menu_executable_actions(items, actions);

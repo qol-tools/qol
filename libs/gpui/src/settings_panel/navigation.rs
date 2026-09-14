@@ -3,6 +3,8 @@ use std::rc::Rc;
 
 use gpui::{App, SharedString};
 
+use super::components::SettingsHint;
+
 pub type CustomPanelInvalidator = Rc<dyn Fn(&mut App)>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,10 +35,16 @@ impl SettingsDestination {
     }
 }
 
+pub struct CustomHints {
+    pub question: Option<SharedString>,
+    pub left: Vec<SettingsHint>,
+    pub right: Vec<SettingsHint>,
+}
+
 pub trait CustomSettingsBreadcrumbs {
     fn settings_breadcrumbs(&self) -> Vec<SettingsDestination>;
 
-    fn settings_hints(&self) -> Option<Vec<(SharedString, SharedString)>> {
+    fn settings_hints(&self) -> Option<CustomHints> {
         None
     }
 }

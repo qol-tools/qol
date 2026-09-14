@@ -1,7 +1,8 @@
 use qol_color::{mix_rgb, rgba_from_rgb, with_alpha};
 use qol_theme::{
-    css, css_rgba_milli, dark_accent_preset, dark_theme, dark_theme_with_accent_key,
-    resolve_surface_override, runtime_dark_theme, theme_for_native_key, PickerSurfacePalette,
+    contrast_ratio, css, css_rgba_milli, dark_accent_preset, dark_theme,
+    dark_theme_with_accent_key, desktop_theme_preview, preset_accent_key, resolve_surface_override,
+    runtime_dark_theme, theme_for_native_key, web_theme_preview, PickerSurfacePalette,
     SettingsPanelPalette, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM,
     DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
     HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
@@ -1052,33 +1053,6 @@ fn themed_gpui_surfaces_do_not_use_inline_color_literals() {
     );
 }
 
-fn relative_luminance(rgb: u32) -> f64 {
-    let channel = |c: u32| {
-        let c = c as f64 / 255.0;
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    let r = channel((rgb >> 16) & 0xff);
-    let g = channel((rgb >> 8) & 0xff);
-    let b = channel(rgb & 0xff);
-    0.2126 * r + 0.7152 * g + 0.0722 * b
-}
-
-fn contrast_ratio(a: u32, b: u32) -> f64 {
-    let (hi, lo) = {
-        let (la, lb) = (relative_luminance(a), relative_luminance(b));
-        if la > lb {
-            (la, lb)
-        } else {
-            (lb, la)
-        }
-    };
-    (hi + 0.05) / (lo + 0.05)
-}
-
 #[test]
 fn tray_theme_presets_have_unique_keys_and_a_default() {
     let presets = qol_theme::tray_theme_presets();
@@ -1645,18 +1619,6 @@ fn the_selected_rail_row_carries_its_label_in_every_accent() {
                     preset.key
                 );
             }
-            let on_fill = rail.on_fill();
-            for (name, ink) in [
-                ("label", on_fill.label_text),
-                ("description", on_fill.status_muted),
-            ] {
-                let ratio = contrast_ratio(ink, rail.fill_current);
-                assert!(
-                    ratio >= ACCENT_INK_FLOOR,
-                    "{mode} {} {name} on the fill = {ratio:.2}, floor {ACCENT_INK_FLOOR}",
-                    preset.key
-                );
-            }
             assert_ne!(
                 rail.fill_current, rail.rail_bg,
                 "{mode} {} selected rail row has to read against the rail",
@@ -1664,6 +1626,16 @@ fn the_selected_rail_row_carries_its_label_in_every_accent() {
             );
         }
     }
+}
+
+#[test]
+fn preset_accent_key_falls_back_to_the_default() {
+    assert_eq!(preset_accent_key(ThemeMode::Dark, Some("violet")), "violet");
+    assert_eq!(
+        preset_accent_key(ThemeMode::Light, Some("nope")),
+        PROD_ACCENT_KEY
+    );
+    assert_eq!(preset_accent_key(ThemeMode::Dark, None), PROD_ACCENT_KEY);
 }
 
 #[test]
@@ -2182,7 +2154,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 41] = [
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 39] = [
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
@@ -2244,12 +2216,12 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 41] = [
     (
         "libs/gpui/src/settings_panel/view/list_card.rs",
         ".text_color(",
-        3,
+        4,
     ),
     (
         "libs/gpui/src/settings_panel/view/list_card.rs",
         ".text_size(",
-        3,
+        4,
     ),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 10),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
@@ -2268,37 +2240,23 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 41] = [
     (
         "libs/gpui/src/settings_panel/view/mod.rs",
         ".text_color(",
-        13,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/mod.rs",
-        ".text_size(",
         10,
     ),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".text_size(", 9),
     (
         "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".bg(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".rounded(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".shadow(",
+        ".border_color(",
         1,
     ),
     (
         "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
         ".text_color(",
-        6,
+        2,
     ),
     (
         "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
         ".text_size(",
-        6,
+        1,
     ),
 ];
 
@@ -2535,4 +2493,120 @@ fn settings_surfaces_build_spinners_through_components() {
          Busy::new live only in settings_panel/components/mod.rs:\n{}",
         calls.join("\n")
     );
+}
+
+#[test]
+fn settings_grounds_resolve_the_locked_roles() {
+    let dark = SettingsPanelPalette::from_theme(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7));
+
+    assert_eq!(dark.grounds.band.bg, 0x464a79);
+    assert_eq!(dark.grounds.band.soft, 0xd4d4db);
+    assert_eq!(dark.grounds.band.faint, 0xb8b9c8);
+    assert_eq!(dark.grounds.band_hover.bg, 0x545783);
+
+    assert_eq!(
+        dark.grounds.band.well,
+        css_rgba_milli(DARK_SYSTEM.text_primary, 140)
+    );
+    assert_eq!(
+        dark.grounds.band.edge,
+        css_rgba_milli(DARK_SYSTEM.text_primary, 240)
+    );
+    assert_eq!(dark.grounds.band.mark, DARK_SYSTEM.text_primary);
+    assert_eq!(dark.grounds.band.on_mark, dark.grounds.band.bg);
+
+    assert_eq!(dark.grounds.pane.ink, DARK_SYSTEM.text_primary);
+    assert_eq!(dark.grounds.pane.soft, DARK_SYSTEM.text_secondary);
+    assert_eq!(dark.grounds.pane.faint, DARK_SYSTEM.text_muted);
+
+    let dark_washes = WashPalette::dark(DARK_SYSTEM);
+    assert_eq!(dark.grounds.pane.well, dark_washes.fill_resting);
+    assert_eq!(dark.grounds.pane.edge, dark_washes.hairline);
+
+    let light_system = LIGHT_SYSTEM.with_accent(0x6f5da8);
+    let light = SettingsPanelPalette::from_theme(ThemeMode::Light, light_system);
+    assert_eq!(light.grounds.band.bg, 0xbbb2d1);
+}
+
+#[test]
+fn settings_ground_text_clears_its_floor_in_every_accent() {
+    let modes = [
+        (
+            "light",
+            ThemeMode::Light,
+            LIGHT_SYSTEM,
+            LIGHT_ACCENT_PRESETS,
+        ),
+        ("dark", ThemeMode::Dark, DARK_SYSTEM, DARK_ACCENT_PRESETS),
+    ];
+    let mut problems = Vec::new();
+
+    for (mode, theme_mode, base, presets) in modes {
+        for preset in presets {
+            let preset_key = preset.key;
+            let system = base.with_accent_pair(preset.rgb, preset.ink);
+            let grounds = SettingsPanelPalette::from_theme(theme_mode, system).grounds;
+            for (name, ground) in [
+                ("pane", grounds.pane),
+                ("rail", grounds.rail),
+                ("band", grounds.band),
+                ("band_hover", grounds.band_hover),
+                ("menu", grounds.menu),
+                ("attention", grounds.attention),
+                ("invalid", grounds.invalid),
+            ] {
+                for (tier, ink, floor) in [
+                    ("ink", ground.ink, 4.5),
+                    ("soft", ground.soft, 4.5),
+                    ("faint", ground.faint, 3.0),
+                ] {
+                    let ratio = contrast_ratio(ink, ground.bg);
+                    if ratio < floor {
+                        problems.push(format!(
+                            "{mode}/{preset_key} {name} {tier} = {ratio:.2}, floor {floor}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "Ground ink clears 4.5, soft clears 4.5 and faint clears 3.0:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn desktop_theme_preview_matches_the_locked_slate_picture() {
+    let preview = desktop_theme_preview(ThemeMode::Dark, "violet");
+    assert_eq!(preview.pane, 0x16171a);
+    assert_eq!(preview.rail, 0x101114);
+    assert_eq!(preview.edge, 0x2a2b31);
+    assert_eq!(preview.ink, 0xf3f2f0);
+    assert_eq!(preview.soft, 0x8b8880);
+    assert_eq!(preview.band, 0x464a79);
+    assert_eq!(preview.accent, 0x8a93f7);
+}
+
+#[test]
+fn web_theme_previews_match_the_locked_pictures() {
+    let slate = web_theme_preview("slate").expect("slate preview");
+    assert_eq!(slate.bg, 0x111317);
+    assert_eq!(slate.surface, 0x1a1e26);
+    assert_eq!(slate.raised, 0x272d38);
+    assert_eq!(slate.border, 0x3e485b);
+    assert_eq!(slate.text, 0x8a97ae);
+    assert_eq!(slate.muted, 0x55627a);
+
+    let midnight = web_theme_preview("midnight").expect("midnight preview");
+    assert_eq!(midnight.bg, 0x090b19);
+    assert_eq!(midnight.surface, 0x141626);
+    assert_eq!(midnight.raised, 0x1b1e30);
+    assert_eq!(midnight.border, 0x34374d);
+    assert_eq!(midnight.text, 0xb2b6cc);
+    assert_eq!(midnight.muted, 0x555974);
+
+    assert!(web_theme_preview("nope").is_none());
 }

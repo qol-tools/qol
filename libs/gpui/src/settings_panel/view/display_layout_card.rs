@@ -5,8 +5,8 @@ use gpui::*;
 
 use super::super::components::{
     display_layout_stage, display_layout_tile, settings_action_spinner, settings_description,
-    settings_label, settings_label_group, settings_message, DisplayLayoutTile, SettingsFeedback,
-    SettingsRow, SettingsSelectValue,
+    settings_label, settings_label_group, settings_message, DisplayLayoutTile, RowGround,
+    SettingsFeedback, SettingsRow, SettingsSelectValue,
 };
 use super::super::display_layout::{nudge_step, DisplayLayoutState};
 use super::super::rows::{Row, RowControl, RowSection};
@@ -265,12 +265,22 @@ impl SettingsPanelView {
         };
         let label = row.label.clone();
         let source = row.source;
+        let description = self.sources[row.source]
+            .copy
+            .get(&row.id)
+            .and_then(|copy| copy.card_description.clone());
         let state = state.as_ref().clone();
         let Some(destination) = self.card_destination(&label, cx) else {
             return;
         };
-        let child =
-            display_layout_card_level(&label, source, state, row_index, destination.clone());
+        let child = display_layout_card_level(
+            &label,
+            source,
+            state,
+            row_index,
+            destination.clone(),
+            description,
+        );
         self.push_card(destination, child);
         self.sync_scroll();
     }
@@ -421,6 +431,10 @@ impl SettingsPanelView {
             stage_row,
             display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_STAGE_ROW),
         );
+        let resolution_ground = RowGround::of(
+            display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_RESOLUTION_ROW),
+            self.body_has_focus(),
+        );
         let options = staged.modes_for_selected();
         let modes_available = !options.is_empty() && staged.modes_writable();
         let current_mode = staged
@@ -440,9 +454,14 @@ impl SettingsPanelView {
             ));
         }
         if modes_available {
-            mode_value = mode_value.child(SettingsSelectValue::new(current_mode, palette));
+            mode_value = mode_value
+                .child(SettingsSelectValue::new(current_mode, resolution_ground, palette).menu());
         } else {
-            mode_value = mode_value.child(settings_description("unavailable", palette));
+            mode_value = mode_value.child(settings_description(
+                "unavailable",
+                resolution_ground,
+                palette,
+            ));
         }
         let mut mode_row = SettingsRow::rule(("settings-display-layout-mode", 0usize), palette)
             .selected(
@@ -452,6 +471,7 @@ impl SettingsPanelView {
             .child(settings_label_group(
                 "Resolution and refresh",
                 None,
+                resolution_ground,
                 palette,
             ))
             .child(mode_value);
@@ -527,13 +547,22 @@ impl SettingsPanelView {
                     })),
             );
         }
+        let primary_ground = RowGround::of(
+            display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_PRIMARY_ROW),
+            self.body_has_focus(),
+        );
         let primary_row =
             SettingsRow::rule(("settings-display-layout-primary-row", 0usize), palette)
                 .selected(
                     display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_PRIMARY_ROW),
                     self.body_has_focus(),
                 )
-                .child(settings_label_group("Primary display", None, palette))
+                .child(settings_label_group(
+                    "Primary display",
+                    None,
+                    primary_ground,
+                    palette,
+                ))
                 .child(primary_group);
         let apply_row = SettingsRow::rule(("settings-display-layout-apply", 0usize), palette)
             .selected(
@@ -655,6 +684,7 @@ fn display_layout_card_level(
     state: DisplayLayoutState,
     origin_row: usize,
     destination: SettingsDestination,
+    description: Option<String>,
 ) -> Level {
     let rows = vec![
         display_layout_card_row("display_layout_stage", label, source),
@@ -665,7 +695,7 @@ fn display_layout_card_level(
     ];
     let section = RowSection {
         label: label.to_string(),
-        description: None,
+        description,
         rows: (0..rows.len()).collect(),
         source,
     };
@@ -685,6 +715,9 @@ fn display_layout_card_level(
         display_layout: Some(state),
         list_card: false,
         live_card: false,
+        choose: None,
+        entries: None,
+        form: None,
     }
 }
 
@@ -889,6 +922,7 @@ mod tests {
             state,
             4,
             SettingsDestination::from_static("Arrangement"),
+            None,
         );
         assert_eq!(card.origin_row, Some(4));
         assert_eq!(card.selected, super::DISPLAY_LAYOUT_STAGE_ROW);
@@ -936,6 +970,7 @@ mod tests {
             display_layout_state(),
             0,
             SettingsDestination::from_static("Arrangement"),
+            None,
         );
         for selected in 0..card.rows.len() {
             let painted: Vec<usize> = (0..card.rows.len())
@@ -953,6 +988,7 @@ mod tests {
             display_layout_state(),
             0,
             SettingsDestination::from_static("Arrangement"),
+            None,
         );
         let visible: Vec<usize> = (0..card.rows.len()).collect();
         assert_eq!(
@@ -1019,6 +1055,7 @@ mod tests {
             display_layout_state(),
             0,
             SettingsDestination::from_static("Arrangement"),
+            None,
         );
         let down = super::DisplayLayoutCardAction::MoveSelection(1);
         for expected in [
@@ -1183,6 +1220,7 @@ mod tests {
                 display_layout_state(),
                 0,
                 SettingsDestination::from_static("Arrangement"),
+                None,
             );
             card.selected = selected;
             assert_eq!(
@@ -1262,6 +1300,7 @@ mod tests {
             card_state,
             0,
             SettingsDestination::from_static("Arrangement"),
+            None,
         );
         let mut stack = vec![root, card];
         assert!(super::super::pop_level(&mut stack).is_some());
@@ -1290,6 +1329,7 @@ mod tests {
             card_state,
             0,
             SettingsDestination::from_static("Arrangement"),
+            None,
         );
         super::display_layout_card_commit(&mut root, &card);
         let RowControl::DisplayLayout(root_state) = &root[0].control else {
@@ -1316,6 +1356,7 @@ mod tests {
             card_state,
             0,
             SettingsDestination::from_static("Arrangement"),
+            None,
         );
         let RowControl::DisplayLayout(fresh) = &mut root[0].control else {
             panic!("expected the root display layout row");

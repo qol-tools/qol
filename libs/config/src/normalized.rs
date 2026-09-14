@@ -1,6 +1,6 @@
 use crate::contract::{
-    ConfigSpec, FieldAlign, FieldDefault, FieldKind, ItemSpec, NumberConstraints, RowActionSpec,
-    RowSliderSpec,
+    ConfigSpec, FieldAlign, FieldDefault, FieldKind, ItemSpec, NestedListSpec, NumberConstraints,
+    RowActionSpec, RowSliderSpec,
 };
 use crate::validation::{validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
@@ -35,6 +35,16 @@ pub struct ResolvedField {
     pub default: FieldDefault,
     pub options: Vec<String>,
     pub option_labels: std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lookup_label: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub option_pictures: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub lists: std::collections::BTreeMap<String, NestedListSpec>,
     pub key_label: Option<String>,
     pub entry_fields: std::collections::BTreeMap<String, FieldKind>,
     pub item: Option<ResolvedItemSpec>,
@@ -137,6 +147,19 @@ pub fn resolve_config(
             options: field.options.clone(),
             option_labels: field
                 .option_labels
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            card_description: field.card_description.clone(),
+            item_label: field.item_label.clone(),
+            lookup_label: field.lookup_label.clone(),
+            option_pictures: field
+                .option_pictures
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            lists: field
+                .lists
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),

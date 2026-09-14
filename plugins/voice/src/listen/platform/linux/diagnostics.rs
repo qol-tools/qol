@@ -5,6 +5,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
+use qol_config::contract::{audio_device_picture, AudioDirection};
 use serde::Deserialize;
 
 use super::{
@@ -31,6 +32,14 @@ impl PulseSource {
                 .get("device.class")
                 .is_some_and(|class| class == "monitor")
             || self.name.ends_with(".monitor")
+    }
+
+    fn picture(&self) -> Option<String> {
+        let entry = serde_json::json!({
+            "name": self.name,
+            "properties": self.properties,
+        });
+        audio_device_picture(&entry, AudioDirection::Input).map(str::to_owned)
     }
 }
 
@@ -92,6 +101,7 @@ fn parse_input_devices(json: &[u8], default: &str) -> Result<Vec<AudioInputDevic
         .into_iter()
         .filter(|source| !source.is_monitor())
         .map(|source| AudioInputDevice {
+            picture: source.picture(),
             is_default: source.name == default,
             id: source.name,
             label: source.description,
@@ -203,7 +213,7 @@ mod tests {
             "name":"mic.one",
             "description":"Desk microphone",
             "monitor_of_sink":null,
-            "properties":{"device.class":"sound"}
+            "properties":{"device.class":"sound","device.form_factor":"webcam"}
           },
           {
             "name":"speaker.monitor",
@@ -218,5 +228,6 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].id, "mic.one");
         assert!(devices[0].is_default);
+        assert_eq!(devices[0].picture.as_deref(), Some("webcam"));
     }
 }

@@ -37,6 +37,8 @@ pub struct DeviceInfo {
 pub struct DeviceOption {
     pub value: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -319,6 +321,7 @@ pub fn managed_device_options(devices: &[DeviceInfo]) -> Vec<DeviceOption> {
         .map(|device| DeviceOption {
             value: device.address.clone(),
             label: format!("{} · {}", device.alias, device.address),
+            picture: None,
         })
         .collect()
 }
@@ -333,6 +336,7 @@ pub fn adapter_options(adapters: &[AdapterInfo]) -> Vec<DeviceOption> {
     let mut options = vec![DeviceOption {
         value: String::new(),
         label: "Automatic · system default".to_string(),
+        picture: Some("adapter-auto".to_string()),
     }];
     options.extend(sorted.into_iter().map(|adapter| DeviceOption {
         value: adapter.address.clone(),
@@ -340,6 +344,7 @@ pub fn adapter_options(adapters: &[AdapterInfo]) -> Vec<DeviceOption> {
             "{} · {} · {} paired",
             adapter.name, adapter.address, adapter.paired_count
         ),
+        picture: Some("adapter-chip".to_string()),
     }));
     options
 }
@@ -507,10 +512,12 @@ mod tests {
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:01".into(),
                     label: "Alpha · AA:BB:CC:DD:EE:01".into(),
+                    picture: None,
                 },
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:02".into(),
                     label: "Luna 2 · AA:BB:CC:DD:EE:02".into(),
+                    picture: None,
                 },
             ]
         );
@@ -537,14 +544,17 @@ mod tests {
                 DeviceOption {
                     value: "".into(),
                     label: "Automatic · system default".into(),
+                    picture: Some("adapter-auto".into()),
                 },
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:01".into(),
                     label: "hci0 · AA:BB:CC:DD:EE:01 · 0 paired".into(),
+                    picture: Some("adapter-chip".into()),
                 },
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:02".into(),
                     label: "hci1 · AA:BB:CC:DD:EE:02 · 3 paired".into(),
+                    picture: Some("adapter-chip".into()),
                 },
             ]
         );

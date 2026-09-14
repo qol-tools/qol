@@ -1,10 +1,12 @@
 use gpui::prelude::*;
-use gpui::{div, px, rgba, AnyElement, App, ClickEvent, ElementId, RenderOnce, Window};
+use gpui::{div, px, rgb, rgba, AnyElement, App, ClickEvent, ElementId, RenderOnce, Window};
 
 use crate::kit::kit;
 use crate::theme::SettingsPanelPalette;
 
-use super::{paint_settings_attention, paint_settings_selection, DIMMED_OPACITY};
+use super::{
+    paint_settings_attention, paint_settings_selection, DIMMED_OPACITY, SETTINGS_ROW_GROUP,
+};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -99,6 +101,7 @@ impl RenderOnce for SettingsRow {
         };
         let mut row = div()
             .id(self.id)
+            .group(SETTINGS_ROW_GROUP)
             .relative()
             .flex()
             .flex_row()
@@ -123,9 +126,14 @@ impl RenderOnce for SettingsRow {
             row = paint_settings_attention(row, self.palette);
         }
         if let Some(on_click) = self.on_click {
+            let hover_fill = if self.selected && self.focused {
+                rgb(self.palette.grounds.band_hover.bg)
+            } else {
+                rgba(shared.washes.fill_hover.packed())
+            };
             row = row
                 .cursor(gpui::CursorStyle::PointingHand)
-                .hover(|style| style.bg(rgba(shared.washes.fill_hover.packed())))
+                .hover(move |style| style.bg(hover_fill))
                 .on_click(move |event, window, cx| on_click(event, window, cx));
         }
         row

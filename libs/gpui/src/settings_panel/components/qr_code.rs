@@ -5,7 +5,7 @@ use crate::settings_panel::rows::{Row, RowControl};
 use crate::settings_panel::{PANEL_QR_CODE_HEIGHT, PANEL_QR_URL_HEIGHT};
 use crate::theme::SettingsPanelPalette;
 
-use super::{paint_settings_selection, settings_query_spinner};
+use super::{paint_settings_selection, settings_query_spinner, RowGround};
 
 pub(in crate::settings_panel) fn qr_code_display(
     row: &Row,
@@ -25,6 +25,8 @@ pub(in crate::settings_panel) fn qr_code_display(
     else {
         return div();
     };
+    let row_ground = RowGround::of(highlighted, true);
+    let ground = row_ground.rest(palette);
     let mut container = div()
         .flex()
         .flex_col()
@@ -57,7 +59,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                         div()
                             .truncate()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(palette.section_text))
+                            .text_color(rgb(ground.ink))
                             .child(row.label.clone()),
                     )
                     .when_some(row.description.clone(), |group, description| {
@@ -65,7 +67,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                             div()
                                 .truncate()
                                 .text_size(px(qol_theme::TEXT_CAPTION))
-                                .text_color(rgb(palette.label_text))
+                                .text_color(rgb(ground.soft))
                                 .child(description),
                         )
                     }),
@@ -112,6 +114,7 @@ pub(in crate::settings_panel) fn qr_code_display(
             if loading {
                 frame.child(settings_query_spinner(
                     ("settings-qr-spinner", index),
+                    row_ground,
                     palette,
                 ))
             } else {
@@ -121,7 +124,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                     .unwrap_or_else(|| "unavailable".into());
                 frame
                     .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(palette.label_text))
+                    .text_color(rgb(ground.soft))
                     .child(placeholder)
             }
         }
@@ -143,7 +146,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                 .text_color(if error.is_some() {
                     rgb(palette.state_off)
                 } else {
-                    rgb(palette.label_text)
+                    rgb(ground.soft)
                 })
                 .child(status),
         );

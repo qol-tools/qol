@@ -20,6 +20,7 @@ args = ["run"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [capabilities]

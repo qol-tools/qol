@@ -22,7 +22,10 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 
 | String | Location | Used for |
 |---|---|---|
-| `Save` | settings_panel/view/structured_list_editor.rs (render_draft_save) | structured-list entry save action |
+| `Save the new {item_label}?` | settings_panel/entry_form.rs | leave question, Add card |
+| `Save changes to {crumb}?` | settings_panel/entry_form.rs | leave question, entry card |
+| `{Label} is empty, so this {item_label} cannot be saved yet.` | settings_panel/entry_form.rs | leave question, blocked save |
+| `Empty` | settings_panel/view/structured_list_editor.rs | empty list or field |
 | `+ Add` | settings_panel/view/mod.rs:2692 | list add button |
 | `On` / `Off` | settings_panel/view/mod.rs:1872 | toggle row |
 | `No matching results.` | settings_panel/view/mod.rs:2429 | options filter empty state |

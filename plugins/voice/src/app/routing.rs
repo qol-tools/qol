@@ -18,6 +18,8 @@ pub struct TerminalTarget {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<CliToolColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -311,6 +313,7 @@ mod tests {
             value: "kitty:1:42".to_owned(),
             label: "Task · Codex".to_owned(),
             accent: Some(CliToolColor::new(0x82, 0xaa, 0xff)),
+            picture: None,
         };
 
         assert_eq!(

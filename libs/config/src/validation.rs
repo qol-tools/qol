@@ -1,5 +1,9 @@
-use crate::contract::{ConfigSpec, FieldDefault, FieldKind, FieldSpec};
+use crate::contract::{
+    is_picture_spec, ConfigSpec, FieldDefault, FieldKind, FieldSpec, CARD_DESCRIPTION_MAX,
+};
 use std::fmt;
+
+const ITEM_LABEL_MAX: usize = 24;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
@@ -99,6 +103,10 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_field_section(id, field.section.as_deref(), spec, errors);
         validate_field_default(id, field, errors);
         validate_field_options(id, field, errors);
+        validate_field_copy(id, field, errors);
+        validate_option_pictures(id, field, errors);
+        validate_lookup_label(id, field, errors);
+        validate_lists(id, field, errors);
         validate_entry_fields(id, field, errors);
         validate_number_constraints(id, field, errors);
         validate_row_slider(id, field, errors);
@@ -313,6 +321,131 @@ fn validate_option_labels(id: &str, field: &FieldSpec, errors: &mut Vec<Validati
             format!("field.{id}.option_labels.{option}"),
             "option label must reference an existing option",
         ));
+    }
+}
+
+fn validate_field_copy(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if let Some(description) = field.card_description.as_deref() {
+        let path = format!("field.{id}.card_description");
+        validate_card_description(&path, description, errors);
+    }
+    let Some(item_label) = field.item_label.as_deref() else {
+        return;
+    };
+    let list_kinds = [
+        FieldKind::ObjectArray,
+        FieldKind::ObjectMap,
+        FieldKind::StringArray,
+    ];
+    if !list_kinds.contains(&field.kind) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.item_label"),
+            "item_label only supported for object_array, object_map and string_array fields",
+        ));
+        return;
+    }
+    let path = format!("field.{id}.item_label");
+    validate_item_label(&path, item_label, errors);
+}
+
+fn validate_card_description(path: &str, description: &str, errors: &mut Vec<ValidationError>) {
+    if description.trim().is_empty() {
+        errors.push(ValidationError::new(
+            path,
+            "card description cannot be empty",
+        ));
+        return;
+    }
+    if description.chars().count() <= CARD_DESCRIPTION_MAX {
+        return;
+    }
+    errors.push(ValidationError::new(
+        path,
+        format!("card description cannot exceed {CARD_DESCRIPTION_MAX} characters"),
+    ));
+}
+
+fn validate_item_label(path: &str, label: &str, errors: &mut Vec<ValidationError>) {
+    if label.trim().is_empty() {
+        errors.push(ValidationError::new(path, "item label cannot be empty"));
+        return;
+    }
+    if label.chars().count() <= ITEM_LABEL_MAX {
+        return;
+    }
+    errors.push(ValidationError::new(
+        path,
+        format!("item label cannot exceed {ITEM_LABEL_MAX} characters"),
+    ));
+}
+
+fn validate_lookup_label(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    let Some(label) = field.lookup_label.as_deref() else {
+        return;
+    };
+    let path = format!("field.{id}.lookup_label");
+    if field.query.is_none() {
+        errors.push(ValidationError::new(
+            path.as_str(),
+            "lookup_label only supported for fields with a query",
+        ));
+        return;
+    }
+    if label.trim().is_empty() {
+        errors.push(ValidationError::new(
+            path.as_str(),
+            "lookup label cannot be empty",
+        ));
+        return;
+    }
+    if label.chars().count() <= ITEM_LABEL_MAX {
+        return;
+    }
+    errors.push(ValidationError::new(
+        path.as_str(),
+        format!("lookup label cannot exceed {ITEM_LABEL_MAX} characters"),
+    ));
+}
+
+fn validate_option_pictures(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    for (option, picture) in &field.option_pictures {
+        let path = format!("field.{id}.option_pictures.{option}");
+        let known = field.options.iter().any(|key| key == option)
+            || field.option_labels.contains_key(option);
+        if !known {
+            errors.push(ValidationError::new(
+                path,
+                "option picture must reference an existing option",
+            ));
+            continue;
+        }
+        if is_picture_spec(picture) {
+            continue;
+        }
+        errors.push(ValidationError::new(path, "invalid picture spec"));
+    }
+}
+
+fn validate_lists(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    for (key, list) in &field.lists {
+        let path = format!("field.{id}.lists.{key}");
+        let item_kind = field.item.as_ref().and_then(|item| item.fields.get(key));
+        let item_kind = item_kind.or_else(|| field.entry_fields.get(key));
+        let valid = item_kind == Some(&FieldKind::StringArray);
+        if !valid || key.ends_with("_mods") {
+            errors.push(ValidationError::new(
+                path.clone(),
+                "lists key must name a string_array item or entry field",
+            ));
+        }
+        if let Some(item_label) = list.item_label.as_deref() {
+            let item_path = format!("{path}.item_label");
+            validate_item_label(&item_path, item_label, errors);
+        }
+        if let Some(description) = list.card_description.as_deref() {
+            let card_path = format!("{path}.card_description");
+            validate_card_description(&card_path, description, errors);
+        }
     }
 }
 

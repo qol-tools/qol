@@ -31,6 +31,7 @@ query = "displays"
 row_label = "{connector}"
 row_subtitle = "{detail}"
 empty_message = "No displays connected."
+card_description = "Live brightness for every display."
 row_slider = { value_from = "brightness", min = 0, max = 100, step = 5, action = "set_brightness", input = { id = "{id}", value = "{value}" } }
 
 [field.apply_preferred]
@@ -81,11 +82,16 @@ label = "Schedule"
 description = "Run night mode between the daily start and end times."
 section = "night"
 default = "off"
+card_description = "When night mode turns on."
 options = ["off", "daily"]
 
 [field.night_schedule.option_labels]
 off = "Off"
 daily = "Daily"
+
+[field.night_schedule.option_pictures]
+off = "schedule-off"
+daily = "schedule-daily"
 
 [field.night_from]
 type = "string"
@@ -110,6 +116,8 @@ label = "Control Policy"
 section = "preferences"
 key_label = "Display ID"
 description = "How each display is controlled. Labels: auto (prefer DDC, fall back to gamma), ddc, gamma, or off. Unknown labels are ignored."
+card_description = "How each display is controlled."
+item_label = "display policy"
 entry_fields = { policy = "string" }
 default = {}
 
@@ -134,3 +142,4 @@ active_query = "modes"
 action = "arrange"
 active_action = "set_mode"
 description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."
+card_description = "Where each display sits."

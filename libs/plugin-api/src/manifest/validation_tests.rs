@@ -614,6 +614,7 @@ mod shortcut_rules {
                     args: Some(vec!["open".to_string()]),
                     config_key: None,
                     checked: false,
+                    picture: None,
                 },
             )]
             .into_iter()

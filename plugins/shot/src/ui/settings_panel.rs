@@ -15,20 +15,10 @@ pub(crate) async fn open_from_async(tracker: MonitorTracker, cx: &AsyncApp) -> a
 }
 
 fn query_options(query: &str) -> Result<serde_json::Value, String> {
-    let options = match query {
-        "audio_sources" => device_options(crate::platform::list_audio_sources()),
-        "audio_sinks" => device_options(crate::platform::list_audio_sinks()),
+    let devices = match query {
+        "audio_sources" => crate::platform::list_audio_sources(),
+        "audio_sinks" => crate::platform::list_audio_sinks(),
         _ => Vec::new(),
     };
-    Ok(serde_json::json!(options
-        .into_iter()
-        .map(|(value, label)| serde_json::json!({ "value": value, "label": label }))
-        .collect::<Vec<_>>()))
-}
-
-fn device_options(devices: Vec<crate::platform::AudioDevice>) -> Vec<(String, String)> {
-    devices
-        .into_iter()
-        .map(|device| (device.value, device.label))
-        .collect()
+    Ok(serde_json::json!(devices))
 }

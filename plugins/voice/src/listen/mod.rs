@@ -58,6 +58,8 @@ pub struct AudioInputDevice {
     pub id: String,
     pub label: String,
     pub is_default: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

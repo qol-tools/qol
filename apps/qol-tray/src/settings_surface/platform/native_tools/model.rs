@@ -15,6 +15,36 @@ pub(super) enum ToolKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EditorQuestion {
+    Save,
+    Blocked { field: usize, label: &'static str },
+}
+
+impl EditorQuestion {
+    pub(super) fn for_empty(first_empty: Option<(usize, &'static str)>) -> Self {
+        match first_empty {
+            Some((field, label)) => Self::Blocked { field, label },
+            None => Self::Save,
+        }
+    }
+}
+
+pub(super) fn question_text(
+    question: EditorQuestion,
+    noun: &str,
+    is_new: bool,
+    crumb: &str,
+) -> String {
+    match question {
+        EditorQuestion::Save if is_new => format!("Save the new {noun}?"),
+        EditorQuestion::Save => format!("Save changes to {crumb}?"),
+        EditorQuestion::Blocked { label, .. } => {
+            format!("{label} is empty, so this {noun} cannot be saved yet.")
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AppRefKind {
     BundleId,
     Name,
@@ -29,6 +59,22 @@ impl AppRefKind {
             Self::BundleId => "Bundle ID",
             Self::Name => "Name",
             Self::Path => "Path",
+        }
+    }
+
+    pub(super) fn picture(self) -> &'static str {
+        match self {
+            Self::BundleId => "bundle-ref",
+            Self::Name => "name-ref",
+            Self::Path => "path-ref",
+        }
+    }
+
+    pub(super) fn browser_picture(self) -> &'static str {
+        match self {
+            Self::BundleId => "browser-bundle-ref",
+            Self::Name => "browser-name-ref",
+            Self::Path => "browser-path-ref",
         }
     }
 }
@@ -66,6 +112,13 @@ impl ShortcutActionKind {
         match self {
             Self::App => "Launch App",
             Self::Url => "Open URL",
+        }
+    }
+
+    pub(super) fn picture(self) -> &'static str {
+        match self {
+            Self::App => "launch-app",
+            Self::Url => "open-url",
         }
     }
 }
@@ -164,13 +217,71 @@ impl ShortcutDraft {
         }
     }
 
-    pub(super) fn can_save(&self) -> bool {
+    pub(super) fn first_empty(&self) -> Option<(usize, &'static str)> {
         if self.managed.is_some() {
+            return None;
+        }
+        if self.name.trim().is_empty() {
+            return Some((2, "Name"));
+        }
+        if self.target.trim().is_empty() {
+            return Some(match self.action_kind {
+                ShortcutActionKind::Url => (4, "URL"),
+                ShortcutActionKind::App => (5, "App"),
+            });
+        }
+        if self.browser_override && self.browser.trim().is_empty() {
+            return Some((7, "Browser"));
+        }
+        None
+    }
+
+    pub(super) fn can_save(&self) -> bool {
+        self.first_empty().is_none()
+    }
+
+    pub(super) fn same_values(&self, other: &Self) -> bool {
+        if self.enabled != other.enabled || self.export_to_launcher != other.export_to_launcher {
+            return false;
+        }
+        if self.managed.is_some() || other.managed.is_some() {
             return true;
         }
-        !self.name.trim().is_empty()
-            && !self.target.trim().is_empty()
-            && (!self.browser_override || !self.browser.trim().is_empty())
+        if self.name != other.name || self.action_kind != other.action_kind {
+            return false;
+        }
+        match self.action_kind {
+            ShortcutActionKind::App => {
+                self.target_kind == other.target_kind && self.target == other.target
+            }
+            ShortcutActionKind::Url => {
+                self.target == other.target
+                    && self.browser_override == other.browser_override
+                    && (!self.browser_override
+                        || (self.browser_kind == other.browser_kind
+                            && self.browser == other.browser))
+            }
+        }
+    }
+
+    pub(super) fn crumb(&self) -> String {
+        if self.original_id.is_none() {
+            return "add".to_string();
+        }
+        let name = self.name.trim();
+        if name.is_empty() {
+            "shortcut".to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
+    pub(super) fn sub_header(&self) -> &'static str {
+        if self.original_id.is_none() {
+            "a new shortcut."
+        } else {
+            "a shortcut."
+        }
     }
 
     pub(super) fn build(&self, existing_ids: &[String]) -> Shortcut {
@@ -258,8 +369,36 @@ impl HotkeyDraft {
         }
     }
 
+    pub(super) fn first_empty(&self) -> Option<(usize, &'static str)> {
+        if self.plugin_uid.is_empty() {
+            return Some((1, "Plugin"));
+        }
+        if self.action.is_empty() {
+            return Some((2, "Action"));
+        }
+        if self.key.is_empty() {
+            return Some((3, "Shortcut"));
+        }
+        None
+    }
+
     pub(super) fn can_save(&self) -> bool {
-        !self.plugin_uid.is_empty() && !self.action.is_empty() && !self.key.is_empty()
+        self.first_empty().is_none()
+    }
+
+    pub(super) fn same_values(&self, other: &Self) -> bool {
+        self.plugin_uid == other.plugin_uid
+            && self.action == other.action
+            && self.key == other.key
+            && self.enabled == other.enabled
+    }
+
+    pub(super) fn sub_header(&self) -> &'static str {
+        if self.original_id.is_none() {
+            "a new hotkey."
+        } else {
+            "a hotkey."
+        }
     }
 
     pub(super) fn build(&self, sequence: u64) -> HotkeyBinding {
@@ -297,6 +436,7 @@ pub(super) fn available_actions(
         return vec![ActionOption {
             id: "run".to_string(),
             label: "Run".to_string(),
+            picture: None,
         }];
     }
     let assigned = hotkeys
@@ -472,6 +612,11 @@ mod tests {
             "only Enabled and Export to launcher stay editable"
         );
         assert!(draft.can_save(), "toggling enabled is always saveable");
+        assert_eq!(
+            draft.first_empty(),
+            None,
+            "a managed shortcut is never blocked"
+        );
 
         draft.enabled = false;
         let rebuilt = draft.build(&[]);
@@ -523,5 +668,113 @@ mod tests {
     #[test]
     fn a_new_hotkey_starts_on_its_capture_field() {
         assert_eq!(HotkeyDraft::blank(&[], &[]).selected, 3);
+    }
+
+    #[test]
+    fn the_first_empty_field_follows_the_editor_field_order() {
+        let mut url = ShortcutDraft::blank();
+        assert_eq!(url.first_empty(), Some((2, "Name")));
+        url.name = "Docs".to_string();
+        assert_eq!(url.first_empty(), Some((4, "URL")));
+        url.target = "https://example.com".to_string();
+        assert_eq!(url.first_empty(), None);
+        url.browser_override = true;
+        assert_eq!(url.first_empty(), Some((7, "Browser")));
+        url.browser = "com.firefox".to_string();
+        assert_eq!(url.first_empty(), None);
+
+        let mut app = ShortcutDraft::blank();
+        app.action_kind = ShortcutActionKind::App;
+        app.name = "Docs".to_string();
+        assert_eq!(app.first_empty(), Some((5, "App")));
+        app.target = "/Applications/Docs.app".to_string();
+        assert_eq!(app.first_empty(), None);
+
+        let mut hotkey = HotkeyDraft::blank(&[], &[]);
+        assert_eq!(hotkey.first_empty(), Some((1, "Plugin")));
+        hotkey.plugin_uid = "plugin-a".to_string();
+        hotkey.action = String::new();
+        assert_eq!(hotkey.first_empty(), Some((2, "Action")));
+        hotkey.action = "open".to_string();
+        assert_eq!(hotkey.first_empty(), Some((3, "Shortcut")));
+        hotkey.key = "Ctrl+Alt+K".to_string();
+        assert_eq!(hotkey.first_empty(), None);
+    }
+
+    #[test]
+    fn editor_values_ignore_the_highlight_and_read_only_what_saving_reads() {
+        let draft = ShortcutDraft::blank();
+        let mut moved = draft.clone();
+        moved.selected = 5;
+        assert!(draft.same_values(&moved));
+
+        let mut renamed = moved.clone();
+        renamed.name = "Docs".to_string();
+        assert!(!draft.same_values(&renamed));
+
+        let mut app = ShortcutDraft::blank();
+        app.action_kind = ShortcutActionKind::App;
+        app.target = "/Applications/Docs.app".to_string();
+        let mut app_other = app.clone();
+        app_other.browser_override = true;
+        app_other.browser_kind = AppRefKind::Path;
+        app_other.browser = "/Applications/Other.app".to_string();
+        assert!(app.same_values(&app_other));
+
+        let hotkey = HotkeyDraft::blank(&[], &[]);
+        let mut hotkey_moved = hotkey.clone();
+        hotkey_moved.selected = 1;
+        assert!(hotkey.same_values(&hotkey_moved));
+        hotkey_moved.key = "Ctrl+K".to_string();
+        assert!(!hotkey.same_values(&hotkey_moved));
+    }
+
+    #[test]
+    fn question_text_asks_to_save_or_names_the_blocking_field() {
+        assert_eq!(
+            question_text(EditorQuestion::Save, "shortcut", true, "add"),
+            "Save the new shortcut?"
+        );
+        assert_eq!(
+            question_text(EditorQuestion::Save, "shortcut", false, "Docs"),
+            "Save changes to Docs?"
+        );
+        assert_eq!(
+            question_text(
+                EditorQuestion::for_empty(Some((4, "URL"))),
+                "shortcut",
+                true,
+                "add"
+            ),
+            "URL is empty, so this shortcut cannot be saved yet."
+        );
+        assert_eq!(EditorQuestion::for_empty(None), EditorQuestion::Save);
+        assert_eq!(
+            EditorQuestion::for_empty(Some((2, "Name"))),
+            EditorQuestion::Blocked {
+                field: 2,
+                label: "Name",
+            }
+        );
+    }
+
+    #[test]
+    fn crumbs_and_sub_headers_name_new_and_existing_editors() {
+        let draft = ShortcutDraft::blank();
+        assert_eq!(draft.crumb(), "add");
+        assert_eq!(draft.sub_header(), "a new shortcut.");
+
+        let mut named = ShortcutDraft::blank();
+        named.original_id = Some("docs".to_string());
+        assert_eq!(named.crumb(), "shortcut");
+        assert_eq!(named.sub_header(), "a shortcut.");
+        named.name = "  Docs  ".to_string();
+        assert_eq!(named.crumb(), "Docs");
+
+        let hotkey = HotkeyDraft::blank(&[], &[]);
+        assert_eq!(hotkey.sub_header(), "a new hotkey.");
+        let mut existing = HotkeyDraft::blank(&[], &[]);
+        existing.original_id = Some("hk-1".to_string());
+        assert_eq!(existing.sub_header(), "a hotkey.");
     }
 }

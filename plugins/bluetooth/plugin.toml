@@ -65,6 +65,7 @@ args = ["apply_host_fix"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [daemon]

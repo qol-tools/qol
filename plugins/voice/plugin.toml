@@ -31,6 +31,7 @@ args = ["session", "stop"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [daemon]

@@ -13,6 +13,7 @@ command = "pointzerver"
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["--action", "settings"]
 
 [capabilities]

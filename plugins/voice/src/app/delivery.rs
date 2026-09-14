@@ -69,6 +69,10 @@ impl ConversationSink for TerminalConversationSink {
                         &cli_session.tool.label,
                     ),
                     accent: Some(cli_session.tool.accent),
+                    picture: Some(format!(
+                        "terminal-session:{}",
+                        cli_session.tool.label.to_lowercase()
+                    )),
                 })
             })
             .collect::<Vec<_>>();

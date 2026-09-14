@@ -1,22 +1,24 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::prelude::*;
 use gpui::*;
 use qol_gpui::deck;
-use qol_gpui::dropdown::{Dropdown, DropdownEvent};
+use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
-    settings_action_spinner, settings_busy_message, settings_description, settings_dropdown_style,
-    settings_label, settings_label_group, settings_message, settings_page, settings_value_group,
-    SettingsGroupHeader, SettingsKeyCombination, SettingsRow, SettingsSelectValue,
-    SettingsTextField, SettingsToggle,
+    choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
+    settings_label_group, settings_message, settings_page, settings_tile_rows,
+    settings_value_group, tile_arts, tile_layout, HintTone, RowGround, SettingsGroupHeader,
+    SettingsHint, SettingsKeyCombination, SettingsRow, SettingsSelectValue, SettingsTextField,
+    SettingsTile, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, wrapping_visible_row, CustomPanelCallback,
-    CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
-    SettingsDestination,
+    adjacent_visible_row, escape_step, intent, wrapping_visible_row, CustomHints,
+    CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
+    EscapeStep, Intent, SettingsDestination,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
@@ -27,28 +29,39 @@ use crate::shortcuts::model::Shortcut;
 
 use super::data::{self, ActionOption, PluginOption, RegistrationError};
 use super::model::{
-    available_actions, chord_from_keystroke, modifier_is_secondary, shortcut_is_managed,
-    shortcut_summary, AppRefKind, HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind,
+    available_actions, chord_from_keystroke, modifier_is_secondary, question_text,
+    shortcut_is_managed, shortcut_summary, AppRefKind, EditorQuestion, HotkeyDraft,
+    ShortcutActionKind, ShortcutDraft, ToolKind,
 };
 
 const MAX_VISIBLE: usize = 9;
 const EDITOR_DEPTH: usize = 1;
+const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
 const HOTKEY_FIELDS: usize = 4;
-
-const ADD_SHORTCUT_DESTINATION: SettingsDestination =
-    SettingsDestination::from_static("Add Shortcut");
-const EDIT_SHORTCUT_DESTINATION: SettingsDestination =
-    SettingsDestination::from_static("Edit Shortcut");
-const ADD_HOTKEY_DESTINATION: SettingsDestination = SettingsDestination::from_static("Add Hotkey");
-const EDIT_HOTKEY_DESTINATION: SettingsDestination =
-    SettingsDestination::from_static("Edit Hotkey");
+const EDITOR_ANIMATION: &str = "native-tools-editor-slide";
+const CHOOSE_ANIMATION: &str = "native-tools-choose-slide";
 
 const ROW_HEIGHT: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 
+#[derive(Clone)]
 enum Mode {
     List,
     Shortcut(ShortcutDraft),
     Hotkey(HotkeyDraft),
+}
+
+struct Editor {
+    initial: Mode,
+    crumb: String,
+    question: Option<EditorQuestion>,
+    choose: Option<ToolChoose>,
+}
+
+#[derive(Clone, Copy)]
+struct ToolChoose {
+    field: usize,
+    select: SelectField,
+    highlighted: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,11 +71,6 @@ enum SelectField {
     BrowserKind,
     Plugin,
     Action,
-}
-
-struct FieldMenu {
-    field: usize,
-    menu: Dropdown,
 }
 
 struct TextFieldSpec<'a> {
@@ -76,17 +84,21 @@ struct TextFieldSpec<'a> {
 pub(super) struct NativeToolsView {
     focus_handle: FocusHandle,
     body_focused: bool,
-    body_width: Rc<Cell<f32>>,
+    body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    editor: Option<Editor>,
     editor_step: usize,
     editor_motion: Option<deck::Motion>,
-    menu: Option<FieldMenu>,
+    choose_closing: Option<ToolChoose>,
+    marks: Vec<Option<f32>>,
+    list_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    field_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     dismisser: SurfaceDismisser,
     on_back: Option<CustomPanelCallback>,
     notify: CustomPanelNotifier,
     tool: ToolKind,
     initial_editor: bool,
     mode: Mode,
-    closing: Option<Mode>,
+    closing: Option<(Mode, String)>,
     editor_text: TextField,
     editor_text_key: Option<(usize, ShortcutActionKind, bool)>,
     shortcuts: Vec<Shortcut>,
@@ -116,10 +128,14 @@ impl NativeToolsView {
         let view = Self {
             focus_handle: cx.focus_handle(),
             body_focused: false,
-            body_width: Rc::new(Cell::new(0.0)),
+            body_bounds: Rc::new(Cell::new(None)),
+            editor: None,
             editor_step: 0,
             editor_motion: None,
-            menu: None,
+            choose_closing: None,
+            marks: Vec::new(),
+            list_bounds: Rc::new(RefCell::new(HashMap::new())),
+            field_bounds: Rc::new(RefCell::new(HashMap::new())),
             dismisser,
             on_back,
             notify,
@@ -229,12 +245,19 @@ impl NativeToolsView {
     }
 
     fn open_editor(&mut self, mode: Mode) {
-        self.menu = None;
         self.closing = None;
+        let crumb = mode_crumb(&mode, &self.plugins);
+        self.editor = Some(Editor {
+            initial: mode.clone(),
+            crumb,
+            question: None,
+            choose: None,
+        });
         self.mode = mode;
         self.editor_text_key = None;
         self.editor_step = self.editor_step.wrapping_add(1);
         self.editor_motion = Some(deck::Motion::Push);
+        self.marks.push(self.list_mark());
     }
 
     fn activate_selected(&mut self) {
@@ -260,14 +283,20 @@ impl NativeToolsView {
 
     fn close_editor(&mut self, cx: &mut Context<Self>) {
         self.cancel_capture();
-        self.menu = None;
+        let crumb = self
+            .editor
+            .take()
+            .map(|editor| editor.crumb)
+            .unwrap_or_default();
+        self.choose_closing = None;
+        self.marks.clear();
         self.editor_text_key = None;
         let leaving = std::mem::replace(&mut self.mode, Mode::List);
         if matches!(leaving, Mode::List) {
             return;
         }
         self.editor_step = self.editor_step.wrapping_add(1);
-        self.closing = Some(leaving);
+        self.closing = Some((leaving, crumb));
         deck::after_transition(cx, |view, cx| {
             view.closing = None;
             cx.notify();
@@ -421,7 +450,8 @@ impl NativeToolsView {
             return;
         };
         if !draft.can_save() {
-            self.fail("Name and target are required", cx);
+            let question = EditorQuestion::for_empty(draft.first_empty());
+            self.set_question(Some(question));
             return;
         }
         let existing_ids = self
@@ -483,7 +513,8 @@ impl NativeToolsView {
             return;
         };
         if !draft.can_save() {
-            self.fail("Plugin, action, and shortcut are required", cx);
+            let question = EditorQuestion::for_empty(draft.first_empty());
+            self.set_question(Some(question));
             return;
         }
         self.sequence = self.sequence.wrapping_add(1);
@@ -662,31 +693,77 @@ impl NativeToolsView {
             }
             return;
         }
-        if self.on_menu_key(event, cx) {
+        if self.on_choose_key(event, cx) {
             return;
         }
-        let list_mode = matches!(self.mode, Mode::List);
-        if list_mode {
+        if self.on_question_key(event, cx) {
+            return;
+        }
+        if matches!(self.mode, Mode::List) {
             self.on_list_key(event, window, cx);
         } else {
             self.on_editor_key(event, window, cx);
         }
     }
 
-    fn on_menu_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        let Some(open) = self.menu.as_mut() else {
+    fn on_choose_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(choose) = self.editor.as_ref().and_then(|editor| editor.choose) else {
             return false;
         };
-        let Some(action) = open.menu.handle_key(event.keystroke.key.as_str()) else {
-            return false;
-        };
-        match action {
-            DropdownEvent::Moved => {}
-            DropdownEvent::Pick(choice) => self.pick_menu(choice),
-            DropdownEvent::Close => self.menu = None,
+        let key = event.keystroke.key.as_str();
+        if matches!(key, "escape" | "esc") {
+            self.close_choose(cx);
+            cx.notify();
+            return true;
         }
-        cx.notify();
+        if matches!(key, "enter" | "return" | "space") {
+            self.choose_index(choose.highlighted, cx);
+            cx.notify();
+            return true;
+        }
+        if matches!(key, "left" | "right" | "up" | "down") {
+            let count = self.choose_count(choose.select);
+            let per_row = tile_layout(count).per_row;
+            if let Some(next) = choose_step(choose.highlighted, count, per_row, key) {
+                if let Some(editor) = self.editor.as_mut() {
+                    if let Some(choose) = editor.choose.as_mut() {
+                        choose.highlighted = next;
+                    }
+                }
+                cx.notify();
+            }
+            return true;
+        }
         true
+    }
+
+    fn on_question_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(question) = self.editor.as_ref().and_then(|editor| editor.question) else {
+            return false;
+        };
+        match event.keystroke.key.as_str() {
+            "enter" | "return" => {
+                match question {
+                    EditorQuestion::Save => self.save_current(cx),
+                    EditorQuestion::Blocked { field, .. } => {
+                        self.set_question(None);
+                        self.select_editor_field(field);
+                    }
+                }
+                cx.notify();
+                true
+            }
+            "escape" | "esc" => {
+                self.set_question(None);
+                self.close_editor(cx);
+                cx.notify();
+                true
+            }
+            _ => {
+                self.set_question(None);
+                false
+            }
+        }
     }
 
     fn on_list_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -708,23 +785,23 @@ impl NativeToolsView {
     fn on_editor_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         if modifier_is_secondary(&event.keystroke.modifiers) && matches!(key, "enter" | "return") {
-            self.save_current(cx);
-            return;
-        }
-        if matches!(key, "escape" | "esc") {
-            self.escape(window, cx);
+            let question = EditorQuestion::for_empty(self.editor_first_empty());
+            self.set_question(Some(question));
+            if question == EditorQuestion::Save {
+                self.save_current(cx);
+            }
             cx.notify();
             return;
         }
-        let fields = match &mut self.mode {
-            Mode::Shortcut(draft) => draft.field_count(),
-            Mode::Hotkey(_) => HOTKEY_FIELDS,
-            Mode::List => return,
-        };
-        let entries = fields + 1;
+        if matches!(key, "escape" | "esc") {
+            self.escape_editor(window, cx);
+            cx.notify();
+            return;
+        }
+        let fields = self.editor_field_count();
         let navigated = match &mut self.mode {
-            Mode::Shortcut(draft) => navigate_form(&mut draft.selected, entries, event),
-            Mode::Hotkey(draft) => navigate_form(&mut draft.selected, entries, event),
+            Mode::Shortcut(draft) => navigate_form(&mut draft.selected, fields, event),
+            Mode::Hotkey(draft) => navigate_form(&mut draft.selected, fields, event),
             Mode::List => false,
         };
         if navigated {
@@ -732,22 +809,34 @@ impl NativeToolsView {
             return;
         }
         let selected = self.editor_selected();
-        if selected == fields {
+        if self.select_field_at(selected).is_some() {
             if matches!(key, "enter" | "return" | "space") {
-                self.save_current(cx);
+                self.open_choose(selected);
+                cx.notify();
             }
-            return;
-        }
-        if matches!(key, "enter" | "return" | "space" | "right")
-            && self.select_field_at(selected).is_some()
-        {
-            self.open_menu(selected);
-            cx.notify();
             return;
         }
         match &mut self.mode {
             Mode::Shortcut(draft) => {
-                if apply_shortcut_field(draft, &mut self.editor_text, event, cx) {
+                if shortcut_text_target(draft).is_some() {
+                    if matches!(key, "enter" | "return") {
+                        let count = draft.field_count();
+                        draft.selected = (draft.selected + 1).min(count.saturating_sub(1));
+                        cx.notify();
+                    } else {
+                        let changed = text_edit::apply_edit_key(
+                            &mut self.editor_text,
+                            &event.keystroke,
+                            || cx.read_from_clipboard().and_then(|item| item.text()),
+                        ) == text_edit::EditKey::Changed;
+                        if changed {
+                            sync_shortcut_target(draft, &self.editor_text);
+                            cx.notify();
+                        }
+                    }
+                } else if matches!(key, "enter" | "return" | "space")
+                    && activate_shortcut_field(draft)
+                {
                     cx.notify();
                 }
             }
@@ -778,7 +867,7 @@ impl NativeToolsView {
         plugin.actions.iter().find(|action| action.id == action_id)
     }
 
-    fn render_body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.loading {
             return settings_busy_message(
                 "native-tools-loading",
@@ -787,52 +876,121 @@ impl NativeToolsView {
             )
             .into_any_element();
         }
-        let editor = match &self.mode {
-            Mode::List => None,
-            Mode::Shortcut(draft) => Some(self.render_shortcut_editor(window, draft, cx)),
-            Mode::Hotkey(draft) => Some(self.render_hotkey_editor(draft, cx)),
-        };
+        let palette = settings_panel_runtime();
+        let width = self.body_width();
+        let on_sliver = Self::sliver_click(cx);
+        if let Some(choose) = self.editor.as_ref().and_then(|state| state.choose) {
+            let deck = deck::render(
+                palette,
+                self.page(self.render_choose_page(choose, cx)),
+                deck::DeckFrame {
+                    depth: CHOOSE_DEPTH,
+                    slide: deck::slide(self.editor_step, self.editor_motion, CHOOSE_DEPTH, width),
+                    closing: None,
+                    animation_id: CHOOSE_ANIMATION,
+                    marks: self.marks.iter().take(CHOOSE_DEPTH).copied().collect(),
+                    on_sliver: Some(Rc::clone(&on_sliver)),
+                },
+            );
+            return deck_shell(deck);
+        }
+        if let Some(editor) = self.render_mode_card(&self.mode, &self.editor_crumb(), cx) {
+            let closing = self.choose_closing.map(|choose| {
+                (
+                    self.page(self.render_choose_page(choose, cx)),
+                    deck::exit(self.editor_step, CHOOSE_DEPTH, width),
+                )
+            });
+            let deck = deck::render(
+                palette,
+                self.page(editor),
+                deck::DeckFrame {
+                    depth: EDITOR_DEPTH,
+                    slide: deck::slide(self.editor_step, self.editor_motion, EDITOR_DEPTH, width),
+                    closing,
+                    animation_id: EDITOR_ANIMATION,
+                    marks: self.marks.iter().take(EDITOR_DEPTH).copied().collect(),
+                    on_sliver: Some(Rc::clone(&on_sliver)),
+                },
+            );
+            return deck_shell(deck);
+        }
         let leaving = match &self.closing {
-            Some(Mode::Shortcut(draft)) => Some(self.render_shortcut_editor(window, draft, cx)),
-            Some(Mode::Hotkey(draft)) => Some(self.render_hotkey_editor(draft, cx)),
-            _ => None,
+            Some((mode, crumb)) => self.render_mode_card(mode, crumb, cx),
+            None => None,
         };
-        let width = self.body_width.get();
-        let deck = match (editor, leaving) {
-            (None, None) => return self.page(self.render_list(cx)).into_any_element(),
-            (None, Some(card)) => deck::reveal(
-                settings_panel_runtime(),
+        match leaving {
+            Some(card) => deck_shell(deck::reveal(
+                palette,
                 self.page(self.render_list(cx)),
                 self.page(card),
                 deck::exit(self.editor_step, EDITOR_DEPTH, width),
-            ),
-            (Some(editor), _) => deck::render(
-                settings_panel_runtime(),
-                EDITOR_DEPTH,
-                self.page(editor),
-                deck::slide(self.editor_step, self.editor_motion, EDITOR_DEPTH, width),
-                "native-tools-editor-slide",
-                None,
-            ),
-        };
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_row()
-            .items_start()
-            .child(deck)
-            .into_any_element()
+            )),
+            None => self.page(self.render_list(cx)).into_any_element(),
+        }
     }
 
-    fn measure_body_width(&self) -> impl IntoElement {
-        let width = Rc::clone(&self.body_width);
+    fn render_mode_card(
+        &self,
+        mode: &Mode,
+        crumb: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        match mode {
+            Mode::List => None,
+            Mode::Shortcut(draft) => Some(self.render_shortcut_editor(draft, crumb, cx)),
+            Mode::Hotkey(draft) => Some(self.render_hotkey_editor(draft, crumb, cx)),
+        }
+    }
+
+    fn measure_body_bounds(&self) -> impl IntoElement {
+        let bounds = Rc::clone(&self.body_bounds);
         canvas(
-            move |bounds, _, _| width.set(bounds.size.width.to_f64() as f32),
+            move |measured, _, _| bounds.set(Some(measured)),
             |_, _, _, _| {},
         )
         .absolute()
         .inset_0()
+    }
+
+    fn body_width(&self) -> f32 {
+        self.body_bounds
+            .get()
+            .map(|bounds| bounds.size.width.to_f64() as f32)
+            .unwrap_or(0.0)
+    }
+
+    fn sliver_click(cx: &mut Context<Self>) -> deck::SliverClick {
+        let view = cx.weak_entity();
+        Rc::new(move |level, window, cx| {
+            let _ = view.update(cx, |this, cx| this.click_sliver(level, window, cx));
+        })
+    }
+
+    fn click_sliver(&mut self, level: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let choosing = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.choose.is_some());
+        if choosing && level >= EDITOR_DEPTH {
+            self.close_choose(cx);
+        } else {
+            self.drop_choose();
+            self.escape_editor(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn list_mark(&self) -> Option<f32> {
+        row_mark(
+            &self.list_bounds,
+            self.list().selected,
+            self.body_bounds.get(),
+        )
+    }
+
+    fn field_mark(&self, index: usize) -> Option<f32> {
+        row_mark(&self.field_bounds, index, self.body_bounds.get())
     }
 
     fn page(&self, body: AnyElement) -> Div {
@@ -933,6 +1091,7 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(settings_label(format!("+ {label}"), palette))
+            .child(bounds_recorder(Rc::clone(&self.list_bounds), 0))
             .into_any_element()
     }
 
@@ -942,13 +1101,15 @@ impl NativeToolsView {
         let Some(shortcut) = self.shortcuts.get(item) else {
             return div().into_any_element();
         };
+        let selected = self.list().selected == item + 1;
+        let row = RowGround::of(selected, self.body_focused);
         let kind = if shortcut_is_managed(shortcut) {
             "Plugin \u{b7} managed".to_string()
         } else {
             shortcut.action.kind().to_string()
         };
         SettingsRow::setting(("native-shortcut-row", item), palette)
-            .selected(self.list().selected == item + 1, self.body_focused)
+            .selected(selected, self.body_focused)
             .dimmed(!shortcut.enabled)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_selected_index(item + 1);
@@ -958,9 +1119,11 @@ impl NativeToolsView {
             .child(settings_label_group(
                 shortcut.name.clone(),
                 Some(shortcut_summary(shortcut).into()),
+                row,
                 palette,
             ))
             .child(settings_value_group().child(kit.value(kind)))
+            .child(bounds_recorder(Rc::clone(&self.list_bounds), item + 1))
             .into_any_element()
     }
 
@@ -969,6 +1132,8 @@ impl NativeToolsView {
         let Some(hotkey) = self.hotkeys.get(item) else {
             return div().into_any_element();
         };
+        let selected = self.list().selected == item + 1;
+        let row = RowGround::of(selected, self.body_focused);
         let plugin = self.current_plugin(hotkey.plugin_uid.as_str());
         let plugin_name = plugin
             .map(|plugin| plugin.name.clone())
@@ -978,7 +1143,7 @@ impl NativeToolsView {
             .map(|action| action.label.clone())
             .unwrap_or_else(|| hotkey.action.clone());
         SettingsRow::setting(("native-hotkey-row", item), palette)
-            .selected(self.list().selected == item + 1, self.body_focused)
+            .selected(selected, self.body_focused)
             .dimmed(!hotkey.enabled)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_selected_index(item + 1);
@@ -988,6 +1153,7 @@ impl NativeToolsView {
             .child(settings_label_group(
                 plugin_name,
                 Some(action.into()),
+                row,
                 palette,
             ))
             .child(
@@ -997,9 +1163,11 @@ impl NativeToolsView {
                         hotkey.key.clone(),
                         false,
                         false,
+                        row,
                         palette,
                     )),
             )
+            .child(bounds_recorder(Rc::clone(&self.list_bounds), item + 1))
             .into_any_element()
     }
 
@@ -1015,21 +1183,20 @@ impl NativeToolsView {
         ))
     }
 
-    fn editor_title(&self) -> &'static str {
-        match (&self.mode, self.tool) {
-            (Mode::Shortcut(draft), _) if draft.managed.is_some() => "Plugin shortcut",
-            (_, ToolKind::Shortcuts) => "Shortcut",
-            (_, ToolKind::Hotkeys) => "Hotkey",
-        }
+    fn editor_crumb(&self) -> String {
+        self.editor
+            .as_ref()
+            .map(|editor| editor.crumb.clone())
+            .unwrap_or_default()
     }
 
     fn render_shortcut_editor(
         &self,
-        window: &mut Window,
         draft: &ShortcutDraft,
+        crumb: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut body = self.editor_body();
+        let mut body = self.editor_body(crumb, draft.sub_header());
         if let Some(managed) = &draft.managed {
             return body
                 .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
@@ -1042,7 +1209,6 @@ impl NativeToolsView {
                 ))
                 .child(self.read_only_field(0, "Runs", &managed.action))
                 .child(self.read_only_field(1, "Owned by", &managed.plugin_id))
-                .child(self.render_save_row(cx))
                 .into_any_element();
         }
         body = body
@@ -1055,7 +1221,6 @@ impl NativeToolsView {
                 cx,
             ))
             .child(self.text_field(
-                window,
                 TextFieldSpec {
                     index: 2,
                     label: "Name",
@@ -1083,7 +1248,6 @@ impl NativeToolsView {
                         cx,
                     ))
                     .child(self.text_field(
-                        window,
                         TextFieldSpec {
                             index: 5,
                             label: "App",
@@ -1097,7 +1261,6 @@ impl NativeToolsView {
             ShortcutActionKind::Url => {
                 body = body
                     .child(self.text_field(
-                        window,
                         TextFieldSpec {
                             index: 4,
                             label: "URL",
@@ -1124,7 +1287,6 @@ impl NativeToolsView {
                             cx,
                         ))
                         .child(self.text_field(
-                            window,
                             TextFieldSpec {
                                 index: 7,
                                 label: "Browser",
@@ -1137,10 +1299,15 @@ impl NativeToolsView {
                 }
             }
         }
-        body.child(self.render_save_row(cx)).into_any_element()
+        body.into_any_element()
     }
 
-    fn render_hotkey_editor(&self, draft: &HotkeyDraft, cx: &mut Context<Self>) -> AnyElement {
+    fn render_hotkey_editor(
+        &self,
+        draft: &HotkeyDraft,
+        crumb: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let plugin = self.current_plugin(&draft.plugin_uid);
         let plugin_label = plugin
             .map(|plugin| plugin.name.as_str())
@@ -1155,47 +1322,12 @@ impl NativeToolsView {
                     draft.action.as_str()
                 }
             });
-        self.editor_body()
+        self.editor_body(crumb, draft.sub_header())
             .child(self.boolean_field(0, "Active", draft.enabled, draft.selected == 0, cx))
             .child(self.select_field(1, "Plugin", plugin_label, draft.selected == 1, cx))
             .child(self.select_field(2, "Action", action_label, draft.selected == 2, cx))
             .child(self.capture_field(draft, cx))
-            .child(self.render_save_row(cx))
             .into_any_element()
-    }
-
-    fn render_save_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = settings_panel_runtime();
-        SettingsRow::rule("native-tools-save", palette)
-            .selected(self.save_selected(), self.body_focused)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.select_save_row();
-                this.save_current(cx);
-                cx.notify();
-            }))
-            .child(settings_label(
-                if self.pending { "Saving" } else { "Save" },
-                palette,
-            ))
-            .child(if self.pending {
-                settings_action_spinner("native-tools-save-spinner", palette).into_any_element()
-            } else {
-                qol_gpui::kit::kit().keycap("\u{21b5}").into_any_element()
-            })
-            .into_any_element()
-    }
-
-    fn save_selected(&self) -> bool {
-        self.editor_selected() == self.editor_field_count()
-    }
-
-    fn select_save_row(&mut self) {
-        let count = self.editor_field_count();
-        match &mut self.mode {
-            Mode::Shortcut(draft) => draft.selected = count,
-            Mode::Hotkey(draft) => draft.selected = count,
-            Mode::List => {}
-        }
     }
 
     fn save_current(&mut self, cx: &mut Context<Self>) {
@@ -1206,7 +1338,7 @@ impl NativeToolsView {
         }
     }
 
-    fn editor_body(&self) -> Div {
+    fn editor_body(&self, crumb: &str, sub_header: &'static str) -> Div {
         div()
             .flex_1()
             .min_h_0()
@@ -1215,8 +1347,8 @@ impl NativeToolsView {
             .gap(px(qol_theme::SPACE_TIGHT))
             .child(
                 SettingsGroupHeader::new(
-                    self.editor_title(),
-                    Some(self.editor_detail().into()),
+                    crumb.to_owned(),
+                    Some(sub_header.into()),
                     settings_panel_runtime(),
                 )
                 .current(self.body_focused),
@@ -1227,16 +1359,12 @@ impl NativeToolsView {
         let palette = settings_panel_runtime();
         SettingsRow::rule(("native-tools-readonly", index), palette)
             .child(settings_label(label, palette))
-            .child(settings_description(value.to_string(), palette))
+            .child(settings_description(
+                value.to_string(),
+                RowGround::of(false, self.body_focused),
+                palette,
+            ))
             .into_any_element()
-    }
-
-    fn editor_detail(&self) -> &'static str {
-        match (&self.mode, self.tool) {
-            (Mode::Shortcut(draft), _) if draft.managed.is_some() => "What this plugin runs.",
-            (_, ToolKind::Shortcuts) => "What this name runs.",
-            (_, ToolKind::Hotkeys) => "What these keys run.",
-        }
     }
 
     fn editor_field_count(&self) -> usize {
@@ -1256,6 +1384,7 @@ impl NativeToolsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = settings_panel_runtime();
+        let row = RowGround::of(selected, self.body_focused);
         SettingsRow::rule(("native-tools-boolean", index), palette)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1264,7 +1393,8 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(settings_label(label, palette))
-            .child(SettingsToggle::new(value, palette))
+            .child(SettingsToggle::new(value, row, palette))
+            .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
 
@@ -1277,6 +1407,7 @@ impl NativeToolsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = settings_panel_runtime();
+        let row = RowGround::of(selected, self.body_focused);
         SettingsRow::rule(("native-tools-select", index), palette)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1285,57 +1416,12 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(settings_label(label, palette))
-            .child(
-                div()
-                    .relative()
-                    .flex_none()
-                    .children(self.render_field_menu(index, cx))
-                    .child(SettingsSelectValue::new(value.to_string(), palette)),
-            )
+            .child(SettingsSelectValue::new(value.to_string(), row, palette))
+            .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
 
-    fn render_field_menu(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let open = self.menu.as_ref().filter(|open| open.field == index)?;
-        let labels = self.select_labels(self.select_field_at(index)?);
-        let view = cx.weak_entity();
-        let dismiss_view = cx.weak_entity();
-        Some(
-            open.menu
-                .render_clickable(
-                    format!("native-tools-menu-{index}"),
-                    &labels,
-                    settings_dropdown_style(settings_panel_runtime()),
-                    move |choice, event, _, cx| {
-                        if !event.standard_click() {
-                            return;
-                        }
-                        cx.stop_propagation();
-                        let view = view.clone();
-                        cx.defer(move |cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                this.pick_menu(choice);
-                                cx.notify();
-                            });
-                        });
-                    },
-                    move |_, cx| {
-                        let _ = dismiss_view.update(cx, |this, cx| {
-                            this.menu = None;
-                            cx.notify();
-                        });
-                    },
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn text_field(
-        &self,
-        window: &mut Window,
-        spec: TextFieldSpec<'_>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn text_field(&self, spec: TextFieldSpec<'_>, cx: &mut Context<Self>) -> AnyElement {
         let TextFieldSpec {
             index,
             label,
@@ -1344,29 +1430,13 @@ impl NativeToolsView {
             selected,
         } = spec;
         let palette = settings_panel_runtime();
-        let text = if selected {
-            self.editor_text.text()
-        } else {
-            value
-        };
-        let empty = text.is_empty();
-        let focused = selected;
-        let mono = font(qol_theme::font_mono());
-        let advance =
-            qol_gpui::text::shaped_width(window, "0", mono.clone(), qol_theme::TEXT_CAPTION);
-        let content_px = qol_gpui::text::shaped_width(window, text, mono, qol_theme::TEXT_CAPTION)
-            + 2.0 * qol_theme::SPACE_CELL
-            + 2.0;
-        let field_width = content_px.clamp(180.0, 320.0);
-        let available = field_width - 2.0 * qol_theme::SPACE_CELL - 2.0 - 2.0;
-        let visible = text_edit::visible_char_count(available, advance);
+        let row = RowGround::of(selected, self.body_focused);
         let field = if selected {
-            SettingsTextField::editable(&self.editor_text, visible, advance, focused, palette)
+            SettingsTextField::live(self.editor_text.clone(), row, palette)
         } else {
-            SettingsTextField::new(text.to_owned(), empty, focused, palette)
+            SettingsTextField::new(value.to_owned(), value.is_empty(), false, row, palette)
                 .placeholder(placeholder)
-        }
-        .width(field_width);
+        };
         SettingsRow::rule(("native-tools-text", index), palette)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1375,12 +1445,14 @@ impl NativeToolsView {
             }))
             .child(settings_label(label, palette))
             .child(field)
+            .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
 
     fn capture_field(&self, draft: &HotkeyDraft, cx: &mut Context<Self>) -> AnyElement {
         let palette = settings_panel_runtime();
         let selected = draft.selected == 3;
+        let row = RowGround::of(selected, self.body_focused);
         let display = if draft.recording {
             "Press a shortcut…  Esc cancels".to_string()
         } else if draft.key.is_empty() {
@@ -1400,8 +1472,10 @@ impl NativeToolsView {
                 display,
                 selected,
                 draft.recording,
+                row,
                 palette,
             ))
+            .child(bounds_recorder(Rc::clone(&self.field_bounds), 3))
             .into_any_element()
     }
 
@@ -1418,7 +1492,7 @@ impl NativeToolsView {
     fn activate_editor_field(&mut self, cx: &mut Context<Self>) {
         let field = self.editor_selected();
         if self.select_field_at(field).is_some() {
-            self.open_menu(field);
+            self.open_choose(field);
             return;
         }
         match &mut self.mode {
@@ -1461,29 +1535,6 @@ impl NativeToolsView {
         }
     }
 
-    fn select_labels(&self, field: SelectField) -> Vec<String> {
-        match field {
-            SelectField::ActionKind => [ShortcutActionKind::App, ShortcutActionKind::Url]
-                .iter()
-                .map(|kind| kind.label().to_string())
-                .collect(),
-            SelectField::TargetKind | SelectField::BrowserKind => AppRefKind::ALL
-                .iter()
-                .map(|kind| kind.label().to_string())
-                .collect(),
-            SelectField::Plugin => self
-                .plugins
-                .iter()
-                .map(|plugin| plugin.name.clone())
-                .collect(),
-            SelectField::Action => self
-                .draft_actions()
-                .into_iter()
-                .map(|action| action.label)
-                .collect(),
-        }
-    }
-
     fn draft_actions(&self) -> Vec<ActionOption> {
         let Mode::Hotkey(draft) = &self.mode else {
             return Vec::new();
@@ -1494,50 +1545,126 @@ impl NativeToolsView {
         available_actions(plugin, &self.hotkeys, draft.original_id.as_deref())
     }
 
-    fn select_index(&self, field: SelectField) -> usize {
-        match (&self.mode, field) {
-            (Mode::Shortcut(draft), SelectField::ActionKind) => {
-                usize::from(draft.action_kind == ShortcutActionKind::Url)
-            }
-            (Mode::Shortcut(draft), SelectField::TargetKind) => AppRefKind::ALL
+    fn choose_count(&self, select: SelectField) -> usize {
+        self.choose_options(select).len()
+    }
+
+    fn choose_options(&self, select: SelectField) -> Vec<(String, Option<String>)> {
+        match select {
+            SelectField::ActionKind => [ShortcutActionKind::App, ShortcutActionKind::Url]
                 .iter()
-                .position(|kind| *kind == draft.target_kind)
-                .unwrap_or(0),
-            (Mode::Shortcut(draft), SelectField::BrowserKind) => AppRefKind::ALL
+                .map(|kind| (kind.label().to_string(), Some(kind.picture().to_string())))
+                .collect(),
+            SelectField::TargetKind => AppRefKind::ALL
                 .iter()
-                .position(|kind| *kind == draft.browser_kind)
-                .unwrap_or(0),
-            (Mode::Hotkey(draft), SelectField::Plugin) => self
+                .map(|kind| (kind.label().to_string(), Some(kind.picture().to_string())))
+                .collect(),
+            SelectField::BrowserKind => AppRefKind::ALL
+                .iter()
+                .map(|kind| {
+                    (
+                        kind.label().to_string(),
+                        Some(kind.browser_picture().to_string()),
+                    )
+                })
+                .collect(),
+            SelectField::Plugin => self
                 .plugins
                 .iter()
-                .position(|plugin| plugin.uid == draft.plugin_uid)
-                .unwrap_or(0),
-            (Mode::Hotkey(draft), SelectField::Action) => self
+                .map(|plugin| (plugin.name.clone(), None))
+                .collect(),
+            SelectField::Action => self
                 .draft_actions()
-                .iter()
-                .position(|action| action.id == draft.action)
-                .unwrap_or(0),
-            _ => 0,
+                .into_iter()
+                .map(|action| (action.label, action.picture))
+                .collect(),
         }
     }
 
-    fn open_menu(&mut self, field: usize) {
+    fn choose_saved(&self, select: SelectField) -> Option<usize> {
+        let editor = self.editor.as_ref()?;
+        match (&self.mode, &editor.initial) {
+            (Mode::Hotkey(current), Mode::Hotkey(initial)) => {
+                if initial.original_id.is_none()
+                    || (select == SelectField::Action && current.plugin_uid != initial.plugin_uid)
+                {
+                    return None;
+                }
+            }
+            (_, Mode::Shortcut(initial)) => {
+                if initial.original_id.is_none()
+                    || (select == SelectField::TargetKind
+                        && initial.action_kind != ShortcutActionKind::App)
+                    || (select == SelectField::BrowserKind
+                        && (initial.action_kind != ShortcutActionKind::Url
+                            || !initial.browser_override))
+                {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+        mode_select_index(&editor.initial, select, &self.plugins, &self.hotkeys)
+    }
+
+    fn select_index(&self, select: SelectField) -> usize {
+        mode_select_index(&self.mode, select, &self.plugins, &self.hotkeys).unwrap_or(0)
+    }
+
+    fn open_choose(&mut self, field: usize) {
         let Some(select) = self.select_field_at(field) else {
             return;
         };
-        let count = self.select_labels(select).len();
-        if count == 0 {
+        if self.choose_count(select) == 0 {
             return;
         }
-        let menu = Dropdown::open(count, self.select_index(select));
-        self.menu = Some(FieldMenu { field, menu });
+        let highlighted = self.select_index(select);
+        let mark = self.field_mark(field);
+        if let Some(editor) = self.editor.as_mut() {
+            editor.choose = Some(ToolChoose {
+                field,
+                select,
+                highlighted,
+            });
+        }
+        self.marks.push(mark);
+        self.editor_step = self.editor_step.wrapping_add(1);
+        self.editor_motion = Some(deck::Motion::Push);
     }
 
-    fn pick_menu(&mut self, choice: usize) {
-        let Some(open) = self.menu.take() else {
+    fn close_choose(&mut self, cx: &mut Context<Self>) {
+        let Some(choose) = self.editor.as_mut().and_then(|editor| editor.choose.take()) else {
             return;
         };
-        let Some(select) = self.select_field_at(open.field) else {
+        self.choose_closing = Some(choose);
+        self.marks.pop();
+        self.editor_motion = None;
+        self.editor_step = self.editor_step.wrapping_add(1);
+        deck::after_transition(cx, |view, cx| {
+            view.choose_closing = None;
+            cx.notify();
+        });
+    }
+
+    fn drop_choose(&mut self) {
+        if let Some(editor) = self.editor.as_mut() {
+            editor.choose = None;
+        }
+        self.choose_closing = None;
+        self.editor_motion = None;
+        self.marks.truncate(EDITOR_DEPTH);
+    }
+
+    fn choose_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(choose) = self.editor.as_ref().and_then(|editor| editor.choose) else {
+            return;
+        };
+        self.apply_choice(choose.field, index);
+        self.close_choose(cx);
+    }
+
+    fn apply_choice(&mut self, field: usize, choice: usize) {
+        let Some(select) = self.select_field_at(field) else {
             return;
         };
         match select {
@@ -1567,13 +1694,16 @@ impl NativeToolsView {
                 let Some(plugin) = self.plugins.get(choice).cloned() else {
                     return;
                 };
-                let action = available_actions(&plugin, &self.hotkeys, None)
-                    .first()
-                    .map(|action| action.id.clone())
-                    .unwrap_or_default();
                 if let Mode::Hotkey(draft) = &mut self.mode {
-                    draft.plugin_uid = plugin.uid.clone();
-                    draft.action = action;
+                    if draft.plugin_uid != plugin.uid {
+                        let action =
+                            available_actions(&plugin, &self.hotkeys, draft.original_id.as_deref())
+                                .first()
+                                .map(|action| action.id.clone())
+                                .unwrap_or_default();
+                        draft.plugin_uid = plugin.uid.clone();
+                        draft.action = action;
+                    }
                 }
             }
             SelectField::Action => {
@@ -1586,36 +1716,346 @@ impl NativeToolsView {
             }
         }
     }
+
+    fn editor_changed(&self) -> bool {
+        let Some(editor) = &self.editor else {
+            return false;
+        };
+        match (&self.mode, &editor.initial) {
+            (Mode::Shortcut(draft), Mode::Shortcut(initial)) => !draft.same_values(initial),
+            (Mode::Hotkey(draft), Mode::Hotkey(initial)) => !draft.same_values(initial),
+            _ => false,
+        }
+    }
+
+    fn editor_first_empty(&self) -> Option<(usize, &'static str)> {
+        match &self.mode {
+            Mode::Shortcut(draft) => draft.first_empty(),
+            Mode::Hotkey(draft) => draft.first_empty(),
+            Mode::List => None,
+        }
+    }
+
+    fn set_question(&mut self, question: Option<EditorQuestion>) {
+        if let Some(editor) = self.editor.as_mut() {
+            editor.question = question;
+        }
+    }
+
+    fn escape_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor_changed() {
+            let question = EditorQuestion::for_empty(self.editor_first_empty());
+            self.set_question(Some(question));
+        } else {
+            self.escape(window, cx);
+        }
+    }
+
+    fn editor_question_text(&self, question: EditorQuestion) -> String {
+        let crumb = self.editor_crumb();
+        match &self.mode {
+            Mode::Shortcut(draft) => {
+                question_text(question, "shortcut", draft.original_id.is_none(), &crumb)
+            }
+            Mode::Hotkey(draft) => {
+                question_text(question, "hotkey", draft.original_id.is_none(), &crumb)
+            }
+            Mode::List => String::new(),
+        }
+    }
+
+    fn field_hints(&self) -> CustomHints {
+        let selected = self.editor_selected();
+        if self.capture_recording() {
+            return CustomHints {
+                question: None,
+                left: Vec::new(),
+                right: vec![SettingsHint::new("esc", "cancel")],
+            };
+        }
+        let mut left = vec![
+            SettingsHint::new("\u{21b5}", self.field_hint_label(selected)),
+            SettingsHint::new("\u{2191}\u{2193}", "move"),
+        ];
+        if self.selected_field_is_text(selected) {
+            left.push(SettingsHint::new("type", "edit"));
+        }
+        CustomHints {
+            question: None,
+            left,
+            right: vec![SettingsHint::new(
+                "esc",
+                if self.editor_changed() {
+                    "back, asks to save"
+                } else {
+                    "back"
+                },
+            )],
+        }
+    }
+
+    fn field_hint_label(&self, selected: usize) -> &'static str {
+        if self.select_field_at(selected).is_some() {
+            return "choose";
+        }
+        if self.selected_field_is_text(selected) {
+            return "next";
+        }
+        if matches!(&self.mode, Mode::Hotkey(draft) if draft.selected == 3) {
+            return "record";
+        }
+        "flip"
+    }
+
+    fn selected_field_is_text(&self, selected: usize) -> bool {
+        match &self.mode {
+            Mode::Shortcut(draft) => shortcut_field_is_text(draft, selected),
+            Mode::Hotkey(_) | Mode::List => false,
+        }
+    }
+
+    fn capture_recording(&self) -> bool {
+        matches!(&self.mode, Mode::Hotkey(draft) if draft.recording)
+    }
+
+    fn render_choose_page(&self, choose: ToolChoose, cx: &mut Context<Self>) -> AnyElement {
+        let palette = settings_panel_runtime();
+        let options = self.choose_options(choose.select);
+        let names = options
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        let pictures = options
+            .iter()
+            .map(|(_, picture)| picture.as_deref())
+            .collect::<Vec<_>>();
+        let arts = tile_arts(&names, &pictures);
+        let layout = tile_layout(arts.len());
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
+        let saved = self.choose_saved(choose.select);
+        let mut tiles = Vec::with_capacity(arts.len());
+        for (index, ((name, _), art)) in options.iter().zip(arts).enumerate() {
+            tiles.push(
+                SettingsTile::new(
+                    ("native-tools-choose-tile", index),
+                    name.clone(),
+                    art,
+                    layout,
+                    context,
+                    palette,
+                )
+                .highlighted(index == choose.highlighted && self.body_focused)
+                .ticked(saved == Some(index))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.choose_index(index, cx);
+                    cx.notify();
+                }))
+                .into_any_element(),
+            );
+        }
+        let mut body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(qol_theme::SPACE_TIGHT))
+            .child(
+                SettingsGroupHeader::new(
+                    choose_label(choose.select),
+                    Some(choose_sub_header(choose.select).into()),
+                    palette,
+                )
+                .current(self.body_focused),
+            );
+        for row in settings_tile_rows(layout.per_row, tiles) {
+            body = body.child(row);
+        }
+        body.into_any_element()
+    }
 }
 
 impl CustomSettingsBreadcrumbs for NativeToolsView {
     fn settings_breadcrumbs(&self) -> Vec<SettingsDestination> {
-        breadcrumb_destinations(&self.mode)
+        let Some(editor) = &self.editor else {
+            return Vec::new();
+        };
+        let choose = editor.choose.map(|choose| choose.select);
+        breadcrumbs(&editor.crumb, choose)
+    }
+
+    fn settings_hints(&self) -> Option<CustomHints> {
+        let editor = self.editor.as_ref()?;
+        let choose = editor.choose;
+        let question = editor.question;
+        if let Some(choose) = choose {
+            return Some(CustomHints {
+                question: None,
+                left: choose_hints(self.choose_count(choose.select)),
+                right: Vec::new(),
+            });
+        }
+        if self.pending {
+            return Some(CustomHints {
+                question: question.map(|question| self.editor_question_text(question).into()),
+                left: vec![SettingsHint::busy("saving")],
+                right: vec![SettingsHint::new("esc", "back")],
+            });
+        }
+        if let Some(question) = question {
+            let left = match question {
+                EditorQuestion::Save => {
+                    vec![SettingsHint::new("\u{21b5}", "save").tone(HintTone::Save)]
+                }
+                EditorQuestion::Blocked { .. } => {
+                    vec![SettingsHint::new("\u{21b5}", "fill it in")]
+                }
+            };
+            return Some(CustomHints {
+                question: Some(self.editor_question_text(question).into()),
+                left,
+                right: vec![SettingsHint::new("esc", "discard").tone(HintTone::Discard)],
+            });
+        }
+        Some(self.field_hints())
     }
 }
 
-fn breadcrumb_destinations(mode: &Mode) -> Vec<SettingsDestination> {
+fn breadcrumbs(crumb: &str, choose: Option<SelectField>) -> Vec<SettingsDestination> {
+    let mut destinations = Vec::new();
+    if let Ok(destination) = SettingsDestination::new(crumb) {
+        destinations.push(destination);
+    }
+    if let Some(select) = choose {
+        if let Ok(destination) = SettingsDestination::new(choose_label(select)) {
+            destinations.push(destination);
+        }
+    }
+    destinations
+}
+
+fn mode_crumb(mode: &Mode, plugins: &[PluginOption]) -> String {
     match mode {
-        Mode::List => Vec::new(),
-        Mode::Shortcut(draft) => vec![shortcut_destination(draft)],
-        Mode::Hotkey(draft) => vec![hotkey_destination(draft)],
+        Mode::List => "add".to_string(),
+        Mode::Shortcut(draft) => draft.crumb(),
+        Mode::Hotkey(draft) => hotkey_crumb(draft, plugins),
     }
 }
 
-fn shortcut_destination(draft: &ShortcutDraft) -> SettingsDestination {
-    if draft.managed.is_some() || draft.original_id.is_some() {
-        EDIT_SHORTCUT_DESTINATION
-    } else {
-        ADD_SHORTCUT_DESTINATION
+fn hotkey_crumb(draft: &HotkeyDraft, plugins: &[PluginOption]) -> String {
+    if draft.original_id.is_none() {
+        return "add".to_string();
+    }
+    let label = plugins
+        .iter()
+        .find(|plugin| plugin.uid == draft.plugin_uid)
+        .and_then(|plugin| {
+            plugin
+                .actions
+                .iter()
+                .find(|action| action.id == draft.action)
+        })
+        .map(|action| action.label.clone());
+    match label {
+        Some(label) => label,
+        None if draft.action.is_empty() => "hotkey".to_string(),
+        None => draft.action.clone(),
     }
 }
 
-fn hotkey_destination(draft: &HotkeyDraft) -> SettingsDestination {
-    if draft.original_id.is_some() {
-        EDIT_HOTKEY_DESTINATION
-    } else {
-        ADD_HOTKEY_DESTINATION
+fn choose_label(select: SelectField) -> &'static str {
+    match select {
+        SelectField::ActionKind | SelectField::Action => "Action",
+        SelectField::TargetKind => "App reference",
+        SelectField::BrowserKind => "Browser reference",
+        SelectField::Plugin => "Plugin",
     }
+}
+
+fn choose_sub_header(select: SelectField) -> &'static str {
+    match select {
+        SelectField::ActionKind => "What the shortcut does.",
+        SelectField::TargetKind => "How qol finds the app.",
+        SelectField::BrowserKind => "How qol finds the browser.",
+        SelectField::Plugin => "Which plugin the hotkey runs.",
+        SelectField::Action => "What the hotkey does.",
+    }
+}
+
+fn mode_select_index(
+    mode: &Mode,
+    select: SelectField,
+    plugins: &[PluginOption],
+    hotkeys: &[HotkeyBinding],
+) -> Option<usize> {
+    match (mode, select) {
+        (Mode::Shortcut(draft), SelectField::ActionKind) => {
+            Some(usize::from(draft.action_kind == ShortcutActionKind::Url))
+        }
+        (Mode::Shortcut(draft), SelectField::TargetKind) => AppRefKind::ALL
+            .iter()
+            .position(|kind| *kind == draft.target_kind),
+        (Mode::Shortcut(draft), SelectField::BrowserKind) => AppRefKind::ALL
+            .iter()
+            .position(|kind| *kind == draft.browser_kind),
+        (Mode::Hotkey(draft), SelectField::Plugin) => plugins
+            .iter()
+            .position(|plugin| plugin.uid == draft.plugin_uid),
+        (Mode::Hotkey(draft), SelectField::Action) => {
+            let plugin = plugins
+                .iter()
+                .find(|plugin| plugin.uid == draft.plugin_uid)?;
+            available_actions(plugin, hotkeys, draft.original_id.as_deref())
+                .iter()
+                .position(|action| action.id == draft.action)
+        }
+        _ => None,
+    }
+}
+
+fn shortcut_field_is_text(draft: &ShortcutDraft, selected: usize) -> bool {
+    match (draft.action_kind, selected) {
+        (_, 2) => true,
+        (ShortcutActionKind::App, 5) => true,
+        (ShortcutActionKind::Url, 4) => true,
+        (ShortcutActionKind::Url, 7) => draft.browser_override,
+        _ => false,
+    }
+}
+
+fn bounds_recorder(store: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>, index: usize) -> AnyElement {
+    canvas(
+        move |bounds, _, _| {
+            store.borrow_mut().insert(index, bounds);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
+    .into_any_element()
+}
+
+fn row_mark(
+    rows: &RefCell<HashMap<usize, Bounds<Pixels>>>,
+    index: usize,
+    body: Option<Bounds<Pixels>>,
+) -> Option<f32> {
+    let row = rows.borrow().get(&index).copied()?;
+    let body = body?;
+    Some((row.origin.y + row.size.height / 2.0 - body.origin.y).to_f64() as f32)
+}
+
+fn deck_shell(deck: Div) -> AnyElement {
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_row()
+        .items_start()
+        .child(deck)
+        .into_any_element()
 }
 
 impl Focusable for NativeToolsView {
@@ -1649,8 +2089,8 @@ impl Render for NativeToolsView {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(self.measure_body_width())
-                    .child(self.render_body(window, cx)),
+                    .child(self.measure_body_bounds())
+                    .child(self.render_body(cx)),
             )
     }
 }
@@ -1670,85 +2110,6 @@ fn navigate_form(selected: &mut usize, count: usize, event: &KeyDownEvent) -> bo
         }
         _ => return false,
     }
-    true
-}
-
-fn apply_shortcut_field(
-    draft: &mut ShortcutDraft,
-    field: &mut TextField,
-    event: &KeyDownEvent,
-    cx: &mut Context<NativeToolsView>,
-) -> bool {
-    let key = event.keystroke.key.as_str();
-    let modifiers = &event.keystroke.modifiers;
-    if matches!(key, "enter" | "return" | "space" | "right") && activate_shortcut_field(draft) {
-        return true;
-    }
-    if draft.managed.is_some() {
-        return false;
-    }
-    if shortcut_text_target(draft).is_none() {
-        return false;
-    }
-    if modifier_is_secondary(modifiers) && key == "v" {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            field.paste(&text);
-            sync_shortcut_target(draft, field);
-            return true;
-        }
-        return false;
-    }
-    let span = text_edit::span(modifiers);
-    match key {
-        "backspace" => {
-            if field.backspace(span) {
-                sync_shortcut_target(draft, field);
-                return true;
-            }
-            return false;
-        }
-        "delete" => {
-            if field.delete_forward(span) {
-                sync_shortcut_target(draft, field);
-                return true;
-            }
-            return false;
-        }
-        "left" => {
-            field.move_left(modifiers.shift, span);
-            return true;
-        }
-        "right" => {
-            field.move_right(modifiers.shift, span);
-            return true;
-        }
-        "home" => {
-            field.move_home(modifiers.shift);
-            return true;
-        }
-        "end" => {
-            field.move_end(modifiers.shift);
-            return true;
-        }
-        "a" if modifier_is_secondary(modifiers) => {
-            field.select_all();
-            return true;
-        }
-        _ => {}
-    }
-    if modifiers.control || modifiers.alt || modifiers.platform {
-        return false;
-    }
-    let Some(character) = event
-        .keystroke
-        .key_char
-        .as_deref()
-        .filter(|text| !text.chars().any(char::is_control))
-    else {
-        return false;
-    };
-    field.insert_str(character);
-    sync_shortcut_target(draft, field);
     true
 }
 
@@ -1774,13 +2135,7 @@ fn activate_shortcut_field(draft: &mut ShortcutDraft) -> bool {
 }
 
 fn shortcut_text_target_key(draft: &ShortcutDraft) -> Option<(usize, ShortcutActionKind, bool)> {
-    let editing = match (draft.action_kind, draft.selected) {
-        (_, 2) => true,
-        (ShortcutActionKind::App, 5) => true,
-        (ShortcutActionKind::Url, 4) => true,
-        (ShortcutActionKind::Url, 7) if draft.browser_override => true,
-        _ => false,
-    };
+    let editing = shortcut_field_is_text(draft, draft.selected);
     editing.then_some((draft.selected, draft.action_kind, draft.browser_override))
 }
 
@@ -1804,119 +2159,74 @@ fn app_placeholder(kind: AppRefKind) -> &'static str {
 
 #[cfg(test)]
 mod breadcrumb_tests {
-    use super::{breadcrumb_destinations, HotkeyDraft, Mode, Shortcut, ShortcutDraft};
-    use crate::hotkeys::HotkeyBinding;
-    use crate::plugins::PluginUid;
-    use crate::shortcuts::model::{AppRef, ShortcutAction, ShortcutSource};
+    use super::{
+        breadcrumbs, mode_crumb, ActionOption, HotkeyDraft, Mode, PluginOption, SelectField,
+        SettingsDestination, ShortcutDraft,
+    };
 
-    fn plain_shortcut() -> Shortcut {
-        Shortcut {
-            id: "docs".to_string(),
-            name: "Docs".to_string(),
-            enabled: true,
-            export_to_launcher: true,
-            source: None,
-            action: ShortcutAction::LaunchApp {
-                app: AppRef::Path {
-                    path: "/Applications/App.app".to_string(),
-                },
-            },
-        }
+    fn labels(destinations: &[SettingsDestination]) -> Vec<String> {
+        destinations
+            .iter()
+            .map(|destination| destination.label().to_string())
+            .collect()
     }
 
-    fn managed_shortcut() -> Shortcut {
-        Shortcut {
-            id: "plugin-a-open".to_string(),
-            name: "Managed".to_string(),
-            enabled: true,
-            export_to_launcher: true,
-            source: Some(ShortcutSource::PluginManifest {
-                plugin_id: "plugin-a".to_string(),
-                shortcut_id: "open".to_string(),
-            }),
-            action: ShortcutAction::PluginAction {
-                plugin_id: "plugin-a".to_string(),
-                action: "open".to_string(),
-            },
+    fn plugin() -> PluginOption {
+        PluginOption {
+            uid: "plugin-a".to_string(),
+            name: "Alt Tab".to_string(),
+            loaded: true,
+            actions: vec![ActionOption {
+                id: "open".to_string(),
+                label: "Open Switcher".to_string(),
+                picture: Some("next-window".to_string()),
+            }],
         }
-    }
-
-    fn hotkey_binding() -> HotkeyBinding {
-        HotkeyBinding {
-            id: "hk-1".to_string(),
-            key: "Ctrl+K".to_string(),
-            plugin_uid: PluginUid::new("plugin-a"),
-            action: "run".to_string(),
-            enabled: true,
-        }
-    }
-
-    fn single_label(mode: &Mode) -> String {
-        let destinations = breadcrumb_destinations(mode);
-        assert_eq!(
-            destinations.len(),
-            1,
-            "an editor mode maps to one destination",
-        );
-        destinations[0].label().to_string()
     }
 
     #[test]
-    fn list_mode_represents_the_source_root_with_no_destinations() {
-        assert!(breadcrumb_destinations(&Mode::List).is_empty());
-    }
-
-    #[test]
-    fn blank_drafts_map_to_add_destinations() {
+    fn new_editors_trail_add() {
         let shortcut = Mode::Shortcut(ShortcutDraft::blank());
-        assert_eq!(single_label(&shortcut), "Add Shortcut");
+        assert_eq!(
+            labels(&breadcrumbs(&mode_crumb(&shortcut, &[]), None)),
+            ["add"]
+        );
         let hotkey = Mode::Hotkey(HotkeyDraft::blank(&[], &[]));
-        assert_eq!(single_label(&hotkey), "Add Hotkey");
+        assert_eq!(
+            labels(&breadcrumbs(&mode_crumb(&hotkey, &[]), None)),
+            ["add"]
+        );
     }
 
     #[test]
-    fn existing_drafts_map_to_edit_destinations() {
-        let shortcut = ShortcutDraft::from_shortcut(&plain_shortcut());
-        assert_eq!(single_label(&Mode::Shortcut(shortcut)), "Edit Shortcut");
-        let hotkey = HotkeyDraft::from_hotkey(&hotkey_binding());
-        assert_eq!(single_label(&Mode::Hotkey(hotkey)), "Edit Hotkey");
-    }
-
-    #[test]
-    fn plugin_managed_shortcut_editors_get_an_explicit_destination() {
-        let draft = ShortcutDraft::from_shortcut(&managed_shortcut());
-        let destinations = breadcrumb_destinations(&Mode::Shortcut(draft));
-        assert_eq!(destinations.len(), 1);
-        assert_eq!(destinations[0].label(), "Edit Shortcut");
-    }
-
-    #[test]
-    fn destination_identity_follows_the_draft_identity_the_renderer_uses() {
+    fn an_existing_shortcut_trails_its_name() {
         let mut draft = ShortcutDraft::blank();
-        assert_eq!(single_label(&Mode::Shortcut(draft.clone())), "Add Shortcut");
         draft.original_id = Some("docs".to_string());
-        assert_eq!(single_label(&Mode::Shortcut(draft)), "Edit Shortcut");
-
-        let mut hotkey = HotkeyDraft::blank(&[], &[]);
-        assert_eq!(single_label(&Mode::Hotkey(hotkey.clone())), "Add Hotkey");
-        hotkey.original_id = Some("hk-1".to_string());
-        assert_eq!(single_label(&Mode::Hotkey(hotkey)), "Edit Hotkey");
+        draft.name = "  Docs  ".to_string();
+        let mode = Mode::Shortcut(draft);
+        assert_eq!(
+            labels(&breadcrumbs(&mode_crumb(&mode, &[]), None)),
+            ["Docs"]
+        );
     }
 
     #[test]
-    fn every_mapped_destination_carries_a_nonempty_label() {
-        let modes = [
-            Mode::List,
-            Mode::Shortcut(ShortcutDraft::blank()),
-            Mode::Shortcut(ShortcutDraft::from_shortcut(&plain_shortcut())),
-            Mode::Shortcut(ShortcutDraft::from_shortcut(&managed_shortcut())),
-            Mode::Hotkey(HotkeyDraft::blank(&[], &[])),
-            Mode::Hotkey(HotkeyDraft::from_hotkey(&hotkey_binding())),
-        ];
-        for mode in &modes {
-            for destination in breadcrumb_destinations(mode) {
-                assert!(!destination.label().trim().is_empty());
-            }
-        }
+    fn a_hotkey_trails_its_action_label() {
+        let plugins = [plugin()];
+        let mut draft = HotkeyDraft::blank(&plugins, &[]);
+        draft.original_id = Some("hk-1".to_string());
+        let mode = Mode::Hotkey(draft);
+        assert_eq!(
+            labels(&breadcrumbs(&mode_crumb(&mode, &plugins), None)),
+            ["Open Switcher"]
+        );
+    }
+
+    #[test]
+    fn a_choose_card_appends_its_label() {
+        assert_eq!(
+            labels(&breadcrumbs("Docs", Some(SelectField::TargetKind))),
+            ["Docs", "App reference"]
+        );
     }
 }

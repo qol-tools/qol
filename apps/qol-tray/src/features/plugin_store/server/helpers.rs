@@ -181,6 +181,7 @@ pub(super) fn extract_actions(manifest: &PluginManifest) -> Vec<PluginAction> {
             id: action.id,
             label: action.label,
             kind: action.kind,
+            picture: action.picture,
         })
         .collect()
 }

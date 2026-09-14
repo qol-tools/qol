@@ -21,6 +21,7 @@ args = ["status"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [menu]
