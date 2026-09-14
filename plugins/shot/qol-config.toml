@@ -23,11 +23,16 @@ description = "Linux-only PulseAudio inputs."
 section = "audio"
 placeholder = "mic"
 default = ["mic"]
+card_description = "What recordings capture."
 options = ["mic", "system"]
 
 [field.audio_inputs.option_labels]
 mic = "Microphone"
 system = "System Audio"
+
+[field.audio_inputs.option_pictures]
+mic = "mic-default"
+system = "speaker-default"
 
 [field.audio_mic_device]
 type = "select"

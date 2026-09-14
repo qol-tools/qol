@@ -16,12 +16,11 @@ mod modifier_chip;
 mod number_field;
 mod qr_code;
 mod row;
-mod select_value;
 mod text_field;
 mod tile;
 mod toggle;
 
-pub use choice_value::SettingsChoiceValue;
+pub use choice_value::{ChoiceArt, SettingsChoiceValue};
 pub use display_layout_tile::{
     display_layout_stage, display_layout_tile, display_layout_tile_style, DisplayLayoutTile,
     DisplayLayoutTileStyle,
@@ -34,7 +33,6 @@ pub use modifier_chip::SettingsModifierChip;
 pub(super) use number_field::number_field;
 pub(super) use qr_code::qr_code_display;
 pub use row::SettingsRow;
-pub use select_value::SettingsSelectValue;
 pub use text_field::SettingsTextField;
 pub use tile::{
     choose_hints, choose_step, settings_tile_rows, tile_arts, tile_grid_gap, tile_layout,
@@ -43,7 +41,6 @@ pub use tile::{
 pub use toggle::SettingsToggle;
 
 pub const DIMMED_OPACITY: f32 = 0.5;
-const FIELD_MIN_WIDTH: f32 = 180.0;
 const CHOICE_WORD_MAX_WIDTH: f32 = 180.0;
 const CHOICE_PICTURE_WIDTH: f32 = 56.0;
 const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
@@ -51,7 +48,6 @@ const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
 const CHOICE_CHEVRON_HEIGHT: f32 = 14.0;
 const CHOICE_CHEVRON_REST_OPACITY: f32 = 0.4;
 const TEXT_FIELD_MIN_WIDTH: f32 = 220.0;
-const VALUE_MAX_WIDTH: f32 = 280.0;
 const FIELD_MAX_WIDTH: f32 = 320.0;
 const TILE_SPINNER_SIZE: f32 = 44.0;
 

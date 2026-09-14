@@ -52,6 +52,7 @@ pub const PICTURE_NAMES: &[&str] = &[
     "family-auto",
     "fixed-size",
     "relative-size",
+    "display-mode",
 ];
 
 const SWATCH_ARGUMENTS: [&str; 6] = ["amber", "green", "cyan", "magenta", "blue", "violet"];
@@ -81,6 +82,7 @@ pub fn is_picture_spec(spec: &str) -> bool {
         "format" => argument.is_some_and(|value| text_without_whitespace(value, 1, 5)),
         "terminal-session" => argument.is_some_and(|value| text_length(value, 1, 24)),
         "local-engine" => argument.is_some_and(|value| text_length(value, 1, 12)),
+        "display-mode" => argument.is_some_and(display_mode_size),
         _ => argument.is_none(),
     }
 }
@@ -135,6 +137,14 @@ fn json_property<'a>(entry: &'a serde_json::Value, name: &str) -> Option<&'a str
 
 fn is_swatch(value: &str) -> bool {
     SWATCH_ARGUMENTS.contains(&value)
+}
+
+fn display_mode_size(value: &str) -> bool {
+    let mut parts = value.split('x');
+    let (Some(width), Some(height), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    bounded_integer(width, 1, 16384) && bounded_integer(height, 1, 16384)
 }
 
 fn bounded_integer(value: &str, min: u32, max: u32) -> bool {
@@ -281,6 +291,23 @@ mod tests {
             audio_device_picture(&entry, AudioDirection::Output),
             Some("hdmi")
         );
+    }
+
+    #[test]
+    fn display_mode_specs_need_a_width_and_a_height() {
+        for spec in ["display-mode:2560x1440", "display-mode:1x1"] {
+            assert!(is_picture_spec(spec), "{spec}");
+        }
+        for spec in [
+            "display-mode",
+            "display-mode:",
+            "display-mode:0x1440",
+            "display-mode:2560",
+            "display-mode:2560x",
+            "display-mode:ax1440",
+        ] {
+            assert!(!is_picture_spec(spec), "{spec}");
+        }
     }
 
     #[test]

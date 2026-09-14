@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use qol_gpui::pictures::{
-    chevron, fitted_image, image, letters_for, markup, tick, PictureContext, Tone,
+    chevron, fitted_image, image, letters_for, markup, stacked_image, tick, PictureContext, Tone,
 };
 use qol_theme::{DesktopThemePreview, ThemeMode, WebThemePreview};
 
@@ -232,6 +232,127 @@ fn every_picture_name_fits_whole_in_both_tones() {
 }
 
 #[test]
+fn display_modes_draw_a_screen_in_their_own_shape() {
+    let context = context();
+    let wide = markup("display-mode:2560x1440", &context).unwrap_or_else(|| panic!("wide mode"));
+    assert!(wide.contains("<rect x=\"10\" y=\"5.63\" width=\"76\" height=\"42.75\" rx=\"4\"/>"));
+    let tall = markup("display-mode:1280x1024", &context).unwrap_or_else(|| panic!("tall mode"));
+    assert!(tall.contains("<rect x=\"20.5\" y=\"5\" width=\"55\" height=\"44\" rx=\"4\"/>"));
+    assert!(tall.contains("<line x1=\"48\" y1=\"49\" x2=\"48\" y2=\"55\"/>"));
+    assert!(tall.contains("<line x1=\"40\" y1=\"55\" x2=\"56\" y2=\"55\"/>"));
+}
+
+#[test]
+fn the_stack_and_the_empty_tile_render_in_both_tones() {
+    let context = context();
+    for tone in [Tone::Rest, Tone::Awake] {
+        for scale in [1.0f32, 2.0] {
+            let width_px = (56.0 * scale).round() as u32;
+            let height_px = (35.0 * scale).round() as u32;
+            let frames = [
+                stacked_image(
+                    "letters:WH",
+                    "letters:PB",
+                    SLATE.ink,
+                    tone,
+                    56.0,
+                    35.0,
+                    scale,
+                    &context,
+                ),
+                stacked_image(
+                    "mic-default",
+                    "speaker-default",
+                    SLATE.ink,
+                    tone,
+                    56.0,
+                    35.0,
+                    scale,
+                    &context,
+                ),
+                fitted_image("empty", SLATE.ink, tone, 56.0, 35.0, scale, &context),
+            ];
+            for frame in frames {
+                let rendered = frame.unwrap_or_else(|| panic!("render {tone:?} {scale}"));
+                let bytes = rendered
+                    .as_bytes(0)
+                    .unwrap_or_else(|| panic!("frame {tone:?} {scale}"));
+                assert_eq!(bytes.len(), (width_px * height_px * 4) as usize);
+                assert!(
+                    bytes.chunks(4).any(|pixel| pixel[3] != 0),
+                    "{tone:?} {scale}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_colour_choice_keeps_its_colour_at_rest() {
+    let context = context();
+    for scale in [1.0f32, 2.0] {
+        let rest = fitted_image(
+            "swatch:violet",
+            SLATE.soft,
+            Tone::Rest,
+            56.0,
+            35.0,
+            scale,
+            &context,
+        )
+        .unwrap_or_else(|| panic!("swatch rest {scale}"));
+        let awake = fitted_image(
+            "swatch:violet",
+            SLATE.soft,
+            Tone::Awake,
+            56.0,
+            35.0,
+            scale,
+            &context,
+        )
+        .unwrap_or_else(|| panic!("swatch awake {scale}"));
+        let rest_bytes = rest.as_bytes(0).unwrap_or_else(|| panic!("frame {scale}"));
+        let awake_bytes = awake.as_bytes(0).unwrap_or_else(|| panic!("frame {scale}"));
+        assert_eq!(rest_bytes, awake_bytes, "{scale}");
+        assert!(
+            rest_bytes
+                .chunks(4)
+                .any(|pixel| pixel[3] == 255 && (pixel[0] != pixel[1] || pixel[1] != pixel[2])),
+            "{scale}"
+        );
+        let letters_rest = fitted_image(
+            "letters:AT",
+            SLATE.soft,
+            Tone::Rest,
+            56.0,
+            35.0,
+            scale,
+            &context,
+        )
+        .unwrap_or_else(|| panic!("letters rest {scale}"));
+        let letters_awake = fitted_image(
+            "letters:AT",
+            SLATE.soft,
+            Tone::Awake,
+            56.0,
+            35.0,
+            scale,
+            &context,
+        )
+        .unwrap_or_else(|| panic!("letters awake {scale}"));
+        assert_ne!(
+            letters_rest
+                .as_bytes(0)
+                .unwrap_or_else(|| panic!("frame {scale}")),
+            letters_awake
+                .as_bytes(0)
+                .unwrap_or_else(|| panic!("frame {scale}")),
+            "{scale}"
+        );
+    }
+}
+
+#[test]
 fn the_tick_draws_ink() {
     let rendered = tick(0xf3f2f0, 32, 24).unwrap_or_else(|| panic!("tick"));
     let bytes = rendered.as_bytes(0).unwrap_or_else(|| panic!("frame tick"));
@@ -265,6 +386,7 @@ fn sample_spec(name: &str) -> String {
         "format" => "format:MP4".to_owned(),
         "terminal-session" => "terminal-session:claude".to_owned(),
         "local-engine" => "local-engine:onnx".to_owned(),
+        "display-mode" => "display-mode:2560x1440".to_owned(),
         other => other.to_owned(),
     }
 }

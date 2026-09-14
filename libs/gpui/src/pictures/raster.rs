@@ -80,6 +80,7 @@ pub fn fitted_image(
     scale_factor: f32,
     context: &PictureContext,
 ) -> Option<Arc<RenderImage>> {
+    let tone = fitted::tone_for(spec, tone);
     let width_px = (width * scale_factor).round() as u32;
     let height_px = (height * scale_factor).round() as u32;
     if width_px == 0 || height_px == 0 {
@@ -146,6 +147,88 @@ pub fn fitted_image(
         height_px,
         transform,
         tone == Tone::Rest,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn stacked_image(
+    front: &str,
+    back: &str,
+    line: u32,
+    tone: Tone,
+    width: f32,
+    height: f32,
+    scale_factor: f32,
+    context: &PictureContext,
+) -> Option<Arc<RenderImage>> {
+    let width_px = (width * scale_factor).round() as u32;
+    let height_px = (height * scale_factor).round() as u32;
+    if width_px == 0 || height_px == 0 {
+        return None;
+    }
+    let key = CacheKey {
+        spec: format!("stack:{front}|{back}"),
+        ink: line,
+        width_px,
+        height_px,
+        context: Some(*context),
+        fit: Some((tone, scale_factor.to_bits())),
+    };
+    if let Some(cached) = cached(&key) {
+        return Some(cached);
+    }
+    let back = stack_part(back, tone, 12.0, 0.0, "back", context)?;
+    let front = stack_part(front, tone, 0.0, 7.5, "front", context)?;
+    let markup = fitted::stacked_markup(&back, &front);
+    let source = markup.replace("currentColor", &format!("#{line:06x}"));
+    let tree = parse(&source)?;
+    let transform = scale_transform(&tree, width_px, height_px);
+    raster(
+        key,
+        &tree,
+        width_px,
+        height_px,
+        transform,
+        tone == Tone::Rest,
+    )
+}
+
+fn stack_part(
+    spec: &str,
+    tone: Tone,
+    x: f32,
+    y: f32,
+    prefix: &str,
+    context: &PictureContext,
+) -> Option<String> {
+    if fitted::is_tile(spec) {
+        return fitted::stack_tile(spec, tone, x, y, context);
+    }
+    let drawing = fitted::markup(
+        spec,
+        tone,
+        fitted::STACK_WIDTH,
+        fitted::STACK_HEIGHT,
+        context,
+    )?;
+    let tree = parse(&drawing)?;
+    let bounds = tree.root().abs_stroke_bounding_box();
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return None;
+    }
+    let fit = (fitted::STACK_WIDTH / bounds.width()).min(fitted::STACK_HEIGHT / bounds.height());
+    let drawing = fitted::with_default_stroke(&drawing, 1.0 / fit);
+    let tree = parse(&drawing)?;
+    let bounds = tree.root().abs_stroke_bounding_box();
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return None;
+    }
+    fitted::stack_drawing(
+        &drawing,
+        x,
+        y,
+        (bounds.x(), bounds.y(), bounds.width(), bounds.height()),
+        prefix,
     )
 }
 

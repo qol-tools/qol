@@ -11,9 +11,9 @@ use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
     settings_label_group, settings_message, settings_page, settings_tile_rows,
-    settings_value_group, tile_arts, tile_layout, HintTone, RowGround, SettingsChoiceValue,
-    SettingsGroupHeader, SettingsHint, SettingsKeyCombination, SettingsRow, SettingsTextField,
-    SettingsTile, SettingsToggle, TileArt,
+    settings_value_group, tile_arts, tile_layout, ChoiceArt, HintTone, RowGround,
+    SettingsChoiceValue, SettingsGroupHeader, SettingsHint, SettingsKeyCombination, SettingsRow,
+    SettingsTextField, SettingsTile, SettingsToggle, TileArt,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, CustomHints,
@@ -1422,7 +1422,7 @@ impl NativeToolsView {
             .child(settings_label(label, palette))
             .child(SettingsChoiceValue::new(
                 value.to_string(),
-                self.select_art(index, value),
+                ChoiceArt::Picture(self.select_art(index, value)),
                 row,
                 context,
                 palette,

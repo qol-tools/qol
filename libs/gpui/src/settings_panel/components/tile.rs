@@ -301,8 +301,9 @@ impl RenderOnce for SettingsTile {
         let detail = detail.map(|detail| {
             let color = if highlighted { band.soft } else { ground.faint };
             div()
-                .max_w_full()
-                .truncate()
+                .w_full()
+                .text_center()
+                .line_clamp(1)
                 .text_size(px(qol_theme::TEXT_NANO))
                 .text_color(rgb(color))
                 .child(detail)

@@ -14,8 +14,8 @@ use qol_config::contract::ResolvedRowAction;
 use super::components::{
     number_field, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
     settings_action_affordance, settings_action_spinner, settings_label_group, settings_page,
-    settings_query_spinner, settings_value_text, RowGround, SettingsChoiceValue, SettingsFeedback,
-    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsSelectValue,
+    settings_query_spinner, settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue,
+    SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
     SettingsToggle, SettingsValueTone,
 };
 use super::display_layout::DisplayLayoutState;
@@ -34,7 +34,7 @@ use super::{
 };
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
-use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
+use crate::dropdown::{Dropdown, DropdownStyle};
 use crate::gamepad::{gamepad_panel, GamepadPalette};
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
@@ -275,7 +275,6 @@ pub(super) struct SettingsPanelState {
 
 enum ActiveControl {
     Edit(String),
-    Dropdown(Dropdown),
     ListActions(ListActionMenu),
     Wheel(WheelControl),
 }
@@ -1423,13 +1422,6 @@ impl SettingsPanelView {
             self.on_list_actions_key(key, cx);
             return;
         }
-        if matches!(
-            self.level().active_control,
-            Some(ActiveControl::Dropdown(_))
-        ) {
-            self.on_dropdown_key(key, cx);
-            return;
-        }
         if !self.filter_open
             && self.stack.len() > 1
             && self.level().choose.is_some()
@@ -1677,22 +1669,6 @@ impl SettingsPanelView {
             .update(cx, |_, window, _| window.remove_window());
     }
 
-    fn on_dropdown_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(ActiveControl::Dropdown(dropdown)) = self.level_mut().active_control.as_mut()
-        else {
-            return;
-        };
-        let Some(event) = dropdown.handle_key(key) else {
-            return;
-        };
-        match event {
-            DropdownEvent::Moved => {}
-            DropdownEvent::Pick(_) => self.pick_dropdown(),
-            DropdownEvent::Close => self.level_mut().active_control = None,
-        }
-        cx.notify();
-    }
-
     fn on_live_card_key(
         &mut self,
         key: &str,
@@ -1718,47 +1694,6 @@ impl SettingsPanelView {
                 true
             }
             _ => false,
-        }
-    }
-
-    fn pick_dropdown(&mut self) {
-        let Some(ActiveControl::Dropdown(dropdown)) = self.level().active_control.as_ref() else {
-            return;
-        };
-        let pick = dropdown.selected();
-        if self.level().display_layout.is_some() {
-            self.pick_display_layout_mode(pick);
-            return;
-        }
-        self.pick_dropdown_option(pick);
-    }
-
-    fn pick_dropdown_option(&mut self, pick: usize) {
-        let selected = self.level().selected;
-        let Some(row) = self.level_mut().rows.get_mut(selected) else {
-            return;
-        };
-        match &mut row.control {
-            RowControl::MultiSelect { selected, .. } => {
-                if let Some(flag) = selected.get_mut(pick) {
-                    *flag = !*flag;
-                    self.persist();
-                }
-            }
-            RowControl::Select { .. }
-            | RowControl::Toggle(_)
-            | RowControl::Number { .. }
-            | RowControl::Text(_)
-            | RowControl::TextList(_)
-            | RowControl::Color(_)
-            | RowControl::Action { .. }
-            | RowControl::Status { .. }
-            | RowControl::List { .. }
-            | RowControl::ObjectArray(_)
-            | RowControl::DisplayLayout(_)
-            | RowControl::Gamepad { .. }
-            | RowControl::QrCode { .. }
-            | RowControl::Unsupported { .. } => self.level_mut().active_control = None,
         }
     }
 
@@ -1798,11 +1733,8 @@ impl SettingsPanelView {
         };
         match &row.control {
             RowControl::Toggle(_) => self.toggle(),
-            RowControl::Select { .. } => self.open_choose_card(selected),
-            RowControl::MultiSelect { options, .. } => {
-                let count = options.len();
-                self.level_mut().active_control =
-                    Some(ActiveControl::Dropdown(Dropdown::open(count, 0)));
+            RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
+                self.open_choose_card(selected);
             }
             RowControl::Color(_) => self.open_color_wheel(selected, window, cx),
             RowControl::Action { .. } => self.dispatch_action(cx),
@@ -2328,7 +2260,7 @@ impl SettingsPanelView {
             match &self.level().active_control {
                 Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
-                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::ListActions(_)) | None => {}
+                Some(ActiveControl::ListActions(_)) | None => {}
             }
         }
         match &self.level().rows[index].control {
@@ -2339,19 +2271,7 @@ impl SettingsPanelView {
                 .unwrap_or_default(),
             RowControl::MultiSelect {
                 options, selected, ..
-            } => {
-                let chosen: Vec<&str> = options
-                    .iter()
-                    .zip(selected)
-                    .filter(|(_, on)| **on)
-                    .map(|(option, _)| option.label.as_str())
-                    .collect();
-                if chosen.is_empty() {
-                    "none".into()
-                } else {
-                    chosen.join(", ")
-                }
-            }
+            } => choose_card::multi_select_word(options, selected),
             RowControl::Number { value, .. } => format_number(*value),
             RowControl::Text(value) => {
                 text_or_placeholder(value, self.level().rows[index].placeholder.as_deref())
@@ -2631,30 +2551,28 @@ impl SettingsPanelView {
     }
 
     fn render_select_value(&self, index: usize, row: RowGround) -> Div {
-        match &self.level().rows[index].control {
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
+        let art = match &self.level().rows[index].control {
             RowControl::Select {
                 options,
                 index: chosen,
                 ..
-            } => {
-                let context = PictureContext::for_accent(
-                    qol_theme::runtime_theme().mode,
-                    qol_theme::runtime_accent_key(),
-                );
-                div().child(SettingsChoiceValue::new(
-                    self.display_value(index),
-                    choose_card::option_art(options, *chosen),
-                    row,
-                    context,
-                    self.palette,
-                ))
-            }
-            _ => div().child(SettingsSelectValue::new(
-                self.display_value(index),
-                row,
-                self.palette,
-            )),
-        }
+            } => ChoiceArt::Picture(choose_card::option_art(options, *chosen)),
+            RowControl::MultiSelect {
+                options, selected, ..
+            } => choose_card::multi_select_art(options, selected),
+            _ => return div(),
+        };
+        div().child(SettingsChoiceValue::new(
+            self.display_value(index),
+            art,
+            row,
+            context,
+            self.palette,
+        ))
     }
 
     fn render_number_value(
@@ -2711,9 +2629,7 @@ impl SettingsPanelView {
             match &self.level().active_control {
                 Some(ActiveControl::Edit(edit)) => edit,
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
-                Some(ActiveControl::Dropdown(_)) | Some(ActiveControl::ListActions(_)) | None => {
-                    value
-                }
+                Some(ActiveControl::ListActions(_)) | None => value,
             }
         } else {
             value
@@ -2780,77 +2696,7 @@ impl SettingsPanelView {
             ground,
             self.palette,
         );
-        let mut value_cell = Some(self.render_value_cell(index, ground));
-        if selected {
-            if let Some(ActiveControl::Dropdown(dropdown)) = &self.level().active_control {
-                let items = match &row.control {
-                    RowControl::MultiSelect {
-                        options, selected, ..
-                    } => Some(
-                        options
-                            .iter()
-                            .zip(selected)
-                            .map(|(option, on)| DropdownItem {
-                                label: format!(
-                                    "{} {}",
-                                    if *on { "[x]" } else { "[ ]" },
-                                    option.label
-                                ),
-                                accent: option.accent,
-                            })
-                            .collect::<Vec<_>>(),
-                    ),
-                    RowControl::Select { .. }
-                    | RowControl::Toggle(_)
-                    | RowControl::Number { .. }
-                    | RowControl::Text(_)
-                    | RowControl::TextList(_)
-                    | RowControl::Color(_)
-                    | RowControl::Action { .. }
-                    | RowControl::Status { .. }
-                    | RowControl::List { .. }
-                    | RowControl::ObjectArray(_)
-                    | RowControl::DisplayLayout(_)
-                    | RowControl::Gamepad { .. }
-                    | RowControl::QrCode { .. }
-                    | RowControl::Unsupported { .. } => None,
-                };
-                if let Some(items) = items {
-                    let view = cx.weak_entity();
-                    let dismiss_view = cx.weak_entity();
-                    let menu = dropdown.render_items_clickable(
-                        format!("settings-options-{index}"),
-                        &items,
-                        self.dropdown_style(),
-                        move |selected, event, _, cx| {
-                            if !event.standard_click() {
-                                return;
-                            }
-                            cx.stop_propagation();
-                            let view = view.clone();
-                            cx.defer(move |cx| {
-                                let _ = view.update(cx, |this, cx| {
-                                    this.pick_dropdown_option(selected);
-                                    cx.notify();
-                                });
-                            });
-                        },
-                        move |_, cx| {
-                            let _ = dismiss_view.update(cx, |this, cx| {
-                                if matches!(
-                                    this.level().active_control,
-                                    Some(ActiveControl::Dropdown(_))
-                                ) {
-                                    this.level_mut().active_control = None;
-                                    cx.notify();
-                                }
-                            });
-                        },
-                    );
-                    value_cell = value_cell.map(|cell| div().relative().child(menu).child(cell));
-                }
-            }
-        }
+        let value_cell = self.render_value_cell(index, ground);
         let mut line = SettingsRow::setting(("settings-row", index), self.palette)
             .selected(selected, self.body_has_focus())
             .child(label_group)
@@ -2861,9 +2707,7 @@ impl SettingsPanelView {
             }
             this.click_row(index, window, cx);
         }));
-        if let Some(cell) = value_cell {
-            line = line.child(cell);
-        }
+        line = line.child(value_cell);
         container = container.child(line);
         let error = match &row.control {
             RowControl::Action {

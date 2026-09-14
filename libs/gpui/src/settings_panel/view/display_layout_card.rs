@@ -5,14 +5,15 @@ use gpui::*;
 
 use super::super::components::{
     display_layout_stage, display_layout_tile, settings_action_spinner, settings_description,
-    settings_label, settings_label_group, settings_message, DisplayLayoutTile, RowGround,
-    SettingsFeedback, SettingsRow, SettingsSelectValue,
+    settings_label, settings_label_group, settings_message, ChoiceArt, DisplayLayoutTile,
+    RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, TileArt,
 };
-use super::super::display_layout::{nudge_step, DisplayLayoutState};
+use super::super::display_layout::{mode_label, nudge_step, DisplayLayoutState};
 use super::super::rows::{Row, RowControl, RowSection};
 use super::super::SettingsDestination;
-use super::{ActiveControl, Level, LevelHeader, SettingsPanelView};
-use crate::dropdown::{Dropdown, DropdownItem};
+use super::choose_card::{label_parts, ChooseOrigin, ChooseState, ChooseTile};
+use super::{Level, LevelHeader, SettingsPanelView};
+use crate::pictures::PictureContext;
 
 const DISPLAY_LAYOUT_STAGE_PAD: f32 = qol_theme::SPACE_INSET;
 
@@ -50,7 +51,7 @@ impl SettingsPanelView {
                 true
             }
             DisplayLayoutCardAction::OpenModePicker => {
-                self.open_display_layout_mode_picker();
+                self.open_display_mode_card(cx);
                 cx.notify();
                 true
             }
@@ -91,23 +92,52 @@ impl SettingsPanelView {
         }
     }
 
-    fn open_display_layout_mode_picker(&mut self) {
+    fn open_display_mode_card(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.level().display_layout.as_ref() else {
             return;
         };
-        let options = state.modes_for_selected();
-        if options.is_empty() || !state.modes_writable() {
+        if state.modes_for_selected().is_empty() || !state.modes_writable() {
             return;
         }
-        let initial = options
-            .iter()
-            .position(|option| state.staged_mode_matches(&option.display_id, option.token))
-            .or_else(|| options.iter().position(|option| option.current))
+        let source = self
+            .level()
+            .sections
+            .first()
+            .map(|section| section.source)
             .unwrap_or(0);
-        self.level_mut().active_control = Some(ActiveControl::Dropdown(Dropdown::open(
-            options.len(),
-            initial,
-        )));
+        let Some(destination) = self.card_destination(RESOLUTION_LABEL, cx) else {
+            return;
+        };
+        let section = RowSection {
+            label: RESOLUTION_LABEL.to_string(),
+            description: Some(RESOLUTION_CARD_DESCRIPTION.to_string()),
+            rows: Vec::new(),
+            source,
+        };
+        let child = Level {
+            rows: Vec::new(),
+            sections: vec![section],
+            selected: 0,
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds: Vec::new(),
+            header: LevelHeader::Card(destination.clone()),
+            origin_row: Some(DISPLAY_LAYOUT_RESOLUTION_ROW),
+            object_array: None,
+            display_layout: None,
+            list_card: false,
+            live_card: false,
+            choose: Some(ChooseState {
+                origin: ChooseOrigin::DisplayModes,
+                highlighted: None,
+            }),
+            entries: None,
+            form: None,
+        };
+        self.push_card(destination, child);
+        self.sync_scroll();
     }
 
     fn stage_display_layout_primary(&mut self) {
@@ -138,13 +168,21 @@ impl SettingsPanelView {
         state.nudge(dx, dy);
     }
 
-    pub(super) fn pick_display_layout_mode(&mut self, pick: usize) {
-        if let Some(state) = self.level_mut().display_layout.as_mut() {
-            if let Some(option) = state.modes_for_selected().get(pick).cloned() {
-                state.stage_mode(&option);
-            }
+    pub(super) fn choose_display_mode(&mut self, pick: usize, cx: &mut Context<Self>) {
+        let Some(parent) = self.stack.len().checked_sub(2) else {
+            return;
+        };
+        let Some(option) = self.stack[parent]
+            .display_layout
+            .as_ref()
+            .and_then(|state| state.modes_for_selected().get(pick).cloned())
+        else {
+            return;
+        };
+        if let Some(state) = self.stack[parent].display_layout.as_mut() {
+            state.stage_mode(&option);
         }
-        self.level_mut().active_control = None;
+        self.pop_card(cx);
     }
 
     fn make_display_layout_primary(&mut self, id: &str) {
@@ -437,11 +475,28 @@ impl SettingsPanelView {
         );
         let options = staged.modes_for_selected();
         let modes_available = !options.is_empty() && staged.modes_writable();
-        let current_mode = staged
-            .selected_id()
-            .and_then(|id| staged.staged_mode(id).map(|mode| mode.label()))
-            .or_else(|| staged.selected().map(|display| display.resolution()))
-            .unwrap_or_default();
+        let staged_mode = staged.selected_id().and_then(|id| staged.staged_mode(id));
+        let (mode_word, mode_art) = match staged_mode {
+            Some(mode) => (
+                mode.label(),
+                format!("display-mode:{}x{}", mode.width, mode.height),
+            ),
+            None => match staged.selected() {
+                Some(display) => {
+                    let width = u32::try_from(display.width).unwrap_or(0);
+                    let height = u32::try_from(display.height).unwrap_or(0);
+                    (
+                        mode_label(width, height, display.refresh_hz),
+                        format!("display-mode:{width}x{height}"),
+                    )
+                }
+                None => (String::new(), String::new()),
+            },
+        };
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
         let mut mode_value = div()
             .flex()
             .flex_row()
@@ -454,9 +509,11 @@ impl SettingsPanelView {
             ));
         }
         if modes_available {
-            mode_value = mode_value.child(SettingsSelectValue::new(
-                current_mode,
+            mode_value = mode_value.child(SettingsChoiceValue::new(
+                mode_word,
+                ChoiceArt::Picture(mode_art),
                 resolution_ground,
+                context,
                 palette,
             ));
         } else {
@@ -472,7 +529,7 @@ impl SettingsPanelView {
                 self.body_has_focus(),
             )
             .child(settings_label_group(
-                "Resolution and refresh",
+                RESOLUTION_LABEL,
                 None,
                 resolution_ground,
                 palette,
@@ -484,54 +541,11 @@ impl SettingsPanelView {
                     return;
                 }
                 cx.stop_propagation();
-                this.open_display_layout_mode_picker();
+                this.open_display_mode_card(cx);
                 cx.notify();
             }));
         }
-        let open_menu = match &self.level().active_control {
-            Some(ActiveControl::Dropdown(dropdown)) if modes_available => {
-                let items: Vec<DropdownItem> = options
-                    .iter()
-                    .map(|option| DropdownItem::plain(option.label.clone()))
-                    .collect();
-                let view = cx.weak_entity();
-                let dismiss_view = cx.weak_entity();
-                Some(dropdown.render_items_clickable(
-                    "settings-display-layout-modes",
-                    &items,
-                    self.dropdown_style(),
-                    move |selected, event, _, cx| {
-                        if !event.standard_click() {
-                            return;
-                        }
-                        cx.stop_propagation();
-                        let view = view.clone();
-                        cx.defer(move |cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                this.pick_display_layout_mode(selected);
-                                cx.notify();
-                            });
-                        });
-                    },
-                    move |_, cx| {
-                        let _ = dismiss_view.update(cx, |this, cx| {
-                            if matches!(
-                                this.level().active_control,
-                                Some(ActiveControl::Dropdown(_))
-                            ) {
-                                this.level_mut().active_control = None;
-                                cx.notify();
-                            }
-                        });
-                    },
-                ))
-            }
-            _ => None,
-        };
-        let mode_control = match open_menu {
-            Some(menu) => div().relative().child(menu).child(mode_row),
-            None => div().child(mode_row),
-        };
+        let mode_control = div().child(mode_row);
         let mut primary_group = self.kit.segmented_group();
         for (index, display) in staged.displays().iter().enumerate() {
             let active = staged.is_primary(display);
@@ -650,6 +664,29 @@ const DISPLAY_LAYOUT_RESOLUTION_ROW: usize = 1;
 const DISPLAY_LAYOUT_PRIMARY_ROW: usize = 2;
 const DISPLAY_LAYOUT_APPLY_ROW: usize = 3;
 const DISPLAY_LAYOUT_CANCEL_ROW: usize = 4;
+const RESOLUTION_LABEL: &str = "Resolution and refresh";
+const RESOLUTION_CARD_DESCRIPTION: &str = "Size and refresh for this display.";
+
+pub(super) fn display_mode_tiles(state: &DisplayLayoutState) -> Vec<ChooseTile> {
+    let staged_token = state
+        .selected_id()
+        .and_then(|id| state.staged_mode(id))
+        .map(|mode| mode.token);
+    state
+        .modes_for_selected()
+        .into_iter()
+        .map(|option| {
+            let (name, detail) = label_parts(&option.label);
+            ChooseTile {
+                value: Some(option.token.to_string()),
+                name: name.to_string(),
+                detail: detail.map(str::to_string),
+                art: TileArt::Picture(format!("display-mode:{}x{}", option.width, option.height)),
+                saved: staged_token.map_or(option.current, |token| token == option.token),
+            }
+        })
+        .collect()
+}
 
 fn display_layout_row_selected(selected: usize, index: usize) -> bool {
     selected == index
@@ -691,7 +728,7 @@ fn display_layout_card_level(
 ) -> Level {
     let rows = vec![
         display_layout_card_row("display_layout_stage", label, source),
-        display_layout_card_row("display_layout_mode", "Resolution and refresh", source),
+        display_layout_card_row("display_layout_mode", RESOLUTION_LABEL, source),
         display_layout_card_row("display_layout_primary", "Primary display", source),
         display_layout_card_row("display_layout_apply", "Apply", source),
         display_layout_card_row("display_layout_cancel", "Cancel", source),
@@ -852,6 +889,7 @@ mod tests {
     use super::super::super::rows::{Row, RowControl};
     use super::super::super::SettingsDestination;
     use super::super::tests::{level, rows, source_section};
+    use crate::settings_panel::components::TileArt;
 
     fn display_layout_state() -> DisplayLayoutState {
         let mut state = DisplayLayoutState::new(DisplayLayoutBindings::new(
@@ -1395,5 +1433,56 @@ mod tests {
             .expect("beta");
         assert_eq!(beta.x, 2000, "fresh geometry lands");
         assert_eq!(state.rect_of(beta).y, 21, "the staged edit survives");
+    }
+
+    #[test]
+    fn display_mode_tiles_tick_the_staged_mode_else_the_current_one() {
+        let mut state = display_layout_state();
+        state.load_modes(&serde_json::json!([
+            {
+                "id": "alpha#11",
+                "display_id": "alpha",
+                "connector": "card0-DP-1",
+                "token": 11,
+                "width": 3840,
+                "height": 2160,
+                "refresh_hz": 60,
+                "label": "3840x2160 \u{00b7} 60 Hz",
+                "detail": "current mode",
+                "current": true,
+                "writable": true,
+                "selectable": false,
+            },
+            {
+                "id": "alpha#12",
+                "display_id": "alpha",
+                "connector": "card0-DP-1",
+                "token": 12,
+                "width": 2560,
+                "height": 1440,
+                "refresh_hz": 165,
+                "label": "2560x1440 \u{00b7} 165 Hz",
+                "detail": "available mode",
+                "current": false,
+                "writable": true,
+                "selectable": true,
+            }
+        ]));
+        let tiles = super::display_mode_tiles(&state);
+        assert_eq!(tiles.len(), 2);
+        assert_eq!(tiles[0].value.as_deref(), Some("11"));
+        assert_eq!(tiles[0].name, "3840x2160");
+        assert_eq!(tiles[0].detail.as_deref(), Some("60 Hz"));
+        assert_eq!(
+            tiles[0].art,
+            TileArt::Picture("display-mode:3840x2160".to_string())
+        );
+        assert!(tiles[0].saved);
+        assert!(!tiles[1].saved, "the current mode opens ticked");
+        let option = state.modes_for("alpha").remove(1);
+        assert!(state.stage_mode(&option).is_some());
+        let tiles = super::display_mode_tiles(&state);
+        assert!(!tiles[0].saved);
+        assert!(tiles[1].saved, "the staged mode takes the tick");
     }
 }

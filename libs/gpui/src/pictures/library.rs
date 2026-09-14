@@ -64,6 +64,7 @@ pub(crate) fn markup_for(spec: &str, context: &PictureContext) -> Option<String>
         "family-auto" => family_auto(),
         "fixed-size" => fixed_size(),
         "relative-size" => relative_size(),
+        "display-mode" => display_mode(argument)?,
         _ => return None,
     };
     Some(picture)
@@ -509,6 +510,26 @@ fn relative_size() -> String {
     out.push_str(&svg::rect(22.5, 10.5, 51.0, 37.0, 2.0, ""));
     out.push_str(&mono(48.0, 32.5, "64%", 10.0, "middle"));
     svg::svg(&out)
+}
+
+fn display_mode(argument: &str) -> Option<String> {
+    let (width, height) = argument.split_once('x')?;
+    let width = width.parse::<u32>().ok()?;
+    let height = height.parse::<u32>().ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let scale = (76.0 / width as f64).min(44.0 / height as f64);
+    let screen_width = svg::rounded(width as f64 * scale);
+    let screen_height = svg::rounded(height as f64 * scale);
+    let x = svg::rounded(48.0 - screen_width / 2.0);
+    let top = svg::rounded((60.0 - screen_height - 6.0) / 2.0);
+    let bottom = svg::rounded(top + screen_height);
+    let stand = svg::rounded(bottom + 6.0);
+    let mut out = svg::rect(x, top, screen_width, screen_height, 4.0, "");
+    out.push_str(&svg::line(48.0, bottom, 48.0, stand, ""));
+    out.push_str(&svg::line(40.0, stand, 56.0, stand, ""));
+    Some(svg::svg(&out))
 }
 
 fn mono(x: f64, y: f64, t: &str, size: f64, anchor: &str) -> String {

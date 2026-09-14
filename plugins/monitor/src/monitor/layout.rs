@@ -136,6 +136,7 @@ pub fn mode_rows(
                 "available mode"
             };
             let display_id = snapshot.handle.id().to_string();
+            let refresh_hz = mode.refresh_hz;
             rows.push(ModeRow {
                 id: format!("{display_id}#{}", mode.token),
                 display_id,
@@ -143,8 +144,12 @@ pub fn mode_rows(
                 token: mode.token,
                 width: mode.width,
                 height: mode.height,
-                refresh_hz: mode.refresh_hz,
-                label: format!("{}x{}@{}", mode.width, mode.height, mode.refresh_hz),
+                refresh_hz,
+                label: if refresh_hz == 0 {
+                    format!("{}x{}", mode.width, mode.height)
+                } else {
+                    format!("{}x{} \u{00b7} {} Hz", mode.width, mode.height, refresh_hz)
+                },
                 detail: detail.to_string(),
                 current,
                 writable,
@@ -528,14 +533,14 @@ mod tests {
         assert_eq!(rows[0].display_id, "main");
         assert_eq!(rows[0].connector, "card0-HDMI-1");
         assert_eq!(rows[0].token, 11);
-        assert_eq!(rows[0].label, "1920x1080@60");
+        assert_eq!(rows[0].label, "1920x1080 \u{00b7} 60 Hz");
         assert_eq!(rows[0].detail, "current mode");
         assert!(rows[0].current);
         assert!(rows[0].writable);
         assert!(!rows[0].selectable);
         assert_eq!(rows[1].id, "main#12");
         assert_eq!(rows[1].token, 12);
-        assert_eq!(rows[1].label, "2560x1440@144");
+        assert_eq!(rows[1].label, "2560x1440 \u{00b7} 144 Hz");
         assert_eq!(rows[1].detail, "available mode");
         assert!(!rows[1].current);
         assert!(rows[1].selectable);

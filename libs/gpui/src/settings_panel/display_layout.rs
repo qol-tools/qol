@@ -79,6 +79,14 @@ fn resolution_label(width: i32, height: i32, refresh_hz: u32) -> String {
     }
 }
 
+pub fn mode_label(width: u32, height: u32, refresh_hz: u32) -> String {
+    if refresh_hz == 0 {
+        format!("{width}x{height}")
+    } else {
+        format!("{width}x{height} \u{00b7} {refresh_hz} Hz")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -122,13 +130,7 @@ impl ModeOption {
         let width = u32::try_from(row.get("width").and_then(Value::as_u64)?).ok()?;
         let height = u32::try_from(row.get("height").and_then(Value::as_u64)?).ok()?;
         let refresh_hz = row.get("refresh_hz").and_then(Value::as_u64).unwrap_or(0) as u32;
-        let label = text(row, "label").unwrap_or_else(|| {
-            if refresh_hz == 0 {
-                format!("{width}x{height}")
-            } else {
-                format!("{width}x{height}@{refresh_hz}")
-            }
-        });
+        let label = text(row, "label").unwrap_or_else(|| mode_label(width, height, refresh_hz));
         text(row, "id")?;
         Some(Self {
             display_id: text(row, "display_id")?,
@@ -416,11 +418,7 @@ pub struct StagedMode {
 
 impl StagedMode {
     pub fn label(&self) -> String {
-        if self.refresh_hz == 0 {
-            format!("{}x{}", self.width, self.height)
-        } else {
-            format!("{}x{}@{}", self.width, self.height, self.refresh_hz)
-        }
+        mode_label(self.width, self.height, self.refresh_hz)
     }
 }
 
@@ -785,11 +783,6 @@ impl DisplayLayoutState {
             height: option.height,
             refresh_hz: option.refresh_hz,
         })
-    }
-
-    pub fn staged_mode_matches(&self, display_id: &str, token: u64) -> bool {
-        self.staged_mode(display_id)
-            .is_some_and(|staged| staged.token == token)
     }
 
     pub fn pending_mode_intents(&self) -> Vec<DisplayLayoutIntent> {
@@ -1796,7 +1789,7 @@ mod tests {
         let option = layout.modes_for("alpha").remove(0);
         let intent = layout.stage_mode(&option).expect("set mode intent");
         assert_eq!(intent.action(), "set_mode");
-        assert!(layout.staged_mode_matches("alpha", 4));
+        assert_eq!(layout.staged_mode("alpha").map(|mode| mode.token), Some(4));
         match parse_set_mode_input(&intent.input()) {
             Ok(parsed) => {
                 assert_eq!(parsed.id, "alpha");
@@ -2211,5 +2204,34 @@ mod tests {
         assert!(layout.staged_mode("beta").is_none());
         assert_eq!(layout.primary_id(), Some("alpha"));
         assert_eq!(layout.effective_position("beta"), (3840, 0));
+    }
+
+    #[test]
+    fn mode_labels_name_the_size_and_the_refresh_rate() {
+        assert_eq!(mode_label(2560, 1440, 165), "2560x1440 \u{00b7} 165 Hz");
+        assert_eq!(mode_label(1280, 720, 0), "1280x720");
+        let staged = StagedMode {
+            display_id: "alpha".to_string(),
+            token: 4,
+            width: 1280,
+            height: 720,
+            refresh_hz: 75,
+        };
+        assert_eq!(staged.label(), "1280x720 \u{00b7} 75 Hz");
+        let option = ModeOption::from_row(&json!({
+            "id": "alpha#4",
+            "display_id": "alpha",
+            "connector": "card0-DP-1",
+            "token": 4,
+            "width": 1280,
+            "height": 720,
+            "refresh_hz": 75,
+            "detail": "available mode",
+            "current": false,
+            "writable": true,
+            "selectable": true,
+        }))
+        .expect("a mode row without a label");
+        assert_eq!(option.label, "1280x720 \u{00b7} 75 Hz");
     }
 }

@@ -38,6 +38,13 @@ pub(crate) fn markup(
             ty = height / 2.0 + 5.76,
             text = escape(argument),
         )),
+        "empty" => Some(format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" fill=\"none\"><rect x=\".5\" y=\".5\" width=\"{iw}\" height=\"{ih}\" rx=\"5.5\" stroke=\"currentColor\" stroke-opacity=\".8\" stroke-dasharray=\"3 3\"{rest}/></svg>",
+            w = width,
+            h = height,
+            iw = width - 1.0,
+            ih = height - 1.0,
+        )),
         _ => {
             let drawing = super::markup(spec, context)?;
             Some(match tone {
@@ -49,7 +56,75 @@ pub(crate) fn markup(
 }
 
 pub(crate) fn is_tile(spec: &str) -> bool {
-    matches!(split_spec(spec).0, "swatch" | "letters")
+    matches!(split_spec(spec).0, "swatch" | "letters" | "empty")
+}
+
+pub(crate) fn tone_for(spec: &str, tone: Tone) -> Tone {
+    match split_spec(spec).0 {
+        "swatch" => Tone::Awake,
+        _ => tone,
+    }
+}
+
+pub(crate) const STACK_WIDTH: f32 = 44.0;
+pub(crate) const STACK_HEIGHT: f32 = 27.5;
+
+pub(crate) fn stack_tile(
+    spec: &str,
+    tone: Tone,
+    x: f32,
+    y: f32,
+    context: &PictureContext,
+) -> Option<String> {
+    let (name, argument) = split_spec(spec);
+    let rest = match tone {
+        Tone::Rest => " opacity=\".7\"",
+        Tone::Awake => "",
+    };
+    match name {
+        "letters" => Some(format!(
+            "<rect x=\"{x}\" y=\"{y}\" width=\"43\" height=\"26.5\" rx=\"4.5\" fill=\"currentColor\" fill-opacity=\".2\" stroke=\"currentColor\" stroke-opacity=\".8\"/><text x=\"{tx}\" y=\"{ty}\" font-size=\"12\" font-family=\"IBM Plex Sans, sans-serif\" font-weight=\"600\" text-anchor=\"middle\" fill=\"currentColor\"{rest}>{text}</text>",
+            x = x + 0.5,
+            y = y + 0.5,
+            tx = x + 22.0,
+            ty = y + 18.05,
+            text = escape(argument),
+        )),
+        "swatch" => {
+            let colour = qol_theme::accent_swatch(context.mode, argument)?;
+            Some(format!(
+                "<rect x=\"{x}\" y=\"{y}\" width=\"44\" height=\"27.5\" rx=\"4.5\" fill=\"#{colour:06x}\"{rest}/>"
+            ))
+        }
+        "empty" => Some(format!(
+            "<rect x=\"{x}\" y=\"{y}\" width=\"43\" height=\"26.5\" rx=\"4.5\" stroke=\"currentColor\" stroke-opacity=\".8\" stroke-dasharray=\"3 3\"{rest}/>",
+            x = x + 0.5,
+            y = y + 0.5,
+        )),
+        _ => None,
+    }
+}
+
+pub(crate) fn stack_drawing(
+    markup: &str,
+    x: f32,
+    y: f32,
+    view_box: (f32, f32, f32, f32),
+    prefix: &str,
+) -> Option<String> {
+    let root = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"96\" height=\"60\" viewBox=\"0 0 96 60\"";
+    let rest = markup.strip_prefix(root)?;
+    let (vx, vy, vw, vh) = view_box;
+    let rest = rest.replace("cut-", &format!("{prefix}-cut-"));
+    Some(format!(
+        "<svg x=\"{x}\" y=\"{y}\" width=\"44\" height=\"27.5\" viewBox=\"{vx} {vy} {vw} {vh}\"{rest}"
+    ))
+}
+
+pub(crate) fn stacked_markup(back: &str, front: &str) -> String {
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"56\" height=\"35\" viewBox=\"0 0 56 35\" fill=\"none\"><defs><mask id=\"stack-cut\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"56\" height=\"35\"><rect width=\"56\" height=\"35\" fill=\"#fff\"/><rect x=\"0\" y=\"7.5\" width=\"44\" height=\"27.5\" rx=\"4.5\" fill=\"#000\"/></mask></defs><g mask=\"url(#stack-cut)\"><g opacity=\".5\">{back}</g></g>{front}</svg>"
+    )
 }
 
 fn rest_drawing(markup: &str) -> String {
@@ -203,7 +278,10 @@ pub(crate) fn desaturate(pixels: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{desaturate, fit_transform, markup, with_default_stroke, Tone};
+    use super::{
+        desaturate, fit_transform, is_tile, markup, stack_drawing, stack_tile, stacked_markup,
+        with_default_stroke, Tone, STACK_HEIGHT, STACK_WIDTH,
+    };
     use crate::pictures::PictureContext;
     use qol_theme::ThemeMode;
 
@@ -305,6 +383,52 @@ mod tests {
         assert_eq!(pixels[3], 128);
         assert_eq!(pixels[7], 0);
         assert_eq!(pixels[11], 255);
+    }
+
+    #[test]
+    fn the_empty_tile_is_a_dashed_ring() {
+        let context = PictureContext::for_accent(ThemeMode::Dark, "violet");
+        let awake = markup("empty", Tone::Awake, 56.0, 35.0, &context).unwrap();
+        assert!(awake.contains("stroke-dasharray=\"3 3\""));
+        assert!(awake.contains("rx=\"5.5\""));
+        assert!(!awake.contains("<text"));
+        let rest = markup("empty", Tone::Rest, 56.0, 35.0, &context).unwrap();
+        assert!(rest.contains(" opacity=\".7\""));
+        assert!(is_tile("empty"));
+    }
+
+    #[test]
+    fn stack_tiles_keep_the_locked_geometry() {
+        let context = PictureContext::for_accent(ThemeMode::Dark, "violet");
+        let tile = stack_tile("letters:WH", Tone::Awake, 0.0, 7.5, &context).unwrap();
+        assert!(tile.contains("x=\"0.5\" y=\"8\""));
+        assert!(tile.contains("rx=\"4.5\""));
+        assert!(tile.contains("font-size=\"12\""));
+        assert!(tile.contains("x=\"22\" y=\"25.55\""));
+    }
+
+    #[test]
+    fn stacked_markup_cuts_the_back_away_under_the_front() {
+        assert_eq!(
+            stacked_markup("B", "F"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"56\" height=\"35\" viewBox=\"0 0 56 35\" fill=\"none\"><defs><mask id=\"stack-cut\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"56\" height=\"35\"><rect width=\"56\" height=\"35\" fill=\"#fff\"/><rect x=\"0\" y=\"7.5\" width=\"44\" height=\"27.5\" rx=\"4.5\" fill=\"#000\"/></mask></defs><g mask=\"url(#stack-cut)\"><g opacity=\".5\">B</g></g>F</svg>"
+        );
+    }
+
+    #[test]
+    fn stack_drawing_nests_the_drawing_in_its_box() {
+        let context = PictureContext::for_accent(ThemeMode::Dark, "violet");
+        let drawing = markup("headset", Tone::Awake, STACK_WIDTH, STACK_HEIGHT, &context).unwrap();
+        let nested = stack_drawing(&drawing, 12.0, 0.0, (0.0, 0.0, 96.0, 60.0), "back").unwrap();
+        assert!(nested.starts_with(
+            "<svg x=\"12\" y=\"0\" width=\"44\" height=\"27.5\" viewBox=\"0 0 96 60\""
+        ));
+        assert!(!nested.contains("xmlns"));
+        assert!(nested.contains("back-cut-1"));
+        assert_eq!(
+            stack_drawing("<g>mine</g>", 0.0, 0.0, (0.0, 0.0, 1.0, 1.0), "front"),
+            None
+        );
     }
 
     fn mask_elements(markup: &str) -> Vec<&str> {

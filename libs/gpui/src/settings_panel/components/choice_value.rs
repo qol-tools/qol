@@ -9,6 +9,12 @@ use super::{
 use crate::pictures::{self, PictureContext, Tone};
 use crate::theme::SettingsPanelPalette;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChoiceArt {
+    Picture(String),
+    Stack { front: String, back: String },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ChoiceTones {
     word: u32,
@@ -43,7 +49,7 @@ fn choice_tones(row: RowGround, palette: SettingsPanelPalette) -> ChoiceTones {
 #[derive(IntoElement)]
 pub struct SettingsChoiceValue {
     text: SharedString,
-    art: String,
+    art: ChoiceArt,
     row: RowGround,
     context: PictureContext,
     palette: SettingsPanelPalette,
@@ -52,14 +58,14 @@ pub struct SettingsChoiceValue {
 impl SettingsChoiceValue {
     pub fn new(
         text: impl Into<SharedString>,
-        art: impl Into<String>,
+        art: ChoiceArt,
         row: RowGround,
         context: PictureContext,
         palette: SettingsPanelPalette,
     ) -> Self {
         Self {
             text: text.into(),
-            art: art.into(),
+            art,
             row,
             context,
             palette,
@@ -79,16 +85,28 @@ impl RenderOnce for SettingsChoiceValue {
         let scale = window.scale_factor();
         let tones = choice_tones(row, palette);
         let art_image = |tone: Tone| {
-            pictures::fitted_image(
-                &art,
-                tones.line,
-                tone,
-                CHOICE_PICTURE_WIDTH,
-                CHOICE_PICTURE_HEIGHT,
-                scale,
-                &context,
-            )
-            .map(|image| {
+            let image = match &art {
+                ChoiceArt::Picture(spec) => pictures::fitted_image(
+                    spec,
+                    tones.line,
+                    tone,
+                    CHOICE_PICTURE_WIDTH,
+                    CHOICE_PICTURE_HEIGHT,
+                    scale,
+                    &context,
+                ),
+                ChoiceArt::Stack { front, back } => pictures::stacked_image(
+                    front,
+                    back,
+                    tones.line,
+                    tone,
+                    CHOICE_PICTURE_WIDTH,
+                    CHOICE_PICTURE_HEIGHT,
+                    scale,
+                    &context,
+                ),
+            };
+            image.map(|image| {
                 img(image)
                     .w(px(CHOICE_PICTURE_WIDTH))
                     .h(px(CHOICE_PICTURE_HEIGHT))

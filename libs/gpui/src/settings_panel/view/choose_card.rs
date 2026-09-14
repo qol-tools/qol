@@ -2,8 +2,8 @@ use gpui::prelude::*;
 use gpui::{AnyElement, ClickEvent, KeyDownEvent};
 
 use super::super::components::{
-    choose_hints, choose_step, settings_tile_rows, tile_arts, tile_layout, SettingsGroupHeader,
-    SettingsHint, SettingsTile, TileArt,
+    choose_hints, choose_step, settings_tile_rows, tile_arts, tile_layout, ChoiceArt,
+    SettingsGroupHeader, SettingsHint, SettingsTile, TileArt,
 };
 use super::super::rows::{
     row_query_names, Row, RowControl, RowQueryState, RowSection, SelectOption,
@@ -14,8 +14,14 @@ use crate::pictures::PictureContext;
 
 const LABEL_DETAIL_SEPARATOR: &str = " \u{00b7} ";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChooseOrigin {
+    Row(usize),
+    DisplayModes,
+}
+
 pub(super) struct ChooseState {
-    pub(super) origin_row: usize,
+    pub(super) origin: ChooseOrigin,
     pub(super) highlighted: Option<String>,
 }
 
@@ -27,15 +33,17 @@ pub(super) struct ChooseTile {
     pub(super) saved: bool,
 }
 
+pub(super) fn label_parts(label: &str) -> (&str, Option<&str>) {
+    match label.split_once(LABEL_DETAIL_SEPARATOR) {
+        Some((name, detail)) => (name, Some(detail)),
+        None => (label, None),
+    }
+}
+
 pub(super) fn option_arts(options: &[SelectOption]) -> Vec<TileArt> {
     let names = options
         .iter()
-        .map(|option| {
-            option
-                .label
-                .split_once(LABEL_DETAIL_SEPARATOR)
-                .map_or(option.label.as_str(), |(name, _)| name)
-        })
+        .map(|option| label_parts(&option.label).0)
         .collect::<Vec<_>>();
     let pictures = options
         .iter()
@@ -53,22 +61,19 @@ pub(super) fn option_art(options: &[SelectOption], index: usize) -> String {
 
 pub(super) fn choose_tiles(
     options: &[SelectOption],
-    saved: usize,
+    saved: &[bool],
     waiting: Option<&str>,
 ) -> Vec<ChooseTile> {
     let arts = option_arts(options);
     let mut tiles = Vec::new();
     for (position, option) in options.iter().enumerate() {
-        let (name, detail) = match option.label.split_once(LABEL_DETAIL_SEPARATOR) {
-            Some((name, detail)) => (name, Some(detail)),
-            None => (option.label.as_str(), None),
-        };
+        let (name, detail) = label_parts(&option.label);
         tiles.push(ChooseTile {
             value: Some(option.value.clone()),
             name: name.to_string(),
             detail: detail.map(str::to_string),
             art: arts[position].clone(),
-            saved: position == saved,
+            saved: saved.get(position) == Some(&true),
         });
     }
     if let Some(label) = waiting {
@@ -83,7 +88,7 @@ pub(super) fn choose_tiles(
     tiles
 }
 
-fn choose_highlight(tiles: &[ChooseTile], highlighted: Option<&str>, saved: usize) -> usize {
+fn choose_highlight(tiles: &[ChooseTile], highlighted: Option<&str>) -> usize {
     if let Some(value) = highlighted {
         if let Some(index) = tiles
             .iter()
@@ -92,18 +97,53 @@ fn choose_highlight(tiles: &[ChooseTile], highlighted: Option<&str>, saved: usiz
             return index;
         }
     }
-    saved.min(tiles.len().saturating_sub(1))
+    tiles.iter().position(|tile| tile.saved).unwrap_or(0)
+}
+
+pub(super) fn multi_select_word(options: &[SelectOption], selected: &[bool]) -> String {
+    let chosen = options
+        .iter()
+        .zip(selected)
+        .filter(|(_, on)| **on)
+        .map(|(option, _)| label_parts(&option.label).0)
+        .collect::<Vec<_>>();
+    if chosen.is_empty() {
+        "none".to_string()
+    } else {
+        chosen.join(", ")
+    }
+}
+
+pub(super) fn multi_select_art(options: &[SelectOption], selected: &[bool]) -> ChoiceArt {
+    let arts = option_arts(options);
+    let chosen = arts
+        .iter()
+        .zip(selected)
+        .filter(|(_, on)| **on)
+        .filter_map(|(art, _)| match art {
+            TileArt::Picture(spec) => Some(spec.as_str()),
+            TileArt::Waiting => None,
+        })
+        .collect::<Vec<_>>();
+    match chosen.as_slice() {
+        [] => ChoiceArt::Picture("empty".to_string()),
+        [one] => ChoiceArt::Picture((*one).to_string()),
+        [front, back, ..] => ChoiceArt::Stack {
+            front: (*front).to_string(),
+            back: (*back).to_string(),
+        },
+    }
+}
+
+pub(super) fn choose_enter_label(multi: bool, highlighted_saved: bool) -> &'static str {
+    match (multi, highlighted_saved) {
+        (false, _) => "choose",
+        (true, true) => "untick",
+        (true, false) => "tick",
+    }
 }
 
 impl SettingsPanelView {
-    fn choose_origin(&self) -> Option<(&Row, &ChooseState)> {
-        let top = self.stack.len().checked_sub(1)?;
-        let parent = self.stack.len().checked_sub(2)?;
-        let choose = self.stack[top].choose.as_ref()?;
-        let row = self.stack[parent].rows.get(choose.origin_row)?;
-        Some((row, choose))
-    }
-
     fn choose_waiting_label(&self, row: &Row) -> Option<String> {
         let lookup_label = self
             .sources
@@ -122,14 +162,55 @@ impl SettingsPanelView {
     }
 
     fn choose_card_tiles(&self) -> Option<(Vec<ChooseTile>, usize)> {
-        let (row, choose) = self.choose_origin()?;
-        let RowControl::Select { options, index, .. } = &row.control else {
-            return None;
+        let top = self.stack.len().checked_sub(1)?;
+        let parent = self.stack.len().checked_sub(2)?;
+        let choose = self.stack[top].choose.as_ref()?;
+        let tiles = match choose.origin {
+            ChooseOrigin::Row(origin_row) => {
+                let row = self.stack[parent].rows.get(origin_row)?;
+                let waiting = self.choose_waiting_label(row);
+                match &row.control {
+                    RowControl::Select { options, index, .. } => {
+                        let mut saved = vec![false; options.len()];
+                        if let Some(flag) = saved.get_mut(*index) {
+                            *flag = true;
+                        }
+                        choose_tiles(options, &saved, waiting.as_deref())
+                    }
+                    RowControl::MultiSelect {
+                        options, selected, ..
+                    } => choose_tiles(options, selected, waiting.as_deref()),
+                    _ => return None,
+                }
+            }
+            ChooseOrigin::DisplayModes => {
+                let state = self.stack[parent].display_layout.as_ref()?;
+                super::display_layout_card::display_mode_tiles(state)
+            }
         };
-        let waiting = self.choose_waiting_label(row);
-        let tiles = choose_tiles(options, *index, waiting.as_deref());
-        let highlighted = choose_highlight(&tiles, choose.highlighted.as_deref(), *index);
+        let highlighted = choose_highlight(&tiles, choose.highlighted.as_deref());
         Some((tiles, highlighted))
+    }
+
+    fn choose_is_multi(&self) -> bool {
+        let Some(top) = self.stack.len().checked_sub(1) else {
+            return false;
+        };
+        let Some(parent) = self.stack.len().checked_sub(2) else {
+            return false;
+        };
+        let Some(ChooseOrigin::Row(origin_row)) =
+            self.stack[top].choose.as_ref().map(|choose| choose.origin)
+        else {
+            return false;
+        };
+        matches!(
+            self.stack[parent]
+                .rows
+                .get(origin_row)
+                .map(|row| &row.control),
+            Some(RowControl::MultiSelect { .. })
+        )
     }
 
     fn choose_tile(&mut self, option: usize, cx: &mut Context<Self>) {
@@ -140,29 +221,60 @@ impl SettingsPanelView {
             .stack
             .last()
             .and_then(|level| level.choose.as_ref())
-            .map(|choose| choose.origin_row)
+            .map(|choose| choose.origin)
         else {
             return;
         };
-        let Some(row) = self.stack[parent].rows.get_mut(origin) else {
-            return;
-        };
-        let RowControl::Select { options, index, .. } = &mut row.control else {
-            return;
-        };
-        if option >= options.len() {
-            return;
+        match origin {
+            ChooseOrigin::DisplayModes => self.choose_display_mode(option, cx),
+            ChooseOrigin::Row(origin_row) => {
+                let Some(row) = self.stack[parent].rows.get_mut(origin_row) else {
+                    return;
+                };
+                match &mut row.control {
+                    RowControl::Select { options, index, .. } => {
+                        if option >= options.len() {
+                            return;
+                        }
+                        *index = option;
+                        self.persist();
+                        self.pop_card(cx);
+                    }
+                    RowControl::MultiSelect {
+                        options, selected, ..
+                    } => {
+                        let Some(value) = options.get(option).map(|entry| entry.value.clone())
+                        else {
+                            return;
+                        };
+                        let Some(flag) = selected.get_mut(option) else {
+                            return;
+                        };
+                        *flag = !*flag;
+                        if let Some(choose) = self
+                            .stack
+                            .last_mut()
+                            .and_then(|level| level.choose.as_mut())
+                        {
+                            choose.highlighted = Some(value);
+                        }
+                        self.persist();
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            }
         }
-        *index = option;
-        self.persist();
-        self.pop_card(cx);
     }
 
     pub(super) fn open_choose_card(&mut self, index: usize) {
         let Some(row) = self.level().rows.get(index) else {
             return;
         };
-        if !matches!(row.control, RowControl::Select { .. }) {
+        if !matches!(
+            row.control,
+            RowControl::Select { .. } | RowControl::MultiSelect { .. }
+        ) {
             return;
         }
         let label = row.label.clone();
@@ -201,7 +313,7 @@ impl SettingsPanelView {
             list_card: false,
             live_card: false,
             choose: Some(ChooseState {
-                origin_row: index,
+                origin: ChooseOrigin::Row(index),
                 highlighted: None,
             }),
             entries: None,
@@ -252,15 +364,11 @@ impl SettingsPanelView {
         let Some((tiles, highlighted)) = self.choose_card_tiles() else {
             return Vec::new();
         };
-        let Some((row, _)) = self.choose_origin() else {
+        let Some(section) = self.level().sections.first() else {
             return Vec::new();
         };
-        let label = row.label.clone();
-        let description = self
-            .sources
-            .get(row.source)
-            .and_then(|state| state.copy.get(&row.id))
-            .and_then(|copy| copy.card_description.clone());
+        let label = section.label.clone();
+        let description = section.description.clone();
         let layout = tile_layout(tiles.len());
         let context = PictureContext::for_accent(
             qol_theme::runtime_theme().mode,
@@ -309,19 +417,37 @@ impl SettingsPanelView {
     }
 
     pub(super) fn choose_hints(&self) -> Vec<SettingsHint> {
-        let count = self
-            .choose_card_tiles()
-            .map(|(tiles, _)| tiles.len())
-            .unwrap_or_default();
-        choose_hints(count)
+        let tiles = self.choose_card_tiles();
+        let count = tiles.as_ref().map_or(0, |(tiles, _)| tiles.len());
+        let multi = self.choose_is_multi();
+        let saved = tiles
+            .as_ref()
+            .and_then(|(tiles, highlighted)| tiles.get(*highlighted))
+            .is_some_and(|tile| tile.saved);
+        let mut hints = choose_hints(count);
+        if let Some(first) = hints.first_mut() {
+            *first = SettingsHint::new("\u{21b5}", choose_enter_label(multi, saved));
+        }
+        hints
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_tiles, option_art};
-    use crate::settings_panel::components::TileArt;
+    use super::{
+        choose_enter_label, choose_highlight, choose_tiles, multi_select_art, multi_select_word,
+        option_art,
+    };
+    use crate::settings_panel::components::{ChoiceArt, TileArt};
     use crate::settings_panel::rows::SelectOption;
+
+    fn managed_devices() -> Vec<SelectOption> {
+        vec![
+            SelectOption::plain("a", "WH-1000XM4 \u{00b7} AA:BB:CC:DD:EE:01"),
+            SelectOption::plain("b", "Pixel Buds Pro \u{00b7} AA:BB:CC:DD:EE:02"),
+            SelectOption::plain("c", "MX Master 3 \u{00b7} AA:BB:CC:DD:EE:03"),
+        ]
+    }
 
     #[test]
     fn choose_tiles_split_labels_and_letter_missing_pictures() {
@@ -329,7 +455,7 @@ mod tests {
         themed.picture = Some("desktop-theme:bone".to_string());
         let unthemed = SelectOption::plain("slate", "Slate");
         let options = [themed, unthemed];
-        let tiles = choose_tiles(&options, 1, None);
+        let tiles = choose_tiles(&options, &[false, true], None);
         assert_eq!(tiles.len(), 2);
         assert_eq!(tiles[0].value.as_deref(), Some("bone"));
         assert_eq!(tiles[0].name, "Bone");
@@ -351,7 +477,7 @@ mod tests {
         themed.picture = Some("desktop-theme:bone".to_string());
         let unthemed = SelectOption::plain("slate", "Slate");
         let options = [themed, unthemed];
-        let tiles = choose_tiles(&options, 0, None);
+        let tiles = choose_tiles(&options, &[true, false], None);
         for (index, tile) in tiles.iter().enumerate() {
             let TileArt::Picture(spec) = &tile.art else {
                 panic!("choose tile art is not a picture");
@@ -366,11 +492,84 @@ mod tests {
             SelectOption::plain("auto", "Automatic"),
             SelectOption::plain("hci0", "hci0 \u{00b7} adapter"),
         ];
-        let tiles = choose_tiles(&options, 0, Some("adapters"));
+        let tiles = choose_tiles(&options, &[true, false], Some("adapters"));
         assert_eq!(tiles.len(), 3);
         assert_eq!(tiles[2].value, None);
         assert_eq!(tiles[2].name, "Looking for adapters");
         assert_eq!(tiles[2].art, TileArt::Waiting);
         assert!(!tiles[2].saved);
+    }
+
+    #[test]
+    fn multi_select_word_names_the_chosen_options() {
+        let options = managed_devices();
+        assert_eq!(
+            multi_select_word(&options, &[true, true, false]),
+            "WH-1000XM4, Pixel Buds Pro"
+        );
+        assert_eq!(multi_select_word(&options, &[false, false, false]), "none");
+    }
+
+    #[test]
+    fn multi_select_art_follows_how_many_are_chosen() {
+        let options = managed_devices();
+        assert_eq!(
+            multi_select_art(&options, &[false, false, false]),
+            ChoiceArt::Picture("empty".to_string())
+        );
+        assert_eq!(
+            multi_select_art(&options, &[true, false, false]),
+            ChoiceArt::Picture("letters:WH".to_string())
+        );
+        assert_eq!(
+            multi_select_art(&options, &[true, true, false]),
+            ChoiceArt::Stack {
+                front: "letters:WH".to_string(),
+                back: "letters:PB".to_string(),
+            }
+        );
+        assert_eq!(
+            multi_select_art(&options, &[true, true, true]),
+            ChoiceArt::Stack {
+                front: "letters:WH".to_string(),
+                back: "letters:PB".to_string(),
+            }
+        );
+        let mut pictured = managed_devices();
+        pictured[0].picture = Some("mic-default".to_string());
+        assert_eq!(
+            multi_select_art(&pictured, &[true, false, false]),
+            ChoiceArt::Picture("mic-default".to_string())
+        );
+    }
+
+    #[test]
+    fn choose_tiles_tick_every_saved_option() {
+        let options = managed_devices();
+        let tiles = choose_tiles(&options, &[true, false, true], None);
+        assert!(tiles[0].saved);
+        assert!(!tiles[1].saved);
+        assert!(tiles[2].saved);
+        let singles = choose_tiles(&options, &[false, true, false], None);
+        assert_eq!(singles.iter().filter(|tile| tile.saved).count(), 1);
+        assert!(singles[1].saved);
+    }
+
+    #[test]
+    fn choose_highlight_opens_on_the_first_saved_tile() {
+        let options = managed_devices();
+        let tiles = choose_tiles(&options, &[false, true, true], None);
+        assert_eq!(choose_highlight(&tiles, None), 1);
+        assert_eq!(choose_highlight(&tiles, Some("c")), 2);
+        let none = choose_tiles(&options, &[false, false, false], None);
+        assert_eq!(choose_highlight(&none, None), 0);
+    }
+
+    #[test]
+    fn choose_enter_label_ticks_or_unticks_a_multi_select() {
+        assert_eq!(choose_enter_label(false, false), "choose");
+        assert_eq!(choose_enter_label(false, true), "choose");
+        assert_eq!(choose_enter_label(true, false), "tick");
+        assert_eq!(choose_enter_label(true, true), "untick");
     }
 }
