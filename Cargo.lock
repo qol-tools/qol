@@ -6540,6 +6540,7 @@ dependencies = [
  "qol-theme",
  "qrcode",
  "raw-window-handle",
+ "resvg",
  "serde",
  "serde_json",
  "smallvec",
