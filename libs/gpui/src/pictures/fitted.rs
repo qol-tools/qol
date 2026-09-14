@@ -192,7 +192,7 @@ pub(crate) fn fit_transform(
 }
 
 pub(crate) fn desaturate(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let grey = (0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32)
             .round() as u8;
         pixel[0] = grey;
