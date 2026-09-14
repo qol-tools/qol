@@ -1359,9 +1359,17 @@ fn refuse_second_ungrouped_lane(
     pending: &super::bridge::PendingBridgeStore,
     driver: &str,
     live: &std::collections::HashSet<String>,
+    silent_wake: bool,
 ) -> Result<()> {
+    if silent_wake {
+        return Ok(());
+    }
     for round in pending.pending_rounds()? {
-        if round.completed || round.group.is_some() || !live.contains(&round.session) {
+        if round.silent_wake
+            || round.completed
+            || round.group.is_some()
+            || !live.contains(&round.session)
+        {
             continue;
         }
         if !driver.is_empty() && round.driver != driver {
@@ -1438,6 +1446,7 @@ pub(super) fn spawn_or_reuse(
                         pending,
                         &super::bridge::driver_token(terminals),
                         &live,
+                        silent_wake,
                     )?;
                 }
                 require_model_for_launch(model)?;
@@ -2550,7 +2559,7 @@ mod tests {
         let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
         run_spawn_with(
             terminals, tool, cwd, key, surface, model, title, config, locks, &ledger, false, false,
-            None, None, None, &pending,
+            None, None, None, &pending, false,
         )
     }
 
@@ -2572,6 +2581,7 @@ mod tests {
         task: Option<&str>,
         cap: Option<SpawnCapConfig>,
         pending: &super::super::bridge::PendingBridgeStore,
+        silent_wake: bool,
     ) -> Result<SpawnOutcome> {
         spawn_or_reuse(
             terminals,
@@ -2588,7 +2598,7 @@ mod tests {
             ledger,
             background,
             autoclose,
-            false,
+            silent_wake,
             resume,
             task,
             None,
@@ -3128,6 +3138,7 @@ mod tests {
             Some("implement the fix"),
             None,
             &pending,
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -3166,7 +3177,7 @@ mod tests {
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
 
-        refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live)
+        refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live, false)
             .expect("another terminal's open ungrouped round must not block this spawn");
 
         pending
@@ -3180,12 +3191,160 @@ mod tests {
                 false,
             )
             .unwrap();
-        let error = refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live)
-            .expect_err("this driver's own open ungrouped round still blocks a second lane");
+        let error =
+            refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live, false)
+                .expect_err("this driver's own open ungrouped round still blocks a second lane");
         assert!(
             error.to_string().contains("lane-own"),
             "the refusal must name this caller's own open round: {error}"
         );
+    }
+
+    #[test]
+    fn a_new_silent_spawn_passes_the_ungrouped_wake_guard() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let waking = SessionBinding::from_str("v1:kitty:waking-lane:300").unwrap();
+        let live = [waking.token()]
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        pending
+            .start_with_label(
+                &waking,
+                "QOL_BRIDGE_DONE_waking",
+                "v1:kitty:this-terminal:42",
+                false,
+                None,
+                Some("lane-waking"),
+                false,
+            )
+            .unwrap();
+
+        refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live, true)
+            .expect("a silent spawn wakes nobody, so an open waking round must not refuse it");
+    }
+
+    #[test]
+    fn an_open_silent_round_never_blocks_a_waking_spawn() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let quiet = SessionBinding::from_str("v1:kitty:quiet-lane:400").unwrap();
+        let live = [quiet.token()]
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        pending
+            .start_with_label(
+                &quiet,
+                "QOL_BRIDGE_DONE_quiet",
+                "v1:kitty:this-terminal:42",
+                false,
+                None,
+                Some("lane-quiet"),
+                true,
+            )
+            .unwrap();
+
+        refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live, false)
+            .expect("a silent round wakes nobody, so it must never count as the blocking lane");
+    }
+
+    #[test]
+    fn a_grouped_round_stays_out_of_the_ungrouped_wake_guard() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let grouped = SessionBinding::from_str("v1:kitty:grouped-lane:500").unwrap();
+        let live = [grouped.token()]
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        pending
+            .start_with_label(
+                &grouped,
+                "QOL_BRIDGE_DONE_grouped",
+                "v1:kitty:this-terminal:42",
+                false,
+                Some("set-2-group"),
+                Some("lane-grouped"),
+                false,
+            )
+            .unwrap();
+
+        refuse_second_ungrouped_lane(&pending, "v1:kitty:this-terminal:42", &live, false)
+            .expect("a grouped round already aggregates its wake, so it must not block");
+    }
+
+    #[test]
+    fn a_silent_background_spawn_launches_beside_a_waking_ungrouped_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = fs::canonicalize(root.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let blocker = SessionBinding::from_str("v1:kitty:77:10").unwrap();
+        let (terminals, _backend) =
+            harness(vec![vec![FakeBackend::facts("77", "blocker", "pi", &cwd)]]);
+        let locks = locks(&root);
+        pending
+            .start_with_label(
+                &blocker,
+                "QOL_BRIDGE_DONE_blocker",
+                "",
+                false,
+                None,
+                Some("lane-blocker"),
+                false,
+            )
+            .unwrap();
+
+        let refused = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-waking-attempt"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            &ledger,
+            true,
+            false,
+            None,
+            Some("implement the fix"),
+            None,
+            &pending,
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refused.contains("lane-blocker"),
+            "a waking ungrouped spawn must still be refused and name the blocking lane: {refused}"
+        );
+
+        let launched = run_spawn_with(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("lane-silent-attempt"),
+            None,
+            Some("flash-x"),
+            None,
+            None,
+            &locks,
+            &ledger,
+            true,
+            false,
+            None,
+            Some("answer the questions"),
+            None,
+            &pending,
+            true,
+        )
+        .unwrap();
+        assert!(launched.background);
+        assert!(!launched.reused);
     }
 
     #[test]
@@ -3221,6 +3380,7 @@ mod tests {
             Some("implement the fix"),
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(outcome.background);
@@ -3255,6 +3415,7 @@ mod tests {
             Some("another fix"),
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(outcome.background);
@@ -3457,6 +3618,7 @@ mod tests {
             None,
             Some(SpawnCapConfig::default()),
             &pending,
+            false,
         )
         .unwrap();
         assert!(!outcome.reused);
@@ -3525,6 +3687,7 @@ mod tests {
             None,
             Some(SpawnCapConfig::default()),
             &pending,
+            false,
         )
         .unwrap();
         assert_eq!(outcome.resume, Some("applied"));
@@ -3724,6 +3887,7 @@ mod tests {
             Some("implement the fix"),
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(outcome.background);
@@ -3781,6 +3945,7 @@ mod tests {
             Some("implement the fix"),
             None,
             &pending,
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -3819,6 +3984,7 @@ mod tests {
             None,
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(!outcome.reused);
@@ -3846,6 +4012,7 @@ mod tests {
             None,
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(reused.reused);
@@ -3874,6 +4041,7 @@ mod tests {
             None,
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(reused.reused);
@@ -3914,6 +4082,7 @@ mod tests {
             None,
             None,
             &pending,
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -3936,6 +4105,7 @@ mod tests {
             Some("implement the fix"),
             None,
             &pending,
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -3972,6 +4142,7 @@ mod tests {
             Some("implement the fix"),
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(outcome.autoclose);
@@ -4001,6 +4172,7 @@ mod tests {
             None,
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(
@@ -4031,6 +4203,7 @@ mod tests {
             None,
             None,
             &pending,
+            false,
         )
         .unwrap();
         assert!(plain.reused, "plain reuse without autoclose stays allowed");
