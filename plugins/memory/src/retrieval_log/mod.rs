@@ -56,7 +56,7 @@ pub fn rotate_if_needed(path: &Path, cap: u64, tail: u64) {
         .iter()
         .rposition(|&byte| byte == b'\n')
         .map_or(0, |pos| pos + 1);
-    let _ = std::fs::write(path, &raw[prefix_len..]);
+    let _ = qol_fs::atomic_write(path, &raw[prefix_len..]);
 }
 
 pub fn correctness_of(
@@ -248,6 +248,25 @@ mod tests {
         let missing = dir.0.join("missing.jsonl");
         rotate_if_needed(&missing, 10, 5);
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn rotate_writes_exactly_the_tail_and_ignores_a_partial_temp() {
+        let dir = TempDir::new("rotate-atomic");
+        let path = dir.0.join("retrievals.jsonl");
+        let fmt_line = |i: usize| format!("line-{i:02}-{}", "x".repeat(15));
+        let body: Vec<String> = (0..12).map(fmt_line).collect();
+        std::fs::write(&path, body.join("\n") + "\n").unwrap();
+        let partial = dir.0.join(".retrievals.jsonl.a1b2c3.tmp");
+        std::fs::write(&partial, "half a line").unwrap();
+
+        rotate_if_needed(&path, 100, 60);
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            body[9..].join("\n") + "\n"
+        );
+        assert_eq!(std::fs::read_to_string(&partial).unwrap(), "half a line");
     }
 
     #[test]

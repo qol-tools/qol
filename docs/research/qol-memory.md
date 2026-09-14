@@ -464,6 +464,20 @@ Every later tier plugs into this without redesign.
 
 ## 10. Iterations
 
+- 2026-09-14 store hygiene (branch store-hygiene): research outputs no
+  longer default into the memory store. snapshot.mjs writes runs under
+  reports/qol-memory/snapshot/ and its walk ledger to
+  reports/qol-memory/ingest.jsonl; eval/eval.mjs lands under
+  reports/qol-memory/eval/ (10 newest runs kept), skills-eval under
+  reports/qol-memory/skills-eval/, parity under reports/qol-memory/parity/,
+  ingest reports under reports/qol-memory/ingest-reports/, the candidates
+  harvest report at reports/qol-memory/candidates-report.json, the ask
+  manifest at reports/qol-memory/manifest.json, and distinctive.json at
+  reports/qol-memory/distinctive.json. Pinned research fixtures live under
+  reports/qol-memory/fixtures/ (snapshot pins 2026-08-10T21-38-02-273Z and
+  2026-08-12T18-46-58-129Z, notes pin 2026-08-13T16:31:40.844Z) and every
+  pinned-run reader resolves them there. --store and QOL_MEMORY_STORE keep
+  their meaning: the memory store, used only for memory data.
 - 2026-08-10: initial distillation. Vision, field survey, corpus facts, tier
   architecture, loop architecture, MVP seed (observability + eval).
 - 2026-08-10 (second pass): first loop-seed artifact landed, the corpus

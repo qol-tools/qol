@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { join, resolve, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchRunDir } from "./lib/store-path.js";
 import { trySealedText, parseUnitsText } from "./lib/seal.js";
 import { acquireDistillLock } from "./lib/distill-lock.js";
 import { redact } from "./lib/redact.js";
@@ -27,7 +27,7 @@ const PINNED =
   JSON.parse(readFileSync(join(BASE, "eval", "questions.json"), "utf8")).run_pin ||
   "2026-08-10T21-38-02-273Z";
 const STORE_ROOT = resolve(pick("--store", qolMemoryStore()));
-const SNAPSHOT_DIR = join(STORE_ROOT, "snapshot");
+const SNAPSHOT_RUN_DIR = researchRunDir("snapshot", PINNED);
 const OUT_DIR = join(STORE_ROOT, "notes");
 const MODEL_DISABLE = process.env.QOL_MEMORY_MODEL_DISABLE === "1";
 const MODEL = process.env.QOL_MEMORY_MODEL || "deepseek-v4-flash";
@@ -285,7 +285,7 @@ try {
       }
     }
 
-    const snapshot = readFileSync(join(SNAPSHOT_DIR, PINNED, "snapshot.jsonl"), "utf8")
+    const snapshot = readFileSync(join(SNAPSHOT_RUN_DIR, "snapshot.jsonl"), "utf8")
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l));

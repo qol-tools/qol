@@ -4,7 +4,7 @@ import { join, resolve, dirname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchOutputRoot } from "./lib/store-path.js";
 import { trySealedText } from "./lib/seal.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
@@ -209,7 +209,7 @@ async function main() {
 
   const excludeSession = firstUnitSession(STORE_ROOT);
 
-  const outDir = join(STORE_ROOT, "eval", `parity-${STARTED_AT.replace(/[:.]/g, "-")}`);
+  const outDir = join(researchOutputRoot(), "parity", `parity-${STARTED_AT.replace(/[:.]/g, "-")}`);
   mkdirSync(outDir, { recursive: true });
   const reportPath = join(outDir, "report.json");
   const scratch = mkdtempSync(join(tmpdir(), "qol-memory-parity-"));

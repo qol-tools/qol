@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchOutputRoot } from "./lib/store-path.js";
 import { parseUnitsText } from "./lib/seal.js";
 import { normalizeQuery, isMiss, candidateKey, discriminatorCount, countPendingCandidates, CANDIDATE_COOLDOWN_MS } from "./lib/retrieval-log.js";
 
@@ -139,9 +139,9 @@ function harvest() {
     candidates: added,
     pending,
   };
-  const outDir = join(STORE, "ingest");
-  mkdirSync(outDir, { recursive: true });
-  writeFileSync(join(outDir, "report.json"), JSON.stringify(report, null, 2));
+  const outPath = join(researchOutputRoot(), "candidates-report.json");
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, JSON.stringify(report, null, 2));
   console.log(`candidates harvest | misses ${misses.length} | added ${added.length} | skipped ${skipped.heldout} heldout ${skipped.cooldown} cooldown ${skipped.duplicate} duplicate | pending ${pending}`);
   return added;
 }
@@ -164,7 +164,7 @@ function promote(key) {
   };
   const tempPath = join(tmpdir(), `qol-memory-promote-${key}.json`);
   writeFileSync(tempPath, JSON.stringify(tempHeldout, null, 2));
-  const r = spawnSync("node", [VERDICT_EVAL, "--store", STORE, "--heldout", tempPath], { encoding: "utf8", timeout: 600000, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync("node", [VERDICT_EVAL, "--heldout", tempPath], { encoding: "utf8", timeout: 600000, maxBuffer: 64 * 1024 * 1024 });
   rmSync(tempPath, { force: true });
   const stdout = r.stdout || "";
   const gatePass = r.status === 0;

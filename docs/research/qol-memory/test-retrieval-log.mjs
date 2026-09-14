@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchOutputRoot } from "./lib/store-path.js";
 import { parseUnitsText } from "./lib/seal.js";
 import { normalizeQuery, candidateKey, discriminatorCount, rotateIfNeeded } from "./lib/retrieval-log.js";
 
@@ -84,8 +84,8 @@ function candLines(store) {
   }
 }
 
-function reportOf(store) {
-  return JSON.parse(readFileSync(join(store, "ingest", "report.json"), "utf8"));
+function reportOf() {
+  return JSON.parse(readFileSync(join(researchOutputRoot(), "candidates-report.json"), "utf8"));
 }
 
 function seedCorpus(store) {
@@ -239,7 +239,7 @@ function missEvent(ts, query, source, verdict, recalled) {
   check(rig && rig.source_unit_key === "n-dec" && rig.source === "tool" && rig.verdict === "no-memory" && rig.source_event_ts === events[0].ts, "H6 provenance fields carried");
   check(rig && /^[0-9a-f]{16}$/.test(rig.key), "H6 key is a 16-hex slice");
   check(rig && rig.key === createHash("sha256").update(rig.norm_query).digest("hex").slice(0, 16), "H6 key is sha256(norm_query) slice(0,16)");
-  const report = reportOf(store);
+  const report = reportOf();
   check(report.harvest.misses === 2 && report.harvest.candidates_added === 2, "H6 report.json carries harvest counts");
   check(report.candidates.length === 2 && report.pending === 2, "H6 report.json lists the proposals and pending count");
   check(!cands.some((c) => c.verdict === "answered"), "H6 answered event never harvested");
@@ -256,14 +256,14 @@ function missEvent(ts, query, source, verdict, recalled) {
   const h1 = runCandidates(store, ["harvest"]);
   check(h1.status === 0, "H7 first harvest exits 0");
   check(candLines(store).length === 1, "H7 same norm_query dedupes to one candidate");
-  check(reportOf(store).harvest.candidates_added === 1, "H7 first harvest adds one");
-  check(reportOf(store).harvest.skipped.heldout === 1 && reportOf(store).harvest.skipped.duplicate === 1, "H7 heldout-matching query skipped, near-duplicate skipped");
+  check(reportOf().harvest.candidates_added === 1, "H7 first harvest adds one");
+  check(reportOf().harvest.skipped.heldout === 1 && reportOf().harvest.skipped.duplicate === 1, "H7 heldout-matching query skipped, near-duplicate skipped");
   const eD = missEvent(new Date(now + 3600e3).toISOString(), "what is the sandbox fixture marker", "tool", "no-memory", ["n-mark"]);
   writeFileSync(join(store, "retrievals.jsonl"), [eH, eB, eC, eD].map((e) => JSON.stringify(e)).join("\n") + "\n");
   const h2 = runCandidates(store, ["harvest"]);
   check(h2.status === 0, "H7 second harvest exits 0");
   check(candLines(store).length === 1, "H7 re-miss within 24h skipped by cooldown");
-  check(reportOf(store).harvest.candidates_added === 0, "H7 second harvest adds nothing");
+  check(reportOf().harvest.candidates_added === 0, "H7 second harvest adds nothing");
   const eE = missEvent(new Date(now + 25 * 3600e3).toISOString(), "what is the sandbox fixture marker", "tool", "no-memory", ["n-mark"]);
   writeFileSync(join(store, "retrievals.jsonl"), [eH, eB, eC, eD, eE].map((e) => JSON.stringify(e)).join("\n") + "\n");
   const h3 = runCandidates(store, ["harvest"]);
@@ -409,7 +409,7 @@ function missEvent(ts, query, source, verdict, recalled) {
   const d2 = runCandidates(store, ["harvest"]);
   check(d1.status === 0 && d2.status === 0, "H11 both harvest runs exit 0");
   check(readFileSync(join(store, "candidates.jsonl")).equals(firstCandidates), "H11 two harvest runs on the same log produce identical candidates.jsonl");
-  check(reportOf(store).harvest.candidates_added === 0, "H11 second harvest adds nothing");
+  check(reportOf().harvest.candidates_added === 0, "H11 second harvest adds nothing");
 }
 
 {

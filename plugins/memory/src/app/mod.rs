@@ -7,7 +7,7 @@ use qol_runtime::protocol::{DaemonResponse, ReadinessPhase};
 
 use crate::app::warm::WarmState;
 use crate::ingest::{self, IngestRoots};
-use crate::store::Store;
+use crate::store::{Store, STALE_TEMP_AGE};
 
 pub mod request;
 pub mod warm;
@@ -132,6 +132,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_
         }
     }
     prune_notes_runs_at_warm(&store, notes_runs_kept);
+    hygiene_sweep_at_warm(&store);
     warming.set_phase(
         ReadinessPhase::Warming,
         Some("building warm index".to_owned()),
@@ -180,6 +181,25 @@ fn prune_notes_runs_at_warm(store: &Store, notes_runs_kept: usize) {
             );
         }
     }
+}
+
+fn hygiene_sweep_at_warm(store: &Store) {
+    let removed_tmp = store.sweep_stale_temp_files(STALE_TEMP_AGE);
+    let pruned_markers = match crate::continue_recall::prune_stale_marker_entries(store) {
+        Ok(count) => count,
+        Err(error) => {
+            eprintln!("qol-memory: continue marker prune failed: {error:#}");
+            qol_runtime::probe!(
+                "QOL_MEMORY_DAEMON",
+                "event=marker_prune_failed error={error}"
+            );
+            0
+        }
+    };
+    qol_runtime::probe!(
+        "QOL_MEMORY_DAEMON",
+        "event=hygiene_sweep removed_tmp={removed_tmp} pruned_markers={pruned_markers}"
+    );
 }
 
 pub fn send_request(action: &str, input: serde_json::Value) -> Result<Option<serde_json::Value>> {
@@ -283,6 +303,49 @@ mod tests {
         prune_notes_runs_at_warm(&store, 1);
         assert_eq!(run_count(&store), 2);
         drop(held);
+    }
+
+    #[test]
+    fn hygiene_sweep_at_warm_removes_stale_temps_and_marker_entries() {
+        let dir = TempDir::new("hygiene");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        let stale_temp = dir.0.join(".units.jsonl.abc123.tmp");
+        std::fs::write(&stale_temp, b"x").unwrap();
+        std::fs::File::open(&stale_temp)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(2 * 60 * 60))
+            .unwrap();
+        let fresh_temp = dir.0.join(".units.jsonl.def456.tmp");
+        std::fs::write(&fresh_temp, b"x").unwrap();
+        let marker = serde_json::json!({
+            "schema": crate::continue_recall::SCHEMA,
+            "cwds": {
+                "/old": {
+                    "ts": "2000-01-01T00:00:00.000Z",
+                    "session": "s",
+                    "units_count": 1
+                },
+                "/recent": {
+                    "ts": crate::text::now_iso(),
+                    "session": "s",
+                    "units_count": 1
+                }
+            }
+        });
+        std::fs::write(
+            store.continue_marker_path(),
+            format!("{}\n", serde_json::to_string_pretty(&marker).unwrap()),
+        )
+        .unwrap();
+
+        hygiene_sweep_at_warm(&store);
+
+        assert!(!stale_temp.exists());
+        assert!(fresh_temp.exists());
+        let text = std::fs::read_to_string(store.continue_marker_path()).unwrap();
+        let marker: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(marker["cwds"].get("/old").is_none());
+        assert!(marker["cwds"]["/recent"].get("last_seen").is_some());
     }
 
     #[test]

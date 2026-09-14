@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseUnitsText } from "./lib/seal.js";
+import { researchOutputRoot } from "./lib/store-path.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
 const SANDBOX = join(tmpdir(), "qol-memory-e2e-" + createHash("sha256").update(String(process.pid) + Date.now()).digest("hex").slice(0, 8));
@@ -13,7 +14,6 @@ const STORE = join(SANDBOX, "store");
 const SESSIONS = join(SANDBOX, "sessions");
 const PI_DIR = join(SESSIONS, "pi");
 const CLAUDE_DIR = join(SESSIONS, "claude");
-const PIN_RUN = "2026-08-10T21-38-02-273Z";
 const HELDOUT = join(SANDBOX, "heldout-e2e.json");
 
 const DECISION_QUERY = "what did we set for the release naming convention";
@@ -100,14 +100,12 @@ process.on("exit", () => {
   } catch {}
 });
 
-mkdirSync(join(STORE, "snapshot", PIN_RUN), { recursive: true });
 mkdirSync(PI_DIR, { recursive: true });
 mkdirSync(CLAUDE_DIR, { recursive: true });
 
 const aFill = fillers(19, 0);
 const bFill = fillers(18, 100);
 const cFill = fillers(19, 200);
-writeFileSync(join(STORE, "snapshot", PIN_RUN, "snapshot.jsonl"), JSON.stringify({ key: "e2e-pin-seed", source: "test", session: "e2e-pin", cwd: "/tmp", kind: "user", ts: "2026-08-10T00:00:00.000Z", text: aFill[0] }) + "\n");
 
 writeFileSync(join(PI_DIR, "e2e-a.jsonl"), sessionLines(SESSION_A, [DECISION_UNIT, ...aFill], COMPACTION_A, Date.UTC(2026, 7, 13, 9)));
 writeFileSync(join(PI_DIR, "e2e-b.jsonl"), sessionLines(SESSION_B, [CONSTRAINT_UNIT, MARKER_UNIT, ...bFill], COMPACTION_B, Date.UTC(2026, 7, 13, 10)));
@@ -147,7 +145,7 @@ check(!!report1 && existsSync(report1), "E2 report-*.json written");
 const report = JSON.parse(readFileSync(report1, "utf8"));
 check(/^2 \(carried 0\)/.test(report.decisions || ""), `E2 decisions added 2 (got: ${report.decisions})`);
 check(report.evals && report.evals.units && report.evals.notes && report.evals.skills && report.evals.verdict !== undefined, "E2 report carries evals + verdict fields");
-check(report.evals.units.hit1 === "0/30" && /^\d+\/10$/.test(report.evals.notes.hit1 || "") && String(report.evals.skills).includes("| pass") && String(report.evals.verdict).includes("traps 8/8 safe"), "E2 evals fields have the sandbox-run values");
+check(/^\d+\/30$/.test(report.evals.units.hit1 || "") && /^\d+\/10$/.test(report.evals.notes.hit1 || "") && String(report.evals.skills).includes("| pass") && String(report.evals.verdict).includes("traps 8/8 safe"), "E2 evals score the pinned units fixture and the sandbox notes run");
 const decisionNotes = parseUnitsText(readFileSync(join(STORE, "notes", notesRun, "notes.jsonl"), "utf8")).filter((n) => n.cls === "decision");
 check(decisionNotes.length >= 2, `E2 notes run created with ${decisionNotes.length} decision notes`);
 check(decisionNotes.some((n) => n.text.includes("release naming convention is set")), "E2 decision note distilled from session A compaction");
@@ -177,6 +175,9 @@ const m1ask = ask(MARKER_QUERY, []);
 check(m1ask.verdict === "answered" && (m1ask.answer.text || "").includes("teal falcon"), `E4 marker query answered by its session unit (${m1ask.verdict})`);
 const mx = ask(MARKER_QUERY, ["--exclude-session", SESSION_B]);
 check(mx.verdict === "no-memory" || mx.verdict === "candidates", `E4 --exclude-session keeps the session from answering its own prompt (${mx.verdict})`);
+
+mkdirSync(join(STORE, "snapshot", snapRun), { recursive: true });
+cpSync(join(researchOutputRoot(), "snapshot", snapRun), join(STORE, "snapshot", snapRun), { recursive: true });
 
 const vd = run("node", [join(BASE, "eval", "verdict-eval.mjs"), "--store", STORE, "--snapshot-run", snapRun, "--notes-run", latestRun(join(STORE, "notes")), "--heldout", HELDOUT, "--floor", "2", "--rebuild"]);
 console.log(scrub(vd.stdout));

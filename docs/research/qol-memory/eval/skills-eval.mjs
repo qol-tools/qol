@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "../lib/store-path.js";
+import { qolMemoryStore, researchOutputRoot } from "../lib/store-path.js";
 import { buildIndex, bm25Ranks } from "../lib/retrieval.js";
 import { buildMetaDoc, serveSection, poolTokens, bestSection } from "../lib/skills-pool.js";
 
@@ -14,7 +14,7 @@ const pick = (flag, def) => {
 };
 const STORE_ROOT = resolve(pick("--store", qolMemoryStore()));
 const SKILLS_ROOT = pick("--skills-root", null);
-const OUT_DIR = resolve(pick("--out", join(STORE_ROOT, "skills", "eval", new Date().toISOString().replace(/[:.]/g, "-"))));
+const OUT_DIR = resolve(pick("--out", join(researchOutputRoot(), "skills-eval", new Date().toISOString().replace(/[:.]/g, "-"))));
 
 const index = JSON.parse(readFileSync(join(STORE_ROOT, "skills", "index.json"), "utf8"));
 const root = SKILLS_ROOT || index.root;

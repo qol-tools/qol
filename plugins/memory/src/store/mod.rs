@@ -1,8 +1,11 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 pub mod lock;
 pub mod seal;
+
+pub const STALE_TEMP_AGE: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -157,6 +160,81 @@ impl Store {
         );
         Ok(removed)
     }
+
+    pub fn sweep_stale_temp_files(&self, older_than: Duration) -> usize {
+        let mut removed = 0usize;
+        for (path, is_dir) in self.stale_temp_entries(older_than) {
+            let result = if is_dir {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if result.is_ok() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    pub fn count_stale_temp_files(&self, older_than: Duration) -> usize {
+        self.stale_temp_entries(older_than).len()
+    }
+
+    fn stale_temp_entries(&self, older_than: Duration) -> Vec<(PathBuf, bool)> {
+        let cutoff = SystemTime::now()
+            .checked_sub(older_than)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let mut stale = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.root) {
+            for entry in entries.filter_map(std::result::Result::ok) {
+                if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                    continue;
+                }
+                if !is_atomic_temp_name(&entry.file_name()) {
+                    continue;
+                }
+                if is_older_than(&entry.path(), cutoff) {
+                    stale.push((entry.path(), false));
+                }
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(self.notes_root()) {
+            for entry in entries.filter_map(std::result::Result::ok) {
+                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                if !entry.file_name().to_string_lossy().starts_with(".tmp-") {
+                    continue;
+                }
+                if is_older_than(&entry.path(), cutoff) {
+                    stale.push((entry.path(), true));
+                }
+            }
+        }
+        stale
+    }
+}
+
+fn is_atomic_temp_name(name: &OsStr) -> bool {
+    let Some(text) = name.to_str() else {
+        return false;
+    };
+    let Some(middle) = text
+        .strip_prefix('.')
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let Some((stem, suffix)) = middle.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty() && suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn is_older_than(path: &Path, cutoff: SystemTime) -> bool {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .is_ok_and(|modified| modified < cutoff)
 }
 
 pub(crate) fn is_run_dir_name(name: &OsStr) -> bool {
@@ -638,6 +716,62 @@ mod tests {
                 dir.0.join("missing-target")
             );
         }
+    }
+
+    #[test]
+    fn sweep_removes_only_stale_atomic_temps() {
+        let dir = TempDir::new("sweep");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        let notes = store.notes_root();
+        std::fs::create_dir_all(&notes).unwrap();
+        let old_time = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+        let backdate = |path: &Path| {
+            std::fs::File::open(path)
+                .unwrap()
+                .set_modified(old_time)
+                .unwrap();
+        };
+        let stale_temp = dir.0.join(".units.jsonl.abc123.tmp");
+        let fresh_temp = dir.0.join(".retrievals.jsonl.def456.tmp");
+        let catchall = dir.0.join(".distill-catchall.ts");
+        let lock = store.distill_lock_path();
+        let units = store.units_path();
+        let stale_tmp_dir = notes.join(".tmp-2026-09-14T01:00:00.000Z");
+        let fresh_tmp_dir = notes.join(".tmp-fresh");
+        for file in [&stale_temp, &fresh_temp, &catchall, &lock, &units] {
+            std::fs::write(file, b"x").unwrap();
+        }
+        for directory in [&stale_tmp_dir, &fresh_tmp_dir] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        std::fs::write(notes.join("loose.txt"), b"x").unwrap();
+        backdate(&stale_temp);
+        backdate(&stale_tmp_dir);
+
+        assert_eq!(store.count_stale_temp_files(STALE_TEMP_AGE), 2);
+        assert_eq!(store.sweep_stale_temp_files(STALE_TEMP_AGE), 2);
+        assert!(!stale_temp.exists());
+        assert!(!stale_tmp_dir.exists());
+        assert!(fresh_temp.exists());
+        assert!(fresh_tmp_dir.exists());
+        assert!(catchall.exists());
+        assert!(lock.exists());
+        assert!(units.exists());
+        assert!(notes.join("loose.txt").exists());
+        assert_eq!(store.count_stale_temp_files(STALE_TEMP_AGE), 0);
+        assert_eq!(store.sweep_stale_temp_files(STALE_TEMP_AGE), 0);
+    }
+
+    #[test]
+    fn sweep_tolerates_missing_roots() {
+        let dir = TempDir::new("sweep-missing");
+        let absent = dir.0.join("absent");
+        let store = Store::resolve(Some(absent.as_path())).unwrap();
+        assert_eq!(store.count_stale_temp_files(STALE_TEMP_AGE), 0);
+        assert_eq!(store.sweep_stale_temp_files(STALE_TEMP_AGE), 0);
+        let empty = TempDir::new("sweep-empty");
+        let store = Store::resolve(Some(empty.0.as_path())).unwrap();
+        assert_eq!(store.sweep_stale_temp_files(STALE_TEMP_AGE), 0);
     }
 
     #[test]

@@ -2,12 +2,11 @@
 import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 import { buildIndex, bm25Ranks } from "./lib/retrieval.js";
 import { buildOrLoad } from "./lib/indexcache.js";
+import { researchRunDir } from "./lib/store-path.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
-const STORE = process.env.QOL_MEMORY_STORE || join(homedir(), ".local", "share", "qol-tray", "plugins", "qol-memory");
 const RUN = process.env.REPLAY_RUN || "2026-08-10T21-38-02-273Z";
 const SESSION_A = process.env.REPLAY_SESSION || "";
 const WATERMARK = process.env.REPLAY_WATERMARK || "";
@@ -15,7 +14,7 @@ const K = 5;
 
 if (!SESSION_A) { console.error("REPLAY_SESSION required"); process.exit(1); }
 
-const units = readFileSync(join(STORE, "snapshot", RUN, "snapshot.jsonl"), "utf8")
+const units = readFileSync(join(researchRunDir("snapshot", RUN), "snapshot.jsonl"), "utf8")
   .trim().split("\n").map(JSON.parse);
 const userUnits = units.filter((u) => u.kind === "user" && (u.text || "").trim());
 const sessionUnits = userUnits.filter((u) => u.session === SESSION_A);

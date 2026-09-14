@@ -1791,7 +1791,7 @@ mod tests {
         let report: DoctorReport =
             serde_json::from_str(&before.stdout).expect("doctor output must be valid JSON");
         assert_eq!(report.plugin_id, PLUGIN_ID);
-        assert_eq!(report.checks.len(), 9);
+        assert_eq!(report.checks.len(), 10);
         let ids = report
             .checks
             .iter()
@@ -1808,7 +1808,8 @@ mod tests {
                 "index_cache",
                 "skills_index",
                 "retrieval_log",
-                "aliases_valid"
+                "aliases_valid",
+                "store_hygiene"
             ]
         );
         assert!(report

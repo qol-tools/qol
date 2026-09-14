@@ -1,10 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { buildIndex, bm25Ranks } from "./lib/retrieval.js";
 import { buildOrLoad } from "./lib/indexcache.js";
+import { researchRunDir } from "./lib/store-path.js";
 
-const STORE = homedir() + "/.local/share/qol-tray/plugins/qol-memory";
 const RUN = process.env.REPLAY_RUN || "2026-08-10T21-38-02-273Z";
 const SESSION_A = process.env.REPLAY_SESSION || "019fec67be4a5f2e";
 const ROOT = new URL(".", import.meta.url).pathname;
@@ -12,7 +11,7 @@ const questions = JSON.parse(readFileSync(join(ROOT, "eval", "questions.json"), 
 const heldout = JSON.parse(readFileSync(join(ROOT, "eval", "heldout.json"), "utf8")).questions;
 const allQ = [...questions, ...heldout.map((q) => ({ ...q, source: "heldout" }))];
 
-const units = readFileSync(join(STORE, "snapshot", RUN, "snapshot.jsonl"), "utf8")
+const units = readFileSync(join(researchRunDir("snapshot", RUN), "snapshot.jsonl"), "utf8")
   .trim().split("\n").map(JSON.parse);
 const userUnits = units.filter((u) => u.kind === "user");
 const byKey = new Map(userUnits.map((u) => [u.key, u]));

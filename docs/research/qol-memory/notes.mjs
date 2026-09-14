@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchRunDir } from "./lib/store-path.js";
 import { acquireDistillLock } from "./lib/distill-lock.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +20,7 @@ const PINNED =
   JSON.parse(readFileSync(join(BASE, "eval", "questions.json"), "utf8")).run_pin ||
   "2026-08-10T19-18-33-961Z";
 const STORE_ROOT = resolve(pick("--store", qolMemoryStore()));
-const SNAPSHOT_DIR = join(STORE_ROOT, "snapshot");
+const SNAPSHOT_RUN_DIR = researchRunDir("snapshot", PINNED);
 const OUT_DIR = join(STORE_ROOT, "notes");
 const TS = new Date().toISOString();
 
@@ -149,7 +149,7 @@ function extractTranscript(units) {
 
 function extractArtifacts() {
   const notes = [];
-  const report = JSON.parse(readFileSync(join(SNAPSHOT_DIR, PINNED, "report.json"), "utf8"));
+  const report = JSON.parse(readFileSync(join(SNAPSHOT_RUN_DIR, "report.json"), "utf8"));
   const script = readFileSync(join(BASE, "snapshot.mjs"), "utf8");
   const artifactTs =
     report.started_at ||
@@ -220,7 +220,7 @@ function extractArtifacts() {
   return notes;
 }
 
-const snapshot = readFileSync(join(SNAPSHOT_DIR, PINNED, "snapshot.jsonl"), "utf8")
+const snapshot = readFileSync(join(SNAPSHOT_RUN_DIR, "snapshot.jsonl"), "utf8")
   .split("\n")
   .filter(Boolean)
   .map((l) => JSON.parse(l));

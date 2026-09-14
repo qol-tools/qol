@@ -15,6 +15,9 @@ const MIN_DELTA: usize = 2;
 const K: usize = 3;
 const CAP_USER: usize = 2;
 const CAP_COMPACTION: usize = 1;
+pub const HOOK_LOG_CAP: u64 = crate::retrieval_log::RETRIEVAL_LOG_CAP;
+pub const HOOK_LOG_TAIL: u64 = crate::retrieval_log::RETRIEVAL_LOG_TAIL;
+const MARKER_MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ContinueRequest {
@@ -145,10 +148,12 @@ fn log_entry(store: &Store, entry: Value) {
         }
     }
     let _ = std::fs::create_dir_all(store.root());
+    let path = store.root().join("hook.log");
+    crate::retrieval_log::rotate_if_needed(&path, HOOK_LOG_CAP, HOOK_LOG_TAIL);
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(store.root().join("hook.log"))
+        .open(&path)
     {
         use std::io::Write;
         let serialized = serde_json::to_string(&Value::Object(line)).unwrap_or_default();
@@ -214,13 +219,152 @@ fn write_marker(
             "ts": now.clone(),
             "session": session,
             "units_count": units_count,
-            "updated": now
+            "updated": now.clone(),
+            "last_seen": now
         }),
     );
+    backfill_marker_entries(&mut updated);
     let mut text = serde_json::to_string_pretty(&updated)?;
     text.push('\n');
     qol_fs::atomic_write(&store.continue_marker_path(), text.as_bytes())?;
     Ok(())
+}
+
+pub fn prune_stale_marker_entries(store: &Store) -> anyhow::Result<usize> {
+    let now = crate::text::now_iso();
+    prune_stale_marker_entries_at(store, parse_iso_millis(Some(&now)))
+}
+
+fn prune_stale_marker_entries_at(store: &Store, now_ms: i64) -> anyhow::Result<usize> {
+    let path = store.continue_marker_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(0);
+    };
+    let Ok(mut marker) = serde_json::from_str::<Value>(&text) else {
+        return Ok(0);
+    };
+    if marker.get("schema").and_then(Value::as_str) != Some(SCHEMA)
+        || !marker.get("cwds").is_some_and(Value::is_object)
+    {
+        return Ok(0);
+    }
+    let Some(cwds) = marker.get("cwds").and_then(Value::as_object).cloned() else {
+        return Ok(0);
+    };
+    let cutoff = now_ms.saturating_sub(MARKER_MAX_AGE_MS);
+    let mut kept = Map::new();
+    let mut pruned = 0usize;
+    let mut changed = false;
+    for (cwd, slot) in cwds {
+        if is_flat_entry(&slot) {
+            let mut entry = slot;
+            changed |= backfill_entry(&mut entry);
+            if entry_is_stale(&entry, cutoff) {
+                pruned += 1;
+                changed = true;
+                continue;
+            }
+            kept.insert(cwd, entry);
+            continue;
+        }
+        let Some(callers) = slot.as_object() else {
+            kept.insert(cwd, slot);
+            continue;
+        };
+        let callers_were_empty = callers.is_empty();
+        let mut next_callers = Map::new();
+        for (caller, mut entry) in callers.clone() {
+            if !entry.is_object() {
+                next_callers.insert(caller, entry);
+                continue;
+            }
+            changed |= backfill_entry(&mut entry);
+            if entry_is_stale(&entry, cutoff) {
+                pruned += 1;
+                changed = true;
+                continue;
+            }
+            next_callers.insert(caller, entry);
+        }
+        if next_callers.is_empty() && !callers_were_empty {
+            changed = true;
+            continue;
+        }
+        kept.insert(cwd, Value::Object(next_callers));
+    }
+    if !changed {
+        return Ok(0);
+    }
+    if let Some(map) = marker.as_object_mut() {
+        map.insert("cwds".to_string(), Value::Object(kept));
+    }
+    let mut text = serde_json::to_string_pretty(&marker)?;
+    text.push('\n');
+    qol_fs::atomic_write(&path, text.as_bytes())?;
+    Ok(pruned)
+}
+
+fn is_flat_entry(entry: &Value) -> bool {
+    entry
+        .get("ts")
+        .and_then(Value::as_str)
+        .is_some_and(|ts| !ts.is_empty())
+}
+
+fn backfill_entry(entry: &mut Value) -> bool {
+    let Some(map) = entry.as_object_mut() else {
+        return false;
+    };
+    if map
+        .get("last_seen")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return false;
+    }
+    let Some(seen) = ["updated", "ts"]
+        .iter()
+        .find_map(|field| map.get(*field).and_then(Value::as_str))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+    else {
+        return false;
+    };
+    map.insert("last_seen".to_string(), Value::String(seen));
+    true
+}
+
+fn backfill_marker_entries(marker: &mut Value) {
+    let Some(cwds) = marker.get_mut("cwds").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for slot in cwds.values_mut() {
+        if is_flat_entry(slot) {
+            backfill_entry(slot);
+            continue;
+        }
+        let Some(callers) = slot.as_object_mut() else {
+            continue;
+        };
+        for entry in callers.values_mut() {
+            if entry.is_object() {
+                backfill_entry(entry);
+            }
+        }
+    }
+}
+
+fn entry_is_stale(entry: &Value, cutoff_ms: i64) -> bool {
+    let seen = entry_last_seen_ms(entry);
+    seen > 0 && seen < cutoff_ms
+}
+
+fn entry_last_seen_ms(entry: &Value) -> i64 {
+    ["last_seen", "updated", "ts"]
+        .iter()
+        .find_map(|field| entry.get(*field).and_then(Value::as_str))
+        .map(|ts| parse_iso_millis(Some(ts)))
+        .unwrap_or(0)
 }
 
 fn line_count(raw: &[u8]) -> usize {
@@ -474,6 +618,146 @@ mod tests {
             session: "current".to_string(),
             agent_home: Some(CALLER.to_string()),
         }
+    }
+
+    #[test]
+    fn marker_write_backfills_last_seen_for_entries_that_lack_it() {
+        let (_dir, store) = store_in("marker-backfill");
+        std::fs::write(store.units_path(), UNITS).unwrap();
+        let marker = json!({
+            "schema": SCHEMA,
+            "cwds": {
+                "/other": {
+                    "ts": "2026-08-01T00:00:00.000Z",
+                    "session": "other-session",
+                    "units_count": 2,
+                    "updated": "2026-08-02T00:00:00.000Z"
+                },
+                "/nested": {
+                    "/home/tester/.claude": {
+                        "ts": "2026-08-03T00:00:00.000Z",
+                        "session": "nested-session",
+                        "units_count": 1
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            store.continue_marker_path(),
+            format!("{}\n", serde_json::to_string_pretty(&marker).unwrap()),
+        )
+        .unwrap();
+
+        let outcome = run(&store, &request()).unwrap();
+        assert_eq!(outcome.stage, "injected");
+
+        let text = std::fs::read_to_string(store.continue_marker_path()).unwrap();
+        let marker: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            marker["cwds"]["/other"]["last_seen"],
+            json!("2026-08-02T00:00:00.000Z")
+        );
+        assert_eq!(
+            marker["cwds"]["/nested"][CALLER]["last_seen"],
+            json!("2026-08-03T00:00:00.000Z")
+        );
+        let current = &marker["cwds"]["/proj"][CALLER];
+        assert_eq!(current["last_seen"], current["updated"]);
+    }
+
+    #[test]
+    fn marker_prune_drops_only_entries_older_than_ninety_days() {
+        let (_dir, store) = store_in("marker-prune");
+        let now_ms = parse_iso_millis(Some("2026-09-14T00:00:00.000Z"));
+        let marker = json!({
+            "schema": SCHEMA,
+            "cwds": {
+                "/stale": {
+                    "ts": "2026-05-01T00:00:00.000Z",
+                    "session": "s",
+                    "units_count": 1,
+                    "updated": "2026-05-02T00:00:00.000Z"
+                },
+                "/boundary-dropped": {
+                    "last_seen": "2026-06-15T23:59:59.999Z",
+                    "ts": "2026-06-15T23:59:59.999Z",
+                    "session": "s",
+                    "units_count": 1
+                },
+                "/nested": {
+                    "/home/a": {
+                        "ts": "2026-06-15T23:59:59.999Z",
+                        "session": "s",
+                        "units_count": 1
+                    },
+                    "/home/b": {
+                        "ts": "2026-06-16T00:00:00.000Z",
+                        "session": "s",
+                        "units_count": 1
+                    },
+                    "/home/c": {
+                        "ts": "2026-08-20T00:00:00.000Z",
+                        "session": "s",
+                        "units_count": 1
+                    }
+                },
+                "/broken": "junk"
+            }
+        });
+        std::fs::write(
+            store.continue_marker_path(),
+            format!("{}\n", serde_json::to_string_pretty(&marker).unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(prune_stale_marker_entries_at(&store, now_ms).unwrap(), 3);
+
+        let text = std::fs::read_to_string(store.continue_marker_path()).unwrap();
+        let marker: Value = serde_json::from_str(&text).unwrap();
+        assert!(marker["cwds"].get("/stale").is_none());
+        assert!(marker["cwds"].get("/boundary-dropped").is_none());
+        assert_eq!(marker["cwds"]["/broken"], json!("junk"));
+        assert!(marker["cwds"]["/nested"].get("/home/a").is_none());
+        assert_eq!(
+            marker["cwds"]["/nested"]["/home/b"]["last_seen"],
+            json!("2026-06-16T00:00:00.000Z")
+        );
+        assert_eq!(
+            marker["cwds"]["/nested"]["/home/c"]["last_seen"],
+            json!("2026-08-20T00:00:00.000Z")
+        );
+        assert_eq!(prune_stale_marker_entries_at(&store, now_ms).unwrap(), 0);
+    }
+
+    #[test]
+    fn hook_log_rotation_keeps_the_tail_under_cap() {
+        let (_dir, store) = store_in("hook-rotate");
+        let path = store.root().join("hook.log");
+        let body: Vec<String> = (0..12)
+            .map(|i| {
+                json!({
+                    "ts": "2026-08-02T00:00:00.000Z",
+                    "stage": format!("old-{i}"),
+                    "pad": "x".repeat(1024 * 1024)
+                })
+                .to_string()
+            })
+            .collect();
+        std::fs::write(&path, body.join("\n") + "\n").unwrap();
+
+        log_entry(
+            &store,
+            json!({"stage": "gate-miss", "reason": "below-min-delta"}),
+        );
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() <= HOOK_LOG_CAP);
+        assert!(!raw.contains("\"old-0\""));
+        assert!(raw.contains("\"old-11\""));
+        assert_eq!(raw.lines().count(), 2);
+        let last: Value = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
+        assert_eq!(last["stage"], "gate-miss");
+        assert_eq!(last["reason"], "below-min-delta");
     }
 
     #[test]

@@ -1,11 +1,13 @@
 use anyhow::Result;
 use qol_headless::{DoctorCheck, DoctorCheckResult};
 
+use crate::continue_recall::HOOK_LOG_CAP;
+use crate::feedback::FEEDBACK_LOG_CAP;
 use crate::retrieval::cache::{cache_state, CacheState};
 use crate::retrieval::DocRef;
 use crate::retrieval_log::RETRIEVAL_LOG_CAP;
 use crate::skills::{load_index, probe_fresh, Freshness};
-use crate::store::Store;
+use crate::store::{Store, STALE_TEMP_AGE};
 
 pub fn checks() -> Vec<DoctorCheck> {
     vec![
@@ -53,6 +55,11 @@ pub fn checks() -> Vec<DoctorCheck> {
             "aliases_valid",
             "Verify the embedded concept aliases validate.",
             aliases_valid_check,
+        ),
+        DoctorCheck::new(
+            "store_hygiene",
+            "Verify store temp files, product logs, and research artifacts.",
+            store_hygiene_check,
         ),
     ]
 }
@@ -349,6 +356,76 @@ fn aliases_valid_check() -> Result<DoctorCheckResult> {
     })
 }
 
+fn store_hygiene_check() -> Result<DoctorCheckResult> {
+    let store = match Store::resolve(None) {
+        Ok(store) => store,
+        Err(error) => {
+            return Ok(DoctorCheckResult::warn(
+                "store_hygiene",
+                format!("Skipped: failed to resolve the memory store: {error:#}"),
+            ))
+        }
+    };
+    Ok(store_hygiene_result(&store))
+}
+
+fn store_hygiene_result(store: &Store) -> DoctorCheckResult {
+    store_hygiene_result_for(store, STALE_TEMP_AGE)
+}
+
+fn store_hygiene_result_for(
+    store: &Store,
+    stale_temp_age: std::time::Duration,
+) -> DoctorCheckResult {
+    let stale_temps = store.count_stale_temp_files(stale_temp_age);
+    let hook_bytes = file_len(&store.root().join("hook.log"));
+    let feedback_bytes = file_len(&store.root().join("feedback.jsonl"));
+    let research: Vec<&str> = ["snapshot", "eval", "ingest"]
+        .into_iter()
+        .filter(|name| dir_has_entries(&store.root().join(name)))
+        .collect();
+    let mut problems = Vec::new();
+    if stale_temps > 0 {
+        problems.push(format!("{stale_temps} stale temp file(s)"));
+    }
+    if hook_bytes > HOOK_LOG_CAP {
+        problems.push(format!(
+            "hook.log is {hook_bytes} bytes, over its {HOOK_LOG_CAP} byte cap"
+        ));
+    }
+    if feedback_bytes > FEEDBACK_LOG_CAP {
+        problems.push(format!(
+            "feedback.jsonl is {feedback_bytes} bytes, over its {FEEDBACK_LOG_CAP} byte cap"
+        ));
+    }
+    if !research.is_empty() {
+        problems.push(format!(
+            "research directories remain populated: {}",
+            research.join(", ")
+        ));
+    }
+    if problems.is_empty() {
+        let message = format!(
+            "Store hygiene is clean: 0 stale temp files, hook.log {hook_bytes} bytes, \
+             feedback.jsonl {feedback_bytes} bytes, no research directories."
+        );
+        DoctorCheckResult::ok("store_hygiene", message)
+    } else {
+        DoctorCheckResult::warn("store_hygiene", format!("Store hygiene: {}.", problems.join("; ")))
+            .with_fix(
+                "move research outputs under reports/qol-memory/ and let the warm sweep trim temp files",
+            )
+    }
+}
+
+fn file_len(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+}
+
+fn dir_has_entries(path: &std::path::Path) -> bool {
+    std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
+}
+
 fn platform_supported_check() -> Result<DoctorCheckResult> {
     Ok(platform_supported_result(crate::platform::current_support()))
 }
@@ -365,4 +442,77 @@ fn platform_supported_result(support: crate::platform::PlatformSupport) -> Docto
         format!("{} is not declared by this plugin.", support.name),
     )
     .with_fix("Run the plugin on Linux or macOS.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qol_headless::DoctorStatus;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "qol-memory-doctor-{}-{}-{}",
+                tag,
+                std::process::id(),
+                nanos
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            TempDir(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn store_hygiene_check_renders_ok_and_warn() {
+        let dir = TempDir::new("hygiene");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        let ok = store_hygiene_result(&store);
+        assert_eq!(ok.id, "store_hygiene");
+        assert_eq!(ok.status, DoctorStatus::Ok);
+        assert!(ok.message.contains("0 stale temp files"));
+        assert!(ok.fix.is_none());
+
+        std::fs::write(dir.0.join(".units.jsonl.abc123.tmp"), b"x").unwrap();
+        std::fs::write(
+            store.root().join("hook.log"),
+            vec![b'x'; HOOK_LOG_CAP as usize + 1],
+        )
+        .unwrap();
+        std::fs::write(
+            store.root().join("feedback.jsonl"),
+            vec![b'x'; FEEDBACK_LOG_CAP as usize + 1],
+        )
+        .unwrap();
+        std::fs::create_dir_all(
+            store
+                .root()
+                .join("snapshot")
+                .join("2026-08-10T21-38-02-273Z"),
+        )
+        .unwrap();
+
+        let warn = store_hygiene_result_for(&store, std::time::Duration::ZERO);
+        assert_eq!(warn.id, "store_hygiene");
+        assert_eq!(warn.status, DoctorStatus::Warn);
+        assert!(warn.message.contains("1 stale temp file"));
+        assert!(warn.message.contains("hook.log"));
+        assert!(warn.message.contains("feedback.jsonl"));
+        assert!(warn.message.contains("snapshot"));
+        let fix = warn.fix.expect("warn carries a fix");
+        assert!(fix.contains("reports/qol-memory/"));
+    }
 }

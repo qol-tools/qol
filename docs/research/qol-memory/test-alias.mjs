@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, rea
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { fixturesRoot } from "./lib/store-path.js";
 import { loadAliases, expandTokens, validate, ALIAS_CAP } from "./lib/concept-aliases.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
@@ -13,7 +13,7 @@ const SNAPSHOT_RUN = "2026-08-12T18-46-58-129Z";
 const NOTES_RUN = "2026-08-13T16:31:40.844Z";
 const FROZEN = join(tmpdir(), "qol-memory-alias-test");
 const ALIASES_JSON = join(BASE, "..", "..", "..", "plugins", "memory", "assets", "concept-aliases.json");
-const STORE_SRC = qolMemoryStore();
+const FIXTURES = fixturesRoot();
 const GOLD_KEYS = { d01: "79046028d14b1cec", d02: "d857979480b72faa", d03: "7570839245601dcc" };
 const ABSTENTIONS = ["h08", "h09", "p01", "p02", "p03", "d01", "d02", "d03"];
 
@@ -33,8 +33,8 @@ function freeze() {
   rmSync(FROZEN, { recursive: true, force: true });
   mkdirSync(join(FROZEN, "snapshot"), { recursive: true });
   mkdirSync(join(FROZEN, "notes"), { recursive: true });
-  cpSync(join(STORE_SRC, "snapshot", SNAPSHOT_RUN), join(FROZEN, "snapshot", SNAPSHOT_RUN), { recursive: true });
-  cpSync(join(STORE_SRC, "notes", NOTES_RUN), join(FROZEN, "notes", NOTES_RUN), { recursive: true });
+  cpSync(join(FIXTURES, "snapshot", SNAPSHOT_RUN), join(FROZEN, "snapshot", SNAPSHOT_RUN), { recursive: true });
+  cpSync(join(FIXTURES, "notes", NOTES_RUN), join(FROZEN, "notes", NOTES_RUN), { recursive: true });
   if (existsSync(join(FROZEN, "units.jsonl"))) throw new Error(`frozen store ${FROZEN} must never carry a live units.jsonl`);
 }
 
