@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub verify_answers: bool,
     pub verifier_endpoint: String,
+    pub notes_runs_kept: u16,
 }
 
 const CONTRACT: &str = qol_config::plugin_config_contract!();

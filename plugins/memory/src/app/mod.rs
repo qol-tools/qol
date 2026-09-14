@@ -36,14 +36,16 @@ pub fn run_daemon() -> Result<()> {
         }
     }
     let state = Arc::new(Mutex::new(warm));
-    let watch_handle = match crate::watch::spawn(IngestRoots::resolve(), Arc::clone(&state)) {
-        Ok(handle) => Some(handle),
-        Err(error) => {
-            eprintln!("qol-memory: transcript watch unavailable: {error}");
-            qol_runtime::probe!("QOL_MEMORY_DAEMON", "event=watch_unavailable error={error}");
-            None
-        }
-    };
+    let notes_runs_kept = config.notes_runs_kept as usize;
+    let watch_handle =
+        match crate::watch::spawn(IngestRoots::resolve(), Arc::clone(&state), notes_runs_kept) {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                eprintln!("qol-memory: transcript watch unavailable: {error}");
+                qol_runtime::probe!("QOL_MEMORY_DAEMON", "event=watch_unavailable error={error}");
+                None
+            }
+        };
     let readiness = ReadinessGate::starting();
     let warm_state = Arc::clone(&state);
     let warm_readiness = readiness.clone();
@@ -52,7 +54,7 @@ pub fn run_daemon() -> Result<()> {
         .spawn(move || {
             let progress = warm_readiness.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                run_initial_warm(warm_state, progress);
+                run_initial_warm(warm_state, progress, notes_runs_kept);
             }));
             if result.is_err() {
                 eprintln!("qol-memory: initial warm thread panicked");
@@ -72,7 +74,7 @@ pub fn run_daemon() -> Result<()> {
     listen_result
 }
 
-fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate) {
+fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_runs_kept: usize) {
     let roots = IngestRoots::resolve();
     let paths = ingest::walk_roots(&roots);
     let total = paths.len();
@@ -111,7 +113,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate) {
         };
         warm.store().clone()
     };
-    match crate::distill::run(&store) {
+    match crate::distill::run(&store, notes_runs_kept) {
         Ok(report) if !report.unchanged => {
             let mut warm = match state.lock() {
                 Ok(guard) => guard,
@@ -129,6 +131,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate) {
             );
         }
     }
+    prune_notes_runs_at_warm(&store, notes_runs_kept);
     warming.set_phase(
         ReadinessPhase::Warming,
         Some("building warm index".to_owned()),
@@ -143,6 +146,37 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate) {
             qol_runtime::probe!(
                 "QOL_MEMORY_DAEMON",
                 "event=initial_warm_failed error={error}"
+            );
+        }
+    }
+}
+
+fn prune_notes_runs_at_warm(store: &Store, notes_runs_kept: usize) {
+    if notes_runs_kept == 0 {
+        return;
+    }
+    match crate::store::lock::DistillLock::acquire(store, "prune") {
+        Ok(None) => {
+            qol_runtime::probe!(
+                "QOL_MEMORY_DISTILL",
+                "event=prune outcome=skip reason=lock_busy"
+            );
+        }
+        Ok(Some(_guard)) => match store.prune_notes_runs(notes_runs_kept) {
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("qol-memory: notes prune failed: {error:#}");
+                qol_runtime::probe!(
+                    "QOL_MEMORY_DISTILL",
+                    "event=prune outcome=error error={error}"
+                );
+            }
+        },
+        Err(error) => {
+            eprintln!("qol-memory: notes prune failed: {error:#}");
+            qol_runtime::probe!(
+                "QOL_MEMORY_DISTILL",
+                "event=prune outcome=error error={error}"
             );
         }
     }
@@ -176,7 +210,80 @@ pub fn daemon_unreachable(error: &anyhow::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "qol-memory-app-{}-{}-{}",
+                tag,
+                std::process::id(),
+                nanos
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            TempDir(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn seed_run(store: &Store, name: &str) {
+        let run = store.notes_root().join(name);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("notes.jsonl"), "{\"key\":\"n\"}\n").unwrap();
+    }
+
+    fn run_count(store: &Store) -> usize {
+        std::fs::read_dir(store.notes_root())
+            .map(|entries| {
+                entries
+                    .filter_map(std::result::Result::ok)
+                    .filter(|entry| entry.path().is_dir())
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn prune_notes_runs_at_warm_respects_keep_and_the_lock() {
+        let dir = TempDir::new("prune");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        for name in [
+            "2026-08-01T09:00:00.000Z",
+            "2026-08-02T09:00:00.000Z",
+            "2026-08-03T09:00:00.000Z",
+            "2026-08-04T09:00:00.000Z",
+            "2026-08-05T09:00:00.000Z",
+        ] {
+            seed_run(&store, name);
+        }
+
+        prune_notes_runs_at_warm(&store, 0);
+        assert_eq!(run_count(&store), 5);
+
+        prune_notes_runs_at_warm(&store, 2);
+        assert_eq!(run_count(&store), 2);
+
+        let held = crate::store::lock::DistillLock::acquire(&store, "test")
+            .unwrap()
+            .unwrap();
+        prune_notes_runs_at_warm(&store, 1);
+        assert_eq!(run_count(&store), 2);
+        drop(held);
+    }
 
     #[test]
     fn daemon_unreachable_matches_missing_and_refused_sockets() {

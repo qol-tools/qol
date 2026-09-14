@@ -25,6 +25,7 @@ const USAGE_CONTINUE: &str =
     "usage: qol-memory continue --cwd PATH --session ID [--store PATH] [--agent-home DIR]";
 const USAGE_REINDEX: &str = "usage: qol-memory reindex [--store PATH]";
 const USAGE_DISTILL: &str = "usage: qol-memory distill [--store PATH]";
+const USAGE_PRUNE: &str = "usage: qol-memory prune [--store PATH] [--keep N]";
 const USAGE_ROWS: &str = "usage: qol-memory rows \"<query>\" [--store PATH] [--agent-home DIR]";
 
 type PlainHandler = Box<dyn Fn(&CommandContext) -> Result<Execution> + Send + Sync>;
@@ -44,6 +45,8 @@ struct Handlers {
     reindex_json: JsonHandler,
     distill_plain: PlainHandler,
     distill_json: JsonHandler,
+    prune_plain: PlainHandler,
+    prune_json: JsonHandler,
     rows_plain: PlainHandler,
     rows_json: JsonHandler,
 }
@@ -64,6 +67,8 @@ impl Handlers {
             reindex_json: Box::new(run_reindex_json),
             distill_plain: Box::new(run_distill_plain),
             distill_json: Box::new(run_distill_json),
+            prune_plain: Box::new(run_prune_plain),
+            prune_json: Box::new(run_prune_json),
             rows_plain: Box::new(run_rows_plain),
             rows_json: Box::new(run_rows_json),
         }
@@ -101,6 +106,7 @@ fn app_with_handlers(handlers: Handlers) -> HeadlessApp {
             handlers.distill_plain,
             handlers.distill_json,
         ))
+        .command(prune_command(handlers.prune_plain, handlers.prune_json))
         .command(rows_command(handlers.rows_plain, handlers.rows_json))
         .doctor_checks(crate::doctor::checks())
 }
@@ -198,6 +204,16 @@ fn distill_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .about("Rewrite the notes layer from compaction units, carrying decision notes forward.")
         .usage(USAGE_DISTILL)
         .output("The `distill: ...` result line in plain text; the report object with --json.")
+        .exit_behavior("Usage errors exit 64; failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn prune_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("prune")
+        .about("Remove notes run folders beyond the retention count.")
+        .usage(USAGE_PRUNE)
+        .output("The `qol-memory prune: ...` line in plain text; the report object with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
         .run_result(move |context| plain(context))
         .run_json(move |context| json(context))
@@ -596,6 +612,49 @@ fn parse_distill_invocation(args: &[String]) -> std::result::Result<DistillInvoc
     Ok(DistillInvocation { store })
 }
 
+#[derive(Debug)]
+struct PruneInvocation {
+    store: Option<PathBuf>,
+    keep: Option<u16>,
+}
+
+fn parse_prune_invocation(args: &[String]) -> std::result::Result<PruneInvocation, String> {
+    let mut store: Option<PathBuf> = None;
+    let mut keep: Option<u16> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index].as_str();
+        match token {
+            "--store" => {
+                store = Some(PathBuf::from(value_flag_with(
+                    args,
+                    index,
+                    "--store",
+                    USAGE_PRUNE,
+                )?));
+                index += 2;
+            }
+            "--keep" => {
+                let value = value_flag_with(args, index, "--keep", USAGE_PRUNE)?;
+                let parsed = value.parse::<u16>().map_err(|_| {
+                    usage_prune_error(&format!("--keep expects a number, got `{value}`"))
+                })?;
+                keep = Some(parsed);
+                index += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(usage_prune_error(&format!("unknown flag `{other}`")));
+            }
+            positional => {
+                return Err(usage_prune_error(&format!(
+                    "unexpected argument `{positional}`"
+                )));
+            }
+        }
+    }
+    Ok(PruneInvocation { store, keep })
+}
+
 fn value_flag<'a>(
     args: &'a [String],
     index: usize,
@@ -642,6 +701,10 @@ fn usage_reindex_error(detail: &str) -> String {
 
 fn usage_distill_error(detail: &str) -> String {
     format!("{detail}\n{USAGE_DISTILL}")
+}
+
+fn usage_prune_error(detail: &str) -> String {
+    format!("{detail}\n{USAGE_PRUNE}")
 }
 
 fn usage_rows_error(detail: &str) -> String {
@@ -995,11 +1058,12 @@ fn run_distill_plain(context: &CommandContext) -> Result<Execution> {
         )
     } else {
         format!(
-            "distill: run {} added {} carried {} dropped {}",
+            "distill: run {} added {} carried {} dropped {} pruned {}",
             report.run.as_deref().unwrap_or_default(),
             report.added,
             report.carried,
-            report.dropped
+            report.dropped,
+            report.pruned
         )
     };
     Ok(Execution::success(newline_terminated(line)))
@@ -1014,7 +1078,45 @@ fn run_distill_json(context: &CommandContext) -> Result<Value> {
 fn distill_report(invocation: &DistillInvocation) -> Result<crate::distill::DistillReport> {
     let store = Store::resolve(invocation.store.as_deref())
         .context("failed to resolve the qol-memory store")?;
-    crate::distill::run(&store)
+    let notes_runs_kept = crate::config::load().notes_runs_kept as usize;
+    crate::distill::run(&store, notes_runs_kept)
+}
+
+fn run_prune_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_prune_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let report = prune_report(&invocation)?;
+    let line = format!(
+        "qol-memory prune: removed {} notes runs (keep {})",
+        report.removed, report.keep
+    );
+    Ok(Execution::success(newline_terminated(line)))
+}
+
+fn run_prune_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_prune_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    let report = prune_report(&invocation)?;
+    serde_json::to_value(&report).context("failed to serialize the prune report")
+}
+
+#[derive(serde::Serialize)]
+struct PruneReport {
+    removed: usize,
+    keep: usize,
+}
+
+fn prune_report(invocation: &PruneInvocation) -> Result<PruneReport> {
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    let keep = invocation
+        .keep
+        .unwrap_or_else(|| crate::config::load().notes_runs_kept) as usize;
+    let _guard = crate::store::lock::DistillLock::acquire(&store, "prune")?
+        .ok_or_else(|| anyhow::anyhow!("qol-memory: prune busy"))?;
+    let removed = store.prune_notes_runs(keep)?;
+    Ok(PruneReport { removed, keep })
 }
 
 fn flatten_status(value: &Value) -> String {
@@ -1075,6 +1177,8 @@ mod tests {
         continue_cmd: AtomicUsize,
         reindex: AtomicUsize,
         distill: AtomicUsize,
+        prune: AtomicUsize,
+        prune_keep: AtomicUsize,
         rows: AtomicUsize,
     }
 
@@ -1087,6 +1191,8 @@ mod tests {
                 && self.continue_cmd.load(Ordering::SeqCst) == 0
                 && self.reindex.load(Ordering::SeqCst) == 0
                 && self.distill.load(Ordering::SeqCst) == 0
+                && self.prune.load(Ordering::SeqCst) == 0
+                && self.prune_keep.load(Ordering::SeqCst) == 0
                 && self.rows.load(Ordering::SeqCst) == 0
         }
     }
@@ -1105,6 +1211,9 @@ mod tests {
         let reindex_json_calls = Arc::clone(calls);
         let distill_calls = Arc::clone(calls);
         let distill_json_calls = Arc::clone(calls);
+        let prune_calls = Arc::clone(calls);
+        let prune_json_calls = Arc::clone(calls);
+        let prune_keep_calls = Arc::clone(calls);
         let rows_calls = Arc::clone(calls);
         let rows_json_calls = Arc::clone(calls);
         Handlers {
@@ -1161,6 +1270,20 @@ mod tests {
             distill_json: Box::new(move |_: &CommandContext| {
                 distill_json_calls.distill.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "sentinel": "distill" }))
+            }),
+            prune_plain: Box::new(move |context: &CommandContext| {
+                let parsed = parse_prune_invocation(context.args()).map_err(anyhow::Error::msg)?;
+                prune_calls.prune.fetch_add(1, Ordering::SeqCst);
+                if let Some(keep) = parsed.keep {
+                    prune_keep_calls
+                        .prune_keep
+                        .store(keep as usize, Ordering::SeqCst);
+                }
+                Ok(Execution::success("sentinel prune"))
+            }),
+            prune_json: Box::new(move |_: &CommandContext| {
+                prune_json_calls.prune.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "prune" }))
             }),
             rows_plain: Box::new(move |_| {
                 rows_calls.rows.fetch_add(1, Ordering::SeqCst);
@@ -1408,6 +1531,7 @@ mod tests {
             vec!["help", "continue"],
             vec!["help", "reindex"],
             vec!["help", "distill"],
+            vec!["help", "prune"],
             vec!["help", "rows"],
             vec!["rows", "help"],
         ];
@@ -1457,6 +1581,64 @@ mod tests {
         let positional = app().execute(["distill".to_string(), "now".to_string()]);
         assert_eq!(positional.exit_code, EXIT_USAGE);
         assert!(positional.stderr.contains(USAGE_DISTILL));
+    }
+
+    #[test]
+    fn prune_usage_errors_and_keep_flag_parse() {
+        let with_store: Vec<String> = ["--store", "/tmp/x"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let parsed = parse_prune_invocation(&with_store).expect("prune parses");
+        assert_eq!(parsed.store, Some(PathBuf::from("/tmp/x")));
+        assert_eq!(parsed.keep, None);
+
+        let with_keep: Vec<String> = ["--keep", "7"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let parsed = parse_prune_invocation(&with_keep).expect("prune keep parses");
+        assert_eq!(parsed.keep, Some(7));
+        assert_eq!(parsed.store, None);
+
+        let missing: Vec<String> = ["--keep"].iter().map(|arg| (*arg).to_string()).collect();
+        let error = parse_prune_invocation(&missing).expect_err("missing keep");
+        assert!(error.contains("--keep requires a value"));
+        assert!(error.contains(USAGE_PRUNE));
+
+        let non_numeric: Vec<String> = ["--keep", "many"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let error = parse_prune_invocation(&non_numeric).expect_err("non-numeric keep");
+        assert!(error.contains("--keep expects a number"));
+        assert!(error.contains(USAGE_PRUNE));
+
+        let out_of_range: Vec<String> = ["--keep", "70000"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let error = parse_prune_invocation(&out_of_range).expect_err("out-of-range keep");
+        assert!(error.contains("--keep expects a number"));
+        assert!(error.contains(USAGE_PRUNE));
+
+        let unknown_flag = app().execute(["prune".to_string(), "--wat".to_string()]);
+        assert_eq!(unknown_flag.exit_code, EXIT_USAGE);
+        assert!(unknown_flag.stderr.contains(USAGE_PRUNE));
+
+        let positional = app().execute(["prune".to_string(), "now".to_string()]);
+        assert_eq!(positional.exit_code, EXIT_USAGE);
+        assert!(positional.stderr.contains(USAGE_PRUNE));
+
+        let calls = Arc::new(OperationCalls::default());
+        let execution = sentinel_app(Arc::clone(&calls)).execute([
+            "prune".to_string(),
+            "--keep".to_string(),
+            "7".to_string(),
+        ]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(calls.prune.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.prune_keep.load(Ordering::SeqCst), 7);
     }
 
     #[test]

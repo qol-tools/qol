@@ -119,9 +119,47 @@ impl Store {
             items,
         })
     }
+
+    pub fn prune_notes_runs(&self, keep: usize) -> anyhow::Result<usize> {
+        if keep == 0 {
+            return Ok(0);
+        }
+        let notes_root = self.notes_root();
+        let entries = match std::fs::read_dir(&notes_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        let mut runs: Vec<String> = entries
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| is_run_dir_name(name))
+            .filter_map(|name| name.to_str().map(str::to_owned))
+            .collect();
+        runs.sort();
+        if runs.len() <= keep {
+            return Ok(0);
+        }
+        let mut removed = 0usize;
+        for name in &runs[..runs.len() - keep] {
+            let path = notes_root.join(name);
+            if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                continue;
+            }
+            if std::fs::remove_dir_all(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        qol_runtime::probe!(
+            "QOL_MEMORY_DISTILL",
+            "event=prune outcome=done removed={removed} kept={}",
+            runs.len() - removed
+        );
+        Ok(removed)
+    }
 }
 
-fn is_run_dir_name(name: &OsStr) -> bool {
+pub(crate) fn is_run_dir_name(name: &OsStr) -> bool {
     let Some(s) = name.to_str() else {
         return false;
     };
@@ -135,7 +173,7 @@ fn is_run_dir_name(name: &OsStr) -> bool {
         && b[10] == b'T'
 }
 
-fn newest_run_name(root: &Path) -> Option<String> {
+pub(crate) fn newest_run_name(root: &Path) -> Option<String> {
     let mut runs: Vec<String> = std::fs::read_dir(root)
         .ok()?
         .filter_map(std::result::Result::ok)
@@ -479,5 +517,189 @@ mod tests {
             "qolmem: launcher receipt body"
         )));
         assert!(!is_boilerplate_unit(&unit("c", None, "real user fact")));
+    }
+
+    fn seed_run(store: &Store, name: &str, body: &str) {
+        let run = store.notes_root().join(name);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("notes.jsonl"), body).unwrap();
+    }
+
+    fn run_names(store: &Store) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(store.notes_root())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| is_run_dir_name(OsStr::new(name)))
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn lcg(state: &mut u64) -> u64 {
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *state >> 33
+    }
+
+    #[test]
+    fn prune_notes_runs_boundary_table() {
+        let names = [
+            "2026-08-01T09:00:00.000Z",
+            "2026-08-02T09:00:00.000Z",
+            "2026-08-03T09:00:00.000Z",
+            "2026-08-04T09:00:00.000Z",
+            "2026-08-05T09:00:00.000Z",
+        ];
+        for keep in [0usize, 1, 4, 5, 6] {
+            let dir = TempDir::new("prune-boundary");
+            let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+            for (position, name) in names.iter().enumerate() {
+                seed_run(&store, name, &format!("{{\"key\":\"n{position}\"}}\n"));
+            }
+            let expected: Vec<String> = if keep == 0 || keep >= names.len() {
+                names.iter().map(|name| (*name).to_string()).collect()
+            } else {
+                names[names.len() - keep..]
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .collect()
+            };
+            let removed = store.prune_notes_runs(keep).unwrap();
+            assert_eq!(removed, names.len() - expected.len(), "keep {keep}");
+            assert_eq!(run_names(&store), expected, "keep {keep}");
+            for (position, name) in names.iter().enumerate() {
+                let path = store.notes_root().join(name);
+                if expected.iter().any(|kept| kept.as_str() == *name) {
+                    let body = std::fs::read_to_string(path.join("notes.jsonl")).unwrap();
+                    assert_eq!(
+                        body,
+                        format!("{{\"key\":\"n{position}\"}}\n"),
+                        "keep {keep}"
+                    );
+                } else {
+                    assert!(!path.exists(), "keep {keep}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prune_notes_runs_never_removes_the_newest_run() {
+        let dir = TempDir::new("prune-newest");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        seed_run(&store, "2026-08-05T09:00:00.000Z", "{\"key\":\"n\"}\n");
+        assert_eq!(store.prune_notes_runs(1).unwrap(), 0);
+        assert_eq!(store.prune_notes_runs(0).unwrap(), 0);
+        assert_eq!(
+            run_names(&store),
+            vec!["2026-08-05T09:00:00.000Z".to_string()]
+        );
+    }
+
+    #[test]
+    fn prune_notes_runs_leaves_non_run_entries_and_links_alone() {
+        let dir = TempDir::new("prune-non-run");
+        let notes = dir.0.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        std::fs::write(notes.join("loose.txt"), "loose\n").unwrap();
+        std::fs::create_dir_all(notes.join(".tmp-2026-09-14T01:00:00.000Z")).unwrap();
+        std::fs::create_dir_all(notes.join("not-a-run")).unwrap();
+        std::fs::create_dir_all(notes.join("2026-9-01T")).unwrap();
+        std::fs::create_dir_all(notes.join("notdigits")).unwrap();
+        std::fs::create_dir_all(notes.join("2026-09-01X00")).unwrap();
+        seed_run(&store, "2026-08-01T09:00:00.000Z", "{\"key\":\"n\"}\n");
+        seed_run(&store, "2026-08-02T09:00:00.000Z", "{\"key\":\"n\"}\n");
+        #[cfg(unix)]
+        {
+            let link_name = notes.join("2026-07-15T09:00:00.000Z");
+            let link_target = dir.0.join("missing-target");
+            std::os::unix::fs::symlink(&link_target, &link_name).unwrap();
+        }
+
+        assert_eq!(store.prune_notes_runs(1).unwrap(), 1);
+        assert!(notes.join("loose.txt").exists());
+        assert!(notes.join(".tmp-2026-09-14T01:00:00.000Z").exists());
+        assert!(notes.join("not-a-run").exists());
+        assert!(notes.join("2026-9-01T").exists());
+        assert!(notes.join("notdigits").exists());
+        assert!(notes.join("2026-09-01X00").exists());
+        assert!(notes.join("2026-08-02T09:00:00.000Z").exists());
+        assert!(!notes.join("2026-08-01T09:00:00.000Z").exists());
+        #[cfg(unix)]
+        {
+            let link_name = notes.join("2026-07-15T09:00:00.000Z");
+            let meta = std::fs::symlink_metadata(&link_name).unwrap();
+            assert!(meta.file_type().is_symlink());
+            assert_eq!(
+                std::fs::read_link(&link_name).unwrap(),
+                dir.0.join("missing-target")
+            );
+        }
+    }
+
+    #[test]
+    fn prune_notes_runs_tolerates_missing_and_empty_roots() {
+        let dir = TempDir::new("prune-roots");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        assert_eq!(store.prune_notes_runs(3).unwrap(), 0);
+        std::fs::create_dir_all(store.notes_root()).unwrap();
+        assert_eq!(store.prune_notes_runs(3).unwrap(), 0);
+    }
+
+    #[test]
+    fn prune_notes_runs_is_idempotent() {
+        let dir = TempDir::new("prune-idempotent");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        seed_run(&store, "2026-08-01T09:00:00.000Z", "{\"key\":\"n\"}\n");
+        seed_run(&store, "2026-08-02T09:00:00.000Z", "{\"key\":\"n\"}\n");
+        seed_run(&store, "2026-08-03T09:00:00.000Z", "{\"key\":\"n\"}\n");
+        assert_eq!(store.prune_notes_runs(1).unwrap(), 2);
+        assert_eq!(store.prune_notes_runs(1).unwrap(), 0);
+    }
+
+    #[test]
+    fn prune_notes_runs_survivors_are_the_keep_greatest_names() {
+        let keeps = [0usize, 1, 2, 5, 7, 10, 60];
+        let mut state = 0x9E3779B97F4A7C15u64;
+        for case in 0..200usize {
+            let size = (lcg(&mut state) % 26) as usize;
+            let keep = keeps[(lcg(&mut state) % keeps.len() as u64) as usize];
+            let mut names: Vec<String> = Vec::with_capacity(size);
+            for _ in 0..size {
+                let month = 1 + lcg(&mut state) % 12;
+                let day = 1 + lcg(&mut state) % 28;
+                let hour = lcg(&mut state) % 24;
+                let minute = lcg(&mut state) % 60;
+                let second = lcg(&mut state) % 60;
+                let millis = lcg(&mut state) % 1000;
+                names.push(format!(
+                    "2026-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+                ));
+            }
+            names.sort();
+            names.dedup();
+            let dir = TempDir::new("prune-sweep");
+            let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+            std::fs::create_dir_all(store.notes_root()).unwrap();
+            for name in &names {
+                seed_run(&store, name, "{\"key\":\"n\"}\n");
+            }
+            let expected: Vec<String> = if keep == 0 || keep >= names.len() {
+                names.clone()
+            } else {
+                names[names.len() - keep..].to_vec()
+            };
+            let removed = store.prune_notes_runs(keep).unwrap();
+            assert_eq!(
+                removed,
+                names.len() - expected.len(),
+                "case {case} keep {keep} size {}",
+                names.len()
+            );
+            assert_eq!(run_names(&store), expected, "case {case} keep {keep}");
+        }
     }
 }

@@ -357,26 +357,7 @@ fn layer_fingerprint(store: &Store) -> LayerFingerprint {
 }
 
 fn newest_notes_run(store: &Store) -> Option<String> {
-    let mut runs: Vec<String> = std::fs::read_dir(store.notes_root())
-        .ok()?
-        .filter_map(std::result::Result::ok)
-        .map(|entry| entry.file_name())
-        .filter_map(|name| name.into_string().ok())
-        .filter(|name| is_run_dir_name(name))
-        .collect();
-    runs.sort();
-    runs.pop()
-}
-
-fn is_run_dir_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    bytes.len() >= 11
-        && bytes[..4].iter().all(u8::is_ascii_digit)
-        && bytes[4] == b'-'
-        && bytes[5..7].iter().all(u8::is_ascii_digit)
-        && bytes[7] == b'-'
-        && bytes[8..10].iter().all(u8::is_ascii_digit)
-        && bytes[10] == b'T'
+    crate::store::newest_run_name(&store.notes_root())
 }
 
 fn mtime_nanos(meta: &std::fs::Metadata) -> u128 {

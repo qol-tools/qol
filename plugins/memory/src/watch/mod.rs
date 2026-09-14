@@ -13,7 +13,11 @@ pub struct WatchHandle {
     _watch: Watch,
 }
 
-pub fn spawn(roots: IngestRoots, state: Arc<Mutex<WarmState>>) -> Result<WatchHandle, WatchError> {
+pub fn spawn(
+    roots: IngestRoots,
+    state: Arc<Mutex<WarmState>>,
+    notes_runs_kept: usize,
+) -> Result<WatchHandle, WatchError> {
     let watch_roots: Vec<WatchRoot> = roots
         .roots
         .iter()
@@ -22,7 +26,7 @@ pub fn spawn(roots: IngestRoots, state: Arc<Mutex<WarmState>>) -> Result<WatchHa
     let (watch, batches) = qol_watch::settled(&watch_roots, SETTLE_WINDOW)?;
     std::thread::Builder::new()
         .name("qol-memory-watch".to_owned())
-        .spawn(move || drain(batches, roots, state))
+        .spawn(move || drain(batches, roots, state, notes_runs_kept))
         .map_err(|error| WatchError::NoWatchableRoot(error.to_string()))?;
     Ok(WatchHandle { _watch: watch })
 }
@@ -31,6 +35,7 @@ fn drain(
     batches: std::sync::mpsc::Receiver<Vec<PathBuf>>,
     roots: IngestRoots,
     state: Arc<Mutex<WarmState>>,
+    notes_runs_kept: usize,
 ) {
     for batch in batches {
         let paths: Vec<PathBuf> = batch
@@ -60,7 +65,7 @@ fn drain(
         if compactions == 0 {
             continue;
         }
-        match crate::distill::run(&store) {
+        match crate::distill::run(&store, notes_runs_kept) {
             Ok(report) if !report.unchanged => {
                 let mut warm = match state.lock() {
                     Ok(guard) => guard,

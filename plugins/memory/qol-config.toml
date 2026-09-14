@@ -20,3 +20,18 @@ description = "Leave empty to start a private Ollama server when needed, or use 
 section = "answers"
 placeholder = "http://127.0.0.1:11434"
 default = ""
+
+[section.storage]
+label = "Storage"
+description = "How much disk the memory history keeps."
+
+[field.notes_runs_kept]
+type = "number"
+variant = "slider"
+label = "Notes run retention"
+description = "How many recent notes run folders to keep on disk. 0 keeps everything and disables pruning. Takes effect after restarting Memory."
+section = "storage"
+default = 0
+min = 0
+max = 60
+step = 1

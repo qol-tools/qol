@@ -23,9 +23,10 @@ pub struct DistillReport {
     pub carried: usize,
     pub added: usize,
     pub dropped: usize,
+    pub pruned: usize,
 }
 
-pub fn run(store: &Store) -> Result<DistillReport> {
+pub fn run(store: &Store, notes_runs_kept: usize) -> Result<DistillReport> {
     let started_at = crate::text::now_iso();
     let units = store.read_units()?;
     let compaction_units: Vec<&Unit> = units
@@ -82,6 +83,7 @@ pub fn run(store: &Store) -> Result<DistillReport> {
                     carried: carried.len(),
                     added: 0,
                     dropped: 0,
+                    pruned: 0,
                 });
             }
         }
@@ -98,6 +100,18 @@ pub fn run(store: &Store) -> Result<DistillReport> {
         body.push('\n');
     }
     atomic_write(&tmp.join("notes.jsonl"), body.as_bytes())?;
+    std::fs::rename(&tmp, notes_root.join(&name))?;
+    let pruned = match store.prune_notes_runs(notes_runs_kept) {
+        Ok(removed) => removed,
+        Err(error) => {
+            eprintln!("qol-memory: notes prune failed: {error:#}");
+            qol_runtime::probe!(
+                "QOL_MEMORY_DISTILL",
+                "event=prune outcome=error error={error}"
+            );
+            0
+        }
+    };
     let report = json!({
         "name": "qol-memory notes (deterministic distill)",
         "schemaVersion": 2,
@@ -112,14 +126,14 @@ pub fn run(store: &Store) -> Result<DistillReport> {
             "added": added,
             "carried": carried.len(),
             "dropped": dropped,
+            "pruned": pruned,
         },
         "commands": ["qol-memory distill"],
     });
     atomic_write(
-        &tmp.join("report.json"),
+        &notes_root.join(&name).join("report.json"),
         serde_json::to_string_pretty(&report)?.as_bytes(),
     )?;
-    std::fs::rename(&tmp, notes_root.join(&name))?;
     Ok(DistillReport {
         run: Some(name),
         unchanged: false,
@@ -127,6 +141,7 @@ pub fn run(store: &Store) -> Result<DistillReport> {
         carried: carried.len(),
         added,
         dropped,
+        pruned,
     })
 }
 
@@ -269,6 +284,31 @@ mod tests {
         std::fs::write(run.join("notes.jsonl"), body).unwrap();
     }
 
+    const OLD_RUNS: [&str; 5] = [
+        "2020-08-01T09:00:00.000Z",
+        "2020-08-02T09:00:00.000Z",
+        "2020-08-03T09:00:00.000Z",
+        "2020-08-04T09:00:00.000Z",
+        "2020-08-05T09:00:00.000Z",
+    ];
+
+    fn seed_run(store: &Store, name: &str) {
+        let run = store.notes_root().join(name);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("notes.jsonl"), "{\"key\":\"n\"}\n").unwrap();
+    }
+
+    fn survivor_runs(store: &Store) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(store.notes_root())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| crate::store::is_run_dir_name(std::ffi::OsStr::new(name)))
+            .collect();
+        names.sort();
+        names
+    }
+
     #[test]
     fn note_key_matches_the_js_note_key_formula() {
         assert_eq!(note_key("Pick the daemon restart path"), "b3129b85eda05e9f");
@@ -285,7 +325,7 @@ mod tests {
         write_units(&store);
         seed_notes(&store);
 
-        let first = run(&store).unwrap();
+        let first = run(&store, 0).unwrap();
         assert!(!first.unchanged);
         assert_eq!(first.compactions, 1);
         assert_eq!(first.carried, 1);
@@ -326,7 +366,7 @@ mod tests {
         assert_eq!(report["stats"]["dropped"], 1);
         assert_eq!(report["commands"][0], "qol-memory distill");
 
-        let second = run(&store).unwrap();
+        let second = run(&store, 0).unwrap();
         assert!(second.unchanged);
         assert_eq!(second.run.as_deref(), Some(run_name.as_str()));
         assert_eq!(second.compactions, 1);
@@ -345,8 +385,59 @@ mod tests {
         let store = Store::resolve(Some(dir.0.as_path())).unwrap();
         write_units(&store);
         let _held = DistillLock::acquire(&store, "test").unwrap().unwrap();
-        let error = run(&store).unwrap_err();
+        let error = run(&store, 0).unwrap_err();
         assert!(is_busy(&error));
         assert_eq!(error.to_string(), "qol-memory: distill busy");
+    }
+
+    #[test]
+    fn run_prunes_old_runs_beyond_keep() {
+        let dir = TempDir::new("prune-keep");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        write_units(&store);
+        for name in OLD_RUNS {
+            seed_run(&store, name);
+        }
+
+        let report = run(&store, 2).unwrap();
+        assert!(!report.unchanged);
+        assert_eq!(report.pruned, 4);
+        let new_run = report.run.clone().unwrap();
+        let survivors = survivor_runs(&store);
+        assert_eq!(
+            survivors,
+            vec!["2020-08-05T09:00:00.000Z".to_string(), new_run.clone()]
+        );
+        for name in &OLD_RUNS[..4] {
+            assert!(!store.notes_root().join(name).exists(), "{name}");
+        }
+        let report_path = store.notes_root().join(&new_run).join("report.json");
+        let report_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(report_path).unwrap()).unwrap();
+        assert_eq!(report_json["stats"]["pruned"], 4);
+        assert_eq!(
+            store.read_notes().unwrap().run.as_deref(),
+            Some(new_run.as_str())
+        );
+    }
+
+    #[test]
+    fn run_with_keep_zero_removes_nothing() {
+        let dir = TempDir::new("prune-disabled");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        write_units(&store);
+        for name in OLD_RUNS {
+            seed_run(&store, name);
+        }
+
+        let report = run(&store, 0).unwrap();
+        assert!(!report.unchanged);
+        assert_eq!(report.pruned, 0);
+        let new_run = report.run.clone().unwrap();
+        assert_eq!(survivor_runs(&store).len(), 6);
+        for name in OLD_RUNS {
+            assert!(store.notes_root().join(name).exists(), "{name}");
+        }
+        assert!(store.notes_root().join(new_run).exists());
     }
 }
