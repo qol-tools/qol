@@ -5,6 +5,8 @@ pub(crate) const FILL: &str = " fill=\"currentColor\" stroke=\"none\"";
 
 pub(crate) const TICK_MARKUP: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\" viewBox=\"-6 0 16 12\" fill=\"none\"><path d=\"M7.5962 2.318L9.0104 3.7322L1.2322 11.5104L-3.0104 7.2678L-1.5962 5.8536L1.2322 8.682Z\" fill=\"currentColor\"/></svg>";
 
+pub(crate) const CHEVRON_MARKUP: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"14\" viewBox=\"0 0 8 14\" fill=\"none\"><path d=\"M1.5 1.5L6.5 7L1.5 12.5\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>";
+
 pub(crate) struct WindowPalette {
     pub(crate) pane: String,
     pub(crate) rail: String,

@@ -454,8 +454,11 @@ impl SettingsPanelView {
             ));
         }
         if modes_available {
-            mode_value = mode_value
-                .child(SettingsSelectValue::new(current_mode, resolution_ground, palette).menu());
+            mode_value = mode_value.child(SettingsSelectValue::new(
+                current_mode,
+                resolution_ground,
+                palette,
+            ));
         } else {
             mode_value = mode_value.child(settings_description(
                 "unavailable",

@@ -7,9 +7,7 @@ use crate::theme::SettingsPanelPalette;
 #[derive(IntoElement)]
 pub struct SettingsSelectValue {
     text: SharedString,
-    accent: Option<u32>,
     row: RowGround,
-    menu: bool,
     palette: SettingsPanelPalette,
 }
 
@@ -21,21 +19,9 @@ impl SettingsSelectValue {
     ) -> Self {
         Self {
             text: text.into(),
-            accent: None,
             row,
-            menu: false,
             palette,
         }
-    }
-
-    pub fn accent(mut self, accent: Option<u32>) -> Self {
-        self.accent = accent;
-        self
-    }
-
-    pub fn menu(mut self) -> Self {
-        self.menu = true;
-        self
     }
 }
 
@@ -59,11 +45,7 @@ impl RenderOnce for SettingsSelectValue {
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .border(px(1.0))
             .border_color(rgba(ground.edge.packed()))
-            .text_size(px(qol_theme::TEXT_BODY))
-            .children(
-                self.accent
-                    .map(|accent| div().flex_none().w_2().h_2().rounded_full().bg(rgb(accent))),
-            );
+            .text_size(px(qol_theme::TEXT_BODY));
         let chip = ground_bg(
             chip,
             rgba(ground.well.packed()),
@@ -83,7 +65,7 @@ impl RenderOnce for SettingsSelectValue {
                 rgb(ground.faint),
                 hover.map(|hover| rgb(hover.faint)),
             )
-            .child(if self.menu { "▾" } else { "›" }),
+            .child("▾"),
         )
     }
 }

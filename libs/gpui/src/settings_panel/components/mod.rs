@@ -6,6 +6,7 @@ use crate::kit::{alpha, kit};
 use crate::spinner::{Busy, Spinner};
 use crate::theme::{SettingsGround, SettingsPanelPalette};
 
+mod choice_value;
 mod display_layout_tile;
 mod feedback;
 mod group_header;
@@ -20,6 +21,7 @@ mod text_field;
 mod tile;
 mod toggle;
 
+pub use choice_value::SettingsChoiceValue;
 pub use display_layout_tile::{
     display_layout_stage, display_layout_tile, display_layout_tile_style, DisplayLayoutTile,
     DisplayLayoutTileStyle,
@@ -42,6 +44,12 @@ pub use toggle::SettingsToggle;
 
 pub const DIMMED_OPACITY: f32 = 0.5;
 const FIELD_MIN_WIDTH: f32 = 180.0;
+const CHOICE_WORD_MAX_WIDTH: f32 = 180.0;
+const CHOICE_PICTURE_WIDTH: f32 = 56.0;
+const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
+const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
+const CHOICE_CHEVRON_HEIGHT: f32 = 14.0;
+const CHOICE_CHEVRON_REST_OPACITY: f32 = 0.4;
 const TEXT_FIELD_MIN_WIDTH: f32 = 220.0;
 const VALUE_MAX_WIDTH: f32 = 280.0;
 const FIELD_MAX_WIDTH: f32 = 320.0;

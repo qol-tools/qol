@@ -3,11 +3,15 @@ use qol_theme::accent_swatch;
 use super::svg::{self, WebPalette, WindowPalette, FILL, SOFT};
 use super::PictureContext;
 
-pub(crate) fn markup_for(spec: &str, context: &PictureContext) -> Option<String> {
-    let (name, argument) = match spec.split_once(':') {
+pub(crate) fn split_spec(spec: &str) -> (&str, &str) {
+    match spec.split_once(':') {
         Some((name, argument)) => (name, argument),
         None => (spec, ""),
-    };
+    }
+}
+
+pub(crate) fn markup_for(spec: &str, context: &PictureContext) -> Option<String> {
+    let (name, argument) = split_spec(spec);
     let picture = match name {
         "hold-to-switch" => hold_to_switch(),
         "sticky" => sticky(),
@@ -511,7 +515,7 @@ fn mono(x: f64, y: f64, t: &str, size: f64, anchor: &str) -> String {
     svg::text(x, y, t, size, anchor, "IBM Plex Mono, monospace", 500)
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {

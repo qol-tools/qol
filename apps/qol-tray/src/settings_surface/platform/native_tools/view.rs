@@ -11,9 +11,9 @@ use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
     settings_label_group, settings_message, settings_page, settings_tile_rows,
-    settings_value_group, tile_arts, tile_layout, HintTone, RowGround, SettingsGroupHeader,
-    SettingsHint, SettingsKeyCombination, SettingsRow, SettingsSelectValue, SettingsTextField,
-    SettingsTile, SettingsToggle,
+    settings_value_group, tile_arts, tile_layout, HintTone, RowGround, SettingsChoiceValue,
+    SettingsGroupHeader, SettingsHint, SettingsKeyCombination, SettingsRow, SettingsTextField,
+    SettingsTile, SettingsToggle, TileArt,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, CustomHints,
@@ -1408,6 +1408,10 @@ impl NativeToolsView {
     ) -> AnyElement {
         let palette = settings_panel_runtime();
         let row = RowGround::of(selected, self.body_focused);
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
         SettingsRow::rule(("native-tools-select", index), palette)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1416,7 +1420,13 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(settings_label(label, palette))
-            .child(SettingsSelectValue::new(value.to_string(), row, palette))
+            .child(SettingsChoiceValue::new(
+                value.to_string(),
+                self.select_art(index, value),
+                row,
+                context,
+                palette,
+            ))
             .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
@@ -1578,6 +1588,17 @@ impl NativeToolsView {
                 .into_iter()
                 .map(|action| (action.label, action.picture))
                 .collect(),
+        }
+    }
+
+    fn select_art(&self, index: usize, value: &str) -> String {
+        match self.select_field_at(index) {
+            Some(select) => chosen_art(
+                &choose_arts(&self.choose_options(select)),
+                mode_select_index(&self.mode, select, &self.plugins, &self.hotkeys),
+                value,
+            ),
+            None => chosen_art(&[], None, value),
         }
     }
 
@@ -1821,15 +1842,7 @@ impl NativeToolsView {
     fn render_choose_page(&self, choose: ToolChoose, cx: &mut Context<Self>) -> AnyElement {
         let palette = settings_panel_runtime();
         let options = self.choose_options(choose.select);
-        let names = options
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>();
-        let pictures = options
-            .iter()
-            .map(|(_, picture)| picture.as_deref())
-            .collect::<Vec<_>>();
-        let arts = tile_arts(&names, &pictures);
+        let arts = choose_arts(&options);
         let layout = tile_layout(arts.len());
         let context = PictureContext::for_accent(
             qol_theme::runtime_theme().mode,
@@ -1874,6 +1887,28 @@ impl NativeToolsView {
             body = body.child(row);
         }
         body.into_any_element()
+    }
+}
+
+fn choose_arts(options: &[(String, Option<String>)]) -> Vec<TileArt> {
+    let names = options
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    let pictures = options
+        .iter()
+        .map(|(_, picture)| picture.as_deref())
+        .collect::<Vec<_>>();
+    tile_arts(&names, &pictures)
+}
+
+fn chosen_art(arts: &[TileArt], position: Option<usize>, value: &str) -> String {
+    if let Some(TileArt::Picture(spec)) = position.and_then(|at| arts.get(at)) {
+        return spec.clone();
+    }
+    match tile_arts(&[value], &[None]).pop() {
+        Some(TileArt::Picture(spec)) => spec,
+        _ => "letters:?".to_string(),
     }
 }
 
@@ -2228,5 +2263,55 @@ mod breadcrumb_tests {
             labels(&breadcrumbs("Docs", Some(SelectField::TargetKind))),
             ["Docs", "App reference"]
         );
+    }
+}
+
+#[cfg(test)]
+mod choose_arts_tests {
+    use super::{choose_arts, chosen_art, tile_arts, ShortcutActionKind, TileArt};
+
+    #[test]
+    fn choose_arts_keep_pictures_and_letter_the_rest() {
+        let kinds = [ShortcutActionKind::App, ShortcutActionKind::Url]
+            .iter()
+            .map(|kind| (kind.label().to_string(), Some(kind.picture().to_string())))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            choose_arts(&kinds),
+            [
+                TileArt::Picture("launch-app".to_string()),
+                TileArt::Picture("open-url".to_string()),
+            ]
+        );
+        let plugins = [
+            ("Alt Tab".to_string(), None),
+            ("Launcher".to_string(), None),
+        ];
+        assert_eq!(
+            choose_arts(&plugins),
+            [
+                TileArt::Picture("letters:AT".to_string()),
+                TileArt::Picture("letters:L".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn chosen_art_letters_a_value_that_is_not_an_option() {
+        let options = [
+            ("Launch App".to_string(), Some("launch-app".to_string())),
+            ("Open URL".to_string(), Some("open-url".to_string())),
+        ];
+        let arts = choose_arts(&options);
+        let second = chosen_art(&arts, Some(1), "No available plugin");
+        assert_eq!(second, "open-url");
+        let letters = match tile_arts(&["No available plugin"], &[None]).pop() {
+            Some(TileArt::Picture(spec)) => spec,
+            _ => "letters:?".to_string(),
+        };
+        let missing = chosen_art(&arts, None, "No available plugin");
+        assert_eq!(missing, letters);
+        let out_of_range = chosen_art(&arts, Some(5), "No available plugin");
+        assert_eq!(out_of_range, letters);
     }
 }

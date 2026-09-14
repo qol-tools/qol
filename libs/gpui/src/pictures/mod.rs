@@ -1,10 +1,12 @@
+mod fitted;
 mod letters;
 mod library;
 mod raster;
 mod svg;
 
+pub use fitted::Tone;
 pub use letters::letters_for;
-pub use raster::{image, tick};
+pub use raster::{chevron, fitted_image, image, tick};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PictureContext {

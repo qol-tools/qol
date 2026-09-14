@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use qol_gpui::pictures::{image, letters_for, markup, tick, PictureContext};
+use qol_gpui::pictures::{
+    chevron, fitted_image, image, letters_for, markup, tick, PictureContext, Tone,
+};
 use qol_theme::{DesktopThemePreview, ThemeMode, WebThemePreview};
 
 const BONE: DesktopThemePreview = DesktopThemePreview {
@@ -212,6 +214,24 @@ fn every_picture_name_renders() {
 }
 
 #[test]
+fn every_picture_name_fits_whole_in_both_tones() {
+    let context = context();
+    for name in qol_config::contract::PICTURE_NAMES {
+        let spec = sample_spec(name);
+        for tone in [Tone::Rest, Tone::Awake] {
+            for scale in [1.0f32, 2.0] {
+                let rendered = fitted_image(&spec, SLATE.soft, tone, 56.0, 35.0, scale, &context)
+                    .unwrap_or_else(|| panic!("fitted image {spec}"));
+                let bytes = rendered
+                    .as_bytes(0)
+                    .unwrap_or_else(|| panic!("frame {spec}"));
+                assert!(bytes.chunks(4).any(|pixel| pixel[3] != 0), "{spec}");
+            }
+        }
+    }
+}
+
+#[test]
 fn the_tick_draws_ink() {
     let rendered = tick(0xf3f2f0, 32, 24).unwrap_or_else(|| panic!("tick"));
     let bytes = rendered.as_bytes(0).unwrap_or_else(|| panic!("frame tick"));
@@ -222,6 +242,15 @@ fn the_tick_draws_ink() {
 fn letters_follow_the_picker_rule() {
     assert_eq!(letters_for(PICKER_LABELS), PICKER_LETTERS);
     assert_eq!(letters_for(&["default", "work laptop"]), ["D", "WL"]);
+}
+
+#[test]
+fn the_chevron_draws_ink() {
+    let rendered = chevron(0xf3f2f0, 16, 28).unwrap_or_else(|| panic!("chevron"));
+    let bytes = rendered
+        .as_bytes(0)
+        .unwrap_or_else(|| panic!("frame chevron"));
+    assert!(bytes.chunks(4).any(|pixel| pixel[3] != 0));
 }
 
 fn sample_spec(name: &str) -> String {

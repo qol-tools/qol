@@ -14,9 +14,9 @@ use qol_config::contract::ResolvedRowAction;
 use super::components::{
     number_field, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
     settings_action_affordance, settings_action_spinner, settings_label_group, settings_page,
-    settings_query_spinner, settings_value_text, RowGround, SettingsFeedback, SettingsGroupHeader,
-    SettingsHint, SettingsHintBar, SettingsRow, SettingsSelectValue, SettingsToggle,
-    SettingsValueTone,
+    settings_query_spinner, settings_value_text, RowGround, SettingsChoiceValue, SettingsFeedback,
+    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsSelectValue,
+    SettingsToggle, SettingsValueTone,
 };
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
@@ -37,6 +37,7 @@ use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
 use crate::dropdown::{Dropdown, DropdownEvent, DropdownItem, DropdownStyle};
 use crate::gamepad::{gamepad_panel, GamepadPalette};
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
+use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
 use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
@@ -2630,13 +2631,30 @@ impl SettingsPanelView {
     }
 
     fn render_select_value(&self, index: usize, row: RowGround) -> Div {
-        let value = SettingsSelectValue::new(self.display_value(index), row, self.palette)
-            .accent(self.option_accent(index));
-        let value = match &self.level().rows[index].control {
-            RowControl::MultiSelect { .. } => value.menu(),
-            _ => value,
-        };
-        div().child(value)
+        match &self.level().rows[index].control {
+            RowControl::Select {
+                options,
+                index: chosen,
+                ..
+            } => {
+                let context = PictureContext::for_accent(
+                    qol_theme::runtime_theme().mode,
+                    qol_theme::runtime_accent_key(),
+                );
+                div().child(SettingsChoiceValue::new(
+                    self.display_value(index),
+                    choose_card::option_art(options, *chosen),
+                    row,
+                    context,
+                    self.palette,
+                ))
+            }
+            _ => div().child(SettingsSelectValue::new(
+                self.display_value(index),
+                row,
+                self.palette,
+            )),
+        }
     }
 
     fn render_number_value(

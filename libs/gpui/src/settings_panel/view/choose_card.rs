@@ -27,11 +27,7 @@ pub(super) struct ChooseTile {
     pub(super) saved: bool,
 }
 
-pub(super) fn choose_tiles(
-    options: &[SelectOption],
-    saved: usize,
-    waiting: Option<&str>,
-) -> Vec<ChooseTile> {
+pub(super) fn option_arts(options: &[SelectOption]) -> Vec<TileArt> {
     let names = options
         .iter()
         .map(|option| {
@@ -45,7 +41,22 @@ pub(super) fn choose_tiles(
         .iter()
         .map(|option| option.picture.as_deref())
         .collect::<Vec<_>>();
-    let arts = tile_arts(&names, &pictures);
+    tile_arts(&names, &pictures)
+}
+
+pub(super) fn option_art(options: &[SelectOption], index: usize) -> String {
+    match option_arts(options).get(index) {
+        Some(TileArt::Picture(spec)) => spec.clone(),
+        _ => "letters:?".to_string(),
+    }
+}
+
+pub(super) fn choose_tiles(
+    options: &[SelectOption],
+    saved: usize,
+    waiting: Option<&str>,
+) -> Vec<ChooseTile> {
+    let arts = option_arts(options);
     let mut tiles = Vec::new();
     for (position, option) in options.iter().enumerate() {
         let (name, detail) = match option.label.split_once(LABEL_DETAIL_SEPARATOR) {
@@ -308,7 +319,7 @@ impl SettingsPanelView {
 
 #[cfg(test)]
 mod tests {
-    use super::choose_tiles;
+    use super::{choose_tiles, option_art};
     use crate::settings_panel::components::TileArt;
     use crate::settings_panel::rows::SelectOption;
 
@@ -332,6 +343,21 @@ mod tests {
         assert_eq!(tiles[1].detail, None);
         assert_eq!(tiles[1].art, TileArt::Picture("letters:S".to_string()));
         assert!(tiles[1].saved);
+    }
+
+    #[test]
+    fn option_art_matches_the_card_tile() {
+        let mut themed = SelectOption::plain("bone", "Bone \u{00b7} Light desktop");
+        themed.picture = Some("desktop-theme:bone".to_string());
+        let unthemed = SelectOption::plain("slate", "Slate");
+        let options = [themed, unthemed];
+        let tiles = choose_tiles(&options, 0, None);
+        for (index, tile) in tiles.iter().enumerate() {
+            let TileArt::Picture(spec) = &tile.art else {
+                panic!("choose tile art is not a picture");
+            };
+            assert_eq!(&option_art(&options, index), spec, "index: {index}");
+        }
     }
 
     #[test]
