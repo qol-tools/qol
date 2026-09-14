@@ -179,8 +179,10 @@ impl Render for AltTabApp {
             .flex_col()
             .w(px(panel_w))
             .h(px(panel_h))
-            .when(!snap.transparent_bg, |s| s.bg(rgb(snap.palette.panel_bg)))
-            .shadow(float_shadow(snap.system.text_primary))
+            .when(!snap.transparent_bg, |s| {
+                s.bg(rgb(snap.palette.panel_bg))
+                    .shadow(float_shadow(snap.system.text_primary))
+            })
             .on_key_down(key_handler)
             .when(snap.visible, |s| {
                 s.on_modifiers_changed(modifiers_handler)
