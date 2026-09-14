@@ -166,7 +166,7 @@ impl McpSessionServer {
         &self,
         id: &Value,
         params: &Value,
-        cancel: Option<&AtomicBool>,
+        cancel: Option<Arc<AtomicBool>>,
     ) -> Value {
         let name = params.get("name").and_then(Value::as_str);
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
@@ -198,7 +198,7 @@ impl McpSessionServer {
         &self,
         name: &str,
         arguments: Value,
-        cancel: Option<&AtomicBool>,
+        cancel: Option<Arc<AtomicBool>>,
     ) -> Option<Result<String, String>> {
         match name {
             "sessions_list" => Some(self.tool_list_sessions()),
@@ -237,7 +237,11 @@ impl McpSessionServer {
         serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
     }
 
-    fn tool_spawn(&self, arguments: Value, cancel: Option<&AtomicBool>) -> Result<String, String> {
+    fn tool_spawn(
+        &self,
+        arguments: Value,
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<String, String> {
         if arguments.get("lanes").is_some() {
             return self.tool_spawn_lanes(&arguments, cancel);
         }
@@ -330,7 +334,7 @@ impl McpSessionServer {
             group.as_deref(),
             &self.pending,
             &self.reports_dir,
-            cancel,
+            cancel.as_deref(),
             &dispatch,
         )
         .map_err(|error| error.to_string())?;
@@ -343,7 +347,7 @@ impl McpSessionServer {
     fn tool_spawn_lanes(
         &self,
         arguments: &Value,
-        cancel: Option<&AtomicBool>,
+        cancel: Option<Arc<AtomicBool>>,
     ) -> Result<String, String> {
         let tool = string_argument(arguments, "tool")?;
         let cwd = string_argument(arguments, "cwd")?;
@@ -393,7 +397,7 @@ impl McpSessionServer {
             group.as_deref(),
             &self.pending,
             &self.reports_dir,
-            cancel,
+            cancel.as_deref(),
             &dispatch,
         )
         .map_err(|error| error.to_string())?;
@@ -496,7 +500,11 @@ impl McpSessionServer {
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
     }
 
-    fn tool_bridge(&self, arguments: Value, cancel: Option<&AtomicBool>) -> Result<String, String> {
+    fn tool_bridge(
+        &self,
+        arguments: Value,
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
         if arguments.get("task").is_some() {
             return Err("session_bridge takes no `task`: delivery belongs to session_spawn and session_submit, and bridge only collects the round after its wake. Resend this call without that argument.".to_owned());
@@ -878,7 +886,7 @@ fn dispatch_line<W: Write + Send + Sync + 'static>(
                     );
                 });
             }
-            let response = server.call_tool_with_cancel(&id, &params, Some(&flag));
+            let response = server.call_tool_with_cancel(&id, &params, Some(Arc::clone(&flag)));
             done.store(true, Ordering::SeqCst);
             if let Err(error) = write_response(&writer, &response) {
                 qol_runtime::probe!(
@@ -4158,6 +4166,88 @@ mod tests {
             "the ping must be answered while the bridge is still waiting: {responses:?}"
         );
         assert_eq!(responses[2]["id"], 2);
+        drain_workers(&workers);
+    }
+
+    #[test]
+    fn a_second_bridge_in_one_process_supersedes_the_abandoned_attach() {
+        let (server, backend) = server(Vec::new(), false, false);
+        let binding: SessionBinding = token().parse().unwrap();
+        let (server, writer, cancellations, workers) = scripted_harness(server);
+
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &request(
+                1,
+                "tools/call",
+                json!({ "name": "session_submit", "arguments": { "session": token(), "task": "implement the bounded change" } }),
+            ),
+        );
+        wait_for_responses(&writer, 1, Duration::from_secs(2));
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &pending_bridge_request(5),
+        );
+        wait_for_attach(&server, &binding);
+
+        let started = Instant::now();
+        feed_line(
+            &server,
+            &writer,
+            &cancellations,
+            &workers,
+            &pending_bridge_request(6),
+        );
+        let responses = wait_for_responses(&writer, 2, Duration::from_secs(5));
+        assert_eq!(
+            responses[1]["id"], 5,
+            "the superseded bridge must return first: {responses:?}"
+        );
+        assert_eq!(responses[1]["result"]["isError"], true);
+        let message = responses[1]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(message.contains("superseded"), "{message}");
+        assert!(
+            !message.contains("another bridge process"),
+            "an abandoned attach must never look like a foreign process: {message}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the superseded bridge took {:?} to return",
+            started.elapsed()
+        );
+        wait_for_attach(&server, &binding);
+        assert!(
+            server.pending.owner_pid(&binding).is_some(),
+            "the newer bridge must hold the attach"
+        );
+        let round = server.pending.pending_round(&binding).unwrap().unwrap();
+        assert!(
+            !round.completed,
+            "superseding an attach must not complete the round"
+        );
+
+        backend.complete_bridge.store(true, Ordering::Relaxed);
+        let responses = wait_for_responses(&writer, 3, Duration::from_secs(5));
+        assert_eq!(responses[2]["id"], 6);
+        assert_eq!(
+            responses[2]["result"]["isError"], false,
+            "the newer bridge serves the round: {responses:?}"
+        );
+        let outcome: Value = serde_json::from_str(
+            responses[2]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(outcome["completed"], true);
         drain_workers(&workers);
     }
 

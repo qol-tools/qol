@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -25,6 +26,12 @@ const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
 const STALL_PROBE_AFTER: Duration = Duration::from_secs(30);
 const WAIT_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const ATTACH_TAKEOVER_BUDGET: Duration = Duration::from_secs(10);
+const ATTACH_TAKEOVER_POLL: Duration = Duration::from_millis(25);
+pub(super) const WAIT_CANCELLED_MESSAGE: &str =
+    "bridge wait cancelled; the round stays open and recoverable via `qol sessions resume`";
+const WAIT_SUPERSEDED_MESSAGE: &str =
+    "bridge wait superseded by a newer session_bridge for this session; the round stays open";
 const TASK_MAX_BYTES: usize = 64 * 1024;
 const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
 const GATE_LOCK_MESSAGE: &str = "Blocking waiting for file lock";
@@ -114,13 +121,38 @@ impl Drop for PendingBridgeLock {
 }
 
 #[derive(Debug)]
+pub(super) struct BridgeAttach {
+    cancel: Arc<AtomicBool>,
+    superseded: AtomicBool,
+}
+
+#[derive(Debug)]
 pub(super) struct BridgeOwner {
     file: File,
     path: PathBuf,
+    binding: String,
+    attaches: Arc<Mutex<HashMap<String, Arc<BridgeAttach>>>>,
+    attach: Option<Arc<BridgeAttach>>,
+}
+
+impl BridgeOwner {
+    pub(super) fn superseded(&self) -> bool {
+        self.attach
+            .as_ref()
+            .is_some_and(|attach| attach.superseded.load(Ordering::SeqCst))
+    }
 }
 
 impl Drop for BridgeOwner {
     fn drop(&mut self) {
+        if let (Some(attach), Ok(mut attaches)) = (&self.attach, self.attaches.lock()) {
+            if attaches
+                .get(&self.binding)
+                .is_some_and(|current| Arc::ptr_eq(current, attach))
+            {
+                attaches.remove(&self.binding);
+            }
+        }
         let _ = fs::write(&self.path, "");
         let _ = self.file.unlock();
     }
@@ -208,18 +240,26 @@ struct StoredRole {
 
 pub(super) struct PendingBridgeStore {
     dir: PathBuf,
+    attaches: Arc<Mutex<HashMap<String, Arc<BridgeAttach>>>>,
 }
 
 impl PendingBridgeStore {
     pub(super) fn system() -> Result<Self> {
         let dir = qol_terminal_sessions::bridge::checkpoint_dir()
             .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?;
-        Ok(Self { dir })
+        Ok(Self::at(dir))
     }
 
     #[cfg(test)]
     pub(super) fn with_dir(dir: PathBuf) -> Self {
-        Self { dir }
+        Self::at(dir)
+    }
+
+    fn at(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            attaches: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     fn load(&self, binding: &SessionBinding) -> Result<Option<StoredCheckpoint>> {
@@ -757,7 +797,11 @@ impl PendingBridgeStore {
         Ok(())
     }
 
-    pub(super) fn acquire_owner(&self, binding: &SessionBinding) -> Result<BridgeOwner> {
+    pub(super) fn acquire_owner(
+        &self,
+        binding: &SessionBinding,
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<BridgeOwner> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let path = self.owner_for(binding);
         let file = OpenOptions::new()
@@ -767,28 +811,82 @@ impl PendingBridgeStore {
             .truncate(false)
             .open(&path)
             .context("failed to open bridge owner lock")?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                let owner = fs::read_to_string(&path).unwrap_or_default();
-                let owner = owner.trim();
-                let owner = if owner.is_empty() { "unknown" } else { owner };
-                qol_runtime::probe!(
-                    "CLI_SESSION_BRIDGE",
-                    "event=owner_conflict target_backend={}",
-                    binding.session_id().backend()
-                );
-                bail!(
-                    "another bridge process (pid {owner}) is already attached to `{binding}`; never start a second one - run `qol sessions next {}` and follow the command it prints",
-                    binding.token()
-                );
-            }
-            Err(TryLockError::Error(error)) => {
-                return Err(error).context("failed to lock the bridge owner file");
+        let deadline = Instant::now() + ATTACH_TAKEOVER_BUDGET;
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(TryLockError::WouldBlock) => {
+                    let local = self.supersede_local_attach(binding);
+                    let held_by_this_process = self
+                        .owner_pid(binding)
+                        .is_some_and(|owner| owner == process::id().to_string());
+                    if local.is_none() && (cancel.is_none() || !held_by_this_process) {
+                        qol_runtime::probe!(
+                            "CLI_SESSION_BRIDGE",
+                            "event=owner_conflict target_backend={}",
+                            binding.session_id().backend()
+                        );
+                        bail!("{}", self.owner_conflict(binding, &path));
+                    }
+                    if Instant::now() >= deadline {
+                        qol_runtime::probe!(
+                            "CLI_SESSION_BRIDGE",
+                            "event=owner_supersede_timeout target_backend={}",
+                            binding.session_id().backend()
+                        );
+                        bail!("{}", self.owner_conflict(binding, &path));
+                    }
+                    std::thread::sleep(ATTACH_TAKEOVER_POLL);
+                }
+                Err(TryLockError::Error(error)) => {
+                    return Err(error).context("failed to lock the bridge owner file");
+                }
             }
         }
         fs::write(&path, process::id().to_string()).context("failed to record the bridge owner")?;
-        Ok(BridgeOwner { file, path })
+        let attach = cancel.map(|cancel| {
+            Arc::new(BridgeAttach {
+                cancel,
+                superseded: AtomicBool::new(false),
+            })
+        });
+        if let Some(attach) = &attach {
+            self.attaches
+                .lock()
+                .unwrap()
+                .insert(binding.token(), Arc::clone(attach));
+        }
+        Ok(BridgeOwner {
+            file,
+            path,
+            binding: binding.token(),
+            attaches: Arc::clone(&self.attaches),
+            attach,
+        })
+    }
+
+    fn owner_conflict(&self, binding: &SessionBinding, path: &Path) -> String {
+        let owner = fs::read_to_string(path).unwrap_or_default();
+        let owner = owner.trim();
+        let owner = if owner.is_empty() { "unknown" } else { owner };
+        format!(
+            "another bridge process (pid {owner}) is already attached to `{binding}`; never start a second one - run `qol sessions next {}` and follow the command it prints",
+            binding.token()
+        )
+    }
+
+    fn supersede_local_attach(&self, binding: &SessionBinding) -> Option<Arc<BridgeAttach>> {
+        let attach = self.attaches.lock().ok()?.get(&binding.token()).cloned()?;
+        let freshly_superseded = !attach.superseded.swap(true, Ordering::SeqCst);
+        attach.cancel.store(true, Ordering::SeqCst);
+        if freshly_superseded {
+            qol_runtime::probe!(
+                "CLI_SESSION_BRIDGE",
+                "event=owner_superseded target_backend={}",
+                binding.session_id().backend()
+            );
+        }
+        Some(attach)
     }
 
     pub(super) fn owner_pid(&self, binding: &SessionBinding) -> Option<String> {
@@ -908,11 +1006,11 @@ pub(super) fn execute(
     locks: &SpawnLocks,
     trace_dir: &std::path::Path,
     acknowledge_marker: Option<&str>,
-    cancel: Option<&AtomicBool>,
+    cancel: Option<Arc<AtomicBool>>,
     dispatch: &AgentDispatch,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
-    let _owner = pending.acquire_owner(binding)?;
+    let _owner = pending.acquire_owner(binding, cancel.clone())?;
     if terminals
         .is_current(binding)
         .context("failed to identify the current terminal session")?
@@ -947,7 +1045,7 @@ pub(super) fn execute(
                 locks,
                 trace_dir,
                 false,
-                cancel,
+                cancel.as_deref(),
             );
         }
         pending.acknowledge(binding, &round.completion_marker, false)?;
@@ -1064,7 +1162,7 @@ pub(super) fn execute(
             &session_liveness(terminals, interpreter, binding),
             STALL_PROBE_AFTER,
             role,
-            None,
+            cancel.as_deref(),
         )?
     } else {
         wait_for_completion(
@@ -1078,7 +1176,7 @@ pub(super) fn execute(
             &session_liveness(terminals, interpreter, binding),
             STALL_PROBE_AFTER,
             role,
-            None,
+            cancel.as_deref(),
         )?
     };
     pending.observe(binding, &marker.token, outcome.completed)?;
@@ -1124,7 +1222,7 @@ pub(super) fn submit(
     resolved: Option<&AgentAssignment>,
 ) -> Result<BridgeOutcome> {
     validate_task(task)?;
-    let _owner = pending.acquire_owner(binding)?;
+    let _owner = pending.acquire_owner(binding, None)?;
     if terminals
         .is_current(binding)
         .context("failed to identify the current terminal session")?
@@ -1254,9 +1352,9 @@ pub(super) fn resume(
     locks: &SpawnLocks,
     trace_dir: &std::path::Path,
     kickstart: bool,
-    cancel: Option<&AtomicBool>,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> Result<BridgeOutcome> {
-    let _owner = pending.acquire_owner(binding)?;
+    let owner = pending.acquire_owner(binding, cancel.clone())?;
     resume_owned(
         terminals,
         interpreter,
@@ -1267,8 +1365,16 @@ pub(super) fn resume(
         locks,
         trace_dir,
         kickstart,
-        cancel,
+        cancel.as_deref(),
     )
+    .map_err(|error| superseded_error(error, &owner))
+}
+
+fn superseded_error(error: anyhow::Error, owner: &BridgeOwner) -> anyhow::Error {
+    if owner.superseded() && error.to_string() == WAIT_CANCELLED_MESSAGE {
+        return anyhow!(WAIT_SUPERSEDED_MESSAGE);
+    }
+    error
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1652,9 +1758,7 @@ pub(super) fn wait_for_completion(
         )
         .context("bridge screen read failed")?;
     if outcome.cancelled {
-        bail!(
-            "bridge wait cancelled; the round stays open and recoverable via `qol sessions resume`"
-        );
+        bail!("{WAIT_CANCELLED_MESSAGE}");
     }
     Ok(BridgeOutcome {
         completed: outcome.completed,
@@ -1770,9 +1874,7 @@ fn wait_for_pi_round(
     let mut cached_paths: Vec<PathBuf> = Vec::new();
     loop {
         if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-            bail!(
-                "bridge wait cancelled; the round stays open and recoverable via `qol sessions resume`"
-            );
+            bail!("{WAIT_CANCELLED_MESSAGE}");
         }
         reads += 1;
         let paths = transcript_paths_for(terminals, interpreter, binding);
@@ -3286,6 +3388,48 @@ mod tests {
     }
 
     #[test]
+    fn a_new_attach_supersedes_a_local_one_instead_of_conflicting() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(PendingBridgeStore::with_dir(root.path().to_path_buf()));
+        let binding = SessionBinding::from_str("v1:fake:9:900").unwrap();
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let owner = store
+            .acquire_owner(&binding, Some(Arc::clone(&abandoned)))
+            .unwrap();
+        assert!(!owner.superseded());
+
+        let taker = {
+            let store = Arc::clone(&store);
+            let binding = binding.clone();
+            std::thread::spawn(move || {
+                store
+                    .acquire_owner(&binding, Some(Arc::new(AtomicBool::new(false))))
+                    .unwrap()
+            })
+        };
+        let started = Instant::now();
+        while !abandoned.load(Ordering::SeqCst) {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "a newer attach must signal the abandoned one"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            owner.superseded(),
+            "the superseded attach must be able to say so"
+        );
+        drop(owner);
+        let taken = taker.join().unwrap();
+        assert!(!taken.superseded());
+        assert_eq!(
+            store.owner_pid(&binding),
+            Some(process::id().to_string()),
+            "the newer attach owns the session"
+        );
+    }
+
+    #[test]
     fn only_one_process_can_own_a_session_bridge_at_a_time() {
         let root = tempfile::TempDir::new().unwrap();
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
@@ -3293,20 +3437,20 @@ mod tests {
         let other = SessionBinding::from_str("v1:fake:9:901").unwrap();
 
         assert!(store.owner_pid(&binding).is_none());
-        let owner = store.acquire_owner(&binding).unwrap();
+        let owner = store.acquire_owner(&binding, None).unwrap();
         assert_eq!(
             store.owner_pid(&binding),
             Some(process::id().to_string()),
             "a held bridge must report its owning process"
         );
-        let conflict = store.acquire_owner(&binding).unwrap_err().to_string();
+        let conflict = store.acquire_owner(&binding, None).unwrap_err().to_string();
         assert!(conflict.contains("already attached"), "{conflict}");
         assert!(conflict.contains("qol sessions next"), "{conflict}");
-        store.acquire_owner(&other).unwrap();
+        store.acquire_owner(&other, None).unwrap();
 
         drop(owner);
         assert!(store.owner_pid(&binding).is_none());
-        store.acquire_owner(&binding).unwrap();
+        store.acquire_owner(&binding, None).unwrap();
     }
 
     #[test]
@@ -4069,7 +4213,7 @@ mod tests {
 
         for round in 0..500 {
             let owner = store
-                .acquire_owner(&binding)
+                .acquire_owner(&binding, None)
                 .unwrap_or_else(|error| panic!("round {round} failed to attach: {error}"));
             assert_eq!(
                 store.owner_pid(&binding).as_deref(),
