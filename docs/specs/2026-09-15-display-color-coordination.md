@@ -158,6 +158,18 @@ The conflict is visible in the night-mode payload and the settings surface, with
 Each phase is a commit series that leaves the tree green.
 Phase 0 alone fixes the reported bug and touches no new subsystems.
 
+### Layout and platform boundary contract
+
+The capability lives in one directory, `plugins/monitor/src/display_color/`, and no new file joins the plugin source root; the existing root modules are pre-existing debt and are edited in place.
+Platform differences sit behind one `display_color/platform/` facade whose `linux/`, `macos/`, `windows/` and complement-cfg `fallback/` modules all use directory form.
+Substrate implementations live in `display_color/backends/` and are named for the real boundary rather than the OS.
+`cfg(target_os)` appears only in the facades and in `mod.rs` re-exports; `mod.rs`, `classifier.rs`, `output_state.rs`, `policy.rs`, `transport.rs` and `owner.rs` stay platform-free.
+Every target outside Linux, macOS and Windows compiles through `fallback/`, whose functions return typed unsupported errors instead of panicking.
+Platform-only dependencies are declared under `[target.'cfg(target_os = ...)'.dependencies]` in `plugins/monitor/Cargo.toml`.
+`plugin.toml` keeps `platforms = ["linux", "macos"]`, so a host never offers the plugin where its runtime transports are stubbed.
+The phase gate runs `cargo fmt --check`, `cargo clippy --all-targets --all-features --keep-going -- -D warnings`, `cargo build` and `cargo test` on the host, plus `cargo check` for one exotic target so the fallback path compiles.
+Every relocation of existing code lands as a move-only commit before the behavior commit that depends on it.
+
 ### Phase 0, correctness
 
 1. Split the base.
@@ -183,20 +195,23 @@ Phase 0 alone fixes the reported bug and touches no new subsystems.
 
 ### Phase 1, owners and claims
 
-10. New `plugins/monitor/src/display_color/` module holding the `WarmthOwner` trait, the classifier, the per-output state, and the adapter registry, with the existing `host_night_light` code moving under it as the first two adapters.
-11. Claim records in `libs/host-session` under a `display-owner` subdir, one record per owner per output set, with the existing generation and handoff rules.
-12. Adapters for KWin NightColor inhibit, redshift and gammastep, Cinnamon gamma applets, and nvidia-settings, with the process and autostart cases going through `libs/host-fixes::takeover` and the applet case through `libs/cinnamon`.
+10. Create `plugins/monitor/src/display_color/` with `mod.rs` (facade and lifecycle), `classifier.rs`, `output_state.rs` and `policy.rs` (platform-neutral), `transport.rs` and `owner.rs` (traits), one `platform/` facade, and `backends/` named by substrate: `x11_randr`, `wlroots_gamma`, `mutter_display_config`, `kwin_nightlight`, `csd_settings`, `gsd_settings`, `redshift`, `cinnamon_applet`, `nvidia_settings`, `coregraphics`, `gdi`, `night_shift_detect`, `windows_night_light_detect`.
+    The Linux facade selects transport and owner set by session type and desktop, the macOS and Windows facades select their transport plus detect-only owners, and the fallback facade returns typed unsupported errors.
+11. Fold `host_night_light/` into `display_color/backends/` as `csd_settings` and `gsd_settings` in a move-only commit, so the existing takeover behavior is preserved before the coordinator calls it differently.
+12. Move the gamma access in `monitor/backends/{x11_randr_gamma,cg_gamma,shared_display}.rs` behind the `ColorTransport` trait in a move-only commit, keeping the current session machine working through the new trait.
+13. Claim records in `libs/host-session` under a `display-owner` subdir, one record per owner per output set, with the existing generation and handoff rules.
+14. Adapters for KWin NightColor inhibit, redshift and gammastep, Cinnamon gamma applets, and nvidia-settings, with the process and autostart cases going through `libs/host-fixes::takeover` and the applet case through `libs/cinnamon`.
 
 ### Phase 2, coordinator policy
 
-13. The coordinator state machine from section 6 wired into `evaluate_night` and the new ownership tick, replacing `reconcile_host_night_light` and the raw tint loops.
-14. Conflict accounting per owner, surfaced in the `night_mode` payload, the doctor, and the settings surface, with the yield action.
-15. A `night_coordination` config value with two supported modes: `own` (default, disable reachable owners and override the rest) and `detect` (never disable, surface conflicts, apply qol warmth only when the transform is clean).
+15. The coordinator state machine from section 6 wired into `evaluate_night` and the new ownership tick, replacing `reconcile_host_night_light` and the raw tint loops.
+16. Conflict accounting per owner, surfaced in the `night_mode` payload, the doctor, and the settings surface, with the yield action.
+17. A `night_coordination` config value with two supported modes: `own` (default, disable reachable owners and override the rest) and `detect` (never disable, surface conflicts, apply qol warmth only when the transform is clean).
 
 ### Phase 3, other transports
 
-16. Wayland transports: `zwlr_gamma_control_manager_v1` for wlroots, Mutter DisplayConfig gamma and CTM for GNOME, and the KWin inhibit path for KDE Wayland.
-17. macOS and Windows owner detection (Night Shift, Night Light), reported as conflicts rather than disabled, plus the existing CG and GDI transports underneath.
+18. Wayland transports: `zwlr_gamma_control_manager_v1` for wlroots, Mutter DisplayConfig gamma and CTM for GNOME, and the KWin inhibit path for KDE Wayland.
+19. macOS and Windows owner detection (Night Shift, Night Light), reported as conflicts rather than disabled, plus the existing CG and GDI transports underneath.
 
 ## 8. Platform matrix
 
