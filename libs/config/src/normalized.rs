@@ -260,7 +260,6 @@ fn canonical_select_option<'a>(options: &'a [String], selected: &str) -> Option<
 
 fn canonical_select_key(value: &str) -> String {
     value
-        .trim()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join("-")
