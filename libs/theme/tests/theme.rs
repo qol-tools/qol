@@ -2151,7 +2151,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 39] = [
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
@@ -2199,26 +2199,16 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 39] = [
         ".text_size(",
         2,
     ),
-    ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 3),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".rounded(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".shadow(",
-        1,
-    ),
+    ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 2),
     (
         "libs/gpui/src/settings_panel/view/list_card.rs",
         ".text_color(",
-        4,
+        1,
     ),
     (
         "libs/gpui/src/settings_panel/view/list_card.rs",
         ".text_size(",
-        4,
+        1,
     ),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 10),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
