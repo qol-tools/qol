@@ -48,7 +48,7 @@ label = "Night mode status"
 section = "night"
 query = "night_mode"
 value_from = "state"
-label_map = { active = "Night mode on", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "OS night light could not be taken over", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid" }
+label_map = { active = "Night mode on", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "OS night light could not be taken over", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid", controlled = "Under qol control", limited = "Another program keeps taking it", uncontrolled = "Warm calibration blocks the tint" }
 tone_map = { active = "success", inactive = "neutral", unsupported = "warning", conflict = "danger", failed = "danger", invalid_schedule = "danger" }
 
 [field.night_toggle]
@@ -108,6 +108,24 @@ label = "To"
 description = "Daily end time in 24-hour HH:MM format."
 section = "night"
 default = "06:00"
+
+[field.night_coordination]
+type = "select"
+config_key = "night_coordination"
+label = "Coordination"
+description = "Choose whether qol owns displays or only watches them while night mode runs."
+section = "night"
+default = "own"
+card_description = "Who owns the display in night mode."
+options = ["own", "detect"]
+
+[field.night_coordination.option_labels]
+own = "Own"
+detect = "Detect"
+
+[field.night_coordination.option_pictures]
+own = "letters:O"
+detect = "letters:D"
 
 [field.policy]
 type = "object_map"

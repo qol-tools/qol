@@ -78,6 +78,17 @@ where
         self.brightness.set_gamma_adjustment(handle, value, tint)
     }
 
+    fn set_gamma_adjustment_guarded(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+        expected: u64,
+    ) -> Result<(), MonitorError> {
+        self.brightness
+            .set_gamma_adjustment_guarded(handle, value, tint, expected)
+    }
+
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
         self.brightness.get_gamma(handle)
     }

@@ -9,6 +9,8 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::DaemonRequest;
 
 use crate::config::{self, DeviceConfig};
+use crate::display_color::backends;
+use crate::display_color::classifier::{self, ColorShape};
 use crate::host_night_light::{
     HostNightLight, HostNightLightStatus, NoopHostNightLight, TakeoverOutcome,
 };
@@ -25,14 +27,21 @@ use crate::monitor::{
 };
 use crate::platform::MonitorControl;
 use crate::session::{
-    LayoutSnapshot, LutProvider, ModeRecord, PlacementRecord, RestoreMode, Session, SessionStore,
-    Snapshot,
+    LayoutSnapshot, LutProvider, ModeRecord, OwnedGamma, PlacementRecord, RestoreMode, Session,
+    SessionStore, Snapshot,
 };
 use qol_windowing::display::{DisplayHandle, DisplayPlacement, DisplaySnapshot};
 
 pub const HOLD_DEBOUNCE: Duration = Duration::from_millis(70);
 pub const NIGHT_TICK: Duration = Duration::from_secs(30);
 pub const HOST_NIGHT_LIGHT_SETTLE_SECS: i64 = 4;
+
+const MAX_GAMMA_RECLAIMS: u32 = 3;
+const RECLAIM_EXHAUSTED_REASON: &str = "another owner keeps taking the display";
+const UNCONTROLLED_REASON: &str = "a foreign warm calibration forbids the night tint";
+const REASSERT_FAILED_REASON: &str = "the gamma re-assert did not verify";
+const FOREIGN_WRITER_REASON: &str = "a foreign writer keeps changing the gamma table";
+const DETECT_FOREIGN_OWNER_REASON: &str = "detect mode leaves the foreign warm table alone";
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -563,6 +572,106 @@ impl HoldStepper {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayState {
+    Controlled,
+    Limited,
+    Uncontrolled,
+}
+
+impl DisplayState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Controlled => "controlled",
+            Self::Limited => "limited",
+            Self::Uncontrolled => "uncontrolled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NightCoordination {
+    Own,
+    Detect,
+}
+
+impl NightCoordination {
+    fn parse(raw: Option<&str>) -> Self {
+        match raw {
+            Some("detect") => Self::Detect,
+            _ => Self::Own,
+        }
+    }
+}
+
+fn foreign_owner_refusal(mode: NightCoordination) -> Option<&'static str> {
+    match mode {
+        NightCoordination::Own => None,
+        NightCoordination::Detect => Some(DETECT_FOREIGN_OWNER_REASON),
+    }
+}
+
+#[derive(Debug, Default)]
+struct DisplayWatch {
+    reclaims: u32,
+    refusals: u32,
+    limited: Option<String>,
+    last_foreign_shape: Option<ColorShape>,
+    applet_probed: bool,
+    coordination_refusal: Option<&'static str>,
+}
+
+impl DisplayWatch {
+    fn reclaim_allowed(&self) -> bool {
+        self.reclaims < MAX_GAMMA_RECLAIMS
+    }
+
+    fn note_reclaim(&mut self, shape: ColorShape) {
+        self.reclaims += 1;
+        self.last_foreign_shape = Some(shape);
+    }
+
+    fn note_refusal(&mut self) -> bool {
+        self.refusals += 1;
+        self.refusals >= MAX_GAMMA_RECLAIMS
+    }
+
+    fn clear_refusals(&mut self) {
+        self.refusals = 0;
+    }
+
+    fn reset_reclaims(&mut self) {
+        self.reclaims = 0;
+        self.refusals = 0;
+        self.limited = None;
+        self.applet_probed = false;
+    }
+}
+
+fn display_state(
+    limited: Option<&str>,
+    coordination_refusal: Option<&str>,
+    ownable: Option<bool>,
+) -> (DisplayState, String) {
+    if let Some(reason) = limited {
+        return (DisplayState::Limited, reason.to_string());
+    }
+    if let Some(reason) = coordination_refusal {
+        return (DisplayState::Uncontrolled, reason.to_string());
+    }
+    match ownable {
+        Some(false) => (DisplayState::Uncontrolled, UNCONTROLLED_REASON.to_string()),
+        _ => (DisplayState::Controlled, String::new()),
+    }
+}
+
+fn refused_display_row(row: &serde_json::Value) -> bool {
+    matches!(
+        row.get("state").and_then(serde_json::Value::as_str),
+        Some("limited") | Some("uncontrolled")
+    )
+}
+
 pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     session: Session<C>,
     stepper: HoldStepper,
@@ -586,6 +695,8 @@ pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     night_apply_error: Option<String>,
     night_native: bool,
     night_fallback_reason: Option<String>,
+    night_coordination: NightCoordination,
+    display_watch: Mutex<BTreeMap<String, DisplayWatch>>,
 }
 
 type Notify = Arc<dyn Fn(&str, &str) + Send + Sync>;
@@ -626,6 +737,8 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
             night_apply_error: None,
             night_native: false,
             night_fallback_reason: None,
+            night_coordination: NightCoordination::Own,
+            display_watch: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -660,6 +773,14 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         self
     }
 
+    fn with_applet(
+        mut self,
+        applet: Arc<dyn crate::display_color::backends::AppletControl>,
+    ) -> Self {
+        self.session = self.session.with_applet(applet);
+        self
+    }
+
     fn surface_gamma_warnings(&self, report: &crate::session::RestoreReport) {
         if report.failed == 0 {
             return;
@@ -683,7 +804,9 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
 
 impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C> {
     fn restore_layout(&self, mode: RestoreMode) {
-        let report = self.session.restore_layout(mode);
+        let report = self
+            .session
+            .restore_layout_guarded(mode, |handle| self.gamma_write_allowed(handle));
         trace_layout_restore(&report);
         if report.failed > 0 {
             (self.notify)(
@@ -695,6 +818,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
 
     pub fn start(&mut self, config: &DeviceConfig) -> crate::session::RestoreReport {
         let handoffs = self.startup_snapshots();
+        self.night_coordination = NightCoordination::parse(Some(&config.night_coordination));
         let recovery = if self.is_resident() {
             crate::session::RestoreReport::default()
         } else {
@@ -723,6 +847,13 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         self.session.adopt_layout_handoff();
         self.apply_preferred_map();
         self.night = config::load_night_state(self.config_root.as_deref());
+        let (schedule, _) = self.parsed_schedule();
+        let now = (self.clock)();
+        if night::decide(&schedule, &self.night, now).active
+            && self.host_night_light.recovery_pending()
+        {
+            self.night_settle_until_unix = Some(now.unix + HOST_NIGHT_LIGHT_SETTLE_SECS);
+        }
         self.evaluate_night(true);
         recovery
     }
@@ -746,6 +877,9 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         let (schedule, schedule_error) = self.parsed_schedule();
         let now = (self.clock)();
         let decision = night::decide(&schedule, &self.night, now);
+        let night_transition = self
+            .night_decision
+            .is_some_and(|previous| previous.active != decision.active);
         let override_on = decision.active && decision.reason == Reason::Manual;
         let armed = schedule.mode == ScheduleMode::Daily || override_on;
         let kelvin = config.night_kelvin();
@@ -826,7 +960,10 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             }
             self.night_applied = Some(target);
         }
-        if !armed && !gamma_brightness {
+        if !decision.active {
+            self.release_idle_baselines();
+        }
+        if !armed {
             self.reconcile_host_night_light(false, now.unix);
             if !self.host_night_light.is_taken_over() {
                 self.night_native = false;
@@ -835,6 +972,9 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         self.night_schedule_error = schedule_error;
         self.night_next_change = schedule.next_transition(now.minute).map(Minute::label);
         self.night_decision = Some(decision);
+        if night_transition {
+            self.reset_all_gamma_reclaims();
+        }
         if changed
             && previous.map(|state| state.0).unwrap_or(false) != decision.active
             && config.notify_on_change
@@ -888,7 +1028,19 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         let mut unsupported = 0;
         self.night_apply_error = None;
         for handle in &targets {
-            match self.session.mutate_tint(handle, tint) {
+            if active {
+                match foreign_owner_refusal(self.night_coordination) {
+                    Some(reason) if self.foreign_warm_display(handle) => {
+                        self.mark_coordination_refusal(handle.id(), reason);
+                        continue;
+                    }
+                    _ => self.clear_coordination_refusal(handle.id()),
+                }
+            }
+            match self
+                .session
+                .mutate_tint_with(handle, tint, || self.claim_applet_once(handle))
+            {
                 Ok(()) => {
                     successes += 1;
                 }
@@ -911,14 +1063,438 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         }
     }
 
-    fn reconcile_host_night_light(&mut self, armed: bool, now_unix: i64) {
-        let result = if armed && !self.host_night_light.is_taken_over() {
-            self.host_night_light.take_over().map(|outcome| {
-                if outcome == TakeoverOutcome::Disabled {
-                    self.night_settle_until_unix = Some(now_unix + HOST_NIGHT_LIGHT_SETTLE_SECS);
-                }
+    fn foreign_warm_display(&self, handle: &DisplayHandle) -> bool {
+        let Some(live) = self.session.capture_gamma(handle) else {
+            return false;
+        };
+        let expected = self
+            .session
+            .store()
+            .load_snapshot(handle.id())
+            .ok()
+            .flatten()
+            .and_then(|snapshot| crate::session::expected_gamma_table(&snapshot));
+        if expected.is_some_and(|expected| expected.checksum() == live.checksum()) {
+            return false;
+        }
+        classifier::classify(&live.red, &live.green, &live.blue).warmth
+    }
+
+    fn gamma_write_allowed(&self, handle: &DisplayHandle) -> bool {
+        foreign_owner_refusal(self.night_coordination).is_none()
+            || !self.foreign_warm_display(handle)
+    }
+
+    fn display_state_for(&self, handle: &DisplayHandle) -> (DisplayState, String) {
+        let (limited, refusal) = {
+            let watch = self.display_watch.lock().unwrap();
+            let entry = watch.get(handle.id());
+            (
+                entry.and_then(|entry| entry.limited.clone()),
+                entry.and_then(|entry| entry.coordination_refusal),
+            )
+        };
+        display_state(
+            limited.as_deref(),
+            refusal,
+            self.session.ownable(handle.id()),
+        )
+    }
+
+    fn display_rows(&self) -> Vec<serde_json::Value> {
+        let Ok(handles) = self.session.control().enumerate() else {
+            return Vec::new();
+        };
+        {
+            let mut watch = self.display_watch.lock().unwrap();
+            watch.retain(|id, _| handles.iter().any(|handle| handle.id() == id));
+        }
+        handles
+            .iter()
+            .map(|handle| {
+                let (state, reason) = self.display_state_for(handle);
+                serde_json::json!({
+                    "id": handle.id(),
+                    "connector": handle.connector(),
+                    "state": state.label(),
+                    "reason": reason,
+                })
             })
-        } else if !armed && self.host_night_light.is_taken_over() {
+            .collect()
+    }
+
+    fn reclaim_allowed(&self, display_id: &str) -> bool {
+        self.display_watch
+            .lock()
+            .unwrap()
+            .get(display_id)
+            .map(DisplayWatch::reclaim_allowed)
+            .unwrap_or(true)
+    }
+
+    fn gamma_limited(&self, display_id: &str) -> bool {
+        self.display_watch
+            .lock()
+            .unwrap()
+            .get(display_id)
+            .is_some_and(|entry| entry.limited.is_some())
+    }
+
+    fn all_owned_displays_limited(&self) -> bool {
+        let owned = self.session.gamma_ownership();
+        if owned.is_empty() {
+            return false;
+        }
+        let watch = self.display_watch.lock().unwrap();
+        owned.iter().all(|display| {
+            watch
+                .get(display.handle.id())
+                .is_some_and(|entry| entry.limited.is_some())
+        })
+    }
+
+    fn mark_gamma_limited(&self, display_id: &str, reason: impl Into<String>) {
+        self.display_watch
+            .lock()
+            .unwrap()
+            .entry(display_id.to_string())
+            .or_default()
+            .limited = Some(reason.into());
+    }
+
+    fn mark_coordination_refusal(&self, display_id: &str, reason: &'static str) {
+        self.display_watch
+            .lock()
+            .unwrap()
+            .entry(display_id.to_string())
+            .or_default()
+            .coordination_refusal = Some(reason);
+    }
+
+    fn clear_coordination_refusal(&self, display_id: &str) {
+        if let Some(entry) = self.display_watch.lock().unwrap().get_mut(display_id) {
+            entry.coordination_refusal = None;
+        }
+    }
+
+    fn clear_gamma_refusals(&self, display_id: &str) {
+        if let Some(entry) = self.display_watch.lock().unwrap().get_mut(display_id) {
+            entry.clear_refusals();
+        }
+    }
+
+    fn note_gamma_refusal(&self, display_id: &str) -> bool {
+        let mut watch = self.display_watch.lock().unwrap();
+        watch
+            .entry(display_id.to_string())
+            .or_default()
+            .note_refusal()
+    }
+
+    fn reset_gamma_reclaims(&self, display_ids: impl IntoIterator<Item = String>) {
+        let mut watch = self.display_watch.lock().unwrap();
+        for display_id in display_ids {
+            if let Some(entry) = watch.get_mut(&display_id) {
+                entry.reset_reclaims();
+            }
+        }
+    }
+
+    fn reset_gamma_reclaims_for(&self, selector: &str) {
+        let ids: Vec<String> = self
+            .session
+            .control()
+            .enumerate()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|handle| handle.id() == selector || handle.connector() == selector)
+            .map(|handle| handle.id().to_string())
+            .collect();
+        self.reset_gamma_reclaims(ids);
+    }
+
+    fn reset_all_gamma_reclaims(&self) {
+        for entry in self.display_watch.lock().unwrap().values_mut() {
+            entry.reset_reclaims();
+        }
+    }
+
+    fn check_gamma_ownership(&self) {
+        let now = (self.clock)();
+        if self
+            .night_settle_until_unix
+            .is_some_and(|until| now.unix < until)
+        {
+            return;
+        }
+        let owned = self.session.gamma_ownership();
+        if owned.is_empty() {
+            return;
+        }
+        for display in owned {
+            self.check_owned_gamma(&display);
+        }
+    }
+
+    fn begin_applet_probe(&self, display_id: &str) -> bool {
+        let mut watch = self.display_watch.lock().unwrap();
+        let entry = watch.entry(display_id.to_string()).or_default();
+        if entry.applet_probed {
+            return false;
+        }
+        entry.applet_probed = true;
+        true
+    }
+
+    fn rearm_applet_probe(&self, display_id: &str) {
+        if let Some(entry) = self.display_watch.lock().unwrap().get_mut(display_id) {
+            entry.applet_probed = false;
+        }
+    }
+
+    fn claim_applet_once(&self, handle: &DisplayHandle) {
+        let display_id = handle.id();
+        if self.gamma_limited(display_id) {
+            return;
+        }
+        if foreign_owner_refusal(self.night_coordination).is_some() {
+            return;
+        }
+        if self.session.applet_claim(display_id).is_some() {
+            return;
+        }
+        if self.session.gamma_ownership().is_empty() {
+            return;
+        }
+        if !self.begin_applet_probe(display_id) {
+            return;
+        }
+        let Some(claim) = self.session.applet().detect() else {
+            return;
+        };
+        if !self
+            .session
+            .record_applet_claim(display_id, &claim.original)
+        {
+            return;
+        }
+        if self.session.applet().disable().is_none() {
+            let _ = self.session.clear_applet_claim(display_id);
+            return;
+        }
+        qol_runtime::probe!(
+            "MONITOR_SESSION",
+            "event=applet_claim display={} outcome=disabled",
+            display_id
+        );
+    }
+
+    fn applet_reason(&self, display_id: &str) -> Option<String> {
+        let claim = self.session.applet_claim(display_id)?;
+        for entry in backends::find_warm_entries(&claim) {
+            for uuid in backends::warm_applet_uuids() {
+                if entry.contains(uuid) {
+                    return Some(format!(
+                        "the {uuid} applet keeps replacing the display owner"
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    fn release_unowned_applets(&self) {
+        if !self.session.gamma_ownership().is_empty() {
+            return;
+        }
+        self.session.release_applet_claims();
+        for entry in self.display_watch.lock().unwrap().values_mut() {
+            entry.applet_probed = false;
+        }
+    }
+
+    fn release_idle_baselines(&self) {
+        for handle in self.session.control().enumerate().unwrap_or_default() {
+            if self.session.release_idle_baseline(&handle)
+                == crate::session::RestoreOutcome::ForeignLutPreserved
+            {
+                qol_runtime::probe!(
+                    "MONITOR_SESSION",
+                    "event=baseline_release display={} outcome=foreign_lut_preserved",
+                    handle.id()
+                );
+            }
+        }
+    }
+
+    fn check_owned_gamma(&self, owned: &OwnedGamma) {
+        let handle = &owned.handle;
+        self.claim_applet_once(handle);
+        let Some(live) = self.session.capture_gamma(handle) else {
+            self.mark_gamma_limited(handle.id(), "the live gamma ramp is unreadable");
+            return;
+        };
+        if live.checksum() == owned.expected.checksum() {
+            self.clear_coordination_refusal(handle.id());
+            self.clear_gamma_refusals(handle.id());
+            return;
+        }
+        if self.gamma_limited(handle.id()) {
+            return;
+        }
+        let verdict = classifier::classify(&live.red, &live.green, &live.blue);
+        if !verdict.tint_allowed {
+            if let Some(reason) = foreign_owner_refusal(self.night_coordination) {
+                self.mark_coordination_refusal(handle.id(), reason);
+                return;
+            }
+            self.session.adopt_compose_base(handle, &live, false);
+            if owned.tint.is_neutral() {
+                let _ = self.session.write_current_gamma(handle);
+            }
+            return;
+        }
+        if verdict.warmth {
+            if let Some(reason) = foreign_owner_refusal(self.night_coordination) {
+                self.mark_coordination_refusal(handle.id(), reason);
+                return;
+            }
+            self.clear_coordination_refusal(handle.id());
+            if !self.reclaim_allowed(handle.id()) {
+                let reason = self
+                    .applet_reason(handle.id())
+                    .unwrap_or_else(|| RECLAIM_EXHAUSTED_REASON.to_string());
+                self.mark_gamma_limited(handle.id(), reason);
+                let shape = self
+                    .display_watch
+                    .lock()
+                    .unwrap()
+                    .get(handle.id())
+                    .and_then(|entry| entry.last_foreign_shape);
+                qol_runtime::probe!(
+                    "MONITOR_SESSION",
+                    "event=gamma_reclaim display={} outcome=exhausted shape={:?}",
+                    handle.id(),
+                    shape
+                );
+                return;
+            }
+            if self.session.applet_claim(handle.id()).is_none() {
+                self.rearm_applet_probe(handle.id());
+            }
+            if self.session.applet_claim(handle.id()).is_some()
+                && self.session.applet().disable().is_some()
+            {
+                qol_runtime::probe!(
+                    "MONITOR_SESSION",
+                    "event=applet_reclaim display={} outcome=disabled",
+                    handle.id()
+                );
+            }
+            match self.session.reassert_gamma_guarded(handle, live.checksum()) {
+                Ok(crate::session::RestoreOutcome::Restored) => {
+                    self.clear_gamma_refusals(handle.id());
+                    self.display_watch
+                        .lock()
+                        .unwrap()
+                        .entry(handle.id().to_string())
+                        .or_default()
+                        .note_reclaim(verdict.shape);
+                    qol_runtime::probe!(
+                        "MONITOR_SESSION",
+                        "event=gamma_reclaim display={} shape={:?}",
+                        handle.id(),
+                        verdict.shape
+                    );
+                }
+                Ok(crate::session::RestoreOutcome::ForeignLutPreserved) => {
+                    if self.note_gamma_refusal(handle.id()) {
+                        self.mark_gamma_limited(handle.id(), FOREIGN_WRITER_REASON);
+                        qol_runtime::probe!(
+                            "MONITOR_SESSION",
+                            "event=gamma_reclaim display={} outcome=drift_limited",
+                            handle.id()
+                        );
+                    }
+                }
+                Ok(_) => {
+                    self.mark_gamma_limited(handle.id(), REASSERT_FAILED_REASON);
+                    qol_runtime::probe!(
+                        "MONITOR_SESSION",
+                        "event=gamma_reclaim display={} outcome=failed",
+                        handle.id()
+                    );
+                }
+                Err(error) => {
+                    self.mark_gamma_limited(handle.id(), error.to_string());
+                    qol_runtime::probe!(
+                        "MONITOR_SESSION",
+                        "event=gamma_reclaim display={} outcome=failed",
+                        handle.id()
+                    );
+                }
+            }
+            return;
+        }
+        if matches!(
+            verdict.shape,
+            ColorShape::Calibration | ColorShape::Identity
+        ) {
+            self.session.adopt_compose_base(handle, &live, true);
+            if let Err(error) = self.session.write_current_gamma(handle) {
+                self.mark_gamma_limited(handle.id(), error.to_string());
+                return;
+            }
+            self.clear_coordination_refusal(handle.id());
+        }
+    }
+
+    fn host_night_light_reclaim_reason(&self) -> String {
+        format!(
+            "the {} night light keeps replacing the display owner",
+            self.host_night_light.strategy()
+        )
+    }
+
+    fn note_host_night_light_reclaim(&self) {
+        let reason = self.host_night_light_reclaim_reason();
+        let owned = self.session.gamma_ownership();
+        let mut watch = self.display_watch.lock().unwrap();
+        for display in &owned {
+            let entry = watch.entry(display.handle.id().to_string()).or_default();
+            if entry.reclaim_allowed() {
+                entry.note_reclaim(ColorShape::PerChannelScale);
+            } else {
+                entry.limited = Some(reason.clone());
+            }
+        }
+    }
+
+    fn reconcile_host_night_light(&mut self, armed: bool, now_unix: i64) {
+        let result = if armed {
+            let retake = self.host_night_light.is_taken_over();
+            if retake && self.all_owned_displays_limited() {
+                return;
+            }
+            if retake
+                && self
+                    .night_settle_until_unix
+                    .is_some_and(|until| now_unix < until)
+            {
+                return;
+            }
+            match self.host_night_light.take_over() {
+                Ok(TakeoverOutcome::Disabled) => {
+                    if retake {
+                        self.note_host_night_light_reclaim();
+                    }
+                    self.night_settle_until_unix = Some(now_unix + HOST_NIGHT_LIGHT_SETTLE_SECS);
+                    Ok(())
+                }
+                Ok(_) => Ok(()),
+                Err(error) => Err(error),
+            }
+        } else if self.host_night_light.is_taken_over() {
             self.night_settle_until_unix = None;
             self.host_night_light.release(RestoreMode::Exit)
         } else {
@@ -950,6 +1526,13 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             reason: Reason::Off,
             next_change_unix: None,
         });
+        let displays = self.display_rows();
+        let display_conflict = match self.night_coordination {
+            NightCoordination::Own => displays.iter().any(refused_display_row),
+            NightCoordination::Detect => {
+                !displays.is_empty() && displays.iter().all(refused_display_row)
+            }
+        };
         let state = if self.night_schedule_error.is_some() {
             "invalid_schedule"
         } else if self.host_night_light_conflict {
@@ -958,6 +1541,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             "unsupported"
         } else if self.night_apply_error.is_some() {
             "failed"
+        } else if decision.active && display_conflict {
+            "conflict"
         } else if decision.active {
             "active"
         } else {
@@ -973,6 +1558,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             "error": self.night_apply_error,
             "fallback_reason": self.night_fallback_reason,
             "strategy": if self.night_native { self.host_night_light.strategy() } else { "gamma" },
+            "displays": displays,
         })
     }
 
@@ -988,18 +1574,21 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         let scheduled = self.config().night_schedule().ok().is_some_and(|schedule| {
             schedule.mode == ScheduleMode::Daily && schedule.from != schedule.to
         });
+        let owns_gamma = !self.session.gamma_ownership().is_empty();
         (active
             || scheduled
             || self.night_apply_error.is_some()
-            || !self.session.tinted_displays().is_empty())
-        .then(|| {
-            self.night_decision
-                .and_then(|decision| decision.next_change_unix)
-                .map(|until| {
-                    Duration::from_secs((until - (self.clock)().unix).max(1) as u64).min(NIGHT_TICK)
-                })
-                .unwrap_or(NIGHT_TICK)
-        })
+            || !self.session.tinted_displays().is_empty()
+            || owns_gamma)
+            .then(|| {
+                self.night_decision
+                    .and_then(|decision| decision.next_change_unix)
+                    .map(|until| {
+                        Duration::from_secs((until - (self.clock)().unix).max(1) as u64)
+                            .min(NIGHT_TICK)
+                    })
+                    .unwrap_or(NIGHT_TICK)
+            })
     }
 
     fn startup_snapshots(&self) -> Vec<Snapshot> {
@@ -1044,6 +1633,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             if !self.session.adopt(&handle) {
                 continue;
             }
+            self.reset_gamma_reclaims([handle.id().to_string()]);
             let _ = self.session.store().write_snapshot(&Snapshot {
                 handoff: false,
                 ..snapshot.clone()
@@ -1158,6 +1748,14 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
     fn reassert_gamma(&self, handles: &[DisplayHandle]) -> crate::session::RestoreReport {
         let mut report = crate::session::RestoreReport::default();
         for handle in handles {
+            self.rearm_applet_probe(handle.id());
+            if !self.gamma_write_allowed(handle) {
+                if let Some(reason) = foreign_owner_refusal(self.night_coordination) {
+                    self.mark_coordination_refusal(handle.id(), reason);
+                }
+                continue;
+            }
+            self.clear_coordination_refusal(handle.id());
             report.record(self.session.reassert_gamma(handle));
         }
         trace_gamma_reassert(&report);
@@ -1414,6 +2012,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 if self.config().notify_on_change {
                     (self.notify)("Monitor", &format!("Brightness {value}%"));
                 }
+                self.reset_gamma_reclaims(applied.iter().cloned());
                 true
             }
             Command::SetMode {
@@ -1425,6 +2024,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             } => {
                 if self.apply_mode(&display, token, width, height, refresh) {
                     self.reapply_display_state("mode");
+                    self.reset_gamma_reclaims_for(&display);
                 }
                 true
             }
@@ -1471,12 +2071,15 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 self.preferred = config::load_preferred(self.config_root.as_deref());
                 self.reload_config(&next);
                 self.night = NightState::default();
+                self.night_coordination =
+                    NightCoordination::parse(Some(&self.config().night_coordination));
                 if let Err(error) =
                     config::save_night_state(self.config_root.as_deref(), &self.night)
                 {
                     eprintln!("[plugin-monitor] failed to clear night mode override: {error:#}");
                 }
                 self.evaluate_night(true);
+                self.release_unowned_applets();
                 true
             }
             Command::Night(request) => {
@@ -1493,10 +2096,14 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     eprintln!("[plugin-monitor] failed to persist night mode state: {error:#}");
                 }
                 self.evaluate_night(false);
+                self.reset_all_gamma_reclaims();
+                self.release_unowned_applets();
                 true
             }
             Command::Tick => {
                 self.evaluate_night(false);
+                self.check_gamma_ownership();
+                self.release_unowned_applets();
                 true
             }
             Command::Kill => {
@@ -1775,6 +2382,9 @@ fn build_runtime(
         || HostResidency::current().is_resident(),
     )
     .with_host_night_light(host_night_light)
+    .with_applet(Arc::new(backends::AppletOwner::new(
+        backends::GsettingsRunner,
+    )))
 }
 
 fn session_store_for(config_root: Option<&std::path::Path>) -> SessionStore {
@@ -2089,11 +2699,14 @@ mod tests {
         layout_calls: StdMutex<Vec<Vec<DisplayPlacement>>>,
         layout_fail: AtomicBool,
         gamma_calls: StdMutex<Vec<(String, u8, Tint)>>,
+        gamma_table: StdMutex<Option<Arc<StdMutex<GammaTable>>>>,
+        gamma_base: StdMutex<Option<GammaTable>>,
         snapshot_fail: AtomicBool,
         claim_checks: StdMutex<Vec<Option<Option<u32>>>>,
         layout_store: StdMutex<Option<SessionStore>>,
         events: StdMutex<Vec<String>>,
         snapshot_gate: StdMutex<Option<Arc<SnapshotGate>>>,
+        guarded_drift: Arc<StdMutex<bool>>,
     }
 
     impl FakeControl {
@@ -2121,11 +2734,14 @@ mod tests {
                 layout_calls: StdMutex::new(Vec::new()),
                 layout_fail: AtomicBool::new(false),
                 gamma_calls: StdMutex::new(Vec::new()),
+                gamma_table: StdMutex::new(None),
+                gamma_base: StdMutex::new(None),
                 snapshot_fail: AtomicBool::new(false),
                 claim_checks: StdMutex::new(Vec::new()),
                 layout_store: StdMutex::new(None),
                 events: StdMutex::new(Vec::new()),
                 snapshot_gate: StdMutex::new(None),
+                guarded_drift: Arc::new(StdMutex::new(false)),
             }
         }
 
@@ -2353,6 +2969,22 @@ mod tests {
             }
         }
 
+        fn set_gamma_adjustment_guarded(
+            &self,
+            handle: &DisplayHandle,
+            value: u8,
+            tint: Tint,
+            _expected: u64,
+        ) -> Result<(), MonitorError> {
+            if *self.guarded_drift.lock().unwrap() {
+                return Err(MonitorError::refused(
+                    "gamma",
+                    crate::monitor::GAMMA_CHANGED_UNDER_WRITE_REASON,
+                ));
+            }
+            self.set_gamma_adjustment(handle, value, tint)
+        }
+
         fn set_gamma_adjustment(
             &self,
             handle: &DisplayHandle,
@@ -2370,6 +3002,12 @@ mod tests {
             self.set_tint(handle, tint)?;
             if self.source == BrightnessSource::Gamma {
                 self.set_brightness(handle, value)?;
+            }
+            if let (Some(table), Some(base)) = (
+                self.gamma_table.lock().unwrap().clone(),
+                self.gamma_base.lock().unwrap().clone(),
+            ) {
+                *table.lock().unwrap() = base.dimmed(value).tinted(tint);
             }
             Ok(())
         }
@@ -2504,6 +3142,136 @@ mod tests {
         }
     }
 
+    struct SharedLut(Arc<StdMutex<GammaTable>>);
+
+    impl LutProvider for SharedLut {
+        fn capture(&self, _connector: &str) -> Option<GammaTable> {
+            Some(self.0.lock().unwrap().clone())
+        }
+
+        fn write_guarded(
+            &self,
+            _handle: &DisplayHandle,
+            _original: &GammaTable,
+            _last_value: u8,
+            _last_tint: Tint,
+        ) -> crate::session::LutRestoreOutcome {
+            crate::session::LutRestoreOutcome::Restored
+        }
+
+        fn adopt_baseline(
+            &self,
+            _handle: &DisplayHandle,
+            _original: &GammaTable,
+            _last_value: u8,
+            _last_tint: Tint,
+        ) {
+        }
+    }
+
+    struct RefusingLut(SharedLut);
+
+    impl LutProvider for RefusingLut {
+        fn capture(&self, connector: &str) -> Option<GammaTable> {
+            self.0.capture(connector)
+        }
+
+        fn write_guarded(
+            &self,
+            _handle: &DisplayHandle,
+            _original: &GammaTable,
+            _last_value: u8,
+            _last_tint: Tint,
+        ) -> crate::session::LutRestoreOutcome {
+            crate::session::LutRestoreOutcome::ForeignLutPreserved
+        }
+
+        fn adopt_baseline(
+            &self,
+            handle: &DisplayHandle,
+            original: &GammaTable,
+            last_value: u8,
+            last_tint: Tint,
+        ) {
+            self.0
+                .adopt_baseline(handle, original, last_value, last_tint);
+        }
+    }
+
+    fn warm_scale_table(size: usize) -> GammaTable {
+        let channel = |peak: f64| {
+            (0..size)
+                .map(|index| {
+                    let ratio = index as f64 / (size - 1) as f64;
+                    (peak * ratio.powf(1.001)).round() as u16
+                })
+                .collect::<Vec<u16>>()
+        };
+        GammaTable {
+            red: channel(65535.0),
+            green: channel(51110.0),
+            blue: channel(35808.0),
+        }
+    }
+
+    fn calibration_table(size: usize) -> GammaTable {
+        let channel = |bias: f64| {
+            (0..size)
+                .map(|index| {
+                    let x = index as f64 / (size - 1) as f64;
+                    let shaped = x * x * (3.0 - 2.0 * x);
+                    (65535.0 * shaped * bias).min(65535.0).round() as u16
+                })
+                .collect::<Vec<u16>>()
+        };
+        GammaTable {
+            red: channel(1.0),
+            green: channel(0.98),
+            blue: channel(1.02),
+        }
+    }
+
+    const APPLET_MENU: &str = "panel1:left:0:menu@cinnamon.org:0";
+    const APPLET_WARM: &str = "panel1:right:3:brightness-and-gamma-applet@cardsurf:6";
+
+    #[derive(Clone, Default)]
+    struct FakeSettings {
+        value: Arc<StdMutex<Option<String>>>,
+        writes: Arc<StdMutex<Vec<String>>>,
+    }
+
+    impl FakeSettings {
+        fn with_value(value: &str) -> Self {
+            let settings = Self::default();
+            settings.set_value(value);
+            settings
+        }
+
+        fn set_value(&self, value: &str) {
+            *self.value.lock().unwrap() = Some(value.to_string());
+        }
+
+        fn value(&self) -> Option<String> {
+            self.value.lock().unwrap().clone()
+        }
+
+        fn writes(&self) -> Vec<String> {
+            self.writes.lock().unwrap().clone()
+        }
+    }
+
+    impl backends::SettingsRunner for FakeSettings {
+        fn get(&self, _key: &str) -> Option<String> {
+            self.value.lock().unwrap().clone()
+        }
+
+        fn set(&self, _key: &str, value: &str) -> bool {
+            self.writes.lock().unwrap().push(value.to_string());
+            self.set_value(value);
+            true
+        }
+    }
+
     fn night_runtime(
         control: Arc<FakeControl>,
         store: SessionStore,
@@ -2621,6 +3389,10 @@ mod tests {
             handoff: false,
             adopt_generation: None,
             lut: None,
+            compose_base: None,
+            compose_foreign: None,
+            ownable: true,
+            applet_claim: None,
             checksum: String::new(),
         }
     }
@@ -2663,15 +3435,1029 @@ mod tests {
         assert_eq!(runtime.night_payload()["state"], "inactive");
     }
 
+    #[test]
+    fn a_display_watch_allows_three_reclaims_then_stops_until_a_user_apply() {
+        let mut watch = DisplayWatch::default();
+        for reclaim in 1..=MAX_GAMMA_RECLAIMS {
+            assert!(watch.reclaim_allowed(), "reclaim {reclaim} is allowed");
+            watch.note_reclaim(ColorShape::PerChannelScale);
+            assert_eq!(watch.reclaims, reclaim);
+            assert_eq!(watch.last_foreign_shape, Some(ColorShape::PerChannelScale));
+        }
+        assert!(!watch.reclaim_allowed(), "the fourth reclaim is refused");
+        watch.limited = Some(RECLAIM_EXHAUSTED_REASON.to_string());
+        assert_eq!(watch.reclaims, MAX_GAMMA_RECLAIMS);
+        watch.reset_reclaims();
+        assert!(
+            watch.reclaim_allowed(),
+            "only a user apply resets the fight"
+        );
+        assert_eq!(watch.reclaims, 0);
+        assert_eq!(watch.limited, None);
+    }
+
+    #[test]
+    fn a_display_state_maps_controlled_limited_and_uncontrolled() {
+        let (state, reason) = display_state(None, None, Some(true));
+        assert_eq!(state, DisplayState::Controlled);
+        assert_eq!(reason, "");
+        let (state, reason) = display_state(None, None, None);
+        assert_eq!(state, DisplayState::Controlled);
+        assert_eq!(reason, "");
+        let (state, reason) = display_state(None, None, Some(false));
+        assert_eq!(state, DisplayState::Uncontrolled);
+        assert_eq!(reason, UNCONTROLLED_REASON);
+        let (state, reason) = display_state(Some(RECLAIM_EXHAUSTED_REASON), None, Some(false));
+        assert_eq!(state, DisplayState::Limited);
+        assert_eq!(reason, RECLAIM_EXHAUSTED_REASON);
+    }
+
+    #[test]
+    fn foreign_owner_refusal_covers_both_coordination_modes() {
+        assert_eq!(foreign_owner_refusal(NightCoordination::Own), None);
+        assert_eq!(
+            foreign_owner_refusal(NightCoordination::Detect),
+            Some(DETECT_FOREIGN_OWNER_REASON)
+        );
+        assert_eq!(
+            NightCoordination::parse(Some("own")),
+            NightCoordination::Own
+        );
+        assert_eq!(
+            NightCoordination::parse(Some("detect")),
+            NightCoordination::Detect
+        );
+        assert_eq!(NightCoordination::parse(None), NightCoordination::Own);
+        assert_eq!(
+            NightCoordination::parse(Some("unknown")),
+            NightCoordination::Own
+        );
+    }
+
+    #[test]
+    fn detect_refusal_reports_uncontrolled_with_the_mode_reason() {
+        let (state, reason) = display_state(None, Some(DETECT_FOREIGN_OWNER_REASON), Some(true));
+        assert_eq!(state, DisplayState::Uncontrolled);
+        assert_eq!(reason, DETECT_FOREIGN_OWNER_REASON);
+    }
+
+    #[test]
+    fn night_payload_reports_the_limited_display_and_a_global_conflict() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let displays = vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")];
+        let control = Arc::new(FakeControl::new(displays, 70, BrightnessSource::Ddc));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control, store, config_root, clock);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        runtime.mark_gamma_limited("id-2", RECLAIM_EXHAUSTED_REASON);
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        let rows = payload["displays"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["id"], "id-1");
+        assert_eq!(rows[0]["connector"], "card0-DP-1");
+        assert_eq!(rows[0]["state"], "controlled");
+        assert_eq!(rows[0]["reason"], "");
+        assert_eq!(rows[1]["state"], "limited");
+        assert_eq!(rows[1]["reason"], RECLAIM_EXHAUSTED_REASON);
+    }
+
+    #[test]
+    fn night_payload_marks_a_refused_calibration_uncontrolled() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control, store.clone(), config_root, clock);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        let mut snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        snapshot.ownable = false;
+        store.write_snapshot(&snapshot).unwrap();
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "uncontrolled");
+        assert_eq!(payload["displays"][0]["reason"], UNCONTROLLED_REASON);
+    }
+
+    #[test]
+    fn the_ownership_tick_reclaims_three_times_and_then_stops() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let display = handle("id-1", "card0-DP-1");
+        let baseline = StaticLut(None).capture("card0-DP-1").unwrap();
+        let shared = Arc::new(StdMutex::new(baseline));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&backends::quoted_list(&[APPLET_MENU]));
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings)));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        let expected = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *shared.lock().unwrap() = expected.clone();
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        let after_on = control.gamma_calls().len();
+        let foreign = warm_scale_table(64);
+        for reclaim in 1..=MAX_GAMMA_RECLAIMS {
+            *shared.lock().unwrap() = foreign.clone();
+            runtime.handle(Command::Tick);
+            assert_eq!(
+                control.gamma_calls().len(),
+                after_on + reclaim as usize,
+                "reclaim {reclaim} re-asserts qol's table"
+            );
+            assert_eq!(
+                shared.lock().unwrap().checksum(),
+                expected.checksum(),
+                "qol holds the display after reclaim {reclaim}"
+            );
+        }
+        *shared.lock().unwrap() = foreign.clone();
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.gamma_calls().len(),
+            after_on + MAX_GAMMA_RECLAIMS as usize,
+            "no write after the reclaim bound"
+        );
+        assert_eq!(
+            shared.lock().unwrap().checksum(),
+            foreign.checksum(),
+            "the foreign table stays in place after the bound"
+        );
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "limited");
+        assert_eq!(payload["displays"][0]["reason"], RECLAIM_EXHAUSTED_REASON);
+        *shared.lock().unwrap() = expected.clone();
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.gamma_calls().len(),
+            after_on + MAX_GAMMA_RECLAIMS as usize,
+            "a clean tick after the bound writes nothing"
+        );
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "limited");
+        assert_eq!(payload["displays"][0]["reason"], RECLAIM_EXHAUSTED_REASON);
+    }
+
+    #[test]
+    fn a_night_transition_restores_the_reclaim_budget() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let display = handle("id-1", "card0-DP-1");
+        let baseline = StaticLut(None).capture("card0-DP-1").unwrap();
+        let shared = Arc::new(StdMutex::new(baseline));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(21 * 60),
+        }));
+        let settings = FakeSettings::with_value(&backends::quoted_list(&[APPLET_MENU]));
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock({
+            let clock = Arc::clone(&clock);
+            move || *clock.lock().unwrap()
+        })
+        .with_applet(Arc::new(backends::AppletOwner::new(settings)));
+        runtime.start(&DeviceConfig {
+            night_schedule: "daily".to_string(),
+            ..DeviceConfig::default()
+        });
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        let expected = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *shared.lock().unwrap() = expected;
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        let foreign = warm_scale_table(64);
+        let after_on = control.gamma_calls().len();
+        for reclaim in 1..=MAX_GAMMA_RECLAIMS {
+            *shared.lock().unwrap() = foreign.clone();
+            runtime.handle(Command::Tick);
+            assert_eq!(
+                control.gamma_calls().len(),
+                after_on + reclaim as usize,
+                "reclaim {reclaim} re-asserts qol's table"
+            );
+        }
+        *shared.lock().unwrap() = foreign.clone();
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.gamma_calls().len(),
+            after_on + MAX_GAMMA_RECLAIMS as usize,
+            "no write after the reclaim bound"
+        );
+        assert_eq!(runtime.night_payload()["displays"][0]["state"], "limited");
+        *clock.lock().unwrap() = Now {
+            unix: 136_000,
+            minute: Minute(7 * 60),
+        };
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            runtime.night_payload()["displays"][0]["state"],
+            "controlled",
+            "the schedule transition clears the limited marker"
+        );
+        *clock.lock().unwrap() = Now {
+            unix: 169_600,
+            minute: Minute(21 * 60),
+        };
+        runtime.handle(Command::Tick);
+        assert_eq!(runtime.night_payload()["state"], "active");
+        let after_next_on = control.gamma_calls().len();
+        for reclaim in 1..=MAX_GAMMA_RECLAIMS {
+            *shared.lock().unwrap() = foreign.clone();
+            runtime.handle(Command::Tick);
+            assert_eq!(
+                control.gamma_calls().len(),
+                after_next_on + reclaim as usize,
+                "the new night's reclaim {reclaim} is allowed"
+            );
+        }
+        *shared.lock().unwrap() = foreign.clone();
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.gamma_calls().len(),
+            after_next_on + MAX_GAMMA_RECLAIMS as usize,
+            "the transition restores exactly three reclaims"
+        );
+        assert_eq!(runtime.night_payload()["displays"][0]["state"], "limited");
+    }
+
+    #[test]
+    fn an_applet_is_claimed_while_qol_holds_a_foreign_base() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let stripped = backends::quoted_list(&[APPLET_MENU]);
+        let display = handle("id-1", "card0-DP-1");
+        let foreign = warm_scale_table(64);
+        let shared = Arc::new(StdMutex::new(foreign.clone()));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&original);
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(snapshot.compose_foreign, Some(true));
+        let expected = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *shared.lock().unwrap() = expected;
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        assert!(
+            !runtime.foreign_warm_display(&display),
+            "the live table is qol's own, so only the recorded base can justify a claim"
+        );
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            settings.value(),
+            Some(stripped),
+            "the applet is removed while qol owns a display whose base came from its warmth"
+        );
+        assert!(store
+            .load_snapshot("id-1")
+            .unwrap()
+            .unwrap()
+            .applet_claim
+            .is_some());
+    }
+
+    #[test]
+    fn an_applet_is_claimed_on_an_ownership_with_a_neutral_base() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let stripped = backends::quoted_list(&[APPLET_MENU]);
+        let display = handle("id-1", "card0-DP-1");
+        let baseline = StaticLut(None).capture("card0-DP-1").unwrap();
+        let shared = Arc::new(StdMutex::new(baseline));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&original);
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(
+            snapshot.compose_foreign,
+            Some(false),
+            "the captured base is neutral"
+        );
+        let expected = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *shared.lock().unwrap() = expected;
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        assert!(
+            !runtime.foreign_warm_display(&display),
+            "the live table is qol's own"
+        );
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            settings.value().unwrap(),
+            stripped,
+            "the warm applet is removed once qol owns the display"
+        );
+        assert!(store
+            .load_snapshot("id-1")
+            .unwrap()
+            .unwrap()
+            .applet_claim
+            .is_some());
+    }
+
+    struct RecordingApplet {
+        inner: backends::AppletOwner<FakeSettings>,
+        control: Arc<FakeControl>,
+        gamma_calls_at_disable: StdMutex<Vec<usize>>,
+    }
+
+    impl RecordingApplet {
+        fn new(inner: backends::AppletOwner<FakeSettings>, control: Arc<FakeControl>) -> Self {
+            Self {
+                inner,
+                control,
+                gamma_calls_at_disable: StdMutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl backends::AppletControl for RecordingApplet {
+        fn detect(&self) -> Option<backends::Claim> {
+            self.inner.detect()
+        }
+
+        fn disable(&self) -> Option<backends::Claim> {
+            self.gamma_calls_at_disable
+                .lock()
+                .unwrap()
+                .push(self.control.gamma_calls().len());
+            self.inner.disable()
+        }
+
+        fn restore(&self, claim: &str) -> bool {
+            self.inner.restore(claim)
+        }
+    }
+
+    #[test]
+    fn a_night_apply_claims_the_applet_before_the_first_composed_write() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let stripped = backends::quoted_list(&[APPLET_MENU]);
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&original);
+        let recorder = Arc::new(RecordingApplet::new(
+            backends::AppletOwner::new(settings.clone()),
+            Arc::clone(&control),
+        ));
+        let mut runtime = Runtime::new(
+            Arc::clone(&control),
+            store.clone(),
+            Arc::new(StaticLut(None)),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(recorder.clone());
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        assert_eq!(
+            recorder.gamma_calls_at_disable.lock().unwrap().as_slice(),
+            [0],
+            "the applet is disabled before the composed table is written"
+        );
+        assert_eq!(
+            settings.value().unwrap(),
+            stripped,
+            "the night apply disables the applet without waiting for the ownership tick"
+        );
+        assert_eq!(
+            store.load_snapshot("id-1").unwrap().unwrap().applet_claim,
+            Some(original)
+        );
+        assert_eq!(control.gamma_calls().len(), 1);
+    }
+
+    #[test]
+    fn an_applet_is_not_claimed_without_gamma_ownership() {
+        let (_session_dir, store) = runtime_store();
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let settings = FakeSettings::with_value(&original);
+        let runtime = Runtime::new(
+            control,
+            store.clone(),
+            Arc::new(StaticLut(None)),
+            |_title, _body| {},
+            None,
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        assert!(runtime.session().gamma_ownership().is_empty());
+        runtime.claim_applet_once(&display);
+        assert_eq!(settings.value().unwrap(), original);
+        assert!(settings.writes().is_empty());
+        assert!(
+            runtime.begin_applet_probe("id-1"),
+            "an unowned display never spends the one-shot applet probe"
+        );
+    }
+
+    #[test]
+    fn a_warm_applet_is_disabled_reclaimed_and_released() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let stripped = backends::quoted_list(&[APPLET_MENU]);
+        let display = handle("id-1", "card0-DP-1");
+        let foreign = warm_scale_table(64);
+        let shared = Arc::new(StdMutex::new(foreign.clone()));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&original);
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        let expected = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *shared.lock().unwrap() = expected.clone();
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        let after_on = control.gamma_calls().len();
+        for reclaim in 1..=MAX_GAMMA_RECLAIMS {
+            *shared.lock().unwrap() = foreign.clone();
+            settings.set_value(&original);
+            runtime.handle(Command::Tick);
+            assert_eq!(
+                store
+                    .load_snapshot("id-1")
+                    .unwrap()
+                    .unwrap()
+                    .applet_claim
+                    .as_deref(),
+                Some(original.as_str()),
+                "reclaim {reclaim} keeps the applet claim on disk"
+            );
+            assert_eq!(
+                settings.value().unwrap(),
+                stripped,
+                "reclaim {reclaim} removes the applet again"
+            );
+            assert_eq!(
+                shared.lock().unwrap().checksum(),
+                expected.checksum(),
+                "reclaim {reclaim} re-asserts qol's table"
+            );
+        }
+        assert_eq!(
+            control.gamma_calls().len(),
+            after_on + MAX_GAMMA_RECLAIMS as usize,
+            "the applet reclaims share the ramp reclaim counter"
+        );
+        *shared.lock().unwrap() = foreign.clone();
+        settings.set_value(&original);
+        let writes_before = settings.writes().len();
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            settings.writes().len(),
+            writes_before,
+            "the applet is left alone once the reclaim bound is reached"
+        );
+        assert!(settings
+            .value()
+            .unwrap()
+            .contains("brightness-and-gamma-applet"));
+        assert_eq!(
+            shared.lock().unwrap().checksum(),
+            foreign.checksum(),
+            "the foreign table stays in place after the bound"
+        );
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "limited");
+        assert!(
+            payload["displays"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("brightness-and-gamma-applet"),
+            "the limited reason names the applet"
+        );
+        runtime.handle(Command::Night(NightRequest::Off));
+        assert_eq!(
+            settings.value().unwrap(),
+            original,
+            "night off puts the applet back as found"
+        );
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "a clean night off drops the released record"
+        );
+    }
+
+    struct BaselineRelease {
+        runtime: Runtime<FakeControl>,
+        store: SessionStore,
+        settings: FakeSettings,
+        original: String,
+    }
+
+    fn baseline_release_harness(
+        store: SessionStore,
+        config_root: PathBuf,
+        refuse_restore: bool,
+    ) -> BaselineRelease {
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let display = handle("id-1", "card0-DP-1");
+        let shared = Arc::new(StdMutex::new(calibration_table(64)));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            100,
+            BrightnessSource::Gamma,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&original);
+        let lut: Arc<dyn LutProvider> = if refuse_restore {
+            Arc::new(RefusingLut(SharedLut(Arc::clone(&shared))))
+        } else {
+            Arc::new(SharedLut(Arc::clone(&shared)))
+        };
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            lut,
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        let adopted = snapshot.compose_base.clone().unwrap().dimmed(90);
+        *shared.lock().unwrap() = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *control.gamma_base.lock().unwrap() = Some(adopted.clone());
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        runtime.session.adopt_compose_base(&display, &adopted, true);
+        BaselineRelease {
+            runtime,
+            store,
+            settings,
+            original,
+        }
+    }
+
+    #[test]
+    fn a_neutral_night_off_restores_the_baseline_and_releases_the_claim() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let mut harness = baseline_release_harness(store, config_root, false);
+        assert!(
+            !harness.runtime.session.gamma_ownership().is_empty(),
+            "an adopted compose base keeps the display owned before the release"
+        );
+        harness.runtime.handle(Command::Night(NightRequest::Off));
+        assert!(
+            harness.runtime.session.gamma_ownership().is_empty(),
+            "a neutral night off ends ownership once the baseline is restored"
+        );
+        assert!(
+            harness.store.load_snapshot("id-1").unwrap().is_none(),
+            "the released display drops its baseline record"
+        );
+        assert_eq!(
+            harness.settings.value().unwrap(),
+            harness.original,
+            "the applet entry is restored as found"
+        );
+        assert_eq!(
+            harness.settings.writes().last(),
+            Some(&harness.original),
+            "the claim is cleared only after the adapter restore"
+        );
+    }
+
+    #[test]
+    fn a_foreign_lut_night_off_keeps_the_baseline_record() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let mut harness = baseline_release_harness(store, config_root, true);
+        harness.runtime.handle(Command::Night(NightRequest::Off));
+        assert!(
+            harness.runtime.session.tinted_displays().is_empty(),
+            "the night tint is cleared before the release is attempted"
+        );
+        let snapshot = harness
+            .store
+            .load_snapshot("id-1")
+            .unwrap()
+            .expect("a refused baseline restore keeps the record");
+        assert_eq!(
+            snapshot.applet_claim, None,
+            "the applet claim is released independently of the refused table restore"
+        );
+        assert!(
+            !harness.runtime.session.gamma_ownership().is_empty(),
+            "a refused baseline restore keeps ownership"
+        );
+        assert_eq!(
+            harness.settings.value().unwrap(),
+            harness.original,
+            "the applet is restored even while the table restore is refused"
+        );
+    }
+
+    #[test]
+    fn detect_mode_leaves_a_warm_owner_and_its_table_alone() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let display = handle("id-1", "card0-DP-1");
+        let shared = Arc::new(StdMutex::new(warm_scale_table(64)));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&original);
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        runtime.start(&DeviceConfig::default());
+        runtime.night_coordination = NightCoordination::Detect;
+        runtime.handle(Command::Night(NightRequest::On));
+        assert!(control.tints().is_empty(), "detect mode writes no tint");
+        assert!(
+            control.gamma_calls().is_empty(),
+            "detect mode writes no gamma"
+        );
+        assert_eq!(
+            settings.value().unwrap(),
+            original,
+            "the applet keeps its entry"
+        );
+        runtime.handle(Command::Tick);
+        assert_eq!(settings.value().unwrap(), original);
+        assert_eq!(
+            settings.writes().len(),
+            0,
+            "detect mode never disables the applet"
+        );
+        assert!(store.load_snapshot("id-1").unwrap().is_none());
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "uncontrolled");
+        assert_eq!(
+            payload["displays"][0]["reason"],
+            DETECT_FOREIGN_OWNER_REASON
+        );
+    }
+
+    #[test]
+    fn an_applet_enabled_after_the_first_write_is_claimed_on_a_warm_tick() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let display = handle("id-1", "card0-DP-1");
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let stripped = backends::quoted_list(&[APPLET_MENU]);
+        let baseline = StaticLut(None).capture("card0-DP-1").unwrap();
+        let shared = Arc::new(StdMutex::new(baseline));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let settings = FakeSettings::with_value(&backends::quoted_list(&[APPLET_MENU]));
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock(move || *clock.lock().unwrap())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        let lut = snapshot.lut.clone().unwrap();
+        assert!(
+            !classifier::classify(&lut.red, &lut.green, &lut.blue).warmth,
+            "the recorded as-found table is not warm"
+        );
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        settings.set_value(&original);
+        *shared.lock().unwrap() = warm_scale_table(64);
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            store
+                .load_snapshot("id-1")
+                .unwrap()
+                .unwrap()
+                .applet_claim
+                .as_deref(),
+            Some(original.as_str()),
+            "the claim is decided from the live table, not the recorded baseline"
+        );
+        assert_eq!(settings.value().unwrap(), stripped);
+    }
+
+    #[test]
+    fn detect_mode_refuses_the_reapply_path_on_a_foreign_warm_display() {
+        let (_dir, store) = runtime_store();
+        let warm = warm_scale_table(64);
+        let shared = Arc::new(StdMutex::new(warm.clone()));
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
+                70,
+                BrightnessSource::Ddc,
+            )
+            .with_snapshot(display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None))
+            .with_snapshot(display_snapshot(
+                "id-2",
+                "card0-HDMI-1",
+                1920.0,
+                0.0,
+                false,
+                None,
+            ))
+            .with_store(store.clone()),
+        );
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            None,
+            |_preferred| Ok(()),
+            || false,
+        );
+        runtime.start(&DeviceConfig::default());
+        store
+            .write_snapshot(&crate::session::Snapshot {
+                source: "gamma".into(),
+                lut: Some(gamma_lut()),
+                last_value: 60,
+                ..stale_snapshot("id-2", "card0-HDMI-1", 100, 60)
+            })
+            .unwrap();
+        runtime.night_coordination = NightCoordination::Detect;
+        runtime.handle(Command::SetPrimary {
+            display: "id-2".into(),
+        });
+        assert_eq!(
+            control.layout_calls().len(),
+            1,
+            "the layout write itself still happens"
+        );
+        assert!(
+            control.gamma_calls().is_empty(),
+            "detect mode never re-asserts a foreign warm ramp"
+        );
+        assert_eq!(shared.lock().unwrap().checksum(), warm.checksum());
+        let payload = runtime.night_payload();
+        assert_eq!(payload["displays"][1]["state"], "uncontrolled");
+        assert_eq!(
+            payload["displays"][1]["reason"],
+            DETECT_FOREIGN_OWNER_REASON
+        );
+    }
+
+    #[test]
+    fn a_second_tick_after_a_calibration_rebind_writes_nothing() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let display = handle("id-1", "card0-DP-1");
+        let foreign = warm_scale_table(64);
+        let calibration = calibration_table(64);
+        let shared = Arc::new(StdMutex::new(foreign.dimmed(70)));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        );
+        runtime.start(&DeviceConfig::default());
+        store
+            .write_snapshot(&crate::session::Snapshot {
+                source: "gamma".into(),
+                lut: Some(foreign.clone()),
+                last_value: 70,
+                ..stale_snapshot("id-1", "card0-DP-1", 100, 70)
+            })
+            .unwrap();
+        assert!(runtime.session().adopt(&display));
+        *control.gamma_base.lock().unwrap() = Some(calibration.clone());
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        *shared.lock().unwrap() = calibration.clone();
+        runtime.handle(Command::Tick);
+        let after_rebind = control.gamma_calls().len();
+        assert_eq!(
+            after_rebind, 1,
+            "the calibration adoption rewrites the ramp once"
+        );
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.gamma_calls().len(),
+            after_rebind,
+            "a steady-state tick after the rebind writes nothing"
+        );
+        assert_eq!(
+            shared.lock().unwrap().checksum(),
+            calibration.dimmed(70).checksum()
+        );
+    }
+
+    #[test]
+    fn detect_mode_tints_a_clean_display() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let displays = vec![handle("id-1", "card0-DP-1")];
+        let control = Arc::new(FakeControl::new(displays, 70, BrightnessSource::Ddc));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root, clock);
+        runtime.start(&DeviceConfig::default());
+        runtime.night_coordination = NightCoordination::Detect;
+        runtime.handle(Command::Night(NightRequest::On));
+        assert_eq!(
+            control.tints(),
+            vec![("id-1".to_string(), Tint::from_kelvin(3500))]
+        );
+        assert_eq!(runtime.night_payload()["state"], "active");
+    }
+
     #[derive(Default)]
     struct DisablingNightLight {
+        live: StdMutex<bool>,
         taken: StdMutex<bool>,
+    }
+
+    impl DisablingNightLight {
+        fn with_live() -> Self {
+            Self {
+                live: StdMutex::new(true),
+                taken: StdMutex::new(false),
+            }
+        }
     }
 
     impl HostNightLight for DisablingNightLight {
         fn take_over(&self) -> Result<TakeoverOutcome, HostNightLightError> {
             *self.taken.lock().unwrap() = true;
-            Ok(TakeoverOutcome::Disabled)
+            let mut live = self.live.lock().unwrap();
+            if *live {
+                *live = false;
+                Ok(TakeoverOutcome::Disabled)
+            } else {
+                Ok(TakeoverOutcome::AlreadyOff)
+            }
         }
 
         fn release(&self, _mode: RestoreMode) -> Result<(), HostNightLightError> {
@@ -2707,10 +4493,15 @@ mod tests {
             unix: 100_000,
             minute: Minute(12 * 60),
         }));
+        let night_light = Arc::new(DisablingNightLight::with_live());
         let mut runtime = night_runtime(control.clone(), store, config_root, clock.clone())
-            .with_host_night_light(Arc::new(DisablingNightLight::default()));
+            .with_host_night_light(night_light.clone());
         runtime.start(&DeviceConfig::default());
         runtime.handle(Command::Night(NightRequest::On));
+        assert!(
+            night_light.is_taken_over(),
+            "the night apply takes the host night light over before any ownership tick"
+        );
         assert!(
             control.tints().is_empty(),
             "the host night light is still fading out; writing now would capture its ramp"
@@ -2740,6 +4531,460 @@ mod tests {
         assert_eq!(control.tints().len(), 2);
         assert_eq!(control.tints()[1].1, Tint::NEUTRAL);
         assert_eq!(runtime.next_night_wait(), None);
+    }
+
+    #[derive(Default)]
+    struct ReturningNightLight {
+        live: StdMutex<bool>,
+        taken: AtomicBool,
+        take_overs: AtomicUsize,
+    }
+
+    impl ReturningNightLight {
+        fn with_live() -> Self {
+            Self {
+                live: StdMutex::new(true),
+                ..Self::default()
+            }
+        }
+
+        fn reenable(&self) {
+            *self.live.lock().unwrap() = true;
+        }
+
+        fn take_overs(&self) -> usize {
+            self.take_overs.load(Ordering::SeqCst)
+        }
+    }
+
+    impl HostNightLight for ReturningNightLight {
+        fn strategy(&self) -> &'static str {
+            "cinnamon"
+        }
+        fn take_over(&self) -> Result<TakeoverOutcome, HostNightLightError> {
+            self.take_overs.fetch_add(1, Ordering::SeqCst);
+            self.taken.store(true, Ordering::SeqCst);
+            let mut live = self.live.lock().unwrap();
+            if *live {
+                *live = false;
+                Ok(TakeoverOutcome::Disabled)
+            } else {
+                Ok(TakeoverOutcome::AlreadyOff)
+            }
+        }
+
+        fn release(&self, _mode: RestoreMode) -> Result<(), HostNightLightError> {
+            self.taken.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn mark_handoff(&self, _successor: Option<&str>) {}
+
+        fn is_taken_over(&self) -> bool {
+            self.taken.load(Ordering::SeqCst)
+        }
+
+        fn status(&self) -> HostNightLightStatus {
+            if self.is_taken_over() {
+                HostNightLightStatus::TakenOver
+            } else {
+                HostNightLightStatus::Off
+            }
+        }
+    }
+
+    #[test]
+    fn a_returning_host_night_light_is_taken_over_again_past_the_settle() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let night_light = Arc::new(ReturningNightLight::with_live());
+        let mut runtime = night_runtime(control, store, config_root, clock.clone())
+            .with_host_night_light(night_light.clone());
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        assert_eq!(night_light.take_overs(), 1);
+        night_light.reenable();
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            night_light.take_overs(),
+            1,
+            "the settle window delays the ownership check"
+        );
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            night_light.take_overs(),
+            2,
+            "a returned night light is disabled again on the next check"
+        );
+    }
+
+    #[test]
+    fn a_restart_with_night_on_takes_over_the_host_night_light() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        config::save_night_state(
+            Some(&config_root),
+            &NightState {
+                override_active: Some(true),
+                override_until_unix: None,
+            },
+        )
+        .unwrap();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let night_light = Arc::new(DisablingNightLight::with_live());
+        let mut runtime = night_runtime(control.clone(), store, config_root, clock.clone())
+            .with_host_night_light(night_light.clone());
+        runtime.start(&DeviceConfig::default());
+        assert!(
+            night_light.is_taken_over(),
+            "a restart with night mode on owns the host night light without an ownership tick"
+        );
+        assert_eq!(runtime.night_payload()["state"], "active");
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.tints(),
+            vec![("id-1".to_string(), Tint::from_kelvin(3500))],
+            "the gamma tint follows the takeover"
+        );
+    }
+
+    struct RecoveredNightLight {
+        taken: AtomicBool,
+    }
+
+    impl HostNightLight for RecoveredNightLight {
+        fn take_over(&self) -> Result<TakeoverOutcome, HostNightLightError> {
+            self.taken.store(true, Ordering::SeqCst);
+            Ok(TakeoverOutcome::AlreadyOff)
+        }
+
+        fn release(&self, _mode: RestoreMode) -> Result<(), HostNightLightError> {
+            self.taken.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn mark_handoff(&self, _successor: Option<&str>) {}
+
+        fn is_taken_over(&self) -> bool {
+            self.taken.load(Ordering::SeqCst)
+        }
+
+        fn status(&self) -> HostNightLightStatus {
+            if self.is_taken_over() {
+                HostNightLightStatus::TakenOver
+            } else {
+                HostNightLightStatus::Off
+            }
+        }
+
+        fn recovery_pending(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_resident_restart_inside_the_host_fade_waits_for_the_settle_before_capturing() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        config::save_night_state(
+            Some(&config_root),
+            &NightState {
+                override_active: Some(true),
+                override_until_unix: None,
+            },
+        )
+        .unwrap();
+        let original = StaticLut(None).capture("card0-DP-1").unwrap();
+        let settled = original.dimmed(70);
+        let shared = Arc::new(StdMutex::new(original.dimmed(85)));
+        let mut snapshot = stale_snapshot("id-1", "card0-DP-1", 70, 70);
+        snapshot.lut = Some(original.clone());
+        snapshot.compose_base = Some(original.clone());
+        snapshot.compose_foreign = Some(false);
+        store.write_snapshot(&snapshot).unwrap();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let night_light = Arc::new(RecoveredNightLight {
+            taken: AtomicBool::new(false),
+        });
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || true,
+        )
+        .with_clock({
+            let clock = Arc::clone(&clock);
+            move || *clock.lock().unwrap()
+        })
+        .with_host_night_light(night_light);
+        runtime.start(&DeviceConfig::default());
+        assert!(
+            control.tints().is_empty(),
+            "the first capture waits out the host fade before composing"
+        );
+        assert_eq!(
+            runtime.next_night_wait(),
+            Some(Duration::from_secs(HOST_NIGHT_LIGHT_SETTLE_SECS as u64))
+        );
+        assert_eq!(
+            store.load_snapshot("id-1").unwrap().unwrap().lut,
+            Some(original)
+        );
+        *shared.lock().unwrap() = settled.clone();
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.tints(),
+            vec![("id-1".to_string(), Tint::from_kelvin(3500))]
+        );
+        assert_eq!(
+            store.load_snapshot("id-1").unwrap().unwrap().lut,
+            Some(settled)
+        );
+    }
+
+    #[test]
+    fn an_exhausted_night_light_reclaim_budget_limits_the_display_by_name() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let baseline = StaticLut(None).capture("card0-DP-1").unwrap();
+        let shared = Arc::new(StdMutex::new(baseline));
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let night_light = Arc::new(ReturningNightLight::with_live());
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock({
+            let clock = Arc::clone(&clock);
+            move || *clock.lock().unwrap()
+        })
+        .with_host_night_light(night_light.clone());
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(runtime.session().gamma_ownership().len(), 1);
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        let expected = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        *shared.lock().unwrap() = expected.clone();
+        for reclaim in 1..=MAX_GAMMA_RECLAIMS {
+            night_light.reenable();
+            clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+            runtime.handle(Command::Tick);
+            assert_eq!(
+                night_light.take_overs(),
+                1 + reclaim as usize + 1,
+                "reclaim {reclaim} disables the returned owner"
+            );
+        }
+        night_light.reenable();
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "limited");
+        assert!(
+            payload["displays"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("night light"),
+            "the limited reason names the night light"
+        );
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            shared.lock().unwrap().checksum(),
+            expected.checksum(),
+            "the settle tick re-asserts qol's table"
+        );
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "limited");
+        assert!(
+            payload["displays"][0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("night light"),
+            "the limited mark survives the clean settle tick"
+        );
+    }
+
+    #[test]
+    fn a_limited_display_leaves_a_returned_night_light_and_a_new_applet_alone() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let display = handle("id-1", "card0-DP-1");
+        let baseline = StaticLut(None).capture("card0-DP-1").unwrap();
+        let shared = Arc::new(StdMutex::new(baseline));
+        let control = Arc::new(FakeControl::new(
+            vec![display.clone()],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let night_light = Arc::new(ReturningNightLight::with_live());
+        let original = backends::quoted_list(&[APPLET_MENU, APPLET_WARM]);
+        let settings = FakeSettings::with_value(&original);
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock({
+            let clock = Arc::clone(&clock);
+            move || *clock.lock().unwrap()
+        })
+        .with_host_night_light(night_light.clone())
+        .with_applet(Arc::new(backends::AppletOwner::new(settings.clone())));
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        let expected = crate::session::expected_gamma_table(&snapshot).unwrap();
+        *control.gamma_base.lock().unwrap() = snapshot.compose_base.clone();
+        *control.gamma_table.lock().unwrap() = Some(Arc::clone(&shared));
+        *shared.lock().unwrap() = expected.clone();
+        for _ in 1..=MAX_GAMMA_RECLAIMS {
+            night_light.reenable();
+            clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+            runtime.handle(Command::Tick);
+        }
+        night_light.reenable();
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(runtime.night_payload()["displays"][0]["state"], "limited");
+        let take_overs = night_light.take_overs();
+        night_light.reenable();
+        clock.lock().unwrap().unix += HOST_NIGHT_LIGHT_SETTLE_SECS;
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            night_light.take_overs(),
+            take_overs,
+            "a returned night light is left alone once the display is limited"
+        );
+        assert!(
+            *night_light.live.lock().unwrap(),
+            "the host night light stays returned"
+        );
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "conflict");
+        assert_eq!(payload["displays"][0]["state"], "limited");
+        let _ = runtime.session().clear_applet_claim("id-1");
+        settings.set_value(&original);
+        runtime.rearm_applet_probe("id-1");
+        let writes_before = settings.writes().len();
+        runtime.claim_applet_once(&display);
+        assert_eq!(
+            settings.writes().len(),
+            writes_before,
+            "a limited display does not claim a newly seen applet"
+        );
+        assert_eq!(runtime.session().applet_claim("id-1"), None);
+    }
+
+    #[test]
+    fn three_reassert_refusals_limit_a_drifted_display() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let baseline = StaticLut(None).capture("card0-DP-1").unwrap();
+        let shared = Arc::new(StdMutex::new(baseline));
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            70,
+            BrightnessSource::Ddc,
+        ));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = Runtime::new(
+            control.clone(),
+            store.clone(),
+            Arc::new(SharedLut(Arc::clone(&shared))),
+            |_title, _body| {},
+            Some(config_root),
+            |_preferred| Ok(()),
+            || false,
+        )
+        .with_clock({
+            let clock = Arc::clone(&clock);
+            move || *clock.lock().unwrap()
+        });
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::On));
+        *control.guarded_drift.lock().unwrap() = true;
+        let foreign = warm_scale_table(64);
+        for refusal in 1..=MAX_GAMMA_RECLAIMS {
+            *shared.lock().unwrap() = foreign.clone();
+            runtime.handle(Command::Tick);
+            if refusal == MAX_GAMMA_RECLAIMS {
+                let payload = runtime.night_payload();
+                assert_eq!(payload["displays"][0]["state"], "limited");
+                assert_eq!(payload["displays"][0]["reason"], FOREIGN_WRITER_REASON);
+            }
+        }
+        assert_eq!(shared.lock().unwrap().checksum(), foreign.checksum());
+        let reasserts_before = control.gamma_calls().len();
+        runtime.handle(Command::Tick);
+        assert_eq!(
+            control.gamma_calls().len(),
+            reasserts_before,
+            "a limited display stops re-asserting the drifted table"
+        );
     }
 
     #[test]
@@ -2969,6 +5214,10 @@ mod tests {
             runtime.handle(Command::Night(NightRequest::Off));
             assert_eq!(runtime.session.brightness(&display).unwrap().value, 75);
             assert_eq!(control.current.lock().unwrap()["id-1"], 75);
+            assert!(
+                !native.is_taken_over(),
+                "night off releases the host night light for {source:?}"
+            );
             if source == BrightnessSource::Gamma {
                 assert!(native.calls.lock().unwrap().is_empty());
                 assert_eq!(

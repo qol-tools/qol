@@ -207,6 +207,17 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for Policy
         self.gamma.set_gamma_adjustment(handle, value, tint)
     }
 
+    fn set_gamma_adjustment_guarded(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+        expected: u64,
+    ) -> Result<(), MonitorError> {
+        self.gamma
+            .set_gamma_adjustment_guarded(handle, value, tint, expected)
+    }
+
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
         self.gamma.get_gamma(handle)
     }

@@ -96,6 +96,14 @@ impl MonitorError {
             reason: reason.into(),
         }
     }
+
+    pub fn is_gamma_changed_under_write(&self) -> bool {
+        matches!(
+            self,
+            Self::Refused { capability, reason }
+                if *capability == "gamma" && reason.as_str() == GAMMA_CHANGED_UNDER_WRITE_REASON
+        )
+    }
 }
 
 impl fmt::Display for MonitorError {
@@ -176,6 +184,15 @@ pub trait DisplayControl: Send + Sync {
             "combined brightness and tint are not implemented on this platform",
         ))
     }
+    fn set_gamma_adjustment_guarded(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: night::Tint,
+        _expected: u64,
+    ) -> Result<(), MonitorError> {
+        self.set_gamma_adjustment(handle, value, tint)
+    }
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError>;
     fn set_gamma(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError>;
     fn list_modes(&self, handle: &DisplayHandle) -> Result<Vec<DisplayMode>, MonitorError>;
@@ -205,6 +222,8 @@ pub struct StubControl;
 
 const BRIGHTNESS_REASON: &str = "the DDC and gamma backends are not implemented on this platform";
 pub(crate) const GAMMA_REASON: &str = "gamma control is not implemented by this backend";
+pub(crate) const GAMMA_CHANGED_UNDER_WRITE_REASON: &str =
+    "the display changed under the gamma write; the other owner's table was kept";
 pub(crate) const LAYOUT_REASON: &str = "layout control is not implemented by this backend";
 pub(crate) const MODES_REASON: &str = "mode control is not implemented by this backend";
 pub(crate) const HDR_REASON: &str = "HDR control is not implemented by this backend";

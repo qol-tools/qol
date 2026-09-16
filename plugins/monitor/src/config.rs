@@ -35,6 +35,8 @@ pub struct DeviceConfig {
     pub night_from: String,
     #[serde(default = "default_night_to")]
     pub night_to: String,
+    #[serde(default = "default_night_coordination")]
+    pub night_coordination: String,
 }
 
 fn default_true() -> bool {
@@ -57,6 +59,10 @@ fn default_night_to() -> String {
     "06:00".to_string()
 }
 
+fn default_night_coordination() -> String {
+    "own".to_string()
+}
+
 impl Default for DeviceConfig {
     fn default() -> Self {
         Self {
@@ -68,6 +74,7 @@ impl Default for DeviceConfig {
             night_schedule: default_night_schedule(),
             night_from: default_night_from(),
             night_to: default_night_to(),
+            night_coordination: default_night_coordination(),
         }
     }
 }
@@ -569,6 +576,7 @@ mod tests {
             "night_schedule": "off",
             "night_from": "20:00",
             "night_to": "06:00",
+            "night_coordination": "own",
         });
         let config = parse_store(&json).unwrap();
         assert_eq!(config.preferred_for("id-a"), Some(80));

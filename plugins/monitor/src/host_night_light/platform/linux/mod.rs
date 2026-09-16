@@ -189,6 +189,28 @@ fn schedule_values(keys: &str) -> Option<BTreeMap<String, String>> {
     )
 }
 
+fn native_apply_values(active: bool, kelvin: u16) -> BTreeMap<String, String> {
+    if active {
+        BTreeMap::from([
+            (
+                TEMPERATURE.into(),
+                format!("uint32 {}", kelvin.clamp(1000, 6500)),
+            ),
+            (ENABLED.into(), "true".into()),
+        ])
+    } else {
+        BTreeMap::from([(ENABLED.into(), "false".into())])
+    }
+}
+
+fn native_restore_values(values: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    values
+        .iter()
+        .filter(|(key, _)| key.as_str() == ENABLED || key.as_str() == TEMPERATURE)
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 impl Settings for Gsettings {
     fn native_supported(&self) -> bool {
         true
@@ -235,18 +257,11 @@ impl Settings for Gsettings {
     }
 
     fn apply_native(&self, active: bool, kelvin: u16) -> Result<(), HostNightLightError> {
-        let mut values = self.schedule.clone();
-        values.insert(
-            TEMPERATURE.into(),
-            format!("uint32 {}", kelvin.clamp(1000, 6500)),
-        );
-        values.insert(ENABLED.into(), active.to_string());
-        values.insert(DISABLED_UNTIL_TOMORROW.into(), "false".into());
-        self.write_values(&values)
+        self.write_values(&native_apply_values(active, kelvin))
     }
 
     fn restore_native(&self, values: &BTreeMap<String, String>) -> Result<(), HostNightLightError> {
-        self.write_values(values)
+        self.write_values(&native_restore_values(values))
     }
 }
 
@@ -446,6 +461,74 @@ mod tests {
         ] {
             assert_eq!(Desktop::detect(value), expected, "desktop: {value}");
         }
+    }
+
+    #[test]
+    fn a_native_apply_writes_no_schedule_key() {
+        for active in [false, true] {
+            let values = native_apply_values(active, 3500);
+            assert!(
+                values
+                    .keys()
+                    .all(|key| key == ENABLED || key == TEMPERATURE),
+                "active: {active}, keys: {:?}",
+                values.keys().collect::<Vec<_>>()
+            );
+            assert_eq!(
+                values.get(ENABLED).map(String::as_str),
+                Some(if active { "true" } else { "false" })
+            );
+            assert_eq!(values.contains_key(TEMPERATURE), active, "active: {active}");
+        }
+    }
+
+    #[test]
+    fn native_restore_leaves_settings_the_takeover_never_wrote_alone() {
+        let recorded = BTreeMap::from([
+            (ENABLED.into(), "true".into()),
+            (TEMPERATURE.into(), "uint32 4500".into()),
+            (
+                "night-light-schedule-mode".into(),
+                "'sunset-to-sunrise'".into(),
+            ),
+            (DISABLED_UNTIL_TOMORROW.into(), "false".into()),
+        ]);
+        assert_eq!(
+            native_restore_values(&recorded)
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![ENABLED, TEMPERATURE]
+        );
+        let mut live = BTreeMap::from([
+            (ENABLED.into(), "true".into()),
+            (TEMPERATURE.into(), "uint32 6500".into()),
+            ("night-light-schedule-mode".into(), "'always'".into()),
+            (DISABLED_UNTIL_TOMORROW.into(), "true".into()),
+        ]);
+        for (key, value) in native_restore_values(&recorded) {
+            live.insert(key, value);
+        }
+        assert_eq!(
+            live.get("night-light-schedule-mode").map(String::as_str),
+            Some("'always'"),
+            "a schedule changed during the night survives the restore"
+        );
+        assert_eq!(
+            live.get(DISABLED_UNTIL_TOMORROW).map(String::as_str),
+            Some("true"),
+            "a suspension changed during the night survives the restore"
+        );
+        assert_eq!(
+            live.get(ENABLED).map(String::as_str),
+            Some("true"),
+            "the takeover wrote the enabled state and the restore puts it back"
+        );
+        assert_eq!(
+            live.get(TEMPERATURE).map(String::as_str),
+            Some("uint32 4500"),
+            "the takeover wrote the temperature and the restore puts it back"
+        );
     }
 
     #[test]

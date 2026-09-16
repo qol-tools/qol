@@ -155,6 +155,13 @@ impl<S: Settings> HostNightLight for Controller<S> {
         self.settings.name()
     }
 
+    fn recovery_pending(&self) -> bool {
+        self.snapshot()
+            .ok()
+            .flatten()
+            .is_some_and(|saved| !saved.clean)
+    }
+
     fn apply_native(&self, active: bool, kelvin: u16) -> Result<bool, HostNightLightError> {
         let mut snapshot = self.snapshot().map_err(|error| self.fail(error))?;
         if snapshot
@@ -484,6 +491,106 @@ mod tests {
                 );
                 assert!(!controller.is_taken_over());
             }
+        }
+    }
+
+    struct KeyedSettings {
+        values: StdMutex<BTreeMap<String, String>>,
+        writes: StdMutex<Vec<(String, String)>>,
+    }
+
+    impl KeyedSettings {
+        fn with_values(values: BTreeMap<String, String>) -> Self {
+            Self {
+                values: StdMutex::new(values),
+                writes: StdMutex::new(Vec::new()),
+            }
+        }
+
+        fn write(&self, key: &str, value: String) {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((key.to_string(), value.clone()));
+            self.values.lock().unwrap().insert(key.to_string(), value);
+        }
+
+        fn values(&self) -> BTreeMap<String, String> {
+            self.values.lock().unwrap().clone()
+        }
+
+        fn writes(&self) -> Vec<(String, String)> {
+            self.writes.lock().unwrap().clone()
+        }
+    }
+
+    impl Settings for KeyedSettings {
+        fn native_supported(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &'static str {
+            "keyed-test"
+        }
+        fn get(&self) -> Result<bool, HostNightLightError> {
+            Ok(self
+                .values
+                .lock()
+                .unwrap()
+                .get("night-light-enabled")
+                .map(String::as_str)
+                == Some("true"))
+        }
+        fn set(&self, enabled: bool) -> Result<(), HostNightLightError> {
+            self.write("night-light-enabled", enabled.to_string());
+            Ok(())
+        }
+        fn native_values(&self) -> Result<Option<BTreeMap<String, String>>, HostNightLightError> {
+            Ok(Some(self.values()))
+        }
+        fn apply_native(&self, active: bool, kelvin: u16) -> Result<(), HostNightLightError> {
+            for (key, value) in super::super::native_apply_values(active, kelvin) {
+                self.write(&key, value);
+            }
+            Ok(())
+        }
+        fn restore_native(
+            &self,
+            values: &BTreeMap<String, String>,
+        ) -> Result<(), HostNightLightError> {
+            for (key, value) in values {
+                self.write(key, value.clone());
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_native_apply_writes_no_schedule_key_and_release_restores_the_recorded_schedule() {
+        for mode in [RestoreMode::Exit, RestoreMode::Recovery] {
+            let dir = tempfile::tempdir().unwrap();
+            let original = BTreeMap::from([
+                ("night-light-enabled".into(), "true".into()),
+                ("night-light-temperature".into(), "uint32 4500".into()),
+                (
+                    "night-light-schedule-mode".into(),
+                    "'sunset-to-sunrise'".into(),
+                ),
+            ]);
+            let controller = Controller::new(
+                KeyedSettings::with_values(original.clone()),
+                session_dir(Some(dir.path()), Some("test")),
+            );
+            controller.apply_native(true, 3500).unwrap();
+            assert_ne!(controller.settings.values(), original);
+            assert!(
+                controller.settings.writes().iter().all(
+                    |(key, _)| key == "night-light-enabled" || key == "night-light-temperature"
+                ),
+                "mode: {mode:?}, writes: {:?}",
+                controller.settings.writes()
+            );
+            controller.release(mode).unwrap();
+            assert_eq!(controller.settings.values(), original, "mode: {mode:?}");
         }
     }
 }

@@ -56,6 +56,9 @@ pub trait HostNightLight: Send + Sync {
     fn strategy(&self) -> &'static str {
         "gamma"
     }
+    fn recovery_pending(&self) -> bool {
+        false
+    }
     fn apply_native(&self, _active: bool, _kelvin: u16) -> Result<bool, HostNightLightError> {
         Ok(false)
     }

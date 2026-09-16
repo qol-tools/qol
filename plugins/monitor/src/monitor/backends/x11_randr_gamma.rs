@@ -4,11 +4,13 @@ use std::sync::Mutex;
 
 use qol_windowing::DisplayEnumerator;
 
+use crate::display_color;
+use crate::display_color::classifier;
 use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
-    DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome, HDR_REASON,
-    MODES_REASON,
+    DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome,
+    GAMMA_CHANGED_UNDER_WRITE_REASON, HDR_REASON, MODES_REASON,
 };
 use crate::session::{LutProvider, LutRestoreOutcome};
 
@@ -124,14 +126,32 @@ pub trait GammaBus {
     fn hdr_active(&mut self, crtc: u32) -> Result<bool, GammaError>;
 }
 
-#[derive(Default)]
 struct GammaSession {
     original: Option<GammaTable>,
+    compose_base: Option<GammaTable>,
+    foreign_base: bool,
+    tint_allowed: bool,
     written_checksum: Option<u64>,
     written_value: Option<u8>,
     tint: Tint,
     mismatches: usize,
     warned: bool,
+}
+
+impl Default for GammaSession {
+    fn default() -> Self {
+        Self {
+            original: None,
+            compose_base: None,
+            foreign_base: false,
+            tint_allowed: true,
+            written_checksum: None,
+            written_value: None,
+            tint: Tint::NEUTRAL,
+            mismatches: 0,
+            warned: false,
+        }
+    }
 }
 
 pub struct GammaBackend<T: GammaTransport> {
@@ -149,6 +169,13 @@ impl<T: GammaTransport> GammaBackend<T> {
 
     fn session(&self) -> std::sync::MutexGuard<'_, HashMap<String, GammaSession>> {
         self.sessions.lock().unwrap()
+    }
+
+    pub fn tint_allowed(&self, handle: &DisplayHandle) -> bool {
+        self.session()
+            .get(handle.id())
+            .map(|entry| entry.tint_allowed)
+            .unwrap_or(true)
     }
 
     fn get_inner(&self, handle: &DisplayHandle) -> Result<u8, GammaError> {
@@ -174,8 +201,8 @@ impl<T: GammaTransport> GammaBackend<T> {
         match session.get(handle.id()) {
             Some(entry) => match (entry.written_value, entry.written_checksum) {
                 (Some(value), Some(checksum)) if current.checksum() == checksum => Ok(value),
-                _ => match &entry.original {
-                    Some(original) => Ok(peak_percent(&current, original)),
+                _ => match &entry.compose_base {
+                    Some(base) => Ok(peak_percent(&current, base)),
                     None => Ok(100),
                 },
             },
@@ -188,6 +215,7 @@ impl<T: GammaTransport> GammaBackend<T> {
         handle: &DisplayHandle,
         value: Option<u8>,
         tint: Option<Tint>,
+        expected: Option<u64>,
     ) -> Result<(), GammaError> {
         let tint_requested = tint.is_some();
         let mut bus = self.transport.open()?;
@@ -205,6 +233,11 @@ impl<T: GammaTransport> GammaBackend<T> {
             });
         }
         let current = bus.read_gamma(crtc)?;
+        if expected.is_some_and(|expected| current.checksum() != expected) {
+            return Err(GammaError::Refused {
+                reason: GAMMA_CHANGED_UNDER_WRITE_REASON.into(),
+            });
+        }
         if current.size() < 2 {
             return Err(GammaError::Unsupported {
                 detail: format!(
@@ -215,10 +248,34 @@ impl<T: GammaTransport> GammaBackend<T> {
         }
         let mut session = self.session();
         let entry = session.entry(handle.id().to_string()).or_default();
-        let original = entry.original.get_or_insert_with(|| current.clone());
+        if entry.original.is_none() {
+            let (base, verdict) = display_color::compose_base(&current);
+            entry.original = Some(current.clone());
+            entry.compose_base = Some(base);
+            entry.foreign_base = verdict.base == classifier::BaseChoice::Neutral;
+            entry.tint_allowed = verdict.tint_allowed;
+        }
+        let base = entry
+            .compose_base
+            .clone()
+            .unwrap_or_else(|| current.clone());
         let value = value.unwrap_or_else(|| entry.written_value.unwrap_or(100));
         let tint = tint.unwrap_or(entry.tint);
-        let target = original.dimmed(value).tinted(tint);
+        if !entry.tint_allowed && !tint.is_neutral() {
+            return Err(GammaError::Refused {
+                reason: format!(
+                    "the gamma ramp on {} carries foreign warmth; night tint is not stacked on another display owner",
+                    handle.connector()
+                ),
+            });
+        }
+        let target = display_color::composed_target(
+            &entry.original.clone().unwrap_or_else(|| current.clone()),
+            &base,
+            entry.foreign_base,
+            value,
+            tint,
+        );
         let mut verified = false;
         for _ in 0..=1 {
             bus.write_gamma(crtc, &target)?;
@@ -254,15 +311,21 @@ impl<T: GammaTransport> GammaBackend<T> {
         last_value: u8,
         last_tint: Tint,
     ) -> Result<RestoreOutcome, GammaError> {
-        let guard = {
-            let session = self.session();
-            match session.get(handle.id()) {
-                Some(entry) => entry
-                    .written_checksum
-                    .unwrap_or_else(|| original.dimmed(last_value).tinted(last_tint).checksum()),
-                None => original.dimmed(last_value).tinted(last_tint).checksum(),
-            }
-        };
+        let (guard_base, guard_verdict) = display_color::compose_base(original);
+        let guard_foreign = guard_verdict.base == classifier::BaseChoice::Neutral;
+        let entry = self.session().get(handle.id()).map(|entry| {
+            (
+                entry.written_checksum,
+                entry.compose_base.clone(),
+                entry.foreign_base,
+            )
+        });
+        let stored = entry.as_ref().and_then(|(stored, _, _)| *stored);
+        let entry_base = entry.as_ref().and_then(|(_, base, _)| base.clone());
+        let entry_foreign = entry
+            .as_ref()
+            .map(|(_, _, foreign)| *foreign)
+            .unwrap_or(guard_foreign);
         let mut bus = self.transport.open()?;
         let Some(crtc) = bus.crtc_for_connector(handle.connector())? else {
             return Err(GammaError::Unsupported {
@@ -273,7 +336,26 @@ impl<T: GammaTransport> GammaBackend<T> {
             });
         };
         let current = bus.read_gamma(crtc)?;
-        if current.checksum() != guard {
+        let accepted = display_color::guard_accepts(
+            &current,
+            original,
+            &guard_base,
+            guard_foreign,
+            last_value,
+            last_tint,
+            stored,
+        ) || entry_base.as_ref().is_some_and(|base| {
+            display_color::guard_accepts(
+                &current,
+                original,
+                base,
+                entry_foreign,
+                last_value,
+                last_tint,
+                stored,
+            )
+        });
+        if !accepted {
             return Ok(RestoreOutcome::ForeignLutPreserved);
         }
         bus.write_gamma(crtc, original)?;
@@ -294,6 +376,9 @@ impl<T: GammaTransport> GammaBackend<T> {
         let mut session = self.session();
         if let Some(entry) = session.get_mut(handle.id()) {
             entry.original = None;
+            entry.compose_base = None;
+            entry.foreign_base = false;
+            entry.tint_allowed = true;
             entry.written_checksum = None;
             entry.written_value = None;
             entry.tint = Tint::NEUTRAL;
@@ -348,7 +433,7 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
     }
 
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.set_inner(handle, Some(value), None)
+        self.set_inner(handle, Some(value), None, None)
             .map_err(|error| error.into_monitor("brightness"))
     }
 
@@ -362,7 +447,7 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
     }
 
     fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
-        self.set_inner(handle, None, Some(tint))
+        self.set_inner(handle, None, Some(tint), None)
             .map_err(|error| error.into_monitor("tint"))
     }
 
@@ -372,7 +457,18 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
         value: u8,
         tint: Tint,
     ) -> Result<(), MonitorError> {
-        self.set_inner(handle, Some(value), Some(tint))
+        self.set_inner(handle, Some(value), Some(tint), None)
+            .map_err(|error| error.into_monitor("gamma"))
+    }
+
+    fn set_gamma_adjustment_guarded(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+        expected: u64,
+    ) -> Result<(), MonitorError> {
+        self.set_inner(handle, Some(value), Some(tint), Some(expected))
             .map_err(|error| error.into_monitor("gamma"))
     }
 
@@ -384,7 +480,7 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
     }
 
     fn set_gamma(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.set_inner(handle, Some(value), None)
+        self.set_inner(handle, Some(value), None, None)
             .map_err(|error| error.into_monitor("gamma"))
     }
 
@@ -457,11 +553,40 @@ impl<T: GammaTransport> LutProvider for GammaBackend<T> {
         let mut session = self.session();
         let entry = session.entry(handle.id().to_string()).or_default();
         if entry.original.is_none() {
+            let (base, verdict) = display_color::compose_base(original);
+            let foreign_base = verdict.base == classifier::BaseChoice::Neutral;
+            let target = display_color::composed_target(
+                original,
+                &base,
+                foreign_base,
+                last_value,
+                last_tint,
+            );
+            entry.written_checksum = Some(target.checksum());
             entry.original = Some(original.clone());
+            entry.compose_base = Some(base);
+            entry.foreign_base = foreign_base;
+            entry.tint_allowed = verdict.tint_allowed;
             entry.written_value = Some(last_value);
             entry.tint = last_tint;
-            entry.written_checksum = Some(original.dimmed(last_value).tinted(last_tint).checksum());
         }
+    }
+
+    fn rebind_compose_base(
+        &self,
+        handle: &DisplayHandle,
+        base: &GammaTable,
+        foreign: bool,
+        tint_allowed: bool,
+    ) -> bool {
+        let mut session = self.session();
+        let Some(entry) = session.get_mut(handle.id()) else {
+            return false;
+        };
+        entry.compose_base = Some(base.clone());
+        entry.foreign_base = foreign;
+        entry.tint_allowed = tint_allowed;
+        true
     }
 }
 
@@ -592,6 +717,7 @@ mod x11 {
 mod tests {
     use super::*;
     use crate::session::{Session, SessionStore};
+    use std::collections::VecDeque;
     use std::sync::Arc;
 
     struct FakeGammaBus {
@@ -599,6 +725,8 @@ mod tests {
         tables: HashMap<u32, GammaTable>,
         hdr: Result<bool, GammaError>,
         co_owner: Option<GammaTable>,
+        read_sequence: VecDeque<GammaTable>,
+        writes: usize,
     }
 
     impl GammaBus for FakeGammaBus {
@@ -607,6 +735,9 @@ mod tests {
         }
 
         fn read_gamma(&mut self, crtc: u32) -> Result<GammaTable, GammaError> {
+            if let Some(next) = self.read_sequence.pop_front() {
+                return Ok(next);
+            }
             self.tables
                 .get(&crtc)
                 .cloned()
@@ -616,6 +747,7 @@ mod tests {
         }
 
         fn write_gamma(&mut self, crtc: u32, table: &GammaTable) -> Result<(), GammaError> {
+            self.writes += 1;
             self.tables.insert(crtc, table.clone());
             if let Some(co_owner) = &self.co_owner {
                 self.tables.insert(crtc, co_owner.clone());
@@ -666,6 +798,39 @@ mod tests {
         }
     }
 
+    fn warm_scale_table(size: usize) -> GammaTable {
+        let channel = |peak: f64| {
+            (0..size)
+                .map(|index| {
+                    let ratio = index as f64 / (size - 1) as f64;
+                    (peak * ratio.powf(1.001)).round() as u16
+                })
+                .collect::<Vec<u16>>()
+        };
+        GammaTable {
+            red: channel(65535.0),
+            green: channel(51110.0),
+            blue: channel(35808.0),
+        }
+    }
+
+    fn warm_calibration_table(size: usize) -> GammaTable {
+        let channel = |bias: f64| {
+            (0..size)
+                .map(|index| {
+                    let x = index as f64 / (size - 1) as f64;
+                    let shaped = x * x * (3.0 - 2.0 * x);
+                    (65535.0 * shaped * bias).min(65535.0).round() as u16
+                })
+                .collect::<Vec<u16>>()
+        };
+        GammaTable {
+            red: channel(1.0),
+            green: channel(0.98),
+            blue: channel(0.72),
+        }
+    }
+
     fn handle() -> DisplayHandle {
         DisplayHandle::new("id-1".into(), "card0-DP-1".into(), None, false)
     }
@@ -682,6 +847,8 @@ mod tests {
             tables: HashMap::from([(crtc, original.clone())]),
             hdr: Ok(false),
             co_owner: None,
+            read_sequence: VecDeque::new(),
+            writes: 0,
         }
     }
 
@@ -833,6 +1000,47 @@ mod tests {
     }
 
     #[test]
+    fn a_guarded_write_refuses_when_the_table_changes_under_the_write() {
+        let original = identity(4, 100);
+        let foreign = warm_scale_table(64);
+        let backend = backend(bus(&original, 1));
+        assert_eq!(backend.capture("card0-DP-1").unwrap(), original);
+        {
+            let mut bus = backend.transport.bus.lock().unwrap();
+            bus.read_sequence.push_back(foreign.clone());
+        }
+        let error = backend
+            .set_gamma_adjustment_guarded(&handle(), 50, Tint::NEUTRAL, original.checksum())
+            .unwrap_err();
+        assert!(error.is_gamma_changed_under_write());
+        let bus = backend.transport.bus.lock().unwrap();
+        assert_eq!(
+            bus.writes, 0,
+            "a table stolen after the read is never overwritten"
+        );
+        assert_eq!(bus.tables[&1], original);
+    }
+
+    #[test]
+    fn a_guarded_write_with_a_matching_expectation_writes_and_verifies() {
+        let original = identity(4, 100);
+        let backend = backend(bus(&original, 1));
+        backend
+            .set_gamma_adjustment_guarded(&handle(), 50, Tint::NEUTRAL, original.checksum())
+            .unwrap();
+        let bus = backend.transport.bus.lock().unwrap();
+        assert_eq!(bus.tables[&1], original.dimmed(50));
+        assert_eq!(bus.writes, 1);
+        drop(bus);
+        let session = backend.sessions.lock().unwrap();
+        let entry = session.get("id-1").unwrap();
+        assert_eq!(entry.written_checksum, Some(original.dimmed(50).checksum()));
+        assert_eq!(entry.written_value, Some(50));
+        assert_eq!(entry.tint, Tint::NEUTRAL);
+        assert_eq!(entry.mismatches, 0);
+    }
+
+    #[test]
     fn night_tint_reports_failed_readback_instead_of_claiming_it_was_applied() {
         let original = identity(4, 30_000);
         let backend = backend(bus(&original, 1));
@@ -842,6 +1050,149 @@ mod tests {
             Err(MonitorError::Refused { .. })
         ));
         assert_eq!(backend.mismatch_count(&handle()), 1);
+    }
+
+    #[test]
+    fn a_warm_foreign_ramp_is_never_the_compose_base() {
+        let foreign = warm_scale_table(64);
+        let backend = backend(bus(&foreign, 1));
+        backend
+            .set_tint(&handle(), Tint::from_kelvin(3500))
+            .unwrap();
+        let written = backend.transport.bus.lock().unwrap().tables[&1].clone();
+        assert_eq!(u32::from(written.red[written.red.len() - 1]), 65535u32);
+        assert_eq!(
+            u32::from(written.green[written.green.len() - 1]),
+            65535u32 * 758 / 1000
+        );
+        assert_eq!(
+            u32::from(written.blue[written.blue.len() - 1]),
+            65535u32 * 563 / 1000
+        );
+        let session = backend.sessions.lock().unwrap();
+        let entry = session.get("id-1").unwrap();
+        assert_eq!(entry.original.as_ref().unwrap(), &foreign);
+        assert_ne!(entry.compose_base.as_ref().unwrap(), &foreign);
+        assert!(entry.tint_allowed);
+    }
+
+    #[test]
+    fn a_brightness_write_on_a_foreign_base_dims_the_host_table() {
+        let foreign = warm_scale_table(64);
+        let backend = backend(bus(&foreign, 1));
+        backend.set_brightness(&handle(), 50).unwrap();
+        let written = backend.transport.bus.lock().unwrap().tables[&1].clone();
+        assert_eq!(written, foreign.dimmed(50));
+    }
+
+    #[test]
+    fn a_restore_accepts_a_table_composed_on_a_rebound_base() {
+        let foreign = warm_scale_table(64);
+        let calibration = identity(64, 200);
+        let warm = Tint::from_kelvin(3500);
+        let shared = Arc::new(Mutex::new(bus(&foreign, 1)));
+        let first = GammaBackend::new(FakeTransport {
+            bus: Arc::clone(&shared),
+        });
+        first.adopt_baseline(&handle(), &foreign, 100, Tint::NEUTRAL);
+        assert!(first.rebind_compose_base(&handle(), &calibration, false, true));
+        first.set_tint(&handle(), warm).unwrap();
+        assert_eq!(
+            shared.lock().unwrap().tables[&1],
+            calibration.tinted(warm),
+            "the tint composes on the rebound base"
+        );
+        let second = GammaBackend::new(FakeTransport {
+            bus: Arc::clone(&shared),
+        });
+        second.adopt_baseline(&handle(), &foreign, 100, Tint::NEUTRAL);
+        assert!(second.rebind_compose_base(&handle(), &calibration, false, true));
+        assert_eq!(
+            second.write_guarded(&handle(), &foreign, 100, warm),
+            LutRestoreOutcome::Restored,
+            "a restart recognises a table written on the persisted base"
+        );
+        assert_eq!(shared.lock().unwrap().tables[&1], foreign);
+    }
+
+    #[test]
+    fn a_restart_recognises_its_own_neutral_base_composition_for_restore() {
+        let foreign = warm_scale_table(64);
+        let shared = Arc::new(Mutex::new(bus(&foreign, 1)));
+        let first = GammaBackend::new(FakeTransport {
+            bus: Arc::clone(&shared),
+        });
+        first.set_brightness(&handle(), 50).unwrap();
+        drop(first);
+        let second = GammaBackend::new(FakeTransport {
+            bus: Arc::clone(&shared),
+        });
+        assert_eq!(
+            second.write_guarded(&handle(), &foreign, 50, Tint::NEUTRAL),
+            LutRestoreOutcome::Restored
+        );
+        assert_eq!(shared.lock().unwrap().tables[&1], foreign);
+    }
+
+    #[test]
+    fn a_restore_after_adoption_on_a_foreign_base_returns_the_as_found_table() {
+        let foreign = warm_scale_table(64);
+        let backend = backend(bus(&foreign.dimmed(80), 1));
+        backend.adopt_baseline(&handle(), &foreign, 80, Tint::NEUTRAL);
+        let session = backend.sessions.lock().unwrap();
+        let entry = session.get("id-1").unwrap();
+        assert_eq!(
+            entry.written_checksum,
+            Some(foreign.dimmed(80).checksum()),
+            "adoption records the table the write path composes"
+        );
+        drop(session);
+        assert_eq!(
+            backend.restore(&handle()).unwrap(),
+            RestoreOutcome::Restored
+        );
+        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+    }
+
+    #[test]
+    fn a_rebound_base_is_what_the_next_tint_composes_on() {
+        let foreign = warm_scale_table(64);
+        let backend = backend(bus(&foreign, 1));
+        let warm = Tint::from_kelvin(3500);
+        backend.set_tint(&handle(), warm).unwrap();
+        let calibration = identity(64, 200);
+        assert!(backend.rebind_compose_base(&handle(), &calibration, false, true));
+        backend.set_tint(&handle(), warm).unwrap();
+        let written = backend.transport.bus.lock().unwrap().tables[&1].clone();
+        assert_eq!(written, calibration.tinted(warm));
+    }
+
+    #[test]
+    fn a_neutral_tint_on_a_foreign_base_returns_the_as_found_table() {
+        let foreign = warm_scale_table(64);
+        let backend = backend(bus(&foreign, 1));
+        backend
+            .set_tint(&handle(), Tint::from_kelvin(3500))
+            .unwrap();
+        assert_ne!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+        backend.set_tint(&handle(), Tint::NEUTRAL).unwrap();
+        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+    }
+
+    #[test]
+    fn a_warm_calibration_ramp_refuses_the_night_tint_without_writing() {
+        let foreign = warm_calibration_table(64);
+        let backend = backend(bus(&foreign, 1));
+        assert!(backend.tint_allowed(&handle()));
+        match backend
+            .set_tint(&handle(), Tint::from_kelvin(3500))
+            .unwrap_err()
+        {
+            MonitorError::Refused { capability, .. } => assert_eq!(capability, "tint"),
+            other => panic!("expected Refused, got {other:?}"),
+        }
+        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], foreign);
+        assert!(!backend.tint_allowed(&handle()));
     }
 
     #[test]
@@ -1069,6 +1420,23 @@ mod tests {
         assert_eq!(outcome, LutRestoreOutcome::ForeignLutPreserved);
         let bus = backend.transport.bus.lock().unwrap();
         assert_eq!(bus.tables[&1], foreign);
+    }
+
+    #[test]
+    fn the_guard_accepts_a_pre_branch_composition() {
+        let original = warm_scale_table(64);
+        let warm = Tint::from_kelvin(3500);
+        let current = original.dimmed(50).tinted(warm);
+        let backend = backend(bus(&current, 1));
+        let (derived_base, verdict) = display_color::compose_base(&original);
+        assert_eq!(verdict.base, classifier::BaseChoice::Neutral);
+        let composed = display_color::composed_target(&original, &derived_base, true, 50, warm);
+        assert_ne!(current.checksum(), composed.checksum());
+        assert_eq!(
+            backend.write_guarded(&handle(), &original, 50, warm),
+            LutRestoreOutcome::Restored
+        );
+        assert_eq!(backend.transport.bus.lock().unwrap().tables[&1], original);
     }
 
     #[test]
