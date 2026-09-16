@@ -1394,7 +1394,7 @@ options = ["top-left", "top-right"]
         );
         write_file(
             &profile_dir.join("default/core/plugin-configs/plugin-invalid.json"),
-            &json!({"corner": "Top left"}),
+            &json!({"corner": "middle"}),
         );
 
         let report = normalize_synced_plugin_configs();
@@ -1403,7 +1403,7 @@ options = ["top-left", "top-right"]
         for detail in [
             "plugin-invalid",
             "corner",
-            "Top left",
+            "middle",
             "top-left",
             "top-right",
         ] {
@@ -1427,7 +1427,7 @@ options = ["top-left", "top-right"]
         );
         assert_eq!(
             read_json(&profile_dir.join("default/core/plugin-configs/plugin-invalid.json")),
-            json!({"corner": "Top left"})
+            json!({"corner": "middle"})
         );
     }
 
