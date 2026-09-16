@@ -11,12 +11,25 @@ label = "Service detection"
 description = "Which commands count as long-running services."
 
 [field.corner]
-type = "string"
+type = "select"
 section = "panel"
 config_key = "corner"
 label = "Screen corner"
-description = "Which corner the panel parks in: top-left, top-right, bottom-left, bottom-right."
 default = "top-right"
+card_description = "Which screen corner holds the panel."
+options = ["top-left", "top-right", "bottom-left", "bottom-right"]
+
+[field.corner.option_labels]
+top-left = "Top left"
+top-right = "Top right"
+bottom-left = "Bottom left"
+bottom-right = "Bottom right"
+
+[field.corner.option_pictures]
+top-left = "letters:TL"
+top-right = "letters:TR"
+bottom-left = "letters:BL"
+bottom-right = "letters:BR"
 
 [field.service_commands]
 type = "string_array"

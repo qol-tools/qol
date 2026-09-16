@@ -2373,7 +2373,7 @@ impl SettingsPanelView {
 
     fn wheel_style(&self) -> WheelStyle {
         WheelStyle {
-            bg: self.palette.dropdown_bg,
+            bg: self.palette.surface_raised,
             border: self.palette.row_border_selected,
             thumb_border: self.palette.section_text,
         }
@@ -2735,7 +2735,7 @@ impl SettingsPanelView {
         let selected = index == self.level().selected;
         let palette = GamepadPalette {
             surface: self.palette.window_bg,
-            raised: self.palette.dropdown_bg,
+            raised: self.palette.surface_raised,
             border: self.palette.panel_border,
             text: self.palette.section_text,
             text_muted: self.palette.label_text,

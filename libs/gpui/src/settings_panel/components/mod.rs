@@ -1,7 +1,6 @@
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, ElementId, FontWeight, Rgba, SharedString};
 
-use crate::dropdown::DropdownStyle;
 use crate::kit::{alpha, kit};
 use crate::spinner::{Busy, Spinner};
 use crate::theme::{SettingsGround, SettingsPanelPalette};
@@ -270,7 +269,7 @@ pub fn settings_action_affordance(
         (rgba(ground.well.packed()), ground.ink)
     } else {
         match variant {
-            Some("ghost") => (rgb(palette.dropdown_bg), palette.label_text),
+            Some("ghost") => (rgb(palette.surface_raised), palette.label_text),
             Some("danger") => (rgba(alpha(palette.state_off, 0x29)), palette.state_off),
             Some("primary") | None | Some(_) => {
                 (rgb(palette.row_bg_selected), palette.section_text)
@@ -309,17 +308,6 @@ pub fn settings_action_affordance(
         ground_text(div(), rgb(text), hover.map(|hover| rgb(hover.ink)))
     };
     control.child(element.child(label.into()))
-}
-
-pub fn settings_dropdown_style(palette: SettingsPanelPalette) -> DropdownStyle {
-    DropdownStyle {
-        bg: palette.dropdown_bg,
-        bg_selected: palette.fill_current,
-        border: palette.row_border_selected,
-        text: palette.label_text,
-        text_selected: palette.section_text,
-        accent: palette.row_border_selected,
-    }
 }
 
 const CRUMB_MAX_WIDTH: f32 = 200.0;

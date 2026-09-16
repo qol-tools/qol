@@ -52,7 +52,7 @@ Removed with this correction: `plugins/monitor/src/ui/`, the monitor daemon's
   displays that remain present.
 - The root page shows one compact row. Enter pushes the card
   (`open_display_layout_card` modeled on `open_object_array_card`), whose body
-  renders the stage, the selected display's mode dropdown, the primary control,
+  renders the stage, the selected display's mode choice card, the primary control,
   and Apply and Cancel rows. The card body scrolls inside the fixed panel
   height; the stage gets its own height constant beside
   `PANEL_GAMEPAD_HEIGHT`.
@@ -93,9 +93,9 @@ Removed with this correction: `plugins/monitor/src/ui/`, the monitor daemon's
   reads as both. The style decision lives in one pure helper,
   `display_layout_tile_style`, so the tile has a single source of truth.
 - Mode options come from the `modes` rows joined by display id, rendered with
-  the shared `Dropdown`. A display with no rows renders its mode control
-  unavailable, never an empty dropdown. When the payload reports every display
-  unwritable, the mode control is disabled.
+  the shared choice card and `SettingsTile` grid. A display with no rows renders
+  its mode control unavailable, never an empty card. When the payload reports
+  every display unwritable, the mode control is disabled.
 - Empty state: a short message.
 
 ### 4.2 Staged interaction
@@ -141,8 +141,8 @@ Chrome and controls come from the shared kit: `Kit::header`, `Kit::section`,
 `Kit::segmented_group`, `Kit::button_ghost`, `Kit::keycap`, `Kit::hint_bar` and
 `Kit::hint`, `Kit::focus_ring`; `SettingsRow::setting` and `SettingsRow::rule`,
 `SettingsRow::paint_settings_selection`, `SettingsGroupHeader`,
-`SettingsFeedback`, `settings_action_spinner`, `settings_dropdown_style`;
-`Dropdown`; `StatusIndicator`. No hand-rolled colors, chips, buttons, or
+`SettingsFeedback`, `settings_action_spinner`, `SettingsChoiceValue`,
+`SettingsTile`; `StatusIndicator`. No hand-rolled colors, chips, buttons, or
 selection styling.
 
 ## 6. Files
