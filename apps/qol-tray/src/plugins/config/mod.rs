@@ -558,6 +558,7 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<()> {
+        let config = normalize_plugin_config_value(plugin_id, config)?;
         let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
         let _profile_guard = profile_config_write_guard_for_plugin(plugin_id);
@@ -1076,14 +1077,50 @@ pub(crate) fn validate_config_value(
     spec: &qol_config::contract::ConfigSpec,
     config: &serde_json::Value,
 ) -> std::result::Result<(), Vec<qol_config::validation::ValidationError>> {
-    let errors = match qol_config::normalized::resolve_config(spec, config) {
-        Ok(_) => strict_validation_errors(spec, config),
+    let normalized = normalize_config_value(spec, config);
+    let errors = match qol_config::normalized::resolve_config(spec, &normalized) {
+        Ok(_) => strict_validation_errors(spec, &normalized),
         Err(errors) => errors,
     };
     if errors.is_empty() {
         return Ok(());
     }
     Err(errors)
+}
+
+pub(crate) fn normalize_config_value(
+    spec: &qol_config::contract::ConfigSpec,
+    config: &serde_json::Value,
+) -> serde_json::Value {
+    qol_config::normalized::normalize_config(spec, config)
+}
+
+pub(crate) fn normalize_plugin_config_value(
+    plugin_id: &str,
+    config: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let Some(spec) = load_config_contract(plugin_id)? else {
+        return Ok(config);
+    };
+    Ok(normalize_config_value(&spec, &config))
+}
+
+pub(crate) fn normalize_and_validate_plugin_config_value(
+    plugin_id: &str,
+    config: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let Some(spec) = load_config_contract(plugin_id)? else {
+        return Ok(config);
+    };
+    let normalized = normalize_config_value(&spec, &config);
+    validate_config_value(&spec, &normalized).map_err(|errors| {
+        anyhow::anyhow!(
+            "Invalid config for {}: {}",
+            plugin_id,
+            format_validation_errors(errors)
+        )
+    })?;
+    Ok(normalized)
 }
 
 pub(crate) fn format_validation_errors(

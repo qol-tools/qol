@@ -18,30 +18,27 @@ pub async fn apply_import_bundle(
     let plugins = super::import_plugins(bundle);
     let stored = super::load_plugins_lock().unwrap_or_else(|_| super::PluginsLock::empty());
     let uid_index = PluginUidIndex::from_plugins(plugins_dir, &plugins, &stored);
-    let phase_one_configs = bundle
+    let mut phase_one_configs = bundle
         .plugin_configs
         .as_ref()
         .map(|configs| canonicalize_plugin_configs(configs, &uid_index));
-    validate_imported_plugin_configs(
-        plugins_dir,
-        phase_one_configs.as_ref(),
-        &plugins,
-        &uid_index,
-    )
-    .await?;
+    if let Some(configs) = phase_one_configs.as_mut() {
+        normalize_and_validate_imported_plugin_configs(plugins_dir, configs, &plugins, &uid_index)
+            .await?;
+    }
     let plugin_results = reconcile_plugins(plugins_dir, &plugins).await;
     write_core_settings(bundle)?;
     super::plugins_lock::sync_plugins_lock_from_imported_state(plugins_dir, &plugins)?;
     let synced_lock = super::load_plugins_lock()?;
     let synced_index =
         PluginUidIndex::from_plugins(plugins_dir, &synced_lock.plugins, &synced_lock);
-    let plugin_configs = phase_one_configs
+    let mut plugin_configs = phase_one_configs
         .as_ref()
         .map(|configs| canonicalize_plugin_configs(configs, &synced_index));
-    if let Some(plugin_configs) = &plugin_configs {
-        validate_imported_plugin_configs(
+    if let Some(plugin_configs) = plugin_configs.as_mut() {
+        normalize_and_validate_imported_plugin_configs(
             plugins_dir,
-            Some(plugin_configs),
+            plugin_configs,
             &synced_lock.plugins,
             &synced_index,
         )
@@ -209,15 +206,12 @@ pub(super) fn project_plugin_configs_to_dir(
     Ok(())
 }
 
-pub(super) async fn validate_imported_plugin_configs(
+pub(super) async fn normalize_and_validate_imported_plugin_configs(
     plugins_dir: &Path,
-    plugin_configs: Option<&HashMap<String, Value>>,
+    plugin_configs: &mut HashMap<String, Value>,
     requested_plugins: &[PluginLockEntry],
     uid_index: &PluginUidIndex,
 ) -> Result<()> {
-    let Some(plugin_configs) = plugin_configs else {
-        return Ok(());
-    };
     let requested_plugins = requested_plugins
         .iter()
         .map(|plugin| (plugin.id.as_str(), plugin))
@@ -234,7 +228,10 @@ pub(super) async fn validate_imported_plugin_configs(
         else {
             continue;
         };
-        let config = plugin_configs.get(&key).context("missing plugin config")?;
+        let config = plugin_configs
+            .get_mut(&key)
+            .context("missing plugin config")?;
+        *config = crate::plugins::config::normalize_config_value(&spec, config);
         let errors = match crate::plugins::config::validate_config_value(&spec, config) {
             Ok(()) => continue,
             Err(errors) => errors,

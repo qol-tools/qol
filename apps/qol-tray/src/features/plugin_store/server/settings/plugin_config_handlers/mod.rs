@@ -62,6 +62,7 @@ fn set_plugin_config_inner(
 ) -> HttpResult<Response> {
     let plugin_id = validated_plugin_id(plugin_id)?;
     let config = io::parse_config_body(body)?;
+    let config = form::normalize_plugin_config(&plugin_id, config)?;
     form::validate_plugin_config(&plugin_id, &config)?;
     io::save_plugin_config(&plugin_id, config)?;
     if let Err(error) = notify::notify_plugin_reload(state, &plugin_id) {

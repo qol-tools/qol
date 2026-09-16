@@ -5,6 +5,7 @@ use crate::contract::{
 use crate::validation::{validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
 use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResolvedConfig {
@@ -109,8 +110,9 @@ pub fn resolve_config(
     spec: &ConfigSpec,
     overrides: &serde_json::Value,
 ) -> Result<ResolvedConfig, Vec<ValidationError>> {
+    let normalized_overrides = normalize_config(spec, overrides);
     let mut errors = validate_spec_collect(spec);
-    validate_overrides_shape(overrides, &mut errors);
+    validate_overrides_shape(&normalized_overrides, &mut errors);
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -131,7 +133,7 @@ pub fn resolve_config(
             default.clone()
         } else {
             widen_to_kind(
-                resolve_field_value(id, field, &default, overrides, &mut errors),
+                resolve_field_value(id, field, &default, &normalized_overrides, &mut errors),
                 field.kind,
             )
         };
@@ -211,6 +213,53 @@ pub fn resolve_config(
         fields: root_fields,
         sections,
     })
+}
+
+pub fn normalize_config(spec: &ConfigSpec, overrides: &Value) -> Value {
+    let mut normalized = overrides.clone();
+    for (id, field) in &spec.fields {
+        if field.kind != FieldKind::Select || field.options.is_empty() || field.query.is_some() {
+            continue;
+        }
+        let config_key = config_key_for(id, field);
+        let Some(value) = get_override_value_mut(&mut normalized, &config_key) else {
+            continue;
+        };
+        let Some(selected) = value.as_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(canonical) = canonical_select_option(&field.options, &selected) else {
+            continue;
+        };
+        if canonical != selected {
+            *value = Value::String(canonical.to_owned());
+        }
+    }
+    normalized
+}
+
+fn get_override_value_mut<'a>(overrides: &'a mut Value, path: &str) -> Option<&'a mut Value> {
+    let mut current = overrides;
+    for part in path.split('.') {
+        current = current.get_mut(part)?;
+    }
+    Some(current)
+}
+
+fn canonical_select_option<'a>(options: &'a [String], selected: &str) -> Option<&'a str> {
+    if let Some(option) = options.iter().find(|option| option.as_str() == selected) {
+        return Some(option.as_str());
+    }
+    let key = canonical_select_key(selected);
+    let matches = options
+        .iter()
+        .filter(|option| canonical_select_key(option) == key)
+        .collect::<Vec<_>>();
+    (matches.len() == 1).then(|| matches[0].as_str())
+}
+
+fn canonical_select_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 pub fn widen_to_kind(value: FieldDefault, kind: FieldKind) -> FieldDefault {
@@ -507,5 +556,37 @@ switchable = "boolean"
                 FieldDefault::ObjectArray(Vec::new())
             );
         }
+    }
+
+    #[test]
+    fn select_overrides_normalize_unique_legacy_aliases() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.corner]
+type = "select"
+config_key = "placement.corner"
+default = "top-right"
+options = ["top-left", "top-right"]
+"#,
+        )
+        .unwrap();
+
+        let normalized = normalize_config(
+            &spec,
+            &serde_json::json!({
+                "placement": {"corner": " TOP_LEFT "},
+                "other": "unchanged"
+            }),
+        );
+
+        assert_eq!(
+            normalized,
+            serde_json::json!({
+                "placement": {"corner": "top-left"},
+                "other": "unchanged"
+            })
+        );
     }
 }

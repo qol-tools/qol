@@ -941,6 +941,45 @@ fn active_profile_cache_refreshes_after_same_length_switch() {
 }
 
 #[test]
+fn set_config_normalizes_legacy_select_aliases() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let plugin_dir = crate::paths::plugins_dir().unwrap().join("plugin-test");
+    fs::create_dir_all(&plugin_dir).unwrap();
+    fs::write(
+        plugin_dir.join("qol-config.toml"),
+        r#"
+schema_version = 1
+
+[field.corner]
+type = "select"
+default = "top-right"
+options = ["top-left", "top-right"]
+"#,
+    )
+    .unwrap();
+
+    let manager = PluginConfigManager::new().unwrap();
+    manager
+        .set_config("plugin-test", json!({"corner": " TOP_LEFT "}))
+        .unwrap();
+
+    let live_path = crate::plugins::paths::config_path(&plugin_dir);
+    assert_eq!(
+        crate::file_io::read_json::<serde_json::Value>(&live_path).unwrap(),
+        json!({"corner": "top-left"})
+    );
+    let profile_path = manager
+        .store()
+        .core_plugin_config_path(&crate::plugins::PluginUid::new("plugin-test"))
+        .unwrap();
+    assert_eq!(
+        crate::file_io::read_json::<serde_json::Value>(&profile_path).unwrap(),
+        json!({"corner": "top-left"})
+    );
+}
+
+#[test]
 fn load_combined_contracts_returns_both_when_present() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();

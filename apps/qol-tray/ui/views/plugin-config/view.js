@@ -28,6 +28,7 @@ export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
     return html`
         <${PageShell} subtitle=${subtitle} badge=${badge} frameClassName="plugin-config-detail">
             <div class="config-detail-content">
+                ${ctx.error && html`<p class="error-msg" role="alert">${ctx.error}</p>`}
                 <${ConfigSection} fields=${section.fields} />
             </div>
         <//>

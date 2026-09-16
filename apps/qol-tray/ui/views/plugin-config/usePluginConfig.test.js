@@ -25,6 +25,7 @@ register('data:text/javascript,' + encodeURIComponent(loaderSource), pathToFileU
 let loadPluginConfigSession;
 let preloadConfigForm;
 let startPluginConfigSessionLoad;
+let persistConfig;
 let importId = 0;
 
 beforeEach(async () => {
@@ -32,6 +33,7 @@ beforeEach(async () => {
         loadPluginConfigSession,
         preloadConfigForm,
         startPluginConfigSessionLoad,
+        persistConfig,
     } = await import(`./usePluginConfig.js?test=${importId++}`));
 });
 
@@ -176,4 +178,13 @@ test('startPluginConfigSessionLoad applies errors while active', async () => {
 
     assert.deepEqual(applied, []);
     assert.deepEqual(errors, [failure]);
+});
+
+test('persistConfig reports rejected saves to the caller', async () => {
+    const errors = [];
+    await withFetch(async () => textResponse('corner is invalid', { status: 400 }), () => {
+        return persistConfig('plugin-a', { corner: 'TOP_LEFT' }, null, null, error => errors.push(error));
+    });
+
+    assert.deepEqual(errors, ['corner is invalid']);
 });

@@ -283,6 +283,7 @@ impl SyncService {
                 reject_cancelled_pull(&cancelled)?;
                 if merge.conflicts.is_empty() {
                     apply_merged_profile(&repo, &repo_path, &merge.merged, "pull")?;
+                    normalize_synced_plugin_configs()?;
                     repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
                     reject_cancelled_pull(&cancelled)?;
                     repo.push(Some(&token))?;
@@ -400,6 +401,7 @@ impl SyncService {
                 &resolve,
             );
             apply_merged_profile(&repo, &repo_path, &merged.merged, "resolve_conflicts")?;
+            normalize_synced_plugin_configs()?;
             repo.commit_all("resolve sync conflicts", &SignatureSpec::default_for_app())?;
             repo.push(Some(&token))?;
             repo.head_sha()
@@ -883,6 +885,12 @@ fn push_profile_changes(
 
     if matches!(outcome, PullOutcome::FastForwarded { .. }) {
         apply_fast_forward(&repo, &outcome, "push")?;
+        if normalize_synced_plugin_configs()? {
+            repo.commit_all(
+                "normalize synced plugin configs",
+                &SignatureSpec::default_for_app(),
+            )?;
+        }
         applied_remote = true;
     }
 
@@ -890,6 +898,7 @@ fn push_profile_changes(
         let merge = reconcile(&repo)?;
         if merge.conflicts.is_empty() {
             apply_merged_profile(&repo, repo_path, &merge.merged, "push")?;
+            normalize_synced_plugin_configs()?;
             repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
             applied_remote = true;
         } else {
@@ -972,16 +981,40 @@ fn commit_profile_schema_repair(
 }
 
 fn repair_profile_schema_under_guard(repo_path: &Path) -> Result<bool> {
-    let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
-    let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
-    let changed = repair_profile_schema(repo_path)?;
-    if !changed {
-        return Ok(false);
+    let schema_changed = {
+        let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
+        let _mutation = crate::plugins::config::begin_runtime_config_global_mutation();
+        let changed = repair_profile_schema(repo_path)?;
+        if changed {
+            let generation =
+                profile_guard.mark_changed(crate::plugins::config::ProfileConfigInvalidation::All);
+            trace_profile_sync_apply("schema_repair", "schema", generation);
+        }
+        changed
+    };
+    let config_changed = normalize_synced_plugin_configs()?;
+    Ok(schema_changed || config_changed)
+}
+
+fn normalize_synced_plugin_configs() -> Result<bool> {
+    let manager = crate::plugins::PluginConfigManager::new()?;
+    let lock = crate::features::profile::core::load_plugins_lock()?;
+    let mut changed = false;
+    for plugin in lock.plugins {
+        let Some(config) = manager.get_config(&plugin.id)? else {
+            continue;
+        };
+        let normalized = crate::plugins::config::normalize_and_validate_plugin_config_value(
+            &plugin.id,
+            config.clone(),
+        )?;
+        if normalized == config {
+            continue;
+        }
+        manager.set_config(&plugin.id, normalized)?;
+        changed = true;
     }
-    let generation =
-        profile_guard.mark_changed(crate::plugins::config::ProfileConfigInvalidation::All);
-    trace_profile_sync_apply("schema_repair", "schema", generation);
-    Ok(true)
+    Ok(changed)
 }
 
 fn write_conflict_backup(value: &Value) -> Result<String> {
@@ -1236,6 +1269,70 @@ mod tests {
         assert_eq!(
             read_json(&local_path.join("default/core/plugins.lock.json"))["plugins"][0]["uid"],
             "remote-uid"
+        );
+    }
+
+    #[test]
+    fn synced_plugin_configs_normalize_legacy_select_aliases() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
+        let plugin_dir = crate::paths::plugins_dir().unwrap().join("plugin-test");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"
+[plugin]
+id = "plugin-test"
+name = "Plugin Test"
+description = "Test plugin"
+version = "1.0.0"
+
+[menu]
+label = "Plugin Test"
+items = []
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("qol-config.toml"),
+            r#"
+schema_version = 1
+
+[field.corner]
+type = "select"
+default = "top-right"
+options = ["top-left", "top-right"]
+"#,
+        )
+        .unwrap();
+        let profile_dir = crate::paths::profile_dir().unwrap();
+        write_file(
+            &profile_dir.join("default/core/plugins.lock.json"),
+            &json!({
+                "version": 1,
+                "plugins": [{
+                    "id": "plugin-test",
+                    "uid": "plugin-test",
+                    "repo_url": "https://example.com/plugin-test.git",
+                    "version": "1.0.0"
+                }]
+            }),
+        );
+        write_file(
+            &profile_dir.join("default/core/plugin-configs/plugin-test.json"),
+            &json!({"corner": " TOP_LEFT "}),
+        );
+
+        assert!(normalize_synced_plugin_configs().unwrap());
+        assert_eq!(
+            read_json(&profile_dir.join("default/core/plugin-configs/plugin-test.json")),
+            json!({"corner": "top-left"})
+        );
+        assert_eq!(
+            read_json(&plugin_dir.join("config.json")),
+            json!({"corner": "top-left"})
         );
     }
 

@@ -15,6 +15,7 @@ type = "select"
 section = "panel"
 config_key = "corner"
 label = "Screen corner"
+description = "Which screen corner holds the panel."
 default = "top-right"
 card_description = "Which screen corner holds the panel."
 options = ["top-left", "top-right", "bottom-left", "bottom-right"]
