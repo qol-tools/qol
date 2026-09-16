@@ -1099,7 +1099,16 @@ pub(crate) fn normalize_plugin_config_value(
     plugin_id: &str,
     config: serde_json::Value,
 ) -> Result<serde_json::Value> {
-    let Some(spec) = load_config_contract(plugin_id)? else {
+    let spec = match load_config_contract(plugin_id) {
+        Ok(spec) => spec,
+        Err(error) => {
+            log::warn!(
+                "Unable to load config contract for {plugin_id}; saving config without normalization: {error:#}"
+            );
+            return Ok(config);
+        }
+    };
+    let Some(spec) = spec else {
         return Ok(config);
     };
     Ok(normalize_config_value(&spec, &config))

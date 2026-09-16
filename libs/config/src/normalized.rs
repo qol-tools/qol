@@ -259,7 +259,13 @@ fn canonical_select_option<'a>(options: &'a [String], selected: &str) -> Option<
 }
 
 fn canonical_select_key(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace('_', "-")
+    value
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_ascii_lowercase()
+        .replace('_', "-")
 }
 
 pub fn widen_to_kind(value: FieldDefault, kind: FieldKind) -> FieldDefault {
@@ -624,7 +630,9 @@ options = ["top-left", "top-right"]
             (" TOP_LEFT ", "top-left"),
             ("ToP_LeFt", "top-left"),
             ("top_left", "top-left"),
-            ("top left", "top left"),
+            ("top left", "top-left"),
+            ("Top Right", "top-right"),
+            ("top   right", "top-right"),
             ("topleft", "topleft"),
             ("TL", "TL"),
         ] {

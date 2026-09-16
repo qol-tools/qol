@@ -980,6 +980,33 @@ options = ["top-left", "top-right"]
 }
 
 #[test]
+fn set_config_preserves_value_when_contract_is_unreadable() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let plugin_dir = crate::paths::plugins_dir().unwrap().join("plugin-test");
+    fs::create_dir_all(&plugin_dir).unwrap();
+    fs::write(plugin_dir.join("qol-config.toml"), "schema_version = [").unwrap();
+
+    let manager = PluginConfigManager::new().unwrap();
+    let config = json!({"corner": "Top left"});
+    manager.set_config("plugin-test", config.clone()).unwrap();
+
+    let live_path = crate::plugins::paths::config_path(&plugin_dir);
+    assert_eq!(
+        crate::file_io::read_json::<serde_json::Value>(&live_path).unwrap(),
+        config
+    );
+    let profile_path = manager
+        .store()
+        .core_plugin_config_path(&crate::plugins::PluginUid::new("plugin-test"))
+        .unwrap();
+    assert_eq!(
+        crate::file_io::read_json::<serde_json::Value>(&profile_path).unwrap(),
+        config
+    );
+}
+
+#[test]
 fn load_combined_contracts_returns_both_when_present() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
