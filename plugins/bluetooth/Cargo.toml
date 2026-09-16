@@ -28,6 +28,8 @@ objc2-io-bluetooth.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
+dbus = "0.9"
+dbus-tokio = "0.7"
 futures = "0.3"
 qol-process.workspace = true
 tokio = { version = "1.35", features = ["macros", "process", "rt", "signal", "sync", "time"] }

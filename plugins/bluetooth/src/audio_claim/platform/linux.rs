@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use dbus::blocking::stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged;
+use dbus::message::SignalArgs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::audio_claim::{PlaybackStarts, RECLAIM_SETTLE};
@@ -37,10 +39,15 @@ pub fn reclaim_output(address: &str) -> Result<()> {
 }
 
 pub fn spawn_playback_watch(enabled: Arc<AtomicBool>) {
-    tokio::spawn(watch_playback(enabled));
+    let (media_sender, media_receiver) = tokio::sync::mpsc::unbounded_channel();
+    spawn_media_play_watch(media_sender);
+    tokio::spawn(watch_playback(enabled, media_receiver));
 }
 
-async fn watch_playback(enabled: Arc<AtomicBool>) {
+async fn watch_playback(
+    enabled: Arc<AtomicBool>,
+    mut media: tokio::sync::mpsc::UnboundedReceiver<()>,
+) {
     loop {
         let mut playback = PlaybackStarts::default();
         let mut child = match tokio::process::Command::new("pactl")
@@ -78,26 +85,111 @@ async fn watch_playback(enabled: Arc<AtomicBool>) {
                 .next_deadline()
                 .map(tokio::time::Instant::from_std)
                 .filter(|deadline| *deadline > tokio::time::Instant::now());
-            let line = match deadline {
-                Some(deadline) => tokio::select! {
-                    line = lines.next_line() => line,
-                    _ = tokio::time::sleep_until(deadline) => {
-                        reclaim_due_outputs(&mut playback, &enabled).await;
-                        continue;
+            let timer =
+                deadline.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600));
+            let line = tokio::select! {
+                line = lines.next_line() => line,
+                _ = tokio::time::sleep_until(timer) => {
+                    if deadline.is_some() {
+                        reclaim_due_outputs(&mut playback, &enabled, false).await;
                     }
-                },
-                None => lines.next_line().await,
+                    continue;
+                }
+                Some(()) = media.recv() => {
+                    reclaim_due_outputs(&mut playback, &enabled, true).await;
+                    continue;
+                }
             };
             let Ok(Some(line)) = line else {
                 break;
             };
             if line.contains("on sink-input") || line.contains("on sink #") {
-                reclaim_due_outputs(&mut playback, &enabled).await;
+                reclaim_due_outputs(&mut playback, &enabled, false).await;
             }
         }
         qol_runtime::probe!("BLUETOOTH_AUDIO_CLAIM", "event=watch outcome=exited");
         tokio::time::sleep(WATCH_RETRY_DELAY).await;
     }
+}
+
+fn spawn_media_play_watch(sender: tokio::sync::mpsc::UnboundedSender<()>) {
+    tokio::spawn(async move {
+        loop {
+            let (resource, connection) = match dbus_tokio::connection::new_session_sync() {
+                Ok(connection) => connection,
+                Err(error) => {
+                    eprintln!("Bluetooth audio claim media watch cannot reach D-Bus: {error}");
+                    qol_runtime::probe!(
+                        "BLUETOOTH_AUDIO_CLAIM",
+                        "event=media_watch outcome=exited reason=connect_failed"
+                    );
+                    tokio::time::sleep(WATCH_RETRY_DELAY).await;
+                    continue;
+                }
+            };
+            let resource = tokio::spawn(resource);
+            let rule = PropertiesPropertiesChanged::match_rule(
+                None,
+                Some(&"/org/mpris/MediaPlayer2".into()),
+            )
+            .static_clone();
+            let media_match = match connection.add_match(rule).await {
+                Ok(media_match) => media_match,
+                Err(error) => {
+                    eprintln!(
+                        "Bluetooth audio claim media watch cannot match MPRIS signals: {error}"
+                    );
+                    qol_runtime::probe!(
+                        "BLUETOOTH_AUDIO_CLAIM",
+                        "event=media_watch outcome=exited reason=match_failed"
+                    );
+                    resource.abort();
+                    tokio::time::sleep(WATCH_RETRY_DELAY).await;
+                    continue;
+                }
+            };
+            let sender = sender.clone();
+            let mut statuses = HashMap::<String, String>::new();
+            let _media_match =
+                media_match.cb(move |message, signal: PropertiesPropertiesChanged| {
+                    if signal.interface_name != "org.mpris.MediaPlayer2.Player" {
+                        return true;
+                    }
+                    let Some(status) = dbus::arg::prop_cast::<String>(
+                        &signal.changed_properties,
+                        "PlaybackStatus",
+                    ) else {
+                        return true;
+                    };
+                    let player = message
+                        .sender()
+                        .map(|name| name.to_string())
+                        .unwrap_or_default();
+                    if is_play_transition(&mut statuses, player, status) {
+                        let _ = sender.send(());
+                    }
+                    true
+                });
+            qol_runtime::probe!("BLUETOOTH_AUDIO_CLAIM", "event=media_watch outcome=started");
+            if let Ok(error) = resource.await {
+                eprintln!("Bluetooth audio claim media watch lost D-Bus: {error}");
+            }
+            qol_runtime::probe!(
+                "BLUETOOTH_AUDIO_CLAIM",
+                "event=media_watch outcome=exited reason=disconnected"
+            );
+            tokio::time::sleep(WATCH_RETRY_DELAY).await;
+        }
+    });
+}
+
+fn is_play_transition(
+    statuses: &mut HashMap<String, String>,
+    player: String,
+    status: &str,
+) -> bool {
+    let previous = statuses.insert(player, status.to_string());
+    status == "Playing" && previous.as_deref() != Some("Playing")
 }
 
 async fn reclaim_playing_output(sink: &str) {
@@ -115,15 +207,25 @@ async fn reclaim_playing_output(sink: &str) {
     );
 }
 
-async fn reclaim_due_outputs(playback: &mut PlaybackStarts, enabled: &AtomicBool) {
+async fn reclaim_due_outputs(
+    playback: &mut PlaybackStarts,
+    enabled: &AtomicBool,
+    media_play: bool,
+) {
     if !enabled.load(Ordering::Relaxed) {
         return;
+    }
+    if media_play {
+        qol_runtime::probe!("BLUETOOTH_AUDIO_CLAIM", "event=media_play");
     }
     let Some((streams, running)) = pactl_playing_streams().await else {
         return;
     };
     let now = Instant::now();
     playback.observe(now, &streams);
+    if media_play {
+        playback.media_started(now);
+    }
     for sink in playback.due(now, &running) {
         reclaim_playing_output(&sink).await;
     }
@@ -249,8 +351,10 @@ fn pactl_uncorked_inputs(output: &[u8]) -> Vec<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        pactl_sink_names, pactl_uncorked_inputs, playing_bluez_streams, running_bluez_sinks,
+        is_play_transition, pactl_sink_names, pactl_uncorked_inputs, playing_bluez_streams,
+        running_bluez_sinks,
     };
+    use std::collections::HashMap;
 
     const SINK_INPUTS: &[u8] = b"Sink Input #161\n\tDriver: PipeWire\n\tClient: 62\n\tSink: 324\n\tCorked: no\nSink Input #162\n\tSink: 50\n\tCorked: no\nSink Input #163\n\tSink: 324\n\tCorked: yes\nSink Input #164\n\tSink: 97\n\tCorked: no\n";
     const SINKS: &[u8] = b"50\talsa_output.pci-0000_01_00.1.hdmi-stereo\tPipeWire\ts32le 2ch\tSUSPENDED\n324\tbluez_output.AA_BB_CC_DD_EE_FF.1\tPipeWire\ts16le 2ch\tRUNNING\n";
@@ -290,5 +394,15 @@ mod tests {
         let running = running_bluez_sinks(SINKS);
         assert_eq!(running.len(), 1);
         assert!(running.contains("bluez_output.AA_BB_CC_DD_EE_FF.1"));
+    }
+
+    #[test]
+    fn only_a_change_to_playing_counts_as_media_play() {
+        let mut statuses = HashMap::new();
+        assert!(is_play_transition(&mut statuses, ":1.1".into(), "Playing"));
+        assert!(!is_play_transition(&mut statuses, ":1.1".into(), "Playing"));
+        assert!(!is_play_transition(&mut statuses, ":1.1".into(), "Paused"));
+        assert!(is_play_transition(&mut statuses, ":1.1".into(), "Playing"));
+        assert!(is_play_transition(&mut statuses, ":1.2".into(), "Playing"));
     }
 }

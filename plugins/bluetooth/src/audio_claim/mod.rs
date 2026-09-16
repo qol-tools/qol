@@ -48,6 +48,15 @@ impl PlaybackStarts {
         self.playing = current;
     }
 
+    pub fn media_started(&mut self, now: Instant) {
+        if !self.seeded {
+            return;
+        }
+        for output in self.playing.keys() {
+            self.pending.entry(output.clone()).or_insert(now);
+        }
+    }
+
     pub fn due(&mut self, now: Instant, running: &HashSet<String>) -> Vec<String> {
         let mut due: Vec<String> = self
             .pending
@@ -209,6 +218,61 @@ mod tests {
         assert!(state
             .due(now + Duration::from_secs(60), &running(&["bluez_output.A"]))
             .is_empty());
+    }
+
+    #[test]
+    fn media_started_marks_outputs_with_streams_pending() {
+        let now = Instant::now();
+        let mut state = PlaybackStarts::default();
+        state.observe(now, &streams(&[("bluez_output.A", 1)]));
+        state.media_started(now);
+        assert_eq!(state.next_deadline(), Some(now + RECLAIM_SETTLE));
+        assert_eq!(
+            state.due(now + RECLAIM_SETTLE, &running(&["bluez_output.A"])),
+            vec!["bluez_output.A".to_string()]
+        );
+    }
+
+    #[test]
+    fn media_started_ignores_outputs_without_streams() {
+        let now = Instant::now();
+        let mut state = PlaybackStarts::default();
+        state.observe(now, &streams(&[("bluez_output.A", 1)]));
+        state.observe(now + Duration::from_secs(1), &streams(&[]));
+        state.media_started(now + Duration::from_secs(1));
+        assert!(state.next_deadline().is_none());
+        assert!(state
+            .due(now + Duration::from_secs(60), &running(&["bluez_output.A"]))
+            .is_empty());
+    }
+
+    #[test]
+    fn media_started_bypasses_the_cooldown() {
+        let now = Instant::now();
+        let mut state = PlaybackStarts::default();
+        state.observe(now, &streams(&[]));
+        state.observe(now, &streams(&[("bluez_output.A", 1)]));
+        assert_eq!(
+            state.due(now + RECLAIM_SETTLE, &running(&["bluez_output.A"])),
+            vec!["bluez_output.A".to_string()]
+        );
+        let played_again = now + RECLAIM_SETTLE + Duration::from_secs(1);
+        state.media_started(played_again);
+        assert_eq!(state.next_deadline(), Some(played_again + RECLAIM_SETTLE));
+        assert_eq!(
+            state.due(played_again + RECLAIM_SETTLE, &running(&["bluez_output.A"])),
+            vec!["bluez_output.A".to_string()]
+        );
+    }
+
+    #[test]
+    fn media_started_does_nothing_before_the_first_snapshot() {
+        let now = Instant::now();
+        let mut state = PlaybackStarts::default();
+        state.media_started(now);
+        assert!(state.next_deadline().is_none());
+        state.observe(now, &streams(&[("bluez_output.A", 1)]));
+        assert!(state.next_deadline().is_none());
     }
 
     #[test]
