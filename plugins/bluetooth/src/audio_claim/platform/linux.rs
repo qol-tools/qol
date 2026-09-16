@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::audio_claim::PlaybackStarts;
+use crate::audio_claim::{PlaybackStarts, RECLAIM_SETTLE};
 use crate::bluetooth::normalize_address;
 
 pub const RECLAIM_SUPPORTED: bool = true;
@@ -69,19 +69,30 @@ async fn watch_playback(enabled: Arc<AtomicBool>) {
             tokio::time::sleep(WATCH_RETRY_DELAY).await;
             continue;
         };
-        if let Some(playing) = pactl_playing_streams().await {
+        if let Some((playing, _)) = pactl_playing_streams().await {
             playback.observe(Instant::now(), &playing);
         }
         let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if !line.contains("on sink-input") || !enabled.load(Ordering::Relaxed) {
-                continue;
-            }
-            let Some(playing) = pactl_playing_streams().await else {
-                continue;
+        loop {
+            let deadline = playback
+                .next_deadline()
+                .map(tokio::time::Instant::from_std)
+                .filter(|deadline| *deadline > tokio::time::Instant::now());
+            let line = match deadline {
+                Some(deadline) => tokio::select! {
+                    line = lines.next_line() => line,
+                    _ = tokio::time::sleep_until(deadline) => {
+                        reclaim_due_outputs(&mut playback, &enabled).await;
+                        continue;
+                    }
+                },
+                None => lines.next_line().await,
             };
-            for sink in playback.observe(Instant::now(), &playing) {
-                reclaim_playing_output(&sink).await;
+            let Ok(Some(line)) = line else {
+                break;
+            };
+            if line.contains("on sink-input") || line.contains("on sink #") {
+                reclaim_due_outputs(&mut playback, &enabled).await;
             }
         }
         qol_runtime::probe!("BLUETOOTH_AUDIO_CLAIM", "event=watch outcome=exited");
@@ -99,14 +110,31 @@ async fn reclaim_playing_output(sink: &str) {
     };
     qol_runtime::probe!(
         "BLUETOOTH_AUDIO_CLAIM",
-        "event=reclaim trigger=play sink={sink} outcome={outcome}"
+        "event=reclaim trigger=play sink={sink} settle_ms={} outcome={outcome}",
+        RECLAIM_SETTLE.as_millis()
     );
 }
 
-async fn pactl_playing_streams() -> Option<Vec<(String, u32)>> {
+async fn reclaim_due_outputs(playback: &mut PlaybackStarts, enabled: &AtomicBool) {
+    if !enabled.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some((streams, running)) = pactl_playing_streams().await else {
+        return;
+    };
+    let now = Instant::now();
+    playback.observe(now, &streams);
+    for sink in playback.due(now, &running) {
+        reclaim_playing_output(&sink).await;
+    }
+}
+
+async fn pactl_playing_streams() -> Option<(Vec<(String, u32)>, HashSet<String>)> {
     let sink_inputs = pactl_listing(&["list", "sink-inputs"]).await?;
     let sinks = pactl_listing(&["list", "short", "sinks"]).await?;
-    Some(playing_bluez_streams(&sink_inputs, &sinks))
+    let streams = playing_bluez_streams(&sink_inputs, &sinks);
+    let running = running_bluez_sinks(&sinks);
+    Some((streams, running))
 }
 
 async fn pactl_listing(args: &[&str]) -> Option<Vec<u8>> {
@@ -163,6 +191,19 @@ fn playing_bluez_streams(sink_inputs: &[u8], sinks: &[u8]) -> Vec<(String, u32)>
         .collect()
 }
 
+fn running_bluez_sinks(sinks: &[u8]) -> HashSet<String> {
+    String::from_utf8_lossy(sinks)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.nth(1)?;
+            let state = fields.last()?;
+            (name.starts_with(BLUETOOTH_SINK_PREFIX) && state == "RUNNING")
+                .then(|| name.to_string())
+        })
+        .collect()
+}
+
 fn pactl_sink_names(output: &[u8]) -> HashMap<u32, String> {
     String::from_utf8_lossy(output)
         .lines()
@@ -207,7 +248,9 @@ fn pactl_uncorked_inputs(output: &[u8]) -> Vec<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pactl_sink_names, pactl_uncorked_inputs, playing_bluez_streams};
+    use super::{
+        pactl_sink_names, pactl_uncorked_inputs, playing_bluez_streams, running_bluez_sinks,
+    };
 
     const SINK_INPUTS: &[u8] = b"Sink Input #161\n\tDriver: PipeWire\n\tClient: 62\n\tSink: 324\n\tCorked: no\nSink Input #162\n\tSink: 50\n\tCorked: no\nSink Input #163\n\tSink: 324\n\tCorked: yes\nSink Input #164\n\tSink: 97\n\tCorked: no\n";
     const SINKS: &[u8] = b"50\talsa_output.pci-0000_01_00.1.hdmi-stereo\tPipeWire\ts32le 2ch\tSUSPENDED\n324\tbluez_output.AA_BB_CC_DD_EE_FF.1\tPipeWire\ts16le 2ch\tRUNNING\n";
@@ -240,5 +283,12 @@ mod tests {
             playing_bluez_streams(SINK_INPUTS, SINKS),
             vec![("bluez_output.AA_BB_CC_DD_EE_FF.1".to_string(), 161)]
         );
+    }
+
+    #[test]
+    fn running_bluez_sinks_reads_the_last_state_field() {
+        let running = running_bluez_sinks(SINKS);
+        assert_eq!(running.len(), 1);
+        assert!(running.contains("bluez_output.AA_BB_CC_DD_EE_FF.1"));
     }
 }

@@ -30,7 +30,7 @@ objc2-io-bluetooth.workspace = true
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 futures = "0.3"
 qol-process.workspace = true
-tokio = { version = "1.35", features = ["process", "rt", "signal", "sync", "time"] }
+tokio = { version = "1.35", features = ["macros", "process", "rt", "signal", "sync", "time"] }
 
 [build-dependencies]
 qol-conventions.workspace = true
