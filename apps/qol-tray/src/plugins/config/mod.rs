@@ -1117,10 +1117,47 @@ pub(crate) fn normalize_and_validate_plugin_config_value(
         anyhow::anyhow!(
             "Invalid config for {}: {}",
             plugin_id,
-            format_validation_errors(errors)
+            format_plugin_config_validation_errors(&spec, &normalized, errors)
         )
     })?;
     Ok(normalized)
+}
+
+fn format_plugin_config_validation_errors(
+    spec: &qol_config::contract::ConfigSpec,
+    config: &serde_json::Value,
+    errors: Vec<qol_config::validation::ValidationError>,
+) -> String {
+    errors
+        .into_iter()
+        .map(|error| {
+            let Some(field_path) = error.path.strip_prefix("overrides.") else {
+                return error.to_string();
+            };
+            let field_id = field_path.split(['.', '[']).next().unwrap_or(field_path);
+            let Some(field) = spec.fields.get(field_id) else {
+                return error.to_string();
+            };
+            if !matches!(
+                field.kind,
+                qol_config::contract::FieldKind::Select
+                    | qol_config::contract::FieldKind::StringArray
+            ) || field.options.is_empty()
+                || field.query.is_some()
+            {
+                return error.to_string();
+            }
+            let config_key = field.config_key.as_deref().unwrap_or(field_id);
+            let rejected_value = config_override_value(config, config_key)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            format!(
+                "{field_id}: rejected value {rejected_value:?}; allowed options {:?}; {}",
+                field.options, error.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn format_validation_errors(

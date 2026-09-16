@@ -588,5 +588,62 @@ options = ["top-left", "top-right"]
                 "other": "unchanged"
             })
         );
+
+        let resolved = resolve_config(
+            &spec,
+            &serde_json::json!({"placement": {"corner": " TOP_LEFT "}}),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved
+                .fields
+                .iter()
+                .find(|field| field.id == "corner")
+                .unwrap()
+                .value,
+            FieldDefault::String("top-left".to_string())
+        );
+    }
+
+    #[test]
+    fn select_override_alias_policy_preserves_unknown_and_ambiguous_values() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.corner]
+type = "select"
+default = "top-right"
+options = ["top-left", "top-right"]
+"#,
+        )
+        .unwrap();
+
+        for (input, expected) in [
+            ("top-left", "top-left"),
+            (" TOP_LEFT ", "top-left"),
+            ("ToP_LeFt", "top-left"),
+            ("top_left", "top-left"),
+            ("top left", "top left"),
+            ("topleft", "topleft"),
+            ("TL", "TL"),
+        ] {
+            let normalized = normalize_config(&spec, &serde_json::json!({"corner": input}));
+            assert_eq!(normalized["corner"], expected, "input {input:?}");
+        }
+
+        let ambiguous = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.corner]
+type = "select"
+default = "top-left"
+options = ["top-left", "top_left"]
+"#,
+        )
+        .unwrap();
+        let normalized = normalize_config(&ambiguous, &serde_json::json!({"corner": " TOP_LEFT "}));
+        assert_eq!(normalized["corner"], " TOP_LEFT ");
     }
 }

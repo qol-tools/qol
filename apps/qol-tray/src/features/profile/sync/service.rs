@@ -283,7 +283,7 @@ impl SyncService {
                 reject_cancelled_pull(&cancelled)?;
                 if merge.conflicts.is_empty() {
                     apply_merged_profile(&repo, &repo_path, &merge.merged, "pull")?;
-                    normalize_synced_plugin_configs()?;
+                    normalize_synced_plugin_configs();
                     repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
                     reject_cancelled_pull(&cancelled)?;
                     repo.push(Some(&token))?;
@@ -401,7 +401,7 @@ impl SyncService {
                 &resolve,
             );
             apply_merged_profile(&repo, &repo_path, &merged.merged, "resolve_conflicts")?;
-            normalize_synced_plugin_configs()?;
+            normalize_synced_plugin_configs();
             repo.commit_all("resolve sync conflicts", &SignatureSpec::default_for_app())?;
             repo.push(Some(&token))?;
             repo.head_sha()
@@ -870,6 +870,19 @@ struct PushTaskOutput {
     applied_remote: bool,
 }
 
+struct SyncNormalizationReport {
+    changed: bool,
+    warnings: Vec<String>,
+}
+
+impl SyncNormalizationReport {
+    fn warning(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        log::warn!("[sync] {message}");
+        self.warnings.push(message);
+    }
+}
+
 fn push_profile_changes(
     repo_path: &Path,
     token: Option<&str>,
@@ -885,7 +898,8 @@ fn push_profile_changes(
 
     if matches!(outcome, PullOutcome::FastForwarded { .. }) {
         apply_fast_forward(&repo, &outcome, "push")?;
-        if normalize_synced_plugin_configs()? {
+        let normalization = normalize_synced_plugin_configs();
+        if normalization.changed {
             repo.commit_all(
                 "normalize synced plugin configs",
                 &SignatureSpec::default_for_app(),
@@ -898,7 +912,7 @@ fn push_profile_changes(
         let merge = reconcile(&repo)?;
         if merge.conflicts.is_empty() {
             apply_merged_profile(&repo, repo_path, &merge.merged, "push")?;
-            normalize_synced_plugin_configs()?;
+            normalize_synced_plugin_configs();
             repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
             applied_remote = true;
         } else {
@@ -992,29 +1006,71 @@ fn repair_profile_schema_under_guard(repo_path: &Path) -> Result<bool> {
         }
         changed
     };
-    let config_changed = normalize_synced_plugin_configs()?;
+    let config_changed = normalize_synced_plugin_configs().changed;
     Ok(schema_changed || config_changed)
 }
 
-fn normalize_synced_plugin_configs() -> Result<bool> {
-    let manager = crate::plugins::PluginConfigManager::new()?;
-    let lock = crate::features::profile::core::load_plugins_lock()?;
-    let mut changed = false;
+fn normalize_synced_plugin_configs() -> SyncNormalizationReport {
+    let mut report = SyncNormalizationReport {
+        changed: false,
+        warnings: Vec::new(),
+    };
+    let manager = match crate::plugins::PluginConfigManager::new() {
+        Ok(manager) => manager,
+        Err(error) => {
+            report.warning(format!(
+                "plugin config normalization unavailable: {error:#}"
+            ));
+            return report;
+        }
+    };
+    let lock = match crate::features::profile::core::load_plugins_lock() {
+        Ok(lock) => lock,
+        Err(error) => {
+            report.warning(format!(
+                "plugin config normalization skipped because the plugin lock could not be loaded: {error:#}"
+            ));
+            return report;
+        }
+    };
     for plugin in lock.plugins {
-        let Some(config) = manager.get_config(&plugin.id)? else {
-            continue;
+        let config = match manager.get_config(&plugin.id) {
+            Ok(Some(config)) => config,
+            Ok(None) => continue,
+            Err(error) => {
+                report.warning(format!(
+                    "plugin {} config normalization skipped: {error:#}",
+                    plugin.id
+                ));
+                continue;
+            }
         };
-        let normalized = crate::plugins::config::normalize_and_validate_plugin_config_value(
+        let normalized = match crate::plugins::config::normalize_and_validate_plugin_config_value(
             &plugin.id,
             config.clone(),
-        )?;
+        ) {
+            Ok(normalized) => normalized,
+            Err(error) => {
+                report.warning(format!(
+                    "plugin {} config normalization skipped: {error:#}",
+                    plugin.id
+                ));
+                continue;
+            }
+        };
         if normalized == config {
             continue;
         }
-        manager.set_config(&plugin.id, normalized)?;
-        changed = true;
+        if let Err(error) = manager.set_config(&plugin.id, normalized) {
+            report.warning(format!(
+                "plugin {} normalized config could not be persisted: {error:#}",
+                plugin.id
+            ));
+            continue;
+        }
+        report.changed = true;
     }
-    Ok(changed)
+    report
 }
 
 fn write_conflict_backup(value: &Value) -> Result<String> {
@@ -1278,13 +1334,15 @@ mod tests {
         let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
         let tmp = TempDir::new().unwrap();
         let _path = TestPathRootEnvGuard::new(tmp.path());
-        let plugin_dir = crate::paths::plugins_dir().unwrap().join("plugin-test");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::write(
-            plugin_dir.join("plugin.toml"),
-            r#"
+        for plugin_id in ["plugin-test", "plugin-invalid"] {
+            let plugin_dir = crate::paths::plugins_dir().unwrap().join(plugin_id);
+            std::fs::create_dir_all(&plugin_dir).unwrap();
+            std::fs::write(
+                plugin_dir.join("plugin.toml"),
+                format!(
+                    r#"
 [plugin]
-id = "plugin-test"
+id = "{plugin_id}"
 name = "Plugin Test"
 description = "Test plugin"
 version = "1.0.0"
@@ -1292,12 +1350,13 @@ version = "1.0.0"
 [menu]
 label = "Plugin Test"
 items = []
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            plugin_dir.join("qol-config.toml"),
-            r#"
+"#
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                plugin_dir.join("qol-config.toml"),
+                r#"
 schema_version = 1
 
 [field.corner]
@@ -1305,34 +1364,70 @@ type = "select"
 default = "top-right"
 options = ["top-left", "top-right"]
 "#,
-        )
-        .unwrap();
+            )
+            .unwrap();
+        }
         let profile_dir = crate::paths::profile_dir().unwrap();
         write_file(
             &profile_dir.join("default/core/plugins.lock.json"),
             &json!({
                 "version": 1,
-                "plugins": [{
-                    "id": "plugin-test",
-                    "uid": "plugin-test",
-                    "repo_url": "https://example.com/plugin-test.git",
-                    "version": "1.0.0"
-                }]
+                "plugins": [
+                    {
+                        "id": "plugin-test",
+                        "uid": "plugin-test",
+                        "repo_url": "https://example.com/plugin-test.git",
+                        "version": "1.0.0"
+                    },
+                    {
+                        "id": "plugin-invalid",
+                        "uid": "plugin-invalid",
+                        "repo_url": "https://example.com/plugin-invalid.git",
+                        "version": "1.0.0"
+                    }
+                ]
             }),
         );
         write_file(
             &profile_dir.join("default/core/plugin-configs/plugin-test.json"),
             &json!({"corner": " TOP_LEFT "}),
         );
+        write_file(
+            &profile_dir.join("default/core/plugin-configs/plugin-invalid.json"),
+            &json!({"corner": "Top left"}),
+        );
 
-        assert!(normalize_synced_plugin_configs().unwrap());
+        let report = normalize_synced_plugin_configs();
+        assert!(report.changed);
+        assert_eq!(report.warnings.len(), 1);
+        for detail in [
+            "plugin-invalid",
+            "corner",
+            "Top left",
+            "top-left",
+            "top-right",
+        ] {
+            assert!(
+                report.warnings[0].contains(detail),
+                "{}",
+                report.warnings[0]
+            );
+        }
         assert_eq!(
             read_json(&profile_dir.join("default/core/plugin-configs/plugin-test.json")),
             json!({"corner": "top-left"})
         );
         assert_eq!(
-            read_json(&plugin_dir.join("config.json")),
+            read_json(
+                &crate::paths::plugins_dir()
+                    .unwrap()
+                    .join("plugin-test/config.json")
+            ),
             json!({"corner": "top-left"})
+        );
+        assert_eq!(
+            read_json(&profile_dir.join("default/core/plugin-configs/plugin-invalid.json")),
+            json!({"corner": "Top left"})
         );
     }
 
@@ -1556,7 +1651,9 @@ items = []
 
     #[test]
     fn pull_before_push_merges_independent_remote_changes() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
         let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
         let url = init_bare_origin(&tmp.path().join("origin.git"));
         let alice_path = tmp.path().join("alice/profile");
         let alice = seed_profile_repo(&alice_path, &url);
@@ -1607,7 +1704,9 @@ items = []
 
     #[test]
     fn pull_before_push_reports_conflicts_without_push_error() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
         let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
         let url = init_bare_origin(&tmp.path().join("origin.git"));
         let alice_path = tmp.path().join("alice/profile");
         let alice = seed_profile_repo(&alice_path, &url);
