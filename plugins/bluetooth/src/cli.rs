@@ -30,6 +30,7 @@ fn app() -> HeadlessApp {
         .command(untrust_command())
         .command(connect_command())
         .command(disconnect_command())
+        .command(reclaim_command())
         .command(remove_command())
         .command(reconnect_command())
         .command(reconnect_trusted_command())
@@ -218,6 +219,29 @@ fn disconnect_command() -> Command {
             let address = one_address("disconnect", context.args())?;
             let device = platform::disconnect_device(&address)?;
             Ok(serde_json::to_value(device)?)
+        })
+}
+
+fn reclaim_command() -> Command {
+    Command::new("reclaim")
+        .about("Switch a shared Bluetooth audio device back to this computer.")
+        .usage(format!("{BINARY_NAME} reclaim AA:BB:CC:DD:EE:FF"))
+        .output("The address whose audio output was reclaimed.")
+        .exit_behavior("Exits non-zero when no Bluetooth audio output is active for the device.")
+        .run_plain_text(|context| {
+            let address = one_address("reclaim", context.args())?;
+            crate::audio_claim::platform::reclaim_output(&address)?;
+            Ok(PlainTextOutput::text(format!(
+                "Reclaimed audio for {address}"
+            )))
+        })
+        .run_json(|context| {
+            let address = one_address("reclaim", context.args())?;
+            crate::audio_claim::platform::reclaim_output(&address)?;
+            Ok(serde_json::json!({
+                "address": address,
+                "reclaimed": true,
+            }))
         })
 }
 

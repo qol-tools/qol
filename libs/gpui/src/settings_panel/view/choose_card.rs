@@ -318,6 +318,7 @@ impl SettingsPanelView {
             }),
             entries: None,
             form: None,
+            list_item: None,
         };
         self.push_card(destination, child);
         self.sync_scroll();

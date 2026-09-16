@@ -1,13 +1,11 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_config::contract::{resolve_slider_action, ResolvedRowAction};
+use qol_config::contract::{is_picture_spec, resolve_slider_action, ResolvedRowAction};
 
 use super::super::components::{
-    settings_action_spinner, settings_label, settings_value_text, RowGround, SettingsRow,
-    SettingsValueTone,
+    settings_action_spinner, settings_label, ChoiceArt, RowGround, SettingsChoiceValue, SettingsRow,
 };
 use super::super::rows::{
     begin_list_item_action, filtered_list_items, list_item_actions, list_slider_value,
@@ -17,28 +15,33 @@ use super::super::rows::{
 use super::super::SettingsDestination;
 use super::{
     align_to_step, horizontal_step_direction, round_to_step_precision, slider_fraction,
-    status_tone_color, ActiveControl, Level, LevelHeader, ListActionMenu, SettingsPanelView,
+    status_tone_color, Level, LevelHeader, ListItemCard, SettingsPanelView,
 };
-use crate::dropdown::{Dropdown, DropdownEvent};
 use crate::phantom_nav::NavAxis;
+use crate::pictures::PictureContext;
+use crate::theme::SettingsPanelPalette;
 
 const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl SettingsPanelView {
     fn slider_rows(&mut self) -> &mut [Row] {
-        if self.level().list_card {
+        if list_card_index(&self.stack).is_some() {
             self.root_mut().rows.as_mut_slice()
         } else {
             self.level_mut().rows.as_mut_slice()
         }
     }
 
-    pub(super) fn sync_list_card(&mut self, query: &str) {
-        if self.stack.len() <= 1 || !self.level().list_card {
+    pub(super) fn sync_list_card(&mut self, query: &str, cx: &mut Context<Self>) {
+        if self.stack.len() <= 1 {
             return;
         }
-        let Some(origin_row) = self.level().origin_row else {
+        let front = self.stack.len() - 1;
+        let Some(list_index) = list_card_index(&self.stack) else {
+            return;
+        };
+        let Some(origin_row) = self.stack[list_index].origin_row else {
             return;
         };
         let Some(parent) = self.root().rows.get(origin_row) else {
@@ -53,9 +56,13 @@ impl SettingsPanelView {
         if row_query.as_str() != query {
             return;
         }
-        let (root, front) = self.stack.split_at_mut(1);
-        list_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+        let (root, levels) = self.stack.split_at_mut(1);
+        list_card_sync(&mut root[0].rows, &mut levels[list_index - 1]);
+        let close = list_index < front && item_card_sync(&root[0].rows, &mut levels[front - 1]);
         self.height_revision += 1;
+        if close {
+            self.pop_card(cx);
+        }
     }
 
     pub(super) fn on_list_card_key(
@@ -74,16 +81,11 @@ impl SettingsPanelView {
                     return true;
                 }
             }
-            if key == "right" {
-                self.dispatch_list_card_action(cx);
-                cx.notify();
-                return true;
-            }
             return false;
         }
         match key {
             "enter" | "return" | "space" => {
-                self.dispatch_list_card_action(cx);
+                self.open_list_card_item(cx);
                 cx.notify();
                 true
             }
@@ -105,27 +107,7 @@ impl SettingsPanelView {
         )
     }
 
-    pub(super) fn on_list_actions_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(ActiveControl::ListActions(menu)) = self.level_mut().active_control.as_mut()
-        else {
-            return;
-        };
-        let Some(event) = menu.dropdown.handle_key(key) else {
-            return;
-        };
-        match event {
-            DropdownEvent::Moved => {}
-            DropdownEvent::Pick(selected) => self.dispatch_list_menu_action(selected, cx),
-            DropdownEvent::Close => self.close_list_actions_menu(),
-        }
-        cx.notify();
-    }
-
-    fn close_list_actions_menu(&mut self) {
-        self.level_mut().active_control = None;
-    }
-
-    fn dispatch_list_card_action(&mut self, cx: &mut Context<Self>) {
+    fn open_list_card_item(&mut self, cx: &mut Context<Self>) {
         let Some(origin_row) = self.level().origin_row else {
             return;
         };
@@ -142,56 +124,54 @@ impl SettingsPanelView {
         let Some(item) = selected_list_item(actions, items, filter, slot) else {
             return;
         };
-        let Some(action) = primary_list_item_action(actions, item) else {
-            return;
-        };
-        let item_id = item.id.clone();
-        self.dispatch_resolved_list_action(origin_row, &item_id, action, cx);
-    }
-
-    fn open_list_card_actions(&mut self) {
-        let Some(origin_row) = self.level().origin_row else {
-            return;
-        };
-        let slot = self.level().selected;
-        let Some(RowControl::List {
-            actions,
-            items,
-            filter,
-            ..
-        }) = self.root().rows.get(origin_row).map(|row| &row.control)
-        else {
-            return;
-        };
-        let Some(item) =
-            selected_list_item(actions, items, filter, slot).filter(|item| !item.pending)
-        else {
-            return;
-        };
-        let resolved = list_item_actions(actions, item);
-        if resolved.len() < 2 {
+        if item.pending || primary_list_item_action(actions, item).is_none() {
             return;
         }
-        self.level_mut().active_control = Some(ActiveControl::ListActions(ListActionMenu {
-            row: origin_row,
-            item_id: item.id.clone(),
-            dropdown: Dropdown::open(resolved.len(), 0),
-            actions: resolved,
-        }));
+        let item_id = item.id.clone();
+        self.open_item_card(origin_row, &item_id, cx);
     }
 
-    fn dispatch_list_menu_action(&mut self, selected: usize, cx: &mut Context<Self>) {
-        let Some(ActiveControl::ListActions(menu)) = self.level_mut().active_control.take() else {
+    fn open_item_card(&mut self, origin_row: usize, item_id: &str, cx: &mut Context<Self>) {
+        let (label, description) = {
+            let Some(parent) = self.root().rows.get(origin_row) else {
+                return;
+            };
+            let RowControl::List { items, .. } = &parent.control else {
+                return;
+            };
+            let Some(item) = items.iter().find(|item| item.id == item_id) else {
+                return;
+            };
+            (item.label.clone(), item.subtitle.clone())
+        };
+        let Some(destination) = self.card_destination(&label, cx) else {
             return;
         };
-        let row_index = menu.row;
-        let item_id = menu.item_id;
-        let Some(action) = menu.actions.into_iter().nth(selected) else {
-            self.close_list_actions_menu();
-            return;
+        let child = {
+            let Some(parent) = self.root().rows.get(origin_row) else {
+                return;
+            };
+            let RowControl::List { items, .. } = &parent.control else {
+                return;
+            };
+            let Some(item) = items.iter().find(|item| item.id == item_id) else {
+                return;
+            };
+            let Some(child) = list_item_card_level(
+                origin_row,
+                item_id,
+                &label,
+                description,
+                destination.clone(),
+                parent,
+                item,
+            ) else {
+                return;
+            };
+            child
         };
-        self.close_list_actions_menu();
-        self.dispatch_resolved_list_action(row_index, &item_id, action, cx);
+        self.push_card(destination, child);
+        self.sync_scroll();
     }
 
     fn dispatch_resolved_list_action(
@@ -242,6 +222,34 @@ impl SettingsPanelView {
             }
         })
         .detach();
+    }
+
+    pub(super) fn run_item_card_action(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = self.level().list_item.as_ref() else {
+            return;
+        };
+        let origin_row = card.origin_row;
+        let item_id = card.item_id.clone();
+        let selected = self.level().selected;
+        let Some(action_id) = self.level().rows.get(selected).map(|row| row.id.clone()) else {
+            return;
+        };
+        let Some(RowControl::List { actions, items, .. }) =
+            self.root().rows.get(origin_row).map(|row| &row.control)
+        else {
+            return;
+        };
+        let Some(item) = items.iter().find(|item| item.id == item_id) else {
+            return;
+        };
+        let Some(action) = list_item_actions(actions, item)
+            .into_iter()
+            .find(|action| action.action == action_id)
+        else {
+            return;
+        };
+        self.dispatch_resolved_list_action(origin_row, &item_id, action, cx);
+        self.pop_card(cx);
     }
 
     fn set_list_action_error(&mut self, row_index: usize, item_id: &str, error: String) {
@@ -577,15 +585,30 @@ impl SettingsPanelView {
         };
         let selected = index == self.level().selected;
         let row = RowGround::of(selected, self.body_has_focus());
+        let visible = filtered_list_items(actions, items, filter);
+        let art = list_item_art(items, &visible, index);
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
+        let word_color = (row == RowGround::Pane).then(|| list_card_word_color(item, self.palette));
         let mut line = SettingsRow::rule(("settings-list-card-item", index), self.palette)
             .selected(selected, self.body_has_focus())
             .child(
                 settings_label(item.label.clone(), self.palette)
                     .flex_1()
                     .min_w(px(0.)),
-            )
-            .child(self.render_list_card_value(item, row))
-            .child(self.render_list_card_action(index, origin_row, item, selected, row, cx));
+            );
+        if item.pending {
+            line = line.child(settings_action_spinner(
+                ("settings-list-card-spinner", index),
+                self.palette,
+            ));
+        }
+        line = line.child(
+            SettingsChoiceValue::new(list_item_value_text(item), art, row, context, self.palette)
+                .word_color(word_color),
+        );
         if let Some((slider, value)) = slider.as_deref().and_then(|slider| {
             list_card_slider_value(slider, actions, items, filter, index)
                 .map(|value| (slider, value))
@@ -597,147 +620,45 @@ impl SettingsPanelView {
             if !event.standard_click() {
                 return;
             }
+            let already_selected = this.level().selected == index;
             this.level_mut().selected = index;
+            if already_selected {
+                this.open_list_card_item(cx);
+            }
             cx.notify();
         }))
         .into_any_element()
     }
+}
 
-    fn render_list_card_value(&self, item: &ListItem, row: RowGround) -> Div {
-        let text = list_item_value_text(item);
-        if item.error.is_some() {
-            return div()
-                .flex_none()
-                .text_size(px(qol_theme::TEXT_BODY))
-                .text_color(rgb(self.palette.state_off))
-                .child(text);
-        }
-        if item.badge.is_some() {
-            let color = status_tone_color(self.palette, item.effective_badge_tone());
-            return div()
-                .flex_none()
-                .text_size(px(qol_theme::TEXT_BODY))
-                .text_color(rgb(color))
-                .child(text);
-        }
-        let tone = if text.is_empty() {
-            SettingsValueTone::Muted
-        } else {
-            SettingsValueTone::Normal
-        };
-        settings_value_text(text, tone, row, self.palette)
+fn list_item_art(items: &[ListItem], visible: &[usize], slot: usize) -> ChoiceArt {
+    let labels = visible
+        .iter()
+        .map(|index| items[*index].label.as_str())
+        .collect::<Vec<_>>();
+    let letters = crate::pictures::letters_for(&labels);
+    let spec = format!(
+        "letters:{}",
+        letters.get(slot).map(String::as_str).unwrap_or_default()
+    );
+    if is_picture_spec(&spec) {
+        ChoiceArt::Picture(spec)
+    } else {
+        ChoiceArt::Picture("letters:?".to_string())
     }
+}
 
-    fn render_list_card_action(
-        &self,
-        index: usize,
-        origin_row: usize,
-        item: &ListItem,
-        selected: bool,
-        row: RowGround,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let Some(RowControl::List { actions, .. }) =
-            self.root().rows.get(origin_row).map(|row| &row.control)
-        else {
-            return div();
-        };
-        let mut cell = div()
-            .flex()
-            .flex_none()
-            .flex_row()
-            .items_center()
-            .gap(px(qol_theme::SPACE_INSET));
-        if item.pending {
-            cell = cell.child(settings_action_spinner(
-                ("settings-list-card-spinner", index),
-                self.palette,
-            ));
-        }
-        let Some(action) = primary_list_item_action(actions, item) else {
-            return cell;
-        };
-        let action_count = list_item_actions(actions, item).len();
-        let label = list_action_affordance(&action.label, action_count);
-        let ground = row.rest(self.palette);
-        let background = match row {
-            RowGround::Band => rgba(ground.well.packed()),
-            RowGround::Pane if selected => rgb(self.palette.row_bg_selected),
-            RowGround::Pane => rgb(self.palette.dropdown_bg),
-        };
-        let text = match row {
-            RowGround::Band => ground.ink,
-            RowGround::Pane if selected => self.palette.state_on,
-            RowGround::Pane => self.palette.label_text,
-        };
-        let mut affordance = div()
-            .id(("settings-list-card-action", index))
-            .px(px(qol_theme::SPACE_TIGHT))
-            .rounded(px(qol_theme::RADIUS_TIGHT))
-            .bg(background)
-            .when(row == RowGround::Pane && !selected, |control| {
-                control.shadow(crate::kit::raised_shadow(self.palette.section_text))
-            })
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .text_color(rgb(text))
-            .child(label);
-        if !item.pending {
-            affordance = affordance
-                .cursor(CursorStyle::PointingHand)
-                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                    if !event.standard_click() {
-                        return;
-                    }
-                    cx.stop_propagation();
-                    this.level_mut().selected = index;
-                    if action_count > 1 {
-                        this.open_list_card_actions();
-                        cx.notify();
-                        return;
-                    }
-                    this.dispatch_list_card_action(cx);
-                    cx.notify();
-                }));
-        }
-        let open_menu = match &self.level().active_control {
-            Some(ActiveControl::ListActions(menu))
-                if menu.row == origin_row && menu.item_id == item.id =>
-            {
-                let labels = menu
-                    .actions
-                    .iter()
-                    .map(|action| action.label.clone())
-                    .collect::<Vec<_>>();
-                let view = cx.weak_entity();
-                let dismiss_view = cx.weak_entity();
-                Some(menu.dropdown.render_clickable(
-                    format!("settings-list-card-actions-{index}"),
-                    &labels,
-                    self.dropdown_style(),
-                    move |selected, event, _, cx| {
-                        if !event.standard_click() {
-                            return;
-                        }
-                        cx.stop_propagation();
-                        let _ = view.update(cx, |this, cx| {
-                            this.dispatch_list_menu_action(selected, cx);
-                            cx.notify();
-                        });
-                    },
-                    move |_, cx| {
-                        let _ = dismiss_view.update(cx, |this, cx| {
-                            this.close_list_actions_menu();
-                            cx.notify();
-                        });
-                    },
-                ))
-            }
-            _ => None,
-        };
-        let Some(menu) = open_menu else {
-            return cell.child(affordance);
-        };
-        cell.child(div().relative().child(menu).child(affordance))
+fn list_card_word_color(item: &ListItem, palette: SettingsPanelPalette) -> u32 {
+    if item.error.is_some() {
+        return palette.state_off;
+    }
+    if item.badge.is_some() {
+        return status_tone_color(palette, item.effective_badge_tone());
+    }
+    if list_item_value_text(item).is_empty() {
+        palette.grounds.pane.faint
+    } else {
+        palette.grounds.pane.soft
     }
 }
 
@@ -810,13 +731,6 @@ fn resolve_list_slider_dispatch(
         resolve_slider_action(&slider.spec, &item.data, value),
         item.id.clone(),
     ))
-}
-
-fn list_action_affordance(primary: &str, action_count: usize) -> String {
-    if action_count > 1 {
-        return format!("{primary} +{}", action_count - 1);
-    }
-    primary.to_string()
 }
 
 fn list_item_value_text(item: &ListItem) -> String {
@@ -908,7 +822,120 @@ fn list_card_level(
         choose: None,
         entries: None,
         form: None,
+        list_item: None,
     }
+}
+
+fn item_card_rows(
+    actions: &ListActions,
+    item: &ListItem,
+    config_key: &str,
+    source: usize,
+) -> Vec<Row> {
+    list_item_actions(actions, item)
+        .into_iter()
+        .map(|action| Row {
+            id: action.action.clone(),
+            section_id: None,
+            section_label: None,
+            label: action.label,
+            description: action.description,
+            placeholder: None,
+            variant: None,
+            config_key: config_key.to_string(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source,
+            control: RowControl::Text(String::new()),
+        })
+        .collect()
+}
+
+fn list_item_card_level(
+    origin_row: usize,
+    item_id: &str,
+    label: &str,
+    description: Option<String>,
+    destination: SettingsDestination,
+    row: &Row,
+    item: &ListItem,
+) -> Option<Level> {
+    let RowControl::List { actions, .. } = &row.control else {
+        return None;
+    };
+    let rows = item_card_rows(actions, item, &row.config_key, row.source);
+    let section = RowSection {
+        label: label.to_string(),
+        description,
+        rows: (0..rows.len()).collect(),
+        source: row.source,
+    };
+    let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
+    Some(Level {
+        rows,
+        sections: vec![section],
+        selected: 0,
+        active_section: None,
+        selected_section: 0,
+        body_scroll: crate::scroll_list::SelectionScroll::new(),
+        active_control: None,
+        row_bounds,
+        header: LevelHeader::Card(destination),
+        origin_row: Some(origin_row),
+        object_array: None,
+        display_layout: None,
+        list_card: false,
+        live_card: false,
+        choose: None,
+        entries: None,
+        form: None,
+        list_item: Some(ListItemCard {
+            origin_row,
+            item_id: item_id.to_string(),
+        }),
+    })
+}
+
+fn list_card_index(stack: &[Level]) -> Option<usize> {
+    let front = stack.len().checked_sub(1)?;
+    if stack[front].list_card {
+        return Some(front);
+    }
+    let list = front.checked_sub(1)?;
+    (stack[front].list_item.is_some() && stack[list].list_card).then_some(list)
+}
+
+fn item_card_sync(root_rows: &[Row], level: &mut Level) -> bool {
+    let Some(card) = level.list_item.as_ref() else {
+        return false;
+    };
+    let origin_row = card.origin_row;
+    let item_id = card.item_id.clone();
+    let selected_id = level.rows.get(level.selected).map(|row| row.id.clone());
+    let Some(row) = root_rows.get(origin_row) else {
+        return true;
+    };
+    let RowControl::List { actions, items, .. } = &row.control else {
+        return true;
+    };
+    let Some(item) = items.iter().find(|item| item.id == item_id) else {
+        return true;
+    };
+    let rows = item_card_rows(actions, item, &row.config_key, row.source);
+    if rows.is_empty() {
+        return true;
+    }
+    let selected = selected_id
+        .and_then(|id| rows.iter().position(|row| row.id == id))
+        .unwrap_or(0);
+    level.rows = rows;
+    level.row_bounds = (0..level.rows.len())
+        .map(|_| Rc::new(Cell::new(None)))
+        .collect();
+    level.selected = selected;
+    false
 }
 
 fn list_card_sync(root_rows: &mut [Row], level: &mut Level) {
@@ -979,22 +1006,12 @@ mod tests {
     use super::super::tests::{level, list_row};
     use super::super::Level;
     use super::{
-        list_action_affordance, list_card_slider_value, slider_percent_label,
-        slider_value_from_fraction, step_list_slider, stepped_slider_value,
+        item_card_sync, list_card_slider_value, list_item_art, list_item_card_level,
+        slider_percent_label, slider_value_from_fraction, step_list_slider, stepped_slider_value,
     };
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
-
-    #[test]
-    fn list_action_affordance_exposes_additional_action_count() {
-        let cases = [
-            ("Connect", 1, "Connect"),
-            ("Disconnect", 2, "Disconnect +1"),
-            ("Pair", 6, "Pair +5"),
-        ];
-        for (primary, count, expected) in cases {
-            assert_eq!(list_action_affordance(primary, count), expected);
-        }
-    }
+    use crate::settings_panel::components::ChoiceArt;
+    use qol_config::contract::RowActionSpec;
 
     #[test]
     fn row_slider_steps_align_and_clamp_to_the_contract_range() {
@@ -1127,6 +1144,145 @@ mod tests {
             None,
         );
         (root.rows, child)
+    }
+
+    fn action_spec(
+        action: &str,
+        label: &str,
+        description: Option<&str>,
+        when: Option<&str>,
+    ) -> RowActionSpec {
+        RowActionSpec {
+            action: action.into(),
+            input: None,
+            label: Some(label.into()),
+            description: description.map(str::to_string),
+            key: None,
+            when: when.map(str::to_string),
+        }
+    }
+
+    fn item_card_fixture() -> (Vec<Row>, Level) {
+        let mut root = level(0);
+        let mut row = listed_row(vec![list_item("a", "Alpha")]);
+        let RowControl::List { actions, .. } = &mut row.control else {
+            unreachable!();
+        };
+        actions.primary = Some(action_spec(
+            "connect",
+            "Connect",
+            Some("Connects it."),
+            None,
+        ));
+        actions.additional = vec![
+            action_spec("disconnect", "Disconnect", Some("Drops it."), None),
+            action_spec("remove", "Remove", None, None),
+        ];
+        root.rows = vec![row];
+        let item = {
+            let RowControl::List { items, .. } = &root.rows[0].control else {
+                unreachable!();
+            };
+            items.iter().find(|item| item.id == "a").expect("item")
+        };
+        let child = list_item_card_level(
+            0,
+            "a",
+            "Alpha",
+            None,
+            SettingsDestination::from_static("Alpha"),
+            &root.rows[0],
+            item,
+        )
+        .expect("item card level");
+        (root.rows, child)
+    }
+
+    #[test]
+    fn an_item_card_lists_actions_in_order_with_descriptions() {
+        let (_, child) = item_card_fixture();
+        assert_eq!(child.rows.len(), 3);
+        assert_eq!(child.rows[0].label, "Connect");
+        assert_eq!(child.rows[0].description.as_deref(), Some("Connects it."));
+        assert_eq!(child.rows[1].label, "Disconnect");
+        assert_eq!(child.rows[1].description.as_deref(), Some("Drops it."));
+        assert_eq!(child.rows[2].label, "Remove");
+        assert_eq!(child.rows[2].description, None);
+        assert!(matches!(&child.rows[0].control, RowControl::Text(value) if value.is_empty()));
+        assert_eq!(child.sections[0].label, "Alpha");
+        assert_eq!(
+            child.header,
+            super::super::LevelHeader::Card(SettingsDestination::from_static("Alpha"))
+        );
+    }
+
+    #[test]
+    fn an_item_card_highlight_starts_on_the_primary_action() {
+        let (_, child) = item_card_fixture();
+        assert_eq!(child.selected, 0);
+        assert_eq!(child.rows[child.selected].id, "connect");
+        assert_eq!(child.rows[child.selected].label, "Connect");
+    }
+
+    #[test]
+    fn an_item_card_resync_keeps_the_highlight_on_the_same_action() {
+        let (mut rows, mut child) = item_card_fixture();
+        child.selected = 2;
+        let RowControl::List { actions, .. } = &mut rows[0].control else {
+            unreachable!();
+        };
+        actions.additional = vec![
+            action_spec("remove", "Remove", None, None),
+            action_spec("disconnect", "Disconnect", Some("Drops it."), None),
+        ];
+        assert!(!item_card_sync(&rows, &mut child));
+        assert_eq!(child.selected, 1);
+        assert_eq!(child.rows[child.selected].id, "remove");
+        assert_eq!(child.rows.len(), 3);
+    }
+
+    #[test]
+    fn an_item_card_resync_reports_when_the_card_must_close() {
+        let (mut rows, mut child) = item_card_fixture();
+        let RowControl::List { items, .. } = &mut rows[0].control else {
+            unreachable!();
+        };
+        items.clear();
+        assert!(item_card_sync(&rows, &mut child));
+
+        let (mut rows, mut child) = item_card_fixture();
+        let RowControl::List { actions, .. } = &mut rows[0].control else {
+            unreachable!();
+        };
+        actions.primary = None;
+        actions.additional.clear();
+        assert!(item_card_sync(&rows, &mut child));
+    }
+
+    #[test]
+    fn card_enter_hints_open_list_cards_and_run_item_cards() {
+        let (_, list) = list_card_fixture();
+        assert_eq!(super::super::card_enter_hint(&list), Some("open"));
+        let (_, item) = item_card_fixture();
+        assert_eq!(super::super::card_enter_hint(&item), Some("run"));
+    }
+
+    #[test]
+    fn list_item_art_letters_every_visible_label() {
+        let items = vec![list_item("a", "Alpha"), list_item("b", "Beta")];
+        assert_eq!(
+            list_item_art(&items, &[0, 1], 0),
+            ChoiceArt::Picture("letters:A".to_string())
+        );
+        assert_eq!(
+            list_item_art(&items, &[0, 1], 1),
+            ChoiceArt::Picture("letters:B".to_string())
+        );
+        let empty = vec![list_item("c", "")];
+        assert_eq!(
+            list_item_art(&empty, &[0], 0),
+            ChoiceArt::Picture("letters:?".to_string())
+        );
     }
 
     #[test]

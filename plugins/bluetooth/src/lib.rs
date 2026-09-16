@@ -1,3 +1,4 @@
+pub mod audio_claim;
 pub mod bluetooth;
 pub mod cli;
 pub mod config;

@@ -53,6 +53,7 @@ pub struct SettingsChoiceValue {
     row: RowGround,
     context: PictureContext,
     palette: SettingsPanelPalette,
+    word_color: Option<u32>,
 }
 
 impl SettingsChoiceValue {
@@ -69,7 +70,13 @@ impl SettingsChoiceValue {
             row,
             context,
             palette,
+            word_color: None,
         }
+    }
+
+    pub fn word_color(mut self, color: Option<u32>) -> Self {
+        self.word_color = color;
+        self
     }
 }
 
@@ -81,6 +88,7 @@ impl RenderOnce for SettingsChoiceValue {
             row,
             context,
             palette,
+            word_color,
         } = self;
         let scale = window.scale_factor();
         let tones = choice_tones(row, palette);
@@ -163,24 +171,22 @@ impl RenderOnce for SettingsChoiceValue {
         } else {
             arrow
         };
+        let word = div()
+            .flex_none()
+            .max_w(px(CHOICE_WORD_MAX_WIDTH))
+            .truncate()
+            .text_size(px(qol_theme::TEXT_BODY));
+        let word = match word_color {
+            Some(color) => word.text_color(rgb(color)),
+            None => ground_text(word, rgb(tones.word), Some(rgb(tones.word_hover))),
+        };
         div()
             .flex()
             .flex_row()
             .flex_none()
             .items_center()
             .gap(px(qol_theme::SPACE_CELL))
-            .child(
-                ground_text(
-                    div()
-                        .flex_none()
-                        .max_w(px(CHOICE_WORD_MAX_WIDTH))
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_BODY)),
-                    rgb(tones.word),
-                    Some(rgb(tones.word_hover)),
-                )
-                .child(text),
-            )
+            .child(word.child(text))
             .child(art_box)
             .child(arrow)
     }

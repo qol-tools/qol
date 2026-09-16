@@ -8,6 +8,7 @@ use crate::config::ReconnectConfig;
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
+    audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
 };
 
 pub fn required_binaries_check() -> DoctorCheckResult {

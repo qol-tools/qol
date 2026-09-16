@@ -163,6 +163,8 @@ pub struct RowActionSpec {
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub key: Option<String>,
     #[serde(default)]
     pub when: Option<String>,
@@ -449,6 +451,7 @@ row_label = "{name}"
 [field.pads.row_action]
 action = "apply_fixes"
 label = "Fix"
+description = "Applies the fix."
 when = "fixable"
 "#;
         let spec = parse_spec_str(spec_str).expect("parse");
@@ -456,6 +459,11 @@ when = "fixable"
         let row_action = field.row_action.as_ref().expect("row_action present");
         assert_eq!(row_action.action, "apply_fixes", "action");
         assert_eq!(row_action.label.as_deref(), Some("Fix"), "label");
+        assert_eq!(
+            row_action.description.as_deref(),
+            Some("Applies the fix."),
+            "description"
+        );
         assert_eq!(row_action.when.as_deref(), Some("fixable"), "when");
     }
 

@@ -627,6 +627,7 @@ mod tests {
                 ("prefix".to_string(), "keep {missing} as-is".to_string()),
             ])),
             label: None,
+            description: None,
             key: None,
             when: None,
         };
@@ -645,6 +646,7 @@ mod tests {
             action: "remember".to_string(),
             input: None,
             label: None,
+            description: None,
             key: None,
             when: None,
         };

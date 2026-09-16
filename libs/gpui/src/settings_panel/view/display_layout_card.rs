@@ -135,6 +135,7 @@ impl SettingsPanelView {
             }),
             entries: None,
             form: None,
+            list_item: None,
         };
         self.push_card(destination, child);
         self.sync_scroll();
@@ -758,6 +759,7 @@ fn display_layout_card_level(
         choose: None,
         entries: None,
         form: None,
+        list_item: None,
     }
 }
 

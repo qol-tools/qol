@@ -54,6 +54,10 @@ args = ["connect"]
 label = "Disconnect Bluetooth Device"
 args = ["disconnect"]
 
+[action.reclaim_device]
+label = "Reclaim Bluetooth Audio"
+args = ["reclaim"]
+
 [action.remove_device]
 label = "Remove Bluetooth Device"
 args = ["remove"]

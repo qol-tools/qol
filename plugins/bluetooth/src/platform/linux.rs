@@ -5,7 +5,8 @@ use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{mpsc, LazyLock, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -36,6 +37,7 @@ use crate::hostfix::BluetoothHostFixes;
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: true,
+    audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
 };
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
@@ -244,6 +246,7 @@ enum DaemonAction {
     UntrustDevice,
     ConnectDevice,
     DisconnectDevice,
+    ReclaimDevice,
     RemoveDevice,
     StartSearch,
     StopSearch,
@@ -274,6 +277,7 @@ impl TryFrom<&str> for DaemonAction {
             "untrust_device" => Ok(Self::UntrustDevice),
             "connect_device" => Ok(Self::ConnectDevice),
             "disconnect_device" => Ok(Self::DisconnectDevice),
+            "reclaim_device" => Ok(Self::ReclaimDevice),
             "remove_device" => Ok(Self::RemoveDevice),
             "start_search" => Ok(Self::StartSearch),
             "stop_search" => Ok(Self::StopSearch),
@@ -1397,6 +1401,7 @@ fn dispatch_daemon_action(
         DaemonAction::DisconnectDevice => {
             device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting")
         }
+        DaemonAction::ReclaimDevice => reclaim_daemon_result(request),
         DaemonAction::RemoveDevice => {
             device_daemon_command(request, DaemonCommand::Remove, "Removing")
         }
@@ -1486,19 +1491,33 @@ fn device_daemon_command(
     command: fn(Address) -> DaemonCommand,
     pending_status: &str,
 ) -> ReadResult<DaemonCommand> {
+    match request_address(request) {
+        Ok(address) => match begin_device_action(address, pending_status) {
+            Ok(()) => ReadResult::Command(command(address)),
+            Err(error) => ReadResult::Error(error.to_string()),
+        },
+        Err(error) => ReadResult::Error(error),
+    }
+}
+
+fn request_address(request: &DaemonRequest) -> std::result::Result<Address, String> {
     let Some(address) = request
         .input
         .get("address")
         .and_then(serde_json::Value::as_str)
     else {
-        return ReadResult::Error(format!("{} requires an address", request.action));
+        return Err(format!("{} requires an address", request.action));
     };
-    match parse_address(address) {
-        Ok(address) => match begin_device_action(address, pending_status) {
-            Ok(()) => ReadResult::Command(command(address)),
-            Err(error) => ReadResult::Error(error.to_string()),
+    parse_address(address).map_err(|error| error.to_string())
+}
+
+fn reclaim_daemon_result(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
+    match request_address(request) {
+        Ok(address) => match crate::audio_claim::platform::reclaim_output(&address.to_string()) {
+            Ok(()) => ReadResult::Handled,
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        Err(error) => ReadResult::Error(error.to_string()),
+        Err(error) => ReadResult::Error(error),
     }
 }
 
@@ -1506,6 +1525,8 @@ async fn resilient_daemon_loop(
     mut config: ReconnectConfig,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
 ) -> Result<()> {
+    let reclaim_enabled = Arc::new(AtomicBool::new(config.auto_reclaim_on_play));
+    crate::audio_claim::platform::spawn_playback_watch(reclaim_enabled.clone());
     loop {
         let adapter = match tokio::time::timeout(ADAPTER_CONNECT_TIMEOUT, default_adapter()).await {
             Ok(Ok(adapter)) => adapter,
@@ -1533,7 +1554,7 @@ async fn resilient_daemon_loop(
                 continue;
             }
         };
-        match daemon_loop(&mut config, &mut commands, adapter).await {
+        match daemon_loop(&mut config, &mut commands, adapter, &reclaim_enabled).await {
             Ok(()) => return Ok(()),
             Err(error) => {
                 set_adapter_state(None);
@@ -1647,7 +1668,9 @@ async fn daemon_loop(
     config: &mut ReconnectConfig,
     commands: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonCommand>,
     adapter: Adapter,
+    reclaim_enabled: &AtomicBool,
 ) -> Result<()> {
+    reclaim_enabled.store(config.auto_reclaim_on_play, Ordering::Relaxed);
     if config.auto_reconnect && !config.managed_devices.is_empty() {
         if let Err(error) = ensure_powered(&adapter, config.power_on_adapter).await {
             eprintln!("Bluetooth adapter unavailable at daemon start: {error:#}");
@@ -1809,6 +1832,7 @@ async fn daemon_loop(
                 }
                 if matches!(command, DaemonCommand::Reload) {
                     *config = crate::config::load();
+                    reclaim_enabled.store(config.auto_reclaim_on_play, Ordering::Relaxed);
                     retries = retry_map(config);
                     let known_addresses = adapter.device_addresses().await?;
                     subscribe_addresses(
@@ -2834,6 +2858,7 @@ mod tests {
             ("untrust_device", DaemonAction::UntrustDevice),
             ("connect_device", DaemonAction::ConnectDevice),
             ("disconnect_device", DaemonAction::DisconnectDevice),
+            ("reclaim_device", DaemonAction::ReclaimDevice),
             ("remove_device", DaemonAction::RemoveDevice),
             ("start_search", DaemonAction::StartSearch),
             ("stop_search", DaemonAction::StopSearch),

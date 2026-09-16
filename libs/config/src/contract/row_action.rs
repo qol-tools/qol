@@ -6,6 +6,7 @@ use super::{RowActionSpec, RowSliderSpec};
 pub struct ResolvedRowAction {
     pub action: String,
     pub label: String,
+    pub description: Option<String>,
     pub input: Value,
 }
 
@@ -21,6 +22,7 @@ pub fn resolve_row_actions(
         .map(|spec| ResolvedRowAction {
             action: spec.action.clone(),
             label: spec.label.clone().unwrap_or_else(|| "Run".into()),
+            description: spec.description.clone(),
             input: resolve_input(spec.input.as_ref(), row),
         })
         .collect()
@@ -35,6 +37,7 @@ pub fn resolve_slider_action(slider: &RowSliderSpec, row: &Value, value: f64) ->
     ResolvedRowAction {
         action: slider.action.clone(),
         label: "Run".into(),
+        description: None,
         input: resolve_input(slider.input.as_ref(), &merged),
     }
 }
@@ -136,7 +139,12 @@ mod tests {
         RowSliderSpec,
     };
 
-    fn action(name: &str, label: Option<&str>, when: Option<&str>) -> RowActionSpec {
+    fn action(
+        name: &str,
+        label: Option<&str>,
+        description: Option<&str>,
+        when: Option<&str>,
+    ) -> RowActionSpec {
         RowActionSpec {
             action: name.into(),
             input: Some(IndexMap::from([
@@ -144,6 +152,7 @@ mod tests {
                 ("message".into(), "Connect {name} ({missing})".into()),
             ])),
             label: label.map(str::to_string),
+            description: description.map(str::to_string),
             key: None,
             when: when.map(str::to_string),
         }
@@ -151,10 +160,20 @@ mod tests {
 
     #[test]
     fn resolves_visible_actions_in_contract_order_with_typed_input() {
-        let primary = action("inspect", None, None);
+        let primary = action("inspect", None, None, None);
         let actions = [
-            action("connect", Some("Connect"), Some("can_connect")),
-            action("disconnect", Some("Disconnect"), Some("can_disconnect")),
+            action(
+                "connect",
+                Some("Connect"),
+                Some("Connects it."),
+                Some("can_connect"),
+            ),
+            action(
+                "disconnect",
+                Some("Disconnect"),
+                None,
+                Some("can_disconnect"),
+            ),
         ];
         let row = serde_json::json!({
             "address": 42,
@@ -168,8 +187,10 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].action, "inspect");
         assert_eq!(resolved[0].label, "Run");
+        assert_eq!(resolved[0].description, None);
         assert_eq!(resolved[1].action, "connect");
         assert_eq!(resolved[1].label, "Connect");
+        assert_eq!(resolved[1].description.as_deref(), Some("Connects it."));
         assert_eq!(resolved[1].input["address"], serde_json::json!(42));
         assert_eq!(
             resolved[1].input["message"],
@@ -292,7 +313,7 @@ mod tests {
 
     #[test]
     fn when_gate_matches_row_value_truthiness() {
-        let action = action("run", None, Some("enabled"));
+        let action = action("run", None, None, Some("enabled"));
         let cases = [
             (serde_json::json!(null), false),
             (serde_json::json!(false), false),

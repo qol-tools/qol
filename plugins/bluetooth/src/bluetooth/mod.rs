@@ -44,6 +44,7 @@ pub struct DeviceOption {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BackendCapabilities {
     pub separate_trust_flag: bool,
+    pub audio_reclaim: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -277,6 +278,7 @@ pub fn devices_payload(
                 "can_connect": device.paired && !device.connected,
                 "can_disconnect": device.connected,
                 "can_pair": !device.paired,
+                "can_reclaim": capabilities.audio_reclaim && ready && audio,
                 "can_remove": device.paired || device.trusted,
                 "can_trust": capabilities.separate_trust_flag && device.paired && !device.trusted,
                 "can_untrust": capabilities.separate_trust_flag && device.trusted,
@@ -363,9 +365,11 @@ mod tests {
 
     const TRUST_CAPABLE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: true,
+        audio_reclaim: false,
     };
     const TRUST_FREE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
+        audio_reclaim: false,
     };
 
     #[test]
@@ -422,6 +426,7 @@ mod tests {
                         "can_connect": false,
                         "can_disconnect": true,
                         "can_pair": false,
+                        "can_reclaim": false,
                         "can_remove": true,
                         "can_trust": false,
                         "can_untrust": true,
@@ -448,6 +453,7 @@ mod tests {
                         "can_connect": true,
                         "can_disconnect": false,
                         "can_pair": false,
+                        "can_reclaim": false,
                         "can_remove": true,
                         "can_trust": false,
                         "can_untrust": true,
@@ -474,6 +480,7 @@ mod tests {
                         "can_connect": false,
                         "can_disconnect": false,
                         "can_pair": true,
+                        "can_reclaim": false,
                         "can_remove": false,
                         "can_trust": false,
                         "can_untrust": false,

@@ -56,36 +56,49 @@ card_description = "Devices nearby and already paired."
 [[field.devices.row_actions]]
 action = "connect_device"
 label = "Connect"
+description = "Connects the device to this computer."
 when = "can_connect"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "reclaim_device"
+label = "Take back"
+description = "Moves the audio from the other device to this computer."
+when = "can_reclaim"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "disconnect_device"
 label = "Disconnect"
+description = "Drops the connection on this computer only."
 when = "can_disconnect"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "pair_device"
 label = "Pair"
+description = "Pairs the device with this computer."
 when = "can_pair"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "trust_device"
 label = "Trust"
+description = "Lets the device connect on its own."
 when = "can_trust"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "untrust_device"
 label = "Untrust"
+description = "Stops the device connecting on its own."
 when = "can_untrust"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "remove_device"
 label = "Remove"
+description = "Forgets the pairing."
 when = "can_remove"
 input = { address = "{address}" }
 
@@ -164,6 +177,7 @@ card_description = "What the Bluetooth stack reports."
 [field.host_findings.row_action]
 action = "apply_host_fix"
 label = "Fix"
+description = "Applies the fix to this computer's Bluetooth stack."
 when = "actionable"
 input = { id = "{id}" }
 
@@ -175,5 +189,12 @@ description = "Where system audio goes when a Bluetooth audio device connects."
 type = "boolean"
 label = "Set as default output on connect"
 description = "Make a connected audio device the system output. The mic stays on your current input because qol pins the high-quality A2DP profile, which carries no microphone."
+section = "audio"
+default = true
+
+[field.auto_reclaim_on_play]
+type = "boolean"
+label = "Take the speaker back when this computer plays"
+description = "When a Bluetooth speaker is shared with another device, such as a phone, switch it back to this computer as soon as this computer starts playing."
 section = "audio"
 default = true

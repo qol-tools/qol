@@ -9,7 +9,6 @@ use std::rc::Rc;
 use futures::StreamExt as _;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_config::contract::ResolvedRowAction;
 
 use super::components::{
     number_field, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
@@ -34,7 +33,6 @@ use super::{
 };
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
-use crate::dropdown::{Dropdown, DropdownStyle};
 use crate::gamepad::{gamepad_panel, GamepadPalette};
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
@@ -275,7 +273,6 @@ pub(super) struct SettingsPanelState {
 
 enum ActiveControl {
     Edit(String),
-    ListActions(ListActionMenu),
     Wheel(WheelControl),
 }
 
@@ -297,6 +294,7 @@ struct Level {
     choose: Option<choose_card::ChooseState>,
     entries: Option<structured_list_editor::EntriesCard>,
     form: Option<super::entry_form::EntryForm>,
+    list_item: Option<ListItemCard>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -305,11 +303,9 @@ enum LevelHeader {
     Card(SettingsDestination),
 }
 
-struct ListActionMenu {
-    row: usize,
+struct ListItemCard {
+    origin_row: usize,
     item_id: String,
-    dropdown: Dropdown,
-    actions: Vec<ResolvedRowAction>,
 }
 
 struct WheelControl {
@@ -355,6 +351,7 @@ impl SettingsPanelView {
             choose: None,
             entries: None,
             form: None,
+            list_item: None,
         };
         let mut view = Self {
             panel,
@@ -1069,7 +1066,7 @@ impl SettingsPanelView {
                             }
                             if !batch.is_empty() {
                                 for (query, result) in batch {
-                                    this.apply_query(&query, result);
+                                    this.apply_query(&query, result, cx);
                                 }
                                 cx.notify();
                             }
@@ -1182,7 +1179,7 @@ impl SettingsPanelView {
         let entity = cx.entity().downgrade();
         window.on_next_frame(move |window, cx| {
             let _ = entity.update(cx, |this, cx| {
-                let changed = this.apply_frame_paced_samples();
+                let changed = this.apply_frame_paced_samples(cx);
                 if this.step_gamepad_motion() || changed {
                     cx.notify();
                 }
@@ -1214,7 +1211,7 @@ impl SettingsPanelView {
         animating
     }
 
-    fn apply_frame_paced_samples(&mut self) -> bool {
+    fn apply_frame_paced_samples(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(samples) = self.frame_paced_samples.clone() else {
             return false;
         };
@@ -1229,13 +1226,18 @@ impl SettingsPanelView {
             }
             self.applied_query_payloads
                 .insert(query.clone(), result.clone());
-            self.apply_query(&query, result);
+            self.apply_query(&query, result, cx);
             changed = true;
         }
         changed
     }
 
-    fn apply_query(&mut self, query: &str, result: Result<serde_json::Value, String>) {
+    fn apply_query(
+        &mut self,
+        query: &str,
+        result: Result<serde_json::Value, String>,
+        cx: &mut Context<Self>,
+    ) {
         self.query_states.insert(
             (self.materialized_source, query.to_string()),
             match &result {
@@ -1251,7 +1253,7 @@ impl SettingsPanelView {
                 || pending.contains(&(index, id.to_string()))
         });
         self.height_revision += 1;
-        self.sync_list_card(query);
+        self.sync_list_card(query, cx);
         self.sync_live_card(query);
         self.sync_display_layout_card(query);
     }
@@ -1413,13 +1415,6 @@ impl SettingsPanelView {
             let _ = popup.update(cx, |popup, popup_window, popup_cx| {
                 popup.handle_key(key, event.keystroke.modifiers.shift, popup_window, popup_cx);
             });
-            return;
-        }
-        if matches!(
-            self.level().active_control,
-            Some(ActiveControl::ListActions(_))
-        ) {
-            self.on_list_actions_key(key, cx);
             return;
         }
         if !self.filter_open
@@ -1727,6 +1722,10 @@ impl SettingsPanelView {
         if self.level().entries.is_some() || self.level().form.is_some() {
             return;
         }
+        if self.level().list_item.is_some() {
+            self.run_item_card_action(cx);
+            return;
+        }
         let selected = self.level().selected;
         let Some(row) = self.level().rows.get(selected) else {
             return;
@@ -1868,7 +1867,7 @@ impl SettingsPanelView {
                         *error = result.err();
                     }
                     if let Some((query, result)) = refreshed {
-                        this.apply_query(&query, result);
+                        this.apply_query(&query, result, cx);
                     }
                     #[cfg(debug_assertions)]
                     if let Some(RowControl::Action { active, error, .. }) =
@@ -2260,7 +2259,7 @@ impl SettingsPanelView {
             match &self.level().active_control {
                 Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
-                Some(ActiveControl::ListActions(_)) | None => {}
+                None => {}
             }
         }
         match &self.level().rows[index].control {
@@ -2370,10 +2369,6 @@ impl SettingsPanelView {
             RowControl::QrCode { .. } => SettingsValueTone::Normal,
             RowControl::Unsupported { .. } => SettingsValueTone::Muted,
         }
-    }
-
-    fn dropdown_style(&self) -> DropdownStyle {
-        super::components::settings_dropdown_style(self.palette)
     }
 
     fn wheel_style(&self) -> WheelStyle {
@@ -2629,7 +2624,7 @@ impl SettingsPanelView {
             match &self.level().active_control {
                 Some(ActiveControl::Edit(edit)) => edit,
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
-                Some(ActiveControl::ListActions(_)) | None => value,
+                None => value,
             }
         } else {
             value
@@ -2707,7 +2702,9 @@ impl SettingsPanelView {
             }
             this.click_row(index, window, cx);
         }));
-        line = line.child(value_cell);
+        if self.level().list_item.is_none() {
+            line = line.child(value_cell);
+        }
         container = container.child(line);
         let error = match &row.control {
             RowControl::Action {
@@ -4315,6 +4312,7 @@ fn live_card_level(
         choose: None,
         entries: None,
         form: None,
+        list_item: None,
     }
 }
 
@@ -4398,6 +4396,9 @@ fn card_enter_hint(level: &Level) -> Option<&'static str> {
         return display_layout_card::enter_hint(level.selected);
     }
     if level.list_card {
+        return Some("open");
+    }
+    if level.list_item.is_some() {
         return Some("run");
     }
     None
@@ -5527,6 +5528,7 @@ default = "visible"
             choose: None,
             entries: None,
             form: None,
+            list_item: None,
         }
     }
 
