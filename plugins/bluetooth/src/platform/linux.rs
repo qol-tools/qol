@@ -66,6 +66,7 @@ const AUDIO_REPAIR_COOLDOWN: Duration = Duration::from_secs(60);
 const AUDIO_REPAIR_MAX_ATTEMPTS: u32 = 3;
 const AUDIO_WATCH_TICK_BUDGET: Duration = Duration::from_secs(3);
 const ADOPTION_RETRY_WINDOW: Duration = Duration::from_secs(600);
+const ADOPT_TRIGGER_RETRY: &str = "retry";
 const DISCONNECT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEVICE_CONNECT_ATTEMPTS: u32 = 3;
 const DEVICE_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(1500);
@@ -1178,11 +1179,20 @@ enum AdoptionOutcome {
     Adopted,
     Blocked(String),
     Unverified,
+    SinkAbsent,
+}
+
+fn adopt_sink_wait(trigger: &str) -> Duration {
+    if trigger == ADOPT_TRIGGER_RETRY {
+        Duration::ZERO
+    } else {
+        PROFILE_CONNECT_TIMEOUT
+    }
 }
 
 async fn adopt_default_sink(address: Address, trigger: &'static str) -> Result<AdoptionOutcome> {
     let prefix = format!("bluez_output.{}", pactl_device_id(address));
-    let deadline = Instant::now() + PROFILE_CONNECT_TIMEOUT;
+    let deadline = Instant::now() + adopt_sink_wait(trigger);
     loop {
         let listing = tokio::process::Command::new("pactl")
             .args(["list", "short", "sinks"])
@@ -1217,15 +1227,7 @@ async fn adopt_default_sink(address: Address, trigger: &'static str) -> Result<A
             if listing_unavailable {
                 return Ok(AdoptionOutcome::Unverified);
             }
-            qol_runtime::probe!(
-                "BLUETOOTH_DEFAULT_OUTPUT",
-                "device={} outcome=failed",
-                redacted(address)
-            );
-            bail!(
-                "{} activated A2DP without exposing a PipeWire sink to adopt as default",
-                redacted(address)
-            );
+            return Ok(AdoptionOutcome::SinkAbsent);
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -1965,9 +1967,11 @@ async fn daemon_loop(
                 if connected && !qol_in_flight {
                     spawn_audio_profile_ensure(address, AudioAdoption::Adopt);
                 }
+                if !connected {
+                    clear_adoption_retry(address);
+                }
                 if !connected && !qol_in_flight {
                     watch_states.remove(&address);
-                    clear_adoption_retry(address);
                 }
                 if let Some(state) = retries.get_mut(&address) {
                     if connected {
@@ -2477,14 +2481,33 @@ fn adoption_decision(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchAction {
+    Repair,
+    Retry,
+    Idle,
+}
+
+fn watch_action(degraded: bool, retry_pending: bool) -> WatchAction {
+    if degraded {
+        return WatchAction::Repair;
+    }
+    if retry_pending {
+        return WatchAction::Retry;
+    }
+    WatchAction::Idle
+}
+
 #[derive(Debug, Default)]
 struct AdoptionRetries {
     pending: HashMap<Address, Instant>,
 }
 
 impl AdoptionRetries {
-    fn register(&mut self, address: Address, now: Instant) {
+    fn register(&mut self, address: Address, now: Instant) -> bool {
+        let known = self.pending.contains_key(&address);
         self.pending.entry(address).or_insert(now);
+        !known
     }
 
     fn clear(&mut self, address: Address) {
@@ -2508,10 +2531,11 @@ impl AdoptionRetries {
     }
 }
 
-fn register_adoption_retry(address: Address) {
-    if let Ok(mut retries) = ADOPTION_RETRIES.write() {
-        retries.register(address, Instant::now());
-    }
+fn register_adoption_retry(address: Address) -> bool {
+    ADOPTION_RETRIES
+        .write()
+        .map(|mut retries| retries.register(address, Instant::now()))
+        .unwrap_or(false)
 }
 
 fn clear_adoption_retry(address: Address) {
@@ -2555,6 +2579,9 @@ fn redacted_sink(name: &str) -> String {
 }
 
 fn record_adoption_skip_blocked(address: Address, blocking: &str) {
+    if !register_adoption_retry(address) {
+        return;
+    }
     let blocking = redacted_sink(blocking);
     eprintln!(
         "Bluetooth default output selection skipped for {}: {blocking} is playing",
@@ -2566,10 +2593,12 @@ fn record_adoption_skip_blocked(address: Address, blocking: &str) {
         redacted(address),
         qol_runtime::probe::token(&blocking)
     );
-    register_adoption_retry(address);
 }
 
 fn record_adoption_skip_unverified(address: Address) {
+    if !register_adoption_retry(address) {
+        return;
+    }
     eprintln!(
         "Bluetooth default output selection skipped for {}: the PipeWire sink listing is unavailable",
         redacted(address)
@@ -2579,7 +2608,21 @@ fn record_adoption_skip_unverified(address: Address) {
         "device={} outcome=skipped reason=guard_unavailable",
         redacted(address)
     );
-    register_adoption_retry(address);
+}
+
+fn record_adoption_sink_absent(address: Address) {
+    if !register_adoption_retry(address) {
+        return;
+    }
+    eprintln!(
+        "Bluetooth default output selection deferred for {}: the device has no PipeWire sink yet",
+        redacted(address)
+    );
+    qol_runtime::probe!(
+        "BLUETOOTH_DEFAULT_OUTPUT",
+        "device={} outcome=skipped reason=sink_absent",
+        redacted(address)
+    );
 }
 
 async fn adopt_reconnected_output(
@@ -2599,6 +2642,7 @@ async fn adopt_reconnected_output(
                 record_adoption_skip_blocked(address, &blocking)
             }
             Ok(AdoptionOutcome::Unverified) => record_adoption_skip_unverified(address),
+            Ok(AdoptionOutcome::SinkAbsent) => record_adoption_sink_absent(address),
             Err(error) => eprintln!(
                 "Bluetooth default output selection failed for {}: {error:#}",
                 redacted(address)
@@ -2606,7 +2650,9 @@ async fn adopt_reconnected_output(
         },
         AdoptionDecision::SkipBlocked(blocking) => record_adoption_skip_blocked(address, &blocking),
         AdoptionDecision::SkipUnverified => record_adoption_skip_unverified(address),
-        AdoptionDecision::SkipDisabled | AdoptionDecision::SkipKeep => {}
+        AdoptionDecision::SkipDisabled | AdoptionDecision::SkipKeep => {
+            clear_adoption_retry(address)
+        }
     }
 }
 
@@ -2639,11 +2685,17 @@ async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, Audio
                 continue;
             }
             let profile = live_audio_profile(address).await;
-            if !audio_output_degraded(profile.as_deref()) {
-                if adoption_retry_pending(address) {
-                    adopt_reconnected_output(address, AudioAdoption::Adopt, "retry").await;
+            match watch_action(
+                audio_output_degraded(profile.as_deref()),
+                adoption_retry_pending(address),
+            ) {
+                WatchAction::Retry => {
+                    adopt_reconnected_output(address, AudioAdoption::Adopt, ADOPT_TRIGGER_RETRY)
+                        .await;
+                    continue;
                 }
-                continue;
+                WatchAction::Idle => continue,
+                WatchAction::Repair => {}
             }
             qol_runtime::probe!(
                 "BLUETOOTH_PROFILE_REPAIR",
@@ -3017,14 +3069,17 @@ fn redacted(address: Address) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        adoption_decision, begin_device_action, complete_device_action_within,
-        finish_device_action, pactl_active_card_profile, pactl_has_card, pactl_sink_matching,
-        pactl_source_in_use, pactl_source_index, parse_address, parse_daemon_request, redacted,
-        redacted_sink, runtime, set_device_action_state, tolerated_profile_connect,
-        transient_connect_error, Address, AdoptionDecision, AdoptionRetries, AudioAdoption,
-        AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout,
-        Duration, ErrorKind, Instant, ReadResult, Result, RetryState, ADOPTION_RETRY_WINDOW,
-        DEVICE_ACTION_STATE,
+        adopt_sink_wait, adoption_decision, adoption_retry_pending, begin_device_action,
+        clear_adoption_retry, complete_device_action_within, finish_device_action,
+        pactl_active_card_profile, pactl_has_card, pactl_sink_matching, pactl_source_in_use,
+        pactl_source_index, parse_address, parse_daemon_request, record_adoption_sink_absent,
+        record_adoption_skip_blocked, record_adoption_skip_unverified, redacted, redacted_sink,
+        register_adoption_retry, runtime, set_device_action_state, tolerated_profile_connect,
+        transient_connect_error, watch_action, Address, AdoptionDecision, AdoptionRetries,
+        AudioAdoption, AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand,
+        DeviceActionTimeout, Duration, ErrorKind, Instant, ReadResult, Result, RetryState,
+        WatchAction, ADOPTION_RETRY_WINDOW, ADOPT_TRIGGER_RETRY, DEVICE_ACTION_STATE,
+        PROFILE_CONNECT_TIMEOUT,
     };
     use qol_runtime::protocol::DaemonRequest;
     use std::collections::HashMap;
@@ -3333,17 +3388,27 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_adoption_is_retried_when_the_guard_clears() {
-        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
-        let now = Instant::now();
-        let mut retries = AdoptionRetries::default();
-        assert!(!retries.is_pending(address));
-        retries.register(address, now);
-        assert!(retries.is_pending(address));
-        let decision = adoption_decision(AudioAdoption::Adopt, true, Ok(None));
-        assert_eq!(decision, AdoptionDecision::Adopt);
-        retries.clear(address);
-        assert!(!retries.is_pending(address));
+    fn the_watch_tick_retries_a_pending_adoption_and_repairs_before_it() {
+        let cases = [
+            (true, true, WatchAction::Repair),
+            (true, false, WatchAction::Repair),
+            (false, true, WatchAction::Retry),
+            (false, false, WatchAction::Idle),
+        ];
+        for (degraded, pending, expected) in cases {
+            assert_eq!(
+                watch_action(degraded, pending),
+                expected,
+                "degraded={degraded} pending={pending}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_retry_never_waits_for_a_sink_the_next_tick_can_find() {
+        assert_eq!(adopt_sink_wait(ADOPT_TRIGGER_RETRY), Duration::ZERO);
+        assert_eq!(adopt_sink_wait("connect"), PROFILE_CONNECT_TIMEOUT);
+        assert_eq!(adopt_sink_wait("repair"), PROFILE_CONNECT_TIMEOUT);
     }
 
     #[test]
@@ -3352,8 +3417,8 @@ mod tests {
         let now = Instant::now();
         let window = ADOPTION_RETRY_WINDOW;
         let mut retries = AdoptionRetries::default();
-        retries.register(address, now);
-        retries.register(address, now + Duration::from_secs(120));
+        assert!(retries.register(address, now));
+        assert!(!retries.register(address, now + Duration::from_secs(120)));
         assert!(retries
             .expire(now + window - Duration::from_secs(1))
             .is_empty());
@@ -3376,20 +3441,27 @@ mod tests {
     }
 
     #[test]
-    fn a_successful_adoption_removes_the_pending_entry() {
-        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
-        let now = Instant::now();
-        let window = ADOPTION_RETRY_WINDOW;
-        let mut retries = AdoptionRetries::default();
-        retries.register(address, now);
-        let blocked = adoption_decision(AudioAdoption::Adopt, true, Ok(Some("hdmi".into())));
-        assert_eq!(blocked, AdoptionDecision::SkipBlocked("hdmi".into()));
-        assert!(retries.is_pending(address));
-        let cleared = adoption_decision(AudioAdoption::Adopt, true, Ok(None));
-        assert_eq!(cleared, AdoptionDecision::Adopt);
-        retries.clear(address);
-        assert!(!retries.is_pending(address));
-        assert!(retries.expire(now + window).is_empty());
+    fn a_recorded_skip_leaves_the_device_pending_until_it_is_cleared() {
+        let address = parse_address("0A:0B:0C:0D:0E:01").unwrap();
+        clear_adoption_retry(address);
+        record_adoption_skip_blocked(address, "alsa_output.pci.hdmi-stereo");
+        assert!(adoption_retry_pending(address));
+        record_adoption_skip_unverified(address);
+        record_adoption_sink_absent(address);
+        assert!(adoption_retry_pending(address));
+        clear_adoption_retry(address);
+        assert!(!adoption_retry_pending(address));
+    }
+
+    #[test]
+    fn only_the_first_skip_of_a_pending_device_is_recorded() {
+        let address = parse_address("0A:0B:0C:0D:0E:02").unwrap();
+        clear_adoption_retry(address);
+        assert!(register_adoption_retry(address));
+        assert!(!register_adoption_retry(address));
+        clear_adoption_retry(address);
+        assert!(register_adoption_retry(address));
+        clear_adoption_retry(address);
     }
 
     #[test]
