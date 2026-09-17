@@ -34,6 +34,7 @@ use crate::bluetooth::{
 };
 use crate::config::ReconnectConfig;
 use crate::hostfix::BluetoothHostFixes;
+use crate::platform::pactl::{parse_short_sinks, running_sink_except};
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: true,
@@ -51,6 +52,8 @@ static DEVICE_ACTION_STATE: LazyLock<RwLock<Option<DeviceActionState>>> =
 static ADAPTER_STATE: LazyLock<RwLock<Option<AdapterHealth>>> = LazyLock::new(|| RwLock::new(None));
 static AUDIO_REPAIRS: LazyLock<RwLock<HashSet<Address>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
+static ADOPTION_RETRIES: LazyLock<RwLock<AdoptionRetries>> =
+    LazyLock::new(|| RwLock::new(AdoptionRetries::default()));
 static CONNECTION_FLIGHTS: LazyLock<RwLock<HashSet<Address>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
@@ -62,6 +65,7 @@ const AUDIO_PROFILE_WATCH_INTERVAL: Duration = Duration::from_secs(10);
 const AUDIO_REPAIR_COOLDOWN: Duration = Duration::from_secs(60);
 const AUDIO_REPAIR_MAX_ATTEMPTS: u32 = 3;
 const AUDIO_WATCH_TICK_BUDGET: Duration = Duration::from_secs(3);
+const ADOPTION_RETRY_WINDOW: Duration = Duration::from_secs(600);
 const DISCONNECT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEVICE_CONNECT_ATTEMPTS: u32 = 3;
 const DEVICE_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(1500);
@@ -1092,17 +1096,25 @@ async fn activate_pipewire_a2dp(
     }
 }
 
-async fn pactl_output(args: &[&str]) -> Option<Vec<u8>> {
+async fn pactl_output(args: &[&str]) -> Result<Vec<u8>> {
     let output = tokio::process::Command::new("pactl")
         .args(args)
         .output()
         .await
-        .ok()?;
-    output.status.success().then_some(output.stdout)
+        .with_context(|| format!("failed to run `pactl {}`", args.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "`pactl {}` failed with {}: {}",
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(output.stdout)
 }
 
 async fn pactl_cards() -> Option<Vec<u8>> {
-    pactl_output(&["list", "short", "cards"]).await
+    pactl_output(&["list", "short", "cards"]).await.ok()
 }
 
 async fn select_a2dp_sink(card: &str) -> Result<bool> {
@@ -1142,7 +1154,7 @@ fn pactl_device_id(address: Address) -> String {
 }
 
 async fn live_audio_profile(address: Address) -> Option<String> {
-    let output = pactl_output(&["list", "cards"]).await?;
+    let output = pactl_output(&["list", "cards"]).await.ok()?;
     let card = format!("bluez_card.{}", pactl_device_id(address));
     pactl_active_card_profile(&output, &card)
 }
@@ -1151,45 +1163,60 @@ async fn microphone_in_use(address: Address) -> bool {
     let prefix = format!("bluez_input.{}", pactl_device_id(address));
     let Some(source_index) = pactl_output(&["list", "short", "sources"])
         .await
+        .ok()
         .and_then(|output| pactl_source_index(&output, &prefix))
     else {
         return false;
     };
     pactl_output(&["list", "short", "source-outputs"])
         .await
-        .is_some_and(|output| pactl_source_in_use(&output, &source_index))
+        .is_ok_and(|output| pactl_source_in_use(&output, &source_index))
 }
 
-async fn adopt_default_sink(address: Address) -> Result<()> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AdoptionOutcome {
+    Adopted,
+    Blocked(String),
+    Unverified,
+}
+
+async fn adopt_default_sink(address: Address, trigger: &'static str) -> Result<AdoptionOutcome> {
     let prefix = format!("bluez_output.{}", pactl_device_id(address));
     let deadline = Instant::now() + PROFILE_CONNECT_TIMEOUT;
     loop {
-        let sinks = tokio::process::Command::new("pactl")
+        let listing = tokio::process::Command::new("pactl")
             .args(["list", "short", "sinks"])
             .output()
-            .await
-            .context("failed to inspect PipeWire sinks through pactl")?;
-        let sink = sinks
-            .status
-            .success()
-            .then(|| pactl_sink_matching(&sinks.stdout, &prefix))
-            .flatten();
-        if let Some(sink) = sink {
-            let status = tokio::process::Command::new("pactl")
-                .args(["set-default-sink", &sink])
-                .status()
-                .await
-                .context("failed to select the default audio sink through pactl")?;
-            if status.success() {
-                qol_runtime::probe!(
-                    "BLUETOOTH_DEFAULT_OUTPUT",
-                    "device={} outcome=adopted",
-                    redacted(address)
-                );
-                return Ok(());
+            .await;
+        let listing_unavailable = match listing {
+            Ok(listing) if listing.status.success() => {
+                let rows = parse_short_sinks(&listing.stdout);
+                if let Some(blocking) = running_sink_except(&rows, &prefix) {
+                    return Ok(AdoptionOutcome::Blocked(blocking));
+                }
+                if let Some(sink) = pactl_sink_matching(&listing.stdout, &prefix) {
+                    let status = tokio::process::Command::new("pactl")
+                        .args(["set-default-sink", &sink])
+                        .status()
+                        .await
+                        .context("failed to select the default audio sink through pactl")?;
+                    if status.success() {
+                        qol_runtime::probe!(
+                            "BLUETOOTH_DEFAULT_OUTPUT",
+                            "device={} outcome=adopted trigger={trigger}",
+                            redacted(address)
+                        );
+                        return Ok(AdoptionOutcome::Adopted);
+                    }
+                }
+                false
             }
-        }
+            _ => true,
+        };
         if Instant::now() >= deadline {
+            if listing_unavailable {
+                return Ok(AdoptionOutcome::Unverified);
+            }
             qol_runtime::probe!(
                 "BLUETOOTH_DEFAULT_OUTPUT",
                 "device={} outcome=failed",
@@ -1205,26 +1232,18 @@ async fn adopt_default_sink(address: Address) -> Result<()> {
 }
 
 fn pactl_sink_matching(output: &[u8], prefix: &str) -> Option<String> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1))
-        .find(|sink| sink.starts_with(prefix))
-        .map(str::to_string)
+    parse_short_sinks(output)
+        .iter()
+        .find(|row| row.name().starts_with(prefix))
+        .map(|row| row.name().to_string())
 }
 
-async fn other_output_playing(address: Address) -> Option<String> {
+async fn other_output_playing(address: Address) -> Result<Option<String>> {
     let prefix = format!("bluez_output.{}", pactl_device_id(address));
-    let listing = pactl_output(&["list", "short", "sinks"]).await?;
-    running_sink_outside(&listing, &prefix)
-}
-
-fn running_sink_outside(output: &[u8], own_prefix: &str) -> Option<String> {
-    String::from_utf8_lossy(output).lines().find_map(|line| {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let name = fields.get(1)?;
-        (fields.len() >= 3 && fields.last() == Some(&"RUNNING") && !name.starts_with(own_prefix))
-            .then(|| name.to_string())
-    })
+    let listing = pactl_output(&["list", "short", "sinks"])
+        .await
+        .context("failed to inspect PipeWire sinks through pactl")?;
+    Ok(running_sink_except(&parse_short_sinks(&listing), &prefix))
 }
 
 fn pactl_source_index(output: &[u8], prefix: &str) -> Option<String> {
@@ -1948,6 +1967,7 @@ async fn daemon_loop(
                 }
                 if !connected && !qol_in_flight {
                     watch_states.remove(&address);
+                    clear_adoption_retry(address);
                 }
                 if let Some(state) = retries.get_mut(&address) {
                     if connected {
@@ -2418,7 +2438,9 @@ fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption) {
             return;
         };
         match ensure_reconnected_audio_profile(address).await {
-            Ok(AudioProfile::Active) => adopt_reconnected_output(address, adoption).await,
+            Ok(AudioProfile::Active) => {
+                adopt_reconnected_output(address, adoption, "connect").await
+            }
             Ok(AudioProfile::Absent) => {}
             Err(error) => eprintln!(
                 "Bluetooth A2DP profile restore failed for {}: {error:#}",
@@ -2428,28 +2450,178 @@ fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption) {
     }));
 }
 
-async fn adopt_reconnected_output(address: Address, adoption: AudioAdoption) {
-    if adoption == AudioAdoption::Keep || !crate::config::load().set_default_output {
-        return;
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AdoptionDecision {
+    Adopt,
+    SkipBlocked(String),
+    SkipUnverified,
+    SkipDisabled,
+    SkipKeep,
+}
+
+fn adoption_decision(
+    adoption: AudioAdoption,
+    enabled: bool,
+    guard: Result<Option<String>>,
+) -> AdoptionDecision {
+    if adoption == AudioAdoption::Keep {
+        return AdoptionDecision::SkipKeep;
     }
-    if let Some(playing) = other_output_playing(address).await {
-        qol_runtime::probe!(
-            "BLUETOOTH_DEFAULT_OUTPUT",
-            "device={} outcome=skipped reason=other_output_playing other_sink={}",
-            redacted(address),
-            playing
-        );
-        return;
+    if !enabled {
+        return AdoptionDecision::SkipDisabled;
     }
-    if let Err(error) = adopt_default_sink(address).await {
-        eprintln!(
-            "Bluetooth default output selection failed for {}: {error:#}",
-            redacted(address)
-        );
+    match guard {
+        Ok(Some(blocking)) => AdoptionDecision::SkipBlocked(blocking),
+        Ok(None) => AdoptionDecision::Adopt,
+        Err(_) => AdoptionDecision::SkipUnverified,
+    }
+}
+
+#[derive(Debug, Default)]
+struct AdoptionRetries {
+    pending: HashMap<Address, Instant>,
+}
+
+impl AdoptionRetries {
+    fn register(&mut self, address: Address, now: Instant) {
+        self.pending.entry(address).or_insert(now);
+    }
+
+    fn clear(&mut self, address: Address) {
+        self.pending.remove(&address);
+    }
+
+    fn is_pending(&self, address: Address) -> bool {
+        self.pending.contains_key(&address)
+    }
+
+    fn expire(&mut self, now: Instant) -> Vec<Address> {
+        let mut expired = Vec::new();
+        self.pending.retain(|address, first| {
+            let live = now.saturating_duration_since(*first) < ADOPTION_RETRY_WINDOW;
+            if !live {
+                expired.push(*address);
+            }
+            live
+        });
+        expired
+    }
+}
+
+fn register_adoption_retry(address: Address) {
+    if let Ok(mut retries) = ADOPTION_RETRIES.write() {
+        retries.register(address, Instant::now());
+    }
+}
+
+fn clear_adoption_retry(address: Address) {
+    if let Ok(mut retries) = ADOPTION_RETRIES.write() {
+        retries.clear(address);
+    }
+}
+
+fn adoption_retry_pending(address: Address) -> bool {
+    ADOPTION_RETRIES
+        .read()
+        .is_ok_and(|retries| retries.is_pending(address))
+}
+
+fn expire_adoption_retries() -> Vec<Address> {
+    ADOPTION_RETRIES
+        .write()
+        .map(|mut retries| retries.expire(Instant::now()))
+        .unwrap_or_default()
+}
+
+fn redacted_sink(name: &str) -> String {
+    let Some(rest) = name.strip_prefix("bluez_output.") else {
+        return name.to_string();
+    };
+    let Some((mac, instance)) = rest.split_once('.') else {
+        return name.to_string();
+    };
+    let octets: Vec<&str> = mac.split('_').collect();
+    let valid = octets.len() == 6
+        && octets
+            .iter()
+            .all(|octet| octet.len() == 2 && octet.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if !valid {
+        return name.to_string();
+    }
+    format!(
+        "bluez_output.**:**:**:**:{}:{}.{}",
+        octets[4], octets[5], instance
+    )
+}
+
+fn record_adoption_skip_blocked(address: Address, blocking: &str) {
+    let blocking = redacted_sink(blocking);
+    eprintln!(
+        "Bluetooth default output selection skipped for {}: {blocking} is playing",
+        redacted(address)
+    );
+    qol_runtime::probe!(
+        "BLUETOOTH_DEFAULT_OUTPUT",
+        "device={} outcome=skipped reason=other_output_playing other_sink={}",
+        redacted(address),
+        qol_runtime::probe::token(&blocking)
+    );
+    register_adoption_retry(address);
+}
+
+fn record_adoption_skip_unverified(address: Address) {
+    eprintln!(
+        "Bluetooth default output selection skipped for {}: the PipeWire sink listing is unavailable",
+        redacted(address)
+    );
+    qol_runtime::probe!(
+        "BLUETOOTH_DEFAULT_OUTPUT",
+        "device={} outcome=skipped reason=guard_unavailable",
+        redacted(address)
+    );
+    register_adoption_retry(address);
+}
+
+async fn adopt_reconnected_output(
+    address: Address,
+    adoption: AudioAdoption,
+    trigger: &'static str,
+) {
+    let decision = adoption_decision(
+        adoption,
+        crate::config::load().set_default_output,
+        other_output_playing(address).await,
+    );
+    match decision {
+        AdoptionDecision::Adopt => match adopt_default_sink(address, trigger).await {
+            Ok(AdoptionOutcome::Adopted) => clear_adoption_retry(address),
+            Ok(AdoptionOutcome::Blocked(blocking)) => {
+                record_adoption_skip_blocked(address, &blocking)
+            }
+            Ok(AdoptionOutcome::Unverified) => record_adoption_skip_unverified(address),
+            Err(error) => eprintln!(
+                "Bluetooth default output selection failed for {}: {error:#}",
+                redacted(address)
+            ),
+        },
+        AdoptionDecision::SkipBlocked(blocking) => record_adoption_skip_blocked(address, &blocking),
+        AdoptionDecision::SkipUnverified => record_adoption_skip_unverified(address),
+        AdoptionDecision::SkipDisabled | AdoptionDecision::SkipKeep => {}
     }
 }
 
 async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, AudioWatchState>) {
+    for address in expire_adoption_retries() {
+        eprintln!(
+            "Bluetooth default output selection abandoned for {}: the retry window expired",
+            redacted(address)
+        );
+        qol_runtime::probe!(
+            "BLUETOOTH_DEFAULT_OUTPUT",
+            "device={} outcome=abandoned reason=window_expired",
+            redacted(address)
+        );
+    }
     let scan = async {
         for address in adapter.device_addresses().await.unwrap_or_default() {
             let Ok(device) = adapter.device(address) else {
@@ -2468,6 +2640,9 @@ async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, Audio
             }
             let profile = live_audio_profile(address).await;
             if !audio_output_degraded(profile.as_deref()) {
+                if adoption_retry_pending(address) {
+                    adopt_reconnected_output(address, AudioAdoption::Adopt, "retry").await;
+                }
                 continue;
             }
             qol_runtime::probe!(
@@ -2551,7 +2726,7 @@ fn spawn_audio_profile_reconnect(address: Address) {
         .await;
         match repair {
             Ok(Ok(AudioProfile::Active)) => {
-                adopt_reconnected_output(address, AudioAdoption::Adopt).await;
+                adopt_reconnected_output(address, AudioAdoption::Adopt, "repair").await;
             }
             Ok(Ok(AudioProfile::Absent)) => {}
             Ok(Err(error)) => eprintln!(
@@ -2842,12 +3017,13 @@ fn redacted(address: Address) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        begin_device_action, complete_device_action_within, finish_device_action,
-        pactl_active_card_profile, pactl_has_card, pactl_sink_matching, pactl_source_in_use,
-        pactl_source_index, parse_address, parse_daemon_request, redacted, running_sink_outside,
-        runtime, set_device_action_state, tolerated_profile_connect, transient_connect_error,
-        Address, AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand,
-        DeviceActionTimeout, Duration, ErrorKind, Instant, ReadResult, Result, RetryState,
+        adoption_decision, begin_device_action, complete_device_action_within,
+        finish_device_action, pactl_active_card_profile, pactl_has_card, pactl_sink_matching,
+        pactl_source_in_use, pactl_source_index, parse_address, parse_daemon_request, redacted,
+        redacted_sink, runtime, set_device_action_state, tolerated_profile_connect,
+        transient_connect_error, Address, AdoptionDecision, AdoptionRetries, AudioAdoption,
+        AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout,
+        Duration, ErrorKind, Instant, ReadResult, Result, RetryState, ADOPTION_RETRY_WINDOW,
         DEVICE_ACTION_STATE,
     };
     use qol_runtime::protocol::DaemonRequest;
@@ -3132,43 +3308,113 @@ mod tests {
     }
 
     #[test]
-    fn adoption_is_skipped_while_another_output_plays() {
-        const OWN: &str = "bluez_output.74_68_59_7F_5F_E9";
-        let cases = [
-            ("", None),
-            (
-                "53\talsa_output.pci-0000_00_1f.3.iec958-stereo\tPipeWire\ts32le 2ch 48000Hz\tSUSPENDED\n72\talsa_output.pci-0000_01_00.1.hdmi-stereo-extra1\tPipeWire\ts32le 2ch 48000Hz\tIDLE\n",
-                None,
-            ),
-            (
-                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n",
-                None,
-            ),
-            (
-                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n8842\tbluez_output.74_68_59_7F_5F_E0.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n",
-                Some("bluez_output.74_68_59_7F_5F_E0.1"),
-            ),
-            (
-                "58\talsa_output.usb-HP__Inc_HyperX_Cloud_Alpha_Wireless_00000001-00.analog-stereo\tPipeWire\ts24le 2ch 48000Hz\tRUNNING\n75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tSUSPENDED\n",
-                Some("alsa_output.usb-HP__Inc_HyperX_Cloud_Alpha_Wireless_00000001-00.analog-stereo"),
-            ),
-            (
-                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tIDLE\n8842\tbluez_output.88_0E_85_16_CA_67.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n",
-                Some("bluez_output.88_0E_85_16_CA_67.1"),
-            ),
-            (
-                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\trunning\n",
-                None,
-            ),
-            ("5\tRUNNING\n", None),
-        ];
-        for (listing, expected) in cases {
-            assert_eq!(
-                running_sink_outside(listing.as_bytes(), OWN).as_deref(),
-                expected,
-                "listing: {listing}"
-            );
-        }
+    fn adoption_decision_covers_each_gate() {
+        let keep = adoption_decision(AudioAdoption::Keep, true, Ok(None));
+        assert_eq!(keep, AdoptionDecision::SkipKeep);
+        let disabled = adoption_decision(AudioAdoption::Adopt, false, Ok(None));
+        assert_eq!(disabled, AdoptionDecision::SkipDisabled);
+        let unverified = adoption_decision(
+            AudioAdoption::Adopt,
+            true,
+            Err(anyhow::anyhow!("the PipeWire sink listing is unavailable")),
+        );
+        assert_eq!(unverified, AdoptionDecision::SkipUnverified);
+        let blocked = adoption_decision(
+            AudioAdoption::Adopt,
+            true,
+            Ok(Some("alsa_output.hdmi-stereo".into())),
+        );
+        assert_eq!(
+            blocked,
+            AdoptionDecision::SkipBlocked("alsa_output.hdmi-stereo".into())
+        );
+        let adopt = adoption_decision(AudioAdoption::Adopt, true, Ok(None));
+        assert_eq!(adopt, AdoptionDecision::Adopt);
+    }
+
+    #[test]
+    fn a_pending_adoption_is_retried_when_the_guard_clears() {
+        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        let now = Instant::now();
+        let mut retries = AdoptionRetries::default();
+        assert!(!retries.is_pending(address));
+        retries.register(address, now);
+        assert!(retries.is_pending(address));
+        let decision = adoption_decision(AudioAdoption::Adopt, true, Ok(None));
+        assert_eq!(decision, AdoptionDecision::Adopt);
+        retries.clear(address);
+        assert!(!retries.is_pending(address));
+    }
+
+    #[test]
+    fn a_pending_adoption_expires_after_the_retry_window() {
+        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        let now = Instant::now();
+        let window = ADOPTION_RETRY_WINDOW;
+        let mut retries = AdoptionRetries::default();
+        retries.register(address, now);
+        retries.register(address, now + Duration::from_secs(120));
+        assert!(retries
+            .expire(now + window - Duration::from_secs(1))
+            .is_empty());
+        assert_eq!(retries.expire(now + window), vec![address]);
+        assert!(!retries.is_pending(address));
+        assert!(retries.expire(now + window).is_empty());
+    }
+
+    #[test]
+    fn a_device_disconnect_drops_only_its_pending_adoption() {
+        let first = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        let second = parse_address("11:22:33:44:55:66").unwrap();
+        let now = Instant::now();
+        let mut retries = AdoptionRetries::default();
+        retries.register(first, now);
+        retries.register(second, now);
+        retries.clear(first);
+        assert!(!retries.is_pending(first));
+        assert!(retries.is_pending(second));
+    }
+
+    #[test]
+    fn a_successful_adoption_removes_the_pending_entry() {
+        let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
+        let now = Instant::now();
+        let window = ADOPTION_RETRY_WINDOW;
+        let mut retries = AdoptionRetries::default();
+        retries.register(address, now);
+        let blocked = adoption_decision(AudioAdoption::Adopt, true, Ok(Some("hdmi".into())));
+        assert_eq!(blocked, AdoptionDecision::SkipBlocked("hdmi".into()));
+        assert!(retries.is_pending(address));
+        let cleared = adoption_decision(AudioAdoption::Adopt, true, Ok(None));
+        assert_eq!(cleared, AdoptionDecision::Adopt);
+        retries.clear(address);
+        assert!(!retries.is_pending(address));
+        assert!(retries.expire(now + window).is_empty());
+    }
+
+    #[test]
+    fn redacted_sink_masks_all_but_the_last_two_octets() {
+        assert_eq!(
+            redacted_sink("bluez_output.74_68_59_7F_5F_E9.1"),
+            "bluez_output.**:**:**:**:5F:E9.1"
+        );
+        assert_eq!(
+            redacted_sink("bluez_output.88_0E_85_16_CA_67.2"),
+            "bluez_output.**:**:**:**:CA:67.2"
+        );
+        assert_eq!(
+            redacted_sink("alsa_output.usb-hyperx.analog-stereo"),
+            "alsa_output.usb-hyperx.analog-stereo"
+        );
+        assert_eq!(redacted_sink("null"), "null");
+        assert_eq!(
+            redacted_sink("bluez_output.not_a_mac.1"),
+            "bluez_output.not_a_mac.1"
+        );
+        assert_eq!(
+            redacted_sink("bluez_output.AA_BB_CC_DD_EE"),
+            "bluez_output.AA_BB_CC_DD_EE"
+        );
     }
 
     #[test]

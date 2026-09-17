@@ -3,6 +3,8 @@ use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Context, Result};
 
+use crate::platform::pactl::parse_short_sinks;
+
 const BLUETOOTH_SINK_PREFIX: &str = "bluez_output.";
 
 pub(in crate::audio_claim::platform::linux) fn subscribe() -> std::io::Result<tokio::process::Child>
@@ -30,11 +32,10 @@ pub(in crate::audio_claim::platform::linux) async fn playing_streams(
 pub(in crate::audio_claim::platform::linux) fn bluetooth_sink(address: &str) -> Result<String> {
     let prefix = format!("{BLUETOOTH_SINK_PREFIX}{}", address.replace(':', "_"));
     let listing = pactl_output(&["list", "short", "sinks"])?;
-    String::from_utf8_lossy(&listing)
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1))
-        .find(|sink| sink.starts_with(&prefix))
-        .map(str::to_string)
+    parse_short_sinks(&listing)
+        .into_iter()
+        .find(|row| row.name().starts_with(&prefix))
+        .map(|row| row.name().to_string())
         .ok_or_else(|| anyhow!("no Bluetooth audio output is active for {address}"))
 }
 
@@ -82,27 +83,17 @@ fn playing_bluez_streams(sink_inputs: &[u8], sinks: &[u8]) -> Vec<(String, u32)>
 }
 
 fn running_bluez_sinks(sinks: &[u8]) -> HashSet<String> {
-    String::from_utf8_lossy(sinks)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let name = fields.nth(1)?;
-            let state = fields.last()?;
-            (name.starts_with(BLUETOOTH_SINK_PREFIX) && state == "RUNNING")
-                .then(|| name.to_string())
-        })
+    parse_short_sinks(sinks)
+        .into_iter()
+        .filter(|row| row.running() && row.name().starts_with(BLUETOOTH_SINK_PREFIX))
+        .map(|row| row.name().to_string())
         .collect()
 }
 
 fn pactl_sink_names(output: &[u8]) -> HashMap<u32, String> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let index = fields.next()?.parse::<u32>().ok()?;
-            let name = fields.next()?;
-            Some((index, name.to_string()))
-        })
+    parse_short_sinks(output)
+        .into_iter()
+        .map(|row| (row.index(), row.name().to_string()))
         .collect()
 }
 
@@ -138,9 +129,7 @@ fn pactl_uncorked_inputs(output: &[u8]) -> Vec<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        pactl_sink_names, pactl_uncorked_inputs, playing_bluez_streams, running_bluez_sinks,
-    };
+    use super::{pactl_uncorked_inputs, playing_bluez_streams, running_bluez_sinks};
 
     const SINK_INPUTS: &[u8] = b"Sink Input #161\n\tDriver: PipeWire\n\tClient: 62\n\tSink: 324\n\tCorked: no\nSink Input #162\n\tSink: 50\n\tCorked: no\nSink Input #163\n\tSink: 324\n\tCorked: yes\nSink Input #164\n\tSink: 97\n\tCorked: no\n";
     const SINKS: &[u8] = b"50\talsa_output.pci-0000_01_00.1.hdmi-stereo\tPipeWire\ts32le 2ch\tSUSPENDED\n324\tbluez_output.AA_BB_CC_DD_EE_FF.1\tPipeWire\ts16le 2ch\tRUNNING\n";
@@ -154,20 +143,6 @@ mod tests {
     }
 
     #[test]
-    fn sink_names_are_indexed_from_the_short_listing() {
-        let names = pactl_sink_names(SINKS);
-        assert_eq!(
-            names.get(&324).map(String::as_str),
-            Some("bluez_output.AA_BB_CC_DD_EE_FF.1")
-        );
-        assert_eq!(
-            names.get(&50).map(String::as_str),
-            Some("alsa_output.pci-0000_01_00.1.hdmi-stereo")
-        );
-        assert_eq!(names.get(&97), None);
-    }
-
-    #[test]
     fn only_uncorked_bluetooth_outputs_are_playing() {
         assert_eq!(
             playing_bluez_streams(SINK_INPUTS, SINKS),
@@ -176,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn running_bluez_sinks_reads_the_last_state_field() {
+    fn running_bluez_sinks_keeps_only_bluetooth_outputs() {
         let running = running_bluez_sinks(SINKS);
         assert_eq!(running.len(), 1);
         assert!(running.contains("bluez_output.AA_BB_CC_DD_EE_FF.1"));
