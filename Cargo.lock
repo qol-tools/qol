@@ -5792,6 +5792,8 @@ version = "0.41.0"
 dependencies = [
  "anyhow",
  "bluer",
+ "dbus",
+ "dbus-tokio",
  "futures",
  "libc",
  "objc2",
