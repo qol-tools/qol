@@ -188,7 +188,7 @@ description = "Where system audio goes when a Bluetooth audio device connects."
 [field.set_default_output]
 type = "boolean"
 label = "Set as default output on connect"
-description = "Make a connected audio device the system output. The mic stays on your current input because qol pins the high-quality A2DP profile, which carries no microphone."
+description = "Make a connected audio device the system output. If another output is already playing, qol leaves it alone and makes the device the output once that output stops, or on the device's next connect. The mic stays on your current input because qol pins the high-quality A2DP profile, which carries no microphone."
 section = "audio"
 default = true
 
