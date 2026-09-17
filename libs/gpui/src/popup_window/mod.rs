@@ -3,6 +3,8 @@ mod platform;
 pub use platform::{set_window_fixed_size_by_title, show_normal_window_by_title};
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::runtime_config::load_gpui_runtime_config;
@@ -81,6 +83,26 @@ pub(crate) use platform::reassert_focus_on_main;
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";
 const ENV_GHOST_COLOR: &str = "QOL_TRAY_GHOST_COLOR";
 
+static PRESENTATION_LOCK: Mutex<()> = Mutex::new(());
+
+pub(crate) fn presentation_guard() -> MutexGuard<'static, ()> {
+    PRESENTATION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub(crate) fn reassert_if_current(
+    gen: &AtomicU64,
+    commit_gen: u64,
+    show: impl FnOnce() -> bool,
+) -> Option<bool> {
+    let _presentation = presentation_guard();
+    if gen.load(Ordering::SeqCst) != commit_gen {
+        return None;
+    }
+    Some(show())
+}
+
 const FOCUS_REASSERT_DELAYS_MS: &[u64] = &[0, 30, 30, 30, 30, 30, 30, 30, 30, 60, 300];
 const FOCUS_HELD_STREAK_STOP: u32 = 4;
 const FOCUS_SETTLE_WINDOW: Duration = Duration::from_millis(180);
@@ -139,7 +161,10 @@ fn reassert_focus_until_held_with(
             step
         },
         move || {
-            let shown = show(&assert_title);
+            let Some(shown) = reassert_if_current(gen, commit_gen, || show(&assert_title)) else {
+                qol_runtime::probe!("FOCUS_REASSERT", "title={assert_title} step=dismissed");
+                return;
+            };
             #[cfg(not(debug_assertions))]
             let _ = shown;
             #[cfg(target_os = "macos")]
@@ -233,6 +258,20 @@ impl Drop for ReasonScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_live_focus_generation_still_reasserts() {
+        static LIVE_GENERATION: AtomicU64 = AtomicU64::new(7);
+        let mut shown = false;
+
+        let outcome = reassert_if_current(&LIVE_GENERATION, 7, || {
+            shown = true;
+            true
+        });
+
+        assert_eq!(outcome, Some(true));
+        assert!(shown);
+    }
 
     #[test]
     fn focus_reassert_delays_cover_the_settling_window_densely() {

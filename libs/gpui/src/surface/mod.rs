@@ -223,6 +223,7 @@ impl SurfaceDismisser {
     }
 
     pub fn dismiss(&self, cx: &mut App) {
+        cancel_focus_reassert();
         self.state
             .generation
             .set(self.state.generation.get().wrapping_add(1));
@@ -429,6 +430,7 @@ impl Surface {
                 if retain_on_dismiss {
                     let current_title = dismiss_state.title.borrow().clone();
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
+                    let _presentation = crate::popup_window::presentation_guard();
                     crate::popup_window::set_window_type_dock_by_title(&current_title);
                     if crate::popup_window::hide_invisible(&current_title) {
                         return;
@@ -555,6 +557,10 @@ impl<V: Render + 'static> Render for SurfaceRoot<V> {
 static PANEL_FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
 static LIVE_SURFACE_TITLES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn cancel_focus_reassert() {
+    PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
 
 fn reserve_surface_title(base: &str) -> String {
     let mut live = LIVE_SURFACE_TITLES
@@ -1228,13 +1234,15 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
 mod tests {
     use super::platform::SurfacePlatform;
     use super::{
-        resolved_app_id, reveal_cancelled, state_restore_needs_retry, DragGestureState,
-        RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+        cancel_focus_reassert, resolved_app_id, reveal_cancelled, state_restore_needs_retry,
+        DragGestureState, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+        PANEL_FOCUS_GENERATION,
     };
     use crate::placement::MonitorPlacement;
     use gpui::{point, px, size, Pixels, WindowKind};
     use std::cell::Cell;
     use std::rc::Rc;
+    use std::sync::atomic::Ordering;
 
     fn at(x: f32, y: f32) -> gpui::Point<Pixels> {
         point(px(x), px(y))
@@ -1305,6 +1313,25 @@ mod tests {
             resolved_app_id(&Some(stable.to_owned()), &title),
             stable,
             "an opted-in identity must not name the plugin that opened the surface"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_surface_is_never_reshown_by_its_focus_reassert() {
+        let commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+
+        cancel_focus_reassert();
+
+        let mut shown = false;
+        let outcome =
+            crate::popup_window::reassert_if_current(&PANEL_FOCUS_GENERATION, commit, || {
+                shown = true;
+                true
+            });
+        assert_eq!(outcome, None);
+        assert!(
+            !shown,
+            "a reassert that outlives the dismiss re-shows a window the surface believes is hidden"
         );
     }
 
