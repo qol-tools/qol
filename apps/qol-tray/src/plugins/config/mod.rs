@@ -558,6 +558,7 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<()> {
+        let config = normalize_plugin_config_value(plugin_id, config)?;
         let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
         let _profile_guard = profile_config_write_guard_for_plugin(plugin_id);
@@ -1076,14 +1077,96 @@ pub(crate) fn validate_config_value(
     spec: &qol_config::contract::ConfigSpec,
     config: &serde_json::Value,
 ) -> std::result::Result<(), Vec<qol_config::validation::ValidationError>> {
-    let errors = match qol_config::normalized::resolve_config(spec, config) {
-        Ok(_) => strict_validation_errors(spec, config),
+    let normalized = normalize_config_value(spec, config);
+    let errors = match qol_config::normalized::resolve_config(spec, &normalized) {
+        Ok(_) => strict_validation_errors(spec, &normalized),
         Err(errors) => errors,
     };
     if errors.is_empty() {
         return Ok(());
     }
     Err(errors)
+}
+
+pub(crate) fn normalize_config_value(
+    spec: &qol_config::contract::ConfigSpec,
+    config: &serde_json::Value,
+) -> serde_json::Value {
+    qol_config::normalized::normalize_config(spec, config)
+}
+
+pub(crate) fn normalize_plugin_config_value(
+    plugin_id: &str,
+    config: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let spec = match load_config_contract(plugin_id) {
+        Ok(spec) => spec,
+        Err(error) => {
+            log::warn!(
+                "Unable to load config contract for {plugin_id}; saving config without normalization: {error:#}"
+            );
+            return Ok(config);
+        }
+    };
+    let Some(spec) = spec else {
+        return Ok(config);
+    };
+    Ok(normalize_config_value(&spec, &config))
+}
+
+pub(crate) fn normalize_and_validate_plugin_config_value(
+    plugin_id: &str,
+    config: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let Some(spec) = load_config_contract(plugin_id)? else {
+        return Ok(config);
+    };
+    let normalized = normalize_config_value(&spec, &config);
+    validate_config_value(&spec, &normalized).map_err(|errors| {
+        anyhow::anyhow!(
+            "Invalid config for {}: {}",
+            plugin_id,
+            format_plugin_config_validation_errors(&spec, &normalized, errors)
+        )
+    })?;
+    Ok(normalized)
+}
+
+fn format_plugin_config_validation_errors(
+    spec: &qol_config::contract::ConfigSpec,
+    config: &serde_json::Value,
+    errors: Vec<qol_config::validation::ValidationError>,
+) -> String {
+    errors
+        .into_iter()
+        .map(|error| {
+            let Some(field_path) = error.path.strip_prefix("overrides.") else {
+                return error.to_string();
+            };
+            let field_id = field_path.split(['.', '[']).next().unwrap_or(field_path);
+            let Some(field) = spec.fields.get(field_id) else {
+                return error.to_string();
+            };
+            if !matches!(
+                field.kind,
+                qol_config::contract::FieldKind::Select
+                    | qol_config::contract::FieldKind::StringArray
+            ) || field.options.is_empty()
+                || field.query.is_some()
+            {
+                return error.to_string();
+            }
+            let config_key = field.config_key.as_deref().unwrap_or(field_id);
+            let rejected_value = config_override_value(config, config_key)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            format!(
+                "{field_id}: rejected value {rejected_value:?}; allowed options {:?}; {}",
+                field.options, error.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn format_validation_errors(

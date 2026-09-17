@@ -1,6 +1,6 @@
 use super::import::{
-    project_plugin_configs_to_dir, remove_live_plugin_configs_missing_from_profile,
-    validate_imported_plugin_configs,
+    normalize_and_validate_imported_plugin_configs, project_plugin_configs_to_dir,
+    remove_live_plugin_configs_missing_from_profile,
 };
 use super::plugins_lock::build_plugins_lock;
 use super::storage::{
@@ -871,7 +871,7 @@ async fn project_plugin_configs_defers_removal_until_after_projection() {
 }
 
 #[tokio::test]
-async fn validate_imported_plugin_configs_resolves_uid_keys_before_lookup() {
+async fn normalize_and_validate_imported_plugin_configs_resolves_uid_keys_before_lookup() {
     let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
     write_installed_plugin_manifest(&plugins_dir, "plugin-test", "1.0.0");
     write_plugin_contract(
@@ -887,13 +887,17 @@ default = 3
     );
     let plugins = vec![test_lock_entry("plugin-test", "u-real-0001")];
     let uid_index = PluginUidIndex::from_plugins(&plugins_dir, &plugins, &PluginsLock::empty());
-    let configs = HashMap::from([("u-real-0001".to_string(), json!({"threshold": "three"}))]);
+    let mut configs = HashMap::from([("u-real-0001".to_string(), json!({"threshold": "three"}))]);
 
-    let error =
-        validate_imported_plugin_configs(&plugins_dir, Some(&configs), &plugins, &uid_index)
-            .await
-            .unwrap_err()
-            .to_string();
+    let error = normalize_and_validate_imported_plugin_configs(
+        &plugins_dir,
+        &mut configs,
+        &plugins,
+        &uid_index,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
 
     assert!(
         error.contains("Invalid config for plugin-test"),
@@ -1192,6 +1196,60 @@ default = 0
     let lock = load_plugins_lock().unwrap();
     assert_eq!(lock.plugins.len(), 1);
     assert_eq!(lock.plugins[0].uid, PluginUid::new("u-real-0001"));
+}
+
+#[tokio::test]
+async fn apply_import_bundle_normalizes_legacy_select_aliases() {
+    let (_guard, _root, _env, plugins_dir) = setup_profile_env().await;
+    let source_repo = create_monorepo_style_source_repo(
+        &plugins_dir,
+        "plugin-test",
+        "1.0.0",
+        Some("u-test-0001"),
+        Some(
+            r#"
+schema_version = 1
+
+[field.corner]
+type = "select"
+default = "top-right"
+options = ["top-left", "top-right"]
+"#,
+        ),
+    );
+    let _source_guard = crate::features::plugin_store::source::test_seam::install(vec![
+        crate::features::plugin_store::source::PluginSource::new(
+            "fixture",
+            source_repo.repo.as_str(),
+            "main",
+        ),
+    ]);
+    let bundle = ProfileImportBundle {
+        plugins: vec![PluginLockEntry {
+            uid: PluginUid::new("plugin-test"),
+            id: "plugin-test".to_string(),
+            repo_url: source_repo.repo.clone(),
+            version: "1.0.0".to_string(),
+            platforms: None,
+        }],
+        plugin_configs: Some(HashMap::from([(
+            "plugin-test".to_string(),
+            json!({"corner": "TOP_LEFT"}),
+        )])),
+        ..ProfileImportBundle::default()
+    };
+
+    let result = apply_import_bundle(&plugins_dir, &bundle).await.unwrap();
+
+    assert!(result.success);
+    assert_eq!(
+        read_live_plugin_config(&plugins_dir, "plugin-test"),
+        json!({"corner": "top-left"})
+    );
+    assert_eq!(
+        read_profile_plugin_config("u-test-0001"),
+        Some(json!({"corner": "top-left"}))
+    );
 }
 
 #[cfg(unix)]

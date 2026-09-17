@@ -61,6 +61,14 @@ pub(super) fn validate_plugin_config(
         .map_err(|errors| Box::new(invalid_config_response(errors)))
 }
 
+pub(super) fn normalize_plugin_config(
+    plugin_id: &str,
+    config: serde_json::Value,
+) -> Result<serde_json::Value, Box<Response>> {
+    crate::plugins::config::normalize_plugin_config_value(plugin_id, config)
+        .map_err(|_| Box::new(contract_unavailable_response()))
+}
+
 fn load_plugin_config_value(plugin_id: &str) -> Result<serde_json::Value, Box<Response>> {
     let manager = crate::plugins::PluginConfigManager::new()
         .map_err(|_| Box::new(config_read_failed_response()))?;

@@ -221,7 +221,12 @@ Per-kind rules (validated, not ignored):
 
 - `number`: `min`/`max`/`step` (`step>0`, `min<=max`); rejected on other kinds.
 - `select`: `options` (non-empty) + optional `option_labels`; default/override must
-  be an option.
+  be a declared option. Static select overrides are canonicalized before validation
+  only when trimming surrounding whitespace, collapsing internal whitespace runs,
+  ASCII-lowercasing, and replacing `_` with `-` produces one unique declared option.
+  Canonical values are preserved;
+  unknown and ambiguous values remain invalid. Query-backed selects are not
+  canonicalized.
 - `object_array`: `[field.<id>.item.fields]`; `object_map`: `key_label` +
   `[field.<id>.entry_fields]`.
 - `color`: hex string, optional `alpha`; streamable.

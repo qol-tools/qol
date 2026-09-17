@@ -40,15 +40,15 @@ export function usePluginConfig(pluginId) {
     const save = useCallback(() => {
         clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(
-            () => persistConfig(pluginId, configRef.current, form, extraKeysRef.current),
+            () => persistConfig(pluginId, configRef.current, form, extraKeysRef.current, setError),
             SAVE_DEBOUNCE_MS,
         );
-    }, [pluginId, form]);
+    }, [pluginId, form, setError]);
 
     const saveNow = useCallback(() => {
         clearTimeout(saveTimerRef.current);
-        return persistConfig(pluginId, configRef.current, form, extraKeysRef.current);
-    }, [pluginId, form]);
+        return persistConfig(pluginId, configRef.current, form, extraKeysRef.current, setError);
+    }, [pluginId, form, setError]);
 
     const bumpRender = useCallback(() => setRenderTick(t => t + 1), []);
 
@@ -154,13 +154,17 @@ function errorMessage(err) {
     return err instanceof Error ? err.message : String(err);
 }
 
-async function persistConfig(pluginId, config, form, extraKeys) {
+export async function persistConfig(pluginId, config, form, extraKeys, setError = () => {}) {
     try {
         const payload = form ? filterOwnedKeys(config, form, extraKeys) : config;
         const response = await savePluginConfig(pluginId, payload);
-        if (!response.ok) throw new Error(await response.text());
+        if (!response.ok) {
+            const message = await response.text();
+            throw new Error(message || `Save failed (${response.status})`);
+        }
+        setError(null);
     } catch (err) {
-        console.error('Save failed', err);
+        setError(errorMessage(err));
     }
 }
 

@@ -40,7 +40,7 @@ pub fn display_layout_tile_style(
         background: if tile.selected {
             palette.row_bg_selected
         } else {
-            palette.dropdown_bg
+            palette.surface_raised
         },
     }
 }
@@ -52,7 +52,7 @@ pub fn display_layout_stage(palette: SettingsPanelPalette, height: f32) -> gpui:
         .h(px(height))
         .overflow_hidden()
         .rounded(px(qol_theme::RADIUS_CARD))
-        .bg(rgb(palette.dropdown_bg))
+        .bg(rgb(palette.surface_raised))
 }
 
 pub fn display_layout_tile(
@@ -166,7 +166,7 @@ mod tests {
         let style = display_layout_tile_style(&tile(false, true), palette);
         assert_eq!(style.border_color, palette.state_off);
         assert_eq!(style.border_width, 2.0);
-        assert_eq!(style.background, palette.dropdown_bg);
+        assert_eq!(style.background, palette.surface_raised);
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
         let selected = display_layout_tile_style(&tile(true, false), palette);
         let unselected = display_layout_tile_style(&tile(false, false), palette);
         assert_eq!(selected.background, palette.row_bg_selected);
-        assert_eq!(unselected.background, palette.dropdown_bg);
+        assert_eq!(unselected.background, palette.surface_raised);
     }
 
     #[test]
@@ -184,6 +184,6 @@ mod tests {
         let style = display_layout_tile_style(&tile(false, false), palette);
         assert_eq!(style.border_color, palette.panel_border);
         assert_eq!(style.border_width, 1.0);
-        assert_eq!(style.background, palette.dropdown_bg);
+        assert_eq!(style.background, palette.surface_raised);
     }
 }

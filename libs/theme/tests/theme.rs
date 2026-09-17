@@ -1736,11 +1736,10 @@ preset has to carry it. A preset below the floor has no visible focus indicator.
     );
 }
 
-const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 14] = [
+const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 13] = [
     ("libs/gpui/src/kit.rs", "HEADER_HEIGHT", HEIGHT_BAND),
     ("libs/gpui/src/kit.rs", "SECTION_HEIGHT", HEIGHT_INLINE),
     ("libs/gpui/src/kit.rs", "GUTTER", SPACE_GUTTER),
-    ("libs/gpui/src/dropdown.rs", "ROW_H", HEIGHT_INLINE),
     (
         "libs/gpui/src/settings_panel/mod.rs",
         "PANEL_ROW_HEIGHT",
@@ -1789,7 +1788,7 @@ const LADDER_GOVERNED_HEIGHTS: [(&str, &str, f32); 14] = [
     ),
 ];
 
-const OFF_LADDER_DEBT: [(&str, &str, f32); 1] = [("libs/gpui/src/dropdown.rs", "ROW_H", 26.0)];
+const OFF_LADDER_DEBT: [(&str, &str, f32); 0] = [];
 
 fn declared_f32(workspace: &Path, file: &str, name: &str) -> Option<f32> {
     let contents = fs::read_to_string(workspace.join(file)).ok()?;
@@ -1878,11 +1877,10 @@ fn rust_sources(dir: &Path) -> Vec<std::path::PathBuf> {
     found
 }
 
-const SETTINGS_SCOPE: [&str; 7] = [
+const SETTINGS_SCOPE: [&str; 6] = [
     "libs/gpui/src/settings_panel/",
     "libs/gpui/src/gamepad/",
     "libs/gpui/src/kit.rs",
-    "libs/gpui/src/dropdown.rs",
     "libs/gpui/src/hint_bar.rs",
     "libs/gpui/src/deck.rs",
     "apps/qol-tray/src/settings_surface/",
@@ -1894,9 +1892,8 @@ fn in_settings_scope(relative: &str) -> bool {
         .any(|prefix| relative.starts_with(prefix))
 }
 
-const RECIPE_OWNERS: [&str; 4] = [
+const RECIPE_OWNERS: [&str; 3] = [
     "libs/gpui/src/kit.rs",
-    "libs/gpui/src/dropdown.rs",
     "libs/gpui/src/deck.rs",
     "libs/gpui/src/hint_bar.rs",
 ];
@@ -2154,7 +2151,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 39] = [
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
@@ -2202,26 +2199,16 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 39] = [
         ".text_size(",
         2,
     ),
-    ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 3),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".rounded(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".shadow(",
-        1,
-    ),
+    ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 2),
     (
         "libs/gpui/src/settings_panel/view/list_card.rs",
         ".text_color(",
-        4,
+        1,
     ),
     (
         "libs/gpui/src/settings_panel/view/list_card.rs",
         ".text_size(",
-        4,
+        1,
     ),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 10),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
