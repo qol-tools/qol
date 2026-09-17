@@ -5916,7 +5916,7 @@ dependencies = [
 
 [[package]]
 name = "plugin-os-themes"
-version = "0.46.1"
+version = "0.46.2"
 dependencies = [
  "anyhow",
  "libc",
