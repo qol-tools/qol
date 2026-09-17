@@ -79,7 +79,31 @@ pub fn latest_version() -> Option<String> {
 }
 
 pub fn checks_enabled() -> bool {
-    !cfg!(feature = "dev") && platform::detect_install_kind() != platform::InstallKind::Development
+    !cfg!(feature = "dev")
+        && platform::detect_install_kind() != platform::InstallKind::Development
+        && !runs_a_workspace_build()
+}
+
+fn runs_a_workspace_build() -> bool {
+    commits_match(workspace_build_commit().as_deref(), running_source_commit())
+}
+
+fn commits_match(installed: Option<&str>, running: Option<&str>) -> bool {
+    matches!((installed, running), (Some(installed), Some(running)) if installed == running)
+}
+
+fn workspace_build_commit() -> Option<String> {
+    let path = qol_config::data_dir()?.join(qol_conventions::HOST_WORKSPACE_BUILD_FILE);
+    let commit = std::fs::read_to_string(path).ok()?;
+    let commit = commit.trim();
+    (!commit.is_empty()).then(|| commit.to_string())
+}
+
+fn running_source_commit() -> Option<&'static str> {
+    match &qol_conventions::artifact::current()?.source {
+        qol_conventions::artifact::SourceIdentity::Git { commit, .. } => Some(commit),
+        qol_conventions::artifact::SourceIdentity::Unspecified => None,
+    }
 }
 
 pub fn note_tray_start() {
@@ -542,6 +566,24 @@ mod tests {
     fn rel(tag: &str) -> GitHubRelease {
         GitHubRelease {
             tag_name: tag.to_string(),
+        }
+    }
+
+    #[test]
+    fn only_the_running_workspace_build_suppresses_update_checks() {
+        let cases = [
+            (Some("abc123"), Some("abc123"), true),
+            (Some("abc123"), Some("def456"), false),
+            (None, Some("abc123"), false),
+            (Some("abc123"), None, false),
+            (None, None, false),
+        ];
+        for (installed, running, expected) in cases {
+            assert_eq!(
+                commits_match(installed, running),
+                expected,
+                "installed={installed:?} running={running:?}"
+            );
         }
     }
 

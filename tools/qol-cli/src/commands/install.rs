@@ -74,7 +74,24 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         &mut command,
         verbose,
     )?;
+    record_workspace_build(build_identity.source())?;
     step_label("ready", StepKind::Success, "qol-tray");
+    Ok(())
+}
+
+fn record_workspace_build(source: &qol_conventions::artifact::SourceIdentity) -> Result<()> {
+    let qol_conventions::artifact::SourceIdentity::Git { commit, .. } = source else {
+        return Ok(());
+    };
+    let Some(path) =
+        qol_config::data_dir().map(|dir| dir.join(qol_conventions::HOST_WORKSPACE_BUILD_FILE))
+    else {
+        bail!("could not determine the local data directory");
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, format!("{commit}\n"))?;
     Ok(())
 }
 

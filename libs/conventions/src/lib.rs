@@ -18,6 +18,7 @@ pub const SETTINGS_SURFACE_APP_ID: &str = "qol-settings-surface";
 pub const SETTINGS_SURFACE_DISPLAY_NAME: &str = "QoL Settings";
 pub const TRAY_ICON_NAME: &str = "qol-tray";
 pub const HTTP_AUTH_TOKEN_FILE: &str = ".http-token";
+pub const HOST_WORKSPACE_BUILD_FILE: &str = "host-workspace-build";
 pub const HTTP_AUTH_HEADER: &str = "x-qol-token";
 pub const HTTP_AGENT_HOME_HEADER: &str = "x-qol-agent-home";
 pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";
