@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::mode::{ModeConfig, ModeFlag};
+use crate::paths::install_marker;
 
 pub mod autostart;
 pub mod boot_environment;
@@ -16,8 +17,6 @@ mod source;
 
 pub use boot_environment::BootEnvironment;
 pub(crate) use platform::binary_filename;
-
-const INSTALL_ID_FILE: &str = "qol-tray.install-id";
 
 pub fn autostart_path() -> Result<PathBuf> {
     autostart::autostart_path()
@@ -244,16 +243,25 @@ fn write_install_id_marker(installed_binary: &Path, install_id: &str) -> Result<
     let parent = installed_binary
         .parent()
         .context("Installed binary has no parent directory")?;
-    let marker_path = parent.join(INSTALL_ID_FILE);
+    let _ = parent;
+    let marker_path = install_marker::marker_path(installed_binary)
+        .context("Installed binary has no parent directory")?;
+    if let Some(parent) = marker_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create marker directory {}", parent.display()))?;
+    }
     fs::write(&marker_path, format!("{}\n", install_id))
-        .with_context(|| format!("Failed to write install marker {}", marker_path.display()))
+        .with_context(|| format!("Failed to write install marker {}", marker_path.display()))?;
+    if let Some(legacy) = install_marker::legacy_marker_path(installed_binary) {
+        if legacy != marker_path {
+            let _ = fs::remove_file(legacy);
+        }
+    }
+    Ok(())
 }
 
 fn has_install_marker(installed_binary: &Path) -> bool {
-    let Some(parent) = installed_binary.parent() else {
-        return false;
-    };
-    parent.join(INSTALL_ID_FILE).exists()
+    install_marker::existing_marker_path(installed_binary).is_some()
 }
 
 fn create_install_id() -> String {

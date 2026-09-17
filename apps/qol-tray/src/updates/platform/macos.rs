@@ -10,6 +10,7 @@ use crate::features::plugin_store::release_integrity;
 use super::super::{latest_version, verify_host_update, GITHUB_REPO};
 use super::unix;
 use super::InstallKind;
+use crate::installer::platform::macos::codesign;
 
 const APP_BUNDLE_NAME: &str = "QoL Tray.app";
 const MACOS_RELEASE_ASSET: &str = "qol-tray-macos-universal.tar.gz";
@@ -37,21 +38,6 @@ pub(super) fn detect_install_kind() -> InstallKind {
 fn is_user_app_bundle(executable: &str, home: Option<&str>) -> bool {
     executable.contains(".app/Contents/MacOS/")
         && home.is_some_and(|home| executable.starts_with(home))
-}
-
-fn ad_hoc_codesign_bundle(bundle_path: &Path) {
-    let sign_status = std::process::Command::new("codesign")
-        .args(["--force", "--sign", "-"])
-        .arg(bundle_path)
-        .output();
-    match sign_status {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => log::warn!(
-            "codesign ad-hoc failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ),
-        Err(e) => log::warn!("codesign not available: {e}"),
-    }
 }
 
 fn find_app_bundle(exe_path: &Path) -> Option<PathBuf> {
@@ -250,8 +236,8 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     });
     install_result?;
 
-    if dev_override {
-        ad_hoc_codesign_bundle(&current_bundle);
+    if dev_override || codesign::configured_identity().is_some() {
+        codesign::codesign_bundle(&current_bundle);
     }
 
     events.send(DaemonEvent::UpdateComplete);

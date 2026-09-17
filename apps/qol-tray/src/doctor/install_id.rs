@@ -4,17 +4,17 @@ use std::path::{Path, PathBuf};
 
 use crate::file_io;
 
-const INSTALL_ID_MARKER_FILE: &str = "qol-tray.install-id";
 const ACTIVE_INSTALL_ID_FILE: &str = qol_config::ACTIVE_INSTALL_ID_FILE;
 
 pub(super) fn marker_path_for(current_exe: &Path) -> Result<PathBuf> {
-    let Some(parent) = current_exe.parent() else {
-        return Err(anyhow!(
-            "current executable has no parent directory: {}",
-            current_exe.display()
-        ));
-    };
-    Ok(parent.join(INSTALL_ID_MARKER_FILE))
+    crate::paths::install_marker::existing_marker_path(current_exe)
+        .or_else(|| crate::paths::install_marker::marker_path(current_exe))
+        .ok_or_else(|| {
+            anyhow!(
+                "current executable has no parent directory: {}",
+                current_exe.display()
+            )
+        })
 }
 
 pub(super) fn active_install_id_path() -> Result<PathBuf> {

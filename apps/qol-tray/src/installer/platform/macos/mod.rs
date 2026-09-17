@@ -1,3 +1,5 @@
+pub(crate) mod codesign;
+
 use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,7 +60,7 @@ impl InstallerOps for Platform {
         let bundle_root = bundle_root_from_binary(binary_path)?;
         write_info_plist(&bundle_root)?;
         write_icon(&bundle_root)?;
-        codesign_bundle(&bundle_root);
+        codesign::codesign_bundle(&bundle_root);
         rebind_url_scheme(&bundle_root);
         Ok(())
     }
@@ -199,21 +201,6 @@ fn write_icon(bundle_root: &Path) -> Result<()> {
     let resources = bundle_root.join("Contents").join("Resources");
     std::fs::create_dir_all(&resources)?;
     std::fs::write(resources.join("qol-tray.icns"), ICNS_DATA).context("Failed to write icon")
-}
-
-fn codesign_bundle(bundle_root: &Path) {
-    let status = std::process::Command::new("codesign")
-        .args(["--force", "--sign", "-"])
-        .arg(bundle_root)
-        .output();
-    match status {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => log::warn!(
-            "codesign ad-hoc failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ),
-        Err(e) => log::warn!("codesign not available: {e}"),
-    }
 }
 
 #[cfg(test)]
