@@ -148,7 +148,7 @@ mod tests {
         assert_eq!(defaults.shake_window_ms, 600);
         assert_eq!(defaults.calm_duration_ms, 100);
         assert_eq!(defaults.grow_ms, 120);
-        assert_eq!(defaults.shrink_ms, 225);
+        assert_eq!(defaults.shrink_ms, 100);
         assert_eq!(
             defaults.tuning_revision, 0,
             "tuning_revision is daemon-owned and serde-defaults to 0 in the contract"
