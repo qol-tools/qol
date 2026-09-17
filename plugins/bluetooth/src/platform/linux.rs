@@ -1212,6 +1212,21 @@ fn pactl_sink_matching(output: &[u8], prefix: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+async fn other_output_playing(address: Address) -> Option<String> {
+    let prefix = format!("bluez_output.{}", pactl_device_id(address));
+    let listing = pactl_output(&["list", "short", "sinks"]).await?;
+    running_sink_outside(&listing, &prefix)
+}
+
+fn running_sink_outside(output: &[u8], own_prefix: &str) -> Option<String> {
+    String::from_utf8_lossy(output).lines().find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let name = fields.get(1)?;
+        (fields.len() >= 3 && fields.last() == Some(&"RUNNING") && !name.starts_with(own_prefix))
+            .then(|| name.to_string())
+    })
+}
+
 fn pactl_source_index(output: &[u8], prefix: &str) -> Option<String> {
     String::from_utf8_lossy(output).lines().find_map(|line| {
         let mut fields = line.split_whitespace();
@@ -2417,6 +2432,15 @@ async fn adopt_reconnected_output(address: Address, adoption: AudioAdoption) {
     if adoption == AudioAdoption::Keep || !crate::config::load().set_default_output {
         return;
     }
+    if let Some(playing) = other_output_playing(address).await {
+        qol_runtime::probe!(
+            "BLUETOOTH_DEFAULT_OUTPUT",
+            "device={} outcome=skipped reason=other_output_playing other_sink={}",
+            redacted(address),
+            playing
+        );
+        return;
+    }
     if let Err(error) = adopt_default_sink(address).await {
         eprintln!(
             "Bluetooth default output selection failed for {}: {error:#}",
@@ -2820,10 +2844,11 @@ mod tests {
     use super::{
         begin_device_action, complete_device_action_within, finish_device_action,
         pactl_active_card_profile, pactl_has_card, pactl_sink_matching, pactl_source_in_use,
-        pactl_source_index, parse_address, parse_daemon_request, redacted, runtime,
-        set_device_action_state, tolerated_profile_connect, transient_connect_error, Address,
-        AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout,
-        Duration, ErrorKind, Instant, ReadResult, Result, RetryState, DEVICE_ACTION_STATE,
+        pactl_source_index, parse_address, parse_daemon_request, redacted, running_sink_outside,
+        runtime, set_device_action_state, tolerated_profile_connect, transient_connect_error,
+        Address, AudioRepairGuard, ConnectionFlightGuard, DaemonAction, DaemonCommand,
+        DeviceActionTimeout, Duration, ErrorKind, Instant, ReadResult, Result, RetryState,
+        DEVICE_ACTION_STATE,
     };
     use qol_runtime::protocol::DaemonRequest;
     use std::collections::HashMap;
@@ -3102,6 +3127,46 @@ mod tests {
                 pactl_sink_matching(output, prefix).as_deref(),
                 expected,
                 "prefix: {prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn adoption_is_skipped_while_another_output_plays() {
+        const OWN: &str = "bluez_output.74_68_59_7F_5F_E9";
+        let cases = [
+            ("", None),
+            (
+                "53\talsa_output.pci-0000_00_1f.3.iec958-stereo\tPipeWire\ts32le 2ch 48000Hz\tSUSPENDED\n72\talsa_output.pci-0000_01_00.1.hdmi-stereo-extra1\tPipeWire\ts32le 2ch 48000Hz\tIDLE\n",
+                None,
+            ),
+            (
+                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n",
+                None,
+            ),
+            (
+                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n8842\tbluez_output.74_68_59_7F_5F_E0.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n",
+                Some("bluez_output.74_68_59_7F_5F_E0.1"),
+            ),
+            (
+                "58\talsa_output.usb-HP__Inc_HyperX_Cloud_Alpha_Wireless_00000001-00.analog-stereo\tPipeWire\ts24le 2ch 48000Hz\tRUNNING\n75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tSUSPENDED\n",
+                Some("alsa_output.usb-HP__Inc_HyperX_Cloud_Alpha_Wireless_00000001-00.analog-stereo"),
+            ),
+            (
+                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\tIDLE\n8842\tbluez_output.88_0E_85_16_CA_67.1\tPipeWire\ts16le 2ch 48000Hz\tRUNNING\n",
+                Some("bluez_output.88_0E_85_16_CA_67.1"),
+            ),
+            (
+                "75\tbluez_output.74_68_59_7F_5F_E9.1\tPipeWire\ts16le 2ch 48000Hz\trunning\n",
+                None,
+            ),
+            ("5\tRUNNING\n", None),
+        ];
+        for (listing, expected) in cases {
+            assert_eq!(
+                running_sink_outside(listing.as_bytes(), OWN).as_deref(),
+                expected,
+                "listing: {listing}"
             );
         }
     }
