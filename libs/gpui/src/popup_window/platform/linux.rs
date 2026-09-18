@@ -926,10 +926,12 @@ pub fn set_window_type_dock_by_title(title: &str) -> bool {
         return false;
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        qol_runtime::probe!("DOCK_WIN", "title={title} wid=NONE");
         return false;
     };
-    set_window_type_dock(&conn, wid);
-    conn.flush().is_ok()
+    let docked = set_window_type_dock(&conn, wid);
+    qol_runtime::probe!("DOCK_WIN", "title={title} wid={wid} docked={docked}");
+    docked
 }
 
 pub fn make_override_redirect(title: &str) -> bool {
@@ -1713,20 +1715,23 @@ fn set_window_manager_decorations(conn: &impl Connection, wid: u32, enabled: boo
     let _ = conn.change_property32(PropMode::REPLACE, wid, atom, atom, &hints);
 }
 
-fn set_window_type_dock(conn: &impl Connection, wid: u32) {
+fn set_window_type_dock(conn: &impl Connection, wid: u32) -> bool {
     let Some(type_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE") else {
-        return;
+        return false;
     };
     let Some(dock_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE_DOCK") else {
-        return;
+        return false;
     };
-    let _ = conn.change_property32(
+    conn.change_property32(
         PropMode::REPLACE,
         wid,
         type_atom,
         AtomEnum::ATOM,
         &[dock_atom],
-    );
+    )
+    .ok()
+    .and_then(|cookie| cookie.check().ok())
+    .is_some()
 }
 
 fn set_qol_ghost(conn: &impl Connection, wid: u32) {
