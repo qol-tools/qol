@@ -99,7 +99,6 @@ core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", tag
 
 [profile.release]
 strip = true
-lto = "thin"
 
 [profile.sandbox]
 inherits = "release"
