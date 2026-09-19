@@ -115,6 +115,10 @@ impl DiscoveryState {
         self.searching = true;
     }
 
+    pub fn request(&mut self) {
+        self.searching = true;
+    }
+
     pub fn stop(&mut self) {
         self.searching = false;
     }

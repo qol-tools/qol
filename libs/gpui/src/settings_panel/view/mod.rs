@@ -3668,7 +3668,7 @@ impl SettingsPanelView {
                         visible,
                     )
                 })
-                .filter(|(_, _, rows)| !rows.is_empty())
+                .filter(|(_, _, rows)| !rows.is_empty() || self.level().list_card)
                 .collect();
         }
         let mut groups = Vec::new();
@@ -3747,12 +3747,16 @@ impl SettingsPanelView {
         detail: Option<&str>,
         here: bool,
     ) -> impl IntoElement {
-        SettingsGroupHeader::new(
+        let header = SettingsGroupHeader::new(
             title.to_string(),
             detail.map(|detail| SharedString::from(detail.to_string())),
             self.palette,
         )
-        .current(here)
+        .current(here);
+        match list_card::list_card_activity(self.level(), &self.root().rows) {
+            Some(label) => header.activity(label.to_string()),
+            None => header,
+        }
     }
 
     fn enter_hint(&self) -> Option<&'static str> {
@@ -5117,6 +5121,46 @@ default = "visible"
     fn binary_runtime_and_config_states_share_on_off_labels() {
         assert_eq!(binary_state_label(true), "On");
         assert_eq!(binary_state_label(false), "Off");
+    }
+
+    #[test]
+    fn bluetooth_search_button_says_scan_and_answers_the_click() {
+        let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/bluetooth/qol-config.toml");
+        let spec = qol_config::contract::parse_spec(&contract).expect("bluetooth contract");
+        let resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
+            .expect("bluetooth config");
+        let rows = rows_from_resolved(&resolved, 0);
+        let row = rows
+            .iter()
+            .find(|row| row.id == "search")
+            .expect("search row");
+        let RowControl::Action {
+            active_action,
+            active_query,
+            state_labels,
+            ..
+        } = &row.control
+        else {
+            panic!("search is an action row");
+        };
+        let label = |active, pending| {
+            action_value_label(
+                active,
+                pending,
+                false,
+                active_query.is_some(),
+                active_action.is_some(),
+                state_labels,
+            )
+        };
+        assert_eq!(label(false, false), "Scan");
+        assert_eq!(
+            label(false, true),
+            "Working",
+            "the click shows before BlueZ answers"
+        );
+        assert_eq!(label(true, false), "Stop");
     }
 
     #[test]

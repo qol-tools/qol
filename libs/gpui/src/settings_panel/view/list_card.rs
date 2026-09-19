@@ -898,6 +898,23 @@ fn list_item_card_level(
     })
 }
 
+pub(super) fn list_card_activity<'a>(level: &Level, root_rows: &'a [Row]) -> Option<&'a str> {
+    if !level.list_card {
+        return None;
+    }
+    let row = root_rows.get(level.origin_row?)?;
+    let RowControl::List {
+        active_query: Some(_),
+        active_label,
+        active: true,
+        ..
+    } = &row.control
+    else {
+        return None;
+    };
+    Some(active_label.as_deref().unwrap_or("Live"))
+}
+
 fn list_card_index(stack: &[Level]) -> Option<usize> {
     let front = stack.len().checked_sub(1)?;
     if stack[front].list_card {
@@ -1144,6 +1161,32 @@ mod tests {
             None,
         );
         (root.rows, child)
+    }
+
+    #[test]
+    fn open_list_card_reads_search_activity_from_live_parent_queries() {
+        let (mut rows, card) = list_card_fixture();
+        let RowControl::List {
+            active_query,
+            active_value_from,
+            active_label,
+            ..
+        } = &mut rows[0].control
+        else {
+            unreachable!();
+        };
+        *active_query = Some("search_status".into());
+        *active_value_from = Some("searching".into());
+        *active_label = Some("Searching".into());
+        for (active, label) in [(false, None), (true, Some("Searching")), (false, None)] {
+            super::super::super::rows::apply_runtime_query(
+                &mut rows,
+                "search_status",
+                Ok(serde_json::json!({"searching":active})),
+                &|_, _| false,
+            );
+            assert_eq!(super::list_card_activity(&card, &rows), label);
+        }
     }
 
     fn action_spec(

@@ -1,7 +1,9 @@
 use gpui::prelude::*;
 use gpui::{div, px, rgb, App, FontWeight, IntoElement, RenderOnce, SharedString, Window};
 
-use super::masthead_rule;
+use super::{
+    masthead_rule, settings_action_spinner, settings_value_text, RowGround, SettingsValueTone,
+};
 use crate::theme::SettingsPanelPalette;
 
 #[derive(IntoElement)]
@@ -9,6 +11,7 @@ pub struct SettingsGroupHeader {
     title: SharedString,
     detail: Option<SharedString>,
     current: bool,
+    activity: Option<SharedString>,
     palette: SettingsPanelPalette,
 }
 
@@ -22,6 +25,7 @@ impl SettingsGroupHeader {
             title: title.into(),
             detail,
             current: false,
+            activity: None,
             palette,
         }
     }
@@ -31,12 +35,18 @@ impl SettingsGroupHeader {
             title: title.into(),
             detail: None,
             current: false,
+            activity: None,
             palette,
         }
     }
 
     pub fn current(mut self, current: bool) -> Self {
         self.current = current;
+        self
+    }
+
+    pub fn activity(mut self, label: impl Into<SharedString>) -> Self {
+        self.activity = Some(label.into());
         self
     }
 }
@@ -65,12 +75,39 @@ impl RenderOnce for SettingsGroupHeader {
             .font_weight(FontWeight::SEMIBOLD)
             .child(
                 div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_DISPLAY))
-                    .line_height(gpui::relative(1.15))
-                    .text_color(rgb(name))
-                    .child(SharedString::from(self.title.to_lowercase())),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(qol_theme::SPACE_CELL))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_size(px(qol_theme::TEXT_DISPLAY))
+                            .line_height(gpui::relative(1.15))
+                            .text_color(rgb(name))
+                            .child(SharedString::from(self.title.to_lowercase())),
+                    )
+                    .when_some(self.activity, |row, label| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .gap(px(qol_theme::SPACE_INSET))
+                                .child(settings_action_spinner(
+                                    "settings-group-activity",
+                                    self.palette,
+                                ))
+                                .child(settings_value_text(
+                                    label,
+                                    SettingsValueTone::Muted,
+                                    RowGround::Pane,
+                                    self.palette,
+                                )),
+                        )
+                    }),
             );
         let block = match self.detail {
             None => block,

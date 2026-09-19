@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
+mod operations;
+
 use anyhow::{anyhow, bail, Context, Result};
 use bluer::{
     Adapter, AdapterEvent, AdapterProperty, Address, Device, DeviceEvent, DeviceProperty,
@@ -187,6 +189,9 @@ impl ExplicitDeviceAction {
         match self {
             Self::Pair => "Pair",
             Self::Connect => "Connect",
+            Self::Disconnect => "Disconnect",
+            Self::Trust(true) => "Trust",
+            Self::Trust(false) => "Untrust",
         }
     }
 
@@ -194,6 +199,9 @@ impl ExplicitDeviceAction {
         match self {
             Self::Pair => "pair",
             Self::Connect => "connect",
+            Self::Disconnect => "disconnect",
+            Self::Trust(true) => "trust",
+            Self::Trust(false) => "untrust",
         }
     }
 }
@@ -202,6 +210,8 @@ impl ExplicitDeviceAction {
 enum ExplicitDeviceAction {
     Pair,
     Connect,
+    Disconnect,
+    Trust(bool),
 }
 
 #[derive(Debug)]
@@ -737,16 +747,7 @@ async fn connect_with(
             redacted(address)
         );
     };
-    let mut device = adapter.device(address)?;
-    let initial = match device_info(&device).await {
-        Ok(info) => info,
-        Err(error) => cached.with_context(|| {
-            format!(
-                "BlueZ dropped {} before the connection operation began: {error}",
-                redacted(address)
-            )
-        })?,
-    };
+    let (mut device, initial) = resolve_action_device(adapter, address, cached).await?;
     let was_connected = initial.connected;
     if is_audio_device(&initial) && !supports_audio_sink(&initial) {
         if mode == ConnectionMode::Reconnect {
@@ -758,8 +759,7 @@ async fn connect_with(
         device = prepare_bredr_audio_device(adapter, address, &initial).await?;
     }
     if !device.is_paired().await? {
-        device
-            .pair()
+        pair_bonded(adapter, &device)
             .await
             .with_context(|| format!("BlueZ failed to pair {}", redacted(address)))?;
     }
@@ -791,22 +791,12 @@ async fn pair_with(
     address: Address,
     cached: Option<DeviceInfo>,
 ) -> Result<DeviceInfo> {
-    let mut device = adapter.device(address)?;
-    let initial = match device_info(&device).await {
-        Ok(info) => info,
-        Err(error) => cached.with_context(|| {
-            format!(
-                "BlueZ dropped {} before the pairing operation began: {error}",
-                redacted(address)
-            )
-        })?,
-    };
+    let (mut device, initial) = resolve_action_device(adapter, address, cached).await?;
     if is_audio_device(&initial) && !supports_audio_sink(&initial) {
         device = prepare_bredr_audio_device(adapter, address, &initial).await?;
     }
     if !device.is_paired().await? {
-        device
-            .pair()
+        pair_bonded(adapter, &device)
             .await
             .with_context(|| format!("BlueZ failed to pair {}", redacted(address)))?;
     }
@@ -824,6 +814,53 @@ async fn pair_with(
         );
     }
     Ok(info)
+}
+
+async fn pair_bonded(adapter: &Adapter, device: &Device) -> Result<()> {
+    let restore_non_pairable = !adapter.is_pairable().await?;
+    if restore_non_pairable {
+        adapter
+            .set_pairable(true)
+            .await
+            .context("failed to make the Bluetooth adapter pairable")?;
+    }
+    let result = device.pair().await.map_err(anyhow::Error::from);
+    if restore_non_pairable {
+        if let Err(error) = adapter.set_pairable(false).await {
+            eprintln!("failed to restore the non-pairable Bluetooth adapter: {error:#}");
+        }
+    }
+    result
+}
+
+async fn resolve_action_device(
+    adapter: &Adapter,
+    address: Address,
+    cached: Option<DeviceInfo>,
+) -> Result<(Device, DeviceInfo)> {
+    let device = adapter.device(address)?;
+    match device_info(&device).await {
+        Ok(info) => Ok((device, info)),
+        Err(error) => {
+            let cached = cached.with_context(|| {
+                format!(
+                    "BlueZ dropped {} before the device action: {error}",
+                    redacted(address)
+                )
+            })?;
+            if !is_audio_device(&cached) {
+                return Err(error);
+            }
+            qol_runtime::probe!(
+                "BLUETOOTH_DEVICE_ACTION",
+                "device={} stage=rediscover reason=expired_object",
+                redacted(address)
+            );
+            let device = discover_bredr_device(adapter, address).await?;
+            let info = device_info(&device).await?;
+            Ok((device, info))
+        }
+    }
 }
 
 async fn prepare_bredr_audio_device(
@@ -1441,7 +1478,10 @@ fn dispatch_daemon_action(
         DaemonAction::RemoveDevice => {
             device_daemon_command(request, DaemonCommand::Remove, "Removing")
         }
-        DaemonAction::StartSearch => ReadResult::Command(DaemonCommand::StartSearch),
+        DaemonAction::StartSearch => match mark_search_requested() {
+            Ok(()) => ReadResult::Command(DaemonCommand::StartSearch),
+            Err(error) => ReadResult::Error(error.to_string()),
+        },
         DaemonAction::StopSearch => match mark_search_stopped() {
             Ok(()) => ReadResult::Command(DaemonCommand::StopSearch),
             Err(error) => ReadResult::Error(error.to_string()),
@@ -1720,6 +1760,7 @@ async fn daemon_loop(
     let mut subscribed = HashSet::new();
     let mut retries = retry_map(config);
     let mut watch_states: HashMap<Address, AudioWatchState> = HashMap::new();
+    let mut operations = operations::DaemonOperations::default();
     let mut manager_reconcile = tokio::time::interval(Duration::from_secs(5));
     manager_reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut audio_watch = tokio::time::interval(AUDIO_PROFILE_WATCH_INTERVAL);
@@ -1748,7 +1789,7 @@ async fn daemon_loop(
     );
 
     loop {
-        let deadline = next_retry_deadline(&retries, adapter_powered);
+        let deadline = operations.retry_deadline(&retries, adapter_powered);
         let search_deadline = discovery.as_ref().map(|session| session.deadline);
         tokio::select! {
             command = commands.recv() => {
@@ -1827,14 +1868,9 @@ async fn daemon_loop(
                     continue;
                 }
                 if let DaemonCommand::Trust(address, trusted) = command {
-                    let (action, failure_label) = if trusted {
-                        ("trust", "Trust")
-                    } else {
-                        ("untrust", "Untrust")
-                    };
-                    let result = set_trusted_with(&adapter, address, trusted).await;
-                    finish_device_action(address, failure_label, &result);
-                    trace_device_action(action, address, result);
+                    spawn_explicit_device_action(
+                        ExplicitDeviceAction::Trust(trusted), address, false, None,
+                    );
                     continue;
                 }
                 if let DaemonCommand::Connect(address) = command {
@@ -1850,20 +1886,13 @@ async fn daemon_loop(
                     continue;
                 }
                 if let DaemonCommand::Disconnect(address) = command {
-                    let result = disconnect_with(&adapter, address).await;
-                    finish_device_action(address, "Disconnect", &result);
-                    trace_device_action("disconnect", address, result);
+                    spawn_explicit_device_action(
+                        ExplicitDeviceAction::Disconnect, address, false, None,
+                    );
                     continue;
                 }
                 if let DaemonCommand::Remove(address) = command {
-                    let result = remove_with(&adapter, address).await;
-                    finish_device_action(address, "Remove", &result);
-                    if result.is_ok() {
-                        retries.remove(&address);
-                        subscribed.remove(&address);
-                        watch_states.remove(&address);
-                    }
-                    trace_remove_action(address, result);
+                    operations.remove(adapter.clone(), address);
                     continue;
                 }
                 if matches!(command, DaemonCommand::Reload) {
@@ -1896,20 +1925,7 @@ async fn daemon_loop(
                 } else {
                     ReconnectSelection::Managed
                 };
-                if let Err(error) = ensure_powered(&adapter, config.power_on_adapter).await {
-                    trace_manual_failure(&error, selection, "adapter_power");
-                    continue;
-                }
-                adapter_powered = true;
-                let report = match reconnect_with(&adapter, config, selection).await {
-                    Ok(report) => report,
-                    Err(error) => {
-                        trace_manual_failure(&error, selection, "reconnect");
-                        continue;
-                    }
-                };
-                apply_report(&mut retries, &report, config);
-                trace_report(&report, selection);
+                operations.reconnect(adapter.clone(), config.clone(), selection);
             }
             event = adapter_events.next() => {
                 match event {
@@ -2016,7 +2032,10 @@ async fn daemon_loop(
                 }
             }
             _ = wait_for_deadline(deadline) => {
-                attempt_due(&adapter, config, &mut retries).await;
+                operations.start_due(&adapter, &retries);
+            }
+            completion = operations.next() => {
+                operations::complete(completion, &mut retries, config, &mut subscribed, &mut watch_states);
             }
             _ = manager_reconcile.tick() => {
                 notify_adopted_managers();
@@ -2072,7 +2091,12 @@ async fn run_explicit_device_action(
     cached: Option<DeviceInfo>,
 ) -> Result<DeviceInfo> {
     let adapter = default_adapter().await?;
-    ensure_powered(&adapter, power_on_adapter).await?;
+    if matches!(
+        action,
+        ExplicitDeviceAction::Pair | ExplicitDeviceAction::Connect
+    ) {
+        ensure_powered(&adapter, power_on_adapter).await?;
+    }
     match action {
         ExplicitDeviceAction::Pair => pair_with(&adapter, address, cached).await,
         ExplicitDeviceAction::Connect => connect_with(
@@ -2084,6 +2108,8 @@ async fn run_explicit_device_action(
         )
         .await
         .map(|(device, _)| device),
+        ExplicitDeviceAction::Disconnect => disconnect_with(&adapter, address).await,
+        ExplicitDeviceAction::Trust(trusted) => set_trusted_with(&adapter, address, trusted).await,
     }
 }
 
@@ -2225,6 +2251,13 @@ fn power_label(powered: bool) -> &'static str {
         return "on";
     }
     "off"
+}
+
+fn mark_search_requested() -> Result<()> {
+    DISCOVERY_STATE
+        .write()
+        .map(|mut state| state.request())
+        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))
 }
 
 fn mark_search_starting() -> Result<()> {
@@ -2916,76 +2949,11 @@ async fn next_device_event(streams: &mut DeviceStreams) -> (Address, bool) {
     }
 }
 
-fn next_retry_deadline(
-    retries: &HashMap<Address, RetryState>,
-    adapter_powered: bool,
-) -> Option<Instant> {
-    if !adapter_powered {
-        return None;
-    }
-    retries.values().filter_map(RetryState::due).min()
-}
-
 async fn wait_for_deadline(deadline: Option<Instant>) {
     let Some(deadline) = deadline else {
         return pending().await;
     };
     tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-}
-
-async fn attempt_due(
-    adapter: &Adapter,
-    config: &ReconnectConfig,
-    retries: &mut HashMap<Address, RetryState>,
-) {
-    let now = Instant::now();
-    let due = retries
-        .iter()
-        .filter_map(|(address, state)| state.is_due(now).then_some(*address))
-        .collect::<Vec<_>>();
-    if due.is_empty() {
-        return;
-    }
-    for address in due {
-        let attempt = retries
-            .get(&address)
-            .map(|state| state.failures() + 1)
-            .unwrap_or(1);
-        qol_runtime::probe!(
-            "BLUETOOTH_ATTEMPT",
-            "device={} source={} attempt={attempt}",
-            redacted(address),
-            ConnectionSource::AutoRetry.label()
-        );
-        match connect_with(
-            adapter,
-            address,
-            ConnectionMode::Reconnect,
-            ConnectionSource::AutoRetry,
-            None,
-        )
-        .await
-        {
-            Ok(_) => {
-                if let Some(state) = retries.get_mut(&address) {
-                    state.connected();
-                }
-                qol_runtime::probe!(
-                    "BLUETOOTH_RESULT",
-                    "device={} source={} outcome=connected attempt={attempt}",
-                    redacted(address),
-                    ConnectionSource::AutoRetry.label()
-                );
-            }
-            Err(error) => {
-                eprintln!(
-                    "Bluetooth reconnect failed for {}: {error:#}",
-                    redacted(address)
-                );
-                schedule_failed(retries, &[address], config, Instant::now());
-            }
-        }
-    }
 }
 
 fn schedule_failed(
@@ -3189,8 +3157,14 @@ mod tests {
         retry.request_now(now);
         let retries = HashMap::from([(address, retry)]);
 
-        assert_eq!(super::next_retry_deadline(&retries, false), None);
-        assert_eq!(super::next_retry_deadline(&retries, true), Some(now));
+        assert_eq!(
+            super::operations::DaemonOperations::default().retry_deadline(&retries, false),
+            None
+        );
+        assert_eq!(
+            super::operations::DaemonOperations::default().retry_deadline(&retries, true),
+            Some(now)
+        );
     }
 
     #[test]
