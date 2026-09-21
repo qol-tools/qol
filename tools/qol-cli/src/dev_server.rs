@@ -66,7 +66,7 @@ fn shutdown_url() -> String {
 }
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(250);
-const HTTP_TIMEOUT: Duration = Duration::from_secs(1);
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const BOOT_FAILURE_TAIL: usize = 40;
 
 #[derive(Debug)]
