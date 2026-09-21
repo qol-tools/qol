@@ -588,7 +588,7 @@ socket = "{contract_socket}"
     fn published_save_defers_reconciliation_until_the_daemon_accepts() {
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let harness = harness(&root);
         let pid_before = harness.pid();
@@ -649,7 +649,7 @@ socket = "{contract_socket}"
     fn unreachable_notification_restarts_and_applies_the_saved_value() {
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let harness = harness(&root);
         let pid_before = harness.pid();
@@ -681,7 +681,7 @@ socket = "{contract_socket}"
     fn replacement_during_notification_failure_is_not_restarted() {
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let harness = harness(&root);
 
@@ -721,7 +721,7 @@ socket = "{contract_socket}"
     fn newer_accepted_save_prevents_old_failure_restart() {
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let harness = harness(&root);
 
@@ -777,7 +777,7 @@ socket = "{contract_socket}"
     fn failing_first_published_request_does_not_restart_while_smaller_request_pending() {
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let harness = harness(&root);
 
@@ -844,7 +844,7 @@ socket = "{contract_socket}"
     fn enrollment_failure_fails_before_publishing() {
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let manager = Arc::new(Mutex::new(PluginManager::new()));
 
@@ -877,7 +877,7 @@ socket = "{contract_socket}"
 
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let plugins_dir = crate::paths::plugins_dir().unwrap();
         let plugin_dir = plugins_dir.join(NO_DAEMON_ID);
@@ -930,7 +930,7 @@ items = []
     fn failing_save_retires_its_request_and_reconcile_still_applies() {
         let _env = crate::test_support::env_lock().blocking_lock();
         let _runtime_cache = crate::test_support::runtime_cache_lock().blocking_lock();
-        let root = tempfile::TempDir::new().unwrap();
+        let root = tempfile::tempdir_in("/tmp").unwrap();
         let _path = crate::paths::push_test_path_root(root.path());
         let harness = harness(&root);
 
