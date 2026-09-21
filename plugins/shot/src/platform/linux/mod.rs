@@ -30,7 +30,7 @@ pub use recording::{
 };
 use system::resolve_command;
 pub use system::{
-    external_services_check, list_audio_sinks, list_audio_sources, open_url, permissions_check,
+    external_services_check, list_audio_sinks, list_audio_sources, open_url,
     platform_supported_check, required_binaries_check, show_notification, show_saved_notification,
 };
 pub use window::{

@@ -75,19 +75,6 @@ pub fn required_binaries_check() -> DoctorCheckResult {
     .with_fix("Install ffmpeg, xrandr, and xdpyinfo.")
 }
 
-pub fn permissions_check() -> DoctorCheckResult {
-    DoctorCheckResult::ok(
-        "permissions",
-        "Linux X11 capture requires no separate OS permission grant.",
-    )
-    .with_details(serde_json::json!({
-        "platform": "linux",
-        "authorization": "x11_session",
-        "prompted": false,
-        "capture_attempted": false,
-    }))
-}
-
 pub fn external_services_check() -> DoctorCheckResult {
     let display = std::env::var_os("DISPLAY")
         .filter(|value| !value.is_empty())

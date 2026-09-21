@@ -1,3 +1,4 @@
+pub use qol_platform::Permission;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 
@@ -395,6 +396,8 @@ pub struct Capabilities {
     pub gpui: bool,
     #[serde(default)]
     pub doctor: bool,
+    #[serde(default)]
+    pub permissions: Vec<Permission>,
     #[serde(flatten)]
     pub extras: HashMap<String, toml::Value>,
 }

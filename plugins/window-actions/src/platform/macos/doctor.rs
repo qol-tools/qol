@@ -12,36 +12,11 @@ const REQUIRED_FRAMEWORKS: [&str; 4] = [
     "/System/Library/Frameworks/CoreGraphics.framework",
 ];
 
-#[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-}
-
 pub(crate) fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::ok(
         "platform_supported",
         "macOS is declared and supported through native Accessibility APIs",
     )
-}
-
-pub(crate) fn permissions_check() -> DoctorCheckResult {
-    let trusted = unsafe { AXIsProcessTrusted() };
-    let details = json!({
-        "platform": "macos",
-        "accessibility_trusted": trusted,
-        "prompted": false,
-        "window_operation_run": false,
-    });
-    if trusted {
-        return DoctorCheckResult::ok("permissions", "macOS Accessibility permission is granted")
-            .with_details(details);
-    }
-    DoctorCheckResult::fail(
-        "permissions",
-        "macOS Accessibility permission is not granted",
-    )
-    .with_fix("Enable Window Actions in System Settings > Privacy & Security > Accessibility")
-    .with_details(details)
 }
 
 pub(crate) fn required_binaries_check() -> DoctorCheckResult {

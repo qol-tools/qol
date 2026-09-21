@@ -2,9 +2,10 @@ use crate::discovery::platform::macos::ffi::{CFRelease, CFRetain};
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::{AnyClass, AnyObject};
+use qol_platform::{permission_status, request_permission, Permission};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -146,8 +147,23 @@ fn sc_framework_ready() -> bool {
     available
 }
 
+/// Asking blocks until the user answers, and this runs on the picker path, so
+/// the request goes on its own thread.
+fn screen_capture_allowed() -> bool {
+    if permission_status(Permission::ScreenCapture).is_allowed() {
+        return true;
+    }
+    static ASKED: AtomicBool = AtomicBool::new(false);
+    if !ASKED.swap(true, Ordering::Relaxed) {
+        std::thread::spawn(|| {
+            request_permission(Permission::ScreenCapture);
+        });
+    }
+    false
+}
+
 pub(crate) fn live_shots_available() -> bool {
-    sc_framework_ready()
+    sc_framework_ready() && screen_capture_allowed()
 }
 
 static WARM_SESSION: Mutex<Option<(Instant, Arc<ShotsSession>)>> = Mutex::new(None);

@@ -190,14 +190,6 @@ pub fn required_binaries_check() -> DoctorCheckResult {
     )
 }
 
-pub fn permissions_check() -> DoctorCheckResult {
-    DoctorCheckResult::fail(
-        "permissions",
-        "QoL Shot has no supported Windows capture backend.",
-    )
-    .with_fix("Run QoL Shot on Linux or macOS.")
-}
-
 pub fn external_services_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(
         "external_services",

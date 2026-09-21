@@ -172,11 +172,22 @@ fn reenable_gate(released: bool, port: Option<&ReenablePort>) -> Option<CFMachPo
     port.map(|port| port.0)
 }
 
+/// A HID tap is created successfully without Accessibility permission and then
+/// receives no events, so the tap alone can never tell us we are untrusted.
+fn accessibility_trusted() -> bool {
+    qol_platform::request_permission(qol_platform::Permission::InputCapture).is_allowed()
+}
+
 fn run_tap(
     matcher: Arc<RwLock<MacBindingMatcher>>,
     fire_tx: Sender<CaptureEvent>,
     ready_tx: Sender<Result<(), String>>,
 ) {
+    if !accessibility_trusted() {
+        log::warn!(
+            "macOS Accessibility permission is not granted to qol-tray; the hotkey tap will receive no events"
+        );
+    }
     let events = vec![CGEventType::KeyDown, CGEventType::KeyUp];
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,

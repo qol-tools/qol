@@ -42,6 +42,7 @@ args = ["settings"]
 [capabilities]
 gpui = true
 doctor = true
+permissions = ["screen-capture"]
 
 [menu]
 label = "QoL Shot"

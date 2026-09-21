@@ -37,6 +37,7 @@ socket = "/tmp/qol-alt-tab.sock"
 [capabilities]
 gpui = true
 doctor = true
+permissions = ["input-capture", "screen-capture"]
 
 [menu]
 label = "Alt Tab"

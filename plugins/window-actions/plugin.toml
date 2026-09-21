@@ -12,6 +12,7 @@ command = "window-actions"
 
 [capabilities]
 doctor = true
+permissions = ["input-capture"]
 gpui = true
 
 [action.snap-left]

@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
+mod permissions;
 mod platform;
 
+pub use permissions::{permission_status, request_permission, Permission, PermissionState};
 use platform::PlatformApi;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

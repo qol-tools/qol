@@ -16,6 +16,7 @@ hmac.workspace = true
 qol-config.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-conventions.workspace = true
 log = "0.4"

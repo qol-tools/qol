@@ -32,6 +32,7 @@ socket = "/tmp/qol-keyremap.sock"
 [capabilities]
 gpui = true
 doctor = true
+permissions = ["input-capture"]
 
 [menu]
 label = "Key Remap"

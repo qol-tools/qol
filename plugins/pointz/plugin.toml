@@ -19,6 +19,7 @@ args = ["--action", "settings"]
 [capabilities]
 gpui = true
 doctor = true
+permissions = ["input-capture"]
 
 [menu]
 label = "PointZ"

@@ -80,6 +80,7 @@ dependencies = [
  "qol-fs",
  "qol-gpui",
  "qol-headless",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -4241,6 +4242,7 @@ dependencies = [
  "qol-conventions",
  "qol-headless",
  "qol-hotkeys",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -6022,6 +6024,7 @@ dependencies = [
  "qol-conventions",
  "qol-fs",
  "qol-headless",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "rdev",
@@ -6686,8 +6689,10 @@ dependencies = [
 name = "qol-platform"
 version = "0.2.0"
 dependencies = [
+ "core-foundation 0.10.0",
  "dirs 6.0.0",
  "libc",
+ "serde",
  "workspace-hack",
 ]
 
@@ -6701,6 +6706,8 @@ dependencies = [
  "proptest",
  "qol-config",
  "qol-conventions",
+ "qol-headless",
+ "qol-platform",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -6881,6 +6888,7 @@ dependencies = [
  "qol-log",
  "qol-mcp",
  "qol-migrations",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -10205,6 +10213,7 @@ dependencies = [
  "qol-conventions",
  "qol-fs",
  "qol-headless",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",

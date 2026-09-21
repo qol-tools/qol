@@ -146,11 +146,7 @@ fn doctor_checks() -> Vec<DoctorCheck> {
             "Verify external capture and launcher tools are available.",
             || Ok(platform::required_binaries_check()),
         ),
-        DoctorCheck::new(
-            "permissions",
-            "Query capture permission state without prompting or capturing.",
-            || Ok(platform::permissions_check()),
-        ),
+        qol_plugin_api::permissions_check!("QoL Shot"),
         DoctorCheck::new(
             "external_services",
             "Query the active display service without capturing any content.",

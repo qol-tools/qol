@@ -82,7 +82,7 @@ pub fn start_tap(state: Arc<TapState>) {
 }
 
 fn wait_for_accessibility() {
-    if accessibility_trusted() {
+    if request_accessibility_trust() {
         return;
     }
 
@@ -99,11 +99,11 @@ fn wait_for_accessibility() {
 }
 
 pub(super) fn accessibility_trusted() -> bool {
-    extern "C" {
-        fn AXIsProcessTrusted() -> bool;
-    }
+    qol_platform::permission_status(qol_platform::Permission::InputCapture).is_allowed()
+}
 
-    unsafe { AXIsProcessTrusted() }
+fn request_accessibility_trust() -> bool {
+    qol_platform::request_permission(qol_platform::Permission::InputCapture).is_allowed()
 }
 
 fn run_tap(state: Arc<TapState>) {

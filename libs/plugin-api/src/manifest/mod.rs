@@ -10,8 +10,8 @@ mod validation_tests;
 pub use schema::{
     ActionCatalog, ActionDeclaration, ActionType, BinaryDependency, BuildInfo, Capabilities,
     ConfigDeclarations, ConfigScope, DaemonConfig, DeclaredAction, Dependencies, LauncherKind,
-    LauncherSpec, MenuConfig, MenuItem, NamedPort, PluginId, PluginInfo, PluginManifest, PluginUid,
-    PortProtocol, RuntimeConfig, ShortcutDeclaration,
+    LauncherSpec, MenuConfig, MenuItem, NamedPort, Permission, PluginId, PluginInfo,
+    PluginManifest, PluginUid, PortProtocol, RuntimeConfig, ShortcutDeclaration,
 };
 pub use validation::{
     is_valid_action_id, is_valid_command_basename, is_valid_plugin_id, is_valid_safe_identifier,
