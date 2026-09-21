@@ -183,12 +183,17 @@ fn run_tap(
     fire_tx: Sender<CaptureEvent>,
     ready_tx: Sender<Result<(), String>>,
 ) {
+    // Only error and startup levels reach the installed tray's log file, so a
+    // warning here would never be readable when it matters.
     if !accessibility_trusted() {
-        log::warn!(
+        log::error!(
             "macOS Accessibility permission is not granted to qol-tray; the hotkey tap will receive no events"
         );
+    } else {
+        log::error!("macOS Accessibility permission is granted to qol-tray");
     }
     let events = vec![CGEventType::KeyDown, CGEventType::KeyUp];
+    let armed_matcher = Arc::clone(&matcher);
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
         CGEventTapPlacement::TailAppendEventTap,
@@ -214,6 +219,10 @@ fn run_tap(
             }
             if matches!(event_type, CGEventType::KeyDown) && is_auto_repeat(event) {
                 return CallbackResult::Keep;
+            }
+            static SEEN: AtomicBool = AtomicBool::new(false);
+            if !SEEN.swap(true, Ordering::Relaxed) {
+                log::error!("macOS hotkey tap received its first key event");
             }
             let observed = observed_combo(event);
             let fired = match matcher.write() {
@@ -251,6 +260,10 @@ fn run_tap(
     };
     CFRunLoop::get_current().add_source(&loop_source, unsafe { kCFRunLoopCommonModes });
     tap.enable();
+    log::error!(
+        "macOS hotkey tap armed with {} bindings",
+        armed_matcher.read().map(|m| m.binding_count()).unwrap_or(0)
+    );
     let _ = ready_tx.send(Ok(()));
     CFRunLoop::run_current();
 }
@@ -262,6 +275,10 @@ struct MacBindingMatcher {
 }
 
 impl MacBindingMatcher {
+    fn binding_count(&self) -> usize {
+        self.bindings.len()
+    }
+
     fn new(bindings: Vec<Binding>) -> Self {
         Self {
             bindings: bindings
