@@ -45,6 +45,7 @@ struct UpdatesView {
 struct HostView {
     current: String,
     latest: Option<String>,
+    update_available: bool,
     dev_build: bool,
     queued: bool,
     running: bool,
@@ -188,10 +189,7 @@ fn start_update_action(state: &AppState, id: Option<&str>) -> Response {
 }
 
 fn start_host_update(state: &AppState) -> Response {
-    let available = is_available(
-        crate::updates::current_version(),
-        crate::updates::latest_version().as_deref(),
-    );
+    let available = crate::updates::host_update_available();
     if let Some(message) = host_update_refusal(
         crate::updates::checks_enabled(),
         crate::updates::host_update_status().running,
@@ -239,11 +237,7 @@ fn start_update_all_action(state: &AppState) -> Response {
             return action_error(StatusCode::INTERNAL_SERVER_ERROR, "Plugin list unavailable")
         }
     };
-    let host_available = crate::updates::checks_enabled()
-        && is_available(
-            crate::updates::current_version(),
-            crate::updates::latest_version().as_deref(),
-        );
+    let host_available = crate::updates::host_update_available();
     let plan = update_all_plan(&plugins, host_available);
     let running = crate::updates::host_update_status().running || state.any_plugin_update_active();
     if let Some(message) = update_all_refusal(running, &plan) {
@@ -314,6 +308,7 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
         host: HostView {
             current: crate::updates::current_version().to_string(),
             latest: crate::updates::latest_version(),
+            update_available: crate::updates::host_update_available(),
             dev_build: !checks_enabled,
             queued: host.queued,
             running: host.running,
@@ -420,7 +415,7 @@ fn host_row_state(view: &UpdatesView) -> RowState {
     if view.host.error.is_some() {
         return RowState::Failed;
     }
-    if is_available(&view.host.current, view.host.latest.as_deref()) {
+    if view.host.update_available {
         RowState::Available
     } else {
         RowState::UpToDate
@@ -593,6 +588,7 @@ mod tests {
         HostView {
             current: current.to_string(),
             latest: latest.map(str::to_string),
+            update_available: is_available(current, latest),
             dev_build: false,
             queued: false,
             running: false,
@@ -688,7 +684,7 @@ mod tests {
         let mut state = view(host("3.66.1", Some("3.67.0")), vec![]);
         assert_eq!(host_row_state(&state), RowState::Available);
 
-        state.host.latest = None;
+        state.host.update_available = false;
         assert_eq!(host_row_state(&state), RowState::UpToDate);
 
         state.host.error = Some("No connection to GitHub".to_string());

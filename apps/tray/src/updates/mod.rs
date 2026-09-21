@@ -79,9 +79,11 @@ pub fn latest_version() -> Option<String> {
 }
 
 pub fn checks_enabled() -> bool {
-    !cfg!(feature = "dev")
-        && platform::detect_install_kind() != platform::InstallKind::Development
-        && !runs_a_workspace_build()
+    !cfg!(feature = "dev") && platform::detect_install_kind() != platform::InstallKind::Development
+}
+
+pub fn host_update_available() -> bool {
+    checks_enabled() && lock_update_state().is_some_and(|state| state.update_found)
 }
 
 fn runs_a_workspace_build() -> bool {
@@ -264,13 +266,15 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
             releases.len()
         );
     }
-    let newest = pick_latest_host_version(&releases);
-    let update_found = newest
-        .as_deref()
-        .map(|latest| is_newer_version(latest, CURRENT_VERSION))
-        .unwrap_or(false);
-    match newest.as_deref() {
-        Some(latest) if update_found => {
+    let newest = pick_latest_host_release(&releases);
+    let update_found = match newest.as_ref() {
+        Some((tag, version)) if is_newer_version(version, CURRENT_VERSION) => {
+            !runs_a_workspace_build() || workspace_build_precedes_release(tag).await
+        }
+        _ => false,
+    };
+    match newest.as_ref() {
+        Some((_, latest)) if update_found => {
             log::info!("Update available: {} -> {}", CURRENT_VERSION, latest)
         }
         Some(_) => log::info!("No updates available (current: {})", CURRENT_VERSION),
@@ -278,9 +282,44 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
     }
     Ok(FetchedRelease {
         update_found,
-        latest: newest.filter(|_| update_found),
+        latest: newest.filter(|_| update_found).map(|(_, version)| version),
         etag: new_etag,
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubComparison {
+    status: Option<String>,
+}
+
+async fn workspace_build_precedes_release(tag: &str) -> bool {
+    let Some(commit) = running_source_commit() else {
+        return false;
+    };
+    let url = format!(
+        "https://api.github.com/repos/{}/compare/{}...{}",
+        GITHUB_REPO, tag, commit
+    );
+    let token = crate::credentials::github_bearer_token();
+    let request = crate::features::plugin_store::github::build_github_request(
+        http_client(),
+        &url,
+        token.as_deref(),
+    );
+    let Ok(response) = request.send().await else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    match response.json::<GitHubComparison>().await {
+        Ok(comparison) => release_newer_than_workspace_build(comparison.status.as_deref()),
+        Err(_) => false,
+    }
+}
+
+fn release_newer_than_workspace_build(status: Option<&str>) -> bool {
+    status == Some("behind")
 }
 
 pub(crate) fn github_status_message(status: u16) -> String {
@@ -445,13 +484,14 @@ fn host_update_state() -> &'static Mutex<HostUpdateState> {
     })
 }
 
-fn pick_latest_host_version(releases: &[GitHubRelease]) -> Option<String> {
+fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)> {
     use crate::features::plugin_store::source::{select_release_tag, version_from_plugin_tag};
     let tag = select_release_tag(
         releases.iter().map(|r| r.tag_name.as_str()),
         HOST_TAG_PREFIX,
     )?;
-    version_from_plugin_tag(tag, HOST_TAG_PREFIX)
+    let version = version_from_plugin_tag(tag, HOST_TAG_PREFIX)?;
+    Some((tag, version))
 }
 
 fn is_newer_version(latest: &str, current: &str) -> bool {
@@ -569,8 +609,12 @@ mod tests {
         }
     }
 
+    fn picked_version(releases: &[GitHubRelease]) -> Option<String> {
+        pick_latest_host_release(releases).map(|(_, version)| version)
+    }
+
     #[test]
-    fn only_the_running_workspace_build_suppresses_update_checks() {
+    fn only_the_running_workspace_build_is_detected() {
         let cases = [
             (Some("abc123"), Some("abc123"), true),
             (Some("abc123"), Some("def456"), false),
@@ -583,6 +627,24 @@ mod tests {
                 commits_match(installed, running),
                 expected,
                 "installed={installed:?} running={running:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_release_is_offered_only_while_the_workspace_build_stays_behind_it() {
+        let cases = [
+            (Some("behind"), true),
+            (Some("ahead"), false),
+            (Some("identical"), false),
+            (Some("diverged"), false),
+            (None, false),
+        ];
+        for (status, expected) in cases {
+            assert_eq!(
+                release_newer_than_workspace_build(status),
+                expected,
+                "status={status:?}"
             );
         }
     }
@@ -648,7 +710,7 @@ mod tests {
         for (tags, expected) in cases {
             let releases: Vec<_> = tags.iter().map(|t| rel(t)).collect();
             assert_eq!(
-                pick_latest_host_version(&releases).as_deref(),
+                picked_version(&releases).as_deref(),
                 expected,
                 "tags: {tags:?}"
             );
@@ -662,7 +724,7 @@ mod tests {
             rel("qol-alt-tab-v2.0.1"),
             rel("qol-keyremap-v0.3.0"),
         ];
-        assert_eq!(pick_latest_host_version(&releases), None);
+        assert_eq!(picked_version(&releases), None);
     }
 
     #[test]
@@ -673,22 +735,19 @@ mod tests {
             rel("qol-tray-v3.2.1"),
             rel("qol-alt-tab-v2.0.1"),
         ];
-        assert_eq!(
-            pick_latest_host_version(&releases).as_deref(),
-            Some("3.2.1")
-        );
+        assert_eq!(picked_version(&releases).as_deref(), Some("3.2.1"));
     }
 
     #[test]
     fn pick_latest_host_version_returns_none_when_empty() {
         let releases: Vec<GitHubRelease> = vec![];
-        assert_eq!(pick_latest_host_version(&releases), None);
+        assert_eq!(picked_version(&releases), None);
     }
 
     #[test]
     fn pick_latest_host_version_rejects_collision_with_other_prefix() {
         let releases = vec![rel("qol-tray-doctor-v1.0.0")];
-        assert_eq!(pick_latest_host_version(&releases), None);
+        assert_eq!(picked_version(&releases), None);
     }
 
     #[test]
