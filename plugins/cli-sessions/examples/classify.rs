@@ -2,10 +2,10 @@ use std::io::Read;
 
 use serde::Deserialize;
 
-use plugin_cli_sessions::attention::{reduce, Attention, Evidence};
-use plugin_cli_sessions::host::{kitty_session_id, Pane};
-use plugin_cli_sessions::registry::summary_for;
-use plugin_cli_sessions::tool::{from_cli_session, is_generic};
+use qol_cli_sessions::attention::{reduce, Attention, Evidence};
+use qol_cli_sessions::host::{kitty_session_id, Pane};
+use qol_cli_sessions::registry::summary_for;
+use qol_cli_sessions::tool::{from_cli_session, is_generic};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 
 #[derive(Deserialize)]

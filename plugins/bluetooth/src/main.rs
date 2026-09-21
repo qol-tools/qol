@@ -2,8 +2,8 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if matches!(args.as_slice(), [arg] if arg == plugin_bluetooth::SETTINGS_SURFACE_ARG) {
-        return match plugin_bluetooth::show_settings() {
+    if matches!(args.as_slice(), [arg] if arg == qol_bluetooth::SETTINGS_SURFACE_ARG) {
+        return match qol_bluetooth::show_settings() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{error:#}");
@@ -12,7 +12,7 @@ fn main() -> ExitCode {
         };
     }
     if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
-        return match plugin_bluetooth::platform::run_daemon(plugin_bluetooth::config::load()) {
+        return match qol_bluetooth::platform::run_daemon(qol_bluetooth::config::load()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{error:#}");
@@ -20,7 +20,7 @@ fn main() -> ExitCode {
             }
         };
     }
-    plugin_bluetooth::cli::exit_code(args)
+    qol_bluetooth::cli::exit_code(args)
 }
 
 #[cfg(test)]

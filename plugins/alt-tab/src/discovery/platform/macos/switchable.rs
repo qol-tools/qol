@@ -1,6 +1,6 @@
 use crate::config::SwitchablePanelOverride;
 
-pub(crate) const QOL_SWITCHABLE_PANELS: &[&str] = &["cli-sessions"];
+pub(crate) const QOL_SWITCHABLE_PANELS: &[&str] = &["qol-cli-sessions"];
 
 #[derive(Debug, Clone)]
 pub(crate) struct SwitchablePanels(Vec<String>);
@@ -50,21 +50,21 @@ mod tests {
     #[test]
     fn qol_panels_are_switchable_without_any_user_overrides() {
         let apps = SwitchablePanels::default();
-        assert!(apps.allows("cli-sessions"));
+        assert!(apps.allows("qol-cli-sessions"));
         assert!(!apps.allows("Microsoft Teams"));
     }
 
     #[test]
     fn user_can_remove_a_qol_panel() {
-        let apps = SwitchablePanels::resolve(&[override_row("cli-sessions", false)]);
-        assert!(!apps.allows("cli-sessions"));
+        let apps = SwitchablePanels::resolve(&[override_row("qol-cli-sessions", false)]);
+        assert!(!apps.allows("qol-cli-sessions"));
     }
 
     #[test]
     fn user_can_add_an_app_qol_does_not_ship() {
         let apps = SwitchablePanels::resolve(&[override_row("Stickies", true)]);
         assert!(apps.allows("Stickies"));
-        assert!(apps.allows("cli-sessions"));
+        assert!(apps.allows("qol-cli-sessions"));
     }
 
     #[test]
@@ -72,22 +72,22 @@ mod tests {
         let apps = SwitchablePanels::resolve(&[override_row("  Stickies  ", true)]);
         assert!(apps.allows("STICKIES"));
         assert!(apps.allows(" stickies "));
-        assert!(apps.allows("CLI-Sessions"));
+        assert!(apps.allows("QOL-CLI-Sessions"));
     }
 
     #[test]
     fn later_override_row_wins_over_earlier_one() {
         let apps = SwitchablePanels::resolve(&[
-            override_row("cli-sessions", false),
-            override_row("CLI-SESSIONS", true),
+            override_row("qol-cli-sessions", false),
+            override_row("QOL-CLI-SESSIONS", true),
         ]);
-        assert!(apps.allows("cli-sessions"));
+        assert!(apps.allows("qol-cli-sessions"));
     }
 
     #[test]
     fn blank_override_rows_are_ignored() {
         let apps = SwitchablePanels::resolve(&[override_row("   ", false), override_row("", true)]);
-        assert!(apps.allows("cli-sessions"));
+        assert!(apps.allows("qol-cli-sessions"));
         assert!(!apps.allows(""));
     }
 }

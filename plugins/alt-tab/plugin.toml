@@ -1,9 +1,9 @@
 [plugin]
-id = "plugin-alt-tab"
+id = "qol-alt-tab"
 uid = "a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6"
 name = "Alt Tab"
 description = "Better alt-tab experience with window previews"
-version = "0.80.0"
+version = "0.81.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
@@ -11,7 +11,7 @@ platforms = ["linux", "macos"]
 switchable_panels = "os"
 
 [runtime]
-command = "alt-tab"
+command = "qol-alt-tab"
 
 [action.open]
 label = "Alt Tab (Open/Next)"
@@ -31,7 +31,8 @@ args = ["--settings"]
 
 [daemon]
 enabled = true
-command = "alt-tab"
+command = "qol-alt-tab"
+inherit_listener = true
 socket = "/tmp/qol-alt-tab.sock"
 
 [capabilities]
@@ -43,7 +44,15 @@ permissions = ["input-capture", "screen-capture"]
 label = "Alt Tab"
 items = []
 
+[traits.confined]
+
+[traits.peripheral-preview]
+neighbors = 1
+
+[traits.atmosphere]
+preset = "spacecraft"
+
 [[dependencies.binaries]]
-name = "alt-tab"
-repo = "qol-tools/plugin-alt-tab"
-pattern = "alt-tab-{os}-{arch}"
+name = "qol-alt-tab"
+repo = "qol-tools/qol-alt-tab"
+pattern = "qol-alt-tab-{os}-{arch}"

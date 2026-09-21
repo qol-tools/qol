@@ -2,14 +2,14 @@
 
 Inventory of string literals that reach the user through gpui surfaces: settings panels, toasts, pickers, overlays, and window titles. Generated 2026-08-21 by scanning every crate that imports gpui (`use gpui` / `use qol_gpui`), excluding `examples/`, `tests/`, and `#[cfg(test)]` blocks, then hand-curating out trace probes, X11 atom names, element ids, and log/assert text.
 
-Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessions 8, launcher 8, qol-tray settings surface 3, plus shared key-cap fragments.
+Per-crate counts: qol-gpui 12, qol-shot 30, qol-alt-tab 14, qol-removeapp 14, qol-cli-sessions 8, qol-launcher 8, qol-tray settings surface 3, plus shared key-cap fragments.
 
 ## Window and panel titles
 
 | String | Location |
 |---|---|
-| `{} Settings` (generic plugin settings window) | apps/qol-tray/src/settings_surface/platform/unix_common.rs:561 |
-| `qol Settings` | apps/qol-tray/src/settings_surface/platform/unix_common.rs:538 |
+| `{} Settings` (generic plugin settings window) | apps/tray/src/settings_surface/platform/unix_common.rs:561 |
+| `qol Settings` | apps/tray/src/settings_surface/platform/unix_common.rs:538 |
 | `Alt Tab Settings` | plugins/alt-tab/src/picker/run.rs:181 |
 | `Alt Tab` | plugins/alt-tab/src/app/render.rs:189 |
 | `Alt Tab · Live Window Grid` | plugins/alt-tab/src/app/render.rs:196 |
@@ -47,7 +47,7 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 | `Wake a controller` / `Controller input unavailable` | gamepad/view.rs:418,420 | empty state |
 | `Left ` / `L ` / `Right ` / `R ` / `D-pad ` / `D ` | gamepad/view.rs:369-371 | button name prefix + abbreviation |
 
-## alt-tab
+## qol-alt-tab
 
 | String | Location |
 |---|---|
@@ -56,7 +56,7 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 | `{app} · {title}` / `[{}] {}` | app/render.rs:540,531 window card label |
 | `...` | app/render.rs:647 truncated label |
 
-## cli-sessions overview
+## qol-cli-sessions overview
 
 | String | Location |
 |---|---|
@@ -66,7 +66,7 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 | `\u{25B2}` | ui/render.rs:587 needs-you marker |
 | `{secs}s` / `{}m` / `{}h` | ui/render.rs:39-43 session age |
 
-## launcher
+## qol-launcher
 
 | String | Location |
 |---|---|
@@ -120,7 +120,7 @@ Overlay hints:
 
 Windows doctor text (plugins/shot/src/platform/windows/mod.rs): full-sentence messages at 181-206, short `qol-shot: ...` errors at 38-127.
 
-## removeapp
+## qol-removeapp
 
 | String | Location |
 |---|---|
@@ -149,11 +149,11 @@ Status as of 2026-08-21, after the cleanup pass (commits 35a95cf1b, d2239d9fa, 1
 **Fixed**
 
 1. Ellipsis style. Every user-visible string now uses the real ellipsis escape. The first pass covered only the two sites listed in this inventory; a follow-up caught the shared settings kit (`qol-gpui/src/settings_panel/view/mod.rs` loading / Waiting / working) and qol-shot's platform recording notifications, which this inventory had missed.
-2. Escape key cap. Named keys read `Esc` everywhere. Two more sites turned up beyond the ones listed here: alt-tab's second (debug-overlay) header bar, and removeapp's `("esc", "back")` hint, so the claim that removeapp was already capitalized was wrong. Single-letter caps (`d`, `T`, `a`) keep their case: it tells you which key to press.
+2. Escape key cap. Named keys read `Esc` everywhere. Two more sites turned up beyond the ones listed here: qol-alt-tab's second (debug-overlay) header bar, and qol-removeapp's `("esc", "back")` hint, so the claim that qol-removeapp was already capitalized was wrong. Single-letter caps (`d`, `T`, `a`) keep their case: it tells you which key to press.
 3. `Capture area` duplication, folded into `CAPTURE_AREA_LABEL`.
 4. `Could not open screenshot editor` duplication, folded into `EDITOR_OPEN_FAILED_TOAST`.
 5. The `Enter to continue` / `Esc to quit` hint duplication, folded into `CONTINUE_OR_QUIT_HINT`.
-7. Size formatting. This was not a precision difference: qol-shot was decimal, removeapp was 1024-based while labelling the result GB/MB/KB, so removeapp reported 90.4 GB for what Finder calls 97.0 GB. Both now call one `qol_gpui::format_bytes`, decimal, which also rolls 999_999 bytes up to `1.0 MB` instead of showing `1000 KB`. `qol-dev-build` has its own binary formatter, correctly labelled GiB/MiB/KiB; that is a different unit system and stays.
+7. Size formatting. This was not a precision difference: qol-shot was decimal, qol-removeapp was 1024-based while labelling the result GB/MB/KB, so qol-removeapp reported 90.4 GB for what Finder calls 97.0 GB. Both now call one `qol_gpui::format_bytes`, decimal, which also rolls 999_999 bytes up to `1.0 MB` instead of showing `1000 KB`. `qol-dev-build` has its own binary formatter, correctly labelled GiB/MiB/KiB; that is a different unit system and stays.
 
 **Rejected**
 
@@ -171,5 +171,5 @@ Status as of 2026-08-21, after the cleanup pass (commits 35a95cf1b, d2239d9fa, 1
 - Trace probes and `qol_runtime::probe!` messages (`title={title} phase=...`, `context={context} stage=...`, GHOSTDUMP lines).
 - X11 atom names (`_NET_WM_STATE`, `_NET_WM_WINDOW_TYPE`, `_MOTIF_WM_HINTS`, `WM_PROTOCOLS`).
 - Element/state ids (`qol-toast-host-{}-{sequence}`, `qol-shot-pin-{}-{seq}`, `show#{}`, `reuse`, `superseded`, `picker_visible`, `gap`, `toggle`, `ghost`, `danger`, `primary`, `accent`).
-- Log/assert/error text (`invalid plugin ID...`, `failed to launch...`, `couldn't confirm package ownership` reason, alt-tab state-machine strings, keepalive/ghost internals).
+- Log/assert/error text (`invalid plugin ID...`, `failed to launch...`, `couldn't confirm package ownership` reason, qol-alt-tab state-machine strings, keepalive/ghost internals).
 - `#[cfg(test)]` blocks and tests/ directories (inventory covers only shipped surfaces).

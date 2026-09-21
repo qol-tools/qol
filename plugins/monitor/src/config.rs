@@ -215,7 +215,7 @@ fn load_from(
     if let Some(json) = store_json.as_ref().filter(|value| !value.is_null()) {
         match parse_store(json) {
             Ok(config) => return (config, ConfigOrigin::HostStore),
-            Err(error) => eprintln!("[plugin-monitor] host config store unreadable: {error:#}"),
+            Err(error) => eprintln!("[{PLUGIN_ID}] host config store unreadable: {error:#}"),
         }
     }
     if let Some(path) = materialized {
@@ -309,7 +309,7 @@ pub(crate) fn load_preferred_file(
         .map(|(id, preference)| (id, preference.brightness))
         .collect();
     if let Err(error) = write_preferred(path, &preferred) {
-        eprintln!("[plugin-monitor] failed to adopt legacy preferred brightness: {error:#}");
+        eprintln!("[{PLUGIN_ID}] failed to adopt legacy preferred brightness: {error:#}");
     }
     preferred
 }

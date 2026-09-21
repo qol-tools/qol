@@ -17,7 +17,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn serve(port: u16, config: Config) -> std::io::Result<()> {
     let listener = bind_task_runner_listener(port)?;
-    eprintln!("[task-runner] listening on 127.0.0.1:{port}");
+    eprintln!("[{}] listening on 127.0.0.1:{port}", env!("QOL_PLUGIN_ID"));
     let config = Arc::new(config);
     for stream in listener.incoming() {
         let Ok(stream) = stream else {

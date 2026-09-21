@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-removeapp"
+id = "qol-removeapp"
 uid = "37aae6d0-ae74-4487-946a-32a635a9ef03"
 name = "Remove App"
 description = "Uninstall an app and its leftovers"
-version = "0.56.0"
+version = "0.57.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "removeapp"
+command = "qol-removeapp"
 
 [action.open]
 label = "Open"
@@ -29,6 +29,6 @@ action = "open"
 export_to_launcher = true
 
 [[dependencies.binaries]]
-name = "removeapp"
-repo = "qol-tools/plugin-removeapp"
-pattern = "removeapp-{os}-{arch}"
+name = "qol-removeapp"
+repo = "qol-tools/qol-removeapp"
+pattern = "qol-removeapp-{os}-{arch}"

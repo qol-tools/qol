@@ -11,8 +11,8 @@ locations are part of the architecture, not interchangeable styling choices.
 | `ui/` | qol-tray's web host | Packaged HTML, JavaScript, CSS, and schemas. The host discovers `ui/index.html` from the installed plugin root. |
 | `src/ui/` | the plugin crate | Rust modules for native GPUI windows, views, toasts, panels, and presentation state. |
 
-Root `ui/` is therefore correct for custom web pages such as keyremap and
-lights. Native GPUI code never belongs there. Conversely, browser assets never
+Root `ui/` is therefore correct for custom web pages such as qol-keyremap and
+qol-lights. Native GPUI code never belongs there. Conversely, browser assets never
 belong under `src/`.
 
 ## Canonical shape

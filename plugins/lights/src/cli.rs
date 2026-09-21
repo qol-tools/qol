@@ -6,7 +6,6 @@ use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 use crate::runtime::actions;
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "plugin-lights";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
@@ -30,7 +29,7 @@ where
     Daemon: Fn() -> CommandResult + Send + Sync + 'static,
 {
     let runtime = Arc::new(runtime);
-    let mut app = HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    let mut app = HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about(
             "Control Zigbee lights through a serial coordinator and daemon-backed live transport.",
         )
@@ -51,7 +50,7 @@ where
 {
     Command::new("launch")
         .about("Run the host daemon when a daemon socket is injected, otherwise open settings.")
-        .usage(format!("{BINARY_NAME} launch"))
+        .usage(format!("{PLUGIN_ID} launch"))
         .detail("This is the no-argument compatibility route used by qol-tray.")
         .output("Daemon and settings diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero if daemon startup or settings activation fails.")
@@ -65,7 +64,7 @@ where
     Command::new("daemon")
         .alias("run")
         .about("Run the long-lived coordinator, action socket, device monitor, and live websocket.")
-        .usage(format!("{BINARY_NAME} daemon"))
+        .usage(format!("{PLUGIN_ID} daemon"))
         .detail("Requires the daemon socket environment supplied by qol-tray.")
         .output("Lifecycle diagnostics are written to stderr.")
         .exit_behavior("Runs until stopped; exits non-zero if coordinator or socket startup fails.")
@@ -81,7 +80,7 @@ where
 {
     let mut command = Command::new(action)
         .about(action_about(action))
-        .usage(format!("{BINARY_NAME} {action}"))
+        .usage(format!("{PLUGIN_ID} {action}"))
         .output("No stdout on success; operational diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero if settings, coordinator startup, or light control fails.");
     if let Some(detail) = action_detail(action) {

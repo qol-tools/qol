@@ -101,15 +101,15 @@ mod tests {
 
     fn sample_entry() -> Entry {
         Entry {
-            id: "plugin-lights".to_string(),
+            id: "qol-lights".to_string(),
             active: Slot {
-                path: PathBuf::from("/home/user/dev/plugin-lights"),
+                path: PathBuf::from("/home/user/dev/qol-lights"),
                 source: SlotSource::DevLink {
-                    origin_path: PathBuf::from("/home/user/dev/plugin-lights"),
+                    origin_path: PathBuf::from("/home/user/dev/qol-lights"),
                 },
             },
             fallback: Some(Slot {
-                path: PathBuf::from("/home/user/.config/qol-tray/plugins/plugin-lights"),
+                path: PathBuf::from("/home/user/.config/qol-tray/plugins/qol-lights"),
                 source: SlotSource::ReleaseAsset,
             }),
         }

@@ -1,0 +1,1011 @@
+use std::collections::HashSet;
+use std::os::unix::net::UnixStream;
+use std::sync::mpsc as std_mpsc;
+use std::time::{Duration, Instant};
+
+use qol_plugin_api::manifest::is_valid_plugin_id;
+use qol_runtime::protocol::{
+    ArmedLifelinesResponse, NotificationLayout, NotificationLevel, PluginConfigResponse, PushAck,
+    RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
+};
+
+use super::io::{write_flushed_json_line, write_state};
+use crate::plugins::config::drain::installed_ids;
+use crate::runtime::server::state_store::SharedState;
+
+const SUBSCRIBER_WRITE_TIMEOUT_SECS: u64 = 5;
+#[cfg(not(test))]
+const SUBSCRIBER_KEEPALIVE_PROBE: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SUBSCRIBER_KEEPALIVE_PROBE: Duration = Duration::from_millis(50);
+
+pub(super) fn handle_request(request: &str, writer: &mut UnixStream, shared: &SharedState) {
+    if handle_json_request(request, writer, shared) {
+        return;
+    }
+
+    handle_text_request(request, writer, shared);
+}
+
+pub(super) fn request_is_long_lived(request: &str) -> bool {
+    if !request.starts_with('{') {
+        return false;
+    }
+
+    matches!(
+        serde_json::from_str::<RuntimeRequest>(request),
+        Ok(RuntimeRequest::Subscribe { .. } | RuntimeRequest::Lifeline { .. })
+    )
+}
+
+fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedState) -> bool {
+    let Ok(request) = serde_json::from_str::<RuntimeRequest>(request) else {
+        return false;
+    };
+
+    match request {
+        RuntimeRequest::GetState => write_state(writer, shared),
+        RuntimeRequest::SetFocus { monitor_idx } => {
+            apply_focus(shared, monitor_idx, "[runtime/socket] SET_FOCUS")
+        }
+        RuntimeRequest::Subscribe { plugin_id, events } => {
+            handle_subscription(writer, shared, plugin_id, events)
+        }
+        RuntimeRequest::Lifeline { plugin_id } => handle_lifeline(writer, shared, plugin_id),
+        RuntimeRequest::ArmedLifelines => {
+            let response = ArmedLifelinesResponse {
+                plugin_ids: shared.armed_lifelines(),
+            };
+            let _ = write_flushed_json_line(writer, &response);
+        }
+        RuntimeRequest::GetPluginConfig { plugin_id } => {
+            let _ = write_flushed_json_line(writer, &load_plugin_config(&plugin_id));
+        }
+        RuntimeRequest::SetPluginConfig { plugin_id, config } => {
+            let _ = write_flushed_json_line(writer, &store_plugin_config(&plugin_id, config));
+        }
+        RuntimeRequest::PushNotification {
+            plugin_id,
+            title,
+            body,
+            level,
+            action_label,
+            action_payload,
+            artifact,
+            layout,
+        } => {
+            let action = resolve_action(action_label.as_deref(), action_payload.as_deref());
+            let artifact = resolve_artifact(artifact.as_deref());
+            handle_push_notification(
+                writer, &plugin_id, &title, &body, level, action, artifact, layout,
+            )
+        }
+        RuntimeRequest::PushStatus { plugin_id, status } => {
+            handle_push_status(writer, &plugin_id, &status)
+        }
+    }
+
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_push_notification(
+    writer: &mut UnixStream,
+    plugin_id: &str,
+    title: &str,
+    body: &str,
+    level: NotificationLevel,
+    action: Option<(&str, &str)>,
+    artifact: Option<&str>,
+    layout: Option<NotificationLayout>,
+) {
+    let accepted = push_plugin_known(plugin_id);
+    if accepted && title.trim().is_empty() {
+        log::warn!(
+            "[runtime/socket] PUSH notification rejected: plugin {plugin_id:?} sent an empty title"
+        );
+        crate::runtime::server::trace::push(
+            qol_conventions::plugin_id::short_name(plugin_id),
+            "notification",
+            false,
+        );
+        let ack = PushAck::Error {
+            message: "empty title".to_string(),
+        };
+        let _ = write_flushed_json_line(writer, &ack);
+        return;
+    }
+    respond_to_push(writer, plugin_id, "notification", accepted);
+    if !accepted {
+        return;
+    }
+    log::info!(
+        "[runtime/socket] PUSH notification from {plugin_id}: {title} (action={})",
+        action.map(|(label, _)| label).unwrap_or("-")
+    );
+    crate::surfaces::show_plugin_notification(title, body, level, action, artifact, layout);
+}
+
+fn resolve_action<'a>(
+    label: Option<&'a str>,
+    payload: Option<&'a str>,
+) -> Option<(&'a str, &'a str)> {
+    let (label, payload) = (label?, payload?);
+    if label.trim().is_empty() {
+        return None;
+    }
+    if !crate::paths::is_existing_absolute_path(payload) {
+        log::warn!(
+            "[runtime/socket] PUSH notification action dropped: payload {payload:?} is not an existing absolute path"
+        );
+        return None;
+    }
+    Some((label, payload))
+}
+
+fn resolve_artifact(artifact: Option<&str>) -> Option<&str> {
+    let artifact = artifact?;
+    if !crate::paths::is_existing_absolute_path(artifact) {
+        log::warn!(
+            "[runtime/socket] PUSH notification artifact dropped: {artifact:?} is not an existing absolute path"
+        );
+        return None;
+    }
+    Some(artifact)
+}
+
+fn handle_push_status(writer: &mut UnixStream, plugin_id: &str, status: &serde_json::Value) {
+    let accepted = push_plugin_known(plugin_id);
+    if accepted {
+        log::info!("[runtime/socket] PUSH status from {plugin_id}: {status}");
+        crate::runtime::PluginStatusRegistry::shared().set(plugin_id, status.clone());
+    }
+    respond_to_push(writer, plugin_id, "status", accepted);
+}
+
+/// The push channel only accepts ids of plugins the host actually knows:
+/// well-formed (`plugin.toml` id rules) and installed under `plugins_dir`.
+fn push_plugin_known(plugin_id: &str) -> bool {
+    if !is_valid_plugin_id(plugin_id) {
+        return false;
+    }
+    let Ok(plugins_dir) = crate::paths::plugins_dir() else {
+        return false;
+    };
+    installed_ids(&plugins_dir).iter().any(|id| id == plugin_id)
+}
+
+fn respond_to_push(writer: &mut UnixStream, plugin_id: &str, kind: &str, accepted: bool) {
+    let clean_id = qol_conventions::plugin_id::short_name(plugin_id);
+    if !accepted {
+        log::warn!("[runtime/socket] PUSH {kind} rejected: unknown plugin id {plugin_id:?}");
+    }
+    crate::runtime::server::trace::push(clean_id, kind, accepted);
+    let ack = if accepted {
+        PushAck::Handled
+    } else {
+        PushAck::Error {
+            message: format!("unknown plugin id: {plugin_id}"),
+        }
+    };
+    let _ = write_flushed_json_line(writer, &ack);
+}
+
+fn load_plugin_config(plugin_id: &str) -> PluginConfigResponse {
+    let manager = match crate::plugins::config::PluginConfigManager::new() {
+        Ok(manager) => manager,
+        Err(err) => {
+            return PluginConfigResponse::Error {
+                message: err.to_string(),
+            }
+        }
+    };
+    match manager.get_config(plugin_id) {
+        Ok(config) => PluginConfigResponse::Ok {
+            config: config.unwrap_or(serde_json::Value::Null),
+        },
+        Err(err) => PluginConfigResponse::Error {
+            message: err.to_string(),
+        },
+    }
+}
+
+fn store_plugin_config(plugin_id: &str, config: serde_json::Value) -> PluginConfigResponse {
+    let manager = match crate::plugins::config::PluginConfigManager::new() {
+        Ok(manager) => manager,
+        Err(err) => {
+            return PluginConfigResponse::Error {
+                message: err.to_string(),
+            }
+        }
+    };
+    match manager.set_config(plugin_id, config.clone()) {
+        Ok(()) => PluginConfigResponse::Ok { config },
+        Err(err) => PluginConfigResponse::Error {
+            message: err.to_string(),
+        },
+    }
+}
+
+fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: String) {
+    log::info!("[runtime/socket] host-death lifeline armed by {plugin_id}");
+    shared.arm_lifeline(plugin_id.clone());
+
+    if !write_flushed_json_line(writer, &SubscribeAck::Subscribed) {
+        shared.disarm_lifeline(&plugin_id);
+        return;
+    }
+
+    register_lifeline_for_exec_handoff(writer);
+
+    let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
+
+    // No events ever flow on a lifeline; the held-open connection exists purely
+    // so the daemon's read sees EOF when this host process dies. Block until the
+    // daemon disconnects (it exited) or the probe detects the peer is gone.
+    let (keepalive_tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+    forward_events(writer, rx);
+    drop(keepalive_tx);
+
+    unregister_lifeline_for_exec_handoff(writer);
+    shared.disarm_lifeline(&plugin_id);
+    log::info!("[runtime/socket] host-death lifeline dropped by {plugin_id}");
+}
+
+fn register_lifeline_for_exec_handoff(writer: &UnixStream) {
+    use std::os::fd::AsRawFd;
+
+    crate::lifeline_handoff::register(writer.as_raw_fd());
+}
+
+fn unregister_lifeline_for_exec_handoff(writer: &UnixStream) {
+    use std::os::fd::AsRawFd;
+
+    crate::lifeline_handoff::unregister(writer.as_raw_fd());
+}
+
+fn handle_subscription(
+    writer: &mut UnixStream,
+    shared: &SharedState,
+    plugin_id: String,
+    events: Vec<RuntimeEventKind>,
+) {
+    let interests: HashSet<_> = events.iter().copied().collect();
+    let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+
+    let clean_id = qol_conventions::plugin_id::short_name(&plugin_id);
+    log::info!(
+        "[runtime/socket] new subscriber ({}): {:?}",
+        clean_id,
+        interests
+    );
+    let subscriber_id = shared.add_subscriber(plugin_id.clone(), interests, tx);
+
+    if !write_flushed_json_line(writer, &SubscribeAck::Subscribed) {
+        shared.remove_subscriber(subscriber_id);
+        return;
+    }
+
+    let replayed_idx = replay_active_monitor(writer, shared, &events);
+    crate::runtime::server::trace::subscribed(clean_id, &events, replayed_idx);
+
+    let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
+
+    forward_events(writer, rx);
+    shared.remove_subscriber(subscriber_id);
+
+    log::info!("[runtime/socket] subscriber disconnected: {}", clean_id);
+}
+
+fn replay_active_monitor(
+    writer: &mut UnixStream,
+    shared: &SharedState,
+    events: &[RuntimeEventKind],
+) -> Option<usize> {
+    if !events.contains(&RuntimeEventKind::ActiveMonitorChanged) {
+        return None;
+    }
+    shared.refresh_snapshot_synchronously();
+    let monitors = shared.monitors();
+    let input = shared.input();
+    let active =
+        crate::runtime::state::pick_active_monitor(&input).or_else(|| monitors.first().copied())?;
+    let idx = monitors.iter().position(|m| *m == active)?;
+    let _ = write_flushed_json_line(
+        writer,
+        &RuntimeEvent::ActiveMonitorChanged {
+            monitor_idx: Some(idx),
+            monitor: Some(active),
+        },
+    );
+    Some(idx)
+}
+
+fn forward_events(writer: &mut UnixStream, rx: std_mpsc::Receiver<RuntimeEvent>) {
+    loop {
+        match rx.recv_timeout(SUBSCRIBER_KEEPALIVE_PROBE) {
+            Ok(event) => {
+                if !write_flushed_json_line(writer, &event) {
+                    return;
+                }
+            }
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                if !peer_is_alive(writer) {
+                    return;
+                }
+            }
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+fn peer_is_alive(writer: &UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let fd = writer.as_raw_fd();
+    let mut buf = [0u8; 1];
+    let n = unsafe {
+        libc::recv(
+            fd,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len(),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    if n == 0 {
+        return false;
+    }
+    if n > 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
+}
+
+fn handle_text_request(request: &str, writer: &mut UnixStream, shared: &SharedState) {
+    if let Some(rest) = request.strip_prefix("SET_FOCUS ") {
+        handle_text_set_focus(rest, shared);
+        return;
+    }
+
+    if !request.eq_ignore_ascii_case("GET_STATE") {
+        return;
+    }
+
+    write_state(writer, shared);
+}
+
+fn handle_text_set_focus(request: &str, shared: &SharedState) {
+    let Ok(idx) = request.parse::<usize>() else {
+        return;
+    };
+    apply_focus(shared, idx, "[runtime/socket] SET_FOCUS (text)");
+}
+
+fn apply_focus(shared: &SharedState, monitor_idx: usize, label: &str) {
+    let Some(monitor) = shared.monitor_at(monitor_idx) else {
+        return;
+    };
+
+    log::debug!(
+        "{} idx={} mon=({}, {})",
+        label,
+        monitor_idx,
+        monitor.x,
+        monitor.y
+    );
+
+    shared.with_input(|input| input.update_focus(monitor, Instant::now()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qol_runtime::MonitorBounds;
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+    use tempfile::TempDir;
+
+    fn mon(x: f32) -> MonitorBounds {
+        MonitorBounds {
+            x,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        }
+    }
+
+    fn pair() -> (UnixStream, UnixStream) {
+        UnixStream::pair().expect("UnixStream::pair")
+    }
+
+    fn read_to_string(stream: &mut UnixStream) -> String {
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    #[test]
+    fn armed_lifeline_socket_stays_close_on_exec() {
+        use std::os::fd::AsRawFd;
+
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+        let server_fd = server.as_raw_fd();
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+
+            let flags = unsafe { libc::fcntl(server_fd, libc::F_GETFD) };
+            assert!(flags >= 0, "armed lifeline fd must be open");
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "armed lifeline must stay close-on-exec so spawned plugin daemons cannot inherit it",
+            );
+
+            drop(client);
+            handle.join().expect("lifeline handler thread");
+        });
+    }
+
+    #[test]
+    fn plugin_config_set_then_get_round_trips_over_socket() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+
+        let (mut writer, mut reader) = pair();
+        handle_request(
+            r#"{"cmd":"set_plugin_config","plugin_id":"plugin-test","config":{"hello":"world"}}"#,
+            &mut writer,
+            &shared,
+        );
+        drop(writer);
+        let set_response = read_to_string(&mut reader);
+        assert!(
+            set_response.contains("\"status\":\"ok\""),
+            "set ack: {set_response:?}",
+        );
+
+        let (mut writer, mut reader) = pair();
+        handle_request(
+            r#"{"cmd":"get_plugin_config","plugin_id":"plugin-test"}"#,
+            &mut writer,
+            &shared,
+        );
+        drop(writer);
+        let get_response = read_to_string(&mut reader);
+        assert!(
+            get_response.contains("\"hello\":\"world\""),
+            "get must return the config stored over the socket: {get_response:?}",
+        );
+    }
+
+    fn push_ack(payload: &str, shared: &SharedState) -> String {
+        let (mut writer, mut reader) = pair();
+        handle_request(payload, &mut writer, shared);
+        drop(writer);
+        read_to_string(&mut reader)
+    }
+
+    /// Sets up a test path root containing a `plugin-test` plugin dir and runs
+    /// `body` while the root guard is alive (it is thread-local and must not
+    /// outlive this call).
+    fn with_known_plugin(body: impl FnOnce()) {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let plugins_dir = crate::paths::plugins_dir().expect("plugins dir under test root");
+        std::fs::create_dir_all(plugins_dir.join("plugin-test")).expect("create plugin dir");
+        body();
+    }
+
+    #[test]
+    fn push_notification_acknowledged_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            let response = push_ack(
+                r#"{"cmd":"push_notification","plugin_id":"plugin-test","title":"Done","body":"Synced","level":"warn"}"#,
+                &shared,
+            );
+            assert!(
+                response.contains("\"status\":\"handled\""),
+                "known plugin push must be handled: {response:?}",
+            );
+        });
+    }
+
+    #[test]
+    fn push_notification_with_action_acknowledged_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            let response = push_ack(
+                r#"{"cmd":"push_notification","plugin_id":"plugin-test","title":"Saved","body":"clip","action_label":"Open Folder","action_payload":"/home/u/Videos/qol-shot.mp4"}"#,
+                &shared,
+            );
+            assert!(
+                response.contains("\"status\":\"handled\""),
+                "action-carrying push must be handled: {response:?}",
+            );
+        });
+    }
+
+    #[test]
+    fn action_resolves_only_for_an_existing_absolute_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let file = tmp.path().join("clip.mp4");
+        std::fs::write(&file, b"x").expect("write payload file");
+        let existing = file.to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_action(Some("Open Folder"), Some(&existing)),
+            Some(("Open Folder", existing.as_str())),
+            "an existing absolute path must carry the action"
+        );
+
+        let missing = tmp.path().join("gone.mp4").to_string_lossy().into_owned();
+        let cases = [
+            ("missing path", Some("Open Folder"), Some(missing.as_str())),
+            ("relative path", Some("Open Folder"), Some("clip.mp4")),
+            (
+                "url payload",
+                Some("Open Folder"),
+                Some("https://example.com"),
+            ),
+            ("blank label", Some("  "), Some(existing.as_str())),
+            ("no payload", Some("Open Folder"), None),
+            ("no label", None, Some(existing.as_str())),
+        ];
+        for (name, label, payload) in cases {
+            assert_eq!(resolve_action(label, payload), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn artifact_resolves_only_for_an_existing_absolute_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let file = tmp.path().join("shot.png");
+        std::fs::write(&file, b"x").expect("write artifact file");
+        let existing = file.to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_artifact(Some(existing.as_str())),
+            Some(existing.as_str()),
+            "an existing absolute path must be kept"
+        );
+
+        let missing = tmp.path().join("gone.png").to_string_lossy().into_owned();
+        let cases = [
+            ("missing path", Some(missing.as_str())),
+            ("relative path", Some("shot.png")),
+            ("url payload", Some("https://example.com")),
+            ("no artifact", None),
+        ];
+        for (name, artifact) in cases {
+            assert_eq!(resolve_artifact(artifact), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn push_notification_rejected_for_unknown_plugin() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let response = push_ack(
+            r#"{"cmd":"push_notification","plugin_id":"plugin-nope","title":"Hi"}"#,
+            &shared,
+        );
+        assert!(
+            response.contains("\"status\":\"error\""),
+            "unknown plugin push must be rejected: {response:?}",
+        );
+        assert!(
+            response.contains("unknown plugin id"),
+            "rejection must name the cause: {response:?}",
+        );
+    }
+
+    #[test]
+    fn push_notification_rejected_for_invalid_id_format() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let response = push_ack(
+            r#"{"cmd":"push_notification","plugin_id":"-bad id!","title":"Hi"}"#,
+            &shared,
+        );
+        assert!(
+            response.contains("\"status\":\"error\""),
+            "malformed plugin id push must be rejected: {response:?}",
+        );
+    }
+
+    #[test]
+    fn push_notification_with_blank_title_rejected_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            for title in ["", "   ", "\t\n "] {
+                let payload = serde_json::json!({
+                    "cmd": "push_notification",
+                    "plugin_id": "plugin-test",
+                    "title": title,
+                    "body": "x",
+                    "level": "info",
+                });
+                let response = push_ack(&payload.to_string(), &shared);
+                assert!(
+                    response.contains("\"status\":\"error\""),
+                    "blank title {title:?} must be refused: {response:?}",
+                );
+                assert!(
+                    response.contains("empty title"),
+                    "refusal must name the cause: {response:?}",
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn push_status_acknowledged_for_known_plugin() {
+        with_known_plugin(|| {
+            let shared = SharedState::new(vec![mon(0.0)]);
+            let response = push_ack(
+                r#"{"cmd":"push_status","plugin_id":"plugin-test","status":{"state":"recording"}}"#,
+                &shared,
+            );
+            assert!(
+                response.contains("\"status\":\"handled\""),
+                "known plugin status push must be handled: {response:?}",
+            );
+        });
+    }
+
+    #[test]
+    fn push_status_rejected_for_unknown_plugin() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _guard = crate::paths::push_test_path_root(tmp.path());
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let response = push_ack(
+            r#"{"cmd":"push_status","plugin_id":"plugin-nope","status":{"state":"idle"}}"#,
+            &shared,
+        );
+        assert!(
+            response.contains("\"status\":\"error\""),
+            "unknown plugin status push must be rejected: {response:?}",
+        );
+    }
+
+    #[test]
+    fn handle_request_dispatches_text_get_state_case_insensitive() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let cases = ["GET_STATE", "get_state", "Get_State"];
+        for input in cases {
+            let (mut writer, mut reader) = pair();
+            handle_request(input, &mut writer, &shared);
+            drop(writer);
+            let response = read_to_string(&mut reader);
+            assert!(
+                response.contains("monitors"),
+                "input {input:?} response: {response:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn handle_request_text_set_focus_updates_focus_when_index_in_range() {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let shared = SharedState::new(monitors.clone());
+        let (mut writer, _reader) = pair();
+
+        handle_request("SET_FOCUS 1", &mut writer, &shared);
+
+        let focus = shared.input().focus.expect("focus stamped");
+        assert_eq!(focus.monitor, monitors[1], "idx=1 picks second monitor");
+    }
+
+    #[test]
+    fn handle_request_text_set_focus_ignores_out_of_range_index() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, _reader) = pair();
+
+        handle_request("SET_FOCUS 99", &mut writer, &shared);
+
+        assert!(
+            shared.input().focus.is_none(),
+            "out-of-range idx must not stamp focus",
+        );
+    }
+
+    #[test]
+    fn handle_request_text_set_focus_ignores_non_numeric_index() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, _reader) = pair();
+
+        handle_request("SET_FOCUS not_a_number", &mut writer, &shared);
+
+        assert!(
+            shared.input().focus.is_none(),
+            "non-numeric idx parsed as Err, no stamp",
+        );
+    }
+
+    #[test]
+    fn handle_request_ignores_unknown_text_payloads() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, mut reader) = pair();
+        handle_request("PLEASE_REBOOT", &mut writer, &shared);
+        drop(writer);
+        let response = read_to_string(&mut reader);
+        assert!(
+            response.is_empty(),
+            "unknown text payload returns nothing: {response:?}",
+        );
+    }
+
+    #[test]
+    fn request_is_long_lived_only_for_held_open_json_commands() {
+        let cases = [
+            ("text get_state", "GET_STATE", false),
+            ("json get_state", r#"{"cmd":"get_state"}"#, false),
+            (
+                "json set_focus",
+                r#"{"cmd":"set_focus","monitor_idx":0}"#,
+                false,
+            ),
+            (
+                "json armed_lifelines",
+                r#"{"cmd":"armed_lifelines"}"#,
+                false,
+            ),
+            (
+                "json subscribe",
+                r#"{"cmd":"subscribe","events":["cursor_moved"]}"#,
+                true,
+            ),
+            (
+                "json lifeline",
+                r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                true,
+            ),
+            ("unknown json", r#"{"cmd":"unknown"}"#, false),
+        ];
+
+        for (label, request, expected) in cases {
+            assert_eq!(request_is_long_lived(request), expected, "case: {label}",);
+        }
+    }
+
+    #[test]
+    fn handle_request_dispatches_json_get_state() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (mut writer, mut reader) = pair();
+        handle_request(r#"{"cmd":"get_state"}"#, &mut writer, &shared);
+        drop(writer);
+        let response = read_to_string(&mut reader);
+        assert!(
+            response.contains("monitors"),
+            "json get_state should respond: {response:?}",
+        );
+    }
+
+    #[test]
+    fn handle_request_dispatches_json_set_focus() {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let shared = SharedState::new(monitors.clone());
+        let (mut writer, _reader) = pair();
+        handle_request(
+            r#"{"cmd":"set_focus","monitor_idx":1}"#,
+            &mut writer,
+            &shared,
+        );
+        let focus = shared.input().focus.expect("focus stamped via json");
+        assert_eq!(focus.monitor, monitors[1]);
+    }
+
+    #[test]
+    fn apply_focus_no_op_when_index_out_of_range() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        apply_focus(&shared, 5, "test");
+        assert!(shared.input().focus.is_none());
+    }
+
+    #[test]
+    fn apply_focus_stamps_focus_when_index_resolves_to_monitor() {
+        let monitors = vec![mon(0.0), mon(2000.0)];
+        let shared = SharedState::new(monitors.clone());
+        apply_focus(&shared, 1, "test");
+        let focus = shared.input().focus.expect("focus must be stamped");
+        assert_eq!(focus.monitor, monitors[1]);
+    }
+
+    #[test]
+    fn peer_is_alive_returns_false_when_peer_closed() {
+        let (writer, reader) = pair();
+        drop(reader);
+        assert!(!peer_is_alive(&writer));
+    }
+
+    #[test]
+    fn peer_is_alive_returns_true_while_peer_holds_handle() {
+        let (writer, _reader) = pair();
+        assert!(peer_is_alive(&writer));
+    }
+
+    #[test]
+    fn forward_events_exits_after_peer_disconnects_without_any_publish() {
+        let (writer, reader) = pair();
+        let (_tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+        drop(reader);
+
+        let handle = std::thread::spawn(move || {
+            let mut writer = writer;
+            forward_events(&mut writer, rx);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !handle.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            handle.is_finished(),
+            "forward_events must exit on peer-close within keepalive window",
+        );
+        handle.join().expect("forward_events thread");
+    }
+
+    #[test]
+    fn forward_events_exits_immediately_when_channel_disconnects() {
+        let (writer, _reader) = pair();
+        let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+        drop(tx);
+
+        let handle = std::thread::spawn(move || {
+            let mut writer = writer;
+            forward_events(&mut writer, rx);
+        });
+
+        handle
+            .join()
+            .expect("forward_events must return on Disconnected");
+    }
+
+    #[test]
+    fn forward_events_writes_event_when_peer_alive() {
+        let (writer, mut reader) = pair();
+        let (tx, rx) = std_mpsc::channel::<RuntimeEvent>();
+        tx.send(RuntimeEvent::CursorMoved { x: 7.0, y: 11.0 })
+            .unwrap();
+        drop(tx);
+
+        let handle = std::thread::spawn(move || {
+            let mut writer = writer;
+            forward_events(&mut writer, rx);
+        });
+
+        handle.join().expect("forward_events thread");
+        let mut buf = [0u8; 256];
+        let _ = reader.set_read_timeout(Some(Duration::from_millis(200)));
+        let n = reader.read(&mut buf).unwrap_or(0);
+        let body = String::from_utf8_lossy(&buf[..n]);
+        assert!(body.contains("cursor_moved"), "got: {body:?}");
+    }
+
+    #[test]
+    fn subscription_is_removed_on_disconnect() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"subscribe","plugin_id":"plugin-x","events":["cursor_moved"]}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+            assert!(
+                shared.has_poll_subscribers(),
+                "subscription must be visible while the daemon is connected",
+            );
+
+            drop(client);
+            handle.join().expect("subscription handler thread");
+        });
+
+        assert!(
+            !shared.has_poll_subscribers(),
+            "subscription must be removed when the daemon disconnects",
+        );
+    }
+
+    #[test]
+    fn armed_lifelines_request_returns_sorted_armed_set() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        shared.arm_lifeline("qol-launcher".to_string());
+        shared.arm_lifeline("qol-alt-tab".to_string());
+        let (mut writer, mut reader) = pair();
+
+        handle_request(r#"{"cmd":"armed_lifelines"}"#, &mut writer, &shared);
+        drop(writer);
+
+        let response = read_to_string(&mut reader);
+        assert!(response.contains("qol-alt-tab"), "got: {response:?}");
+        assert!(response.contains("qol-launcher"), "got: {response:?}");
+    }
+
+    #[test]
+    fn lifeline_arms_on_connect_and_disarms_on_disconnect() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+            assert!(
+                shared.armed_lifelines().iter().any(|id| id == "plugin-x"),
+                "lifeline must be armed once the daemon connects",
+            );
+
+            drop(client);
+            handle.join().expect("lifeline handler thread");
+        });
+
+        assert!(
+            shared.armed_lifelines().is_empty(),
+            "lifeline must disarm when the daemon disconnects",
+        );
+    }
+
+    #[test]
+    fn lifeline_stays_armed_while_peer_is_connected() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, mut client) = pair();
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"lifeline","plugin_id":"plugin-x"}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let ack = read_to_string(&mut client);
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+            std::thread::sleep(SUBSCRIBER_KEEPALIVE_PROBE * 3);
+            assert!(
+                shared.armed_lifelines().iter().any(|id| id == "plugin-x"),
+                "lifeline must remain armed until the daemon disconnects",
+            );
+
+            drop(client);
+            handle.join().expect("lifeline handler thread");
+        });
+
+        assert!(
+            shared.armed_lifelines().is_empty(),
+            "lifeline must disarm after the daemon disconnects",
+        );
+    }
+}

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# qol-alt-tab - UI-host flavour: retained picker needs a window-manager host (cinnamon/muffin).
+source "$(cd "$(dirname "$0")/.." && pwd)/framework.sh"
+
+mock_init "qol-alt-tab" "qol-alt-tab" "Switch desktop windows through a retained native picker." "daemon"
+
+mock_command "daemon" \
+  --about "Run the retained Alt Tab picker daemon." \
+  --usage "qol-alt-tab daemon" \
+  --detail "Requires a compatible UI host (cinnamon/muffin); falls back to a GPUI overlay elsewhere." \
+  --output "Lifecycle diagnostics are written to stderr." \
+  --exit "Runs until stopped; exits non-zero when no UI host is available." \
+  --handler daemon_cmd
+
+mock_command "--show" \
+  --about "Show or advance the retained Alt Tab picker." \
+  --usage "qol-alt-tab --show" \
+  --output "No stdout on success." \
+  --exit "Exits after signaling the daemon, or runs the daemon when none is available." \
+  --handler show_cmd
+
+mock_command "--show-reverse" \
+  --about "Show or move backward through the retained Alt Tab picker." \
+  --usage "qol-alt-tab --show-reverse" \
+  --output "No stdout on success." \
+  --exit "Exits after signaling the daemon, or starts the hidden daemon when none is available." \
+  --handler show_cmd
+
+mock_command "--settings" \
+  --about "Open the Alt Tab settings surface." \
+  --usage "qol-alt-tab --settings" \
+  --output "No stdout on success; launch failures are written to stderr." \
+  --exit "Exits after the settings launcher returns." \
+  --handler settings_cmd
+
+mock_command "--kill" \
+  --about "Ask the running Alt Tab daemon to stop." \
+  --usage "qol-alt-tab --kill" \
+  --output "No output on success." \
+  --exit "Exits zero whether or not a daemon is currently running." \
+  --handler kill_cmd
+
+daemon_cmd() { mock_start_daemon qol-alt-tab "cinnamon/muffin" || return $?; }
+show_cmd() {
+  if [ -f "$MOCK_STATE/qol-alt-tab.state" ]; then
+    echo "qol-alt-tab: picker signaled (host: cinnamon)"
+  else
+    echo "qol-alt-tab: no daemon; starting retained picker via GPUI overlay"
+  fi
+}
+settings_cmd() { echo "qol-alt-tab: opened settings surface (host-owned URL)"; }
+kill_cmd() { mock_stop_daemon qol-alt-tab; }
+
+doctor_checks() {
+  mock_check platform_supported ok "linux (cinnamon) is declared"
+  mock_check ui_host ok "muffin compositor reachable"
+  mock_check config_readable ok "plugin config is readable"
+  mock_check daemon_socket ok "daemon socket present"
+  mock_check permissions ok "window listing permission granted"
+}
+mock_doctor doctor_checks
+
+qol-alt-tab_status() { mock_daemon_status qol-alt-tab "host: cinnamon"; }
+qol-alt-tab_kill() { mock_stop_daemon qol-alt-tab; }
+mock_lifecycle "qol-alt-tab" "daemon" "qol-alt-tab_kill" "qol-alt-tab_status"
+qol-alt-tab_config() { echo '{}'; }
+mock_config qol-alt-tab_config
+_config() { echo '{}'; }
+mock_config _config
+mock_dispatch "$@"

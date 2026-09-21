@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn accepts_safe_ids() {
-        let cases = ["plugin-alt-tab", "alt_tab", "keyremap", "a", "A1-b_2"];
+        let cases = ["qol-alt-tab", "alt_tab", "qol-keyremap", "a", "A1-b_2"];
         for id in cases {
             assert!(is_valid_plugin_id(id), "should accept: {id}");
         }

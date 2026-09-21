@@ -37,7 +37,7 @@ state-dir resolver.
 This rule is scoped to config/data dirs. The following `qol-tray` literals are
 acknowledged residuals and are intentionally NOT routed through `qol-config`:
 
-- **qol-tray test-only override branch** (`apps/qol-tray/src/paths.rs`). The
+- **qol-tray test-only override branch** (`apps/tray/src/paths.rs`). The
   `QOL_TRAY_TEST_PATH_ROOT` thread-local override stack and its guards stay in
   qol-tray; only the production join delegates to `qol_config::data_dir()` /
   `qol_config::config_dir()`. The override branch joins `qol_config::NAMESPACE`
@@ -45,11 +45,11 @@ acknowledged residuals and are intentionally NOT routed through `qol-config`:
   `QOL_TRAY_TEST_PATH_ROOT` keep working.
 - **Log dirs**, whose platform conventions differ from `data_dir` and so cannot
   route through it:
-  - macOS `apps/qol-tray/src/logging/platform/macos.rs` - `Library/Logs/qol-tray`
+  - macOS `apps/tray/src/logging/platform/macos.rs` - `Library/Logs/qol-tray`
     (macOS `data_dir` is `Application Support`, not `Library/Logs`; redirecting
     would relocate logs).
-  - Windows `apps/qol-tray/src/logging/platform/windows.rs` - `qol-tray/logs`.
-  - temp-dir fallback `apps/qol-tray/src/logging/file_logger.rs` -
+  - Windows `apps/tray/src/logging/platform/windows.rs` - `qol-tray/logs`.
+  - temp-dir fallback `apps/tray/src/logging/file_logger.rs` -
     `temp_dir()/qol-tray/logs`.
 
   These are log-class literals; converging them is deferred to a future

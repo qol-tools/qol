@@ -1,6 +1,6 @@
 # Architecture
 
-`plugin-cli-sessions` watches the CLI sessions running in a terminal and shows
+`qol-cli-sessions` watches the CLI sessions running in a terminal and shows
 an always-on-top panel, one row per session, colored by how much each session
 wants your attention.
 
@@ -231,7 +231,7 @@ Jumping to the next session that wants you must work when the panel is *not*
 focused (you are in an editor or another terminal), so it is not an in-view key -
 it is a qol-tray-bound action. The manifest declares a `next` catalog action plus
 a bindable `[[shortcuts]]` entry; a hotkey fires
-`cli-sessions next`, which forwards to the running daemon over its socket
+`qol-cli-sessions next`, which forwards to the running daemon over its socket
 (`Command::NextAttention`). The daemon focuses the next attention session's
 terminal window via the host and advances its selection cursor, so repeated
 presses cycle through just the rows that want you (`nav::next_attention`, pure and
@@ -277,7 +277,7 @@ The flap recorder only sees one direction: a *false positive* (a NeedsYou that
 self-clears). A *false negative* - a session that genuinely wants you but reads
 idle/working - has no temporal tell, so the daemon, whose own classification is
 the thing that is wrong, cannot detect it. Only you can. The `snapshot` action
-(`cli-sessions snapshot`, bindable to a hotkey) is that escape hatch: one press
+(`qol-cli-sessions snapshot`, bindable to a hotkey) is that escape hatch: one press
 dumps every live session's frame in the moment - screen, title, and the status
 the panel is currently showing - to `paths::snapshots_dir` in the same
 corpus-fixture shape (`snapshot::capture_all`). When the panel is wrong in any

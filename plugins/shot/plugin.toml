@@ -52,6 +52,7 @@ items = [
 
 [daemon]
 enabled = true
+inherit_listener = true
 command = "qol-shot"
 socket = "/tmp/qol-shot.sock"
 

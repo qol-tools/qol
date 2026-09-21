@@ -268,7 +268,10 @@ fn coordinator_result(config: &PluginConfig, metadata: &SerialMetadata) -> Docto
                 candidates.len()
             ),
         )
-        .with_fix("Run plugin-lights reload to perform coordinator detection")
+        .with_fix(format!(
+            "Run {} reload to perform coordinator detection",
+            crate::config::store::PLUGIN_ID
+        ))
         .with_details(details);
     }
     if metadata.ports.is_empty() {

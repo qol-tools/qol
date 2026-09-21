@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-sound"
+id = "qol-sound"
 uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
 name = "Sound"
 description = "Choose where sound plays and how loud"
-version = "0.1.0"
+version = "0.2.0"
 author = "KMRH47"
 platforms = ["linux"]
 
 [runtime]
-command = "plugin-sound"
+command = "qol-sound"
 
 [action.outputs]
 label = "List Sound Outputs"
@@ -48,7 +48,7 @@ hotkey = false
 
 [daemon]
 enabled = true
-command = "plugin-sound"
+command = "qol-sound"
 socket = "/tmp/plugin-sound.sock"
 port = 42750
 
@@ -64,6 +64,6 @@ label = "Sound"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-sound"
-repo = "qol-tools/plugin-sound"
-pattern = "plugin-sound-{os}-{arch}"
+name = "qol-sound"
+repo = "qol-tools/qol-sound"
+pattern = "qol-sound-{os}-{arch}"

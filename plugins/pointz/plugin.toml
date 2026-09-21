@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-pointz"
+id = "qol-pointz"
 uid = "9cb88d65-1d43-4fde-95b6-105761f0a14b"
 name = "PointZerver"
 description = "Control your PC from mobile devices"
-version = "1.42.0"
+version = "1.43.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "pointzerver"
+command = "qol-pointz"
 
 [action.settings]
 label = "Settings"
@@ -27,7 +27,8 @@ items = []
 
 [daemon]
 enabled = true
-command = "pointzerver"
+inherit_listener = true
+command = "qol-pointz"
 socket = "/tmp/qol-pointz.sock"
 
 [[daemon.extra_ports]]
@@ -40,7 +41,15 @@ name = "command"
 port = 45455
 protocol = "udp"
 
+[traits.confined]
+
+[traits.peripheral-preview]
+neighbors = 1
+
+[traits.atmosphere]
+preset = "terminal"
+
 [[dependencies.binaries]]
-name = "pointzerver"
-repo = "qol-tools/plugin-pointz"
-pattern = "pointzerver-{os}-{arch}"
+name = "qol-pointz"
+repo = "qol-tools/qol-pointz"
+pattern = "qol-pointz-{os}-{arch}"

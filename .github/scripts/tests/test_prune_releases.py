@@ -16,12 +16,12 @@ _SPEC.loader.exec_module(pr)
 class ParseTag(unittest.TestCase):
     def test_component_and_version_extraction(self):
         cases = [
-            ("plugin-alt-tab-v0.29.1", ("plugin-alt-tab", (0, 29, 1))),
+            ("qol-alt-tab-v0.29.1", ("qol-alt-tab", (0, 29, 1))),
             ("qol-tray-v3.18.2", ("qol-tray", (3, 18, 2))),
             ("qol-shot-v1.15.0", ("qol-shot", (1, 15, 0))),
             ("v1.2.3", None),
-            ("plugin-alt-tab-v0.29", None),
-            ("plugin-alt-tab-v0.29.1-rc1", None),
+            ("qol-alt-tab-v0.29", None),
+            ("qol-alt-tab-v0.29.1-rc1", None),
             ("random-tag", None),
         ]
         for tag, expected in cases:

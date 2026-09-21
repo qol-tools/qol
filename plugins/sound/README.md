@@ -9,10 +9,10 @@ Choose where sound plays and how loud.
 ## Quick start
 
 ```sh
-plugin-sound outputs
-plugin-sound switch "Living Room"
-plugin-sound volume 40
-plugin-sound doctor
+qol-sound outputs
+qol-sound switch "Living Room"
+qol-sound volume 40
+qol-sound doctor
 ```
 
 Sound works from a terminal on its own. qol-tray is one way to use it, not a requirement.

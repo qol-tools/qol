@@ -468,7 +468,7 @@ mod tests {
     fn workspace_root_from_finds_nearest_cargo_workspace() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("mono");
-        let crate_dir = workspace.join("apps").join("qol-tray");
+        let crate_dir = workspace.join("apps").join("tray");
         fs::create_dir_all(&crate_dir).unwrap();
         write_workspace(&workspace);
         write_package(&crate_dir, "qol-tray");
@@ -632,19 +632,19 @@ mod tests {
         fs::create_dir_all(&with_bin).unwrap();
         fs::write(
             with_bin.join("Cargo.toml"),
-            "[package]\nname = \"plugin-cli-sessions\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"cli-sessions\"\npath = \"src/main.rs\"\n",
+            "[package]\nname = \"qol-cli-sessions\"\nversion = \"0.1.0\"\n\n[[bin]]\nname = \"qol-cli-sessions\"\npath = \"src/main.rs\"\n",
         )
         .unwrap();
-        assert_eq!(cargo_bin_name(&with_bin).unwrap(), "cli-sessions");
+        assert_eq!(cargo_bin_name(&with_bin).unwrap(), "qol-cli-sessions");
 
         let without_bin = tmp.path().join("without-bin");
         fs::create_dir_all(&without_bin).unwrap();
         fs::write(
             without_bin.join("Cargo.toml"),
-            "[package]\nname = \"plugin-removeapp\"\nversion = \"0.1.0\"\n",
+            "[package]\nname = \"qol-removeapp\"\nversion = \"0.1.0\"\n",
         )
         .unwrap();
-        assert_eq!(cargo_bin_name(&without_bin).unwrap(), "plugin-removeapp");
+        assert_eq!(cargo_bin_name(&without_bin).unwrap(), "qol-removeapp");
     }
 
     #[test]
@@ -722,7 +722,7 @@ mod tests {
             &reserved,
             "reserved",
             &plugin_toml(
-                "plugin-template",
+                "qol-template",
                 "\"linux\", \"macos\", \"windows\"",
                 "[runtime]\ncommand = \"x\"\n",
             ),

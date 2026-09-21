@@ -227,6 +227,33 @@ pub fn merge_profile_with(
     ProfileMerge { merged, conflicts }
 }
 
+fn index_lock_entries(snapshot: Option<&Value>) -> BTreeMap<String, Value> {
+    let mut indexed = BTreeMap::new();
+    for entry in snapshot
+        .and_then(|value| value.get("plugins"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = entry.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let renamed = match qol_migrations::renamed_plugin_id(id) {
+            Some(new_id) => new_id,
+            None => id,
+        };
+        let mut normalized = entry.clone();
+        normalized["id"] = Value::String(renamed.to_string());
+        let key = normalized
+            .get("uid")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| renamed.to_string());
+        indexed.insert(key, normalized);
+    }
+    indexed
+}
+
 fn merge_lock(
     file: &str,
     base: Option<&Value>,
@@ -235,53 +262,40 @@ fn merge_lock(
     resolve: &ConflictResolver<'_>,
     conflicts: &mut Vec<FieldConflict>,
 ) -> Value {
-    let by_id = |snapshot: Option<&Value>| -> BTreeMap<String, Value> {
-        snapshot
-            .and_then(|v| v.get("plugins"))
-            .and_then(Value::as_array)
-            .map(|list| {
-                list.iter()
-                    .filter_map(|entry| {
-                        entry
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(|id| (id.to_string(), entry.clone()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let base = by_id(base);
-    let local = by_id(local);
-    let remote = by_id(remote);
+    let base = index_lock_entries(base);
+    let local = index_lock_entries(local);
+    let remote = index_lock_entries(remote);
 
-    let mut ids: Vec<String> = local.keys().chain(remote.keys()).cloned().collect();
-    ids.sort();
-    ids.dedup();
+    let mut keys: Vec<String> = local.keys().chain(remote.keys()).cloned().collect();
+    keys.sort();
+    keys.dedup();
 
     let mut entries = Vec::new();
-    for id in ids {
-        let b = base.get(&id);
-        let l = local.get(&id);
-        let r = remote.get(&id);
+    for key in keys {
+        let b = base.get(&key);
+        let l = local.get(&key);
+        let r = remote.get(&key);
         let chosen = match (l, r) {
             (Some(l), Some(r)) if l == r => Some(l.clone()),
             (Some(l), Some(r)) if b == Some(l) => Some(r.clone()),
             (Some(l), Some(r)) if b == Some(r) => Some(l.clone()),
-            (Some(l), Some(r)) => match resolve(file, &format!("plugins.{id}")) {
-                Some(true) => Some(r.clone()),
-                Some(false) => Some(l.clone()),
-                None => {
-                    conflicts.push(FieldConflict {
-                        file: file.to_string(),
-                        plugin: Some(id.clone()),
-                        key_path: format!("plugins.{id}"),
-                        local: l.clone(),
-                        remote: r.clone(),
-                    });
-                    Some(l.clone())
+            (Some(l), Some(r)) => {
+                let label = l.get("id").and_then(Value::as_str).unwrap_or(key.as_str());
+                match resolve(file, &format!("plugins.{label}")) {
+                    Some(true) => Some(r.clone()),
+                    Some(false) => Some(l.clone()),
+                    None => {
+                        conflicts.push(FieldConflict {
+                            file: file.to_string(),
+                            plugin: Some(label.to_string()),
+                            key_path: format!("plugins.{label}"),
+                            local: l.clone(),
+                            remote: r.clone(),
+                        });
+                        Some(l.clone())
+                    }
                 }
-            },
+            }
             (Some(only), None) | (None, Some(only)) => Some(only.clone()),
             (None, None) => None,
         };
@@ -365,7 +379,7 @@ mod tests {
     fn both_changed_same_key_is_a_conflict() {
         let out = merge_json(
             "f.json",
-            Some("plugin-alt-tab"),
+            Some("qol-alt-tab"),
             &json!({"opacity": 1.0}),
             &json!({"opacity": 0.8}),
             &json!({"opacity": 0.5}),
@@ -375,7 +389,7 @@ mod tests {
         assert_eq!(c[0].key_path, "opacity");
         assert_eq!(c[0].local, json!(0.8));
         assert_eq!(c[0].remote, json!(0.5));
-        assert_eq!(c[0].plugin.as_deref(), Some("plugin-alt-tab"));
+        assert_eq!(c[0].plugin.as_deref(), Some("qol-alt-tab"));
         assert_eq!(merged(&out), &json!({"opacity": 0.8}));
     }
 
@@ -468,5 +482,104 @@ mod tests {
             ids.contains(&"p-mac") && ids.contains(&"p-linux"),
             "both platform plugins preserved, got {ids:?}"
         );
+    }
+
+    fn lock_snapshot(entries: Vec<Value>) -> ProfileSnapshot {
+        ProfileSnapshot {
+            files: BTreeMap::from([(
+                "core/plugins.lock.json".to_string(),
+                json!({"plugins": entries}),
+            )]),
+        }
+    }
+
+    fn lock_entry(uid: Option<&str>, id: &str, version: &str) -> Value {
+        match uid {
+            Some(uid) => json!({"uid": uid, "id": id, "version": version}),
+            None => json!({"id": id, "version": version}),
+        }
+    }
+
+    #[test]
+    fn plugins_lock_groups_entries_by_uid_and_keeps_the_renamed_id() {
+        let base = lock_snapshot(vec![lock_entry(
+            Some("uid-lights"),
+            "plugin-lights",
+            "0.9.0",
+        )]);
+        let local = lock_snapshot(vec![lock_entry(
+            Some("uid-lights"),
+            "plugin-lights",
+            "1.0.0",
+        )]);
+        let remote = lock_snapshot(vec![lock_entry(Some("uid-lights"), "qol-lights", "1.0.0")]);
+
+        let out = merge_profile(&base, &local, &remote);
+
+        let plugins = out.merged["core/plugins.lock.json"]["plugins"]
+            .as_array()
+            .unwrap();
+        assert_eq!(plugins.len(), 1, "one uid stays one entry");
+        assert_eq!(plugins[0]["id"], "qol-lights");
+        assert_eq!(plugins[0]["uid"], "uid-lights");
+        assert_eq!(plugins[0]["version"], "1.0.0");
+        assert!(
+            out.conflicts.is_empty(),
+            "the same state spelled with the old id is not a conflict"
+        );
+    }
+
+    #[test]
+    fn plugins_lock_conflict_uses_the_renamed_id() {
+        let base = ProfileSnapshot {
+            files: BTreeMap::new(),
+        };
+        let local = lock_snapshot(vec![lock_entry(
+            Some("uid-lights"),
+            "plugin-lights",
+            "1.0.0",
+        )]);
+        let remote = lock_snapshot(vec![lock_entry(
+            Some("uid-lights"),
+            "plugin-lights",
+            "2.0.0",
+        )]);
+
+        let out = merge_profile(&base, &local, &remote);
+
+        assert_eq!(out.conflicts.len(), 1);
+        assert_eq!(out.conflicts[0].key_path, "plugins.qol-lights");
+        assert_eq!(out.conflicts[0].plugin.as_deref(), Some("qol-lights"));
+        let plugins = out.merged["core/plugins.lock.json"]["plugins"]
+            .as_array()
+            .unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0]["id"], "qol-lights");
+    }
+
+    #[test]
+    fn plugins_lock_normalizes_ids_without_uid_and_keeps_distinct_uids() {
+        let base = ProfileSnapshot {
+            files: BTreeMap::new(),
+        };
+        let local = lock_snapshot(vec![
+            lock_entry(None, "plugin-lights", "1.0.0"),
+            lock_entry(Some("uid-other"), "plugin-alt-tab", "2.0.0"),
+        ]);
+        let remote = lock_snapshot(vec![lock_entry(None, "qol-lights", "1.0.0")]);
+
+        let out = merge_profile(&base, &local, &remote);
+
+        assert!(out.conflicts.is_empty());
+        let plugins = out.merged["core/plugins.lock.json"]["plugins"]
+            .as_array()
+            .unwrap();
+        assert_eq!(plugins.len(), 2);
+        assert!(plugins
+            .iter()
+            .any(|entry| entry["id"] == "qol-lights" && entry.get("uid").is_none()));
+        assert!(plugins
+            .iter()
+            .any(|entry| entry["id"] == "qol-alt-tab" && entry["uid"] == "uid-other"));
     }
 }

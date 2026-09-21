@@ -4,7 +4,6 @@ use std::sync::Arc;
 use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "pointzerver";
 const DIRECT_ACTIONS: [(&str, &str); 5] = [
     ("settings", "Open the PointZ settings surface."),
     (
@@ -68,7 +67,7 @@ where
     O: Operations,
 {
     let args = Arc::new(args.to_vec());
-    let app = HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    let app = HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run and control the PointZ remote-input server.")
         .default_command(["server"])
         .command(server_command(operations.clone(), Arc::clone(&args)))
@@ -102,7 +101,7 @@ where
 {
     Command::new("server")
         .about("Run the PointZ services when selected by the no-argument default.")
-        .usage(BINARY_NAME)
+        .usage(PLUGIN_ID)
         .detail("Running the binary without arguments starts the server.")
         .detail("An explicit server token retains legacy direct-action forwarding.")
         .output("Lifecycle or daemon-delivery diagnostics are written to stderr.")
@@ -121,7 +120,7 @@ where
         Arc::clone(&args),
     )
     .alias("--action")
-    .usage(format!("{BINARY_NAME} --action <name>"))
+    .usage(format!("{PLUGIN_ID} --action <name>"))
     .detail("Legacy routing ignores tokens after the selected action.");
     let command = command.subcommand(legacy_command(
         "kill",
@@ -153,7 +152,7 @@ where
     let name = name.into();
     Command::new(name.clone())
         .about(about)
-        .usage(format!("{BINARY_NAME} {name}"))
+        .usage(format!("{PLUGIN_ID} {name}"))
         .output("The selected legacy route writes its result to stderr.")
         .exit_behavior("Exits zero whether or not a daemon is currently running.")
         .run_result(move |_| Ok(run_legacy(&operations, &args)))

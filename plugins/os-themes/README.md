@@ -2,13 +2,13 @@
 
 # OS Themes
 
-A [QoL Tray](../../apps/qol-tray) plugin for OS-wide theming: GTK, Qt, icons, cursors.
+A [QoL Tray](../../apps/tray) plugin for OS-wide theming: GTK, Qt, icons, cursors.
 
 </div>
 
 ## Quick start
 
-Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/tray) plugin store.
 
 ## About
 

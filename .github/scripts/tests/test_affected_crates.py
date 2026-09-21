@@ -20,13 +20,13 @@ class PlatformExcludeDerivation(unittest.TestCase):
     def test_excludes_derived_from_plugin_platforms(self):
         ubuntu, macos = ac.platform_excludes()
         cases = [
-            ("keyremap", ubuntu, True),
-            ("plugin-removeapp", ubuntu, False),
-            ("plugin-os-themes", ubuntu, False),
-            ("plugin-os-themes", macos, True),
-            ("keyremap", macos, False),
-            ("alt-tab", ubuntu, False),
-            ("alt-tab", macos, False),
+            ("qol-keyremap", ubuntu, True),
+            ("qol-removeapp", ubuntu, False),
+            ("qol-os-themes", ubuntu, False),
+            ("qol-os-themes", macos, True),
+            ("qol-keyremap", macos, False),
+            ("qol-alt-tab", ubuntu, False),
+            ("qol-alt-tab", macos, False),
         ]
         for package, excluded, expected in cases:
             self.assertEqual(
@@ -44,13 +44,13 @@ class LocalPlannerContract(unittest.TestCase):
     @patch.object(ac, "run")
     def test_worktree_diff_includes_untracked_files(self, run):
         run.side_effect = [
-            subprocess.CompletedProcess([], 0, "tools/qol-cli/src/main.rs\n", ""),
+            subprocess.CompletedProcess([], 0, "tools/cli/src/main.rs\n", ""),
             subprocess.CompletedProcess([], 0, "new-file.txt\n", ""),
         ]
 
         self.assertEqual(
             ac.changed_files("base", ac.WORKTREE_HEAD),
-            ["new-file.txt", "tools/qol-cli/src/main.rs"],
+            ["new-file.txt", "tools/cli/src/main.rs"],
         )
         self.assertEqual(
             run.call_args_list[0].args[0],
@@ -154,14 +154,14 @@ class LocalPlannerContract(unittest.TestCase):
     ):
         changed_files.return_value = ["Cargo.lock"]
         graph.return_value = {
-            "alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+            "qol-alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
             "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
-        lock_changed_packages.return_value = {"alt-tab"}
+        lock_changed_packages.return_value = {"qol-alt-tab"}
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
             ac.main()
 
-        self.assertIn("-p alt-tab", emit.call_args.args[0]["ubuntu_build"])
+        self.assertIn("-p qol-alt-tab", emit.call_args.args[0]["ubuntu_build"])
         self.assertNotIn("unrelated", emit.call_args.args[0]["ubuntu_build"])
         self.assertIs(emit.call_args.args[0]["full"], False)
 
@@ -174,7 +174,7 @@ class LocalPlannerContract(unittest.TestCase):
     ):
         changed_files.return_value = ["Cargo.lock"]
         graph.return_value = {
-            "alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+            "qol-alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
             "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
         lock_changed_packages.return_value = {"serde"}
@@ -193,7 +193,7 @@ class LocalPlannerContract(unittest.TestCase):
     ):
         changed_files.return_value = ["Cargo.lock"]
         graph.return_value = {
-            "alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+            "qol-alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
         }
         lock_changed_packages.return_value = None
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
@@ -204,13 +204,13 @@ class LocalPlannerContract(unittest.TestCase):
     @patch.object(ac, "run")
     def test_lock_change_set_is_keyed_by_name_and_version(self, run):
         before = (
-            '[[package]]\nname = "alt-tab"\nversion = "0.1.0"\n'
+            '[[package]]\nname = "qol-alt-tab"\nversion = "0.1.0"\n'
             'dependencies = ["qol-runtime"]\n\n'
             '[[package]]\nname = "serde"\nversion = "1.0.0"\n\n'
             '[[package]]\nname = "unrelated"\nversion = "0.2.0"\n'
         )
         after = (
-            '[[package]]\nname = "alt-tab"\nversion = "0.1.0"\n'
+            '[[package]]\nname = "qol-alt-tab"\nversion = "0.1.0"\n'
             'dependencies = ["qol-runtime", "tracing"]\n\n'
             '[[package]]\nname = "serde"\nversion = "1.0.0"\n\n'
             '[[package]]\nname = "unrelated"\nversion = "0.2.0"\n'
@@ -220,7 +220,7 @@ class LocalPlannerContract(unittest.TestCase):
             subprocess.CompletedProcess([], 0, after, ""),
         ]
 
-        self.assertEqual(ac.lock_changed_packages("base", "head"), {"alt-tab"})
+        self.assertEqual(ac.lock_changed_packages("base", "head"), {"qol-alt-tab"})
 
     @patch.object(ac, "run")
     def test_workspace_metadata_is_locked(self, run):
@@ -245,14 +245,14 @@ class LocalPlannerContract(unittest.TestCase):
                 "deps": {"qol-process"},
                 "doctest": True,
             },
-            "qol": {"dir": "tools/qol-cli", "deps": {"qol-dev-build"}, "doctest": False},
+            "qol": {"dir": "tools/cli", "deps": {"qol-dev-build"}, "doctest": False},
             "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
         cases = [
             ("libs/process/src/lib.rs", True, True, True),
             ("libs/foundation/src/lib.rs", True, True, True),
             ("libs/dev-build/src/lib.rs", False, True, True),
-            ("tools/qol-cli/src/main.rs", False, False, True),
+            ("tools/cli/src/main.rs", False, False, True),
             ("libs/unrelated/src/lib.rs", False, False, False),
         ]
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
@@ -276,7 +276,7 @@ class LocalPlannerContract(unittest.TestCase):
                     )
                     self.assertIs(
                         emit.call_args.args[0]["ubuntu_doctest"],
-                        path != "tools/qol-cli/src/main.rs",
+                        path != "tools/cli/src/main.rs",
                     )
 
     def test_documentation_targets_follow_cargo_metadata(self):

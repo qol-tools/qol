@@ -142,8 +142,8 @@ mod tests {
     #[test]
     fn run_exec_rejects_invalid_plugin_and_action_ids_without_network() {
         assert_eq!(run_exec("bad plugin id!", "settings"), 1);
-        assert_eq!(run_exec("plugin-monitor", "bad action!"), 1);
+        assert_eq!(run_exec("qol-monitor", "bad action!"), 1);
         assert_eq!(run_exec("shortcut", "bad id!"), 1);
-        assert_eq!(run_exec("plugin-monitor", ""), 1);
+        assert_eq!(run_exec("qol-monitor", ""), 1);
     }
 }

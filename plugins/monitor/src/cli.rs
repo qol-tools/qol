@@ -19,7 +19,6 @@ use crate::monitor::{
 };
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "plugin-monitor";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
@@ -55,7 +54,7 @@ fn app_with_config_root(
     grant: Arc<dyn GrantBackend>,
     config_root: Option<PathBuf>,
 ) -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Inspect and control display brightness, gamma, and modes.")
         .default_command(["list"])
         .command(list_command(Arc::clone(&control)))
@@ -88,7 +87,7 @@ fn app_with_config_root(
 fn list_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("list")
         .about("List connected displays with their stable identity.")
-        .usage(format!("{BINARY_NAME} list"))
+        .usage(format!("{PLUGIN_ID} list"))
         .output("One `connector id` line per connected display.")
         .exit_behavior("Exits non-zero if display enumeration fails.")
         .run_plain_text(move |_| {
@@ -107,7 +106,7 @@ fn list_command(control: Arc<dyn DisplayControl>) -> Command {
 fn status_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("status")
         .about("Show per-display probe results.")
-        .usage(format!("{BINARY_NAME} status"))
+        .usage(format!("{PLUGIN_ID} status"))
         .output("One capability block per connected display.")
         .exit_behavior("Exits non-zero if enumeration or probing fails.")
         .run_plain_text(move |_| {
@@ -141,7 +140,7 @@ fn status_command(control: Arc<dyn DisplayControl>) -> Command {
 fn get_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("get")
         .about("Show the brightness of a display with its source.")
-        .usage(format!("{BINARY_NAME} get [display]"))
+        .usage(format!("{PLUGIN_ID} get [display]"))
         .output("Prints `brightness=<value> source=<ddc|gamma>`.")
         .exit_behavior("Exits non-zero if the display or its brightness is unavailable.")
         .run_plain_text(move |context| {
@@ -157,7 +156,7 @@ fn get_command(control: Arc<dyn DisplayControl>) -> Command {
 fn set_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("set")
         .about("Set the brightness of a display through its selected source.")
-        .usage(format!("{BINARY_NAME} set <value> [display]"))
+        .usage(format!("{PLUGIN_ID} set <value> [display]"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero on invalid value or when no source can set brightness.")
         .run_plain_text(move |context| {
@@ -174,7 +173,7 @@ fn set_command(control: Arc<dyn DisplayControl>) -> Command {
 fn up_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("up")
         .about("Step brightness up by one step.")
-        .usage(format!("{BINARY_NAME} up [display]"))
+        .usage(format!("{PLUGIN_ID} up [display]"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero when brightness cannot be stepped.")
         .run_plain_text(move |context| {
@@ -186,7 +185,7 @@ fn up_command(control: Arc<dyn DisplayControl>) -> Command {
 fn down_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("down")
         .about("Step brightness down by one step.")
-        .usage(format!("{BINARY_NAME} down [display]"))
+        .usage(format!("{PLUGIN_ID} down [display]"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero when brightness cannot be stepped.")
         .run_plain_text(move |context| {
@@ -200,7 +199,7 @@ fn modes_command(control: Arc<dyn DisplayControl>) -> Command {
     let json = Arc::clone(&control);
     Command::new("modes")
         .about("List the selectable modes of a display, with the current mode marked.")
-        .usage(format!("{BINARY_NAME} modes [display]"))
+        .usage(format!("{PLUGIN_ID} modes [display]"))
         .output(
             "One `connector WxH@Hz` line per mode with `current` marked, or a JSON array \
              with --json.",
@@ -230,7 +229,7 @@ fn set_mode_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("set-mode")
         .about("Set the resolution and refresh rate of a display.")
         .usage(format!(
-            "{BINARY_NAME} set-mode <WIDTHxHEIGHT[@HZ]> [display]"
+            "{PLUGIN_ID} set-mode <WIDTHxHEIGHT[@HZ]> [display]"
         ))
         .output("No stdout on success.")
         .exit_behavior(
@@ -259,7 +258,7 @@ fn layout_command(control: Arc<dyn DisplayControl>) -> Command {
     let json = Arc::clone(&control);
     Command::new("layout")
         .about("Show the position, size, refresh rate, and primary flag of every display.")
-        .usage(format!("{BINARY_NAME} layout"))
+        .usage(format!("{PLUGIN_ID} layout"))
         .output(
             "One `connector id +x+y WxH@Hz` line per display with `primary` marked, or a JSON \
              array with --json.",
@@ -289,7 +288,7 @@ fn arrange_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("arrange")
         .about("Move displays to absolute positions in one atomic write.")
         .usage(format!(
-            "{BINARY_NAME} arrange <display>=<x>,<y> [more...] [--primary <display>]"
+            "{PLUGIN_ID} arrange <display>=<x>,<y> [more...] [--primary <display>]"
         ))
         .output("No stdout on success.")
         .exit_behavior(
@@ -312,7 +311,7 @@ fn arrange_command(control: Arc<dyn DisplayControl>) -> Command {
 fn primary_command(control: Arc<dyn DisplayControl>) -> Command {
     Command::new("primary")
         .about("Set the primary display without moving any display.")
-        .usage(format!("{BINARY_NAME} primary <display>"))
+        .usage(format!("{PLUGIN_ID} primary <display>"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero when the display is unknown or the write is refused.")
         .run_plain_text(move |context| {
@@ -335,7 +334,7 @@ fn primary_command(control: Arc<dyn DisplayControl>) -> Command {
 fn apply_layout_command(control: Arc<dyn DisplayControl>, config_root: Option<PathBuf>) -> Command {
     Command::new("apply-layout")
         .about("Apply the configured display positions and primary flag.")
-        .usage(format!("{BINARY_NAME} apply-layout"))
+        .usage(format!("{PLUGIN_ID} apply-layout"))
         .output("Prints the number of applied display positions.")
         .exit_behavior(
             "Exits non-zero when the configured positions are unknown or the write is refused.",
@@ -555,7 +554,7 @@ fn parse_arrange_assignment(token: &str) -> Result<ArrangeRequest> {
 fn daemon_command() -> Command {
     Command::new("daemon")
         .about("Run the resident daemon that owns brightness hotkeys and session restore.")
-        .usage(format!("{BINARY_NAME} daemon"))
+        .usage(format!("{PLUGIN_ID} daemon"))
         .output("No stdout; runs until the host sends kill.")
         .exit_behavior("Exits non-zero if the daemon listener cannot start.")
         .run_plain_text(|_| {
@@ -567,7 +566,7 @@ fn daemon_command() -> Command {
 fn open_command() -> Command {
     Command::new("open")
         .about("Open the plugin settings.")
-        .usage(format!("{BINARY_NAME} open"))
+        .usage(format!("{PLUGIN_ID} open"))
         .detail("Convenience alias for the settings command.")
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
@@ -585,7 +584,7 @@ fn open_tray_settings() -> Result<()> {
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the plugin settings.")
-        .usage(format!("{BINARY_NAME} settings"))
+        .usage(format!("{PLUGIN_ID} settings"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
         .run_plain_text(|_| {
@@ -597,7 +596,7 @@ fn settings_command() -> Command {
 fn grant_command(grant: Arc<dyn GrantBackend>) -> Command {
     Command::new("grant")
         .about("Grant the current user i2c access via the qol uaccess udev rule.")
-        .usage(format!("{BINARY_NAME} grant"))
+        .usage(format!("{PLUGIN_ID} grant"))
         .output("Prints `i2c uaccess grant active` on success.")
         .exit_behavior(
             "Exits non-zero when the grant is busy, conflicts with an operator rule, or is \
@@ -612,7 +611,7 @@ fn grant_command(grant: Arc<dyn GrantBackend>) -> Command {
 fn revoke_command(grant: Arc<dyn GrantBackend>) -> Command {
     Command::new("revoke")
         .about("Revoke the i2c uaccess grant and restore the rule directory.")
-        .usage(format!("{BINARY_NAME} revoke"))
+        .usage(format!("{PLUGIN_ID} revoke"))
         .output("Prints `i2c uaccess grant revoked` or `no i2c uaccess grant is active`.")
         .exit_behavior(
             "Exits non-zero when the grant is mid-release, the caller is not an owner, or the \
@@ -723,10 +722,9 @@ fn mode_control_result(
             "mode_control",
             "mode writing is gated on macOS while arrangement is available",
         )
-        .with_fix(
-            "Change the resolution in System Settings; use `plugin-monitor arrange` for display \
-             positions.",
-        );
+        .with_fix(format!(
+            "Change the resolution in System Settings; use `{PLUGIN_ID} arrange` for display positions."
+        ));
     }
     if server != crate::platform::DisplayServer::X11 {
         return DoctorCheckResult::warn(
@@ -872,15 +870,15 @@ fn grant_state_result(state: I2cGrantState) -> DoctorCheckResult {
         ),
         I2cGrantState::Preparing => DoctorCheckResult::warn(
             "i2c_grant",
-            "i2c uaccess grant is mid-apply; run `plugin-monitor grant` to resume it",
+            format!("i2c uaccess grant is mid-apply; run `{PLUGIN_ID} grant` to resume it"),
         ),
         I2cGrantState::Releasing => DoctorCheckResult::warn(
             "i2c_grant",
-            "i2c uaccess grant is mid-release; run `plugin-monitor revoke` to resume it",
+            format!("i2c uaccess grant is mid-release; run `{PLUGIN_ID} revoke` to resume it"),
         ),
         I2cGrantState::ReleaseFailed => DoctorCheckResult::fail(
             "i2c_grant",
-            "i2c uaccess grant release failed; run `plugin-monitor revoke` to retry",
+            format!("i2c uaccess grant release failed; run `{PLUGIN_ID} revoke` to retry"),
         ),
         I2cGrantState::Unreadable { message } => DoctorCheckResult::fail(
             "i2c_grant",
@@ -888,7 +886,7 @@ fn grant_state_result(state: I2cGrantState) -> DoctorCheckResult {
         ),
         I2cGrantState::None => DoctorCheckResult::ok(
             "i2c_grant",
-            "no i2c uaccess grant is active; run `plugin-monitor grant` to enable DDC access",
+            format!("no i2c uaccess grant is active; run `{PLUGIN_ID} grant` to enable DDC access"),
         ),
         I2cGrantState::Unsupported => {
             DoctorCheckResult::ok("i2c_grant", "skipped: i2c uaccess grants require Linux")
@@ -997,9 +995,9 @@ fn ddc_probe_result(control: &dyn DisplayControl) -> DoctorCheckResult {
         .iter()
         .any(|(_, taxonomy)| taxonomy.starts_with("permission"))
     {
-        return result.with_fix(
-            "Run `plugin-monitor grant` to apply the i2c uaccess rule, then retry doctor.",
-        );
+        return result.with_fix(format!(
+            "Run `{PLUGIN_ID} grant` to apply the i2c uaccess rule, then retry doctor."
+        ));
     }
     result
 }
@@ -1608,8 +1606,8 @@ mod tests {
             &hotkeys,
             serde_json::json!({
                 "hotkeys": [
-                    {"id": "h1", "key": "ctrl+shift+b", "plugin_uid": "plugin-monitor", "action": "brightness-up", "enabled": true},
-                    {"id": "h2", "key": "ctrl+shift+b", "plugin_uid": "plugin-monitor", "action": "brightness-down", "enabled": true}
+                    {"id": "h1", "key": "ctrl+shift+b", "plugin_uid": "qol-monitor", "action": "brightness-up", "enabled": true},
+                    {"id": "h2", "key": "ctrl+shift+b", "plugin_uid": "qol-monitor", "action": "brightness-down", "enabled": true}
                 ]
             })
             .to_string(),
@@ -1950,7 +1948,7 @@ mod tests {
                 .fix
                 .as_deref()
                 .unwrap_or_default()
-                .contains("plugin-monitor grant"),
+                .contains(&format!("{PLUGIN_ID} grant")),
             "permission failures must suggest the grant: {:?}",
             probe.fix
         );

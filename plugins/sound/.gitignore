@@ -2,6 +2,6 @@ config.json
 *.log
 .DS_Store
 target/
-plugin-sound
-plugin-sound.new
+qol-sound
+qol-sound.new
 .cargo/config.toml

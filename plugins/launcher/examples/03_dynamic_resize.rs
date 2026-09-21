@@ -2,7 +2,7 @@
 // Verifies: window.resize() during render, height changes with items
 
 use gpui::*;
-use launcher::open_window_with_focus;
+use qol_launcher::open_window_with_focus;
 
 actions!(test, [Quit]);
 

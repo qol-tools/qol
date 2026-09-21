@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn parses_generated_qol_run_script_argv() {
-        let script = "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'plugin-monitor' 'settings'\n";
+        let script = "#!/bin/sh\nexec '/Applications/qol-tray.app/Contents/MacOS/qol-courier' 'exec' 'qol-monitor' 'settings'\n";
 
         let argv = parse_run_script(script).unwrap();
 
@@ -68,7 +68,7 @@ mod tests {
             [
                 "/Applications/qol-tray.app/Contents/MacOS/qol-courier",
                 "exec",
-                "plugin-monitor",
+                "qol-monitor",
                 "settings",
             ]
         );

@@ -382,6 +382,8 @@ pub struct DaemonConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub extra_ports: Vec<NamedPort>,
+    #[serde(default)]
+    pub inherit_listener: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

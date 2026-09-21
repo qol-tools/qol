@@ -559,7 +559,7 @@ fn web_plugin_css_skips_default_accent_override_block() {
 #[test]
 fn tray_theme_tokens_import_and_derive_generated_base() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let theme_tokens_path = workspace.join("apps/qol-tray/ui/styles/theme-tokens.css");
+    let theme_tokens_path = workspace.join("apps/tray/ui/styles/theme-tokens.css");
     let theme_tokens = fs::read_to_string(&theme_tokens_path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", theme_tokens_path.display()));
     assert!(
@@ -621,17 +621,17 @@ fn tray_theme_tokens_import_and_derive_generated_base() {
 fn themed_tray_internals_do_not_use_raw_color_literals() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let files = [
-        "apps/qol-tray/ui/styles/theme-tokens.css",
-        "apps/qol-tray/ui/fx/atmosphere/atmosphere.css",
-        "apps/qol-tray/ui/fx/dissolve/engine.js",
-        "apps/qol-tray/ui/fx/dissolve/gpu.js",
-        "apps/qol-tray/ui/fx/dissolve/index.js",
-        "apps/qol-tray/ui/fx/dissolve/worker.js",
-        "apps/qol-tray/ui/lib/minimap-draw.js",
-        "apps/qol-tray/ui/styles/plugin-config.css",
-        "apps/qol-tray/ui/views/plugin-config/fields/QrCodeField.js",
-        "apps/qol-tray/ui/views/plugin-config/fields/SliderField.js",
-        "apps/qol-tray/ui/views/plugin-config/fields/ColorField.js",
+        "apps/tray/ui/styles/theme-tokens.css",
+        "apps/tray/ui/fx/atmosphere/atmosphere.css",
+        "apps/tray/ui/fx/dissolve/engine.js",
+        "apps/tray/ui/fx/dissolve/gpu.js",
+        "apps/tray/ui/fx/dissolve/index.js",
+        "apps/tray/ui/fx/dissolve/worker.js",
+        "apps/tray/ui/lib/minimap-draw.js",
+        "apps/tray/ui/styles/plugin-config.css",
+        "apps/tray/ui/views/plugin-config/fields/QrCodeField.js",
+        "apps/tray/ui/views/plugin-config/fields/SliderField.js",
+        "apps/tray/ui/views/plugin-config/fields/ColorField.js",
     ];
     let mut violations = Vec::new();
 
@@ -658,7 +658,7 @@ fn generated_artifacts_are_current() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifacts = [
         (
-            "apps/qol-tray/ui/styles/generated-theme-tokens.css",
+            "apps/tray/ui/styles/generated-theme-tokens.css",
             css::tray_css(),
         ),
         (
@@ -674,7 +674,7 @@ fn generated_artifacts_are_current() {
             css::alt_tab_cinnamon_js(),
         ),
         (
-            "apps/qol-tray/ui/lib/generated-theme-tokens.js",
+            "apps/tray/ui/lib/generated-theme-tokens.js",
             css::tray_theme_js(),
         ),
     ];
@@ -1337,7 +1337,7 @@ fn light_system_palette_holds_contrast_floors() {
     }
 }
 
-const SURFACE_ROOTS: [&str; 3] = ["libs/gpui/src", "plugins", "apps/qol-tray/src"];
+const SURFACE_ROOTS: [&str; 3] = ["libs/gpui/src", "plugins", "apps/tray/src"];
 
 fn surface_sources(workspace: &Path) -> Vec<(String, std::path::PathBuf)> {
     let mut found = Vec::new();
@@ -1883,7 +1883,7 @@ const SETTINGS_SCOPE: [&str; 6] = [
     "libs/gpui/src/kit.rs",
     "libs/gpui/src/hint_bar.rs",
     "libs/gpui/src/deck.rs",
-    "apps/qol-tray/src/settings_surface/",
+    "apps/tray/src/settings_surface/",
 ];
 
 fn in_settings_scope(relative: &str) -> bool {
@@ -2302,7 +2302,7 @@ fn settings_surfaces_compose_shared_components() {
     assert!(
         problems.is_empty(),
         "Settings surfaces compose recipes from kit.rs and settings_panel/components/; \
-leaf styling stays with the recipe owners. apps/qol-tray/src/settings_surface/ must be at zero, \
+leaf styling stays with the recipe owners. apps/tray/src/settings_surface/ must be at zero, \
 every other settings-scope file keeps its exact counts in LEAF_STYLING_DEBT.\n{}",
         problems.join("\n")
     );

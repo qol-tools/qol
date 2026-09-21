@@ -512,7 +512,7 @@ pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
     notify_adopted_managers();
     let (listener_tx, listener_rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, listener_tx, parse_daemon_request) {
-        bail!("plugin-bluetooth daemon listener failed to start");
+        bail!("{} daemon listener failed to start", crate::PLUGIN_ID);
     }
 
     let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();

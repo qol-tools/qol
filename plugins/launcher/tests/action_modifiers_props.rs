@@ -3,7 +3,7 @@ use proptest::prelude::*;
 mod common;
 use common::config;
 
-use launcher::{action_for_modifiers, action_hint, LaunchAction};
+use qol_launcher::{action_for_modifiers, action_hint, LaunchAction};
 
 #[test]
 fn prop_ctrl_has_priority() {

@@ -8,8 +8,7 @@ use crate::core::{
     RemovalPlan,
 };
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "removeapp";
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
@@ -25,13 +24,13 @@ where
     Scan: Fn(&CommandContext) -> Result<CommandResult> + Send + Sync + 'static,
     Remove: Fn(&CommandContext) -> Result<CommandResult> + Send + Sync + 'static,
 {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Inspect installed applications and remove an app with its owned leftovers.")
         .default_command(["open"])
         .command(
             Command::new("open")
                 .about("Open the Remove App picker.")
-                .usage(format!("{BINARY_NAME} open"))
+                .usage(format!("{PLUGIN_ID} open"))
                 .output("No stdout on success.")
                 .exit_behavior("Exits non-zero if the picker cannot be opened.")
                 .run_result(open),
@@ -39,7 +38,7 @@ where
         .command(
             Command::new("scan")
                 .about("Print the read-only removal plan for one installed app.")
-                .usage(format!("{BINARY_NAME} scan <app>"))
+                .usage(format!("{PLUGIN_ID} scan <app>"))
                 .detail("The app query must resolve to one installed application.")
                 .detail("Prints the plan without moving, deleting, or quitting anything.")
                 .output("Pretty-printed removal-plan JSON on stdout.")
@@ -49,7 +48,7 @@ where
         .command(
             Command::new("remove")
                 .about("Remove one installed app and its owned leftovers.")
-                .usage(format!("{BINARY_NAME} remove <app> [flags]"))
+                .usage(format!("{PLUGIN_ID} remove <app> [flags]"))
                 .detail("--dry-run prints the guarded plan without removing anything.")
                 .detail("--yes skips confirmation; --force permanently deletes.")
                 .detail("--quit asks a running app to exit before removal.")
@@ -65,7 +64,7 @@ where
 fn open_command(context: &CommandContext) -> Result<CommandResult> {
     if !context.args().is_empty() {
         return Ok(CommandResult::usage(format!(
-            "removeapp: unexpected argument {:?}",
+            "{PLUGIN_ID}: unexpected argument {:?}",
             context.args()[0]
         )));
     }
@@ -134,10 +133,10 @@ fn parse_flags(args: &[String]) -> Result<Flags> {
                 flags.query = Some(other.to_string());
             }
             other if other.starts_with('-') => {
-                anyhow::bail!("removeapp: unknown flag {other:?}");
+                anyhow::bail!("{PLUGIN_ID}: unknown flag {other:?}");
             }
             other => {
-                anyhow::bail!("removeapp: unexpected argument {other:?}");
+                anyhow::bail!("{PLUGIN_ID}: unexpected argument {other:?}");
             }
         }
     }
@@ -231,7 +230,7 @@ fn require_query(flags: &Flags) -> Result<&str> {
     flags
         .query
         .as_deref()
-        .ok_or_else(|| anyhow!("removeapp: missing <app> argument"))
+        .ok_or_else(|| anyhow!("{PLUGIN_ID}: missing <app> argument"))
 }
 
 fn scan_execution(args: &[String]) -> CommandResult {
@@ -275,7 +274,11 @@ fn run_remove(flags: &Flags) -> Result<CommandResult> {
         )));
     }
     if let Some(reason) = guard_refusal(guards.running, &guards.package, flags) {
-        return Ok(CommandResult::new("", format!("removeapp: {reason}\n"), 2));
+        return Ok(CommandResult::new(
+            "",
+            format!("{PLUGIN_ID}: {reason}\n"),
+            2,
+        ));
     }
 
     let requested = if flags.trash_anyway {
@@ -298,7 +301,9 @@ fn run_remove(flags: &Flags) -> Result<CommandResult> {
             package_action.as_ref(),
         )?
     {
-        return Ok(CommandResult::runtime_error("removeapp: aborted"));
+        return Ok(CommandResult::runtime_error(format!(
+            "{PLUGIN_ID}: aborted"
+        )));
     }
 
     if guards.running && flags.quit {
@@ -306,7 +311,7 @@ fn run_remove(flags: &Flags) -> Result<CommandResult> {
     }
     if !flags.trash_anyway && core::is_running(&app) {
         anyhow::bail!(
-            "removeapp: {} is still running; pass --trash-anyway to move to Trash anyway",
+            "{PLUGIN_ID}: {} is still running; pass --trash-anyway to move to Trash anyway",
             app.name
         );
     }

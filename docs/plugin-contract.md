@@ -46,7 +46,7 @@ Source-of-truth crates: `libs/plugin-api` (manifest schema + validation),
 `libs/config` (config + runtime schema, config loader), `libs/plugin-daemon`
 (the daemon helper a plugin links), `libs/runtime` (state socket client +
 watchdog + wire protocol), `libs/gpui` (gpui plugin building blocks), and
-`apps/qol-tray/src/{plugins,hotkeys,runtime,logging}` (the host side).
+`apps/tray/src/{plugins,hotkeys,runtime,logging}` (the host side).
 
 ### Channel inventory
 
@@ -55,13 +55,13 @@ watchdog + wire protocol), `libs/gpui` (gpui plugin building blocks), and
 | Config delivery | host to plugin | `config.json` on disk + `QOL_TRAY_PLUGIN_ID` env | `qol-config/src/lib.rs` (`load_plugin_config_from_env`) |
 | Config form / query / action | host UI to plugin daemon | HTTP to daemon socket | `plugin_config_handlers/`, `qol-config/src/contract/runtime.rs` |
 | Config reload | host to plugin | `reload` daemon action (else daemon restart) | `.../plugin_config_handlers/notify.rs` |
-| Action dispatch | host to plugin | daemon socket OR runtime spawn | `apps/qol-tray/src/plugins/action_executor/` |
+| Action dispatch | host to plugin | daemon socket OR runtime spawn | `apps/tray/src/plugins/action_executor/` |
 | Platform state | host to plugin | `QOL_TRAY_STATE_SOCKET` UDS, `get_state` / `subscribe` | `libs/runtime/src/client.rs`, `.../protocol.rs` |
 | `set_focus` | plugin to host | state socket, fire-and-forget | `runtime/server/socket/requests.rs` |
 | Notification / status push | plugin to host | state socket, `push_notification` / `push_status` | `libs/runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
 | Lifeline (watchdog) | plugin and host | state socket, held open until EOF | `libs/runtime/src/watchdog.rs` + `requests.rs` |
-| Logging | plugin to host | piped stderr/stdout relay | `apps/qol-tray/src/logging/relay.rs` |
-| OS notification (fallback) | plugin to OS | `osascript` / `notify-send`, only when the tray is unreachable | each plugin (e.g. `plugin-cli-sessions/src/notify.rs`) |
+| Logging | plugin to host | piped stderr/stdout relay | `apps/tray/src/logging/relay.rs` |
+| OS notification (fallback) | plugin to OS | `osascript` / `notify-send`, only when the tray is unreachable | each plugin (e.g. `qol-cli-sessions/src/notify.rs`) |
 | Inter-plugin event bus | plugin to plugin | broker UDS, publish/subscribe (same socket as the pane-field pull API) | `libs/runtime/src/broker/{bus,client,protocol,topic}.rs` |
 
 ---
@@ -172,14 +172,14 @@ Minimal `plugin.toml`:
 
 ```toml
 [plugin]
-id = "plugin-template"
+id = "qol-template"
 name = "My Plugin"
 description = "A qol-tray plugin"
 version = "0.1.0"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "plugin-template"
+command = "qol-template"
 
 [action.run]
 label = "Run"
@@ -195,9 +195,9 @@ label = "My Plugin"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-template"
+name = "qol-template"
 repo = "qol-tools/plugin-template"
-pattern = "plugin-template-{os}-{arch}"
+pattern = "qol-template-{os}-{arch}"
 ```
 
 ### 2.2 `qol-config.toml` (optional) - the settings UI schema
@@ -362,11 +362,11 @@ Source: `libs/config/src/lib.rs` (`load_plugin_config_from_env`,
 
 Three entry points converge on one executor:
 `action_executor::try_execute_action(plugin_manager, plugin_id, action_id)`
-(`apps/qol-tray/src/plugins/action_executor/`).
+(`apps/tray/src/plugins/action_executor/`).
 
 ### 4.1 What is bindable, and who owns the key
 
-- The hotkey catalog (`apps/qol-tray/src/hotkeys/catalog.rs`) collects bindable
+- The hotkey catalog (`apps/tray/src/hotkeys/catalog.rs`) collects bindable
   actions from `manifest.executable_action_ids()`: executable `[action.<id>]`
   entries when the catalog is present, otherwise legacy executable menu actions
   (recursing into submenus). Checkbox/toggle-config ids are config controls, not
@@ -407,7 +407,7 @@ Three entry points converge on one executor:
   single-flight deduped via `RUNNING_ACTIONS` except the no-daemon `open` action
   (treated as an activation request, so a second `open` can focus an existing window).
 
-`DaemonActionDispatch` (`apps/qol-tray/src/plugins/action_transport/`) is the
+`DaemonActionDispatch` (`apps/tray/src/plugins/action_transport/`) is the
 transport: a newline-terminated `DaemonRequest{action}` JSON over the Unix socket,
 10s IO timeout, returning `Handled{payload?}` / `Fallback` / `Error` / `Unavailable`.
 The same transport carries config **queries**.
@@ -430,9 +430,9 @@ The same transport carries config **queries**.
   and to shortcuts: it writes a macOS `.app` / Linux `.desktop` that runs
   `qol-tray exec shortcut <id>` (Windows no-op, honoring "leave host as found").
 
-### 4.4 Worked trace: `plugin-cli-sessions` `open`
+### 4.4 Worked trace: `qol-cli-sessions` `open`
 
-`open` has no `[daemon]`, so it resolves to a runtime spawn of `cli-sessions open`
+`open` has no `[daemon]`, so it resolves to a runtime spawn of `qol-cli-sessions open`
 with `args=["open"]`. `main.rs` first tries `send_action(&CONFIG, "open", false)` to
 its own socket; if an instance is running, that instance receives `Command::Open`
 and shows the panel and the second process exits; if not, this process binds the
@@ -468,11 +468,11 @@ A plugin links this to receive actions while running (`src/daemon.rs`):
 
 - **Host-owned daemon** (`[daemon] enabled=true`): qol-tray autostarts it
   (`plugins/daemon_lifecycle/`), supplies `QOL_TRAY_DAEMON_SOCKET`, and dispatches
-  actions over the socket. Examples: alt-tab, lights, launcher, pointz.
+  actions over the socket. Examples: qol-alt-tab, qol-lights, qol-launcher, qol-pointz.
 - **Self-daemonizing** (no `[daemon]`, only `[runtime]`): spawned fresh per action;
   the plugin itself becomes a daemon on first invocation (via `send_action` to its
   own socket, binding if that fails). qol-tray never sets `QOL_TRAY_DAEMON_SOCKET`.
-  Example: cli-sessions.
+  Example: qol-cli-sessions.
 
 ### 5.3 Spawn, track, kill
 
@@ -494,7 +494,7 @@ A plugin links this to receive actions while running (`src/daemon.rs`):
 
 This is mission non-negotiable #3 (host left exactly as found, no orphaned daemons).
 Source: `libs/runtime/src/watchdog.rs`; host side
-`apps/qol-tray/src/runtime/server/socket/requests.rs`.
+`apps/tray/src/runtime/server/socket/requests.rs`.
 
 - `spawn_host_death_watchdog()` **does nothing unless `QOL_TRAY_STATE_SOCKET` is in
   the environment.** When present, it spawns a thread that opens a `lifeline` to the
@@ -514,9 +514,9 @@ Source: `libs/runtime/src/watchdog.rs`; host side
 ## 6. The platform-state socket
 
 A host-authoritative Unix socket (`QOL_TRAY_STATE_SOCKET`, default
-`/tmp/qol-tray-state.sock`, const in `apps/qol-tray/src/paths/mod.rs`). Client API in
+`/tmp/qol-tray-state.sock`, const in `apps/tray/src/paths/mod.rs`). Client API in
 `libs/runtime/src/client.rs` (`PlatformStateClient`, `Subscription`); protocol
-in `libs/runtime/src/protocol.rs`; server in `apps/qol-tray/src/runtime/server/`.
+in `libs/runtime/src/protocol.rs`; server in `apps/tray/src/runtime/server/`.
 
 Requests (newline JSON, `cmd`-tagged): `get_state` (monitors etc.),
 `set_focus {monitor_idx}` (fire-and-forget), `subscribe {plugin_id, events}` (held-open
@@ -673,7 +673,7 @@ treat `reload` as "re-read `config.json`".
 The host pipes plugin stderr (and stdout in dev). In prod, lines matching `ERROR`,
 `error`, `FATAL`, `panic`, or `PANIC` (so any line containing "error" is captured -
 deliberately aggressive) are forwarded into the host's structured error capture
-tagged `plugin.{id}.daemon_stderr` (`apps/qol-tray/src/logging/relay.rs`), so plugin
+tagged `plugin.{id}.daemon_stderr` (`apps/tray/src/logging/relay.rs`), so plugin
 errors surface in the host. `RUST_LOG` is injected per profile. `qol_runtime::probe!` is a
 debug-only per-process trace to `/tmp/qol-altmon.log` (not collected by the host);
 see `qol-project:qol-trace`.
@@ -690,7 +690,7 @@ stays host-authoritative for state.
 
 - `push_notification {plugin_id, title, body, level, action_label, action_payload}` -
   shows a toast through the tray's own notification surface
-  (`apps/qol-tray/src/surfaces/native_notifications/`): `notify-send` on Linux
+  (`apps/tray/src/surfaces/native_notifications/`): `notify-send` on Linux
   with urgency mapped from `level` (`info`=low, `warn`=normal, `error`=critical),
   `osascript display notification` on macOS. `body` and `level` default to `""`
   and `info`. `action_label` and `action_payload` are optional (default `null`):
@@ -732,7 +732,7 @@ client.send_status(&serde_json::json!({ "state": "recording" }));
 Both return `true` when the host accepted the push, so a plugin can fall back
 to its own `notify-send`/`osascript` when the tray is unreachable (standalone
 run, or host rejection). Host receiver:
-`apps/qol-tray/src/runtime/server/socket/platform/unix/requests.rs`.
+`apps/tray/src/runtime/server/socket/platform/unix/requests.rs`.
 
 ### 8.4 Adding a new channel
 

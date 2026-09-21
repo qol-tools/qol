@@ -171,11 +171,11 @@ impl Fixture {
         });
         let config = root
             .path()
-            .join("config/qol-tray/plugins/plugin-bluetooth/config.json");
+            .join("config/qol-tray/plugins/qol-bluetooth/config.json");
         std::fs::create_dir_all(config.parent().unwrap()).unwrap();
         std::fs::write(config, json!({"managed_devices":if automatic {vec![ADDRESS]} else {vec![]},"auto_reconnect":automatic,"auto_reclaim_on_play":false,"set_default_output":false}).to_string()).unwrap();
         let binary = std::env::var_os("QOL_BLUETOOTH_TEST_BINARY")
-            .unwrap_or_else(|| env!("CARGO_BIN_EXE_plugin-bluetooth").into());
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_qol-bluetooth").into());
         let plugin = Process(
             Command::new(binary)
                 .env_clear()

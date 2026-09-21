@@ -2,8 +2,8 @@
 # Sim 03 — V3: config probe.
 # V3 contract: every feature exposes a read-only config surface.
 LAB="$(cd "$(dirname "$0")/.." && pwd)"
-BINS=(alt-tab bluetooth cli-sessions controllers ide-checkout keyremap launcher lights \
-      os-themes pointz qol-shot qol-voice removeapp window-actions qol-tray-install)
+BINS=(qol-alt-tab qol-bluetooth qol-cli-sessions qol-controllers qol-ide-checkout qol-keyremap qol-launcher qol-lights \
+      qol-os-themes qol-pointz qol-shot qol-voice qol-removeapp qol-window-actions qol-tray-install)
 
 echo "== V3 config probe: config show =="
 for b in "${BINS[@]}"; do
@@ -20,5 +20,5 @@ done
 
 echo
 echo "== what config questions can a script answer today? =="
-"$LAB/bins/bluetooth" doctor --json | grep -o '"config_readable","status":"[a-z]*"' | head -1
+"$LAB/bins/qol-bluetooth" doctor --json | grep -o '"config_readable","status":"[a-z]*"' | head -1
 echo "(only a boolean readable/not-readable verdict — no values)"

@@ -136,7 +136,7 @@ fn capability_row(device: &DetectedDevice) -> ControllerRow {
 
 pub fn run_from_env() -> Result<()> {
     core_daemon::run_stateful_listener(&DAEMON_CONFIG, DaemonRuntime::default(), handle_action)
-        .context("plugin-controllers daemon listener failed")
+        .context(format!("{} daemon listener failed", crate::PLUGIN_ID))
 }
 
 fn is_supported_action(action: &str) -> bool {

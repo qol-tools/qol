@@ -5,7 +5,6 @@ use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 use crate::ui::run::StartupIntent;
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "launcher";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Operation {
@@ -65,7 +64,7 @@ fn app_with_operations<O>(operations: O, doctor_checks: Vec<DoctorCheck>) -> Hea
 where
     O: Operations,
 {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Search installed applications and files from a retained native launcher.")
         .default_command(["run"])
         .command(operation_command(

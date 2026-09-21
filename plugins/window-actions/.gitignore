@@ -1,4 +1,4 @@
 /target/
-/window-actions
-/window-actions.new
+/qol-window-actions
+/qol-window-actions.new
 .cargo/config.toml

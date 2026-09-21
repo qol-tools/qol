@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-ide-checkout"
+id = "qol-ide-checkout"
 uid = "b61195c4-a0a8-4be5-a507-9aeb45edb060"
 name = "IDE Checkout"
 description = "Local HTTP API for a browser extension to check out a git branch and open it in a configured app"
-version = "1.40.0"
+version = "1.41.0"
 author = "KMRH47"
 platforms = ["macos", "linux"]
 
 [runtime]
-command = "task-runner"
+command = "qol-ide-checkout"
 
 [capabilities]
 doctor = true
@@ -30,10 +30,11 @@ items = []
 
 [daemon]
 enabled = true
-command = "task-runner"
+command = "qol-ide-checkout"
+inherit_listener = true
 port = 42720
 
 [[dependencies.binaries]]
-name = "task-runner"
-repo = "qol-tools/plugin-ide-checkout"
-pattern = "task-runner-{os}-{arch}"
+name = "qol-ide-checkout"
+repo = "qol-tools/qol-ide-checkout"
+pattern = "qol-ide-checkout-{os}-{arch}"

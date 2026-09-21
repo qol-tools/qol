@@ -2,13 +2,13 @@
 
 # PointZerver
 
-A [QoL Tray](../../apps/qol-tray) plugin for remote PC control from mobile devices.
+A [QoL Tray](../../apps/tray) plugin for remote PC control from mobile devices.
 
 </div>
 
 ## Quick start
 
-Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/tray) plugin store.
 
 ## About
 

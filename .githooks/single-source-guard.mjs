@@ -159,7 +159,7 @@ if (
         out.write('  injects it via QOL_TRAY_DAEMON_SOCKET into the daemon and every action client.\n');
         out.write('  offending occurrences:\n');
         for (const line of socketHits.split('\n')) out.write(`    ${line}\n`);
-        out.write('\n  fix: use SocketSource::EnvRequired (see plugin-launcher/src/daemon.rs); drop default_socket_name.\n');
+        out.write('\n  fix: use SocketSource::EnvRequired (see plugins/launcher/src/daemon.rs); drop default_socket_name.\n');
     }
     if (contractDefaultHits) {
         out.write('\n  plugin config defaults must come from qol-config.toml through qol-config\n');

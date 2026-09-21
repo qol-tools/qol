@@ -1474,7 +1474,7 @@ mod tests {
 
     // Regression test: `SO_ACCEPTCONN` is 0 for every UDP socket, so judging
     // a pre-bound port fd by "is it listening" rejected every datagram
-    // handoff. plugin-pointz then rebound its discovery port, hit
+    // handoff. qol-pointz then rebound its discovery port, hit
     // EADDRINUSE against the qol-tray-held socket, and crash-looped.
     #[test]
     fn inherited_port_fd_adopts_a_pre_bound_udp_socket() {

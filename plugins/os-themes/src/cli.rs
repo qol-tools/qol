@@ -5,8 +5,6 @@ use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 
 use crate::config::PLUGIN_ID;
 
-const BINARY_NAME: &str = "plugin-os-themes";
-
 pub(crate) fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
 }
@@ -27,13 +25,13 @@ where
     let daemon = Arc::new(daemon);
     let action = Arc::new(action);
 
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run cursor effects and control OS-wide light and dark themes.")
         .default_command(["run"])
         .command(
             Command::new("run")
                 .about("Run the cursor-effects daemon.")
-                .usage(format!("{BINARY_NAME} run"))
+                .usage(format!("{PLUGIN_ID} run"))
                 .detail("Running the binary without arguments selects this command.")
                 .output("Lifecycle diagnostics are written to stderr.")
                 .exit_behavior("Runs until stopped; exits non-zero if the daemon cannot start.")
@@ -71,7 +69,7 @@ where
 {
     Command::new(name)
         .about(about)
-        .usage(format!("{BINARY_NAME} {name}"))
+        .usage(format!("{PLUGIN_ID} {name}"))
         .output(output)
         .exit_behavior("Exits non-zero if the requested operation fails.")
         .run_result(move |_| Ok(handler(name)))

@@ -4,6 +4,7 @@ pub const RECLAIM_SUPPORTED: bool = false;
 
 pub fn reclaim_output(_address: &str) -> Result<()> {
     Err(anyhow!(
-        "plugin-bluetooth: audio reclaim is not implemented on this platform"
+        "{}: audio reclaim is not implemented on this platform",
+        crate::PLUGIN_ID
     ))
 }

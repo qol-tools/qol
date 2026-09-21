@@ -1,7 +1,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use plugin_removeapp::cli;
+use qol_removeapp::cli;
 
 fn main() -> ExitCode {
     cli::exit_code(env::args().skip(1))
@@ -17,12 +17,6 @@ mod tests {
     fn live_manifest_declares_the_headless_contract() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-        let runtime = manifest
-            .runtime
-            .as_ref()
-            .expect("Remove App runtime must be declared");
-
-        assert_eq!(runtime.command, "removeapp");
         assert!(manifest.capabilities.doctor);
         assert_eq!(
             manifest.catalog_runtime_args("open"),

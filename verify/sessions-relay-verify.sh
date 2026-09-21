@@ -4,7 +4,7 @@
 # Proves, on a clean Mint guest with kitty 0.32.2 (the Ubuntu/Mint build with
 # the send-key --match bug):
 #   1. headless relay: list/read/send/wait work with zero qol processes
-#      (no qol-tray, no cli-sessions daemon, no plugin socket)
+#      (no qol-tray, no qol-cli-sessions daemon, no plugin socket)
 #   2. submit into an UNFOCUSED window executes (the DeliveryMode::Submit fix)
 #   3. wait --expect skips the echo of the last send (echo-exclusion)
 #

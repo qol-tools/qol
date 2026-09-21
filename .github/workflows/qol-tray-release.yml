@@ -155,7 +155,7 @@ jobs:
             -output "${MACOS_DIR}/qol-tray"
 
           chmod +x "${MACOS_DIR}/qol-tray"
-          cp apps/qol-tray/assets/qol-tray.icns "${RESOURCES_DIR}/qol-tray.icns"
+          cp apps/tray/assets/qol-tray.icns "${RESOURCES_DIR}/qol-tray.icns"
           cp libs/gpui/assets/fonts/OFL.txt "${RESOURCES_DIR}/IBM-Plex-OFL.txt"
 
           cat > "${CONTENTS_DIR}/Info.plist" <<EOF

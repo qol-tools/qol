@@ -272,7 +272,7 @@ mod tests {
             b"{\"plugins\":[]}",
         );
         write(
-            &staging.join("default/os/macos/plugin-configs/plugin-keyremap.json"),
+            &staging.join("default/os/macos/plugin-configs/qol-keyremap.json"),
             b"{\"enabled\":true}",
         );
         write(
@@ -289,7 +289,7 @@ mod tests {
             b"{\"plugins\":[]}"
         );
         assert_eq!(
-            read(&profile.join("default/os/macos/plugin-configs/plugin-keyremap.json")),
+            read(&profile.join("default/os/macos/plugin-configs/qol-keyremap.json")),
             b"{\"enabled\":true}"
         );
         assert_eq!(

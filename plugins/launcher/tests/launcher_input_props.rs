@@ -1,5 +1,5 @@
-use launcher::ui::key_to_input_char;
 use proptest::prelude::*;
+use qol_launcher::ui::key_to_input_char;
 
 mod common;
 use common::config;

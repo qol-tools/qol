@@ -13,10 +13,8 @@ use crate::{platform, Config, PLUGIN_ID};
 
 use actions::ShotAction;
 
-const BINARY_NAME: &str = "qol-shot";
-
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
-    app(BINARY_NAME).run(args)
+    app(PLUGIN_ID).run(args)
 }
 
 fn app(binary_name: &'static str) -> HeadlessApp {
@@ -311,40 +309,37 @@ mod tests {
 
     #[test]
     fn empty_argv_prints_usage_without_running() {
-        let execution = app(BINARY_NAME).execute(Vec::new());
+        let execution = app(PLUGIN_ID).execute(Vec::new());
         assert_eq!(execution.exit_code, EXIT_USAGE);
         assert!(execution.stderr.contains("No command supplied"));
     }
 
     #[test]
     fn record_help_topic_is_registered() {
-        let execution = app(BINARY_NAME).execute(vec!["help".to_string(), "record".to_string()]);
+        let execution = app(PLUGIN_ID).execute(vec!["help".to_string(), "record".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
-        assert!(execution.stdout.contains(&format!("{BINARY_NAME} record")));
+        assert!(execution.stdout.contains(&format!("{PLUGIN_ID} record")));
     }
 
     #[test]
     fn screenshot_help_uses_selected_binary_name() {
-        let execution =
-            app(BINARY_NAME).execute(vec!["help".to_string(), "screenshot".to_string()]);
+        let execution = app(PLUGIN_ID).execute(vec!["help".to_string(), "screenshot".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
         assert!(execution
             .stdout
-            .contains(&format!("{BINARY_NAME} screenshot")));
+            .contains(&format!("{PLUGIN_ID} screenshot")));
     }
 
     #[test]
     fn copy_commands_are_registered() {
         for command in ["copy", "copy-path"] {
-            let execution = app(BINARY_NAME).execute(vec!["help".to_string(), command.to_string()]);
+            let execution = app(PLUGIN_ID).execute(vec!["help".to_string(), command.to_string()]);
             assert_eq!(
                 execution.exit_code, EXIT_SUCCESS,
                 "{command} help should succeed"
             );
             assert!(
-                execution
-                    .stdout
-                    .contains(&format!("{BINARY_NAME} {command}")),
+                execution.stdout.contains(&format!("{PLUGIN_ID} {command}")),
                 "{command} help should mention its usage"
             );
         }
@@ -353,22 +348,21 @@ mod tests {
     #[test]
     fn legacy_command_aliases_are_not_registered() {
         for command in ["shot", "toggle"] {
-            let execution = app(BINARY_NAME).execute(vec![command.to_string()]);
+            let execution = app(PLUGIN_ID).execute(vec![command.to_string()]);
             assert_eq!(execution.exit_code, EXIT_USAGE, "{command} should fail");
         }
     }
 
     #[test]
     fn settings_json_is_rejected_by_shared_gate() {
-        let execution =
-            app(BINARY_NAME).execute(vec!["settings".to_string(), "--json".to_string()]);
+        let execution = app(PLUGIN_ID).execute(vec!["settings".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_USAGE);
         assert!(execution.stderr.contains("does not support --json"));
     }
 
     #[test]
     fn doctor_json_is_registered() {
-        let execution = app(BINARY_NAME).execute(vec!["doctor".to_string(), "--json".to_string()]);
+        let execution = app(PLUGIN_ID).execute(vec!["doctor".to_string(), "--json".to_string()]);
         assert_eq!(execution.exit_code, EXIT_SUCCESS);
         assert!(execution
             .stdout

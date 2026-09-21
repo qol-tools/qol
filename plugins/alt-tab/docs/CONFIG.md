@@ -5,7 +5,7 @@
 The plugin checks these locations (first valid JSON wins):
 
 - Install-scoped paths under active QoL Tray install:
-  - `plugins/plugin-alt-tab/config.json`
+  - `plugins/qol-alt-tab/config.json`
   - `plugins/alt-tab/config.json`
 
 Where `<base>` = `dirs::data_local_dir()/qol-tray` (Linux: `~/.local/share/qol-tray`, macOS: `~/Library/Application Support/qol-tray`).

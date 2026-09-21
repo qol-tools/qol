@@ -2,7 +2,7 @@
 
 # QoL Migrations
 
-On-disk and cloud-stored data migrations between [QoL Tray](../../apps/qol-tray) releases.
+On-disk and cloud-stored data migrations between [QoL Tray](../../apps/tray) releases.
 
 </div>
 

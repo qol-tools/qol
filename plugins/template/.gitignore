@@ -2,6 +2,6 @@ config.json
 *.log
 .DS_Store
 target/
-plugin-template
-plugin-template.new
+qol-template
+qol-template.new
 .cargo/config.toml

@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use qol_windowing::DisplayEnumerator;
 
+use crate::hotkeys::PLUGIN_ID;
 use crate::monitor::policy::DdcStatus;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
@@ -49,7 +50,7 @@ impl fmt::Display for I2cError {
         match self {
             Self::Permission { node } => write!(
                 f,
-                "no permission to access {node}; run `plugin-monitor grant` to apply the i2c \
+                "no permission to access {node}; run `{PLUGIN_ID} grant` to apply the i2c \
                  uaccess rule"
             ),
             Self::NoDevice { node } => write!(
@@ -985,7 +986,7 @@ mod tests {
     #[test]
     fn open_tiers_surface_at_the_facade() {
         for (failure, needle) in [
-            (FakeFailure::Permission, "plugin-monitor grant"),
+            (FakeFailure::Permission, "qol-monitor grant"),
             (FakeFailure::NoDevice, "i2c-dev"),
             (FakeFailure::Busy, "ddcci"),
         ] {

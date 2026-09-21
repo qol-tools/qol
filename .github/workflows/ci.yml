@@ -51,7 +51,7 @@ jobs:
         run: bash .githooks/commit-msg.test.sh
 
       - name: Test QoL Tray UI
-        working-directory: apps/qol-tray/ui
+        working-directory: apps/tray/ui
         run: |
           mapfile -d '' tests < <(find . -type f -name '*.test.js' -print0)
           ((${#tests[@]})) || { echo "No UI tests found" >&2; exit 1; }

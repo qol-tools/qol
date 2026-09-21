@@ -5,7 +5,7 @@
 # Scope model (decided 2026-06-03): the first scope token is a workspace MEMBER
 # or an UMBRELLA. A member's canonical scope is its directory basename with the
 # redundant family prefix dropped: a crate that repeats its parent folder's name
-# as a prefix (plugin-alt-tab inside plugins/) loses it; a crate carrying a real
+# as a prefix (plugin-example inside plugins/) loses it; a crate carrying a real
 # namespace (qol-color in libs/) keeps it. This is derived from the folder layout
 # at runtime, so a new family (services/, daemons/, ...) needs no edit here.
 
@@ -26,7 +26,7 @@ qol_singular() {
 
 # Canonical scope for a member, given its family dir name and its basename.
 # Drops a leading "<family-singular>-" prefix; otherwise returns the basename.
-#   plugins plugin-alt-tab    -> alt-tab
+#   plugins plugin-example    -> example
 #   libs    qol-color         -> qol-color
 #   libs    qol-plugin-api    -> qol-plugin-api   (leading token is qol-, not lib-)
 #   services service-foo      -> foo

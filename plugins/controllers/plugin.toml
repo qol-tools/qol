@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-controllers"
+id = "qol-controllers"
 uid = "eb274823-d360-47bb-a668-6bf047ba8baf"
 name = "Controllers"
 description = "Inspect connected game controllers and apply relevant driver-specific fixes"
-version = "0.34.0"
+version = "0.35.0"
 author = "KMRH47"
 platforms = ["linux"]
 
 [runtime]
-command = "plugin-controllers"
+command = "qol-controllers"
 
 [action.apply_fixes]
 label = "Apply Relevant Controller Fixes"
@@ -22,7 +22,7 @@ args = ["settings"]
 
 [daemon]
 enabled = true
-command = "plugin-controllers"
+command = "qol-controllers"
 socket = "/tmp/plugin-controllers.sock"
 port = 42730
 
@@ -35,6 +35,6 @@ label = "Controllers"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-controllers"
-repo = "qol-tools/plugin-controllers"
-pattern = "plugin-controllers-{os}-{arch}"
+name = "qol-controllers"
+repo = "qol-tools/qol-controllers"
+pattern = "qol-controllers-{os}-{arch}"

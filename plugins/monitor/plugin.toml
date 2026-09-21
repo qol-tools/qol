@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-monitor"
+id = "qol-monitor"
 uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
 name = "Monitor"
 description = "Display brightness, gamma, and mode control"
-version = "0.15.0"
+version = "0.16.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "plugin-monitor"
+command = "qol-monitor"
 
 [action.brightness-up]
 label = "Brightness Up"
@@ -72,7 +72,7 @@ doctor = true
 
 [daemon]
 enabled = true
-command = "plugin-monitor"
+command = "qol-monitor"
 socket = "/tmp/qol-plugin-monitor.sock"
 
 [menu]
@@ -80,6 +80,6 @@ label = "Monitor"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-monitor"
-repo = "qol-tools/plugin-monitor"
-pattern = "plugin-monitor-{os}-{arch}"
+name = "qol-monitor"
+repo = "qol-tools/qol-monitor"
+pattern = "qol-monitor-{os}-{arch}"

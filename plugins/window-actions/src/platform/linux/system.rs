@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use qol_windowing::{WindowId, WindowOps, WindowRect};
 
+use crate::cli::PLUGIN_ID;
 use crate::restore::WindowSystem;
 
 const WINDOW_STATE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -35,11 +36,15 @@ impl WindowOps for X11WindowSystem {
     }
 
     fn window_geometry(&self, _window_id: &WindowId) -> Result<Option<WindowRect>, String> {
-        Err("window-actions: window geometry lookup is not implemented on Linux".to_string())
+        Err(format!(
+            "{PLUGIN_ID}: window geometry lookup is not implemented on Linux"
+        ))
     }
 
     fn move_resize(&self, _window_id: &WindowId, _rect: WindowRect) -> Result<(), String> {
-        Err("window-actions: window move/resize is not implemented on Linux".to_string())
+        Err(format!(
+            "{PLUGIN_ID}: window move/resize is not implemented on Linux"
+        ))
     }
 
     fn focus_window(&self, window_id: &WindowId) -> Result<bool, String> {

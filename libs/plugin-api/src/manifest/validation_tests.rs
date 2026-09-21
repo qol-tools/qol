@@ -193,10 +193,11 @@ mod command_rules {
         let manifest = PluginManifest {
             daemon: Some(DaemonConfig {
                 enabled: true,
-                command: "pointzerver".to_string(),
+                command: "qol-pointz".to_string(),
                 socket: None,
                 port: None,
                 extra_ports: Vec::new(),
+                inherit_listener: false,
             }),
             runtime: Some(RuntimeConfig {
                 command: "window_actions_2".to_string(),

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use qol_headless::{Command, CommandContext, DoctorCheck, Execution, HeadlessApp};
 use serde_json::Value;
 
-use crate::{BINARY_NAME, PLUGIN_ID};
+use crate::PLUGIN_ID;
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
@@ -44,7 +44,7 @@ fn app() -> HeadlessApp {
 }
 
 fn app_with_handlers(handlers: Handlers, doctor_checks: Vec<DoctorCheck>) -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Choose where sound plays and how loud.")
         .command(outputs_command(
             handlers.outputs_plain,
@@ -226,31 +226,31 @@ fn settings(context: &CommandContext) -> Result<Execution> {
 }
 
 fn usage_outputs() -> String {
-    format!("{BINARY_NAME} outputs [--json]")
+    format!("{PLUGIN_ID} outputs [--json]")
 }
 
 fn usage_switch() -> String {
-    format!("{BINARY_NAME} switch <output>")
+    format!("{PLUGIN_ID} switch <output>")
 }
 
 fn usage_next() -> String {
-    format!("{BINARY_NAME} next")
+    format!("{PLUGIN_ID} next")
 }
 
 fn usage_volume() -> String {
-    format!("{BINARY_NAME} volume [<percent>]")
+    format!("{PLUGIN_ID} volume [<percent>]")
 }
 
 fn usage_up() -> String {
-    format!("{BINARY_NAME} up")
+    format!("{PLUGIN_ID} up")
 }
 
 fn usage_down() -> String {
-    format!("{BINARY_NAME} down")
+    format!("{PLUGIN_ID} down")
 }
 
 fn usage_settings() -> String {
-    format!("{BINARY_NAME} settings")
+    format!("{PLUGIN_ID} settings")
 }
 
 fn usage_error(usage: impl AsRef<str>, detail: impl AsRef<str>) -> String {

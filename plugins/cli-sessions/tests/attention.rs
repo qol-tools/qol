@@ -1,6 +1,6 @@
-use plugin_cli_sessions::attention::{reduce, Attention, Evidence, Phase, Reason, GRACE_SECS};
-use plugin_cli_sessions::status::Status;
 use proptest::prelude::*;
+use qol_cli_sessions::attention::{reduce, Attention, Evidence, Phase, Reason, GRACE_SECS};
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::cli::{CliRuntimeState as RT, CliViewportState as VP};
 
 fn att(status: Status) -> Attention {
@@ -695,8 +695,8 @@ fn descriptor_needs_input_stays_immediate_from_working() {
 
 #[test]
 fn supported_harnesses_require_completion_and_live_work_overrides_old_ready_records() {
-    use plugin_cli_sessions::attention::reduce_with_policy;
-    use plugin_cli_sessions::tool::completion_policy;
+    use qol_cli_sessions::attention::reduce_with_policy;
+    use qol_cli_sessions::tool::completion_policy;
     use qol_terminal_sessions::cli::{claude_tool, codex_tool, pi_tool};
     for tool in [claude_tool(), codex_tool(), pi_tool()] {
         let policy = completion_policy(&tool);

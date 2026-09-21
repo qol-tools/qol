@@ -26,7 +26,7 @@ let config: MyConfig = qol_config::load_plugin_config(PLUGIN_NAMES);
 
 ## About
 
-Defines what a plugin can express in `qol-config.toml`, validates it, and normalizes it into a renderer-friendly form for [QoL Tray](../../apps/qol-tray). The plugin contract is declarative; rendering logic stays in the tray. For the v1 schema reference, see [docs/v1.md](./docs/v1.md).
+Defines what a plugin can express in `qol-config.toml`, validates it, and normalizes it into a renderer-friendly form for [QoL Tray](../../apps/tray). The plugin contract is declarative; rendering logic stays in the tray. For the v1 schema reference, see [docs/v1.md](./docs/v1.md).
 
 ## License
 

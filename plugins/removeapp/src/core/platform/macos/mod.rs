@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::cli::PLUGIN_ID;
 use crate::core::classify::{normalize_entry, owner_of};
 use crate::core::guards::{
     sanitize_stderr, ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
@@ -251,7 +252,7 @@ impl AppPlatform for Platform {
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
         {
-            anyhow::bail!("removeapp: {} is a symlink; refusing", app.name);
+            anyhow::bail!("{PLUGIN_ID}: {} is a symlink; refusing", app.name);
         }
 
         let mut all_bids: Vec<String> = inventory
@@ -331,12 +332,12 @@ impl AppPlatform for Platform {
 
     fn quit(&self, app: &InstalledApp) -> Result<()> {
         let Some(bid) = &app.bundle_id else {
-            anyhow::bail!("removeapp: {} has no bundle id", app.name)
+            anyhow::bail!("{PLUGIN_ID}: {} has no bundle id", app.name)
         };
         if terminate_bundle_id(bid) {
             Ok(())
         } else {
-            anyhow::bail!("removeapp: could not quit {}", app.name)
+            anyhow::bail!("{PLUGIN_ID}: could not quit {}", app.name)
         }
     }
 
@@ -388,10 +389,10 @@ impl AppPlatform for Platform {
 
     fn uninstall_package(&self, _app: &InstalledApp, package: &ManagedPackage) -> Result<()> {
         if package.manager() != PackageManager::Homebrew {
-            anyhow::bail!("removeapp: unsupported package manager on macOS")
+            anyhow::bail!("{PLUGIN_ID}: unsupported package manager on macOS")
         }
         let Some(brew) = brew_path() else {
-            anyhow::bail!("removeapp: brew not found")
+            anyhow::bail!("{PLUGIN_ID}: brew not found")
         };
         let out = run_brew(&brew, &["uninstall", "--cask", "--", package.id()])?;
         if out.status.success() {

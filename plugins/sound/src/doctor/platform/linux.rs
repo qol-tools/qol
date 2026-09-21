@@ -1,3 +1,4 @@
+use crate::PLUGIN_ID;
 use qol_headless::DoctorCheckResult;
 
 use super::super::{Check, PLATFORM_SUPPORTED, PLATFORM_SUPPORTED_ABOUT};
@@ -42,7 +43,7 @@ fn server_reachable_check() -> DoctorCheckResult {
         Err(error) => DoctorCheckResult::fail(
             SERVER_REACHABLE,
             format!(
-                "The audio server could not be read: {error}. Start the sound server, then run `plugin-sound doctor` again."
+                "The audio server could not be read: {error}. Start the sound server, then run `{PLUGIN_ID} doctor` again."
             ),
         ),
     }
@@ -57,7 +58,7 @@ fn saved_output_check() -> DoctorCheckResult {
             return DoctorCheckResult::fail(
                 SAVED_OUTPUT,
                 format!(
-                    "The saved sound output could not be read: {error}. Repair or remove the Sound config file, then run `plugin-sound doctor` again."
+                    "The saved sound output could not be read: {error}. Repair or remove the Sound config file, then run `{PLUGIN_ID} doctor` again."
                 ),
             )
         }
@@ -80,20 +81,20 @@ fn saved_output_check() -> DoctorCheckResult {
         Ok(Resolution::Ambiguous(devices)) => DoctorCheckResult::fail(
             SAVED_OUTPUT,
             format!(
-                "The saved output {requested} matches {} available outputs. Run `plugin-sound outputs` and choose the exact value in the Sound settings.",
+                "The saved output {requested} matches {} available outputs. Run `{PLUGIN_ID} outputs` and choose the exact value in the Sound settings.",
                 devices.len()
             ),
         ),
         Ok(Resolution::NotFound) => DoctorCheckResult::fail(
             SAVED_OUTPUT,
             format!(
-                "The saved output {requested} is not available on this system. Run `plugin-sound outputs` and choose a connected output in the Sound settings."
+                "The saved output {requested} is not available on this system. Run `{PLUGIN_ID} outputs` and choose a connected output in the Sound settings."
             ),
         ),
         Err(error) => DoctorCheckResult::fail(
             SAVED_OUTPUT,
             format!(
-                "The saved output {requested} could not be checked: {error}. Start the sound server, then run `plugin-sound doctor` again."
+                "The saved output {requested} could not be checked: {error}. Start the sound server, then run `{PLUGIN_ID} doctor` again."
             ),
         ),
     }

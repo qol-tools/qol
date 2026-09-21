@@ -1,5 +1,5 @@
-use plugin_cli_sessions::nav::next_attention;
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::nav::next_attention;
+use qol_cli_sessions::status::Status;
 
 #[test]
 fn no_cursor_lands_on_the_highest_priority_attention_row() {

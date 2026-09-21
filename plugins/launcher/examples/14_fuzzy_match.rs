@@ -1,5 +1,5 @@
 use gpui::*;
-use launcher::{fuzzy_match, open_window_with_focus, FuzzyMatch};
+use qol_launcher::{fuzzy_match, open_window_with_focus, FuzzyMatch};
 
 actions!(test, [Quit]);
 

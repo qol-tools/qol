@@ -1,4 +1,4 @@
-//! The checks behind `plugin-sound doctor`. Read-only, always: a check that
+//! The checks behind `qol-sound doctor`. Read-only, always: a check that
 //! can be fixed carries the command that fixes it instead of running it.
 
 mod platform;

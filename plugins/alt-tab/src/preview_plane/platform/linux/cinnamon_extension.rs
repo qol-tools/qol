@@ -346,7 +346,7 @@ mod tests {
         fs::create_dir(root.parent().unwrap()).unwrap();
         let legacy_target = temp
             .path()
-            .join("plugins/plugin-alt-tab/shell/cinnamon/preview-plane");
+            .join("plugins/alt-tab/shell/cinnamon/preview-plane");
         symlink(&legacy_target, &root).unwrap();
 
         let migrated = success(sync_extension_files(&root));

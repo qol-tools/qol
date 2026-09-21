@@ -5,6 +5,7 @@ pub mod platform;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::cli::PLUGIN_ID;
 use anyhow::Result;
 
 pub use classify::MatchKind;
@@ -179,7 +180,7 @@ fn quit_and_wait_with(
             std::thread::sleep(delay);
         }
     }
-    anyhow::bail!("removeapp: {} is still running", app.name)
+    anyhow::bail!("{PLUGIN_ID}: {} is still running", app.name)
 }
 
 pub fn is_running(app: &InstalledApp) -> bool {
@@ -303,11 +304,11 @@ fn pick_unique(apps: Vec<InstalledApp>, query: &str) -> Result<InstalledApp> {
         return Ok(matches.remove(pos));
     }
     match matches.len() {
-        0 => anyhow::bail!("removeapp: no app matches {query:?}"),
+        0 => anyhow::bail!("{PLUGIN_ID}: no app matches {query:?}"),
         1 => Ok(matches.remove(0)),
         _ => {
             let names: Vec<&str> = matches.iter().map(|a| a.name.as_str()).collect();
-            anyhow::bail!("removeapp: {query:?} is ambiguous: {}", names.join(", "))
+            anyhow::bail!("{PLUGIN_ID}: {query:?} is ambiguous: {}", names.join(", "))
         }
     }
 }
@@ -348,7 +349,7 @@ fn remove_with(
 fn validate_plan_with(plat: &impl AppPlatform, plan: &RemovalPlan) -> Result<()> {
     if plat.is_protected(&plan.app) {
         anyhow::bail!(
-            "removeapp: {} is protected and cannot be removed",
+            "{PLUGIN_ID}: {} is protected and cannot be removed",
             plan.app.name
         );
     }
@@ -356,7 +357,7 @@ fn validate_plan_with(plat: &impl AppPlatform, plan: &RemovalPlan) -> Result<()>
     for (item, snap) in plan.items.iter().zip(&plan.snapshots) {
         if !snap.matches(&item.path) {
             anyhow::bail!(
-                "removeapp: {} changed on disk; aborting",
+                "{PLUGIN_ID}: {} changed on disk; aborting",
                 item.path.display()
             );
         }
@@ -375,7 +376,7 @@ fn ensure_snapshot_alignment(plan: &RemovalPlan) -> Result<()> {
     if plan.snapshots.len() == plan.items.len() {
         return Ok(());
     }
-    anyhow::bail!("removeapp: stale plan missing identity snapshots")
+    anyhow::bail!("{PLUGIN_ID}: stale plan missing identity snapshots")
 }
 
 fn absorb(acc: &mut RemovalOutcome, res: RemovalOutcome, plan: &RemovalPlan) {

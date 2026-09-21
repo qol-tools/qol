@@ -11,7 +11,7 @@ type = "string"
 config_key = "tempDir"
 label = "Temp Directory"
 section = "general"
-default = "/tmp/task-runner"
+default = "/tmp/qol-ide-checkout"
 
 [section.apps]
 label = "Applications"

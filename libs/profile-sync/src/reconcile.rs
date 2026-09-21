@@ -52,8 +52,8 @@ mod tests {
     fn mergeable_path_accepts_core_os_manifest_and_excludes_backups_and_gitignore() {
         let cases = [
             ("default/manifest.json", true),
-            ("default/core/plugin-configs/plugin-alt-tab.json", true),
-            ("default/os/macos/plugin-configs/plugin-lights.json", true),
+            ("default/core/plugin-configs/qol-alt-tab.json", true),
+            ("default/os/macos/plugin-configs/qol-lights.json", true),
             ("default/sync/backups/20260508-conflict.json", false),
             (".gitignore", false),
             ("default/device/plugin-configs/x.json", false),
@@ -67,8 +67,8 @@ mod tests {
     fn reconcile_auto_merges_independent_changes_and_flags_only_real_clashes() {
         let tmp = TempDir::new().unwrap();
         let url = init_bare_origin(&tmp.path().join("o.git"));
-        let alt_tab = "default/core/plugin-configs/plugin-alt-tab.json";
-        let lights = "default/core/plugin-configs/plugin-lights.json";
+        let alt_tab = "default/core/plugin-configs/qol-alt-tab.json";
+        let lights = "default/core/plugin-configs/qol-lights.json";
 
         let a_path = tmp.path().join("a");
         let a = GitRepo::init(&a_path, &url).unwrap();
@@ -92,7 +92,7 @@ mod tests {
 
         assert_eq!(merge.conflicts.len(), 1, "only opacity clashes");
         assert_eq!(merge.conflicts[0].key_path, "opacity");
-        assert_eq!(merge.conflicts[0].plugin.as_deref(), Some("plugin-alt-tab"));
+        assert_eq!(merge.conflicts[0].plugin.as_deref(), Some("qol-alt-tab"));
         assert!(
             merge.merged.contains_key(lights),
             "independent b-only file is auto-merged in"

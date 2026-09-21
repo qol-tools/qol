@@ -7,7 +7,7 @@ description = "Open the PointZ settings window"
 description = "Allow a nearby PointZ client to pair for two minutes"
 
 [query.connection_status]
-description = "Current pointzerver daemon state"
+description = "Current qol-pointz daemon state"
 poll_interval_ms = 3000
 
 [query.connection_info]

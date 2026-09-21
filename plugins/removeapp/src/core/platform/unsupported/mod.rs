@@ -14,7 +14,10 @@ impl Platform {
     }
 }
 
-const UNSUPPORTED: &str = "removeapp: not implemented on this platform yet";
+const UNSUPPORTED: &str = concat!(
+    env!("QOL_PLUGIN_ID"),
+    ": not implemented on this platform yet"
+);
 
 pub(crate) fn metadata_identity(_meta: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
     (None, None)

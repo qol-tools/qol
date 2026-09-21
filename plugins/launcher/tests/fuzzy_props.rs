@@ -1,5 +1,5 @@
-use launcher::{fuzzy_match, FuzzyMatch};
 use proptest::prelude::*;
+use qol_launcher::{fuzzy_match, FuzzyMatch};
 
 mod common;
 use common::config;
