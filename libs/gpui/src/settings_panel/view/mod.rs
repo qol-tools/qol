@@ -3,6 +3,7 @@ mod display_layout_card;
 mod list_card;
 mod structured_list_editor;
 
+use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -15,7 +16,7 @@ use super::components::{
     settings_action_affordance, settings_action_spinner, settings_label_group, settings_page,
     settings_query_spinner, settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue,
     SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
-    SettingsToggle, SettingsValueTone,
+    SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
@@ -1642,7 +1643,7 @@ impl SettingsPanelView {
         }
         self.persist();
         if let Some(action) = action {
-            self.dispatch_stream_action(row_index, &action, cx);
+            self.dispatch_row_action(row_index, &action, serde_json::Value::Null, cx);
         }
         cx.notify();
     }
@@ -1929,6 +1930,7 @@ impl SettingsPanelView {
             min,
             max,
             step,
+            ..
         }) = self
             .level()
             .rows
@@ -1956,6 +1958,7 @@ impl SettingsPanelView {
         let Some(row) = self.level_mut().rows.get_mut(selected) else {
             return;
         };
+        let mut live_number = None;
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
             RowControl::Number {
@@ -1963,12 +1966,15 @@ impl SettingsPanelView {
                 min,
                 max,
                 step,
-                ..
+                live,
             } => {
                 let Some(parsed) = parsed_number(&edit, *min, *max, *step) else {
                     return;
                 };
                 *value = parsed;
+                if live.is_some() {
+                    live_number = Some(parsed);
+                }
                 if streams {
                     if let Some(stream) = self.stream_for(self.level().selected) {
                         stream.close();
@@ -1989,9 +1995,16 @@ impl SettingsPanelView {
             | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         }
+        if let Some(number) = live_number {
+            if let Some(action) = action {
+                self.dispatch_live_number(selected, &action, number, cx);
+            }
+            cx.notify();
+            return;
+        }
         self.persist();
         if let Some(action) = action {
-            self.dispatch_stream_action(self.level().selected, &action, cx);
+            self.dispatch_row_action(selected, &action, serde_json::Value::Null, cx);
         }
         cx.notify();
     }
@@ -2127,7 +2140,117 @@ impl SettingsPanelView {
             .unwrap_or_else(|| format!("{:06x}", self.palette.live_color_fallback))
     }
 
-    fn dispatch_stream_action(&self, row: usize, action: &str, cx: &mut Context<Self>) {
+    fn dispatch_live_number(
+        &mut self,
+        row: usize,
+        action: &str,
+        value: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
+            return;
+        };
+        let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) else {
+            return;
+        };
+        let hold = (row, id);
+        self.slider_pending.insert(hold.clone());
+        let action = action.to_string();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx
+                    .background_spawn(
+                        async move { runtime.run_action(&action, number_input(value)) },
+                    )
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    this.slider_pending.remove(&hold);
+                    if let Err(error) = result {
+                        this.save_error = Some(error);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn set_number_slider(&mut self, row: usize, fraction: f32, cx: &mut Context<Self>) {
+        let Some(RowControl::Number {
+            value,
+            min: Some(min),
+            max: Some(max),
+            step,
+            live,
+        }) = self
+            .level_mut()
+            .rows
+            .get_mut(row)
+            .map(|row| &mut row.control)
+        else {
+            return;
+        };
+        *value = slider_value_from_fraction(*min, *max, step.unwrap_or(1.0), fraction);
+        let live = live.is_some();
+        self.level_mut().selected = row;
+        if matches!(self.level().active_control, Some(ActiveControl::Edit(_))) {
+            self.level_mut().active_control = None;
+        }
+        if live {
+            self.schedule_live_number(row, cx);
+        }
+        cx.notify();
+    }
+
+    fn schedule_live_number(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.slider_dispatch_generation += 1;
+        let generation = self.slider_dispatch_generation;
+        if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+            self.slider_pending.insert((row, id));
+        }
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(SLIDER_DISPATCH_DEBOUNCE)
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if this.slider_dispatch_generation != generation {
+                        return;
+                    }
+                    let action = row_action(&this.level().rows, row);
+                    let value = match this.level().rows.get(row).map(|row| &row.control) {
+                        Some(RowControl::Number { value, .. }) => *value,
+                        _ => return,
+                    };
+                    if let Some(action) = action {
+                        this.dispatch_live_number(row, &action, value, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn finish_number_slider(&mut self, row: usize) {
+        let live = matches!(
+            self.level().rows.get(row).map(|row| &row.control),
+            Some(RowControl::Number { live: Some(_), .. })
+        );
+        if !live {
+            self.persist();
+        }
+    }
+
+    fn dispatch_row_action(
+        &self,
+        row: usize,
+        action: &str,
+        input: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
         let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
             return;
         };
@@ -2136,9 +2259,7 @@ impl SettingsPanelView {
             let async_cx = cx.clone();
             async move {
                 let _ = async_cx
-                    .background_spawn(async move {
-                        runtime.run_action(&action, serde_json::Value::Null)
-                    })
+                    .background_spawn(async move { runtime.run_action(&action, input) })
                     .await;
             }
         })
@@ -2450,7 +2571,7 @@ impl SettingsPanelView {
         }
     }
 
-    fn render_value_cell(&self, index: usize, row: RowGround) -> Div {
+    fn render_value_cell(&self, index: usize, row: RowGround, cx: &mut Context<Self>) -> Div {
         if let Some(cell) = self.render_query_state_cell(index, row) {
             return cell;
         }
@@ -2465,7 +2586,15 @@ impl SettingsPanelView {
                 max,
                 step,
                 ..
-            } => return self.render_number_value(index, row, *value, *min, *max, *step),
+            } => {
+                let number = NumberSpec {
+                    value: *value,
+                    min: *min,
+                    max: *max,
+                    step: *step,
+                };
+                return self.render_number_value(index, row, number, cx);
+            }
             RowControl::Action { active, .. }
                 if self.level().rows[index].variant.as_deref() == Some("toggle") =>
             {
@@ -2574,13 +2703,18 @@ impl SettingsPanelView {
         &self,
         index: usize,
         row: RowGround,
-        value: f64,
-        min: Option<f64>,
-        max: Option<f64>,
-        step: Option<f64>,
+        number: NumberSpec,
+        cx: &mut Context<Self>,
     ) -> Div {
+        let NumberSpec {
+            value,
+            min,
+            max,
+            step,
+        } = number;
         let mut track = None;
-        if self.level().rows[index].variant.as_deref() == Some("slider") {
+        if let Some(style) = SliderStyle::from_variant(self.level().rows[index].variant.as_deref())
+        {
             let edit = if index == self.level().selected {
                 match &self.level().active_control {
                     Some(ActiveControl::Edit(edit)) => Some(edit.as_str()),
@@ -2590,12 +2724,72 @@ impl SettingsPanelView {
                 None
             };
             let fraction = slider_fraction(number_preview(edit, value, min, max, step), min, max);
-            track = Some(fraction);
+            track = Some((fraction, style));
         }
+        let id = self.level().rows[index].id.clone();
+        let bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+        let bounds_for_down = bounds.clone();
+        let bounds_for_move = bounds.clone();
+        let id_for_down = id.clone();
+        let id_for_move = id.clone();
+        let id_for_up = id.clone();
+        let id_for_up_out = id;
+        let interact = move |element: Div| {
+            element
+                .cursor(CursorStyle::PointingHand)
+                .child(
+                    canvas(move |area, _, _| bounds.set(Some(area)), |_, _, _, _| {})
+                        .absolute()
+                        .inset_0(),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        let Some(area) = bounds_for_down.get() else {
+                            return;
+                        };
+                        this.slider_drag = Some((index, id_for_down.clone()));
+                        this.set_number_slider(index, track_fraction(event.position.x, area), cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                    if !event.dragging()
+                        || this.slider_drag.as_ref() != Some(&(index, id_for_move.clone()))
+                    {
+                        return;
+                    }
+                    let Some(area) = bounds_for_move.get() else {
+                        return;
+                    };
+                    this.set_number_slider(index, track_fraction(event.position.x, area), cx);
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseUpEvent, _, cx| {
+                        if this.slider_drag.as_ref() == Some(&(index, id_for_up.clone())) {
+                            this.slider_drag = None;
+                            this.finish_number_slider(index);
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseUpEvent, _, cx| {
+                        if this.slider_drag.as_ref() == Some(&(index, id_for_up_out.clone())) {
+                            this.slider_drag = None;
+                            this.finish_number_slider(index);
+                            cx.notify();
+                        }
+                    }),
+                )
+        };
         number_field(
             self.display_value(index),
             number_unit(&self.level().rows[index].id),
             track,
+            interact,
             row,
             self.palette,
         )
@@ -2691,7 +2885,7 @@ impl SettingsPanelView {
             ground,
             self.palette,
         );
-        let value_cell = self.render_value_cell(index, ground);
+        let value_cell = self.render_value_cell(index, ground, cx);
         let mut line = SettingsRow::setting(("settings-row", index), self.palette)
             .selected(selected, self.body_has_focus())
             .child(label_group)
@@ -3953,6 +4147,22 @@ fn number_preview(
         .unwrap_or(fallback)
 }
 
+#[derive(Clone, Copy)]
+struct NumberSpec {
+    value: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: Option<f64>,
+}
+
+fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
+    (((x - area.left()).to_f64() / area.size.width.to_f64()).clamp(0.0, 1.0)) as f32
+}
+
+fn number_input(value: f64) -> serde_json::Value {
+    serde_json::json!({ "value": super::rows::number_json(value) })
+}
+
 fn horizontal_step_direction(key: &str) -> Option<f64> {
     match key {
         "left" => Some(-1.0),
@@ -4625,6 +4835,7 @@ mod tests {
                 options: vec![],
                 index: 0,
                 dynamic: None,
+                live: None,
             },
         };
         let card = Row {
@@ -4649,6 +4860,7 @@ mod tests {
                 min: None,
                 max: None,
                 step: None,
+                live: None,
             },
         };
         let dynamic = Row {

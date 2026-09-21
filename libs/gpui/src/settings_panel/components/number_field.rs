@@ -5,10 +5,43 @@ use crate::theme::SettingsPanelPalette;
 
 use super::{ground_bg, ground_text, RowGround};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::settings_panel) enum SliderStyle {
+    Compact,
+    Wide,
+}
+
+impl SliderStyle {
+    pub(in crate::settings_panel) fn from_variant(variant: Option<&str>) -> Option<Self> {
+        match variant {
+            Some("slider") => Some(Self::Compact),
+            Some("wide_slider") => Some(Self::Wide),
+            _ => None,
+        }
+    }
+
+    fn track_width(self) -> f32 {
+        match self {
+            Self::Compact => 72.0,
+            Self::Wide => 240.0,
+        }
+    }
+
+    fn track_height(self) -> f32 {
+        match self {
+            Self::Compact => 4.0,
+            Self::Wide => 6.0,
+        }
+    }
+}
+
+const WIDE_THUMB: f32 = 14.0;
+
 pub(in crate::settings_panel) fn number_field(
     display: String,
     unit: Option<&'static str>,
-    fraction: Option<f32>,
+    track: Option<(f32, SliderStyle)>,
+    interact: impl FnOnce(gpui::Div) -> gpui::Div,
     row: RowGround,
     palette: SettingsPanelPalette,
 ) -> gpui::Div {
@@ -23,30 +56,49 @@ pub(in crate::settings_panel) fn number_field(
         .flex_row()
         .items_center()
         .gap(px(qol_theme::SPACE_INSET));
-    if let Some(fraction) = fraction {
-        cell = cell.child(
-            ground_bg(
-                div()
-                    .relative()
-                    .w(px(72.))
-                    .h(px(4.))
-                    .rounded_full()
-                    .overflow_hidden(),
-                rgba(ground.well.packed()),
-                hover.map(|hover| rgba(hover.well.packed())),
-            )
-            .child(ground_bg(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .h_full()
-                    .w(px(fraction * 72.0))
-                    .rounded_full(),
-                rgb(ground.mark),
-                hover.map(|hover| rgb(hover.mark)),
-            )),
-        );
+    if let Some((fraction, style)) = track {
+        let width = style.track_width();
+        let bar = ground_bg(
+            div()
+                .relative()
+                .w(px(width))
+                .h(px(style.track_height()))
+                .rounded_full()
+                .overflow_hidden(),
+            rgba(ground.well.packed()),
+            hover.map(|hover| rgba(hover.well.packed())),
+        )
+        .child(ground_bg(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .h_full()
+                .w(px(fraction * width))
+                .rounded_full(),
+            rgb(ground.mark),
+            hover.map(|hover| rgb(hover.mark)),
+        ));
+        cell = cell.child(interact(match style {
+            SliderStyle::Compact => bar,
+            SliderStyle::Wide => div()
+                .relative()
+                .flex()
+                .items_center()
+                .w(px(width))
+                .h(px(WIDE_THUMB))
+                .child(bar)
+                .child(ground_bg(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(px(fraction * (width - WIDE_THUMB)))
+                        .size(px(WIDE_THUMB))
+                        .rounded_full(),
+                    rgb(ground.mark),
+                    hover.map(|hover| rgb(hover.mark)),
+                )),
+        }));
     }
     let chip = div()
         .flex()
@@ -79,4 +131,24 @@ pub(in crate::settings_panel) fn number_field(
         rgba(ground.well.packed()),
         hover.map(|hover| rgba(hover.well.packed())),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wide_slider_is_opt_in_by_variant() {
+        assert_eq!(
+            SliderStyle::from_variant(Some("slider")),
+            Some(SliderStyle::Compact)
+        );
+        assert_eq!(
+            SliderStyle::from_variant(Some("wide_slider")),
+            Some(SliderStyle::Wide)
+        );
+        assert_eq!(SliderStyle::from_variant(None), None);
+        assert_eq!(SliderStyle::from_variant(Some("danger")), None);
+        assert!(SliderStyle::Wide.track_width() > SliderStyle::Compact.track_width());
+    }
 }

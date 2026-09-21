@@ -121,7 +121,7 @@ pub fn resolve_config(
     let mut sections = build_sections(spec);
 
     for (id, field) in &spec.fields {
-        let no_stored_value = !field.kind.has_stored_value();
+        let no_stored_value = !field.has_stored_value();
         let default = widen_to_kind(
             field
                 .default

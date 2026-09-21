@@ -7,14 +7,14 @@ pub(super) const DEV_DAEMON_AUTOSTART_MARKER: &str = ".qol-tray-dev-autostart";
 pub(super) fn start_plugin_daemons<'a, I>(
     plugins: I,
     cancellation: Option<&qol_process::CancellationToken>,
-) -> Option<u64>
+) -> Vec<(String, u64)>
 where
     I: IntoIterator<Item = &'a mut Plugin>,
 {
     let mut expected_lifelines = Vec::new();
     let mut runtime_config = None;
     let mut runtime_config_attempted = false;
-    let mut consumed_generation: Option<u64> = None;
+    let mut consumed_generations = Vec::new();
     for plugin in plugins {
         if cancellation.is_some_and(qol_process::CancellationToken::is_cancelled) {
             break;
@@ -31,12 +31,11 @@ where
             expected_lifelines.push(plugin.id.as_str().to_string());
         }
         if let Some(generation) = start_daemon(plugin, runtime_config.as_mut(), cancellation) {
-            consumed_generation =
-                Some(consumed_generation.map_or(generation, |current| current.max(generation)));
+            consumed_generations.push((plugin.id.as_str().to_string(), generation));
         }
     }
     audit_host_death_lifelines(expected_lifelines);
-    consumed_generation
+    consumed_generations
 }
 
 fn audit_host_death_lifelines(expected: Vec<String>) {

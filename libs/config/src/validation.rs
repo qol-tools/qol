@@ -159,7 +159,7 @@ fn validate_config_key_collisions(spec: &ConfigSpec, errors: &mut Vec<Validation
         .fields
         .iter()
         .filter_map(|(id, field)| {
-            if field.kind.has_stored_value() {
+            if field.has_stored_value() {
                 Some((
                     id.as_str(),
                     field.config_key.clone().unwrap_or_else(|| id.clone()),
@@ -201,7 +201,7 @@ fn validate_field_default(id: &str, field: &FieldSpec, errors: &mut Vec<Validati
     let default = match &field.default {
         Some(default) => default,
         None => {
-            if field.kind.has_stored_value() {
+            if field.has_stored_value() {
                 errors.push(ValidationError::new(
                     format!("field.{id}.default"),
                     "missing default",

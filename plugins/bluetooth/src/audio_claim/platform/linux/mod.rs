@@ -1,19 +1,40 @@
 mod backends;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::Result;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use anyhow::{anyhow, Result};
 
-use crate::audio_claim::{PlaybackStarts, RECLAIM_SETTLE};
 use crate::bluetooth::normalize_address;
-use backends::{mpris, pulse_streams};
+use backends::pulse_streams;
+use qol_audio::attempts::lease::{self, Scope};
 
 pub const RECLAIM_SUPPORTED: bool = true;
 
-const WATCH_RETRY_DELAY: Duration = Duration::from_secs(5);
+const RECLAIM_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+
+enum ReclaimAttempt {
+    Done,
+    Failed(anyhow::Error),
+    Skipped(String),
+}
+
+fn reclaim_locked(sink: &str) -> ReclaimAttempt {
+    let _global = match lease::acquire_within(Scope::GlobalDefault, RECLAIM_LOCK_TIMEOUT) {
+        Ok(lease) => lease,
+        Err(_) => return ReclaimAttempt::Skipped(lock_holder(&Scope::GlobalDefault)),
+    };
+    match pulse_streams::suspend_resume(sink) {
+        Ok(()) => ReclaimAttempt::Done,
+        Err(error) => ReclaimAttempt::Failed(error),
+    }
+}
+
+fn lock_holder(scope: &Scope) -> String {
+    match lease::holder(scope) {
+        Ok(Some(holder)) => format!("{}:{}", holder.owner, holder.pid),
+        Ok(None) | Err(_) => "unknown".to_string(),
+    }
+}
 
 pub fn reclaim_output(address: &str) -> Result<()> {
     let address = normalize_address(address)?;
@@ -27,120 +48,180 @@ pub fn reclaim_output(address: &str) -> Result<()> {
             return Err(error);
         }
     };
-    let result = pulse_streams::suspend_resume(&sink);
-    let outcome = if result.is_ok() { "ok" } else { "failed" };
-    qol_runtime::probe!(
-        "BLUETOOTH_AUDIO_CLAIM",
-        "event=reclaim trigger=manual sink={sink} outcome={outcome}"
-    );
-    result
-}
-
-pub fn spawn_playback_watch(enabled: Arc<AtomicBool>) {
-    let (media_sender, media_receiver) = tokio::sync::mpsc::unbounded_channel();
-    mpris::spawn_media_play_watch(media_sender);
-    tokio::spawn(watch_playback(enabled, media_receiver));
-}
-
-async fn watch_playback(
-    enabled: Arc<AtomicBool>,
-    mut media: tokio::sync::mpsc::UnboundedReceiver<()>,
-) {
-    loop {
-        let mut playback = PlaybackStarts::default();
-        let mut child = match pulse_streams::subscribe() {
-            Ok(child) => child,
-            Err(error) => {
-                eprintln!("Bluetooth audio claim watch failed to start pactl: {error:#}");
-                qol_runtime::probe!(
-                    "BLUETOOTH_AUDIO_CLAIM",
-                    "event=watch outcome=exited reason=spawn_failed"
-                );
-                tokio::time::sleep(WATCH_RETRY_DELAY).await;
-                continue;
-            }
-        };
-        qol_runtime::probe!("BLUETOOTH_AUDIO_CLAIM", "event=watch outcome=started");
-        let Some(stdout) = child.stdout.take() else {
+    match reclaim_locked(&sink) {
+        ReclaimAttempt::Done => {
             qol_runtime::probe!(
                 "BLUETOOTH_AUDIO_CLAIM",
-                "event=watch outcome=exited reason=no_stdout"
+                "event=reclaim trigger=manual sink={sink} outcome=ok"
             );
-            tokio::time::sleep(WATCH_RETRY_DELAY).await;
-            continue;
-        };
-        if let Some((playing, _)) = pulse_streams::playing_streams().await {
-            playback.observe(Instant::now(), &playing);
+            Ok(())
         }
-        let mut lines = BufReader::new(stdout).lines();
-        loop {
-            let deadline = playback
-                .next_deadline()
-                .map(tokio::time::Instant::from_std)
-                .filter(|deadline| *deadline > tokio::time::Instant::now());
-            let timer =
-                deadline.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600));
-            let line = tokio::select! {
-                line = lines.next_line() => line,
-                _ = tokio::time::sleep_until(timer) => {
-                    if deadline.is_some() {
-                        reclaim_due_outputs(&mut playback, &enabled, false).await;
-                    }
-                    continue;
-                }
-                Some(()) = media.recv() => {
-                    reclaim_due_outputs(&mut playback, &enabled, true).await;
-                    continue;
-                }
-            };
-            let Ok(Some(line)) = line else {
-                break;
-            };
-            if pulse_streams::is_playback_event(&line) {
-                reclaim_due_outputs(&mut playback, &enabled, false).await;
+        ReclaimAttempt::Failed(error) => {
+            qol_runtime::probe!(
+                "BLUETOOTH_AUDIO_CLAIM",
+                "event=reclaim trigger=manual sink={sink} outcome=failed"
+            );
+            Err(error)
+        }
+        ReclaimAttempt::Skipped(holder) => {
+            qol_runtime::probe!(
+                "BLUETOOTH_AUDIO_CLAIM",
+                "event=reclaim trigger=manual sink={sink} outcome=skipped reason=sound_lock_busy holder={}",
+                qol_runtime::probe::token(&holder)
+            );
+            Err(anyhow!("the sound lock for {sink} is held by {holder}"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::path::Path;
+    use std::process::{Child, ChildStdout, Command, Stdio};
+
+    use super::*;
+
+    const CHILD_ENV: &str = "QOL_BLUETOOTH_RECLAIM_CHILD";
+    const CHILD_RAN: &str = "QOL_BLUETOOTH_RECLAIM_CHILD_RAN";
+    const CHILD_SKIPPED: &str = "QOL_BLUETOOTH_RECLAIM_CHILD_SKIPPED";
+    const CHILD_HOLDER_PID: &str = "QOL_BLUETOOTH_RECLAIM_CHILD_HOLDER_PID";
+    const HOLDER_ENV: &str = "QOL_BLUETOOTH_RECLAIM_HOLDER";
+    const HOLDER_HELD: &str = "QOL_BLUETOOTH_RECLAIM_HOLDER_HELD";
+
+    struct HolderChild {
+        child: Option<Child>,
+        output: BufReader<ChildStdout>,
+    }
+
+    impl HolderChild {
+        fn spawn(root: &Path) -> Self {
+            let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+            let mut child = command
+                .arg("--exact")
+                .arg("--nocapture")
+                .arg("audio_claim::platform::linux::tests::reclaim_holder_child")
+                .env(HOLDER_ENV, "1")
+                .env("XDG_DATA_HOME", root)
+                .env("HOME", root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("the holder probe runs");
+            let output = BufReader::new(child.stdout.take().expect("the holder stdout"));
+            Self {
+                child: Some(child),
+                output,
             }
         }
-        qol_runtime::probe!("BLUETOOTH_AUDIO_CLAIM", "event=watch outcome=exited");
-        tokio::time::sleep(WATCH_RETRY_DELAY).await;
-    }
-}
 
-async fn reclaim_playing_output(sink: &str) {
-    let target = sink.to_string();
-    let suspended =
-        tokio::task::spawn_blocking(move || pulse_streams::suspend_resume(&target)).await;
-    let outcome = if suspended.is_ok_and(|result| result.is_ok()) {
-        "ok"
-    } else {
-        "failed"
-    };
-    qol_runtime::probe!(
-        "BLUETOOTH_AUDIO_CLAIM",
-        "event=reclaim trigger=play sink={sink} settle_ms={} outcome={outcome}",
-        RECLAIM_SETTLE.as_millis()
-    );
-}
+        fn pid(&mut self) -> u32 {
+            let mut seen = String::new();
+            for line in self.output.by_ref().lines() {
+                let line = line.expect("the holder output");
+                if let Some(index) = line.find(HOLDER_HELD) {
+                    let raw = line[index + HOLDER_HELD.len()..].trim();
+                    return raw.parse().expect("the holder pid is numeric");
+                }
+                seen.push_str(&line);
+                seen.push('\n');
+            }
+            panic!("the holder probe never reported {HOLDER_HELD}: {seen:?}");
+        }
 
-async fn reclaim_due_outputs(
-    playback: &mut PlaybackStarts,
-    enabled: &AtomicBool,
-    media_play: bool,
-) {
-    if !enabled.load(Ordering::Relaxed) {
-        return;
+        fn finish(mut self) {
+            let mut child = self.child.take().expect("the holder child");
+            drop(child.stdin.take());
+            let _ = child.wait();
+        }
     }
-    if media_play {
-        qol_runtime::probe!("BLUETOOTH_AUDIO_CLAIM", "event=media_play");
+
+    impl Drop for HolderChild {
+        fn drop(&mut self) {
+            if let Some(child) = self.child.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
     }
-    let Some((streams, running)) = pulse_streams::playing_streams().await else {
-        return;
-    };
-    let now = Instant::now();
-    playback.observe(now, &streams);
-    if media_play {
-        playback.media_started(now);
+
+    #[test]
+    fn a_held_global_lock_skips_the_reclaim_and_names_the_holder() {
+        let root = tempfile::tempdir().expect("an isolated sound state root");
+        let mut holder = HolderChild::spawn(root.path());
+        let holder_pid = holder.pid();
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("the test binary"));
+        let output = command
+            .arg("--exact")
+            .arg("--nocapture")
+            .arg("audio_claim::platform::linux::tests::reclaim_probe_child")
+            .env(CHILD_ENV, "1")
+            .env(CHILD_HOLDER_PID, holder_pid.to_string())
+            .env("XDG_DATA_HOME", root.path())
+            .env("HOME", root.path())
+            .output()
+            .expect("the child probe runs");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains(CHILD_RAN),
+            "the child probe never ran: {stdout:?} {stderr:?}"
+        );
+        assert!(
+            stdout.contains(CHILD_SKIPPED),
+            "the child probe never reached the skip verdict: {stdout:?} {stderr:?}"
+        );
+        assert!(
+            output.status.success(),
+            "the child probe failed: {stdout:?} {stderr:?}"
+        );
+        holder.finish();
     }
-    for sink in playback.due(now, &running) {
-        reclaim_playing_output(&sink).await;
+
+    #[test]
+    fn reclaim_holder_child() {
+        if std::env::var_os(HOLDER_ENV).is_none() {
+            return;
+        }
+        let _lease = lease::acquire(Scope::GlobalDefault).expect("the global lock");
+        println!("{HOLDER_HELD} {}", std::process::id());
+        std::io::stdout()
+            .flush()
+            .expect("the holder sentinel flushes");
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .expect("the holder waits for stdin");
+    }
+
+    #[test]
+    fn reclaim_probe_child() {
+        if std::env::var_os(CHILD_ENV).is_none() {
+            return;
+        }
+        println!("{CHILD_RAN}");
+        let holder_pid = std::env::var(CHILD_HOLDER_PID)
+            .expect("the holder pid")
+            .parse::<u32>()
+            .expect("the holder pid is numeric");
+        match reclaim_locked("bluez_output.AA_BB_CC_DD_EE_FF.1") {
+            ReclaimAttempt::Skipped(holder) => {
+                let (owner, pid) = holder.split_once(':').expect("the holder is owner:pid");
+                assert!(!owner.is_empty(), "the holder names its owner");
+                assert_eq!(
+                    pid.parse::<u32>().expect("the holder pid is numeric"),
+                    holder_pid,
+                    "the holder names the process holding the lock"
+                );
+                println!("{CHILD_SKIPPED} {holder}");
+            }
+            ReclaimAttempt::Done => {
+                panic!("the reclaim must not reach the audio server while the lock is held")
+            }
+            ReclaimAttempt::Failed(error) => panic!(
+                "the reclaim must not reach the audio server while the lock is held: {error:#}"
+            ),
+        }
     }
 }

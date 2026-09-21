@@ -144,12 +144,24 @@ impl ProfileConfigReadGuard {
 
 pub struct ProfileConfigWriteGuard {
     _guard: RwLockWriteGuard<'static, ()>,
+    generation: std::cell::Cell<u64>,
 }
 
 impl ProfileConfigWriteGuard {
     pub(crate) fn mark_changed(&self, scope: ProfileConfigInvalidation) -> u64 {
-        mark_profile_config_changed(scope)
+        let generation = mark_profile_config_changed(scope);
+        self.generation.set(generation);
+        generation
     }
+
+    pub(crate) fn published_generation(&self) -> u64 {
+        self.generation.get()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConfigSaveReceipt {
+    pub(crate) generation: u64,
 }
 
 pub(crate) fn profile_config_read_guard() -> ProfileConfigReadGuard {
@@ -187,7 +199,10 @@ pub(crate) fn profile_config_write_guard_unmarked() -> ProfileConfigWriteGuard {
     let guard = profile_config_lock()
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    ProfileConfigWriteGuard { _guard: guard }
+    ProfileConfigWriteGuard {
+        _guard: guard,
+        generation: std::cell::Cell::new(0),
+    }
 }
 
 fn profile_config_write_guard_for_scope(
@@ -546,9 +561,17 @@ impl PluginConfigManager {
     }
 
     pub fn set_config(&self, plugin_id: &str, config: serde_json::Value) -> Result<()> {
+        self.set_config_tracked(plugin_id, config).map(|_| ())
+    }
+
+    pub(crate) fn set_config_tracked(
+        &self,
+        plugin_id: &str,
+        config: serde_json::Value,
+    ) -> Result<ConfigSaveReceipt> {
         let lock = load_lock_entry_for(plugin_id);
         let manifest = try_load_plugin_manifest(plugin_id);
-        self.set_config_with(plugin_id, config, lock.as_ref(), manifest.as_ref())
+        self.set_config_with_tracked(plugin_id, config, lock.as_ref(), manifest.as_ref())
     }
 
     pub fn set_config_with(
@@ -558,13 +581,26 @@ impl PluginConfigManager {
         lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
         manifest: Option<&crate::plugins::manifest::PluginManifest>,
     ) -> Result<()> {
+        self.set_config_with_tracked(plugin_id, config, lock_entry, manifest)
+            .map(|_| ())
+    }
+
+    fn set_config_with_tracked(
+        &self,
+        plugin_id: &str,
+        config: serde_json::Value,
+        lock_entry: Option<&crate::features::profile::core::PluginLockEntry>,
+        manifest: Option<&crate::plugins::manifest::PluginManifest>,
+    ) -> Result<ConfigSaveReceipt> {
         let config = normalize_plugin_config_value(plugin_id, config)?;
         let uid = uid_from_lock_manifest_or_id(lock_entry, manifest, plugin_id);
         let runtime_path = Self::plugin_config_path(plugin_id)?;
-        let _profile_guard = profile_config_write_guard_for_plugin(plugin_id);
+        let profile_guard = profile_config_write_guard_for_plugin(plugin_id);
+        let generation = profile_guard.published_generation();
         let _mutation = begin_runtime_config_mutation(&self.scope_store);
         store::write_plugin_config(&runtime_path, &config)?;
-        save_plugin_config_split_unlocked(&self.scope_store, &uid, &config, lock_entry, manifest)
+        save_plugin_config_split_unlocked(&self.scope_store, &uid, &config, lock_entry, manifest)?;
+        Ok(ConfigSaveReceipt { generation })
     }
 }
 

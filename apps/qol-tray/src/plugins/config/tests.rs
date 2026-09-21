@@ -1783,3 +1783,28 @@ items = []
         );
     }
 }
+
+#[test]
+fn tracked_save_reports_the_generation_this_save_published() {
+    let env_root = TempDir::new().unwrap();
+    let _env = ConfigEnvGuard::new(env_root.path());
+    let manager = PluginConfigManager::new().unwrap();
+
+    let first = manager
+        .set_config_tracked("test-plugin", json!({"value": "first"}))
+        .unwrap();
+    let second = manager
+        .set_config_tracked("test-plugin", json!({"value": "second"}))
+        .unwrap();
+
+    assert!(second.generation > first.generation);
+    assert_eq!(
+        profile_config_plugin_generation("test-plugin"),
+        second.generation
+    );
+
+    manager
+        .set_config("test-plugin", json!({"value": "third"}))
+        .unwrap();
+    assert!(profile_config_plugin_generation("test-plugin") > second.generation);
+}

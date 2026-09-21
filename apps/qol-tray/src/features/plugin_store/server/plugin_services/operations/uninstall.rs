@@ -1,4 +1,5 @@
 use crate::features::plugin_store::installer::PluginInstaller;
+use crate::features::resident_policy::give_back_one;
 
 use super::super::super::helpers::reload_plugin_and_notify;
 use super::super::super::types::{AppState, UninstallResult};
@@ -6,6 +7,7 @@ use super::{failed_uninstall_result, success_uninstall_result};
 
 pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallResult {
     log::info!("Uninstall requested for plugin: {}", id);
+    give_back_before_removal(state, id).await;
     let unlinked_dev = match unlink_dev_plugin_if_linked(id) {
         Ok(value) => value,
         Err(error) => {
@@ -27,6 +29,19 @@ pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallRes
     reload_plugin_and_notify(state, id);
     log::info!("Plugin {} uninstalled successfully", id);
     success_uninstall_result(&uninstall_message(removed_installed_copy, unlinked_dev))
+}
+
+async fn give_back_before_removal(state: &AppState, id: &str) {
+    let plugin_manager = state.plugin_manager.clone();
+    let plugin_id = id.to_string();
+    match tokio::task::spawn_blocking(move || give_back_one(&plugin_manager, &plugin_id)).await {
+        Ok(report) => report.log_failures("uninstall"),
+        Err(error) => log::error!(
+            "Give back before uninstalling {} did not finish: {}",
+            id,
+            error
+        ),
+    }
 }
 
 async fn uninstall_installed_copy(

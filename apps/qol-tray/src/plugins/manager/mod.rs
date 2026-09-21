@@ -1,6 +1,7 @@
 mod autostart;
 mod lifeline_facade;
 mod loading;
+pub(crate) mod reload_delivery;
 mod runtime;
 
 use super::{Plugin, PluginId, PluginIdentityIndex};
@@ -8,6 +9,10 @@ use crate::plugins::action_executor::ProcessTracker;
 use crate::plugins::action_transport::DaemonActionDispatch;
 use crate::plugins::resolver::ResolutionReport;
 use anyhow::Result;
+use reload_delivery::{
+    CompletionDecision, DaemonInstance, DeliverySettlement, PendingReloadTicket, ReloadDeliveries,
+    ReloadDeliveryOutcome,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -17,6 +22,7 @@ pub struct PluginManager {
     resolution_report: ResolutionReport,
     last_profile_generation: u64,
     last_reconciled_plugin_generations: HashMap<String, u64>,
+    pending_reloads: ReloadDeliveries,
     lifecycle_cancellation: Arc<qol_process::CancellationToken>,
     process_tracker: Arc<ProcessTracker>,
     #[cfg(test)]
@@ -31,6 +37,7 @@ impl PluginManager {
             resolution_report: ResolutionReport::default(),
             last_profile_generation: crate::plugins::config::current_profile_config_generation(),
             last_reconciled_plugin_generations: HashMap::new(),
+            pending_reloads: ReloadDeliveries::default(),
             lifecycle_cancellation: Arc::new(qol_process::CancellationToken::new()),
             process_tracker: Arc::new(ProcessTracker::default()),
             #[cfg(test)]
@@ -43,6 +50,7 @@ impl PluginManager {
     }
 
     pub fn load_plugins(&mut self) -> Result<()> {
+        self.pending_reloads.supersede_all();
         loading::load_plugins(self)?;
         self.last_profile_generation = crate::plugins::config::current_profile_config_generation();
         self.last_reconciled_plugin_generations.clear();
@@ -53,10 +61,13 @@ impl PluginManager {
         if self.lifecycle_cancellation.is_cancelled() {
             return;
         }
-        autostart::start_plugin_daemons(
+        let consumed = autostart::start_plugin_daemons(
             self.plugins.values_mut(),
             Some(&self.lifecycle_cancellation),
         );
+        for (plugin_id, generation) in consumed {
+            self.acknowledge_profile_plugin_generation(&plugin_id, generation);
+        }
     }
 
     pub fn reconcile_and_autostart_daemons(&mut self) {
@@ -81,6 +92,7 @@ impl PluginManager {
         if self.lifecycle_cancellation.is_cancelled() {
             return Ok(());
         }
+        self.pending_reloads.supersede_all();
         let observed_generation = crate::plugins::config::current_profile_config_generation();
         runtime::reload_plugins(self)?;
         self.last_profile_generation = observed_generation;
@@ -92,6 +104,7 @@ impl PluginManager {
         if self.lifecycle_cancellation.is_cancelled() {
             return Ok(());
         }
+        self.pending_reloads.supersede_plugin(plugin_id);
         let consumed_generation = runtime::reload_plugin(self, plugin_id)?;
         self.acknowledge_profile_plugin_generation(plugin_id, consumed_generation);
         Ok(())
@@ -105,6 +118,8 @@ impl PluginManager {
         if self.lifecycle_cancellation.is_cancelled() {
             return Ok(false);
         }
+        self.pending_reloads
+            .expire_stale(reload_delivery::now(), reload_delivery::RELOAD_DELIVERY_TTL);
         let Some((observed_generation, invalidation)) =
             crate::plugins::config::profile_config_invalidation_since(self.last_profile_generation)
         else {
@@ -114,8 +129,10 @@ impl PluginManager {
         {
             self.profile_reconciliation_count += 1;
         }
+        let mut deferred = false;
         let reconciled = match invalidation {
             crate::plugins::config::ProfileConfigInvalidation::All => {
+                self.pending_reloads.supersede_all();
                 runtime::reload_plugins(self)?;
                 self.last_reconciled_plugin_generations.clear();
                 true
@@ -124,6 +141,14 @@ impl PluginManager {
                 let plugin_ids = self.resolve_profile_plugin_ids(plugin_ids);
                 let mut reloaded = false;
                 for plugin_id in &plugin_ids {
+                    if self.pending_reloads.is_pending(plugin_id) {
+                        qol_runtime::probe!(
+                            "PLUGIN_RELOAD",
+                            "plugin={plugin_id} stage=defer scope=single reason=delivery-in-flight consumed_generation=none acknowledged_generation=none"
+                        );
+                        deferred = true;
+                        continue;
+                    }
                     let invalidation_generation =
                         self.profile_plugin_invalidation_generation(plugin_id);
                     if self
@@ -139,7 +164,9 @@ impl PluginManager {
                 reloaded
             }
         };
-        self.last_profile_generation = observed_generation;
+        if !deferred {
+            self.last_profile_generation = observed_generation;
+        }
         Ok(reconciled)
     }
 
@@ -170,11 +197,152 @@ impl PluginManager {
 
     pub fn acknowledge_profile_plugin_generation(&mut self, plugin_id: &str, generation: u64) {
         self.last_reconciled_plugin_generations
-            .insert(plugin_id.to_string(), generation);
+            .entry(plugin_id.to_string())
+            .and_modify(|current| *current = (*current).max(generation))
+            .or_insert(generation);
+        let acknowledged = self
+            .last_reconciled_plugin_generations
+            .get(plugin_id)
+            .copied()
+            .unwrap_or(generation);
         qol_runtime::probe!(
             "PLUGIN_RELOAD",
-            "plugin={plugin_id} stage=ack scope=single consumed_generation={generation} acknowledged_generation={generation}"
+            "plugin={plugin_id} stage=ack scope=single consumed_generation={generation} acknowledged_generation={acknowledged}"
         );
+    }
+
+    pub(crate) fn begin_config_reload(
+        &mut self,
+        plugin_id: &str,
+    ) -> Result<PendingReloadTicket, String> {
+        if !self.plugins.contains_key(plugin_id) {
+            return Err(format!("plugin not found: {plugin_id}"));
+        }
+        let daemon_instance = self.current_daemon_instance(plugin_id);
+        Ok(self
+            .pending_reloads
+            .begin(plugin_id, daemon_instance, reload_delivery::now()))
+    }
+
+    pub(crate) fn record_config_reload_saved(
+        &mut self,
+        ticket: &PendingReloadTicket,
+        receipt: crate::plugins::config::ConfigSaveReceipt,
+    ) -> Result<(), String> {
+        if self
+            .pending_reloads
+            .record_saved(ticket, receipt.generation)
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "config reload request {} is no longer pending for {}",
+            ticket.request_id(),
+            ticket.plugin_id()
+        ))
+    }
+
+    pub(crate) fn complete_config_reload(
+        &mut self,
+        ticket: &PendingReloadTicket,
+        outcome: ReloadDeliveryOutcome,
+    ) -> CompletionDecision {
+        let current_instance = self.current_daemon_instance(ticket.plugin_id());
+        match self
+            .pending_reloads
+            .complete(ticket, outcome, current_instance)
+        {
+            DeliverySettlement::Acknowledged { generation } => {
+                self.acknowledge_profile_plugin_generation(ticket.plugin_id(), generation);
+                CompletionDecision::Acknowledged { generation }
+            }
+            DeliverySettlement::Superseded => CompletionDecision::Superseded,
+            DeliverySettlement::Restart { generation } => {
+                self.restart_failed_delivery(ticket, generation)
+            }
+        }
+    }
+
+    fn restart_failed_delivery(
+        &mut self,
+        ticket: &PendingReloadTicket,
+        generation: Option<u64>,
+    ) -> CompletionDecision {
+        let plugin_id = ticket.plugin_id();
+        let acknowledged = self.acknowledged_watermark(plugin_id);
+        if generation.is_some_and(|generation| acknowledged >= generation) {
+            qol_runtime::probe!(
+                "PLUGIN_RELOAD",
+                "plugin={plugin_id} stage=complete decision=superseded reason=generation-consumed request_id={} published_generation={} acknowledged_generation={acknowledged}",
+                ticket.request_id(),
+                reload_delivery::generation_label(generation)
+            );
+            return CompletionDecision::Superseded;
+        }
+        if self.current_daemon_instance(plugin_id) != ticket.daemon_instance() {
+            qol_runtime::probe!(
+                "PLUGIN_RELOAD",
+                "plugin={plugin_id} stage=complete decision=superseded reason=daemon-replaced request_id={} published_generation={} acknowledged_generation=none",
+                ticket.request_id(),
+                reload_delivery::generation_label(generation)
+            );
+            return CompletionDecision::Superseded;
+        }
+        if self.pending_reloads.is_pending(plugin_id) {
+            qol_runtime::probe!(
+                "PLUGIN_RELOAD",
+                "plugin={plugin_id} stage=complete decision=superseded reason=delivery-pending request_id={} published_generation={} acknowledged_generation=none",
+                ticket.request_id(),
+                reload_delivery::generation_label(generation)
+            );
+            return CompletionDecision::Superseded;
+        }
+        match runtime::restart_running_plugin_daemon(self, plugin_id) {
+            Ok(()) => {
+                qol_runtime::probe!(
+                    "PLUGIN_RELOAD",
+                    "plugin={plugin_id} stage=restart outcome=ok request_id={} published_generation={} acknowledged_generation=none",
+                    ticket.request_id(),
+                    reload_delivery::generation_label(generation)
+                );
+                CompletionDecision::Restarted
+            }
+            Err(error) => {
+                qol_runtime::probe!(
+                    "PLUGIN_RELOAD",
+                    "plugin={plugin_id} stage=restart outcome=failed request_id={} published_generation={} acknowledged_generation=none",
+                    ticket.request_id(),
+                    reload_delivery::generation_label(generation)
+                );
+                CompletionDecision::RestartFailed(error.to_string())
+            }
+        }
+    }
+
+    fn acknowledged_watermark(&self, plugin_id: &str) -> u64 {
+        self.last_reconciled_plugin_generations
+            .get(plugin_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn current_daemon_instance(&self, plugin_id: &str) -> Option<DaemonInstance> {
+        let plugin = self.plugins.get(plugin_id)?;
+        let pid = plugin.daemon_pid()?;
+        let incarnation = crate::plugins::daemon_lifecycle::current_daemon_incarnation(plugin_id)?;
+        Some(DaemonInstance { pid, incarnation })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn acknowledged_plugin_generation(&self, plugin_id: &str) -> Option<u64> {
+        self.last_reconciled_plugin_generations
+            .get(plugin_id)
+            .copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_pending_config_reload(&self, plugin_id: &str) -> bool {
+        self.pending_reloads.is_pending(plugin_id)
     }
 
     #[cfg(test)]
@@ -189,6 +357,7 @@ impl PluginManager {
 
     pub fn shutdown(&mut self) {
         self.lifecycle_cancellation.cancel();
+        self.pending_reloads.supersede_all();
         runtime::shutdown(self);
     }
 

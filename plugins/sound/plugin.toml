@@ -1,0 +1,55 @@
+[plugin]
+id = "plugin-sound"
+uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
+name = "Sound"
+description = "Choose where sound plays and give the output back when you are done"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux"]
+
+[runtime]
+command = "plugin-sound"
+
+[action.outputs]
+label = "List Sound Outputs"
+args = ["outputs"]
+
+[action.switch]
+label = "Switch Sound Output"
+args = ["switch"]
+
+[action.give_back]
+label = "Give Back the Output"
+args = ["give-back"]
+
+[action.set_volume]
+label = "Set Sound Volume"
+args = ["volume"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+picture = "gear"
+args = ["settings"]
+
+[daemon]
+enabled = true
+command = "plugin-sound"
+socket = "/tmp/plugin-sound.sock"
+port = 42750
+
+[capabilities]
+gpui = true
+doctor = true
+
+[config.scope]
+output = "device"
+
+[menu]
+label = "Sound"
+items = []
+
+[[dependencies.binaries]]
+name = "plugin-sound"
+repo = "qol-tools/plugin-sound"
+pattern = "plugin-sound-{os}-{arch}"

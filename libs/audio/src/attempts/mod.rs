@@ -1,4 +1,21 @@
+//! Who may repair an output, and how often.
+//!
+//! This module picks no numbers of its own: the caller passes its own cooldown
+//! and cap, so counting stays bookkeeping and the policy stays with the plugin
+//! that owns it.
+
+pub mod lease;
+pub mod record;
+
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+use crate::AudioError;
+
+#[cfg(test)]
+use std::path::Path;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Default)]
 pub struct AudioWatchState {
@@ -35,6 +52,85 @@ impl AudioWatchState {
     pub fn attempts(&self) -> u32 {
         self.attempts
     }
+}
+
+pub(crate) const STATE_SUBDIR: &str = "sound";
+
+pub(crate) fn state_root() -> Result<PathBuf, AudioError> {
+    #[cfg(test)]
+    {
+        if let Some(root) = current_test_root() {
+            return Ok(root);
+        }
+    }
+    qol_config::data_subdir(STATE_SUBDIR).ok_or_else(|| {
+        AudioError::Operation("no local data directory is available for sound state".to_string())
+    })
+}
+
+pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+#[cfg(test)]
+pub(crate) const TEST_ROOT_ENV: &str = "QOL_AUDIO_TEST_STATE_DIR";
+
+#[cfg(test)]
+static TEST_ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+#[cfg(test)]
+static TEST_ROOT_EXCLUSIVE: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) struct IsolatedRoot {
+    _exclusive: MutexGuard<'static, ()>,
+    dir: tempfile::TempDir,
+}
+
+#[cfg(test)]
+impl IsolatedRoot {
+    pub(crate) fn new() -> Self {
+        let exclusive = TEST_ROOT_EXCLUSIVE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::TempDir::new().expect("an isolated sound state directory");
+        *TEST_ROOT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(dir.path().to_path_buf());
+        Self {
+            _exclusive: exclusive,
+            dir,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+#[cfg(test)]
+impl Drop for IsolatedRoot {
+    fn drop(&mut self) {
+        *TEST_ROOT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn current_test_root() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os(TEST_ROOT_ENV) {
+        return Some(PathBuf::from(value));
+    }
+    TEST_ROOT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 #[cfg(test)]

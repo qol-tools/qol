@@ -816,7 +816,6 @@ mod tests {
             auto_reconnect: true,
             power_on_adapter: true,
             set_default_output: true,
-            auto_reclaim_on_play: true,
             retry_initial_seconds: 1.0,
             retry_max_seconds: 60.0,
         }

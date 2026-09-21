@@ -31,6 +31,7 @@ workspace-hack.workspace = true
 libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+qol-audio.workspace = true
 x11rb = { workspace = true, features = ["shm", "xfixes"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

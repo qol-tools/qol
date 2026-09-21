@@ -191,10 +191,3 @@ label = "Set as default output on connect"
 description = "Make a connected audio device the system output. If another output is already playing, qol leaves it alone and makes the device the output once that output stops, or on the device's next connect. The mic stays on your current input because qol pins the high-quality A2DP profile, which carries no microphone."
 section = "audio"
 default = true
-
-[field.auto_reclaim_on_play]
-type = "boolean"
-label = "Take the speaker back when this computer plays"
-description = "When a Bluetooth speaker is shared with another device, such as a phone, switch it back to this computer as soon as this computer starts playing."
-section = "audio"
-default = true

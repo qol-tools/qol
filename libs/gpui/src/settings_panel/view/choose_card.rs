@@ -232,11 +232,19 @@ impl SettingsPanelView {
                     return;
                 };
                 match &mut row.control {
-                    RowControl::Select { options, index, .. } => {
+                    RowControl::Select {
+                        options,
+                        index,
+                        live,
+                        ..
+                    } => {
                         if option >= options.len() {
                             return;
                         }
                         *index = option;
+                        if let Some(live) = live {
+                            live.saved = options[option].value.clone();
+                        }
                         self.persist();
                         self.pop_card(cx);
                     }

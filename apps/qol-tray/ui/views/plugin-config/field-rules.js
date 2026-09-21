@@ -2,7 +2,7 @@ export function isSliderNumberField(field) {
     if (field.kind !== 'number') {
         return false;
     }
-    if (field.variant === 'slider') {
+    if (field.variant === 'slider' || field.variant === 'wide_slider') {
         return true;
     }
     return field.number?.min === 0 && field.number?.max === 1;

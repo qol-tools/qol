@@ -94,20 +94,20 @@ fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> H
             &state.daemon,
             &as_str(field, value)?,
         ),
-        "residency" => set_residency(as_bool(field, value)?),
+        "residency" => set_residency(state, as_bool(field, value)?),
         "handler" => crate::features::notifications::set_native_handler(as_handler(field, value)?),
         _ => return Err(Box::new(bad_request(&format!("unknown field: {field}")))),
     };
     result.map_err(|error| Box::new(bad_request(&format!("{error:#}"))))
 }
 
-fn set_residency(resident: bool) -> anyhow::Result<()> {
+fn set_residency(state: &AppState, resident: bool) -> anyhow::Result<()> {
     let value = if resident {
         qol_host_fixes::residency::HostResidency::Resident
     } else {
         qol_host_fixes::residency::HostResidency::Portable
     };
-    crate::features::resident_policy::apply_residency(value)?;
+    crate::features::resident_policy::apply_residency(&state.plugin_manager, value)?;
     log::info!("core settings: residency set to {}", value.as_str());
     Ok(())
 }

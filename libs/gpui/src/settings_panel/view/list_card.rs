@@ -21,7 +21,8 @@ use crate::phantom_nav::NavAxis;
 use crate::pictures::PictureContext;
 use crate::theme::SettingsPanelPalette;
 
-const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
+pub(super) const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration =
+    std::time::Duration::from_millis(200);
 const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl SettingsPanelView {
@@ -667,7 +668,7 @@ fn stepped_slider_value(current: f64, direction: f64, min: f64, max: f64, step: 
     next.clamp(min, max)
 }
 
-fn slider_value_from_fraction(min: f64, max: f64, step: f64, fraction: f32) -> f64 {
+pub(super) fn slider_value_from_fraction(min: f64, max: f64, step: f64, fraction: f32) -> f64 {
     let value = min + f64::from(fraction) * (max - min);
     align_to_step(value, Some(min), Some(max), step)
 }

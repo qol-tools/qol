@@ -1,18 +1,36 @@
+use crate::plugins::PluginManager;
 use anyhow::{bail, Context, Result};
 use qol_host_fixes::policy::cli::{parse_args, ParsedCommand, ResidentCommand};
 use qol_host_fixes::residency::HostResidency;
+use std::sync::{Arc, Mutex};
 
+mod give_back;
 mod restore;
+pub(crate) use give_back::{give_back_all, give_back_one, GiveBackReport};
 pub use restore::{restore_all, RestoreEntry, RestoreReport};
 
 pub use qol_host_fixes::policy::nvidia::{fragment_path, NVIDIA_POLICY_ID};
 
-pub fn apply_residency(target: HostResidency) -> Result<()> {
+pub fn apply_residency(
+    plugin_manager: &Arc<Mutex<PluginManager>>,
+    target: HostResidency,
+) -> Result<()> {
     apply_residency_with(
         target,
         HostResidency::current(),
         HostResidency::set,
         restore_all,
+        || give_back_all(plugin_manager),
+    )
+}
+
+fn apply_residency_without_plugins(target: HostResidency) -> Result<()> {
+    apply_residency_with(
+        target,
+        HostResidency::current(),
+        HostResidency::set,
+        restore_all,
+        GiveBackReport::empty,
     )
 }
 
@@ -21,11 +39,13 @@ fn apply_residency_with(
     previous: HostResidency,
     set: impl FnOnce(HostResidency) -> Result<()>,
     restore: impl FnOnce() -> RestoreReport,
+    give_back: impl FnOnce() -> GiveBackReport,
 ) -> Result<()> {
     set(target)?;
     if !previous.is_resident() || target.is_resident() {
         return Ok(());
     }
+    give_back().log_failures("residency disabled");
     let report = restore();
     let failures: Vec<String> = report
         .entries()
@@ -123,7 +143,7 @@ where
         } else {
             HostResidency::Portable
         };
-        let result = apply_residency(target);
+        let result = apply_residency_without_plugins(target);
         if let Err(error) = &result {
             eprintln!("resident-policy: {error:#}");
         }
@@ -257,6 +277,7 @@ fn escalate(command: &ResidentCommand) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::give_back::{GiveBackEntry, GiveBackOutcome};
     use super::*;
     use qol_host_fixes::policy::cli::parse_args;
     use std::sync::{Mutex, OnceLock};
@@ -475,6 +496,7 @@ mod tests {
                 restored = true;
                 RestoreReport::from_entries(Vec::new())
             },
+            || GiveBackReport::from_entries(Vec::new()),
         );
         assert!(outcome.is_ok());
         assert!(restored, "disabling residency must restore the host");
@@ -491,6 +513,7 @@ mod tests {
                 restored = true;
                 RestoreReport::from_entries(Vec::new())
             },
+            || GiveBackReport::from_entries(Vec::new()),
         );
         assert!(outcome.is_ok());
         assert!(!restored, "a portable host has nothing to restore");
@@ -508,9 +531,148 @@ mod tests {
                     error: "permission denied".to_string(),
                 }])
             },
+            || GiveBackReport::from_entries(Vec::new()),
         );
         let error = outcome.expect_err("a failed restore must not report success");
         assert!(format!("{error:#}").contains("nvidia: permission denied"));
+    }
+
+    #[test]
+    fn leaving_residency_asks_the_plugins_to_give_back() {
+        let mut asked = false;
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Resident,
+            |_| Ok(()),
+            || RestoreReport::from_entries(Vec::new()),
+            || {
+                asked = true;
+                GiveBackReport::from_entries(Vec::new())
+            },
+        );
+        assert!(outcome.is_ok());
+        assert!(
+            asked,
+            "disabling residency must ask the plugins to give back"
+        );
+    }
+
+    #[test]
+    fn staying_portable_asks_nothing_to_give_back() {
+        let mut asked = false;
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Portable,
+            |_| Ok(()),
+            || RestoreReport::from_entries(Vec::new()),
+            || {
+                asked = true;
+                GiveBackReport::from_entries(Vec::new())
+            },
+        );
+        assert!(outcome.is_ok());
+        assert!(!asked, "a portable host owns no plugin state to hand back");
+    }
+
+    #[test]
+    fn becoming_resident_asks_nothing_to_give_back() {
+        let mut asked = false;
+        let outcome = apply_residency_with(
+            HostResidency::Resident,
+            HostResidency::Portable,
+            |_| Ok(()),
+            || RestoreReport::from_entries(Vec::new()),
+            || {
+                asked = true;
+                GiveBackReport::from_entries(Vec::new())
+            },
+        );
+        assert!(outcome.is_ok());
+        assert!(!asked, "taking residency must not hand plugin state back");
+    }
+
+    #[test]
+    fn give_back_runs_before_the_host_is_restored() {
+        let order = std::cell::RefCell::new(Vec::new());
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Resident,
+            |_| Ok(()),
+            || {
+                order.borrow_mut().push("restore");
+                RestoreReport::from_entries(Vec::new())
+            },
+            || {
+                order.borrow_mut().push("give_back");
+                GiveBackReport::from_entries(Vec::new())
+            },
+        );
+        assert!(outcome.is_ok());
+        assert_eq!(
+            order.into_inner(),
+            vec!["give_back", "restore"],
+            "plugins give back before restore reverts the host policy"
+        );
+    }
+
+    #[test]
+    fn a_refused_give_back_does_not_block_the_residency_change() {
+        let mut restored = false;
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Resident,
+            |_| Ok(()),
+            || {
+                restored = true;
+                RestoreReport::from_entries(Vec::new())
+            },
+            || {
+                GiveBackReport::from_entries(vec![GiveBackEntry {
+                    plugin_id: "plugin-sound".to_string(),
+                    outcome: GiveBackOutcome::Refused {
+                        error: "the output is busy".to_string(),
+                    },
+                }])
+            },
+        );
+        assert!(
+            outcome.is_ok(),
+            "a plugin refusal must not abort the residency change"
+        );
+        assert!(
+            restored,
+            "the host restore still runs after a refused give back"
+        );
+    }
+
+    #[test]
+    fn a_refused_give_back_is_not_folded_into_the_restore_failure() {
+        let outcome = apply_residency_with(
+            HostResidency::Portable,
+            HostResidency::Resident,
+            |_| Ok(()),
+            || {
+                RestoreReport::from_entries(vec![RestoreEntry::Failed {
+                    policy: "nvidia",
+                    error: "permission denied".to_string(),
+                }])
+            },
+            || {
+                GiveBackReport::from_entries(vec![GiveBackEntry {
+                    plugin_id: "plugin-sound".to_string(),
+                    outcome: GiveBackOutcome::Refused {
+                        error: "the output is busy".to_string(),
+                    },
+                }])
+            },
+        );
+        let error = outcome.expect_err("a failed restore must not report success");
+        let text = format!("{error:#}");
+        assert!(text.contains("nvidia: permission denied"));
+        assert!(
+            !text.contains("the output is busy"),
+            "a plugin refusal is logged, never a host policy failure"
+        );
     }
 
     #[test]

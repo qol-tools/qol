@@ -1,12 +1,12 @@
 use crate::platform::AudioDevice;
 use anyhow::{Context, Result};
+use qol_audio::devices::{self, Device, Direction};
 use qol_config::contract::{audio_device_picture, AudioDirection};
 use qol_headless::DoctorCheckResult;
 use qol_runtime::protocol::NotificationLevel;
 use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use x11rb::connection::Connection;
 
 pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
@@ -152,85 +152,145 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 pub fn list_audio_sources() -> Vec<AudioDevice> {
-    pactl_devices("sources", AudioDirection::Input)
-        .into_iter()
-        .filter(|device| !device.value.ends_with(".monitor"))
-        .collect()
+    without_monitors(audio_devices(AudioDirection::Input))
 }
 
 pub fn list_audio_sinks() -> Vec<AudioDevice> {
-    pactl_devices("sinks", AudioDirection::Output)
+    audio_devices(AudioDirection::Output)
 }
 
-fn pactl_devices(kind: &str, direction: AudioDirection) -> Vec<AudioDevice> {
-    let output = Command::new("pactl")
-        .args(["--format=json", "list", kind])
-        .stdin(Stdio::null())
-        .output();
-    let Ok(output) = output else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
+fn audio_devices(direction: AudioDirection) -> Vec<AudioDevice> {
+    match devices::list(native_direction(direction)) {
+        Ok(devices) => devices
+            .iter()
+            .map(|device| map_audio_device(device, direction))
+            .collect(),
+        Err(error) => {
+            eprintln!("[qol-shot] listing audio devices failed ({direction:?}): {error}");
+            Vec::new()
+        }
     }
-    parse_pactl_devices(&String::from_utf8_lossy(&output.stdout), direction)
 }
 
-fn parse_pactl_devices(raw: &str, direction: AudioDirection) -> Vec<AudioDevice> {
-    let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else {
-        return Vec::new();
-    };
-    entries
-        .iter()
-        .filter_map(|entry| {
-            let value = entry.get("name")?.as_str()?.to_string();
-            let label = entry
-                .get("description")
-                .and_then(|description| description.as_str())
-                .unwrap_or(value.as_str())
-                .to_string();
-            Some(AudioDevice {
-                value,
-                label,
-                picture: audio_device_picture(entry, direction).map(str::to_owned),
-            })
-        })
+fn native_direction(direction: AudioDirection) -> Direction {
+    match direction {
+        AudioDirection::Input => Direction::Input,
+        AudioDirection::Output => Direction::Output,
+    }
+}
+
+fn map_audio_device(device: &Device, direction: AudioDirection) -> AudioDevice {
+    let entry = serde_json::json!({
+        "name": &device.name,
+        "properties": &device.properties,
+        "active_port": &device.active_port,
+    });
+    AudioDevice {
+        value: device.name.clone(),
+        label: device.description.clone(),
+        picture: audio_device_picture(&entry, direction).map(str::to_owned),
+    }
+}
+
+fn without_monitors(devices: Vec<AudioDevice>) -> Vec<AudioDevice> {
+    devices
+        .into_iter()
+        .filter(|device| !device.value.ends_with(".monitor"))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_audio::devices::State;
 
-    #[test]
-    fn pactl_device_parsing_maps_names_and_descriptions() {
-        let raw = r#"[
-            {"index": 1, "name": "alsa_input.foo", "description": "Built-in Microphone", "properties": {"device.bus": "usb"}},
-            {"index": 2, "name": "alsa_output.bar.monitor"},
-            {"index": 3, "description": "nameless is skipped"}
-        ]"#;
-        let devices = parse_pactl_devices(raw, AudioDirection::Input);
-        assert_eq!(devices.len(), 2);
-        assert_eq!(devices[0].value, "alsa_input.foo");
-        assert_eq!(devices[0].label, "Built-in Microphone");
-        assert_eq!(devices[0].picture.as_deref(), Some("usb-mic"));
-        assert_eq!(devices[1].value, "alsa_output.bar.monitor");
-        assert_eq!(devices[1].label, "alsa_output.bar.monitor");
-        assert_eq!(devices[1].picture, None);
-        assert!(parse_pactl_devices("not json", AudioDirection::Input).is_empty());
+    fn device(
+        name: &str,
+        description: &str,
+        properties: &[(&str, &str)],
+        active_port: Option<&str>,
+    ) -> Device {
+        Device {
+            index: 1,
+            name: name.to_owned(),
+            description: description.to_owned(),
+            properties: properties
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+            active_port: active_port.map(str::to_owned),
+            monitor_of_sink: None,
+            state: State::Unknown,
+        }
     }
 
     #[test]
-    fn pactl_output_devices_map_their_audio_picture() {
-        let raw = r#"[
-            {"index": 1, "name": "alsa_output.usb", "description": "USB Headset", "properties": {"device.form_factor": "headset"}},
-            {"index": 2, "name": "alsa_output.pci", "description": "Speakers"},
-            {"index": 3, "name": "alsa_output.digital", "description": "Digital Output", "active_port": "hdmi-stereo"}
-        ]"#;
-        let devices = parse_pactl_devices(raw, AudioDirection::Output);
-        assert_eq!(devices[0].picture.as_deref(), Some("headphones"));
-        assert_eq!(devices[1].picture, None);
-        assert_eq!(devices[2].picture.as_deref(), Some("hdmi"));
+    fn typed_devices_map_names_descriptions_and_pictures() {
+        let devices = [
+            device(
+                "alsa_input.foo",
+                "Built-in Microphone",
+                &[("device.bus", "usb")],
+                None,
+            ),
+            device("alsa_output.bar.monitor", "Monitor of bar", &[], None),
+        ];
+        let mapped = devices
+            .iter()
+            .map(|device| map_audio_device(device, AudioDirection::Input))
+            .collect::<Vec<_>>();
+
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped[0].value, "alsa_input.foo");
+        assert_eq!(mapped[0].label, "Built-in Microphone");
+        assert_eq!(mapped[0].picture.as_deref(), Some("usb-mic"));
+        assert_eq!(mapped[1].value, "alsa_output.bar.monitor");
+        assert_eq!(mapped[1].label, "Monitor of bar");
+        assert_eq!(mapped[1].picture, None);
+    }
+
+    #[test]
+    fn monitor_sources_are_excluded_from_source_listing() {
+        let devices = [
+            device("alsa_input.foo", "Built-in Microphone", &[], None),
+            device("alsa_output.bar.monitor", "Monitor of bar", &[], None),
+        ];
+        let mapped = without_monitors(
+            devices
+                .iter()
+                .map(|device| map_audio_device(device, AudioDirection::Input))
+                .collect(),
+        );
+
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].value, "alsa_input.foo");
+    }
+
+    #[test]
+    fn output_devices_map_their_audio_picture() {
+        let devices = [
+            device(
+                "alsa_output.usb",
+                "USB Headset",
+                &[("device.form_factor", "headset")],
+                None,
+            ),
+            device("alsa_output.pci", "Speakers", &[], None),
+            device(
+                "alsa_output.digital",
+                "Digital Output",
+                &[],
+                Some("hdmi-stereo"),
+            ),
+        ];
+        let mapped = devices
+            .iter()
+            .map(|device| map_audio_device(device, AudioDirection::Output))
+            .collect::<Vec<_>>();
+
+        assert_eq!(mapped[0].picture.as_deref(), Some("headphones"));
+        assert_eq!(mapped[1].picture, None);
+        assert_eq!(mapped[2].picture.as_deref(), Some("hdmi"));
     }
 
     #[test]

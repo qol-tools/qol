@@ -1,5 +1,6 @@
 use axum::{http::StatusCode, response::IntoResponse, response::Response};
 
+use crate::plugins::config::ConfigSaveReceipt;
 use crate::plugins::PluginConfigManager;
 
 use super::super::super::types::MAX_CONFIG_SIZE;
@@ -25,7 +26,7 @@ pub(super) fn parse_config_body(
 pub(super) fn save_plugin_config(
     plugin_id: &str,
     config: serde_json::Value,
-) -> Result<(), Box<Response>> {
+) -> Result<ConfigSaveReceipt, Box<Response>> {
     let manager =
         PluginConfigManager::new().map_err(|_| Box::new(save_config_failed_response()))?;
     let existing = manager
@@ -34,7 +35,7 @@ pub(super) fn save_plugin_config(
         .unwrap_or_else(empty_config);
     let merged = merge_config(existing, config);
     manager
-        .set_config(plugin_id, merged)
+        .set_config_tracked(plugin_id, merged)
         .map_err(|_| Box::new(save_config_failed_response()))
 }
 
