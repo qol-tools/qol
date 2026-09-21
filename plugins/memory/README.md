@@ -2,13 +2,13 @@
 
 # QoL Memory
 
-Long-context memory: recall settled facts from your agent session history for [QoL Tray](../../apps/qol-tray).
+Long-context memory: recall settled facts from your agent session history for [QoL Tray](../../apps/tray).
 
 </div>
 
 ## Quick start
 
-Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/tray) plugin store.
 
 ```text
 qol-memory ask "<query>" [--brief] [--json] [--store PATH]

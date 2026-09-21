@@ -1,5 +1,5 @@
 [alias]
-setup = "install --path tools/qol-cli --locked --force --debug"
+setup = "install --path tools/cli --locked --force --debug"
 
 # Fast linking: rustc injects -B <sysroot>/.../bin/gcc-ld when it sees
 # -fuse-ld=lld, so the toolchain-bundled rust-lld is used with zero install.

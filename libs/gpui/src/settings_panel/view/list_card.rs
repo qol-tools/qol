@@ -14,15 +14,16 @@ use super::super::rows::{
 };
 use super::super::SettingsDestination;
 use super::{
-    align_to_step, horizontal_step_direction, round_to_step_precision, slider_fraction,
-    status_tone_color, Level, LevelHeader, ListItemCard, SettingsPanelView,
+    align_to_step, horizontal_step_direction, round_to_step_precision, slider_drag_track,
+    slider_fraction, status_tone_color, Level, LevelHeader, ListItemCard, SettingsPanelView,
 };
 use crate::phantom_nav::NavAxis;
 use crate::pictures::PictureContext;
 use crate::theme::SettingsPanelPalette;
 
-const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
-const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
+pub(super) const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration =
+    std::time::Duration::from_millis(200);
+pub(super) const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl SettingsPanelView {
     fn slider_rows(&mut self) -> &mut [Row] {
@@ -295,7 +296,9 @@ impl SettingsPanelView {
         };
         step_list_slider(slider, item, direction);
         let item_id = item.id.clone();
-        self.schedule_slider_dispatch(origin_row, &item_id, cx);
+        self.schedule_slider_dispatch(origin_row, item_id, cx, |this, row, id, cx| {
+            this.dispatch_list_slider(row, &id, cx);
+        });
         true
     }
 
@@ -333,36 +336,9 @@ impl SettingsPanelView {
                 until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
             },
         );
-        self.schedule_slider_dispatch(row_index, item_id, cx);
-    }
-
-    fn schedule_slider_dispatch(
-        &mut self,
-        row_index: usize,
-        item_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        self.slider_dispatch_generation += 1;
-        let generation = self.slider_dispatch_generation;
-        self.slider_pending.clear();
-        self.slider_pending.insert((row_index, item_id.to_string()));
-        let item_id = item_id.to_string();
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                async_cx
-                    .background_executor()
-                    .timer(SLIDER_DISPATCH_DEBOUNCE)
-                    .await;
-                let _ = this.update(&mut async_cx, |this, cx| {
-                    if this.slider_dispatch_generation != generation {
-                        return;
-                    }
-                    this.dispatch_list_slider(row_index, &item_id, cx);
-                });
-            }
-        })
-        .detach();
+        self.schedule_slider_dispatch(row_index, item_id.to_string(), cx, |this, row, id, cx| {
+            this.dispatch_list_slider(row, &id, cx);
+        });
     }
 
     fn dispatch_list_slider(&mut self, row_index: usize, item_id: &str, cx: &mut Context<Self>) {
@@ -463,13 +439,8 @@ impl SettingsPanelView {
         let percent = slider_percent_label(slider.spec.min, slider.spec.max, value);
         let ground = row.rest(self.palette);
         let item_id = item.id.clone();
-        let track_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
-        let bounds_for_down = track_bounds.clone();
-        let bounds_for_move = track_bounds.clone();
-        let id_for_down = item_id.clone();
-        let id_for_move = item_id.clone();
-        let id_for_up = item_id.clone();
-        let id_for_up_out = item_id;
+        let down_item = item_id.clone();
+        let move_item = item_id.clone();
         div()
             .flex()
             .flex_none()
@@ -495,62 +466,27 @@ impl SettingsPanelView {
                             .rounded_full()
                             .bg(rgb(ground.mark)),
                     )
-                    .child(
-                        canvas(
-                            move |bounds, _, _| track_bounds.set(Some(bounds)),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .inset_0(),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                            let Some(bounds) = bounds_for_down.get() else {
-                                return;
-                            };
-                            let fraction = (((event.position.x - bounds.left()).to_f64()
-                                / bounds.size.width.to_f64())
-                            .clamp(0.0, 1.0)) as f32;
-                            this.slider_drag = Some((row_index, id_for_down.clone()));
-                            this.set_list_slider_value(row_index, &id_for_down, fraction, cx);
-                            cx.stop_propagation();
+                    .child(slider_drag_track(
+                        cx,
+                        row_index,
+                        item_id,
+                        move |panel: &mut SettingsPanelView,
+                              row: usize,
+                              fraction: f32,
+                              cx: &mut Context<SettingsPanelView>| {
+                            panel.set_list_slider_value(row, &down_item, fraction, cx);
+                        },
+                        move |panel: &mut SettingsPanelView,
+                              row: usize,
+                              fraction: f32,
+                              cx: &mut Context<SettingsPanelView>| {
+                            panel.set_list_slider_value(row, &move_item, fraction, cx);
                             cx.notify();
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                        if !event.dragging()
-                            || this.slider_drag.as_ref() != Some(&(row_index, id_for_move.clone()))
-                        {
-                            return;
-                        }
-                        let Some(bounds) = bounds_for_move.get() else {
-                            return;
-                        };
-                        let fraction = (((event.position.x - bounds.left()).to_f64()
-                            / bounds.size.width.to_f64())
-                        .clamp(0.0, 1.0)) as f32;
-                        this.set_list_slider_value(row_index, &id_for_move, fraction, cx);
-                        cx.notify();
-                    }))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseUpEvent, _, _| {
-                            if this.slider_drag.as_ref() == Some(&(row_index, id_for_up.clone())) {
-                                this.slider_drag = None;
-                            }
-                        }),
-                    )
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseUpEvent, _, _| {
-                            if this.slider_drag.as_ref()
-                                == Some(&(row_index, id_for_up_out.clone()))
-                            {
-                                this.slider_drag = None;
-                            }
-                        }),
-                    ),
+                        },
+                        |_: &mut SettingsPanelView,
+                         _: usize,
+                         _: &mut Context<SettingsPanelView>| {},
+                    )),
             )
             .child(
                 div()
@@ -667,7 +603,7 @@ fn stepped_slider_value(current: f64, direction: f64, min: f64, max: f64, step: 
     next.clamp(min, max)
 }
 
-fn slider_value_from_fraction(min: f64, max: f64, step: f64, fraction: f32) -> f64 {
+pub(super) fn slider_value_from_fraction(min: f64, max: f64, step: f64, fraction: f32) -> f64 {
     let value = min + f64::from(fraction) * (max - min);
     align_to_step(value, Some(min), Some(max), step)
 }
@@ -896,6 +832,23 @@ fn list_item_card_level(
             item_id: item_id.to_string(),
         }),
     })
+}
+
+pub(super) fn list_card_activity<'a>(level: &Level, root_rows: &'a [Row]) -> Option<&'a str> {
+    if !level.list_card {
+        return None;
+    }
+    let row = root_rows.get(level.origin_row?)?;
+    let RowControl::List {
+        active_query: Some(_),
+        active_label,
+        active: true,
+        ..
+    } = &row.control
+    else {
+        return None;
+    };
+    Some(active_label.as_deref().unwrap_or("Live"))
 }
 
 fn list_card_index(stack: &[Level]) -> Option<usize> {
@@ -1144,6 +1097,32 @@ mod tests {
             None,
         );
         (root.rows, child)
+    }
+
+    #[test]
+    fn open_list_card_reads_search_activity_from_live_parent_queries() {
+        let (mut rows, card) = list_card_fixture();
+        let RowControl::List {
+            active_query,
+            active_value_from,
+            active_label,
+            ..
+        } = &mut rows[0].control
+        else {
+            unreachable!();
+        };
+        *active_query = Some("search_status".into());
+        *active_value_from = Some("searching".into());
+        *active_label = Some("Searching".into());
+        for (active, label) in [(false, None), (true, Some("Searching")), (false, None)] {
+            super::super::super::rows::apply_runtime_query(
+                &mut rows,
+                "search_status",
+                Ok(serde_json::json!({"searching":active})),
+                &|_, _| false,
+            );
+            assert_eq!(super::list_card_activity(&card, &rows), label);
+        }
     }
 
     fn action_spec(

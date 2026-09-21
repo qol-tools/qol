@@ -73,6 +73,8 @@ pub const DEV_PROMOTE_GENERATION_ROUTE: &str = dev_routes::PROMOTE_GENERATION;
 
 pub mod artifact;
 
+pub mod plugin_id;
+
 pub mod api_routes {
     pub const HOTKEYS: &str = "/api/hotkeys";
     pub const HOTKEY_ERRORS: &str = "/api/hotkeys/errors";
@@ -147,11 +149,11 @@ pub mod dev_routes {
 }
 
 /// The `qol-tray-doctor` CLI contract shared between its parser
-/// (`apps/qol-tray/src/doctor/cli.rs`) and its callers in `tools/qol-cli`
+/// (`apps/tray/src/doctor/cli.rs`) and its callers in `tools/cli`
 /// (the dashboard's background/manual probes and the top-level `qol doctor`
 /// command). Not covered by the literal-guard above: "check"/"fix" are
 /// common English words that also appear as unrelated progress-step labels
-/// elsewhere in `tools/qol-cli`, so a repo-wide grep for them would be noisy
+/// elsewhere in `tools/cli`, so a repo-wide grep for them would be noisy
 /// rather than protective. Usage/error strings and test fixtures may still
 /// spell these out literally; only the actual parse/dispatch logic must use
 /// these constants.
@@ -332,7 +334,7 @@ pub fn local_hash_url_with_token(route: &str, port: u16, token: Option<&str>) ->
 
 pub const CORE_PANEL_ID: &str = "core";
 
-const RESERVED_PLUGIN_IDS: &[&str] = &["plugin-template", CORE_PANEL_ID];
+const RESERVED_PLUGIN_IDS: &[&str] = &["qol-template", CORE_PANEL_ID];
 
 pub fn is_reserved_plugin_id(id: &str) -> bool {
     RESERVED_PLUGIN_IDS.contains(&id)
@@ -386,7 +388,7 @@ mod tests {
     #[test]
     fn only_reserved_ids_are_special_plugin_ids() {
         let cases = [
-            ("plugin-template", true),
+            ("qol-template", true),
             (CORE_PANEL_ID, true),
             ("plugin-foo", false),
             ("plugin-bar", false),

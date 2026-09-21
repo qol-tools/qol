@@ -3,7 +3,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
-        return match plugin_controllers::app::run_from_env() {
+        return match qol_controllers::app::run_from_env() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{error:#}");
@@ -11,7 +11,7 @@ fn main() -> ExitCode {
             }
         };
     }
-    plugin_controllers::cli::exit_code(args)
+    qol_controllers::cli::exit_code(args)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 [package]
-name = "plugin-monitor"
-version = "0.15.0"
+name = "qol-monitor"
+version = "0.16.0"
 edition = "2021"
 
 [dependencies]

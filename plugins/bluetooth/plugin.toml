@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-bluetooth"
+id = "qol-bluetooth"
 uid = "c30275fa-eb76-42af-bdce-2e7596976fba"
 name = "Bluetooth"
 description = "Reliably reconnect the Bluetooth devices you choose"
-version = "0.43.0"
+version = "0.44.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "plugin-bluetooth"
+command = "qol-bluetooth"
 
 [action.reconnect]
 label = "Reconnect Managed Devices"
@@ -74,7 +74,7 @@ args = ["settings"]
 
 [daemon]
 enabled = true
-command = "plugin-bluetooth"
+command = "qol-bluetooth"
 socket = "/tmp/plugin-bluetooth.sock"
 port = 42740
 
@@ -87,6 +87,6 @@ label = "Bluetooth"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-bluetooth"
-repo = "qol-tools/plugin-bluetooth"
-pattern = "plugin-bluetooth-{os}-{arch}"
+name = "qol-bluetooth"
+repo = "qol-tools/qol-bluetooth"
+pattern = "qol-bluetooth-{os}-{arch}"

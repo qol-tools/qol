@@ -3,6 +3,7 @@ mod display_layout_card;
 mod list_card;
 mod structured_list_editor;
 
+use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -15,16 +16,16 @@ use super::components::{
     settings_action_affordance, settings_action_spinner, settings_label_group, settings_page,
     settings_query_spinner, settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue,
     SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
-    SettingsToggle, SettingsValueTone,
+    SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
 use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
-    apply_runtime_query, filtered_list_items, merged_config, query_flag_value, row_action,
-    row_query_names, row_streams, runtime_query_names, stream_gated, Row, RowControl,
-    RowQueryState, RowSection,
+    apply_runtime_query, filtered_list_items, merged_config, query_flag_value, retire_number_holds,
+    row_action, row_query_names, row_streams, runtime_query_names, stream_gated, Row, RowControl,
+    RowQueryState, RowSection, SliderHold,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -236,9 +237,10 @@ pub(super) struct SettingsPanelView {
     filter_open: bool,
     wheel_generation: u64,
     runtime_poll_generation: u64,
-    slider_dispatch_generation: u64,
+    slider_dispatch_generation: std::collections::HashMap<(usize, String), u64>,
     slider_drag: Option<(usize, String)>,
     slider_pending: std::collections::HashSet<(usize, String)>,
+    slider_holds: std::collections::HashMap<(usize, String), SliderHold>,
     frame_paced_samples: Option<SampledQueryResults>,
     applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
     /// Per-source query freshness, so a row backed by a wedged daemon can say
@@ -393,9 +395,10 @@ impl SettingsPanelView {
             stack: vec![root],
             wheel_generation: 0,
             runtime_poll_generation: 0,
-            slider_dispatch_generation: 0,
+            slider_dispatch_generation: std::collections::HashMap::new(),
             slider_drag: None,
             slider_pending: std::collections::HashSet::new(),
+            slider_holds: std::collections::HashMap::new(),
             frame_paced_samples: None,
             applied_query_payloads: std::collections::HashMap::new(),
             query_states: std::collections::HashMap::new(),
@@ -1245,12 +1248,13 @@ impl SettingsPanelView {
                 Err(message) => RowQueryState::Unavailable(message.clone()),
             },
         );
+        retire_number_holds(&self.stack[0].rows, &mut self.slider_holds, query, &result);
         let drag = self.slider_drag.clone();
         let pending = self.slider_pending.clone();
+        let holds = self.slider_holds.clone();
+        let now = std::time::Instant::now();
         apply_runtime_query(&mut self.root_mut().rows, query, result, &|index, id| {
-            drag.as_ref()
-                .is_some_and(|(drag_index, drag_id)| *drag_index == index && drag_id == id)
-                || pending.contains(&(index, id.to_string()))
+            slider_protected(drag.as_ref(), &pending, &holds, index, id, now)
         });
         self.height_revision += 1;
         self.sync_list_card(query, cx);
@@ -1642,7 +1646,7 @@ impl SettingsPanelView {
         }
         self.persist();
         if let Some(action) = action {
-            self.dispatch_stream_action(row_index, &action, cx);
+            self.dispatch_row_action(row_index, &action, serde_json::Value::Null, cx);
         }
         cx.notify();
     }
@@ -1929,6 +1933,7 @@ impl SettingsPanelView {
             min,
             max,
             step,
+            ..
         }) = self
             .level()
             .rows
@@ -1953,9 +1958,11 @@ impl SettingsPanelView {
         let streams = row_streams(&self.level().rows, self.level().selected);
         let action = row_action(&self.level().rows, self.level().selected);
         let selected = self.level().selected;
+        let row_id = self.level().rows.get(selected).map(|row| row.id.clone());
         let Some(row) = self.level_mut().rows.get_mut(selected) else {
             return;
         };
+        let mut live_number = None;
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
             RowControl::Number {
@@ -1963,12 +1970,15 @@ impl SettingsPanelView {
                 min,
                 max,
                 step,
-                ..
+                live,
             } => {
                 let Some(parsed) = parsed_number(&edit, *min, *max, *step) else {
                     return;
                 };
                 *value = parsed;
+                if live.is_some() {
+                    live_number = Some(parsed);
+                }
                 if streams {
                     if let Some(stream) = self.stream_for(self.level().selected) {
                         stream.close();
@@ -1989,9 +1999,16 @@ impl SettingsPanelView {
             | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         }
+        if let Some(number) = live_number {
+            if let (Some(action), Some(id)) = (action, row_id) {
+                self.dispatch_live_number(selected, &id, &action, number, cx);
+            }
+            cx.notify();
+            return;
+        }
         self.persist();
         if let Some(action) = action {
-            self.dispatch_stream_action(self.level().selected, &action, cx);
+            self.dispatch_row_action(selected, &action, serde_json::Value::Null, cx);
         }
         cx.notify();
     }
@@ -2090,11 +2107,6 @@ impl SettingsPanelView {
         let Some(ActiveControl::Edit(edit)) = self.level().active_control.as_ref() else {
             return;
         };
-        if !row_streams(&self.level().rows, self.level().selected)
-            || stream_gated(&self.level().rows)
-        {
-            return;
-        }
         let Some(RowControl::Number { min, max, step, .. }) = self
             .level()
             .rows
@@ -2106,9 +2118,17 @@ impl SettingsPanelView {
         let Some(value) = parsed_number(edit, *min, *max, *step) else {
             return;
         };
+        let selected = self.level().selected;
+        self.stream_level(selected, value);
+    }
+
+    fn stream_level(&self, row: usize, value: f64) {
+        if !row_streams(&self.level().rows, row) || stream_gated(&self.level().rows) {
+            return;
+        }
         let level = value.clamp(0.0, 255.0) as u8;
         let hex = self.stream_hex();
-        if let Some(stream) = self.stream_for(self.level().selected) {
+        if let Some(stream) = self.stream_for(row) {
             if let Some(frame) = super::stream::brightness_frame(level, &hex) {
                 stream.send(frame);
             }
@@ -2127,7 +2147,164 @@ impl SettingsPanelView {
             .unwrap_or_else(|| format!("{:06x}", self.palette.live_color_fallback))
     }
 
-    fn dispatch_stream_action(&self, row: usize, action: &str, cx: &mut Context<Self>) {
+    fn dispatch_live_number(
+        &mut self,
+        row: usize,
+        id: &str,
+        action: &str,
+        value: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (row, id.to_string());
+        self.slider_pending.remove(&key);
+        let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
+            self.slider_holds.remove(&key);
+            return;
+        };
+        let generation = self.slider_dispatch_generation.get(&key).copied();
+        self.slider_holds.insert(
+            key.clone(),
+            SliderHold {
+                value,
+                dispatched: Some(value),
+                until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
+            },
+        );
+        let action = action.to_string();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx
+                    .background_spawn(
+                        async move { runtime.run_action(&action, number_input(value)) },
+                    )
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if let Err(error) = result {
+                        if this.slider_dispatch_generation.get(&key).copied() == generation {
+                            this.slider_holds.remove(&key);
+                        }
+                        this.save_error = Some(error);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn begin_number_slider_drag(&mut self, row: usize) {
+        if matches!(self.level().active_control, Some(ActiveControl::Edit(_))) {
+            let editing = self.level().selected;
+            if let Some(stream) = self.stream_for(editing) {
+                stream.close();
+            }
+            self.level_mut().active_control = None;
+        }
+        if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
+            if let Some(stream) = self.stream_for(row) {
+                stream.open();
+            }
+        }
+    }
+
+    fn set_number_slider(&mut self, row: usize, fraction: f32, cx: &mut Context<Self>) {
+        let Some(RowControl::Number {
+            value,
+            min: Some(min),
+            max: Some(max),
+            step,
+            live,
+        }) = self
+            .level_mut()
+            .rows
+            .get_mut(row)
+            .map(|row| &mut row.control)
+        else {
+            return;
+        };
+        *value = slider_value_from_fraction(*min, *max, step.unwrap_or(1.0), fraction);
+        let live = live.is_some();
+        let dragged = *value;
+        self.level_mut().selected = row;
+        self.stream_level(row, dragged);
+        if live {
+            if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
+                    match live_number_dispatch_plan(&this.level().rows, row) {
+                        LiveNumberDispatch::Fire { action, value } => {
+                            this.dispatch_live_number(row, &id, &action, value, cx);
+                        }
+                        LiveNumberDispatch::Release => {
+                            release_slider_dispatch(
+                                &mut this.slider_pending,
+                                &mut this.slider_holds,
+                                &(row, id),
+                            );
+                        }
+                    }
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn schedule_slider_dispatch<D>(
+        &mut self,
+        row: usize,
+        id: String,
+        cx: &mut Context<Self>,
+        dispatch: D,
+    ) where
+        D: FnOnce(&mut SettingsPanelView, usize, String, &mut Context<SettingsPanelView>) + 'static,
+    {
+        let key = (row, id);
+        let generation = schedule_slider_generation(&mut self.slider_dispatch_generation, &key);
+        self.slider_pending.insert(key.clone());
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(SLIDER_DISPATCH_DEBOUNCE)
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if !slider_generation_current(
+                        &this.slider_dispatch_generation,
+                        &key,
+                        generation,
+                    ) {
+                        return;
+                    }
+                    dispatch(this, row, key.1.clone(), cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn finish_number_slider(&mut self, row: usize, cx: &mut Context<Self>) {
+        if let Some(stream) = self.stream_for(row) {
+            stream.close();
+        }
+        match number_finish_plan(&self.level().rows, row) {
+            NumberFinishPlan::Live => {}
+            NumberFinishPlan::Persist { action } => {
+                self.persist();
+                if let Some(action) = action {
+                    self.dispatch_row_action(row, &action, serde_json::Value::Null, cx);
+                }
+            }
+        }
+    }
+
+    fn dispatch_row_action(
+        &self,
+        row: usize,
+        action: &str,
+        input: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
         let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
             return;
         };
@@ -2136,9 +2313,7 @@ impl SettingsPanelView {
             let async_cx = cx.clone();
             async move {
                 let _ = async_cx
-                    .background_spawn(async move {
-                        runtime.run_action(&action, serde_json::Value::Null)
-                    })
+                    .background_spawn(async move { runtime.run_action(&action, input) })
                     .await;
             }
         })
@@ -2450,7 +2625,7 @@ impl SettingsPanelView {
         }
     }
 
-    fn render_value_cell(&self, index: usize, row: RowGround) -> Div {
+    fn render_value_cell(&self, index: usize, row: RowGround, cx: &mut Context<Self>) -> Div {
         if let Some(cell) = self.render_query_state_cell(index, row) {
             return cell;
         }
@@ -2465,7 +2640,15 @@ impl SettingsPanelView {
                 max,
                 step,
                 ..
-            } => return self.render_number_value(index, row, *value, *min, *max, *step),
+            } => {
+                let number = NumberSpec {
+                    value: *value,
+                    min: *min,
+                    max: *max,
+                    step: *step,
+                };
+                return self.render_number_value(index, row, number, cx);
+            }
             RowControl::Action { active, .. }
                 if self.level().rows[index].variant.as_deref() == Some("toggle") =>
             {
@@ -2574,13 +2757,18 @@ impl SettingsPanelView {
         &self,
         index: usize,
         row: RowGround,
-        value: f64,
-        min: Option<f64>,
-        max: Option<f64>,
-        step: Option<f64>,
+        number: NumberSpec,
+        cx: &mut Context<Self>,
     ) -> Div {
+        let NumberSpec {
+            value,
+            min,
+            max,
+            step,
+        } = number;
         let mut track = None;
-        if self.level().rows[index].variant.as_deref() == Some("slider") {
+        if let Some(style) = SliderStyle::from_variant(self.level().rows[index].variant.as_deref())
+        {
             let edit = if index == self.level().selected {
                 match &self.level().active_control {
                     Some(ActiveControl::Edit(edit)) => Some(edit.as_str()),
@@ -2590,12 +2778,37 @@ impl SettingsPanelView {
                 None
             };
             let fraction = slider_fraction(number_preview(edit, value, min, max, step), min, max);
-            track = Some(fraction);
+            track = Some((fraction, style));
         }
+        let id = self.level().rows[index].id.clone();
+        let interact = move |element: Div| {
+            element.child(slider_drag_track(
+                cx,
+                index,
+                id,
+                |panel: &mut SettingsPanelView,
+                 row: usize,
+                 fraction: f32,
+                 cx: &mut Context<SettingsPanelView>| {
+                    panel.begin_number_slider_drag(row);
+                    panel.set_number_slider(row, fraction, cx);
+                },
+                |panel: &mut SettingsPanelView,
+                 row: usize,
+                 fraction: f32,
+                 cx: &mut Context<SettingsPanelView>| {
+                    panel.set_number_slider(row, fraction, cx);
+                },
+                |panel: &mut SettingsPanelView, row: usize, cx: &mut Context<SettingsPanelView>| {
+                    panel.finish_number_slider(row, cx);
+                },
+            ))
+        };
         number_field(
             self.display_value(index),
             number_unit(&self.level().rows[index].id),
             track,
+            interact,
             row,
             self.palette,
         )
@@ -2691,7 +2904,7 @@ impl SettingsPanelView {
             ground,
             self.palette,
         );
-        let value_cell = self.render_value_cell(index, ground);
+        let value_cell = self.render_value_cell(index, ground, cx);
         let mut line = SettingsRow::setting(("settings-row", index), self.palette)
             .selected(selected, self.body_has_focus())
             .child(label_group)
@@ -3668,7 +3881,7 @@ impl SettingsPanelView {
                         visible,
                     )
                 })
-                .filter(|(_, _, rows)| !rows.is_empty())
+                .filter(|(_, _, rows)| !rows.is_empty() || self.level().list_card)
                 .collect();
         }
         let mut groups = Vec::new();
@@ -3747,12 +3960,16 @@ impl SettingsPanelView {
         detail: Option<&str>,
         here: bool,
     ) -> impl IntoElement {
-        SettingsGroupHeader::new(
+        let header = SettingsGroupHeader::new(
             title.to_string(),
             detail.map(|detail| SharedString::from(detail.to_string())),
             self.palette,
         )
-        .current(here)
+        .current(here);
+        match list_card::list_card_activity(self.level(), &self.root().rows) {
+            Some(label) => header.activity(label.to_string()),
+            None => header,
+        }
     }
 
     fn enter_hint(&self) -> Option<&'static str> {
@@ -3951,6 +4168,196 @@ fn number_preview(
 ) -> f64 {
     edit.and_then(|value| parsed_number(value, min, max, step))
         .unwrap_or(fallback)
+}
+
+#[derive(Clone, Copy)]
+struct NumberSpec {
+    value: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: Option<f64>,
+}
+
+fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
+    (((x - area.left()).to_f64() / area.size.width.to_f64()).clamp(0.0, 1.0)) as f32
+}
+
+fn schedule_slider_generation(
+    generations: &mut std::collections::HashMap<(usize, String), u64>,
+    key: &(usize, String),
+) -> u64 {
+    let generation = generations.entry(key.clone()).or_insert(0);
+    *generation = generation.wrapping_add(1);
+    *generation
+}
+
+fn slider_generation_current(
+    generations: &std::collections::HashMap<(usize, String), u64>,
+    key: &(usize, String),
+    generation: u64,
+) -> bool {
+    generations.get(key).copied() == Some(generation)
+}
+
+fn release_slider_dispatch(
+    pending: &mut std::collections::HashSet<(usize, String)>,
+    holds: &mut std::collections::HashMap<(usize, String), SliderHold>,
+    key: &(usize, String),
+) -> bool {
+    let released = pending.remove(key);
+    holds.remove(key);
+    released
+}
+
+fn slider_protected(
+    drag: Option<&(usize, String)>,
+    pending: &std::collections::HashSet<(usize, String)>,
+    holds: &std::collections::HashMap<(usize, String), SliderHold>,
+    index: usize,
+    id: &str,
+    now: std::time::Instant,
+) -> bool {
+    if drag.is_some_and(|(drag_index, drag_id)| *drag_index == index && drag_id == id) {
+        return true;
+    }
+    if pending.contains(&(index, id.to_string())) {
+        return true;
+    }
+    holds
+        .get(&(index, id.to_string()))
+        .is_some_and(|hold| hold.until > now)
+}
+
+#[derive(Debug, PartialEq)]
+enum LiveNumberDispatch {
+    Fire { action: String, value: f64 },
+    Release,
+}
+
+fn live_number_dispatch_plan(rows: &[Row], row: usize) -> LiveNumberDispatch {
+    let Some(RowControl::Number { value, .. }) = rows.get(row).map(|row| &row.control) else {
+        return LiveNumberDispatch::Release;
+    };
+    match row_action(rows, row) {
+        Some(action) => LiveNumberDispatch::Fire {
+            action,
+            value: *value,
+        },
+        None => LiveNumberDispatch::Release,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum NumberFinishPlan {
+    Live,
+    Persist { action: Option<String> },
+}
+
+fn number_finish_plan(rows: &[Row], row: usize) -> NumberFinishPlan {
+    match rows.get(row).map(|row| &row.control) {
+        Some(RowControl::Number { live: Some(_), .. }) => NumberFinishPlan::Live,
+        Some(RowControl::Number { .. }) => NumberFinishPlan::Persist {
+            action: row_action(rows, row),
+        },
+        _ => NumberFinishPlan::Live,
+    }
+}
+
+fn slider_drag_track<O, M, R>(
+    cx: &mut Context<SettingsPanelView>,
+    row: usize,
+    id: String,
+    on_down: O,
+    move_to: M,
+    release: R,
+) -> Div
+where
+    O: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    M: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    R: Fn(&mut SettingsPanelView, usize, &mut Context<SettingsPanelView>) + 'static,
+{
+    let bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+    let bounds_for_down = bounds.clone();
+    let id_for_down = id.clone();
+    let view = cx.weak_entity();
+    div()
+        .absolute()
+        .inset_0()
+        .cursor(CursorStyle::PointingHand)
+        .child(
+            canvas(
+                move |area, _, _| bounds.set(Some(area)),
+                move |area, _, window, _| {
+                    watch_slider_drag(window, view, row, id, area, move_to, release);
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                let Some(area) = bounds_for_down.get() else {
+                    return;
+                };
+                this.slider_drag = Some((row, id_for_down.clone()));
+                on_down(this, row, track_fraction(event.position.x, area), cx);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+}
+
+fn watch_slider_drag<M, R>(
+    window: &mut Window,
+    view: WeakEntity<SettingsPanelView>,
+    row: usize,
+    id: String,
+    bounds: Bounds<Pixels>,
+    move_to: M,
+    release: R,
+) where
+    M: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    R: Fn(&mut SettingsPanelView, usize, &mut Context<SettingsPanelView>) + 'static,
+{
+    let move_view = view.clone();
+    let move_id = id.clone();
+    let release = Rc::new(release);
+    let release_for_move = release.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+        if phase != DispatchPhase::Capture {
+            return;
+        }
+        let _ = move_view.update(cx, |panel, cx| {
+            if panel.slider_drag.as_ref() != Some(&(row, move_id.clone())) {
+                return;
+            }
+            if event.dragging() {
+                move_to(panel, row, track_fraction(event.position.x, bounds), cx);
+            } else {
+                panel.slider_drag = None;
+                release_for_move(panel, row, cx);
+                cx.notify();
+            }
+        });
+    });
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+        if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
+            return;
+        }
+        let _ = view.update(cx, |panel, cx| {
+            if panel.slider_drag.as_ref() != Some(&(row, id.clone())) {
+                return;
+            }
+            panel.slider_drag = None;
+            release(panel, row, cx);
+            cx.notify();
+        });
+    });
+}
+
+fn number_input(value: f64) -> serde_json::Value {
+    serde_json::json!({ "value": super::rows::number_json(value) })
 }
 
 fn horizontal_step_direction(key: &str) -> Option<f64> {
@@ -4552,20 +4959,25 @@ fn list_header_height(row: &Row) -> f32 {
 mod tests {
     use super::{
         action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        binary_state_label, clamp_selected, color_display, crumb_labels, due_query_indices,
-        escape_step, focus_level, format_number, header_is_redundant, horizontal_step_direction,
-        intent, list_fit_updates, live_card_level, live_card_sync, live_card_sync_back,
-        number_preview, number_unit, parsed_color, parsed_number, pop_level, push_level,
-        query_is_due, rail_group_breaks, row_body_height, slider_fraction,
-        source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
-        transition_policy, EscapeStep, HeightCache, Intent, Level, LevelHeader, ObjectArrayState,
-        Row, RowControl, RowSection, SettingsDestination, TransitionAction, TransitionTracker,
+        apply_runtime_query, binary_state_label, clamp_selected, color_display, crumb_labels,
+        due_query_indices, escape_step, focus_level, format_number, header_is_redundant,
+        horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
+        live_card_sync_back, live_number_dispatch_plan, number_finish_plan, number_preview,
+        number_unit, parsed_color, parsed_number, pop_level, push_level, query_is_due,
+        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
+        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
+        stepped_number, text_or_placeholder, transition_in_flight, transition_policy, EscapeStep,
+        HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan,
+        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, TransitionAction,
+        TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::object_array_row::{Entry, Item};
-    use crate::settings_panel::rows::{rows_from_resolved, visible_row_indices};
+    use crate::settings_panel::rows::{
+        retire_number_holds, rows_from_resolved, visible_row_indices, LiveQuery, SliderHold,
+    };
     use crate::settings_panel::PanelSourceGroup;
 
     #[test]
@@ -4625,6 +5037,7 @@ mod tests {
                 options: vec![],
                 index: 0,
                 dynamic: None,
+                live: None,
             },
         };
         let card = Row {
@@ -4649,6 +5062,7 @@ mod tests {
                 min: None,
                 max: None,
                 step: None,
+                live: None,
             },
         };
         let dynamic = Row {
@@ -5120,6 +5534,46 @@ default = "visible"
     }
 
     #[test]
+    fn bluetooth_search_button_says_scan_and_answers_the_click() {
+        let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/bluetooth/qol-config.toml");
+        let spec = qol_config::contract::parse_spec(&contract).expect("bluetooth contract");
+        let resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
+            .expect("bluetooth config");
+        let rows = rows_from_resolved(&resolved, 0);
+        let row = rows
+            .iter()
+            .find(|row| row.id == "search")
+            .expect("search row");
+        let RowControl::Action {
+            active_action,
+            active_query,
+            state_labels,
+            ..
+        } = &row.control
+        else {
+            panic!("search is an action row");
+        };
+        let label = |active, pending| {
+            action_value_label(
+                active,
+                pending,
+                false,
+                active_query.is_some(),
+                active_action.is_some(),
+                state_labels,
+            )
+        };
+        assert_eq!(label(false, false), "Scan");
+        assert_eq!(
+            label(false, true),
+            "Working",
+            "the click shows before BlueZ answers"
+        );
+        assert_eq!(label(true, false), "Stop");
+    }
+
+    #[test]
     fn action_values_distinguish_commands_from_semantic_runtime_state() {
         let no_labels = std::collections::BTreeMap::new();
         let cases = [
@@ -5338,6 +5792,242 @@ default = "visible"
                 "value={value} min={min:?} max={max:?}"
             );
         }
+    }
+
+    fn number_row(action: Option<&str>, live: bool) -> Row {
+        let mut row = rows(&[false]).remove(0);
+        row.id = "brightness".into();
+        row.action = action.map(str::to_string);
+        row.control = RowControl::Number {
+            value: 42.0,
+            min: Some(1.0),
+            max: Some(100.0),
+            step: Some(1.0),
+            live: live.then(|| LiveQuery {
+                query: "brightness".into(),
+                value_from: None,
+            }),
+        };
+        row
+    }
+
+    #[test]
+    fn a_stopped_live_number_dispatch_releases_the_slider_hold() {
+        assert_eq!(
+            live_number_dispatch_plan(&[number_row(Some("set_brightness"), false)], 0),
+            LiveNumberDispatch::Fire {
+                action: "set_brightness".into(),
+                value: 42.0,
+            }
+        );
+        assert_eq!(
+            live_number_dispatch_plan(&[number_row(None, false)], 0),
+            LiveNumberDispatch::Release
+        );
+        assert_eq!(
+            live_number_dispatch_plan(&[number_row(Some("set_brightness"), false)], 9),
+            LiveNumberDispatch::Release
+        );
+        assert_eq!(
+            live_number_dispatch_plan(&rows(&[false]), 0),
+            LiveNumberDispatch::Release
+        );
+    }
+
+    #[test]
+    fn releasing_a_stopped_dispatch_clears_only_that_sliders_hold() {
+        let mut pending = std::collections::HashSet::new();
+        pending.insert((0usize, "brightness".to_string()));
+        pending.insert((1usize, "volume".to_string()));
+        let mut holds = std::collections::HashMap::new();
+        holds.insert(
+            (0usize, "brightness".to_string()),
+            SliderHold {
+                value: 42.0,
+                dispatched: Some(42.0),
+                until: std::time::Instant::now() + std::time::Duration::from_secs(10),
+            },
+        );
+        let key = (0usize, "brightness".to_string());
+        assert!(release_slider_dispatch(&mut pending, &mut holds, &key));
+        assert_eq!(
+            pending,
+            std::collections::HashSet::from([(1usize, "volume".to_string())])
+        );
+        assert!(holds.is_empty());
+        assert!(!release_slider_dispatch(&mut pending, &mut holds, &key));
+    }
+
+    #[test]
+    fn two_live_numbers_scheduled_inside_one_debounce_both_stay_current() {
+        let mut generations = std::collections::HashMap::new();
+        let volume = (0usize, "volume".to_string());
+        let brightness = (1usize, "brightness".to_string());
+        let volume_generation = schedule_slider_generation(&mut generations, &volume);
+        let brightness_generation = schedule_slider_generation(&mut generations, &brightness);
+        assert!(slider_generation_current(
+            &generations,
+            &volume,
+            volume_generation
+        ));
+        assert!(slider_generation_current(
+            &generations,
+            &brightness,
+            brightness_generation
+        ));
+        let volume_again = schedule_slider_generation(&mut generations, &volume);
+        assert!(slider_generation_current(
+            &generations,
+            &volume,
+            volume_again
+        ));
+        assert!(!slider_generation_current(
+            &generations,
+            &volume,
+            volume_generation
+        ));
+        assert!(slider_generation_current(
+            &generations,
+            &brightness,
+            brightness_generation
+        ));
+    }
+
+    #[test]
+    fn a_list_slider_schedule_never_cancels_a_number_slider_schedule() {
+        let mut generations = std::collections::HashMap::new();
+        let list = (0usize, "kbd".to_string());
+        let number = (1usize, "volume".to_string());
+        let list_generation = schedule_slider_generation(&mut generations, &list);
+        let number_generation = schedule_slider_generation(&mut generations, &number);
+        let list_again = schedule_slider_generation(&mut generations, &list);
+        assert!(slider_generation_current(&generations, &list, list_again));
+        assert!(!slider_generation_current(
+            &generations,
+            &list,
+            list_generation
+        ));
+        assert!(slider_generation_current(
+            &generations,
+            &number,
+            number_generation
+        ));
+        let number_again = schedule_slider_generation(&mut generations, &number);
+        assert!(slider_generation_current(
+            &generations,
+            &number,
+            number_again
+        ));
+        assert!(!slider_generation_current(
+            &generations,
+            &number,
+            number_generation
+        ));
+        assert!(slider_generation_current(&generations, &list, list_again));
+    }
+
+    fn live_number_row(value: f64) -> Row {
+        let mut row = number_row(Some("set_brightness"), true);
+        if let RowControl::Number {
+            value: current,
+            live,
+            ..
+        } = &mut row.control
+        {
+            *current = value;
+            *live = Some(LiveQuery {
+                query: "brightness".into(),
+                value_from: Some("brightness".into()),
+            });
+        }
+        row
+    }
+
+    fn live_number_value(rows: &[Row]) -> f64 {
+        match &rows[0].control {
+            RowControl::Number { value, .. } => *value,
+            other => panic!("expected number, got {other:?}"),
+        }
+    }
+
+    fn number_hold(
+        value: f64,
+        dispatched: Option<f64>,
+        until: std::time::Instant,
+    ) -> std::collections::HashMap<(usize, String), SliderHold> {
+        let mut holds = std::collections::HashMap::new();
+        holds.insert(
+            (0usize, "brightness".to_string()),
+            SliderHold {
+                value,
+                dispatched,
+                until,
+            },
+        );
+        holds
+    }
+
+    #[test]
+    fn a_stale_answer_after_the_dispatch_resolves_does_not_snap_the_number_back() {
+        let mut rows = vec![live_number_row(60.0)];
+        let now = std::time::Instant::now();
+        let mut holds = number_hold(60.0, Some(60.0), now + std::time::Duration::from_secs(10));
+        let stale = Ok(serde_json::json!({ "brightness": 45 }));
+        retire_number_holds(&rows, &mut holds, "brightness", &stale);
+        assert!(holds.contains_key(&(0usize, "brightness".to_string())));
+        let pending = std::collections::HashSet::new();
+        apply_runtime_query(&mut rows, "brightness", stale, &|index, id| {
+            slider_protected(None, &pending, &holds, index, id, now)
+        });
+        assert_eq!(live_number_value(&rows), 60.0);
+    }
+
+    #[test]
+    fn a_confirming_answer_drops_the_number_hold() {
+        let mut rows = vec![live_number_row(60.0)];
+        let now = std::time::Instant::now();
+        let mut holds = number_hold(60.0, Some(60.0), now + std::time::Duration::from_secs(10));
+        let answer = Ok(serde_json::json!({ "brightness": 60 }));
+        retire_number_holds(&rows, &mut holds, "brightness", &answer);
+        assert!(holds.is_empty());
+        let pending = std::collections::HashSet::new();
+        apply_runtime_query(&mut rows, "brightness", answer, &|index, id| {
+            slider_protected(None, &pending, &holds, index, id, now)
+        });
+        assert_eq!(live_number_value(&rows), 60.0);
+    }
+
+    #[test]
+    fn the_number_hold_expires_after_its_ttl() {
+        let mut rows = vec![live_number_row(60.0)];
+        let now = std::time::Instant::now();
+        let mut holds = number_hold(60.0, Some(60.0), now - std::time::Duration::from_secs(1));
+        let answer = Ok(serde_json::json!({ "brightness": 45 }));
+        retire_number_holds(&rows, &mut holds, "brightness", &answer);
+        assert!(holds.is_empty());
+        let pending = std::collections::HashSet::new();
+        apply_runtime_query(&mut rows, "brightness", answer, &|index, id| {
+            slider_protected(None, &pending, &holds, index, id, now)
+        });
+        assert_eq!(live_number_value(&rows), 45.0);
+    }
+
+    #[test]
+    fn a_released_non_live_slider_dispatches_its_declared_action() {
+        assert_eq!(
+            number_finish_plan(&[number_row(Some("set_brightness"), false)], 0),
+            NumberFinishPlan::Persist {
+                action: Some("set_brightness".into()),
+            }
+        );
+        assert_eq!(
+            number_finish_plan(&[number_row(None, false)], 0),
+            NumberFinishPlan::Persist { action: None }
+        );
+        assert_eq!(
+            number_finish_plan(&[number_row(Some("set_brightness"), true)], 0),
+            NumberFinishPlan::Live
+        );
     }
 
     #[test]

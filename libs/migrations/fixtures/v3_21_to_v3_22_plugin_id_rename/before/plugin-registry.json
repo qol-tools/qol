@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "plugin-lights",
+      "active": {
+        "path": "{{config}}/plugins/plugin-lights",
+        "source": { "type": "release-asset" }
+      }
+    },
+    {
+      "id": "qol-lights",
+      "active": {
+        "path": "{{config}}/plugins/qol-lights",
+        "source": { "type": "release-asset" }
+      },
+      "fallback": {
+        "path": "{{config}}/plugins/plugin-lights",
+        "source": { "type": "release-asset" }
+      }
+    },
+    {
+      "id": "plugin-unknown",
+      "active": {
+        "path": "/opt/qol/plugin-unknown",
+        "source": { "type": "release-asset" }
+      }
+    }
+  ]
+}

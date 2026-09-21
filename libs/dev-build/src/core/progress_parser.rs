@@ -104,11 +104,11 @@ mod tests {
     #[test]
     fn parse_progress_line_extracts_done_total_and_phase() {
         let parsed =
-            parse_cargo_progress_line("Building [=============>      ] 91/236: plugin-alt-tab")
+            parse_cargo_progress_line("Building [=============>      ] 91/236: qol-alt-tab")
                 .expect("progress should parse");
         assert_eq!(parsed.done, 91);
         assert_eq!(parsed.total, 236);
-        assert_eq!(parsed.phase, "plugin-alt-tab");
+        assert_eq!(parsed.phase, "qol-alt-tab");
     }
 
     #[test]

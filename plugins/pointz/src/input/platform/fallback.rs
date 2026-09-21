@@ -5,6 +5,7 @@
 //! because the constructor never succeeds, but they still return typed `Err`
 //! to satisfy the trait without `unimplemented!()`.
 
+use crate::cli::PLUGIN_ID;
 use crate::command::ModifierKeys;
 use crate::input::{InputHandlerTrait, InputReadiness, PlatformSupport};
 use anyhow::{anyhow, Result};
@@ -33,14 +34,14 @@ pub(in crate::input) fn inspect_readiness() -> InputReadiness {
 impl InputHandlerImpl {
     pub fn new() -> Result<Self> {
         Err(anyhow!(
-            "plugin-pointz: input handling is not implemented on this OS"
+            "{PLUGIN_ID}: input handling is not implemented on this OS"
         ))
     }
 }
 
 fn unsupported<T>() -> Result<T> {
     Err(anyhow!(
-        "plugin-pointz: input handling is not implemented on this OS"
+        "{PLUGIN_ID}: input handling is not implemented on this OS"
     ))
 }
 

@@ -90,6 +90,6 @@ PreFlight has no daemon to talk to: it runs before the daemon boots. The new dae
 PostAuth could technically be a service (the daemon is up by then), but the lifecycle penalty of starting one - extra process, extra socket, extra failure surface - outweighs the cost of an in-process async call. Both phases are consumed two ways:
 
 - As a library from the qol-tray daemon (one call per phase at boot).
-- As a standalone CLI via the `qol-tray-migrate` binary under `apps/qol-tray`, for manual `--dry-run` debugging or running on a config dir other than the default.
+- As a standalone CLI via the `qol-tray-migrate` binary under `apps/tray`, for manual `--dry-run` debugging or running on a config dir other than the default.
 
 Both paths share the same registries and the same migration implementations.

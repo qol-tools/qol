@@ -11,46 +11,46 @@ five-version design evolution in the companion spec:
 
 ```bash
 # any mock mirrors its real surface
-./bins/bluetooth list
-./bins/bluetooth --json list
-./bins/alt-tab --show
+./bins/qol-bluetooth list
+./bins/qol-bluetooth --json list
+./bins/qol-alt-tab --show
 ./bins/qol-voice session status --json
-./bins/pointz server
+./bins/qol-pointz server
 
 # help and doctor
-./bins/bluetooth help
-./bins/bluetooth help connect
-./bins/bluetooth connect help
-./bins/bluetooth --json doctor
+./bins/qol-bluetooth help
+./bins/qol-bluetooth help connect
+./bins/qol-bluetooth connect help
+./bins/qol-bluetooth --json doctor
 
 # lifecycle (V2+)
-./bins/cli-sessions daemon    # canonical start
-./bins/cli-sessions status
-./bins/cli-sessions kill
+./bins/qol-cli-sessions daemon    # canonical start
+./bins/qol-cli-sessions status
+./bins/qol-cli-sessions kill
 
 # config (V4+)
-./bins/bluetooth config show
-./bins/bluetooth config get managed_devices
+./bins/qol-bluetooth config show
+./bins/qol-bluetooth config get managed_devices
 ```
 
 ## Flavours captured
 
 | Flavour | Mocks |
 |---|---|
-| UI-host dependent | alt-tab (needs cinnamon/muffin) |
-| data-heavy with --json | bluetooth |
-| daemon-signal, best-effort | cli-sessions |
-| status + privileged fix | controllers |
-| daemon + status, no kill | ide-checkout |
-| run/reload/kill + aliases | keyremap |
-| retained-GPUI, dashed verbs | launcher |
-| action-heavy flat | lights, window-actions |
-| theme state machine | os-themes |
+| UI-host dependent | qol-alt-tab (needs cinnamon/muffin) |
+| data-heavy with --json | qol-bluetooth |
+| daemon-signal, best-effort | qol-cli-sessions |
+| status + privileged fix | qol-controllers |
+| daemon + status, no kill | qol-ide-checkout |
+| run/reload/kill + aliases | qol-keyremap |
+| retained-GPUI, dashed verbs | qol-launcher |
+| action-heavy flat | qol-lights, qol-window-actions |
+| theme state machine | qol-os-themes |
 | hierarchical subcommands | qol-voice |
-| destructive flags + confirmation | removeapp |
-| legacy fallback forwarding | pointz |
+| destructive flags + confirmation | qol-removeapp |
+| legacy fallback forwarding | qol-pointz |
 | side-effect default | qol-shot |
 | installer + legacy fallback | qol-tray-install |
 | migration + legacy fallback | qol-tray-migrate |
-| scaffold | template |
+| scaffold | qol-template |
 | tool (13 flat commands) | qol |

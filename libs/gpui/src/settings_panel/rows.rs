@@ -57,6 +57,18 @@ pub(super) struct OptionQuery {
     seeded: Vec<SelectOption>,
 }
 
+#[derive(Debug)]
+pub(super) struct LiveQuery {
+    pub(super) query: String,
+    pub(super) value_from: Option<String>,
+}
+
+#[derive(Debug)]
+pub(super) struct SelectLive {
+    pub(super) source: LiveQuery,
+    pub(super) saved: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SelectOption {
     pub(super) value: String,
@@ -83,6 +95,7 @@ pub(super) enum RowControl {
         options: Vec<SelectOption>,
         index: usize,
         dynamic: Option<OptionQuery>,
+        live: Option<SelectLive>,
     },
     MultiSelect {
         options: Vec<SelectOption>,
@@ -94,6 +107,7 @@ pub(super) enum RowControl {
         min: Option<f64>,
         max: Option<f64>,
         step: Option<f64>,
+        live: Option<LiveQuery>,
     },
     Text(String),
     TextList(Vec<String>),
@@ -373,6 +387,10 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 _ => return unsupported_mismatch(field),
             };
             let (options, dynamic) = field_options(field, std::slice::from_ref(&current));
+            let live = live_query(field).map(|source| SelectLive {
+                source,
+                saved: current.clone(),
+            });
             let index = options
                 .iter()
                 .position(|option| option.value == current)
@@ -381,6 +399,7 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 options,
                 index,
                 dynamic,
+                live,
             }
         }
         FieldKind::Number => match field.value {
@@ -389,6 +408,7 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 min: field.number.min,
                 max: field.number.max,
                 step: field.number.step,
+                live: live_query(field),
             },
             _ => unsupported_mismatch(field),
         },
@@ -593,6 +613,13 @@ fn entry_field_schema(
     )
 }
 
+fn live_query(field: &ResolvedField) -> Option<LiveQuery> {
+    field.active_query.as_ref().map(|query| LiveQuery {
+        query: query.clone(),
+        value_from: field.active_value_from.clone(),
+    })
+}
+
 fn field_options(
     field: &ResolvedField,
     current: &[String],
@@ -692,7 +719,16 @@ pub(super) fn merged_config<'a>(
 fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
     match control {
         RowControl::Toggle(value) => Some(serde_json::json!(value)),
-        RowControl::Select { options, index, .. } => Some(serde_json::json!(options[*index].value)),
+        RowControl::Select {
+            options,
+            index,
+            live,
+            ..
+        } => Some(serde_json::json!(live
+            .as_ref()
+            .map_or(options[*index].value.as_str(), |live| live
+                .saved
+                .as_str()))),
         RowControl::MultiSelect {
             options, selected, ..
         } => {
@@ -704,6 +740,7 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
                 .collect();
             Some(serde_json::json!(values))
         }
+        RowControl::Number { live: Some(_), .. } => None,
         RowControl::Number { value, .. } => Some(number_json(*value)),
         RowControl::Text(value) => Some(serde_json::json!(value)),
         RowControl::TextList(values) => Some(serde_json::json!(values)),
@@ -764,11 +801,12 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
 /// Every runtime query this single row's value depends on.
 pub(super) fn row_query_names(row: &Row) -> Vec<&str> {
     match &row.control {
-        RowControl::Select {
-            dynamic: Some(dynamic),
-            ..
-        }
-        | RowControl::MultiSelect {
+        RowControl::Select { dynamic, live, .. } => dynamic
+            .iter()
+            .map(|dynamic| dynamic.name.as_str())
+            .chain(live.iter().map(|live| live.source.query.as_str()))
+            .collect(),
+        RowControl::MultiSelect {
             dynamic: Some(dynamic),
             ..
         } => vec![dynamic.name.as_str()],
@@ -776,6 +814,9 @@ pub(super) fn row_query_names(row: &Row) -> Vec<&str> {
             active_query: Some(query),
             ..
         } => vec![query.as_str()],
+        RowControl::Number {
+            live: Some(live), ..
+        } => vec![live.query.as_str()],
         RowControl::Status { query, .. } | RowControl::Gamepad { query, .. } => {
             vec![query.as_str()]
         }
@@ -816,20 +857,59 @@ pub(super) fn apply_runtime_query(
             RowControl::Select {
                 options,
                 index,
-                dynamic: Some(dynamic),
-            } if dynamic.name == query => {
-                if let Ok(value) = &result {
-                    let current = options
-                        .get(*index)
-                        .map(|option| option.value.clone())
-                        .unwrap_or_default();
-                    let fetched = options_from_value(value);
-                    *options =
-                        merge_options(&dynamic.seeded, &fetched, std::slice::from_ref(&current));
-                    *index = options
-                        .iter()
-                        .position(|option| option.value == current)
-                        .unwrap_or(0);
+                dynamic,
+                live,
+            } => {
+                if let Some(dynamic) = dynamic.as_ref().filter(|dynamic| dynamic.name == query) {
+                    if let Ok(value) = &result {
+                        let current = options
+                            .get(*index)
+                            .map(|option| option.value.clone())
+                            .unwrap_or_default();
+                        let fetched = options_from_value(value);
+                        *options = merge_options(
+                            &dynamic.seeded,
+                            &fetched,
+                            std::slice::from_ref(&current),
+                        );
+                        *index = options
+                            .iter()
+                            .position(|option| option.value == current)
+                            .unwrap_or(0);
+                    }
+                }
+                if let Some(live) = live.as_ref().filter(|live| live.source.query == query) {
+                    if let Ok(value) = &result {
+                        let live_text = query_value(value, live.source.value_from.as_deref())
+                            .filter(|value| value.is_string())
+                            .and_then(query_value_text);
+                        if let Some(text) = live_text {
+                            if !options.iter().any(|option| option.value == text) {
+                                let merged = merge_options(
+                                    options.as_slice(),
+                                    &[],
+                                    std::slice::from_ref(&text),
+                                );
+                                *options = merged;
+                            }
+                            *index = options
+                                .iter()
+                                .position(|option| option.value == text)
+                                .unwrap_or(0);
+                        }
+                    }
+                }
+            }
+            RowControl::Number {
+                value,
+                live: Some(live),
+                ..
+            } if live.query == query && !slider_protected(row_index, &row.id) => {
+                if let Some(number) = result.as_ref().ok().and_then(|answer| {
+                    query_value(answer, live.value_from.as_deref())
+                        .and_then(serde_json::Value::as_f64)
+                }) {
+                    *value = number;
                 }
             }
             RowControl::MultiSelect {
@@ -994,6 +1074,35 @@ pub(super) fn apply_runtime_query(
             _ => {}
         }
     }
+}
+
+pub(super) fn retire_number_holds(
+    rows: &[Row],
+    holds: &mut std::collections::HashMap<(usize, String), SliderHold>,
+    query: &str,
+    result: &Result<serde_json::Value, String>,
+) {
+    let now = std::time::Instant::now();
+    holds.retain(|(row_index, _), hold| {
+        let Some(RowControl::Number {
+            live: Some(live), ..
+        }) = rows.get(*row_index).map(|row| &row.control)
+        else {
+            return false;
+        };
+        if live.query != query {
+            return true;
+        }
+        let fresh = result
+            .as_ref()
+            .ok()
+            .and_then(|answer| query_value(answer, live.value_from.as_deref()))
+            .and_then(serde_json::Value::as_f64);
+        let confirmed = hold
+            .dispatched
+            .is_some_and(|dispatched| fresh == Some(dispatched));
+        !confirmed && hold.until > now
+    });
 }
 
 fn query_flag(value: &serde_json::Value, path: Option<&str>) -> bool {
@@ -1234,7 +1343,7 @@ fn option_accent(item: &serde_json::Value) -> Option<u32> {
     Some(u32::from(red) << 16 | u32::from(green) << 8 | u32::from(blue))
 }
 
-fn number_json(value: f64) -> serde_json::Value {
+pub(super) fn number_json(value: f64) -> serde_json::Value {
     let whole = value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64;
     if whole {
         serde_json::json!(value as i64)
@@ -1904,6 +2013,168 @@ query = "managed_device_options"
         }
     }
 
+    const LIVE_SELECT_SPEC: &str = r#"
+schema_version = 1
+
+[field.output]
+type = "select"
+config_key = "output.device"
+label = "Sound output"
+default = "default"
+query = "outputs"
+active_query = "output_status"
+active_value_from = "applied"
+
+[field.output.option_labels]
+default = "System Default"
+"#;
+
+    fn live_select_rows() -> Vec<Row> {
+        let spec = qol_config::contract::parse_spec_str(LIVE_SELECT_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        rows_from_resolved(&resolved, 0)
+    }
+
+    fn live_select_displayed(rows: &[Row]) -> String {
+        match &rows[0].control {
+            RowControl::Select { options, index, .. } => options[*index].value.clone(),
+            other => panic!("expected select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn live_select_answers_move_the_displayed_option_but_keep_the_saved_value() {
+        let mut rows = live_select_rows();
+        assert_eq!(runtime_query_names(&rows), ["output_status", "outputs"]);
+        apply_query(
+            &mut rows,
+            "output_status",
+            Ok(serde_json::json!({ "applied": "speaker" })),
+        );
+        match &rows[0].control {
+            RowControl::Select {
+                options,
+                index,
+                live,
+                ..
+            } => {
+                assert_eq!(options[*index].value, "speaker");
+                assert_eq!(
+                    live.as_ref().map(|live| live.saved.as_str()),
+                    Some("default")
+                );
+            }
+            other => panic!("expected select, got {other:?}"),
+        }
+        assert_eq!(
+            merged_config(&serde_json::json!({}), &rows),
+            serde_json::json!({ "output": { "device": "default" } }),
+            "a live move must never overwrite the saved value"
+        );
+    }
+
+    #[test]
+    fn live_select_answers_insert_an_unknown_value_and_select_it() {
+        let mut rows = live_select_rows();
+        apply_query(
+            &mut rows,
+            "output_status",
+            Ok(serde_json::json!({ "applied": "alsa_output.usb_headset" })),
+        );
+        match &rows[0].control {
+            RowControl::Select { options, index, .. } => {
+                assert_eq!(*index, 0, "an unknown live value joins the front");
+                assert_eq!(options[*index].value, "alsa_output.usb_headset");
+                assert_eq!(options[*index].label, "alsa_output.usb_headset");
+            }
+            other => panic!("expected select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn null_and_failed_live_select_answers_leave_the_displayed_option_alone() {
+        let cases = [
+            Ok(serde_json::json!({ "applied": null })),
+            Ok(serde_json::json!({ "applied": 42 })),
+            Ok(serde_json::json!({})),
+            Err("unavailable".to_string()),
+        ];
+        for result in cases {
+            let mut rows = live_select_rows();
+            let label = format!("{result:?}");
+            apply_query(&mut rows, "output_status", result);
+            assert_eq!(live_select_displayed(&rows), "default", "result: {label}");
+        }
+    }
+
+    #[test]
+    fn option_query_answers_after_a_live_move_keep_the_live_option() {
+        let mut rows = live_select_rows();
+        apply_query(
+            &mut rows,
+            "output_status",
+            Ok(serde_json::json!({ "applied": "alsa_output.usb_headset" })),
+        );
+        apply_query(
+            &mut rows,
+            "outputs",
+            Ok(serde_json::json!([
+                { "value": "default", "label": "System Default" },
+                { "value": "alsa_output.usb_headset", "label": "USB Headset" }
+            ])),
+        );
+        assert_eq!(live_select_displayed(&rows), "alsa_output.usb_headset");
+        match &rows[0].control {
+            RowControl::Select {
+                options,
+                index,
+                live,
+                ..
+            } => {
+                assert_eq!(
+                    options[*index].value, "alsa_output.usb_headset",
+                    "an options answer must re-find the live option"
+                );
+                assert_eq!(
+                    live.as_ref().map(|live| live.saved.as_str()),
+                    Some("default")
+                );
+            }
+            other => panic!("expected select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_without_active_query_ignores_other_queries() {
+        const PLAIN_SPEC: &str = r#"
+schema_version = 1
+
+[field.mode]
+type = "select"
+config_key = "mode"
+label = "Mode"
+default = "compact"
+options = ["compact", "wide"]
+query = "modes"
+"#;
+        let spec = qol_config::contract::parse_spec_str(PLAIN_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved, 0);
+        assert_eq!(runtime_query_names(&rows), ["modes"]);
+        apply_query(
+            &mut rows,
+            "output_status",
+            Ok(serde_json::json!({ "applied": "wide" })),
+        );
+        assert_eq!(live_select_displayed(&rows), "compact");
+        assert_eq!(
+            merged_config(&serde_json::json!({}), &rows),
+            serde_json::json!({ "mode": "compact" })
+        );
+    }
+
     #[test]
     fn merged_config_preserves_fields_without_rows() {
         let base = serde_json::json!({
@@ -1929,6 +2200,7 @@ query = "managed_device_options"
                     options: vec![option("hold_to_switch", "Hold"), option("sticky", "Sticky")],
                     index: 1,
                     dynamic: None,
+                    live: None,
                 },
             },
             Row {
@@ -1950,6 +2222,7 @@ query = "managed_device_options"
                     min: None,
                     max: None,
                     step: Some(1.0),
+                    live: None,
                 },
             },
         ];
@@ -1960,6 +2233,81 @@ query = "managed_device_options"
                 "display": { "card_background_color": "aabbcc", "max_columns": 4 }
             })
         );
+    }
+
+    const LIVE_NUMBER_SPEC: &str = r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+label = "Volume"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#;
+
+    fn live_number_rows() -> Vec<Row> {
+        let spec = qol_config::contract::parse_spec_str(LIVE_NUMBER_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        rows_from_resolved(&resolved, 0)
+    }
+
+    fn live_number_value(rows: &[Row]) -> f64 {
+        match &rows[0].control {
+            RowControl::Number { value, .. } => *value,
+            other => panic!("expected number, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_live_number_follows_its_query_and_is_never_saved() {
+        let mut rows = live_number_rows();
+        assert_eq!(runtime_query_names(&rows), ["volume"]);
+        apply_query(&mut rows, "volume", Ok(serde_json::json!({ "volume": 35 })));
+        assert_eq!(live_number_value(&rows), 35.0);
+        assert_eq!(
+            merged_config(&serde_json::json!({}), &rows),
+            serde_json::json!({}),
+            "a live number is set through its action, never written to the config"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_failed_live_number_answer_keeps_the_last_value() {
+        let mut rows = live_number_rows();
+        apply_query(&mut rows, "volume", Ok(serde_json::json!({ "volume": 35 })));
+        for answer in [
+            Ok(serde_json::json!({ "volume": null })),
+            Ok(serde_json::json!({})),
+            Err("the daemon is not running".to_string()),
+        ] {
+            apply_query(&mut rows, "volume", answer);
+            assert_eq!(live_number_value(&rows), 35.0);
+        }
+    }
+
+    #[test]
+    fn a_live_number_being_changed_is_not_snapped_back_by_a_stale_answer() {
+        let mut rows = live_number_rows();
+        apply_query(&mut rows, "volume", Ok(serde_json::json!({ "volume": 35 })));
+        if let RowControl::Number { value, .. } = &mut rows[0].control {
+            *value = 60.0;
+        }
+        apply_runtime_query(
+            &mut rows,
+            "volume",
+            Ok(serde_json::json!({ "volume": 35 })),
+            &|index, id| index == 0 && id == "volume",
+        );
+        assert_eq!(live_number_value(&rows), 60.0);
+        apply_query(&mut rows, "volume", Ok(serde_json::json!({ "volume": 60 })));
+        assert_eq!(live_number_value(&rows), 60.0);
     }
 
     #[test]
@@ -1976,6 +2324,7 @@ query = "managed_device_options"
                 min: None,
                 max: None,
                 step: Some(1.0),
+                live: None,
             };
             assert_eq!(row_value_json(&control), Some(expected), "value: {value}");
         }
@@ -2534,7 +2883,7 @@ default = true
                 .unwrap_or_else(|error| panic!("{plugin}: {error:?}"));
             contracts.push((plugin, spec));
         }
-        assert_eq!(contracts.len(), 16, "expected 16 plugin contracts");
+        assert_eq!(contracts.len(), 17, "expected 17 plugin contracts");
         let mut unsupported = Vec::new();
         for (plugin, spec) in &contracts {
             let resolved = qol_config::normalized::resolve_config(spec, &serde_json::json!({}))

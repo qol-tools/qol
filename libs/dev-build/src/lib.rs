@@ -41,12 +41,7 @@ pub fn configure_dev_cargo(command: &mut std::process::Command) {
 
 pub fn dev_feature_flags(root: &Path) -> Result<Vec<String>, String> {
     let mut flags = workspace_dev_features(root).map_err(|error| error.to_string())?;
-    if root
-        .join("apps")
-        .join("qol-tray")
-        .join("Cargo.toml")
-        .is_file()
-    {
+    if root.join("apps").join("tray").join("Cargo.toml").is_file() {
         for feature in Platform.tray_dev_features().split(',') {
             flags.push(format!("qol-tray/{feature}"));
         }
@@ -68,7 +63,7 @@ mod tests {
     #[test]
     fn dev_feature_flags_append_tray_flags_with_tray_manifest() {
         let tmp = tempfile::tempdir().unwrap();
-        let tray = tmp.path().join("apps").join("qol-tray");
+        let tray = tmp.path().join("apps").join("tray");
         std::fs::create_dir_all(&tray).unwrap();
         std::fs::write(tray.join("Cargo.toml"), "[package]\nname = \"qol-tray\"\n").unwrap();
         let flags = dev_feature_flags(tmp.path()).unwrap();

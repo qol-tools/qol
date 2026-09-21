@@ -28,6 +28,10 @@ runs:
         targets: ${{ inputs.targets }}
         components: ${{ inputs.components }}
 
+    - name: Key the build cache on the Cargo profiles
+      shell: bash
+      run: echo "RUST_PROFILES_HASH=$(sed -n '/^\[profile/,$p' Cargo.toml | git hash-object --stdin)" >> "${GITHUB_ENV}"
+
     - name: Restore or save build cache
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:

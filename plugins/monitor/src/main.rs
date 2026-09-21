@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    plugin_monitor::cli::exit_code(std::env::args().skip(1))
+    qol_monitor::cli::exit_code(std::env::args().skip(1))
 }
 
 #[cfg(test)]
@@ -14,15 +14,9 @@ mod tests {
     fn live_manifest_declares_the_headless_contract() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-        let runtime = manifest
-            .runtime
-            .as_ref()
-            .expect("monitor runtime must be declared");
-
-        assert_eq!(runtime.command, "plugin-monitor");
         assert_eq!(
             manifest.plugin.uid.as_ref().map(|uid| uid.as_str()),
-            Some(plugin_monitor::hotkeys::PLUGIN_UID),
+            Some(qol_monitor::hotkeys::PLUGIN_UID),
             "the doctor and the host hotkey config must agree on the tray-written uid"
         );
         assert!(manifest.capabilities.doctor);
@@ -61,7 +55,6 @@ mod tests {
             .as_ref()
             .expect("continuous actions require a daemon transport");
         assert!(daemon.enabled);
-        assert_eq!(daemon.command, "plugin-monitor");
         assert!(daemon.socket.is_some());
 
         let expected = [

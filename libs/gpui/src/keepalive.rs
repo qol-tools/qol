@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn every_title_this_module_builds_is_recognized_again() {
-        for app_id in [Some("plugin-cli-sessions"), Some("qol-tray-launcher"), None] {
+        for app_id in [Some("qol-cli-sessions"), Some("qol-tray-launcher"), None] {
             let title = keepalive_title(app_id, 61790);
             assert!(is_keepalive_title(&title), "title: {title}");
         }

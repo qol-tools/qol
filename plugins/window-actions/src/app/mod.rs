@@ -4,6 +4,7 @@ use std::time::Duration;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::DaemonRequest;
 
+use crate::cli::PLUGIN_ID;
 use crate::config::load_config;
 use crate::diagnostics::ActionTimer;
 use crate::glide::{Direction, Phase};
@@ -102,7 +103,7 @@ impl Runtime {
             }
             Command::Settings => {
                 if let Err(error) = (self.open_settings)() {
-                    eprintln!("[window-actions] failed to open settings page: {error}");
+                    eprintln!("[{PLUGIN_ID}] failed to open settings page: {error}");
                 }
                 true
             }
@@ -149,7 +150,7 @@ impl Runtime {
 pub(crate) fn run() -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&CONFIG, tx, parse_request) {
-        return Err("Failed to start window-actions daemon listener".into());
+        return Err(format!("Failed to start {PLUGIN_ID} daemon listener"));
     }
     trace_daemon_lifecycle("start");
 

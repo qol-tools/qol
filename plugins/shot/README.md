@@ -2,13 +2,13 @@
 
 # QoL Shot
 
-A [QoL Tray](../../apps/qol-tray) plugin for screenshots and screen recordings.
+A [QoL Tray](../../apps/tray) plugin for screenshots and screen recordings.
 
 </div>
 
 ## Quick start
 
-Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/tray) plugin store.
 
 ## About
 

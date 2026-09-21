@@ -87,7 +87,7 @@ def candidate_plan(root: Path, tags: list[ReleaseTag]) -> dict:
     if len(host_tags) > 1:
         raise ValueError("only one qol-tray candidate is allowed")
     if host_tags:
-        actual = package_version(root / "apps/qol-tray/Cargo.toml")
+        actual = package_version(root / "apps/tray/Cargo.toml")
         expected = host_tags[0].version
         if actual != expected:
             raise ValueError(

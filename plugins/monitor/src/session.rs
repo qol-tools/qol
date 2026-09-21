@@ -8,6 +8,7 @@ use qol_windowing::display::{DisplayHandle, DisplayPlacement, DisplaySnapshot};
 
 use crate::display_color;
 use crate::display_color::backends::{AppletControl, NoAppletControl};
+use crate::hotkeys::PLUGIN_ID;
 use crate::monitor::night::Tint;
 use crate::monitor::{BrightnessSource, BrightnessState, DisplayControl, GammaTable, MonitorError};
 
@@ -423,7 +424,7 @@ impl SessionStore {
                 Ok(None) => {}
                 Err(error) => {
                     eprintln!(
-                        "[plugin-monitor] skipping unreadable snapshot {}: {error:#}",
+                        "[{PLUGIN_ID}] skipping unreadable snapshot {}: {error:#}",
                         path.display()
                     );
                     inventory.unreadable.push(path);
@@ -864,7 +865,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 .is_err()
             {
                 eprintln!(
-                    "[plugin-monitor] failed to mark snapshot {} for reload handoff",
+                    "[{PLUGIN_ID}] failed to mark snapshot {} for reload handoff",
                     display_id
                 );
             }
@@ -884,7 +885,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             })
             .is_err()
         {
-            eprintln!("[plugin-monitor] failed to mark the layout snapshot for reload handoff");
+            eprintln!("[{PLUGIN_ID}] failed to mark the layout snapshot for reload handoff");
         }
     }
 
@@ -982,7 +983,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             if snapshot.last_value != snapshot.value {
                 if let Err(error) = self.control.set_brightness(handle, snapshot.value) {
                     eprintln!(
-                        "[plugin-monitor] restore of {} failed: {error}",
+                        "[{PLUGIN_ID}] restore of {} failed: {error}",
                         handle.connector()
                     );
                     return RestoreOutcome::Failed;
@@ -998,7 +999,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             Ok(()) => RestoreOutcome::Restored,
             Err(error) => {
                 eprintln!(
-                    "[plugin-monitor] restore of {} failed: {error}",
+                    "[{PLUGIN_ID}] restore of {} failed: {error}",
                     handle.connector()
                 );
                 RestoreOutcome::Failed
@@ -1044,7 +1045,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     pub fn restore_all(&self, mode: RestoreMode) -> RestoreReport {
         let mut report = RestoreReport::default();
         let Ok(inventory) = self.store.load_all() else {
-            eprintln!("[plugin-monitor] session directory is unreadable; restore skipped");
+            eprintln!("[{PLUGIN_ID}] session directory is unreadable; restore skipped");
             return report;
         };
         report.unreadable = inventory.unreadable.len();
@@ -1137,7 +1138,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             Ok(()) => RestoreOutcome::Restored,
             Err(error) => {
                 eprintln!(
-                    "[plugin-monitor] gamma re-assert failed on {}: {error}",
+                    "[{PLUGIN_ID}] gamma re-assert failed on {}: {error}",
                     handle.connector()
                 );
                 RestoreOutcome::Failed
@@ -1233,7 +1234,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         snapshot.applet_claim = None;
         if let Err(error) = self.store.write_snapshot(snapshot) {
             eprintln!(
-                "[plugin-monitor] failed to clear the applet claim for {}: {error:#}",
+                "[{PLUGIN_ID}] failed to clear the applet claim for {}: {error:#}",
                 snapshot.display_id
             );
         }
@@ -1369,7 +1370,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             }
             Err(error) => {
                 eprintln!(
-                    "[plugin-monitor] gamma re-assert failed on {}: {error}",
+                    "[{PLUGIN_ID}] gamma re-assert failed on {}: {error}",
                     handle.connector()
                 );
                 return Err(error);
@@ -1406,7 +1407,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 return report;
             }
             Err(error) => {
-                eprintln!("[plugin-monitor] layout snapshot is unreadable: {error:#}");
+                eprintln!("[{PLUGIN_ID}] layout snapshot is unreadable: {error:#}");
                 report.record(RestoreOutcome::Failed);
                 return report;
             }
@@ -1427,7 +1428,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             Ok(current) => current,
             Err(error) => {
                 eprintln!(
-                    "[plugin-monitor] display state is unavailable; layout restore skipped: {error}"
+                    "[{PLUGIN_ID}] display state is unavailable; layout restore skipped: {error}"
                 );
                 report.record(RestoreOutcome::Failed);
                 return report;
@@ -1444,7 +1445,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 Ok(modes) => modes,
                 Err(error) => {
                     eprintln!(
-                        "[plugin-monitor] mode list for {} is unreadable: {error}",
+                        "[{PLUGIN_ID}] mode list for {} is unreadable: {error}",
                         handle.connector()
                     );
                     continue;
@@ -1465,7 +1466,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 });
             let Some(selected) = selected else {
                 eprintln!(
-                    "[plugin-monitor] recorded mode for {} is no longer available",
+                    "[{PLUGIN_ID}] recorded mode for {} is no longer available",
                     handle.connector()
                 );
                 continue;
@@ -1478,7 +1479,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                     qol_runtime::probe::quoted(&error.to_string(), 160)
                 );
                 eprintln!(
-                    "[plugin-monitor] mode restore failed on {}: {error}",
+                    "[{PLUGIN_ID}] mode restore failed on {}: {error}",
                     handle.connector()
                 );
             }
@@ -1511,7 +1512,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             Ok(fresh) => fresh,
             Err(error) => {
                 eprintln!(
-                    "[plugin-monitor] display state is unavailable; layout restore skipped: {error}"
+                    "[{PLUGIN_ID}] display state is unavailable; layout restore skipped: {error}"
                 );
                 report.record(RestoreOutcome::Failed);
                 return report;
@@ -1531,21 +1532,21 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 "event=rejected op=restore display=none error=\"{}\"",
                 qol_runtime::probe::quoted(&error.to_string(), 160)
             );
-            eprintln!("[plugin-monitor] layout restore failed: {error}");
+            eprintln!("[{PLUGIN_ID}] layout restore failed: {error}");
             report.record(RestoreOutcome::Failed);
             return report;
         }
         let applied = match self.control.snapshot() {
             Ok(applied) => applied,
             Err(error) => {
-                eprintln!("[plugin-monitor] the restored layout could not be read back: {error}");
+                eprintln!("[{PLUGIN_ID}] the restored layout could not be read back: {error}");
                 report.record(RestoreOutcome::Failed);
                 return report;
             }
         };
         if !placements_match(&applied, &placements) {
             eprintln!(
-                "[plugin-monitor] the restored layout does not match the snapshot; keeping it for the next attempt"
+                "[{PLUGIN_ID}] the restored layout does not match the snapshot; keeping it for the next attempt"
             );
             report.record(RestoreOutcome::Failed);
             return report;
@@ -1561,7 +1562,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         }
         if let Err(error) = self.store.delete_layout() {
             eprintln!(
-                "[plugin-monitor] restored the layout but could not clear the snapshot: {error:#}"
+                "[{PLUGIN_ID}] restored the layout but could not clear the snapshot: {error:#}"
             );
         }
         report.record(RestoreOutcome::Restored);

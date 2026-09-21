@@ -1,5 +1,5 @@
-use plugin_cli_sessions::registry::summary_for;
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::registry::summary_for;
+use qol_cli_sessions::status::Status;
 use qol_gpui::theme::{CliSessionsPalette, DARK_SYSTEM, LIGHT_SYSTEM};
 use qol_terminal_sessions::cli::claude_tool;
 

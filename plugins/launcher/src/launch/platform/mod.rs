@@ -33,26 +33,23 @@ mod tests {
 
     #[test]
     fn daemon_exec_args_accepts_qol_action_shape() {
-        let exec = args(&["/opt/qol-tray", "exec", "plugin-monitor", "settings"]);
+        let exec = args(&["/opt/qol-tray", "exec", "qol-monitor", "settings"]);
 
-        assert_eq!(
-            daemon_exec_args(&exec),
-            Some(("plugin-monitor", "settings"))
-        );
+        assert_eq!(daemon_exec_args(&exec), Some(("qol-monitor", "settings")));
     }
 
     #[test]
     fn daemon_exec_args_rejects_wrong_arg_counts() {
         assert_eq!(daemon_exec_args(&args(&["/opt/qol-tray"])), None);
         assert_eq!(
-            daemon_exec_args(&args(&["/opt/qol-tray", "exec", "plugin-monitor"])),
+            daemon_exec_args(&args(&["/opt/qol-tray", "exec", "qol-monitor"])),
             None
         );
         assert_eq!(
             daemon_exec_args(&args(&[
                 "/opt/qol-tray",
                 "exec",
-                "plugin-monitor",
+                "qol-monitor",
                 "settings",
                 "extra",
             ])),
@@ -63,21 +60,11 @@ mod tests {
     #[test]
     fn daemon_exec_args_rejects_non_exec_verbs() {
         assert_eq!(
-            daemon_exec_args(&args(&[
-                "/opt/qol-tray",
-                "open",
-                "plugin-monitor",
-                "settings"
-            ])),
+            daemon_exec_args(&args(&["/opt/qol-tray", "open", "qol-monitor", "settings"])),
             None
         );
         assert_eq!(
-            daemon_exec_args(&args(&[
-                "/opt/qol-tray",
-                "EXEC",
-                "plugin-monitor",
-                "settings"
-            ])),
+            daemon_exec_args(&args(&["/opt/qol-tray", "EXEC", "qol-monitor", "settings"])),
             None
         );
     }

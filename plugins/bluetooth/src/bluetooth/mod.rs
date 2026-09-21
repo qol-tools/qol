@@ -4,7 +4,6 @@ use serde::Serialize;
 
 use anyhow::{bail, Result};
 
-pub mod audio_watch;
 pub mod retry;
 
 pub fn normalize_address(value: &str) -> Result<String> {
@@ -112,6 +111,10 @@ impl DiscoveryState {
     pub fn start(&mut self) {
         self.addresses.clear();
         self.devices.clear();
+        self.searching = true;
+    }
+
+    pub fn request(&mut self) {
         self.searching = true;
     }
 

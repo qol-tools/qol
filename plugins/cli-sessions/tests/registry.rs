@@ -1,6 +1,6 @@
-use plugin_cli_sessions::host::kitty_session_id;
-use plugin_cli_sessions::registry::{meaningful_name, summary_for, Registry, SessionState};
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::host::kitty_session_id;
+use qol_cli_sessions::registry::{meaningful_name, summary_for, Registry, SessionState};
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::cli::{claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool};
 use qol_terminal_sessions::SessionId;
 
@@ -214,7 +214,7 @@ fn settle_timers_are_never_serialized() {
 
 #[test]
 fn every_state_reorders_live_without_changing_selected_session() {
-    use plugin_cli_sessions::selection::Selection;
+    use qol_cli_sessions::selection::Selection;
 
     let expected = [
         Status::NeedsYou,

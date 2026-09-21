@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use qol_headless::DoctorCheckResult;
 use qol_hotkeys::grammar;
 
-pub const PLUGIN_ID: &str = "plugin-monitor";
+pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 pub const PLUGIN_UID: &str = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -126,26 +126,20 @@ mod tests {
     fn parses_the_host_hotkey_config_shape() {
         let json = r#"{
             "hotkeys": [
-                {"id": "h1", "key": "ctrl+shift+b", "plugin_uid": "plugin-monitor", "action": "brightness-up", "enabled": true},
-                {"id": "h2", "key": "super+f9", "plugin_id": "plugin-monitor", "action": "brightness-down", "enabled": true}
+                {"id": "h1", "key": "ctrl+shift+b", "plugin_uid": "qol-monitor", "action": "brightness-up", "enabled": true},
+                {"id": "h2", "key": "super+f9", "plugin_id": "qol-monitor", "action": "brightness-down", "enabled": true}
             ]
         }"#;
         let config: HostHotkeyConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.hotkeys.len(), 2);
-        assert!(config.hotkeys[1].plugin_uid == "plugin-monitor");
+        assert!(config.hotkeys[1].plugin_uid == "qol-monitor");
     }
 
     #[test]
     fn duplicate_chords_are_detected_across_aliases_and_case() {
         let config = HostHotkeyConfig {
             hotkeys: vec![
-                binding(
-                    "h1",
-                    "ctrl+shift+b",
-                    "plugin-monitor",
-                    "brightness-up",
-                    true,
-                ),
+                binding("h1", "ctrl+shift+b", "qol-monitor", "brightness-up", true),
                 binding(
                     "h2",
                     "CTRL + SHIFT + B",
@@ -165,13 +159,7 @@ mod tests {
     fn disabled_bindings_do_not_collide() {
         let config = HostHotkeyConfig {
             hotkeys: vec![
-                binding(
-                    "h1",
-                    "ctrl+shift+b",
-                    "plugin-monitor",
-                    "brightness-up",
-                    true,
-                ),
+                binding("h1", "ctrl+shift+b", "qol-monitor", "brightness-up", true),
                 binding("h2", "ctrl+shift+b", "plugin-other", "other-action", false),
             ],
         };
@@ -182,13 +170,7 @@ mod tests {
     fn monitor_bindings_filter_by_plugin_id_or_uid() {
         let config = HostHotkeyConfig {
             hotkeys: vec![
-                binding(
-                    "h1",
-                    "ctrl+shift+b",
-                    "plugin-monitor",
-                    "brightness-up",
-                    true,
-                ),
+                binding("h1", "ctrl+shift+b", "qol-monitor", "brightness-up", true),
                 binding("h2", "ctrl+shift+b", "plugin-other", "other-action", true),
                 binding("h3", "ctrl+shift+d", PLUGIN_UID, "brightness-down", true),
                 binding("h4", "ctrl+shift+f", "plugin-foreign", "other-action", true),
@@ -213,20 +195,8 @@ mod tests {
             &hotkeys,
             serde_json::to_string(&HostHotkeyConfig {
                 hotkeys: vec![
-                    binding(
-                        "h1",
-                        "ctrl+shift+b",
-                        "plugin-monitor",
-                        "brightness-up",
-                        true,
-                    ),
-                    binding(
-                        "h2",
-                        "ctrl+shift+d",
-                        "plugin-monitor",
-                        "brightness-down",
-                        true,
-                    ),
+                    binding("h1", "ctrl+shift+b", "qol-monitor", "brightness-up", true),
+                    binding("h2", "ctrl+shift+d", "qol-monitor", "brightness-down", true),
                 ],
             })
             .unwrap(),
@@ -243,7 +213,7 @@ mod tests {
                 hotkeys: vec![binding(
                     "h1",
                     "ctrl+shift+b",
-                    "plugin-monitor",
+                    "qol-monitor",
                     "brightness-up",
                     true,
                 )],
@@ -269,13 +239,7 @@ mod tests {
             &hotkeys,
             serde_json::to_string(&HostHotkeyConfig {
                 hotkeys: vec![
-                    binding(
-                        "h1",
-                        "ctrl+shift+b",
-                        "plugin-monitor",
-                        "brightness-up",
-                        true,
-                    ),
+                    binding("h1", "ctrl+shift+b", "qol-monitor", "brightness-up", true),
                     binding("h2", "ctrl+shift+b", "plugin-other", "other-action", true),
                 ],
             })

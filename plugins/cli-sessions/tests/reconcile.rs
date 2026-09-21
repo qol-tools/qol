@@ -1,14 +1,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use plugin_cli_sessions::attention::{Evidence, GRACE_SECS};
-use plugin_cli_sessions::daemon::reconcile::{
+use qol_cli_sessions::attention::{Evidence, GRACE_SECS};
+use qol_cli_sessions::daemon::reconcile::{
     tick, tick_with_caches, transition_line, ReconcileCaches,
 };
-use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
-use plugin_cli_sessions::registry::{Registry, SessionState};
-use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
+use qol_cli_sessions::registry::{Registry, SessionState};
+use qol_cli_sessions::service::{NoServiceProbe, ServiceProbe};
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::cli::{
     codex_tool, generic_tool, kimi_tool, CliActivityEvidence, CliRuntimeState,
     CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionInterpreter,
@@ -1144,7 +1144,7 @@ fn transition_diagnostics_are_redacted_and_carry_the_reason() {
         "claude",
         Status::Working,
         Status::YourTurn,
-        plugin_cli_sessions::attention::Reason::GraceCompleted,
+        qol_cli_sessions::attention::Reason::GraceCompleted,
         5,
         &evidence,
     );

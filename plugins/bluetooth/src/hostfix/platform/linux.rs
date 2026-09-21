@@ -19,14 +19,7 @@ pub(crate) fn service_journal() -> Option<String> {
 }
 
 pub(crate) fn audio_server() -> Option<String> {
-    let output = Command::new("pactl").arg("info").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| line.strip_prefix("Server Name:"))
-        .map(|name| name.trim().to_string())
+    qol_audio::control::server_facts().ok()?.name
 }
 
 pub(crate) fn process_running(process: &str) -> bool {

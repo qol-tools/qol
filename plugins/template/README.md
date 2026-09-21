@@ -2,7 +2,7 @@
 
 # Plugin Template
 
-A starting point for building [QoL Tray](../../apps/qol-tray) plugins.
+A starting point for building [QoL Tray](../../apps/tray) plugins.
 
 </div>
 

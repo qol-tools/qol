@@ -2,7 +2,7 @@
 
 # QoL Runtime
 
-Protocol types and client for the [QoL Tray](../../apps/qol-tray) platform state server.
+Protocol types and client for the [QoL Tray](../../apps/tray) platform state server.
 
 </div>
 

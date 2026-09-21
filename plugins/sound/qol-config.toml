@@ -1,0 +1,40 @@
+schema_version = 1
+title = "Sound"
+description = "Where sound plays on this computer."
+
+[section.output]
+label = "Output"
+description = "The output every app plays on."
+
+[field.volume]
+type = "number"
+label = "Volume"
+description = "How loud the output that is playing is."
+section = "output"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "wide_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+
+[field.output_device]
+type = "select"
+config_key = "output.device"
+label = "Sound output"
+description = "Where sound plays right now. Pick one to switch; System Default leaves the output alone."
+section = "output"
+default = "default"
+query = "outputs"
+active_query = "output_status"
+active_value_from = "shown"
+lookup_label = "outputs"
+card_description = "Where sound plays."
+
+[field.output_device.option_labels]
+default = "System Default"
+
+[field.output_device.option_pictures]
+default = "speaker-default"

@@ -1,7 +1,7 @@
 use gpui::{point, px, size, Bounds};
-use plugin_cli_sessions::collapse::{reanchor_expanded, strip_bounds, CollapseState, STRIP_HEIGHT};
-use plugin_cli_sessions::placement::Corner;
 use proptest::prelude::*;
+use qol_cli_sessions::collapse::{reanchor_expanded, strip_bounds, CollapseState, STRIP_HEIGHT};
+use qol_cli_sessions::placement::Corner;
 
 fn expanded_bounds() -> Bounds<gpui::Pixels> {
     Bounds::new(point(px(120.0), px(80.0)), size(px(360.0), px(400.0)))

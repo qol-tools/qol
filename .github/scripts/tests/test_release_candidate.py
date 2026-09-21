@@ -37,7 +37,7 @@ def write_plugin(
 
 
 def write_host(root: Path, version: str):
-    crate = root / "apps/qol-tray"
+    crate = root / "apps/tray"
     crate.mkdir(parents=True)
     (crate / "Cargo.toml").write_text(
         f'[package]\nname = "qol-tray"\nversion = "{version}"\n'
@@ -47,19 +47,19 @@ def write_host(root: Path, version: str):
 class ReleaseTagTests(unittest.TestCase):
     def test_parses_host_and_plugin_tags(self):
         tags = rc.parse_release_tags(
-            "plugin-alt-tab-v1.2.3 qol-tray-v3.41.1"
+            "qol-alt-tab-v1.2.3 qol-tray-v3.41.1"
         )
 
         self.assertEqual(
             [(tag.unit_id, tag.version) for tag in tags],
-            [("plugin-alt-tab", "1.2.3"), ("qol-tray", "3.41.1")],
+            [("qol-alt-tab", "1.2.3"), ("qol-tray", "3.41.1")],
         )
 
     def test_rejects_invalid_and_duplicate_tags(self):
         cases = [
-            "plugin-alt-tab-v1.2",
-            "plugin-alt-tab-v1.2.3;touch-pwned",
-            "plugin-alt-tab-v1.2.3 plugin-alt-tab-v1.2.3",
+            "qol-alt-tab-v1.2",
+            "qol-alt-tab-v1.2.3;touch-pwned",
+            "qol-alt-tab-v1.2.3 qol-alt-tab-v1.2.3",
         ]
         for value in cases:
             with self.subTest(value=value):

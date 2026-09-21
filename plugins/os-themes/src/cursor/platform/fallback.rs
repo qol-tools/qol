@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 
-use crate::config::Config;
+use crate::config::{Config, PLUGIN_ID};
 use crate::cursor::{CursorEffect, RunControl};
 
 use super::CursorPlatform;
@@ -27,7 +27,7 @@ impl CursorEffect for UnsupportedEffect {
     fn run(&self, _config: &Config, control: &dyn RunControl) -> Result<()> {
         let _ = control.should_stop();
         Err(anyhow!(
-            "plugin-os-themes: cursor effects are not implemented on this platform"
+            "{PLUGIN_ID}: cursor effects are not implemented on this platform"
         ))
     }
 }

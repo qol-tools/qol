@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / ".github" / "scripts"))
+
+import plugin_version
+
+ZERO_SHA = "0" * 40
+MAIN_REF = "refs/heads/main"
+OVERRIDE_ENV = "QOL_ALLOW_WIDE_RELEASE"
+
+
+def commit_exists(sha: str) -> bool:
+    probe = subprocess.run(
+        ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=ROOT, capture_output=True
+    )
+    return probe.returncode == 0
+
+
+def released_units(rev_range: str) -> tuple[list[str], int]:
+    packages = plugin_version.load_packages(ROOT)
+    units = plugin_version.discover_release_units(ROOT, packages, None)
+    commits = plugin_version.load_commits(ROOT, rev_range)
+    caches = ({}, {}, {}, {})
+    released = [
+        unit.id
+        for unit in units
+        if any(
+            plugin_version.is_releasable_commit(commit)
+            for commit in plugin_version.relevant_commits(
+                ROOT, commits, unit, packages, *caches
+            )
+        )
+    ]
+    return released, len(units)
+
+
+def main() -> int:
+    for line in sys.stdin:
+        fields = line.split()
+        if len(fields) != 4:
+            continue
+        _, local_sha, remote_ref, remote_sha = fields
+        if remote_ref != MAIN_REF or ZERO_SHA in (local_sha, remote_sha):
+            continue
+        if not commit_exists(remote_sha):
+            continue
+        released, total = released_units(f"{remote_sha}..{local_sha}")
+        if not released:
+            continue
+        print(
+            f"pre-push: releases {len(released)} of {total} units: {', '.join(released)}",
+            file=sys.stderr,
+        )
+        if len(released) * 2 >= total and os.environ.get(OVERRIDE_ENV) != "1":
+            print(
+                f"\n  pre-push rejected: this push re-releases {len(released)} of {total} units\n"
+                "  fix    : keep the change out of shared build config and shared libs,\n"
+                "           or get the owner's go-ahead for a wide release\n"
+                f"  then   : {OVERRIDE_ENV}=1 git push\n",
+                file=sys.stderr,
+            )
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

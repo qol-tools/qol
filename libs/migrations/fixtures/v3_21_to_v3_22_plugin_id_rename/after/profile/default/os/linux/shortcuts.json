@@ -1,0 +1,19 @@
+{
+  "shortcuts": [
+    {
+      "id": "qol-lights-toggle",
+      "name": "Toggle Lights",
+      "enabled": false,
+      "export_to_launcher": true,
+      "source": { "type": "plugin_manifest", "plugin_id": "qol-lights", "shortcut_id": "toggle" },
+      "action": { "type": "plugin_action", "plugin_id": "qol-lights", "action": "toggle" }
+    },
+    {
+      "id": "docs",
+      "name": "Docs",
+      "enabled": true,
+      "export_to_launcher": false,
+      "action": { "type": "open_url", "url": "https://example.test/docs" }
+    }
+  ]
+}

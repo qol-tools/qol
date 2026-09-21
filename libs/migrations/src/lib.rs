@@ -15,6 +15,7 @@ mod v3_17_to_v3_18_plugin_configs_by_os;
 mod v3_18_to_v3_19_declared_plugin_id;
 mod v3_19_to_v3_20_plugin_uid;
 mod v3_20_to_v3_21_keyremap_delete_alias;
+mod v3_21_to_v3_22_plugin_id_rename;
 
 pub use v3_15_to_v3_16_gist_to_repo::V3_15ToV3_16GistToRepo;
 pub use v3_16_to_v3_17_device_to_os::V3_16ToV3_17DeviceToOs;
@@ -22,6 +23,7 @@ pub use v3_17_to_v3_18_plugin_configs_by_os::V3_17ToV3_18PluginConfigsByOs;
 pub use v3_18_to_v3_19_declared_plugin_id::V3_18ToV3_19DeclaredPluginId;
 pub use v3_19_to_v3_20_plugin_uid::V3_19ToV3_20PluginUid;
 pub use v3_20_to_v3_21_keyremap_delete_alias::V3_20ToV3_21KeyremapDeleteAlias;
+pub use v3_21_to_v3_22_plugin_id_rename::{renamed_plugin_id, V3_21ToV3_22PluginIdRename};
 
 pub use fs_util::archive_path;
 
@@ -105,6 +107,9 @@ impl PreFlightRegistry {
         ));
         registry.register(Box::new(
             v3_20_to_v3_21_keyremap_delete_alias::V3_20ToV3_21KeyremapDeleteAlias,
+        ));
+        registry.register(Box::new(
+            v3_21_to_v3_22_plugin_id_rename::V3_21ToV3_22PluginIdRename::default_for_production(),
         ));
         registry
     }

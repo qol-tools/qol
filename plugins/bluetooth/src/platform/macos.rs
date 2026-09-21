@@ -790,7 +790,7 @@ fn run_retry_pass(
 pub fn run_daemon(mut config: ReconnectConfig) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx, parse_daemon_request) {
-        bail!("plugin-bluetooth daemon listener failed to start");
+        bail!("{} daemon listener failed to start", crate::PLUGIN_ID);
     }
 
     let mut retries: HashMap<String, RetryState> = HashMap::new();
@@ -816,7 +816,6 @@ mod tests {
             auto_reconnect: true,
             power_on_adapter: true,
             set_default_output: true,
-            auto_reclaim_on_play: true,
             retry_initial_seconds: 1.0,
             retry_max_seconds: 60.0,
         }

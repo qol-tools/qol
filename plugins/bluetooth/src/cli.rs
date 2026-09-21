@@ -10,14 +10,12 @@ use crate::bluetooth::{
 use crate::hostfix::{self, BluetoothHostFixes};
 use crate::{config, platform, PLUGIN_ID};
 
-const BINARY_NAME: &str = "plugin-bluetooth";
-
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
 }
 
 fn app() -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Inspect and reliably reconnect Bluetooth devices through the platform backend.")
         .default_command(["list"])
         .command(list_command())
@@ -56,7 +54,7 @@ fn adapter_power_command(name: &'static str, powered: bool) -> Command {
     };
     Command::new(name)
         .about(intent)
-        .usage(format!("{BINARY_NAME} {name}"))
+        .usage(format!("{PLUGIN_ID} {name}"))
         .output("The resulting adapter state.")
         .exit_behavior(
             "Exits non-zero when the Bluetooth stack or the default adapter is unavailable.",
@@ -78,7 +76,7 @@ fn adapter_power_command(name: &'static str, powered: bool) -> Command {
 fn stop_search_command() -> Command {
     Command::new("stop_search")
         .about("Stop discovery in the running Bluetooth daemon.")
-        .usage(format!("{BINARY_NAME} stop_search"))
+        .usage(format!("{PLUGIN_ID} stop_search"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero when the Bluetooth daemon is not reachable.")
         .run_plain_text(|context| {
@@ -91,7 +89,7 @@ fn stop_search_command() -> Command {
 fn search_command() -> Command {
     Command::new("search")
         .about("Search for Bluetooth devices for up to 60 seconds.")
-        .usage(format!("{BINARY_NAME} search"))
+        .usage(format!("{PLUGIN_ID} search"))
         .detail("Press Ctrl+C to stop discovery early and print the devices found.")
         .output("Paired and discovered devices ordered by connection state and signal strength.")
         .exit_behavior("Exits non-zero when discovery cannot run.")
@@ -114,7 +112,7 @@ fn search_command() -> Command {
 fn list_command() -> Command {
     Command::new("list")
         .about("List Bluetooth devices known to the default adapter.")
-        .usage(format!("{BINARY_NAME} list"))
+        .usage(format!("{PLUGIN_ID} list"))
         .output("One line per known device, or a JSON array with --json.")
         .exit_behavior(
             "Exits non-zero when the Bluetooth stack or the default adapter is unavailable.",
@@ -138,7 +136,7 @@ fn list_command() -> Command {
 fn connect_command() -> Command {
     Command::new("connect")
         .about("Pair, trust, and connect one Bluetooth device in a verified operation.")
-        .usage(format!("{BINARY_NAME} connect AA:BB:CC:DD:EE:FF"))
+        .usage(format!("{PLUGIN_ID} connect AA:BB:CC:DD:EE:FF"))
         .detail(
             "Powers on the adapter first when enabled and repairs audio devices the Bluetooth stack only knows through Bluetooth LE.",
         )
@@ -159,7 +157,7 @@ fn connect_command() -> Command {
 fn pair_command() -> Command {
     Command::new("pair")
         .about("Pair one Bluetooth device using its appropriate transport.")
-        .usage(format!("{BINARY_NAME} pair AA:BB:CC:DD:EE:FF"))
+        .usage(format!("{PLUGIN_ID} pair AA:BB:CC:DD:EE:FF"))
         .output("The resulting device state.")
         .exit_behavior("Exits non-zero when pairing or profile discovery fails.")
         .run_plain_text(|context| {
@@ -189,7 +187,7 @@ fn trust_state_command(name: &'static str, trusted: bool) -> Command {
         } else {
             "Remove trust from one paired Bluetooth device."
         })
-        .usage(format!("{BINARY_NAME} {name} AA:BB:CC:DD:EE:FF"))
+        .usage(format!("{PLUGIN_ID} {name} AA:BB:CC:DD:EE:FF"))
         .output("The resulting device state.")
         .exit_behavior("Exits non-zero when the Bluetooth stack cannot update the trust state.")
         .run_plain_text(move |context| {
@@ -207,7 +205,7 @@ fn trust_state_command(name: &'static str, trusted: bool) -> Command {
 fn disconnect_command() -> Command {
     Command::new("disconnect")
         .about("Disconnect every active profile for one Bluetooth device.")
-        .usage(format!("{BINARY_NAME} disconnect AA:BB:CC:DD:EE:FF"))
+        .usage(format!("{PLUGIN_ID} disconnect AA:BB:CC:DD:EE:FF"))
         .output("The resulting device state.")
         .exit_behavior("Exits non-zero when the Bluetooth stack cannot disconnect the device.")
         .run_plain_text(|context| {
@@ -225,7 +223,7 @@ fn disconnect_command() -> Command {
 fn reclaim_command() -> Command {
     Command::new("reclaim")
         .about("Switch a shared Bluetooth audio device back to this computer.")
-        .usage(format!("{BINARY_NAME} reclaim AA:BB:CC:DD:EE:FF"))
+        .usage(format!("{PLUGIN_ID} reclaim AA:BB:CC:DD:EE:FF"))
         .output("The address whose audio output was reclaimed.")
         .exit_behavior("Exits non-zero when no Bluetooth audio output is active for the device.")
         .run_plain_text(|context| {
@@ -248,7 +246,7 @@ fn reclaim_command() -> Command {
 fn remove_command() -> Command {
     Command::new("remove")
         .about("Remove one Bluetooth device and its pairing information.")
-        .usage(format!("{BINARY_NAME} remove AA:BB:CC:DD:EE:FF"))
+        .usage(format!("{PLUGIN_ID} remove AA:BB:CC:DD:EE:FF"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero when the Bluetooth stack cannot remove the device.")
         .run_plain_text(|context| {
@@ -261,7 +259,7 @@ fn remove_command() -> Command {
 fn reconnect_command() -> Command {
     Command::new("reconnect")
         .about("Reconnect every device in the managed-device allowlist.")
-        .usage(format!("{BINARY_NAME} reconnect"))
+        .usage(format!("{PLUGIN_ID} reconnect"))
         .output("A connection result for each managed device.")
         .exit_behavior("Exits non-zero only when the Bluetooth stack itself is unavailable.")
         .run_plain_text(|context| {
@@ -279,7 +277,7 @@ fn reconnect_command() -> Command {
 fn reconnect_trusted_command() -> Command {
     Command::new("reconnect_trusted")
         .about("Reconnect every paired, trusted, disconnected device known to this computer.")
-        .usage(format!("{BINARY_NAME} reconnect_trusted"))
+        .usage(format!("{PLUGIN_ID} reconnect_trusted"))
         .detail("This is an explicit recovery action and does not alter the automatic allowlist.")
         .output("A connection result for each eligible device.")
         .exit_behavior("Exits non-zero only when the Bluetooth stack itself is unavailable.")
@@ -298,7 +296,7 @@ fn reconnect_trusted_command() -> Command {
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the Bluetooth plugin settings in the qol settings surface.")
-        .usage(format!("{BINARY_NAME} settings"))
+        .usage(format!("{PLUGIN_ID} settings"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings surface cannot be opened.")
         .run_plain_text(|context| {
@@ -364,7 +362,7 @@ fn adapter_powered_check() -> Result<DoctorCheckResult> {
         "adapter_powered",
         format!("adapter {} is powered off", health.name),
     )
-    .with_fix(format!("run: {BINARY_NAME} reconnect_trusted")))
+    .with_fix(format!("run: {PLUGIN_ID} reconnect_trusted")))
 }
 
 fn config_readable_check() -> Result<DoctorCheckResult> {
@@ -420,7 +418,7 @@ fn host_takeover_check() -> Result<DoctorCheckResult> {
             .iter()
             .map(|manager| {
                 format!(
-                    "run: {BINARY_NAME} apply_host_fix {}",
+                    "run: {PLUGIN_ID} apply_host_fix {}",
                     hostfix::release_manager_fix_id(manager.process)
                 )
             })
@@ -437,7 +435,7 @@ fn host_takeover_check() -> Result<DoctorCheckResult> {
             "Blueman autostart is hidden by an orphaned qol ownership override",
         )
         .with_fix(format!(
-            "run: {BINARY_NAME} apply_host_fix {}",
+            "run: {PLUGIN_ID} apply_host_fix {}",
             hostfix::ORPHANED_AUTOSTART_FIX_ID
         )));
     }
@@ -450,7 +448,7 @@ fn host_takeover_check() -> Result<DoctorCheckResult> {
 fn host_fixes_command() -> Command {
     Command::new("host_fixes")
         .about("Report contextual findings about this computer's Bluetooth stack.")
-        .usage(format!("{BINARY_NAME} host_fixes"))
+        .usage(format!("{PLUGIN_ID} host_fixes"))
         .output("One line per finding, or the full payload with --json.")
         .exit_behavior("Exits non-zero only when the findings cannot be encoded.")
         .run_plain_text(|context| {
@@ -468,7 +466,7 @@ fn host_fixes_command() -> Command {
 fn apply_host_fix_command() -> Command {
     Command::new("apply_host_fix")
         .about("Apply one contextual fix to this computer's Bluetooth stack.")
-        .usage(format!("{BINARY_NAME} apply_host_fix <fix-id>"))
+        .usage(format!("{PLUGIN_ID} apply_host_fix <fix-id>"))
         .output("The applied fix summary.")
         .exit_behavior("Exits non-zero when the fix id is unknown or the fix fails.")
         .run_plain_text(|context| {

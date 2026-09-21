@@ -13,7 +13,6 @@ pub struct ReconnectConfig {
     pub auto_reconnect: bool,
     pub power_on_adapter: bool,
     pub set_default_output: bool,
-    pub auto_reclaim_on_play: bool,
     pub retry_initial_seconds: f64,
     pub retry_max_seconds: f64,
 }
@@ -44,7 +43,6 @@ mod tests {
         assert!(config.auto_reconnect);
         assert!(config.power_on_adapter);
         assert!(config.set_default_output);
-        assert!(config.auto_reclaim_on_play);
         assert_eq!(config.retry_initial_seconds, 1.0);
         assert_eq!(config.retry_max_seconds, 60.0);
     }

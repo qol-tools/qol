@@ -121,7 +121,7 @@ mod tests {
             "default/manifest.json",
             "default/core/plugins.lock.json",
             "default/core/plugin-configs/plugin-x.json",
-            "default/os/macos/plugin-configs/plugin-keyremap.json",
+            "default/os/macos/plugin-configs/qol-keyremap.json",
             "default/os/linux/hotkeys.json",
             "default/sync/backups/20260508-conflict.json",
             "work/core/plugins.lock.json",

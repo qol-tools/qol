@@ -1,7 +1,7 @@
 *.log
 .DS_Store
 target/
-plugin-lights
-plugin-lights.new
+qol-lights
+qol-lights.new
 .cargo/config.toml
 config.json

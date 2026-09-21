@@ -372,15 +372,20 @@ mod tests {
     fn the_qol_panel_survives_the_layer_filter_but_its_keepalive_window_does_not() {
         let switchable = SwitchablePanels::default();
         let cases = [
-            (PANEL_LAYER, "cli-sessions", "cli-sessions-panel", true),
+            (PANEL_LAYER, "qol-cli-sessions", "cli-sessions-panel", true),
             (
                 PANEL_LAYER,
-                "cli-sessions",
-                "plugin-cli-sessions-keepalive-61790",
+                "qol-cli-sessions",
+                "qol-cli-sessions-keepalive-61790",
                 false,
             ),
             (PANEL_LAYER, "Microsoft Teams", "Meeting controls", false),
-            (K_CG_WINDOW_LAYER_NORMAL, "cli-sessions", "anything", false),
+            (
+                K_CG_WINDOW_LAYER_NORMAL,
+                "qol-cli-sessions",
+                "anything",
+                false,
+            ),
         ];
 
         for (layer, app_name, title, expected) in cases {
@@ -395,12 +400,12 @@ mod tests {
     #[test]
     fn a_panel_the_user_removed_goes_back_to_being_filtered() {
         let switchable = SwitchablePanels::resolve(&[crate::config::SwitchablePanelOverride {
-            app: "cli-sessions".to_string(),
+            app: "qol-cli-sessions".to_string(),
             switchable: false,
         }]);
         assert!(!admits_as_switchable_panel(
             PANEL_LAYER,
-            "cli-sessions",
+            "qol-cli-sessions",
             "cli-sessions-panel",
             &switchable
         ));

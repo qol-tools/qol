@@ -2,13 +2,13 @@
 
 # Lights
 
-A lights control plugin for [QoL Tray](../../apps/qol-tray).
+A lights control plugin for [QoL Tray](../../apps/tray).
 
 </div>
 
 ## Quick start
 
-Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/tray) plugin store.
 
 ## About
 

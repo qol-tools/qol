@@ -1,5 +1,5 @@
-use plugin_cli_sessions::host::{kitty_session_id, Pane};
-use plugin_cli_sessions::tool::from_cli_session;
+use qol_cli_sessions::host::{kitty_session_id, Pane};
+use qol_cli_sessions::tool::from_cli_session;
 use qol_terminal_sessions::cli::{
     claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, CliSessionInterpreter,
 };

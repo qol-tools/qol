@@ -1,7 +1,7 @@
-use plugin_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
-use plugin_cli_sessions::host::{kitty_session_id, Pane};
-use plugin_cli_sessions::signal::screen::{screen_hash, stable_screen};
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
+use qol_cli_sessions::host::{kitty_session_id, Pane};
+use qol_cli_sessions::signal::screen::{screen_hash, stable_screen};
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::cli::{
     claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, CliRuntimeState as RT,
     CliSessionInterpreter, CliViewportState,

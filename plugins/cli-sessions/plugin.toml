@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-cli-sessions"
+id = "qol-cli-sessions"
 uid = "98f8b9fe-2115-4890-a8cc-89b6d4483d75"
 name = "CLI Sessions"
 description = "Always-on-top overview of live CLI sessions (Claude Code, Codex, any command)"
-version = "0.63.0"
+version = "0.64.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "cli-sessions"
+command = "qol-cli-sessions"
 
 [action.open]
 label = "Open Overview"
@@ -30,7 +30,8 @@ args = ["settings"]
 
 [daemon]
 enabled = true
-command = "cli-sessions"
+command = "qol-cli-sessions"
+inherit_listener = true
 socket = "/tmp/qol-cli-sessions.sock"
 
 [capabilities]
@@ -60,6 +61,6 @@ action = "snapshot"
 export_to_launcher = true
 
 [[dependencies.binaries]]
-name = "cli-sessions"
-repo = "qol-tools/plugin-cli-sessions"
-pattern = "cli-sessions-{os}-{arch}"
+name = "qol-cli-sessions"
+repo = "qol-tools/qol-cli-sessions"
+pattern = "qol-cli-sessions-{os}-{arch}"

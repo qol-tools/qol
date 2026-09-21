@@ -7,7 +7,7 @@
 
 ## Problem
 
-plugin-alt-tab creates fresh `Arc<RenderImage>` values for live preview and icon images, then overwrites or prunes maps without calling `App::drop_image`. GPUI keeps atlas entries alive until `drop_image` reaches the platform atlas, so repeated picker use silently accumulates GPU atlas tiles and degrades picker rendering over long sessions.
+qol-alt-tab creates fresh `Arc<RenderImage>` values for live preview and icon images, then overwrites or prunes maps without calling `App::drop_image`. GPUI keeps atlas entries alive until `drop_image` reaches the platform atlas, so repeated picker use silently accumulates GPU atlas tiles and degrades picker rendering over long sessions.
 
 The leak is permanent on macOS because `pre_create_offscreen` (`src/picker/create.rs:183`) opens the picker window once at daemon boot, registers it under `BOOTSTRAP_KEY`, and reuses the same handle for every alt-tab. Linux destroys and recreates the window on monitor reconfig (`src/picker/platform/linux.rs:219`, `:227`), so the atlas dies with the window and the leak resets per cycle. Scope of the bug is the macOS keep-alive path.
 
@@ -144,4 +144,4 @@ Ground truth references:
 - `Window::drop_image` at `gpui-0.2.2/src/window.rs:3198` (calls `sprite_atlas.remove`)
 - `MetalAtlas::remove` at `gpui-0.2.2/src/platform/mac/metal_atlas.rs:60` (`tiles_by_key.get` not `.remove`; texture put back when refcount > 0; double-decrement hazard)
 - `BladeAtlas::remove` at `gpui-0.2.2/src/platform/blade/blade_atlas.rs:104` (`tiles_by_key.remove` unconditional; safe under repeat call)
-- `grep drop_image plugin-alt-tab/src` returns zero matches.
+- `grep drop_image qol-alt-tab/src` returns zero matches.

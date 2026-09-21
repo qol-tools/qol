@@ -11,14 +11,12 @@ use qol_headless::{Command, HeadlessApp, PlainTextOutput};
 
 use crate::PLUGIN_ID;
 
-const BINARY_NAME: &str = "qol-voice";
-
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
 }
 
 fn app() -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run provider-neutral speech recognition and conversational turn coordination.")
         .default_command(["session", "status"])
         .command(session::command())
@@ -33,7 +31,7 @@ fn app() -> HeadlessApp {
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the plugin settings page.")
-        .usage(format!("{BINARY_NAME} settings"))
+        .usage(format!("{PLUGIN_ID} settings"))
         .output("No stdout on success.")
         .run_plain_text(|context| {
             reject_args(context.args())?;

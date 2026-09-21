@@ -1,5 +1,5 @@
 use gpui::{point, px, size, Bounds};
-use plugin_cli_sessions::placement::{parse_corner, Corner, CORNER_MARGIN};
+use qol_cli_sessions::placement::{parse_corner, Corner, CORNER_MARGIN};
 use qol_gpui::placement::MonitorPlacement;
 
 #[test]

@@ -1,6 +1,6 @@
 [package]
-name = "pointzerver"
-version = "1.42.0"
+name = "qol-pointz"
+version = "1.43.0"
 edition = "2021"
 description = "PointZerver - Headless server for remote PC control from mobile devices"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -66,5 +66,5 @@ depends = "$auto, libx11-6, libxdo3"
 section = "utils"
 priority = "optional"
 assets = [
-    ["target/release/pointzerver", "usr/bin/", "755"],
+    ["target/release/qol-pointz", "usr/bin/", "755"],
 ]

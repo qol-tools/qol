@@ -9,7 +9,6 @@ use crate::ask::{render_text, AskOutput, AskRequest, LogOptions};
 use crate::store::Store;
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "qol-memory";
 const DEFAULT_K: usize = 5;
 const DEFAULT_LOG_SOURCE: &str = "ask-cli";
 
@@ -84,7 +83,7 @@ fn app() -> HeadlessApp {
 }
 
 fn app_with_handlers(handlers: Handlers) -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Long-context memory: answer questions from your settled agent session history.")
         .default_command(["status"])
         .command(ask_command(handlers.ask_plain, handlers.ask_json))
@@ -115,7 +114,7 @@ fn ask_command(plain: PlainHandler, json: JsonHandler) -> Command {
     Command::new("ask")
         .about("Answer a question from your agent history memory.")
         .usage(format!(
-            "{BINARY_NAME} ask \"<query>\" [--k N] [--exclude-session ID] [--brief] \
+            "{PLUGIN_ID} ask \"<query>\" [--k N] [--exclude-session ID] [--brief] \
              [--log-source S] [--log-cwd PATH] [--log-fact FACT] [--no-log] [--store PATH] \
              [--agent-home DIR]"
         ))
@@ -135,7 +134,7 @@ fn ask_command(plain: PlainHandler, json: JsonHandler) -> Command {
 fn status_command(plain: PlainHandler, json: JsonHandler) -> Command {
     Command::new("status")
         .about("Show the state of the local memory store.")
-        .usage(format!("{BINARY_NAME} status [--store PATH]"))
+        .usage(format!("{PLUGIN_ID} status [--store PATH]"))
         .output("key: value lines in plain text; the status object with --json.")
         .exit_behavior("Usage errors exit 64; failures exit 1.")
         .run_result(move |context| plain(context))

@@ -267,13 +267,13 @@ fn read_child_dirs(dir: &Path) -> Vec<PathBuf> {
 
 fn resolve_missing_tray_root(root: &Path, fallback: &Path) -> PathBuf {
     for ancestor in root.ancestors() {
-        let monorepo_tray = ancestor.join("apps").join("qol-tray");
+        let monorepo_tray = ancestor.join("apps").join("tray");
         if manifest_is_qol_tray(&monorepo_tray) {
             return monorepo_tray;
         }
     }
     if let Ok(workspace_root) = qol_workspace::workspace_root_from(root) {
-        let workspace_tray = workspace_root.join("apps").join("qol-tray");
+        let workspace_tray = workspace_root.join("apps").join("tray");
         if manifest_is_qol_tray(&workspace_tray) {
             return workspace_tray;
         }
@@ -531,12 +531,12 @@ mod tests {
     #[test]
     fn manifest_is_qol_tray_rejects_plugin_packages() {
         for plugin in [
-            "alt-tab",
-            "launcher",
-            "keyremap",
-            "pointz",
-            "window-actions",
-            "plugin-lights",
+            "qol-alt-tab",
+            "qol-launcher",
+            "qol-keyremap",
+            "qol-pointz",
+            "qol-window-actions",
+            "qol-lights",
         ] {
             let tmp = TempDir::new().unwrap();
             write_manifest(tmp.path(), &plugin_manifest(plugin));
@@ -558,7 +558,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let contents = "\
 [package]
-name = \"alt-tab\"
+name = \"qol-alt-tab\"
 version = \"0.1.0\"
 
 [[bin]]
@@ -600,8 +600,8 @@ path = \"src/main.rs\"
         let tmp = TempDir::new().unwrap();
         let fallback = tmp.path().join("base").join("qol-tray");
         write_manifest(&fallback, qol_tray_manifest());
-        let plugin_dir = tmp.path().join("plugin-alt-tab");
-        write_manifest(&plugin_dir, &plugin_manifest("alt-tab"));
+        let plugin_dir = tmp.path().join("qol-alt-tab");
+        write_manifest(&plugin_dir, &plugin_manifest("qol-alt-tab"));
         let resolved = resolve_tray_root(Some(&plugin_dir), &fallback);
         assert_ne!(resolved, plugin_dir, "should not return the plugin dir");
         assert_eq!(resolved, fallback);
@@ -612,18 +612,15 @@ path = \"src/main.rs\"
         let tmp = TempDir::new().unwrap();
         write_manifest(
             &tmp.path().join("plugins").join("alt-tab"),
-            &plugin_manifest("alt-tab"),
+            &plugin_manifest("qol-alt-tab"),
         );
-        write_manifest(
-            &tmp.path().join("apps").join("qol-tray"),
-            qol_tray_manifest(),
-        );
+        write_manifest(&tmp.path().join("apps").join("tray"), qol_tray_manifest());
 
         let resolved = resolve_tray_root(
             Some(&tmp.path().join("plugins").join("alt-tab")),
             Path::new("/fallback"),
         );
-        assert_eq!(resolved, tmp.path().join("apps").join("qol-tray"));
+        assert_eq!(resolved, tmp.path().join("apps").join("tray"));
     }
 
     #[test]
@@ -631,12 +628,12 @@ path = \"src/main.rs\"
         let tmp = TempDir::new().unwrap();
         let feature_root = tmp.path();
         write_manifest(
-            &feature_root.join("plugin-alt-tab"),
-            &plugin_manifest("alt-tab"),
+            &feature_root.join("qol-alt-tab"),
+            &plugin_manifest("qol-alt-tab"),
         );
         write_manifest(&feature_root.join("qol-tray"), qol_tray_manifest());
         let resolved = resolve_tray_root(
-            Some(&feature_root.join("plugin-alt-tab")),
+            Some(&feature_root.join("qol-alt-tab")),
             Path::new("/fallback"),
         );
         assert_eq!(resolved, feature_root.join("qol-tray"));
@@ -667,7 +664,7 @@ path = \"src/main.rs\"
         let tmp = TempDir::new().unwrap();
         let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
         let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
-        create_git_worktree(&feature.join("plugin-window-actions"));
+        create_git_worktree(&feature.join("qol-window-actions"));
         let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
 
         assert_eq!(result.len(), 1, "result: {:?}", result);
@@ -679,7 +676,7 @@ path = \"src/main.rs\"
         let tmp = TempDir::new().unwrap();
         let manifest_dir = create_manifest_dir(tmp.path(), "qol-tray");
         let feature = tmp.path().join("worktrees").join("feat-config-contract-v1");
-        for repo in ["plugin-launcher", "plugin-alt-tab", "qol-tray"] {
+        for repo in ["qol-launcher", "qol-alt-tab", "qol-tray"] {
             create_git_worktree(&feature.join(repo));
         }
         let result = scan_with_branch_resolver(&manifest_dir, fake_branch_resolver);
@@ -781,13 +778,13 @@ path = \"src/main.rs\"
     fn build_command_uses_requested_bins_dev_features_json_render_diagnostics_and_manifest_path() {
         let tmp = TempDir::new().unwrap();
         let workspace_root = tmp.path();
-        let tray_dir = workspace_root.join("apps").join("qol-tray");
+        let tray_dir = workspace_root.join("apps").join("tray");
         let workspace_manifest = workspace_root.join("Cargo.toml");
         let tray_manifest = tray_dir.join("Cargo.toml");
         std::fs::create_dir_all(&tray_dir).unwrap();
         std::fs::write(
             &workspace_manifest,
-            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
+            "[workspace]\nmembers = [\"apps/tray\"]\nresolver = \"2\"\n",
         )
         .unwrap();
         std::fs::write(&tray_manifest, "[package]\nname = \"qol-tray\"\n").unwrap();
@@ -940,10 +937,10 @@ path = \"src/main.rs\"
     fn debug_binary_path_uses_workspace_development_target_for_member_roots() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("mono");
-        let tray_root = workspace.join("apps").join("qol-tray");
+        let tray_root = workspace.join("apps").join("tray");
         write_manifest(
             &workspace,
-            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
+            "[workspace]\nmembers = [\"apps/tray\"]\nresolver = \"2\"\n",
         );
         write_manifest(&tray_root, qol_tray_manifest());
 
@@ -963,10 +960,10 @@ path = \"src/main.rs\"
     fn tray_manifest_path_resolves_the_package_from_a_monorepo_root() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("mono");
-        let tray_root = workspace.join("apps").join("qol-tray");
+        let tray_root = workspace.join("apps").join("tray");
         write_manifest(
             &workspace,
-            "[workspace]\nmembers = [\"apps/qol-tray\"]\nresolver = \"2\"\n",
+            "[workspace]\nmembers = [\"apps/tray\"]\nresolver = \"2\"\n",
         );
         write_manifest(&tray_root, qol_tray_manifest());
 

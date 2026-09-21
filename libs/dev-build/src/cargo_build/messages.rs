@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn parses_the_exact_compiler_artifact_contract() {
         let message = parse_cargo_message(
-            r#"{"reason":"compiler-artifact","package_id":"path+file:///repo#qol-tray@3.40.6","manifest_path":"/repo/apps/qol-tray/Cargo.toml","target":{"kind":["bin"],"crate_types":["bin"],"name":"qol-tray-install","src_path":"/repo/apps/qol-tray/src/installer/main.rs","edition":"2021","doc":true,"doctest":false,"test":true},"profile":{"opt_level":"3","debuginfo":0,"debug_assertions":false,"overflow_checks":false,"test":false},"features":["default"],"filenames":["/repo/target/release/qol-tray-install"],"executable":"/repo/target/release/qol-tray-install","fresh":true}"#,
+            r#"{"reason":"compiler-artifact","package_id":"path+file:///repo#qol-tray@3.40.6","manifest_path":"/repo/apps/tray/Cargo.toml","target":{"kind":["bin"],"crate_types":["bin"],"name":"qol-tray-install","src_path":"/repo/apps/tray/src/installer/main.rs","edition":"2021","doc":true,"doctest":false,"test":true},"profile":{"opt_level":"3","debuginfo":0,"debug_assertions":false,"overflow_checks":false,"test":false},"features":["default"],"filenames":["/repo/target/release/qol-tray-install"],"executable":"/repo/target/release/qol-tray-install","fresh":true}"#,
         )
         .unwrap();
 
@@ -226,7 +226,7 @@ mod tests {
         };
         assert_eq!(
             artifact.manifest_path,
-            PathBuf::from("/repo/apps/qol-tray/Cargo.toml")
+            PathBuf::from("/repo/apps/tray/Cargo.toml")
         );
         assert_eq!(artifact.target_name, "qol-tray-install");
         assert_eq!(artifact.target_kind, ["bin"]);

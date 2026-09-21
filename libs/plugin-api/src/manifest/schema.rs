@@ -138,6 +138,7 @@ pub struct DeclaredAction {
     pub label: String,
     pub kind: ActionType,
     pub picture: Option<String>,
+    pub hotkey: bool,
 }
 
 impl PluginManifest {
@@ -152,6 +153,14 @@ impl PluginManifest {
     pub fn executable_action_ids(&self) -> BTreeSet<String> {
         self.executable_actions()
             .into_iter()
+            .map(|action| action.id)
+            .collect()
+    }
+
+    pub fn hotkey_action_ids(&self) -> BTreeSet<String> {
+        self.executable_actions()
+            .into_iter()
+            .filter(|action| action.hotkey)
             .map(|action| action.id)
             .collect()
     }
@@ -179,6 +188,7 @@ impl PluginManifest {
                 label: action.label.clone(),
                 kind: action.kind,
                 picture: action.picture.clone(),
+                hotkey: action.hotkey,
             })
             .collect()
     }
@@ -248,6 +258,8 @@ pub struct ActionDeclaration {
     pub checked: bool,
     #[serde(default)]
     pub picture: Option<String>,
+    #[serde(default = "default_true")]
+    pub hotkey: bool,
 }
 
 fn default_action_kind() -> ActionType {
@@ -370,6 +382,8 @@ pub struct DaemonConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub extra_ports: Vec<NamedPort>,
+    #[serde(default)]
+    pub inherit_listener: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -412,6 +426,7 @@ fn collect_legacy_menu_executable_actions(items: &[MenuItem], actions: &mut Vec<
                 label: label.clone(),
                 kind: *action,
                 picture: None,
+                hotkey: true,
             }),
             MenuItem::Submenu { items, .. } => {
                 collect_legacy_menu_executable_actions(items, actions);

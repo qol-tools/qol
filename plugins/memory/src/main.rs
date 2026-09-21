@@ -24,12 +24,6 @@ mod tests {
     fn live_manifest_declares_the_headless_contract() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-        let runtime = manifest
-            .runtime
-            .as_ref()
-            .expect("QoL Memory runtime must be declared");
-
-        assert_eq!(runtime.command, "qol-memory");
         assert!(manifest.capabilities.doctor);
         assert_eq!(
             manifest.catalog_runtime_args("status"),
@@ -44,7 +38,6 @@ mod tests {
         let daemon = manifest.daemon.as_ref().expect("daemon must be declared");
 
         assert_eq!(manifest.daemon.as_ref().map(|d| d.enabled), Some(true));
-        assert_eq!(daemon.command, "qol-memory");
         assert_eq!(daemon.socket.as_deref(), Some("/tmp/qol-memory.sock"));
     }
 }

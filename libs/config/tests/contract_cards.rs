@@ -20,7 +20,7 @@ fn plugin_directories(root: &Path) -> Vec<PathBuf> {
 
 fn config_files() -> Vec<PathBuf> {
     let root = repository_root();
-    let core = root.join("apps/qol-tray");
+    let core = root.join("apps/tray");
     let mut files = vec![core.join("src/settings_surface/platform/core-config.toml")];
     for directory in plugin_directories(&root) {
         let config = directory.join("qol-config.toml");

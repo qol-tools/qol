@@ -144,9 +144,17 @@ pub(crate) fn plugin_config_dirs(profile_dir: &Path) -> Vec<PathBuf> {
 }
 
 pub(crate) fn hotkey_files(profile_dir: &Path) -> Vec<PathBuf> {
+    os_bucket_files(profile_dir, "hotkeys.json")
+}
+
+pub(crate) fn shortcut_files(profile_dir: &Path) -> Vec<PathBuf> {
+    os_bucket_files(profile_dir, "shortcuts.json")
+}
+
+fn os_bucket_files(profile_dir: &Path, file_name: &str) -> Vec<PathBuf> {
     list_subdirs(&profile_dir.join("os"))
         .into_iter()
-        .map(|bucket| bucket.join("hotkeys.json"))
+        .map(|bucket| bucket.join(file_name))
         .filter(|p| p.is_file())
         .collect()
 }

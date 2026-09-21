@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn push_notification_with_layout_round_trips() {
         let request = RuntimeRequest::PushNotification {
-            plugin_id: "plugin-cli-sessions".to_string(),
+            plugin_id: "qol-cli-sessions".to_string(),
             title: "lane".to_string(),
             body: "needs you".to_string(),
             level: NotificationLevel::Info,

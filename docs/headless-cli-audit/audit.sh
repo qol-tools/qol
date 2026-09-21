@@ -80,11 +80,11 @@ for p in plugins/*/; do
     check_plugin "$p"
 done
 
-check_bin tool qol "$(pwd)/tools/qol-cli"
-check_bin tool qol-guest-runner "$(pwd)/tools/qol-guest-runner"
+check_bin tool qol "$(pwd)/tools/cli"
+check_bin tool qol-guest-runner "$(pwd)/tools/guest-runner"
 
 for bin in qol-tray qol-tray-install qol-tray-doctor qol-tray-migrate; do
-    check_bin app "$bin" "$(pwd)/apps/qol-tray"
+    check_bin app "$bin" "$(pwd)/apps/tray"
 done
 
 if [ "$JSON" = "1" ]; then

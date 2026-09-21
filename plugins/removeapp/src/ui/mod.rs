@@ -14,7 +14,7 @@ use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
 
-pub const WINDOW_TITLE: &str = "removeapp";
+pub const WINDOW_TITLE: &str = env!("QOL_PLUGIN_ID");
 pub const WINDOW_WIDTH: f32 = 460.0;
 pub const WINDOW_HEIGHT: f32 = 540.0;
 const SEARCH_H: f32 = qol_gpui::theme::HEIGHT_HINT_BAR;
@@ -467,7 +467,7 @@ impl RemoveAppView {
                 format!("App bundle \u{00B7} {}", qol_gpui::format_bytes(size)).into_any_element()
             }
             None => qol_gpui::Busy::new(
-                "removeapp-size",
+                "qol-removeapp-size",
                 "measuring size",
                 rgb(palette.text_secondary),
             )
@@ -685,7 +685,7 @@ impl RemoveAppView {
             .children(self.guard_banner())
             .child(
                 div()
-                    .id("removeapp-items")
+                    .id("qol-removeapp-items")
                     .flex_1()
                     .min_h_0()
                     .w_full()
@@ -860,7 +860,7 @@ impl Render for RemoveAppView {
         let palette = current_palette();
         self.list.sync(self.matches.len());
         div()
-            .id("removeapp")
+            .id("qol-removeapp")
             .track_focus(&self.focus_handle)
             .size_full()
             .flex()
@@ -1026,7 +1026,7 @@ fn banner_line(color: u32, text: &str) -> impl IntoElement {
 fn banner_busy(color: u32) -> AnyElement {
     banner_frame(color)
         .child(qol_gpui::Busy::new(
-            "removeapp-guards-busy",
+            "qol-removeapp-guards-busy",
             "Checking package manager",
             rgb(color),
         ))

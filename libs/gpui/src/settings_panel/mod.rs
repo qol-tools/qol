@@ -1184,30 +1184,30 @@ mod tests {
     #[test]
     fn attention_payload_names_only_truthy_sources() {
         let payload = serde_json::json!({
-            "plugin-alt-tab": true,
-            "plugin-lights": false,
-            "plugin-launcher": 0,
-            "plugin-cli-sessions": 3,
-            "plugin-voice": "",
-            "plugin-shot": "1.63.1 -> 1.64.0",
-            "plugin-pointz": null,
-            "plugin-removeapp": [],
-            "plugin-keyremap": {},
+            "qol-alt-tab": true,
+            "qol-lights": false,
+            "qol-launcher": 0,
+            "qol-cli-sessions": 3,
+            "qol-voice": "",
+            "qol-shot": "1.63.1 -> 1.64.0",
+            "qol-pointz": null,
+            "qol-removeapp": [],
+            "qol-keyremap": {},
         });
 
         let ids = super::attention_plugin_ids(&payload);
 
-        assert!(ids.contains("plugin-alt-tab"));
-        assert!(ids.contains("plugin-cli-sessions"));
-        assert!(ids.contains("plugin-shot"));
+        assert!(ids.contains("qol-alt-tab"));
+        assert!(ids.contains("qol-cli-sessions"));
+        assert!(ids.contains("qol-shot"));
         assert_eq!(ids.len(), 3);
         for absent in [
-            "plugin-lights",
-            "plugin-launcher",
-            "plugin-voice",
-            "plugin-pointz",
-            "plugin-removeapp",
-            "plugin-keyremap",
+            "qol-lights",
+            "qol-launcher",
+            "qol-voice",
+            "qol-pointz",
+            "qol-removeapp",
+            "qol-keyremap",
         ] {
             assert!(!ids.contains(absent), "{absent} is not attention");
         }
@@ -1220,7 +1220,7 @@ mod tests {
             serde_json::json!(true),
             serde_json::json!(2),
             serde_json::json!("updates"),
-            serde_json::json!(["plugin-lights"]),
+            serde_json::json!(["qol-lights"]),
         ] {
             assert!(super::attention_plugin_ids(&payload).is_empty());
         }

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use qol_headless::{Command, CommandResult, HeadlessApp};
 
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "window-actions";
 const ACTIONS: [ActionSpec; 13] = [
     ActionSpec::ordinary("snap-left", "Snap the focused window to the left."),
     ActionSpec::ordinary("snap-right", "Snap the focused window to the right."),
@@ -67,7 +66,7 @@ where
 {
     let daemon = Arc::new(daemon);
     let action = Arc::new(action);
-    let mut app = HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    let mut app = HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Move, resize, minimize, restore, and continuously glide desktop windows.")
         .default_command(["daemon"])
         .command(daemon_command(daemon))
@@ -89,7 +88,7 @@ where
     Command::new("daemon")
         .alias("run")
         .about("Run the daemon that owns continuous glide sessions.")
-        .usage(format!("{BINARY_NAME} daemon"))
+        .usage(format!("{PLUGIN_ID} daemon"))
         .detail("The legacy `run` command is an alias.")
         .output("Runtime diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero if the daemon listener cannot start.")
@@ -102,7 +101,7 @@ where
 {
     let mut command = Command::new(spec.name)
         .about(spec.about)
-        .usage(format!("{BINARY_NAME} {}", spec.name))
+        .usage(format!("{PLUGIN_ID} {}", spec.name))
         .output("No stdout on success; diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero if the platform cannot perform the action.");
     if spec.continuous {
@@ -116,7 +115,7 @@ where
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the Window Actions settings page in qol-tray.")
-        .usage(format!("{BINARY_NAME} settings"))
+        .usage(format!("{PLUGIN_ID} settings"))
         .output("No stdout on success; opens the settings URL through the platform launcher.")
         .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
         .run_result(move |_| {

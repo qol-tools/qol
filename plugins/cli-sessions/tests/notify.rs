@@ -1,5 +1,5 @@
-use plugin_cli_sessions::notify::{announces_attention, Notice};
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::notify::{announces_attention, Notice};
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::cli::{claude_tool, generic_tool};
 
 #[test]

@@ -1,6 +1,6 @@
-use plugin_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
-use plugin_cli_sessions::host::{kitty_session_id, Pane};
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::attention::{reduce, Attention, Evidence, GRACE_SECS};
+use qol_cli_sessions::host::{kitty_session_id, Pane};
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter, CliViewportState};
 
 const WORKING_WITH_TASKLIST: &str = include_str!("fixtures/claude_real/working_win1.txt");

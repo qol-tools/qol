@@ -1,0 +1,69 @@
+[plugin]
+id = "qol-sound"
+uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
+name = "Sound"
+description = "Choose where sound plays and how loud"
+version = "0.2.0"
+author = "KMRH47"
+platforms = ["linux"]
+
+[runtime]
+command = "qol-sound"
+
+[action.outputs]
+label = "List Sound Outputs"
+args = ["outputs"]
+hotkey = false
+
+[action.switch]
+label = "Switch Sound Output"
+args = ["switch"]
+hotkey = false
+
+[action.set_volume]
+label = "Set Sound Volume"
+args = ["volume"]
+hotkey = false
+
+[action.next_output]
+label = "Next Sound Output"
+args = ["next"]
+
+[action.volume_up]
+label = "Volume Up"
+args = ["up"]
+continuous = true
+
+[action.volume_down]
+label = "Volume Down"
+args = ["down"]
+continuous = true
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+picture = "gear"
+args = ["settings"]
+hotkey = false
+
+[daemon]
+enabled = true
+command = "qol-sound"
+socket = "/tmp/plugin-sound.sock"
+port = 42750
+
+[capabilities]
+gpui = true
+doctor = true
+
+[config.scope]
+output = "device"
+
+[menu]
+label = "Sound"
+items = []
+
+[[dependencies.binaries]]
+name = "qol-sound"
+repo = "qol-tools/qol-sound"
+pattern = "qol-sound-{os}-{arch}"

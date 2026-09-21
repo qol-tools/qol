@@ -127,6 +127,17 @@ pub struct FieldSpec {
     pub number: NumberConstraints,
 }
 
+impl FieldSpec {
+    pub fn has_stored_value(&self) -> bool {
+        self.kind.has_stored_value()
+            && !(self.kind == FieldKind::Number && self.active_query.is_some())
+    }
+
+    pub fn requires_declared_default(&self) -> bool {
+        self.kind.has_stored_value()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldAlign {

@@ -1,5 +1,5 @@
 /target/
-/pointzerver
-/pointzerver.new
+/qol-pointz
+/qol-pointz.new
 .DS_Store
 .cargo/config.toml
