@@ -73,6 +73,7 @@ fn make_catalog_plugin(
             config_key: None,
             checked: false,
             picture: None,
+            hotkey: true,
         },
     );
     plugin

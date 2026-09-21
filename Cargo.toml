@@ -12,6 +12,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 # internal crates - the single source of truth for every cross-crate path
 qol-agent-homes = { path = "libs/agent-homes" }
 qol-artifact = { path = "libs/artifact" }
+qol-audio = { path = "libs/audio" }
 qol-build-identity = { path = "libs/build-identity" }
 qol-cinnamon = { path = "libs/cinnamon" }
 qol-color = { path = "libs/color" }

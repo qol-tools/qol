@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use qol_audio::default_output;
+use qol_audio::devices::Direction;
+
 use crate::audio::{AudioEncoding, AudioFormat, AudioFrame};
 
 use super::super::{
@@ -180,25 +183,13 @@ fn default_source_name() -> Result<String, ListenError> {
             return Ok(source);
         }
     }
-    let output = Command::new("pactl")
-        .arg("get-default-source")
-        .output()
-        .map_err(|error| {
-            ListenError::InputUnavailable(format!(
-                "could not run pactl: {error}; install PulseAudio utilities"
-            ))
-        })?;
-    if !output.status.success() {
-        return Err(ListenError::InputUnavailable(command_error(
-            "pactl could not resolve the default source",
-            &output.stderr,
-        )));
+    match default_output::effective(Direction::Input) {
+        Ok(Some(name)) if !name.is_empty() => Ok(name),
+        Ok(_) => Err(ListenError::NoInputDevice),
+        Err(error) => Err(ListenError::InputUnavailable(format!(
+            "could not resolve the default audio source: {error}"
+        ))),
     }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if name.is_empty() {
-        return Err(ListenError::NoInputDevice);
-    }
-    Ok(name)
 }
 
 fn capture_command(device_name: &str) -> Command {

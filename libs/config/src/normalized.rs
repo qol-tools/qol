@@ -121,14 +121,12 @@ pub fn resolve_config(
     let mut sections = build_sections(spec);
 
     for (id, field) in &spec.fields {
-        let no_stored_value = !field.kind.has_stored_value();
-        let default = widen_to_kind(
-            field
-                .default
-                .clone()
-                .unwrap_or(FieldDefault::String(String::new())),
-            field.kind,
-        );
+        let no_stored_value = !field.has_stored_value();
+        let declared = field.default.clone().unwrap_or_else(|| match field.kind {
+            FieldKind::Number => FieldDefault::Number(0.0),
+            _ => FieldDefault::String(String::new()),
+        });
+        let default = widen_to_kind(declared, field.kind);
         let value = if no_stored_value {
             default.clone()
         } else {
@@ -652,5 +650,30 @@ options = ["top-left", "top_left"]
         .unwrap();
         let normalized = normalize_config(&ambiguous, &serde_json::json!({"corner": " TOP_LEFT "}));
         assert_eq!(normalized["corner"], " TOP_LEFT ");
+    }
+
+    #[test]
+    fn a_live_number_without_a_default_is_refused() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+min = 0
+max = 100
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        )
+        .unwrap();
+        let errors = resolve_config(&spec, &serde_json::json!({})).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.volume.default"),
+            "{errors:?}"
+        );
     }
 }

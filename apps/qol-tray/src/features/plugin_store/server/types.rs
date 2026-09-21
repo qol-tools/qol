@@ -301,6 +301,7 @@ pub(super) struct PluginAction {
     pub(super) kind: ActionType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) picture: Option<String>,
+    pub(super) hotkey: bool,
 }
 
 #[derive(Clone, Serialize)]

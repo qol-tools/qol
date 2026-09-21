@@ -27,6 +27,12 @@ pub(super) struct ActionOption {
     pub(super) label: String,
     #[serde(default)]
     pub(super) picture: Option<String>,
+    #[serde(default = "default_true")]
+    pub(super) hotkey: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]

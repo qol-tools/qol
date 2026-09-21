@@ -19,7 +19,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
     .with_fix("Run Bluetooth on Linux")
     .with_details(serde_json::json!({
         "platform": "windows",
-        "pactl": null,
+        "bundled_client": false,
         "executed": false,
     }))
 }

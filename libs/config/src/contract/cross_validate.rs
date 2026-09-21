@@ -38,11 +38,17 @@ fn validate_runtime_active_refs(
     }
     match field.kind {
         FieldKind::Action => validate_action_active_refs(id, field, runtime, errors),
-        FieldKind::List => validate_list_active_refs(id, field, runtime, errors),
+        FieldKind::List | FieldKind::Select => {
+            validate_list_active_refs(id, field, runtime, errors)
+        }
+        FieldKind::Number => {
+            validate_list_active_refs(id, field, runtime, errors);
+            validate_live_number_action_ref(id, field, runtime, errors);
+        }
         FieldKind::DisplayLayout => {}
         _ => errors.push(ValidationError::new(
             format!("field.{id}"),
-            "runtime active state is only valid for action and list fields",
+            "runtime active state is only valid for action, list, select, and number fields",
         )),
     }
 }
@@ -85,6 +91,33 @@ fn validate_list_active_refs(
         ));
     }
     validate_active_query_refs(id, field, runtime, errors);
+}
+
+fn validate_live_number_action_ref(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.active_query.is_none() {
+        return;
+    }
+    let Some(action) = field.action.as_deref() else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.action"),
+            "is required when runtime active state is configured",
+        ));
+        return;
+    };
+    let Some(runtime) = runtime else {
+        return;
+    };
+    if !runtime.actions.contains_key(action) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.action"),
+            format!("references undeclared action: {action}"),
+        ));
+    }
 }
 
 fn validate_active_query_refs(
@@ -530,6 +563,167 @@ poll_interval_ms = 1000
         assert!(errors
             .iter()
             .any(|error| error.path == "field.devices.active_query"));
+    }
+
+    #[test]
+    fn validates_select_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+query = "outputs"
+active_query = "output_status"
+active_value_from = "applied"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.outputs]
+description = "Outputs"
+poll_interval_ms = 5000
+
+[query.output_status]
+description = "Applied output"
+poll_interval_ms = 5000
+"#,
+        )
+        .expect("parse runtime");
+
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        let undeclared = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.outputs]
+description = "Outputs"
+poll_interval_ms = 5000
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&undeclared)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.device.active_query"));
+
+        let with_action = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+query = "outputs"
+active_action = "switch_output"
+active_query = "output_status"
+active_value_from = "applied"
+"#,
+        )
+        .expect("parse config");
+        let errors = validate_contracts(&with_action, Some(&runtime)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.device.active_action"));
+    }
+
+    #[test]
+    fn validates_number_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "wide_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.volume]
+description = "Volume"
+poll_interval_ms = 2000
+
+[action.set_volume]
+description = "Set the volume"
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        let without_action = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+variant = "wide_slider"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        )
+        .expect("parse config");
+        let errors = validate_contracts(&without_action, Some(&runtime)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.volume.action"
+                    && error.message.contains("is required")),
+            "{errors:?}"
+        );
+
+        let undeclared_action = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.volume]
+description = "Volume"
+poll_interval_ms = 2000
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&undeclared_action)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.volume.action"
+                    && error.message.contains("set_volume")),
+            "{errors:?}"
+        );
+
+        let undeclared = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.set_volume]
+description = "Set the volume"
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&undeclared)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.volume.active_query"));
     }
 
     #[test]

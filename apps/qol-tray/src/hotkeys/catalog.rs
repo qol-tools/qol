@@ -26,7 +26,7 @@ where
         .map(|plugin| {
             let actions = plugin
                 .manifest
-                .executable_action_ids()
+                .hotkey_action_ids()
                 .into_iter()
                 .map(|action_id| {
                     let continuous = plugin
@@ -254,11 +254,50 @@ mod tests {
                 config_key: None,
                 checked: false,
                 picture: None,
+                hotkey: true,
             },
         );
 
         let catalog = catalog_for_plugins(std::iter::once(&plugin));
 
         assert!(catalog[&PluginUid::new("plugin-foo")]["glide-left"]);
+    }
+
+    #[test]
+    fn catalog_excludes_actions_that_are_not_hotkey_bindable() {
+        let mut plugin = make_plugin("plugin-foo", None, vec![]);
+        plugin.manifest.actions.insert(
+            "volume-up".to_string(),
+            crate::plugins::manifest::ActionDeclaration {
+                label: "Volume Up".to_string(),
+                kind: ActionType::Run,
+                continuous: true,
+                args: Some(vec!["up".to_string()]),
+                config_key: None,
+                checked: false,
+                picture: None,
+                hotkey: true,
+            },
+        );
+        plugin.manifest.actions.insert(
+            "set-volume".to_string(),
+            crate::plugins::manifest::ActionDeclaration {
+                label: "Set Sound Volume".to_string(),
+                kind: ActionType::Run,
+                continuous: false,
+                args: Some(vec!["set".to_string()]),
+                config_key: None,
+                checked: false,
+                picture: None,
+                hotkey: false,
+            },
+        );
+
+        let catalog = catalog_for_plugins(std::iter::once(&plugin));
+
+        assert_eq!(
+            sorted_ids(catalog[&PluginUid::new("plugin-foo")].clone()),
+            vec!["volume-up"]
+        );
     }
 }

@@ -19,6 +19,8 @@ import { useSurface } from '../../lib/components/Surface.js';
 import { FieldLabel } from './fields/FieldLabel.js';
 import { isSliderNumberField } from './field-rules.js';
 import { selectOptions } from './fields/select-options.js';
+import { extractPath } from './fields/query-data.js';
+import { isLiveField } from '../../lib/qol-config.js';
 import { useQueryPoll } from '../../lib/hooks/useQueryPoll.js';
 
 const FIELD_MAP = {
@@ -104,10 +106,16 @@ const SELECT_QUERY_POLL_MS = 5000;
 
 function SelectField({ field }) {
     const ctx = usePluginConfigContext();
-    const value = ctx.getFieldValue(field);
+    const isLive = isLiveField(field);
+    const stored = ctx.getFieldValue(field);
     const queryDef = field.query ? ctx.runtime?.query?.[field.query] : null;
     const interval = field.query ? (queryDef?.poll_interval_ms ?? SELECT_QUERY_POLL_MS) : 0;
     const query = useQueryPoll(ctx.pluginId, field.query || '', interval);
+    const activeQueryDef = isLive ? ctx.runtime?.query?.[field.active_query] : null;
+    const activeInterval = isLive ? (activeQueryDef?.poll_interval_ms ?? SELECT_QUERY_POLL_MS) : 0;
+    const activeState = useQueryPoll(ctx.pluginId, field.active_query || '', activeInterval);
+    const liveAnswer = isLive ? extractPath(activeState.data, field.active_value_from) : null;
+    const value = typeof liveAnswer === 'string' ? liveAnswer : stored;
     const { options, labels } = selectOptions(field, value, query.data);
     const onChange = useCallback((option) => {
         ctx.setFieldValue(field, option);

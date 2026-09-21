@@ -1,12 +1,11 @@
-use std::collections::BTreeMap;
 use std::io::Read;
 use std::process::Command;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
+use qol_audio::devices::{self, Device, Direction};
 use qol_config::contract::{audio_device_picture, AudioDirection};
-use serde::Deserialize;
 
 use super::{
     capture_command, command_error, default_source_name, terminate_child, CAPTURE_START_TIMEOUT,
@@ -14,52 +13,29 @@ use super::{
 };
 use crate::listen::{AudioInputDevice, AudioInputProbe, AudioInputRequest, ListenError};
 
-#[derive(Deserialize)]
-struct PulseSource {
-    name: String,
-    description: String,
-    #[serde(default)]
-    monitor_of_sink: Option<serde_json::Value>,
-    #[serde(default)]
-    properties: BTreeMap<String, String>,
+fn is_monitor(device: &Device) -> bool {
+    device.monitor_of_sink.is_some()
+        || device
+            .properties
+            .get("device.class")
+            .is_some_and(|class| class == "monitor")
+        || device.name.ends_with(".monitor")
 }
 
-impl PulseSource {
-    fn is_monitor(&self) -> bool {
-        self.monitor_of_sink.is_some()
-            || self
-                .properties
-                .get("device.class")
-                .is_some_and(|class| class == "monitor")
-            || self.name.ends_with(".monitor")
-    }
-
-    fn picture(&self) -> Option<String> {
-        let entry = serde_json::json!({
-            "name": self.name,
-            "properties": self.properties,
-        });
-        audio_device_picture(&entry, AudioDirection::Input).map(str::to_owned)
-    }
+fn device_picture(device: &Device) -> Option<String> {
+    let entry = serde_json::json!({
+        "name": &device.name,
+        "properties": &device.properties,
+    });
+    audio_device_picture(&entry, AudioDirection::Input).map(str::to_owned)
 }
 
 pub(crate) fn audio_input_devices() -> Result<Vec<AudioInputDevice>, ListenError> {
-    let output = Command::new("pactl")
-        .args(["--format=json", "list", "sources"])
-        .output()
-        .map_err(|error| {
-            ListenError::InputUnavailable(format!(
-                "could not run pactl: {error}; install PulseAudio utilities"
-            ))
-        })?;
-    if !output.status.success() {
-        return Err(ListenError::InputUnavailable(command_error(
-            "pactl could not list audio sources",
-            &output.stderr,
-        )));
-    }
+    let sources = devices::list(Direction::Input).map_err(|error| {
+        ListenError::InputUnavailable(format!("could not list audio inputs: {error}"))
+    })?;
     let default = default_source_name()?;
-    parse_input_devices(&output.stdout, &default)
+    Ok(map_input_devices(sources, &default))
 }
 
 pub(crate) fn verify_audio_input() -> Result<(), ListenError> {
@@ -94,19 +70,17 @@ pub(crate) fn probe_audio_input(
     Ok(probe_report(device_id, pcm))
 }
 
-fn parse_input_devices(json: &[u8], default: &str) -> Result<Vec<AudioInputDevice>, ListenError> {
-    let sources = serde_json::from_slice::<Vec<PulseSource>>(json)
-        .map_err(|error| ListenError::InputUnavailable(format!("invalid pactl output: {error}")))?;
-    Ok(sources
+fn map_input_devices(devices: Vec<Device>, default: &str) -> Vec<AudioInputDevice> {
+    devices
         .into_iter()
-        .filter(|source| !source.is_monitor())
-        .map(|source| AudioInputDevice {
-            picture: source.picture(),
-            is_default: source.name == default,
-            id: source.name,
-            label: source.description,
+        .filter(|device| !is_monitor(device))
+        .map(|device| AudioInputDevice {
+            picture: device_picture(&device),
+            is_default: device.name == default,
+            id: device.name,
+            label: device.description,
         })
-        .collect())
+        .collect()
 }
 
 fn capture_probe_pcm(device_name: &str, duration_ms: u64) -> Result<Vec<u8>, ListenError> {
@@ -204,30 +178,52 @@ fn scale_ratio(value: usize, total: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_input_devices;
+    use super::map_input_devices;
+    use qol_audio::devices::{Device, State};
+
+    fn device(
+        name: &str,
+        description: &str,
+        properties: &[(&str, &str)],
+        monitor_of_sink: Option<u32>,
+    ) -> Device {
+        Device {
+            index: 1,
+            name: name.to_owned(),
+            description: description.to_owned(),
+            properties: properties
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+            active_port: None,
+            monitor_of_sink,
+            state: State::Unknown,
+        }
+    }
 
     #[test]
     fn source_inventory_excludes_output_monitors_and_marks_default() {
-        let json = br#"[
-          {
-            "name":"mic.one",
-            "description":"Desk microphone",
-            "monitor_of_sink":null,
-            "properties":{"device.class":"sound","device.form_factor":"webcam"}
-          },
-          {
-            "name":"speaker.monitor",
-            "description":"Speaker monitor",
-            "monitor_of_sink":null,
-            "properties":{"device.class":"monitor"}
-          }
-        ]"#;
+        let devices = vec![
+            device(
+                "mic.one",
+                "Desk microphone",
+                &[("device.class", "sound"), ("device.form_factor", "webcam")],
+                None,
+            ),
+            device(
+                "speaker.monitor",
+                "Speaker monitor",
+                &[("device.class", "monitor")],
+                None,
+            ),
+            device("sink.five.monitor-output", "Sink monitor", &[], Some(5)),
+        ];
 
-        let devices = parse_input_devices(json, "mic.one").unwrap();
+        let mapped = map_input_devices(devices, "mic.one");
 
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].id, "mic.one");
-        assert!(devices[0].is_default);
-        assert_eq!(devices[0].picture.as_deref(), Some("webcam"));
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].id, "mic.one");
+        assert!(mapped[0].is_default);
+        assert_eq!(mapped[0].picture.as_deref(), Some("webcam"));
     }
 }

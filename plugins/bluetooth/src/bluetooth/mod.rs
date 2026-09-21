@@ -4,7 +4,6 @@ use serde::Serialize;
 
 use anyhow::{bail, Result};
 
-pub mod audio_watch;
 pub mod retry;
 
 pub fn normalize_address(value: &str) -> Result<String> {

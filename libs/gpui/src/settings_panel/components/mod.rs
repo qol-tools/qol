@@ -29,7 +29,7 @@ pub use group_header::SettingsGroupHeader;
 pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
 pub use modifier_chip::SettingsModifierChip;
-pub(super) use number_field::number_field;
+pub(super) use number_field::{number_field, SliderStyle};
 pub(super) use qr_code::qr_code_display;
 pub use row::SettingsRow;
 pub use text_field::SettingsTextField;

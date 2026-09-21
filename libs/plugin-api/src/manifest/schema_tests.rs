@@ -225,6 +225,94 @@ fn parse_action_picture_and_default() {
 }
 
 #[test]
+fn action_hotkey_defaults_to_true() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Hotkeys"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [action.volume_up]
+        label = "Volume Up"
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert!(manifest.actions["volume_up"].hotkey);
+
+    let declared = manifest.executable_actions();
+    assert_eq!(declared.len(), 1);
+    assert!(declared[0].hotkey);
+    assert!(manifest.hotkey_action_ids().contains("volume_up"));
+}
+
+#[test]
+fn parse_action_hotkey_false() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Hotkeys"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [action.outputs]
+        label = "List Sound Outputs"
+        args = ["outputs"]
+        hotkey = false
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert!(!manifest.actions["outputs"].hotkey);
+}
+
+#[test]
+fn hotkey_false_action_stays_executable_and_routable() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Hotkeys"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [action.outputs]
+        label = "List Sound Outputs"
+        args = ["outputs"]
+        hotkey = false
+
+        [action.volume_up]
+        label = "Volume Up"
+        args = ["up"]
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert!(manifest.executable_action_ids().contains("outputs"));
+    assert_eq!(
+        manifest.catalog_runtime_args("outputs"),
+        Some(vec!["outputs".to_string()])
+    );
+    assert_eq!(
+        manifest.catalog_runtime_args("volume_up"),
+        Some(vec!["up".to_string()])
+    );
+
+    let hotkeys = manifest.hotkey_action_ids();
+    assert!(!hotkeys.contains("outputs"));
+    assert!(hotkeys.contains("volume_up"));
+}
+
+#[test]
 fn executable_actions_prefer_action_catalog_over_menu_items() {
     let toml = r#"
         [plugin]

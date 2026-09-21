@@ -1,0 +1,30 @@
+schema_version = 1
+
+[query.outputs]
+description = "Sound outputs this computer can play on"
+poll_interval_ms = 5000
+
+[query.output_status]
+description = "Saved choice, applied output, and whether a switch is pending"
+poll_interval_ms = 5000
+
+[query.volume]
+description = "The volume of the output everything plays on"
+poll_interval_ms = 2000
+
+[action.set_volume]
+description = "Set the volume of the output everything plays on: input requires a value between 0 and 100"
+input = { value = "number" }
+
+[action.switch]
+description = "Make the given output the one every app plays on"
+input = { output = "string" }
+
+[action.next_output]
+description = "Switch to the next connected sound output"
+
+[action.volume_up]
+description = "Raise the volume of the output everything plays on"
+
+[action.volume_down]
+description = "Lower the volume of the output everything plays on"

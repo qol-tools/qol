@@ -159,7 +159,7 @@ fn validate_config_key_collisions(spec: &ConfigSpec, errors: &mut Vec<Validation
         .fields
         .iter()
         .filter_map(|(id, field)| {
-            if field.kind.has_stored_value() {
+            if field.has_stored_value() {
                 Some((
                     id.as_str(),
                     field.config_key.clone().unwrap_or_else(|| id.clone()),
@@ -201,7 +201,7 @@ fn validate_field_default(id: &str, field: &FieldSpec, errors: &mut Vec<Validati
     let default = match &field.default {
         Some(default) => default,
         None => {
-            if field.kind.has_stored_value() {
+            if field.requires_declared_default() {
                 errors.push(ValidationError::new(
                     format!("field.{id}.default"),
                     "missing default",
@@ -1092,6 +1092,62 @@ default = 5
             "field.service_commands.default",
             "value does not match field type string_array",
         );
+    }
+
+    #[test]
+    fn live_number_requires_a_numeric_default() {
+        let missing = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+min = 0
+max = 100
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        );
+        assert_has_error(&missing, "field.volume.default", "missing default");
+
+        let non_numeric = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = "loud"
+min = 0
+max = 100
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        );
+        assert_has_error(
+            &non_numeric,
+            "field.volume.default",
+            "value does not match field type number",
+        );
+
+        let sound = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "wide_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        );
+        assert!(sound.is_empty(), "{sound:?}");
     }
 
     fn validate_contract(contract: &str) -> Vec<ValidationError> {

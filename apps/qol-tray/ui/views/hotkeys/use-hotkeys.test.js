@@ -61,7 +61,7 @@ register('data:text/javascript,' + encodeURIComponent(loaderSource), pathToFileU
 
 globalThis.__hotkeyApiText = async () => 'Hotkeys saved';
 const { executeDelete, executeSave } = await import(`./use-hotkeys.js?test=${Date.now()}`);
-const { persistHotkeys } = await import('./data.js');
+const { persistHotkeys, getAvailableActions } = await import('./data.js');
 
 function deferred() {
     let resolve;
@@ -213,4 +213,18 @@ test('concurrent deletes serialize against the committed refs', async () => {
 
     assert.deepEqual(data.hotkeysRef.current.map(entry => entry.id), ['a']);
     assert.equal(data.selectedIndexRef.current, 0);
+});
+
+test('getAvailableActions hides actions that are not hotkey bindable', () => {
+    const plugins = [{
+        uid: 'plugin-sound',
+        actions: [
+            { id: 'volume_up', label: 'Volume Up', hotkey: true },
+            { id: 'set_volume', label: 'Set Sound Volume', hotkey: false },
+        ],
+    }];
+
+    const available = getAvailableActions(plugins, [], 'plugin-sound', null);
+
+    assert.deepEqual(available.map(action => action.id), ['volume_up']);
 });

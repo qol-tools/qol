@@ -81,7 +81,7 @@ impl SettingsChoiceValue {
 }
 
 impl RenderOnce for SettingsChoiceValue {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let SettingsChoiceValue {
             text,
             art,
@@ -90,6 +90,16 @@ impl RenderOnce for SettingsChoiceValue {
             palette,
             word_color,
         } = self;
+        let font = window.text_style().font();
+        let text = crate::text::truncate_to_width(
+            &text,
+            font.clone(),
+            qol_theme::TEXT_BODY,
+            font.weight,
+            CHOICE_WORD_MAX_WIDTH,
+            "…",
+            cx,
+        );
         let scale = window.scale_factor();
         let tones = choice_tones(row, palette);
         let art_image = |tone: Tone| {

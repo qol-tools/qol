@@ -2215,6 +2215,7 @@ mod breadcrumb_tests {
                 id: "open".to_string(),
                 label: "Open Switcher".to_string(),
                 picture: Some("next-window".to_string()),
+                hotkey: true,
             }],
         }
     }

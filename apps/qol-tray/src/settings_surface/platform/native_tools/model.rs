@@ -437,6 +437,7 @@ pub(super) fn available_actions(
             id: "run".to_string(),
             label: "Run".to_string(),
             picture: None,
+            hotkey: true,
         }];
     }
     let assigned = hotkeys
@@ -449,7 +450,7 @@ pub(super) fn available_actions(
     plugin
         .actions
         .iter()
-        .filter(|action| !assigned.contains(action.id.as_str()))
+        .filter(|action| action.hotkey && !assigned.contains(action.id.as_str()))
         .cloned()
         .collect()
 }
@@ -668,6 +669,39 @@ mod tests {
     #[test]
     fn a_new_hotkey_starts_on_its_capture_field() {
         assert_eq!(HotkeyDraft::blank(&[], &[]).selected, 3);
+    }
+
+    #[test]
+    fn available_actions_skip_actions_that_are_not_hotkey_bindable() {
+        let plugin = PluginOption {
+            uid: "plugin-sound".to_string(),
+            name: "Sound".to_string(),
+            loaded: true,
+            actions: vec![
+                ActionOption {
+                    id: "volume_up".to_string(),
+                    label: "Volume Up".to_string(),
+                    picture: None,
+                    hotkey: true,
+                },
+                ActionOption {
+                    id: "set_volume".to_string(),
+                    label: "Set Sound Volume".to_string(),
+                    picture: None,
+                    hotkey: false,
+                },
+            ],
+        };
+
+        let available = available_actions(&plugin, &[], None);
+
+        assert_eq!(
+            available
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["volume_up"]
+        );
     }
 
     #[test]

@@ -1,3 +1,9 @@
+//! Who may repair an output, and how often.
+//!
+//! This module picks no numbers of its own: the caller passes its own cooldown
+//! and cap, so counting stays bookkeeping and the policy stays with the plugin
+//! that owns it.
+
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Default)]

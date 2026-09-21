@@ -5,12 +5,37 @@ mod spawn;
 
 use super::Plugin;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::process::Child;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 pub(super) use listener::DaemonListener;
 
 const DAEMON_STOP_GRACE: Duration = Duration::from_secs(2);
+
+static DAEMON_INCARNATIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
+fn daemon_incarnations() -> &'static Mutex<HashMap<String, u64>> {
+    DAEMON_INCARNATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn bump_daemon_incarnation(plugin_id: &str) -> u64 {
+    let mut incarnations = daemon_incarnations()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let next = incarnations.get(plugin_id).copied().unwrap_or(0) + 1;
+    incarnations.insert(plugin_id.to_string(), next);
+    next
+}
+
+pub(super) fn current_daemon_incarnation(plugin_id: &str) -> Option<u64> {
+    daemon_incarnations()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(plugin_id)
+        .copied()
+}
 
 pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
     start_daemon_with_context(plugin, None).map(|_| ())
@@ -116,6 +141,7 @@ fn clear_exited_daemon(plugin: &mut Plugin, reason: &str) {
     );
     plugin.daemon_process = None;
     plugin.daemon_spawn_fingerprint = None;
+    bump_daemon_incarnation(plugin.id.as_str());
 }
 
 fn reaped_elsewhere(error: &std::io::Error) -> bool {
@@ -137,6 +163,7 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
         return Ok(());
     };
     plugin.daemon_spawn_fingerprint = None;
+    bump_daemon_incarnation(plugin.id.as_str());
 
     log::info!("Stopping daemon for plugin: {}", plugin.id);
     super::daemon_tracker::registry::unregister(
@@ -163,6 +190,7 @@ fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<
     }
     plugin.daemon_process = Some(child);
     plugin.daemon_spawn_fingerprint = spawn_fingerprint;
+    bump_daemon_incarnation(plugin.id.as_str());
     track_desktop_state_pid(pid);
     super::daemon_tracker::registry::register(
         &crate::paths::runtime_pids_dir(),
@@ -259,6 +287,28 @@ items = []
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+
+    #[test]
+    fn daemon_incarnation_advances_when_a_daemon_is_replaced_or_stopped() {
+        let _env = crate::test_support::env_lock().blocking_lock();
+        let mut plugin = minimal_plugin();
+        register_daemon(&mut plugin, spawn_long_running(), None);
+        let first_incarnation = current_daemon_incarnation(PLUGIN_ID).unwrap();
+
+        register_daemon(&mut plugin, spawn_long_running(), None);
+        let second_incarnation = current_daemon_incarnation(PLUGIN_ID).unwrap();
+        assert!(
+            second_incarnation > first_incarnation,
+            "registering a replacement daemon must advance the tracked incarnation"
+        );
+
+        stop_daemon(&mut plugin).unwrap();
+        let stopped_incarnation = current_daemon_incarnation(PLUGIN_ID).unwrap();
+        assert!(
+            stopped_incarnation > second_incarnation,
+            "stopping a daemon must invalidate its tracked incarnation"
+        );
     }
 
     #[test]

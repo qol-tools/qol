@@ -42,6 +42,8 @@ pub(super) fn reload_plugin(manager: &mut PluginManager, plugin_id: &str) -> Res
                 std::iter::once(&mut *plugin),
                 Some(&manager.lifecycle_cancellation),
             )
+            .first()
+            .map(|(_, generation)| *generation)
             .unwrap_or(requested_generation);
         }
     }
@@ -167,8 +169,14 @@ fn start_plugin_daemon_with_current_config(
 ) -> Result<()> {
     let plugin = plugin_mut(manager, plugin_id)?;
     let mut runtime_config = crate::plugins::config::RuntimeConfigContext::new()?;
-    super::super::daemon_lifecycle::start_daemon_with_context(plugin, Some(&mut runtime_config))
-        .map(|_| ())
+    let consumed_generation = super::super::daemon_lifecycle::start_daemon_with_context(
+        plugin,
+        Some(&mut runtime_config),
+    )?;
+    if let Some(generation) = consumed_generation {
+        manager.acknowledge_profile_plugin_generation(plugin_id, generation);
+    }
+    Ok(())
 }
 
 fn plugin_mut<'a>(manager: &'a mut PluginManager, plugin_id: &str) -> Result<&'a mut Plugin> {
@@ -537,6 +545,598 @@ command = "daemon"
         assert!(
             crate::process_utils::is_pid_alive(other_pid_before as i32),
             "the unrelated daemon must remain alive"
+        );
+
+        for plugin in manager.plugins.values_mut() {
+            plugin.stop_daemon().unwrap();
+        }
+    }
+
+    use crate::plugins::manager::reload_delivery::{
+        CompletionDecision, PendingReloadTicket, ReloadDeliveryOutcome, RELOAD_DELIVERY_TTL,
+    };
+
+    fn tracked_config_save(
+        plugin_id: &str,
+        value: u64,
+    ) -> crate::plugins::config::ConfigSaveReceipt {
+        crate::plugins::PluginConfigManager::new()
+            .unwrap()
+            .set_config_tracked(plugin_id, serde_json::json!({ "value": value }))
+            .unwrap()
+    }
+
+    fn begin_and_record_reload(
+        manager: &mut PluginManager,
+        plugin_id: &str,
+        value: u64,
+    ) -> (
+        PendingReloadTicket,
+        crate::plugins::config::ConfigSaveReceipt,
+    ) {
+        let ticket = manager.begin_config_reload(plugin_id).unwrap();
+        let receipt = tracked_config_save(plugin_id, value);
+        manager
+            .record_config_reload_saved(&ticket, receipt)
+            .unwrap();
+        (ticket, receipt)
+    }
+
+    fn spawn_fixture_plugin(
+        manager: &mut PluginManager,
+        plugins_dir: &std::path::Path,
+        plugin_id: &str,
+    ) -> u32 {
+        let plugin_dir = write_daemon_plugin(plugins_dir, plugin_id, "1.0.0");
+        let config_dir = crate::paths::shared_config_dir().unwrap();
+        crate::plugins::registry::record_release_install(&config_dir, plugin_id, plugin_dir)
+            .unwrap();
+        insert_loaded_plugin(manager, plugin_id, &plugins_dir.join(plugin_id));
+        manager.get(plugin_id).unwrap().daemon_pid().unwrap()
+    }
+
+    struct ReloadClock(Instant);
+
+    impl ReloadClock {
+        fn start(instant: Instant) -> Self {
+            crate::plugins::manager::reload_delivery::set_test_now(Some(instant));
+            Self(instant)
+        }
+
+        fn advance(&self, duration: Duration) {
+            crate::plugins::manager::reload_delivery::set_test_now(Some(self.0 + duration));
+        }
+    }
+
+    impl Drop for ReloadClock {
+        fn drop(&mut self) {
+            crate::plugins::manager::reload_delivery::set_test_now(None);
+        }
+    }
+
+    #[test]
+    fn handled_config_reload_acknowledges_the_exact_save_and_keeps_the_daemon() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (ticket, receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: receipt.generation
+            }
+        );
+        assert_eq!(
+            manager.acknowledged_plugin_generation(PLUGIN_ID),
+            Some(receipt.generation),
+            "the acknowledgement must name the generation this save published"
+        );
+
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before),
+            "an acknowledged reload must not restart the daemon"
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn pending_config_reload_defers_reconciliation_until_acknowledgement() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (ticket, receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        assert!(manager.has_pending_config_reload(PLUGIN_ID));
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before),
+            "reconciliation must not restart a daemon with an in-flight save"
+        );
+
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: receipt.generation
+            }
+        );
+        assert!(!manager.has_pending_config_reload(PLUGIN_ID));
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn completing_one_config_reload_leaves_the_other_request_pending() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (first, first_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        let (second, second_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 2);
+
+        assert_eq!(
+            manager.complete_config_reload(&first, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: first_receipt.generation
+            }
+        );
+        assert!(
+            manager.has_pending_config_reload(PLUGIN_ID),
+            "completing one request must leave the newer request pending"
+        );
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+
+        assert_eq!(
+            manager.complete_config_reload(&second, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: second_receipt.generation
+            }
+        );
+        assert!(!manager.has_pending_config_reload(PLUGIN_ID));
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn reversed_config_reload_completions_keep_the_latest_generation_authoritative() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (first, first_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        let (second, second_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 2);
+        assert!(second_receipt.generation > first_receipt.generation);
+
+        assert_eq!(
+            manager.complete_config_reload(&second, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: second_receipt.generation
+            }
+        );
+        assert_eq!(
+            manager.complete_config_reload(&first, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: first_receipt.generation
+            }
+        );
+        assert_eq!(
+            manager.acknowledged_plugin_generation(PLUGIN_ID),
+            Some(second_receipt.generation),
+            "a late older acknowledgement must not regress the watermark"
+        );
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn failed_config_save_retires_its_request_without_suppressing_reconciliation() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let ticket = manager.begin_config_reload(PLUGIN_ID).unwrap();
+        {
+            let _published =
+                crate::plugins::config::profile_config_write_guard_for_plugin(PLUGIN_ID);
+        }
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::SaveFailed),
+            CompletionDecision::Superseded
+        );
+
+        assert!(
+            manager.reconcile_profile_generation().unwrap(),
+            "an unpublished or failed save must stay eligible for reconciliation"
+        );
+        let pid_after = manager.get(PLUGIN_ID).unwrap().daemon_pid().unwrap();
+        assert_ne!(pid_after, pid_before);
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Superseded
+        );
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_after)
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn expired_config_reload_is_revisited_without_another_save() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+        let clock = ReloadClock::start(Instant::now());
+
+        let (ticket, _receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+
+        clock.advance(RELOAD_DELIVERY_TTL + Duration::from_secs(1));
+        assert!(
+            manager.reconcile_profile_generation().unwrap(),
+            "an expired request must be revisited without another configuration mutation"
+        );
+        let pid_after = manager.get(PLUGIN_ID).unwrap().daemon_pid().unwrap();
+        assert_ne!(pid_after, pid_before);
+        assert!(!manager.has_pending_config_reload(PLUGIN_ID));
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Superseded
+        );
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_after)
+        );
+
+        drop(clock);
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn replaced_daemon_rejects_stale_completion_and_failure() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (ticket, receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        manager.restart_running_plugin_daemon(PLUGIN_ID).unwrap();
+        let pid_after = manager.get(PLUGIN_ID).unwrap().daemon_pid().unwrap();
+        assert_ne!(pid_after, pid_before);
+
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Superseded,
+            "the replaced daemon cannot acknowledge the old request"
+        );
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Failed),
+            CompletionDecision::Superseded,
+            "a stale failure must not restart the replacement daemon"
+        );
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_after)
+        );
+        assert!(
+            manager
+                .acknowledged_plugin_generation(PLUGIN_ID)
+                .is_some_and(|generation| generation >= receipt.generation),
+            "the replacement daemon must have recorded the generation it consumed"
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn failed_older_config_reload_does_not_restart_while_a_newer_request_is_pending() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (older, _older_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        let (newer, newer_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 2);
+
+        assert_eq!(
+            manager.complete_config_reload(&older, ReloadDeliveryOutcome::Failed),
+            CompletionDecision::Superseded,
+            "an older failure must not discard the newer in-flight save"
+        );
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+        assert!(manager.has_pending_config_reload(PLUGIN_ID));
+
+        assert_eq!(
+            manager.complete_config_reload(&newer, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: newer_receipt.generation
+            }
+        );
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn failed_reload_after_newer_acknowledged_generation_does_not_restart() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (older, _older_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        let (newer, newer_receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 2);
+        assert_eq!(
+            manager.complete_config_reload(&newer, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: newer_receipt.generation
+            }
+        );
+        assert_eq!(
+            manager.complete_config_reload(&older, ReloadDeliveryOutcome::Failed),
+            CompletionDecision::Superseded,
+            "a failed request must not restart after a newer save was consumed"
+        );
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_before)
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn failed_config_reload_notification_restarts_and_reconciles_cleanly() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (ticket, _receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Failed),
+            CompletionDecision::Restarted
+        );
+        let pid_after = manager.get(PLUGIN_ID).unwrap().daemon_pid().unwrap();
+        assert_ne!(pid_after, pid_before);
+        assert!(
+            !manager.reconcile_profile_generation().unwrap(),
+            "the replacement daemon must have consumed the saved generation"
+        );
+        assert_eq!(
+            manager.get(PLUGIN_ID).unwrap().daemon_pid(),
+            Some(pid_after)
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn pending_config_reload_does_not_block_unrelated_plugin_reconciliation() {
+        const TARGET_ID: &str = "plugin-pending-reload-target";
+        const OTHER_ID: &str = "plugin-pending-reload-other";
+
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let target_pid = spawn_fixture_plugin(&mut manager, &plugins_dir, TARGET_ID);
+        let other_pid = spawn_fixture_plugin(&mut manager, &plugins_dir, OTHER_ID);
+
+        let (ticket, receipt) = begin_and_record_reload(&mut manager, TARGET_ID, 1);
+        crate::plugins::PluginConfigManager::new()
+            .unwrap()
+            .set_config(OTHER_ID, serde_json::json!({"enabled": true}))
+            .unwrap();
+
+        assert!(manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(TARGET_ID).unwrap().daemon_pid(),
+            Some(target_pid),
+            "the pending plugin must stay deferred"
+        );
+        assert_ne!(
+            manager.get(OTHER_ID).unwrap().daemon_pid(),
+            Some(other_pid),
+            "an unrelated plugin must still reconcile"
+        );
+
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Acknowledged {
+                generation: receipt.generation
+            }
+        );
+        assert!(!manager.reconcile_profile_generation().unwrap());
+        assert_eq!(
+            manager.get(TARGET_ID).unwrap().daemon_pid(),
+            Some(target_pid)
+        );
+
+        for plugin in manager.plugins.values_mut() {
+            plugin.stop_daemon().unwrap();
+        }
+    }
+
+    #[test]
+    fn plugin_replacement_supersedes_pending_config_reloads() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let _pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (ticket, _receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        manager.reload_plugin(PLUGIN_ID).unwrap();
+
+        assert!(!manager.has_pending_config_reload(PLUGIN_ID));
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Failed),
+            CompletionDecision::Superseded
+        );
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Superseded
+        );
+
+        manager
+            .plugins
+            .get_mut(PLUGIN_ID)
+            .unwrap()
+            .stop_daemon()
+            .unwrap();
+    }
+
+    #[test]
+    fn full_profile_invalidation_supersedes_pending_config_reloads() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let _runtime_cache_lock = crate::test_support::runtime_cache_lock().blocking_lock();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let plugins_dir = crate::paths::plugins_dir().unwrap();
+        let mut manager = PluginManager::new();
+        let _pid_before = spawn_fixture_plugin(&mut manager, &plugins_dir, PLUGIN_ID);
+
+        let (ticket, _receipt) = begin_and_record_reload(&mut manager, PLUGIN_ID, 1);
+        {
+            let _all = crate::plugins::config::profile_config_write_guard();
+        }
+        assert!(manager.reconcile_profile_generation().unwrap());
+
+        assert!(!manager.has_pending_config_reload(PLUGIN_ID));
+        assert_eq!(
+            manager.complete_config_reload(&ticket, ReloadDeliveryOutcome::Handled),
+            CompletionDecision::Superseded
         );
 
         for plugin in manager.plugins.values_mut() {

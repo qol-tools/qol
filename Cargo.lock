@@ -2209,6 +2209,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum-primitive-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba7795da175654fe16979af73f81f26a8ea27638d8d9823d317016888a63dc4c"
+dependencies = [
+ "num-traits",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5803,6 +5814,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-io-bluetooth",
  "qol-apps",
+ "qol-audio",
  "qol-config",
  "qol-conventions",
  "qol-fs",
@@ -5961,6 +5973,24 @@ dependencies = [
  "tempfile",
  "trash",
  "wait-timeout",
+ "workspace-hack",
+]
+
+[[package]]
+name = "plugin-sound"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "qol-apps",
+ "qol-audio",
+ "qol-config",
+ "qol-conventions",
+ "qol-headless",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "serde",
+ "serde_json",
  "workspace-hack",
 ]
 
@@ -6282,6 +6312,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
+name = "pulseaudio"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d70623bd7967a9ca4c2ae0e807fc380b291f98480fc037042305ec643a4d3373"
+dependencies = [
+ "bitflags 2.13.0",
+ "byteorder",
+ "enum-primitive-derive",
+ "futures",
+ "log",
+ "mio",
+ "num-traits",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6385,6 +6431,17 @@ dependencies = [
  "qol-conventions",
  "serde_json",
  "target-lexicon",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-audio"
+version = "1.0.0"
+dependencies = [
+ "mio",
+ "pulseaudio",
+ "socket2",
+ "tempfile",
  "workspace-hack",
 ]
 
@@ -6794,6 +6851,7 @@ dependencies = [
  "libc",
  "objc2",
  "qol-apps",
+ "qol-audio",
  "qol-cinnamon",
  "qol-color",
  "qol-config",
@@ -6933,6 +6991,7 @@ dependencies = [
  "futures-util",
  "hf-hub",
  "qol-apps",
+ "qol-audio",
  "qol-config",
  "qol-conventions",
  "qol-headless",

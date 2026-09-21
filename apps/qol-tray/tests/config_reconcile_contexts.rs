@@ -393,9 +393,9 @@ mod write_point_dispatch_contracts {
         let handler =
             read_src("features/plugin_store/server/settings/plugin_config_handlers/mod.rs");
         assert!(
-            handler.contains("notify::notify_plugin_reload(state, &plugin_id)"),
-            "set_plugin_config_inner must invoke notify_plugin_reload after save so the live \
-             daemon picks up the new config"
+            handler.contains("notify::notify_plugin_reload_outcome(plugin_manager, plugin_id)"),
+            "set_plugin_config_inner must invoke the tracked reload notification after save so \
+             the live daemon picks up the new config"
         );
         assert!(
             !handler.contains("trigger_reload()"),

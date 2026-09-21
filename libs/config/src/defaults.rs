@@ -17,7 +17,7 @@ pub fn defaults_json_from_spec(spec: &ConfigSpec) -> Result<Value, Vec<Validatio
 
     let mut root = Map::new();
     for (id, field) in &spec.fields {
-        if !field.kind.has_stored_value() {
+        if !field.has_stored_value() {
             continue;
         }
         let Some(default) = &field.default else {
@@ -306,6 +306,34 @@ default = "#ffffff"
                 "audio": { "inputs": ["mic", "system"] },
                 "display": { "color": "#ffffff" }
             })
+        );
+    }
+
+    #[test]
+    fn a_live_number_is_not_a_stored_default() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "string"
+config_key = "output.device"
+default = "default"
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            defaults_json_from_spec(&spec).unwrap(),
+            json!({ "output": { "device": "default" } })
         );
     }
 

@@ -1,5 +1,13 @@
 import { getVal, setVal } from './config-paths.js';
 
+export function isLiveField(field) {
+    return Boolean(field?.active_query);
+}
+
+export function isLiveNumberField(field) {
+    return field?.kind === 'number' && isLiveField(field);
+}
+
 export function buildFieldPathIndex(form) {
     const paths = {};
     for (const field of form.fields) {

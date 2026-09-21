@@ -38,7 +38,7 @@ export function getAvailableActions(plugins, hotkeys, pluginUid, editingId) {
         .filter(h => h.plugin_uid === pluginUid && h.id !== editingId)
         .map(h => h.action);
 
-    return plugin.actions.filter(a => !assigned.includes(a.id));
+    return plugin.actions.filter(a => a.hotkey !== false && !assigned.includes(a.id));
 }
 
 export function buildSavedHotkeys(hotkeys, modal) {

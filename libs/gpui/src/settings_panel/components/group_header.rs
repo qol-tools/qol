@@ -83,7 +83,7 @@ impl RenderOnce for SettingsGroupHeader {
                         div()
                             .min_w_0()
                             .flex_1()
-                            .truncate()
+                            .line_clamp(1)
                             .text_size(px(qol_theme::TEXT_DISPLAY))
                             .line_height(gpui::relative(1.15))
                             .text_color(rgb(name))
@@ -113,8 +113,8 @@ impl RenderOnce for SettingsGroupHeader {
             None => block,
             Some(detail) => block.child(
                 div()
-                    .min_w_0()
-                    .truncate()
+                    .w_full()
+                    .line_clamp(1)
                     .text_size(px(qol_theme::TEXT_NANO))
                     .line_height(gpui::relative(1.2))
                     .text_color(rgb(detail_ink))

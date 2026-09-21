@@ -615,6 +615,7 @@ mod shortcut_rules {
                     config_key: None,
                     checked: false,
                     picture: None,
+                    hotkey: true,
                 },
             )]
             .into_iter()

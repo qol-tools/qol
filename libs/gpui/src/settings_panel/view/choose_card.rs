@@ -88,6 +88,22 @@ pub(super) fn choose_tiles(
     tiles
 }
 
+pub(super) fn highlighted_at_open(control: &RowControl) -> Option<String> {
+    match control {
+        RowControl::Select { options, index, .. } => {
+            options.get(*index).map(|option| option.value.clone())
+        }
+        RowControl::MultiSelect {
+            options, selected, ..
+        } => options
+            .iter()
+            .zip(selected)
+            .find(|(_, selected)| **selected)
+            .map(|(option, _)| option.value.clone()),
+        _ => None,
+    }
+}
+
 fn choose_highlight(tiles: &[ChooseTile], highlighted: Option<&str>) -> usize {
     if let Some(value) = highlighted {
         if let Some(index) = tiles
@@ -232,11 +248,19 @@ impl SettingsPanelView {
                     return;
                 };
                 match &mut row.control {
-                    RowControl::Select { options, index, .. } => {
+                    RowControl::Select {
+                        options,
+                        index,
+                        live,
+                        ..
+                    } => {
                         if option >= options.len() {
                             return;
                         }
                         *index = option;
+                        if let Some(live) = live {
+                            live.saved = options[option].value.clone();
+                        }
                         self.persist();
                         self.pop_card(cx);
                     }
@@ -314,7 +338,7 @@ impl SettingsPanelView {
             live_card: false,
             choose: Some(ChooseState {
                 origin: ChooseOrigin::Row(index),
-                highlighted: None,
+                highlighted: highlighted_at_open(&row.control),
             }),
             entries: None,
             form: None,
@@ -436,11 +460,11 @@ impl SettingsPanelView {
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_enter_label, choose_highlight, choose_tiles, multi_select_art, multi_select_word,
-        option_art,
+        choose_enter_label, choose_highlight, choose_tiles, highlighted_at_open, multi_select_art,
+        multi_select_word, option_art,
     };
     use crate::settings_panel::components::{ChoiceArt, TileArt};
-    use crate::settings_panel::rows::SelectOption;
+    use crate::settings_panel::rows::{LiveQuery, RowControl, SelectLive, SelectOption};
 
     fn managed_devices() -> Vec<SelectOption> {
         vec![
@@ -564,6 +588,35 @@ mod tests {
         assert_eq!(choose_highlight(&tiles, Some("c")), 2);
         let none = choose_tiles(&options, &[false, false, false], None);
         assert_eq!(choose_highlight(&none, None), 0);
+    }
+
+    #[test]
+    fn a_polled_index_does_not_move_the_frozen_highlight() {
+        let options = managed_devices();
+        let mut control = RowControl::Select {
+            options: options.clone(),
+            index: 1,
+            dynamic: None,
+            live: Some(SelectLive {
+                source: LiveQuery {
+                    query: "output_status".to_string(),
+                    value_from: Some("shown".to_string()),
+                },
+                saved: "b".to_string(),
+            }),
+        };
+        let highlighted = highlighted_at_open(&control);
+        assert_eq!(highlighted.as_deref(), Some("b"));
+        let tiles = choose_tiles(&options, &[false, true, false], None);
+        let chosen = choose_highlight(&tiles, highlighted.as_deref());
+        assert_eq!(tiles[chosen].value.as_deref(), Some("b"));
+        if let RowControl::Select { index, .. } = &mut control {
+            *index = 2;
+        }
+        let moved = choose_tiles(&options, &[false, false, true], None);
+        let still = choose_highlight(&moved, highlighted.as_deref());
+        assert_eq!(still, chosen);
+        assert_eq!(moved[still].value.as_deref(), Some("b"));
     }
 
     #[test]

@@ -1,0 +1,23 @@
+[package]
+name = "plugin-sound"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+qol-apps.workspace = true
+qol-audio.workspace = true
+qol-config.workspace = true
+qol-conventions.workspace = true
+qol-headless.workspace = true
+qol-plugin-daemon.workspace = true
+qol-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+workspace-hack.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+qol-plugin-api.workspace = true
