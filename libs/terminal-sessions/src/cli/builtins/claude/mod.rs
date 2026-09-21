@@ -77,6 +77,11 @@ impl CliSessionStrategy for ClaudeStrategy {
                 viewport: CliViewportState::Live,
                 runtime: CliRuntimeState::Working,
             }
+        } else if crate::cli::screen::claude_dialog(screen) {
+            CliScreenEvidence {
+                viewport: CliViewportState::Live,
+                runtime: CliRuntimeState::NeedsInput,
+            }
         } else if crate::cli::screen::has_done_marker(screen) {
             CliScreenEvidence {
                 viewport: CliViewportState::Unknown,

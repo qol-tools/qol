@@ -12,6 +12,15 @@ const CHOICE_HINTS: [&str; 6] = [
     "to submit",
     "space to toggle",
 ];
+const CLAUDE_DIALOG_WINDOW: usize = 8;
+const CLAUDE_DIALOG_AFFORDANCES: [&str; 6] = [
+    "esc to cancel",
+    "enter to select",
+    "enter to confirm",
+    "enter to submit",
+    "\u{2191}/\u{2193} to navigate",
+    "esc to close",
+];
 
 pub(super) fn has_interrupt_hint(text: &str) -> bool {
     tail(text, STATUS_TAIL)
@@ -36,6 +45,66 @@ fn is_status_spinner(trimmed: &str) -> bool {
         && !starts_with_glyph(glyph, 0x2800..=0x28FF)
         && rest.contains("\u{2026} (")
         && trimmed.ends_with(')')
+}
+
+pub(super) fn claude_dialog(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let rules: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_rule_line(line))
+        .map(|(index, _)| index)
+        .collect();
+    let (start, end) = match rules.as_slice() {
+        [] => return false,
+        [only] => (*only + 1, lines.len()),
+        rest => (rest[rest.len() - 2] + 1, rest[rest.len() - 1]),
+    };
+    if start > end {
+        return false;
+    }
+    let region = &lines[start..end];
+    let mut numbered = 0usize;
+    let mut selected = 0usize;
+    for is_selected in region.iter().filter_map(|line| claude_option(line)) {
+        numbered += 1;
+        selected += usize::from(is_selected);
+    }
+    let window_end = end.saturating_add(CLAUDE_DIALOG_WINDOW).min(lines.len());
+    let affordance = lines[start..window_end].iter().any(|line| {
+        let lower = line.to_lowercase();
+        CLAUDE_DIALOG_AFFORDANCES
+            .iter()
+            .any(|marker| lower.contains(marker))
+    });
+    let question = region.iter().any(|line| {
+        let lower = line.to_lowercase();
+        lower.contains("do you want to proceed?") || lower.contains("would you like to proceed?")
+    });
+    (selected >= 1 && numbered >= 2 && affordance) || (question && numbered >= 1)
+}
+
+fn claude_option(line: &str) -> Option<bool> {
+    let rest = line.trim_start();
+    let (rest, selected) = match rest.strip_prefix('\u{276F}') {
+        Some(rest) => (rest.trim_start(), true),
+        None => (rest, false),
+    };
+    let digits = rest
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    if digits == 0 {
+        return None;
+    }
+    let mut tail = rest[digits..].chars();
+    if !matches!(tail.next(), Some('.') | Some(')')) {
+        return None;
+    }
+    matches!(tail.next(), None | Some(' ') | Some('\t')).then_some(selected)
 }
 
 pub(super) fn has_braille_spinner(text: &str) -> bool {
@@ -453,9 +522,9 @@ fn is_choice_affordance(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        claude_working, contains_any, has_braille_spinner, has_choice_hint, has_done_marker,
-        has_interrupt_hint, has_numbered_choice, has_picker_cluster, kimi_live, kimi_questionnaire,
-        kimi_working, pi_live,
+        claude_dialog, claude_working, contains_any, has_braille_spinner, has_choice_hint,
+        has_done_marker, has_interrupt_hint, has_numbered_choice, has_picker_cluster, kimi_live,
+        kimi_questionnaire, kimi_working, pi_live,
     };
 
     fn screen(tail: &[&str]) -> String {
@@ -542,6 +611,74 @@ mod tests {
             let text = screen(&[line]);
             assert_eq!(has_braille_spinner(&text), expected, "line: {line}");
         }
+    }
+
+    #[test]
+    fn claude_dialog_recognizes_trust_and_picker_shapes() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let trust = [
+            rule,
+            " Accessing workspace:",
+            " Quick safety check: Is this a project you created or one you trust?",
+            " \u{276F} 1. Yes, I trust this folder",
+            "   2. No, exit",
+            " Enter to confirm \u{b7} Esc to cancel",
+        ]
+        .join("\n");
+        assert!(claude_dialog(&trust));
+
+        let picker = [
+            rule,
+            " \u{2610} Guard action",
+            "When a guard trips, what should Remove App do?",
+            " \u{276F} 1. Warn + one-key act",
+            "   2. Warn-only (block)",
+            "   3. Auto-handle silently",
+            rule,
+            "  Chat about this",
+            "Enter to select \u{b7} \u{2191}/\u{2193} to navigate \u{b7} Esc to cancel",
+        ]
+        .join("\n");
+        assert!(claude_dialog(&picker));
+    }
+
+    #[test]
+    fn claude_dialog_rejects_echoes_drafts_and_bare_composers() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let echo = [
+            rule,
+            "  transcript text",
+            "  \u{276F} 404. open locally",
+            rule,
+        ]
+        .join("\n");
+        assert!(!claude_dialog(&echo));
+
+        let at_rest = [rule, "  \u{276F} ", rule].join("\n");
+        assert!(!claude_dialog(&at_rest));
+
+        let draft = [
+            rule,
+            "  \u{276F} 1. first draft point",
+            "    2. second draft point",
+            rule,
+        ]
+        .join("\n");
+        assert!(!claude_dialog(&draft));
+    }
+
+    #[test]
+    fn claude_dialog_recognizes_the_permission_prompt() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let permission = [
+            rule,
+            "Do you want to proceed?",
+            " \u{276F} 1. Yes",
+            "   2. Yes, and don't ask again for npm test in /work/project",
+            "   3. No, and tell Claude what to do differently (esc)",
+        ]
+        .join("\n");
+        assert!(claude_dialog(&permission));
     }
 
     #[test]
@@ -948,6 +1085,7 @@ mod tests {
                 let _ = (
                     has_interrupt_hint(&text),
                     claude_working(&text),
+                    claude_dialog(&text),
                     has_braille_spinner(&text),
                     has_choice_hint(&text),
                     has_picker_cluster(&text),

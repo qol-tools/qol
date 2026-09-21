@@ -4,6 +4,6 @@
   "foreground_basenames": [
     "claude"
   ],
-  "expect": "Unknown",
+  "expect": "NeedsYou",
   "screen_changed": false
 }

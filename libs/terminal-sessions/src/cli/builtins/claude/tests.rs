@@ -453,6 +453,36 @@ fn screen_classification_distinguishes_work_done_and_plain_output() {
 }
 
 #[test]
+fn claude_dialog_reads_needs_input_and_work_still_wins() {
+    let strategy = ClaudeStrategy::default();
+    let facts = session();
+
+    let dialog = concat!(
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n",
+        "Do you want to proceed?\n",
+        "\u{276F} 1. Yes\n",
+        "  2. Yes, and don't ask again for npm test in /work/project\n",
+        "  3. No, and tell Claude what to do differently (esc)"
+    );
+    assert_eq!(
+        strategy.classify_screen(&facts, dialog),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::NeedsInput,
+        }
+    );
+
+    let working = format!("{dialog}\n\u{2728} Working \u{2026} (3s)");
+    assert_eq!(
+        strategy.classify_screen(&facts, &working),
+        CliScreenEvidence {
+            viewport: CliViewportState::Live,
+            runtime: CliRuntimeState::Working,
+        }
+    );
+}
+
+#[test]
 fn claude_done_marker_sets_runtime_ready_but_never_a_live_viewport() {
     let strategy = ClaudeStrategy::default();
     let facts = session();
