@@ -61,7 +61,7 @@ fn dev_repo_root_from(cwd: &Path, config_dir: Option<&Path>) -> Result<PathBuf> 
 }
 
 fn record_default_workspace_in(root: &Path, config_dir: &Path) -> Result<()> {
-    let root = exact_qol_cli_workspace(root)?;
+    let root = exact_qol_cli_workspace(&main_checkout(root))?;
     let value = root
         .to_str()
         .context("qol workspace path is not valid UTF-8")?;
@@ -72,6 +72,16 @@ fn record_default_workspace_in(root: &Path, config_dir: &Path) -> Result<()> {
     }
     qol_fs::atomic_write_durable(&path, content.as_bytes())
         .with_context(|| format!("failed to record default workspace at {}", path.display()))
+}
+
+fn main_checkout(root: &Path) -> PathBuf {
+    match git2::Repository::open(root) {
+        Ok(repo) if repo.is_worktree() => repo
+            .commondir()
+            .parent()
+            .map_or_else(|| root.to_path_buf(), Path::to_path_buf),
+        _ => root.to_path_buf(),
+    }
 }
 
 fn read_default_workspace(config_dir: &Path) -> Result<PathBuf> {
@@ -433,6 +443,32 @@ mod tests {
         let resolved = dev_repo_root_from(&current.join("tools"), Some(&config_dir)).unwrap();
 
         assert_eq!(resolved, current);
+    }
+
+    #[test]
+    fn setup_from_a_linked_worktree_records_the_main_checkout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        let linked = tmp.path().join("linked");
+        let config_dir = tmp.path().join("config");
+        write_qol_cli_workspace(&main);
+        let repo = git2::Repository::init(&main).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        repo.worktree("linked", &linked, None).unwrap();
+
+        record_default_workspace_in(&linked, &config_dir).unwrap();
+
+        assert_eq!(
+            read_default_workspace(&config_dir).unwrap(),
+            main.canonicalize().unwrap()
+        );
     }
 
     #[test]
