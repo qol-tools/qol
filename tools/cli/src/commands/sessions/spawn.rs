@@ -139,6 +139,7 @@ struct SpawnConfigFile {
     spawn_surface: Option<String>,
     spawn_model: Option<String>,
     allowed_models: Option<Vec<String>>,
+    tool_models: Option<std::collections::BTreeMap<String, Vec<String>>>,
     spawn_cap: Option<bool>,
     spawn_cpu_weight: Option<u32>,
     spawn_io_weight: Option<u32>,
@@ -397,6 +398,7 @@ fn config_dispatch_policy_at(path: &Path) -> Result<DispatchPolicy> {
     let config: SpawnConfigFile =
         toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
     let allowed_models = allowed_models_from(config.allowed_models, config.spawn_model.clone());
+    let tool_models = tool_models_from(config.tool_models, path)?;
     let agent = AgentPolicy::build(
         config.agent_profiles,
         config.default_agent_profile,
@@ -406,6 +408,7 @@ fn config_dispatch_policy_at(path: &Path) -> Result<DispatchPolicy> {
         agent,
         default_model: config.spawn_model,
         allowed_models,
+        tool_models,
     })
 }
 
@@ -430,6 +433,56 @@ fn allowed_models_from(allowed: Option<Vec<String>>, spawn_model: Option<String>
         Some(allowed) if !allowed.is_empty() => allowed,
         _ => spawn_model.into_iter().collect(),
     }
+}
+
+fn tool_models_from(
+    configured: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    path: &Path,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>> {
+    let Some(configured) = configured else {
+        return Ok(std::collections::BTreeMap::new());
+    };
+    let mut tool_models = std::collections::BTreeMap::new();
+    for (tool, models) in configured {
+        let tool = tool.trim().to_owned();
+        if tool.is_empty() {
+            bail!(
+                "tool_models declares a tool with an empty name in {}",
+                path.display()
+            );
+        }
+        if models.is_empty() {
+            bail!(
+                "tool_models for `{tool}` must declare at least one model in {}",
+                path.display()
+            );
+        }
+        if tool_models.contains_key(&tool) {
+            bail!(
+                "tool_models declares tool `{tool}` twice in {}",
+                path.display()
+            );
+        }
+        let mut declared = Vec::new();
+        for model in models {
+            let model = model.trim().to_owned();
+            if model.is_empty() {
+                bail!(
+                    "tool_models for `{tool}` declares an empty model in {}",
+                    path.display()
+                );
+            }
+            if declared.contains(&model) {
+                bail!(
+                    "tool_models for `{tool}` lists model `{model}` twice in {}",
+                    path.display()
+                );
+            }
+            declared.push(model);
+        }
+        tool_models.insert(tool, declared);
+    }
+    Ok(tool_models)
 }
 
 pub(super) fn require_model_for_launch(model: Option<&str>) -> Result<()> {
@@ -3460,6 +3513,108 @@ mod tests {
     }
 
     #[test]
+    fn tool_models_parse_into_the_policy_and_stay_empty_when_absent() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("sessions.toml");
+
+        let missing = config_dispatch_policy_at(&path).unwrap();
+        assert!(missing.tool_models.is_empty());
+
+        fs::write(&path, "allowed_models = [\"flash\"]\n").unwrap();
+        let absent = config_dispatch_policy_at(&path).unwrap();
+        assert!(absent.tool_models.is_empty());
+
+        fs::write(
+            &path,
+            "allowed_models = [\"flash\", \"glm-5.3-flash\"]\n[tool_models]\npi = [\" flash \", \"glm-5.3-flash\"]\n",
+        )
+        .unwrap();
+        let parsed = config_dispatch_policy_at(&path).unwrap();
+        assert_eq!(
+            parsed.tool_models.get("pi"),
+            Some(&vec!["flash".to_owned(), "glm-5.3-flash".to_owned()])
+        );
+        assert_eq!(parsed.tool_models.len(), 1);
+    }
+
+    #[test]
+    fn tool_models_reject_empty_duplicate_and_absent_entries() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("sessions.toml");
+
+        fs::write(&path, "[tool_models]\n\"  \" = [\"flash\"]\n").unwrap();
+        let empty_tool = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(empty_tool.contains("tool_models"), "{empty_tool}");
+
+        fs::write(&path, "[tool_models]\npi = [\"  \"]\n").unwrap();
+        let empty_model = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(empty_model.contains("tool_models"), "{empty_model}");
+
+        fs::write(&path, "[tool_models]\npi = [\"flash\", \"flash\"]\n").unwrap();
+        let duplicate = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(duplicate.contains("tool_models"), "{duplicate}");
+
+        fs::write(&path, "[tool_models]\npi = []\n").unwrap();
+        let empty_list = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(empty_list.contains("tool_models"), "{empty_list}");
+    }
+
+    #[test]
+    fn a_tool_models_pair_gates_a_spawn_before_the_terminal_launch() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let dispatch = AgentDispatch::new(
+            DispatchPolicy {
+                agent: AgentPolicy::default(),
+                default_model: None,
+                allowed_models: vec!["flash".to_owned(), "pro".to_owned()],
+                tool_models: std::collections::BTreeMap::from([(
+                    "pi".to_owned(),
+                    vec!["flash".to_owned()],
+                )]),
+            },
+            AssignmentRequest::default(),
+        );
+
+        let error = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-undeclared-pair",
+            Some("pro"),
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("tool_models"), "{error}");
+        assert!(error.contains("pro"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+
+        let launched = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-declared-pair",
+            Some("flash"),
+            false,
+            None,
+            &dispatch,
+        )
+        .unwrap();
+        assert_eq!(launched.model.as_deref(), Some("flash"));
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
     fn wrap_launch_runs_inside_a_systemd_scope_when_capping_is_resolved() {
         let launch = CliLaunchProgram {
             program: "pi".to_owned(),
@@ -3723,6 +3878,7 @@ mod tests {
                 agent: AgentPolicy::default(),
                 default_model: Some("flash-y".to_owned()),
                 allowed_models: Vec::new(),
+                tool_models: std::collections::BTreeMap::new(),
             },
             AssignmentRequest::default(),
         );
@@ -5367,6 +5523,7 @@ mod tests {
                 agent: policy,
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
+                tool_models: std::collections::BTreeMap::new(),
             },
             AssignmentRequest {
                 agent_profile: agent_profile.map(str::to_owned),
@@ -5397,6 +5554,7 @@ mod tests {
                 agent: policy,
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
+                tool_models: std::collections::BTreeMap::new(),
             },
             AssignmentRequest {
                 agent_profile: Some("other".to_owned()),
@@ -5427,6 +5585,7 @@ mod tests {
                 agent: policy,
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
+                tool_models: std::collections::BTreeMap::new(),
             },
             AssignmentRequest::default(),
         )
@@ -5930,6 +6089,7 @@ mod tests {
                 agent: policy,
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
+                tool_models: std::collections::BTreeMap::new(),
             },
             AssignmentRequest {
                 agent_profile: Some(selected.to_owned()),
@@ -5966,6 +6126,7 @@ mod tests {
                 agent: policy,
                 default_model: None,
                 allowed_models,
+                tool_models: std::collections::BTreeMap::new(),
             },
             AssignmentRequest {
                 agent_profile: Some("worker".to_owned()),
@@ -6237,7 +6398,7 @@ mod tests {
             &ledger,
             &locks(&root),
             &forks,
-            "pi",
+            Some("pi"),
             &cwd,
             "lane-fork-profile",
             None,
@@ -6261,7 +6422,7 @@ mod tests {
             &ledger,
             &locks(&root),
             &forks,
-            "pi",
+            Some("pi"),
             &cwd,
             "lane-fork-conflict",
             None,

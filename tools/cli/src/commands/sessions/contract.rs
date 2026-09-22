@@ -129,7 +129,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model override for the spawned session. Omit it: a selected agent profile's declared model is the default, then the spawn_model config, and allowed_models refuses anything else, because tiers are billed per token and only the person paying picks one",
+                        "description": "Model override for the spawned session. Omit it: a selected agent profile's declared model is the default, then the spawn_model config. The tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models remains the spending allowlist, because tiers are billed per token and only the person paying picks one",
                     },
                     "title": {
                         "type": "string",
@@ -221,7 +221,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "description": "Registered CLI tool to fork; defaults to claude",
+                        "description": "Registered CLI tool to fork. Optional: it resolves from the selected agent profile's declared tool, or on an unconstrained fork from the harness the tool_models mapping declares for the chosen model, never a silent claude default",
                     },
                     "cwd": {
                         "type": "string",
@@ -233,7 +233,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, and allowed_models still governs spending.",
+                        "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, the tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models still governs spending.",
                     },
                     "effort": {
                         "type": "string",

@@ -153,7 +153,7 @@ Bridge work between independent terminal sessions.
 Primary usage:
   qol sessions list [--json]
   qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
-  qol sessions fork --tool TOOL --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
   qol sessions next [<session>] [--json]
@@ -186,6 +186,8 @@ Details:
   explicit --model override names the spawned session's model (appended to
   the harness launch as --model); a selected agent profile's declared model is
   the default, and the spawn_model setting in the same file is the fallback.
+  The tool_models mapping in the same file binds models to harnesses, and a
+  pair it does not declare is refused before launch.
   --title names the new tab (the lane key by default), and
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,
@@ -200,8 +202,10 @@ Details:
   from image_input and visual_review where an empty value means no
   requirements while an omitted flag means none were declared; a fork's
   --model is optional because a selected profile's declared model is the
-  default when the caller supplies none, while an explicit conflicting model
-  stays an error. image_input needs a native declaration
+  default when the caller supplies none, the harness resolves from the
+  selected profile or the model's tool_models entry rather than a silent
+  claude default, and an explicit conflicting model stays an error.
+  image_input needs a native declaration
   and visual_review needs native plus allow. Configuring any agent_profiles
   entry enables enforcement unless enforce_agent_profiles is false, an
   explicit agent_profile or default_agent_profile is then required, and the

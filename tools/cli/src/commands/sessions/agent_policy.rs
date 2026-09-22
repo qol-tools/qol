@@ -278,6 +278,34 @@ pub(super) struct DispatchPolicy {
     pub(super) agent: AgentPolicy,
     pub(super) default_model: Option<String>,
     pub(super) allowed_models: Vec<String>,
+    pub(super) tool_models: BTreeMap<String, Vec<String>>,
+}
+
+impl DispatchPolicy {
+    fn tool_for_model(&self, model: &str) -> Result<String> {
+        if self.tool_models.is_empty() {
+            bail!(
+                "a launch without an explicit tool needs tool_models to resolve the harness for model `{model}`; declare the harness in tool_models or pass the tool explicitly"
+            );
+        }
+        let matches = self
+            .tool_models
+            .iter()
+            .filter(|(_, models)| models.iter().any(|entry| entry == model))
+            .map(|(tool, _)| tool.as_str())
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [tool] => Ok((*tool).to_owned()),
+            [] => bail!(
+                "model `{model}` is not declared for any tool in tool_models; tool_models declares: {}",
+                tool_models_catalog(&self.tool_models)
+            ),
+            many => bail!(
+                "model `{model}` is declared for more than one tool in tool_models ({}); pass the tool explicitly",
+                many.join(", ")
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -357,13 +385,36 @@ impl AgentDispatch {
         self.policy.agent.enforcement() || !self.request.is_unconstrained()
     }
 
+    pub(super) fn resolve_launch_tool(
+        &self,
+        explicit_tool: Option<&str>,
+        explicit_model: Option<&str>,
+    ) -> Result<String> {
+        if let Some(tool) = explicit_tool {
+            return Ok(tool.to_owned());
+        }
+        if self.is_constrained() {
+            let (_, profile) = resolve_profile(&self.policy.agent, &self.request)?;
+            return Ok(profile.tool.clone());
+        }
+        let model = explicit_model
+            .map(str::to_owned)
+            .or_else(|| self.policy.default_model.clone());
+        let Some(model) = model else {
+            bail!(
+                "a launch without an explicit tool needs a model to resolve the harness; pass --model MODEL or set spawn_model in sessions.toml"
+            );
+        };
+        self.policy.tool_for_model(&model)
+    }
+
     pub(super) fn admit_launch(
         &self,
         tool: &str,
         explicit_model: Option<&str>,
     ) -> Result<Admission> {
         if !self.is_constrained() {
-            let model = resolve_launch_model(&self.policy, None, explicit_model)?;
+            let model = resolve_launch_model(&self.policy, None, explicit_model, tool)?;
             return Ok(Admission {
                 model,
                 assignment: None,
@@ -379,7 +430,8 @@ impl AgentDispatch {
         let task_role = require_role(name, profile, self.request.task_role)?;
         let requires = self.request.requires.clone().unwrap_or_default();
         require_capabilities(name, profile, &requires)?;
-        let model = resolve_launch_model(&self.policy, Some((name, profile)), explicit_model)?;
+        let model =
+            resolve_launch_model(&self.policy, Some((name, profile)), explicit_model, tool)?;
         Ok(Admission {
             model,
             assignment: Some(assignment_from(name, profile, task_role, requires)),
@@ -407,6 +459,7 @@ impl AgentDispatch {
             };
             if let Some(model) = model.as_deref() {
                 enforce_allowed_model(model, &self.policy.allowed_models)?;
+                enforce_tool_model(tool, model, &self.policy.tool_models)?;
             }
             return Ok(Admission {
                 model,
@@ -417,6 +470,11 @@ impl AgentDispatch {
         let assignment = resolve_recorded_assignment(&self.request, assignment, profile)?;
         let model = Some(assignment.model.clone());
         enforce_allowed_model(assignment.model.as_str(), &self.policy.allowed_models)?;
+        enforce_tool_model(
+            &assignment.tool,
+            &assignment.model,
+            &self.policy.tool_models,
+        )?;
         Ok(Admission {
             model,
             assignment: Some(assignment),
@@ -437,6 +495,7 @@ impl AgentDispatch {
         };
         let profile = verify_recorded(&self.policy.agent, recorded, None, None)?;
         enforce_allowed_model(recorded.model.as_str(), &self.policy.allowed_models)?;
+        enforce_tool_model(&recorded.tool, &recorded.model, &self.policy.tool_models)?;
         Ok(Some(resolve_recorded_assignment(
             &self.request,
             recorded,
@@ -591,6 +650,7 @@ fn resolve_launch_model(
     policy: &DispatchPolicy,
     profile: Option<(&str, &AgentProfileSpec)>,
     explicit_model: Option<&str>,
+    tool: &str,
 ) -> Result<Option<String>> {
     let model = match profile {
         Some((name, profile)) => {
@@ -610,6 +670,7 @@ fn resolve_launch_model(
     };
     if let Some(model) = model.as_deref() {
         enforce_allowed_model(model, &policy.allowed_models)?;
+        enforce_tool_model(tool, model, &policy.tool_models)?;
     }
     Ok(model)
 }
@@ -701,6 +762,38 @@ pub(super) fn enforce_allowed_model(model: &str, allowed: &[String]) -> Result<(
     )
 }
 
+pub(super) fn enforce_tool_model(
+    tool: &str,
+    model: &str,
+    declared: &BTreeMap<String, Vec<String>>,
+) -> Result<()> {
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let Some(models) = declared.get(tool) else {
+        bail!(
+            "tool `{tool}` is not declared in tool_models, so model `{model}` cannot launch with it; tool_models declares: {}",
+            tool_models_catalog(declared)
+        );
+    };
+    if models.iter().any(|entry| entry == model) {
+        return Ok(());
+    }
+    bail!(
+        "model `{model}` is not declared for tool `{tool}` in tool_models; tool `{tool}` declares: {}. tool_models declares: {}",
+        models.join(", "),
+        tool_models_catalog(declared)
+    )
+}
+
+fn tool_models_catalog(declared: &BTreeMap<String, Vec<String>>) -> String {
+    declared
+        .iter()
+        .map(|(tool, models)| format!("{tool} = [{}]", models.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,6 +833,7 @@ mod tests {
                 agent: policy,
                 default_model: None,
                 allowed_models: Vec::new(),
+                tool_models: BTreeMap::new(),
             },
             request,
         )
@@ -1149,6 +1243,7 @@ mod tests {
                 agent: policy,
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
+                tool_models: BTreeMap::new(),
             },
             request(Some("worker"), Some(AgentRole::Implement), None),
         );
@@ -1164,6 +1259,7 @@ mod tests {
                 agent: AgentPolicy::default(),
                 default_model: Some("flash".to_owned()),
                 allowed_models: Vec::new(),
+                tool_models: BTreeMap::new(),
             },
             AssignmentRequest::default(),
         );
@@ -1172,6 +1268,137 @@ mod tests {
         assert_eq!(admitted.model.as_deref(), Some("flash"));
         assert!(admitted.assignment.is_none());
         assert_eq!(admitted.status(), AgentStatus::Unconstrained);
+    }
+
+    #[test]
+    fn enforce_tool_model_follows_the_declared_mapping() {
+        let declared = BTreeMap::from([("pi".to_owned(), vec!["flash".to_owned()])]);
+        assert!(enforce_tool_model("codex", "pro", &BTreeMap::new()).is_ok());
+        assert!(enforce_tool_model("pi", "flash", &declared).is_ok());
+
+        let wrong_model = enforce_tool_model("pi", "pro", &declared)
+            .unwrap_err()
+            .to_string();
+        assert!(wrong_model.contains("tool_models"), "{wrong_model}");
+        assert!(wrong_model.contains("pro"), "{wrong_model}");
+        assert!(wrong_model.contains("flash"), "{wrong_model}");
+
+        let undeclared_tool = enforce_tool_model("codex", "flash", &declared)
+            .unwrap_err()
+            .to_string();
+        assert!(undeclared_tool.contains("tool_models"), "{undeclared_tool}");
+        assert!(undeclared_tool.contains("codex"), "{undeclared_tool}");
+    }
+
+    #[test]
+    fn resolving_a_harness_from_a_model_requires_exactly_one_declaration() {
+        let unique = DispatchPolicy {
+            tool_models: BTreeMap::from([("pi".to_owned(), vec!["flash".to_owned()])]),
+            ..DispatchPolicy::default()
+        };
+        assert_eq!(unique.tool_for_model("flash").unwrap(), "pi");
+
+        let missing = unique.tool_for_model("pro").unwrap_err().to_string();
+        assert!(missing.contains("pro"), "{missing}");
+        assert!(missing.contains("tool_models"), "{missing}");
+
+        let ambiguous = DispatchPolicy {
+            tool_models: BTreeMap::from([
+                ("pi".to_owned(), vec!["flash".to_owned()]),
+                ("claude".to_owned(), vec!["flash".to_owned()]),
+            ]),
+            ..DispatchPolicy::default()
+        };
+        let error = ambiguous.tool_for_model("flash").unwrap_err().to_string();
+        assert!(error.contains("claude"), "{error}");
+        assert!(error.contains("pi"), "{error}");
+        assert!(error.contains("explicitly"), "{error}");
+
+        let empty = DispatchPolicy::default()
+            .tool_for_model("flash")
+            .unwrap_err()
+            .to_string();
+        assert!(empty.contains("tool_models"), "{empty}");
+    }
+
+    #[test]
+    fn a_declared_tool_model_pair_admits_and_an_undeclared_pair_is_refused() {
+        let dispatch = AgentDispatch::new(
+            DispatchPolicy {
+                agent: AgentPolicy::default(),
+                default_model: None,
+                allowed_models: vec!["flash".to_owned(), "pro".to_owned()],
+                tool_models: BTreeMap::from([("pi".to_owned(), vec!["flash".to_owned()])]),
+            },
+            AssignmentRequest::default(),
+        );
+        let admitted = dispatch.admit_launch("pi", Some("flash")).unwrap();
+        assert_eq!(admitted.model.as_deref(), Some("flash"));
+        assert!(admitted.assignment.is_none());
+
+        let wrong_model = dispatch
+            .admit_launch("pi", Some("pro"))
+            .unwrap_err()
+            .to_string();
+        assert!(wrong_model.contains("tool_models"), "{wrong_model}");
+        assert!(wrong_model.contains("pro"), "{wrong_model}");
+
+        let undeclared_tool = dispatch
+            .admit_launch("codex", Some("flash"))
+            .unwrap_err()
+            .to_string();
+        assert!(undeclared_tool.contains("tool_models"), "{undeclared_tool}");
+        assert!(undeclared_tool.contains("codex"), "{undeclared_tool}");
+    }
+
+    #[test]
+    fn a_launch_tool_resolves_from_the_profile_or_the_model_mapping() {
+        let spec = profile(
+            "codex",
+            "flash",
+            vec![AgentRole::Implement],
+            ImageInput::Unknown,
+            VisualReview::Deny,
+        );
+        let constrained = AgentDispatch::new(
+            DispatchPolicy {
+                agent: policy_with("worker", spec, None, None),
+                default_model: None,
+                allowed_models: Vec::new(),
+                tool_models: BTreeMap::new(),
+            },
+            request(Some("worker"), Some(AgentRole::Implement), None),
+        );
+        assert_eq!(
+            constrained.resolve_launch_tool(None, None).unwrap(),
+            "codex"
+        );
+        assert_eq!(
+            constrained.resolve_launch_tool(Some("pi"), None).unwrap(),
+            "pi"
+        );
+
+        let unconstrained = AgentDispatch::new(
+            DispatchPolicy {
+                agent: AgentPolicy::default(),
+                default_model: None,
+                allowed_models: Vec::new(),
+                tool_models: BTreeMap::from([("pi".to_owned(), vec!["flash".to_owned()])]),
+            },
+            AssignmentRequest::default(),
+        );
+        assert_eq!(
+            unconstrained
+                .resolve_launch_tool(None, Some("flash"))
+                .unwrap(),
+            "pi"
+        );
+        let error = unconstrained
+            .resolve_launch_tool(None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--model"), "{error}");
+        assert!(error.contains("spawn_model"), "{error}");
     }
 
     #[test]
@@ -1447,6 +1674,7 @@ mod tests {
                 agent: policy_with("worker", spec.clone(), None, None),
                 default_model: None,
                 allowed_models: vec!["other".to_owned()],
+                tool_models: BTreeMap::new(),
             },
             AssignmentRequest::default(),
         );
@@ -1462,6 +1690,7 @@ mod tests {
                 agent: policy_with("worker", spec, None, None),
                 default_model: None,
                 allowed_models: Vec::new(),
+                tool_models: BTreeMap::new(),
             },
             AssignmentRequest::default(),
         );

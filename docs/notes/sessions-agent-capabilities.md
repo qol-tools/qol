@@ -86,6 +86,17 @@ With a selected profile, its declared tool and model are the launch identity.
 A conflicting explicit `--model` or tool is an error rather than a silent switch.
 For `session_spawn` and `session_fork` the profile model is the default when no explicit model is supplied, and an explicit model outside the selected profile is refused.
 
+A `[tool_models]` table in the same `sessions.toml` binds each registered tool to the models its harness may run:
+
+```toml
+[tool_models]
+pi = ["deepseek-v4-flash", "deepseek-flash", "glm-5.3-flash"]
+```
+
+Every launch path enforces the pair: a tool present with a listed model is eligible, a model outside its tool's list is refused, and a tool absent from the mapping is refused.
+When `tool_models` is absent or empty, explicit tool/model pairs keep the legacy behavior and only `allowed_models` applies.
+Resolving a default harness from a model requires the mapping to declare that model for exactly one tool; zero matches and multiple matches are refused.
+
 The existing `allowed_models` spending allowlist stays independent and is applied to the resolved model on every launch path, including the MCP fork path that previously skipped it, and to a constrained submit so a now-disallowed recorded model cannot keep consuming paid work.
 There is no automatic model upgrade, no preference-based launch, no fallback launch, and no widening of `allowed_models`.
 `qol sessions capability` lists the configured profiles sorted by preference with their declarations and a `spend_allowed` flag so a caller can choose within budget.

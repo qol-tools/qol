@@ -317,7 +317,8 @@ const EXECUTE_SPAWN: &str = r#"    async execute(_toolCallId, params, signal, _o
 "#;
 
 const EXECUTE_FORK: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
-      const args = ["fork", "--tool", params.tool ?? "claude", "--cwd", params.cwd, "--key", params.key];
+      const args = ["fork", "--cwd", params.cwd, "--key", params.key];
+      if (params.tool != null) args.push("--tool", params.tool);
       if (params.model != null) args.push("--model", params.model);
       if (params.effort != null) args.push("--effort", params.effort);
       if (params.title != null) args.push("--title", params.title);
@@ -836,6 +837,14 @@ mod tests {
         assert!(EXECUTE_FORK
             .contains("if (params.model != null) args.push(\"--model\", params.model);"));
         assert!(!EXECUTE_FORK.contains("\"--model\", params.model];"));
+    }
+
+    #[test]
+    fn pi_fork_template_passes_the_tool_only_when_supplied() {
+        assert!(
+            EXECUTE_FORK.contains("if (params.tool != null) args.push(\"--tool\", params.tool);")
+        );
+        assert!(!EXECUTE_FORK.contains("params.tool ?? \"claude\""));
     }
 
     #[test]

@@ -206,7 +206,7 @@ pub(super) fn fork(
     ledger: &SpawnLedger,
     locks: &SpawnLocks,
     forks: &ForkStore,
-    tool: &str,
+    tool: Option<&str>,
     cwd: &str,
     key: &str,
     surface: Option<&str>,
@@ -219,10 +219,14 @@ pub(super) fn fork(
     dispatch: &AgentDispatch,
 ) -> Result<ForkOutcome> {
     validate_brief(brief)?;
-    let tool_id = CliToolId::new(tool.to_owned())
-        .map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
+    let tool = match tool {
+        Some(tool) => tool.to_owned(),
+        None => dispatch.resolve_launch_tool(None, model)?,
+    };
+    let tool_id =
+        CliToolId::new(tool.clone()).map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
     let extra = effort_args(&tool_id, effort)?;
-    let admission = dispatch.admit_launch(tool, model)?;
+    let admission = dispatch.admit_launch(&tool, model)?;
     let Some(model) = admission.model.as_deref() else {
         bail!(
             "a fork needs --model, a selected profile model, or spawn_model in sessions.toml so the tier is one this host may launch"
@@ -233,7 +237,7 @@ pub(super) fn fork(
     let prompt = fork_prompt(&brief_path, parent);
     let mut record = ForkRecord {
         key: key.to_owned(),
-        tool: tool.to_owned(),
+        tool: tool.clone(),
         model: model.to_owned(),
         effort: effort.map(str::to_owned),
         surface: surface.unwrap_or(super::spawn::SURFACE_TAB).to_owned(),
@@ -251,7 +255,7 @@ pub(super) fn fork(
         interpreter,
         ledger,
         locks,
-        tool,
+        &tool,
         cwd,
         key,
         surface,
@@ -317,7 +321,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &SpawnLedger::system()?,
         &SpawnLocks::system()?,
         &ForkStore::system()?,
-        &parsed.tool,
+        parsed.tool.as_deref(),
         &parsed.cwd,
         &parsed.key,
         parsed.surface.as_deref(),
@@ -355,7 +359,7 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct ForkArgs {
     pub(super) help: bool,
-    pub(super) tool: String,
+    pub(super) tool: Option<String>,
     pub(super) cwd: String,
     pub(super) key: String,
     pub(super) surface: Option<String>,
@@ -381,14 +385,11 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork --tool TOOL --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
-    let mut parsed = ForkArgs {
-        tool: "claude".to_owned(),
-        ..ForkArgs::default()
-    };
+    let mut parsed = ForkArgs::default();
     let mut index = 0;
     while index < args.len() {
         let flag = args[index]
@@ -399,7 +400,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
                 parsed.help = true;
                 return Ok(parsed);
             }
-            "--tool" => parsed.tool = flag_value(args, &mut index, "--tool")?,
+            "--tool" => parsed.tool = Some(flag_value(args, &mut index, "--tool")?),
             "--cwd" => parsed.cwd = flag_value(args, &mut index, "--cwd")?,
             "--key" => parsed.key = flag_value(args, &mut index, "--key")?,
             "--surface" => parsed.surface = Some(flag_value(args, &mut index, "--surface")?),
@@ -464,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn fork_args_default_to_claude_and_require_key_and_cwd() {
+    fn fork_args_leave_the_tool_unset_and_require_key_and_cwd() {
         let parsed = parse_args(&args(&[
             "--cwd",
             "/work",
@@ -478,7 +479,7 @@ mod tests {
             "the lockfile goes stale",
         ]))
         .unwrap();
-        assert_eq!(parsed.tool, "claude");
+        assert_eq!(parsed.tool, None);
         assert_eq!(parsed.model.as_deref(), Some("opus"));
         assert_eq!(parsed.effort.as_deref(), Some("xhigh"));
         assert_eq!(parsed.brief.as_deref(), Some("the lockfile goes stale"));
