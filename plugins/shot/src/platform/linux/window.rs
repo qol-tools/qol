@@ -64,6 +64,7 @@ pub fn configure_pin_window(title: String, origin: (f64, f64), source_preview: O
         }
         qol_gpui::popup_window::present_topmost(title);
         if !qol_gpui::popup_window::show_window_by_title(title) {
+            qol_gpui::popup_window::restore_composite(title);
             return false;
         }
         let source_preview = source_preview

@@ -427,6 +427,8 @@ impl Surface {
             .replace(Box::new(move |cx: &mut App| {
                 dismiss_visible.set(false);
                 dismiss_reveal_pending.set(false);
+                let owner = dismiss_state.title.borrow().clone();
+                crate::popup_window::restore_composite(&owner);
                 if retain_on_dismiss {
                     let current_title = dismiss_state.title.borrow().clone();
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
