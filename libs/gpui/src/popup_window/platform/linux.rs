@@ -909,6 +909,10 @@ pub fn configure_popup_window(title: &str) -> bool {
         return false;
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        qol_runtime::probe!(
+            "DOCK_WIN",
+            "title={title} wid=NONE path=configure_popup_window"
+        );
         return false;
     };
 
@@ -926,7 +930,10 @@ pub fn set_window_type_dock_by_title(title: &str) -> bool {
         return false;
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        qol_runtime::probe!("DOCK_WIN", "title={title} wid=NONE");
+        qol_runtime::probe!(
+            "DOCK_WIN",
+            "title={title} wid=NONE path=set_window_type_dock_by_title"
+        );
         return false;
     };
     apply_window_type_dock(&conn, wid, title, "set_window_type_dock_by_title")
@@ -1734,11 +1741,18 @@ fn set_window_type_dock(conn: &impl Connection, wid: u32) -> bool {
 
 fn apply_window_type_dock(conn: &impl Connection, wid: u32, title: &str, path: &str) -> bool {
     let docked = set_window_type_dock(conn, wid);
+    #[cfg(debug_assertions)]
+    let docked = docked && !dock_write_forced_failure();
     qol_runtime::probe!(
         "DOCK_WIN",
         "title={title} wid={wid} docked={docked} path={path}"
     );
     docked
+}
+
+#[cfg(debug_assertions)]
+fn dock_write_forced_failure() -> bool {
+    std::env::var_os("QOL_DOCK_FORCE_FAIL").is_some()
 }
 
 fn set_qol_ghost(conn: &impl Connection, wid: u32) {
