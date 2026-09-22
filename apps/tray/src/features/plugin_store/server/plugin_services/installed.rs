@@ -9,8 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::super::helpers::{
-    extract_actions, infer_load_error, is_newer_version, read_installed_plugin_dirs,
-    read_manifest_without_validation,
+    extract_actions, infer_load_error, read_installed_plugin_dirs, read_manifest_without_validation,
 };
 use super::super::types::{AppState, InstalledPlugin, InstalledPluginsResponse, PluginAction};
 
@@ -311,7 +310,8 @@ fn check_update(
     let update_available = available
         .as_ref()
         .map(|version| {
-            installed_version != "unknown" && is_newer_version(version, installed_version)
+            installed_version != "unknown"
+                && crate::version::is_newer_version(version, installed_version)
         })
         .unwrap_or(false);
     (available, update_available)
@@ -418,5 +418,23 @@ mod uid_tests {
         for (input, expected) in cases {
             assert_eq!(manifest_uid(input, &id), expected, "expected {expected}");
         }
+    }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+
+    #[test]
+    fn check_update_uses_semver_precedence() {
+        let mut cached = HashMap::new();
+        cached.insert("qol-alt-tab".to_string(), "1.2.4-rc.1".to_string());
+        let (available, update_available) = check_update(&cached, "qol-alt-tab", "1.2.2");
+        assert_eq!(available.as_deref(), Some("1.2.4-rc.1"));
+        assert!(update_available);
+
+        cached.insert("qol-alt-tab".to_string(), "3.67.0-rc.9".to_string());
+        let (_, update_available) = check_update(&cached, "qol-alt-tab", "3.67.0");
+        assert!(!update_available);
     }
 }

@@ -63,7 +63,7 @@ impl Version {
     }
 }
 
-pub fn normalize_semver_tag(tag: &str) -> Option<String> {
+fn parse_semver_tag(tag: &str) -> Option<semver::Version> {
     let trimmed = tag.trim();
     let without_prefix = trimmed
         .strip_prefix('v')
@@ -74,9 +74,20 @@ pub fn normalize_semver_tag(tag: &str) -> Option<String> {
         return None;
     }
 
-    semver::Version::parse(without_prefix)
-        .ok()
-        .map(|v| v.to_string())
+    semver::Version::parse(without_prefix).ok()
+}
+
+pub fn normalize_semver_tag(tag: &str) -> Option<String> {
+    parse_semver_tag(tag).map(|version| version.to_string())
+}
+
+pub fn is_newer_version(available: &str, installed: &str) -> bool {
+    match (parse_semver_tag(available), parse_semver_tag(installed)) {
+        (Some(available), Some(installed)) => {
+            available.cmp_precedence(&installed) == Ordering::Greater
+        }
+        _ => Version::parse(available).is_newer_than(&Version::parse(installed)),
+    }
 }
 
 pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -168,6 +179,47 @@ mod tests {
             let va = Version::parse(a);
             let vb = Version::parse(b);
             assert_eq!(va.is_newer_than(&vb), expected, "{:?} vs {:?}", a, b);
+        }
+    }
+
+    #[test]
+    fn is_newer_version_uses_semver_precedence_when_both_parse() {
+        let cases = [
+            ("1.2.4-rc.1", "1.2.2", true),
+            ("3.67.0-rc.9", "3.67.0", false),
+            ("1.0.0-beta.1", "1.0.0", false),
+            ("1.2.3+build5", "1.2.3", false),
+            ("1.2.3+build.5", "1.2.3", false),
+            ("1.2.3", "1.2.3-rc.1", true),
+            ("1.0.0-rc.1", "1.0.0-beta.1", true),
+            ("1.0.0-rc.1", "1.0.0-beta.2", true),
+            ("1.0.0-rc.2", "1.0.0-rc.10", false),
+            ("1.0.0-rc.10", "1.0.0-rc.2", true),
+        ];
+        for (available, installed, expected) in cases {
+            assert_eq!(
+                is_newer_version(available, installed),
+                expected,
+                "available={available} installed={installed}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_newer_version_falls_back_to_lenient_parts() {
+        let cases = [
+            ("1.0.0.1", "1.0.0", true),
+            ("1.0", "1.0.0", false),
+            ("1.2.3", "junk", true),
+            ("junk", "1.2.3", false),
+            ("", "", false),
+        ];
+        for (available, installed, expected) in cases {
+            assert_eq!(
+                is_newer_version(available, installed),
+                expected,
+                "available={available} installed={installed}"
+            );
         }
     }
 

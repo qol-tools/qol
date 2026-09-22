@@ -7,10 +7,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-use super::super::helpers::{is_newer_version, validate_plugin_id};
+use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
 use super::super::types::{AppState, PluginUpdateJob, PluginUpdateState, MAX_CONFIG_SIZE};
 use super::http_json;
+use crate::version::is_newer_version;
 
 pub(super) const UPDATES_QUERY: &str = "updates";
 pub(super) const ATTENTION_QUERY: &str = "attention";
@@ -760,6 +761,7 @@ mod tests {
     fn availability_requires_a_newer_known_latest() {
         let cases = [
             ("1.0.0", Some("1.0.1"), true),
+            ("1.2.2", Some("1.2.4-rc.1"), true),
             ("1.0.0", Some("1.0.0"), false),
             ("1.0.0", None, false),
             ("unknown", Some("1.0.1"), false),

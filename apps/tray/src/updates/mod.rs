@@ -268,7 +268,7 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
     }
     let newest = pick_latest_host_release(&releases);
     let update_found = match newest.as_ref() {
-        Some((tag, version)) if is_newer_version(version, CURRENT_VERSION) => {
+        Some((tag, version)) if version::is_newer_version(version, CURRENT_VERSION) => {
             !runs_a_workspace_build() || workspace_build_precedes_release(tag).await
         }
         _ => false,
@@ -492,11 +492,6 @@ fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)
     )?;
     let version = version_from_plugin_tag(tag, HOST_TAG_PREFIX)?;
     Some((tag, version))
-}
-
-fn is_newer_version(latest: &str, current: &str) -> bool {
-    use crate::version::Version;
-    Version::parse(latest).is_newer_than(&Version::parse(current))
 }
 
 pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus>) -> Result<()> {
@@ -761,11 +756,37 @@ mod tests {
         ];
         for (latest, current, expected) in cases {
             assert_eq!(
-                is_newer_version(latest, current),
+                version::is_newer_version(latest, current),
                 expected,
                 "latest={latest} current={current}"
             );
         }
+    }
+
+    #[test]
+    fn selected_host_release_agrees_with_availability() {
+        let releases = vec![rel("qol-tray-v1.2.4-rc.1"), rel("qol-tray-v1.2.3")];
+        let (tag, version) =
+            pick_latest_host_release(&releases).expect("a host release is selected");
+        assert_eq!(tag, "qol-tray-v1.2.4-rc.1");
+        assert_eq!(version, "1.2.4-rc.1");
+        assert!(
+            version::is_newer_version(&version, "1.2.2"),
+            "selected host release {version} must be offered over 1.2.2"
+        );
+    }
+
+    #[test]
+    fn selected_host_prerelease_is_not_offered_over_its_stable() {
+        let releases = vec![rel("qol-tray-v3.67.0-rc.9")];
+        let (tag, version) =
+            pick_latest_host_release(&releases).expect("a host release is selected");
+        assert_eq!(tag, "qol-tray-v3.67.0-rc.9");
+        assert_eq!(version, "3.67.0-rc.9");
+        assert!(
+            !version::is_newer_version(&version, "3.67.0"),
+            "the selected prerelease must not be offered over the stable it precedes"
+        );
     }
 
     #[test]
