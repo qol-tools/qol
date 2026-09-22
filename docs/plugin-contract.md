@@ -636,7 +636,9 @@ The rendering contract is the `libs/gpui` crate that such plugins depend on:
 
 - `keepalive::open_keepalive` - a hidden 1x1 window so the app process stays alive
   with no visible windows.
-- `popup_window` - `configure_popup_window`, `show_window_by_title`,
+- `popup_window` - `configure_popup_window` (on Linux, whether the
+  `_NET_WM_WINDOW_TYPE_DOCK` write was confirmed; on macOS, whether the window
+  resolved), `show_window_by_title`,
   `hide_window_by_title`, `reposition_window_by_title`, `reason_scope` (RAII guard
   recording why a show/hide happened, visible in probes), `set_ghost_debug`.
 - `monitor::MonitorTracker` - `snapshot_monitor`, `snapshot_monitor_focus_first`,
