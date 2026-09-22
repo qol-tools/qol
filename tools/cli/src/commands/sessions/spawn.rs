@@ -2280,8 +2280,7 @@ fn plan_lane(
 ) -> Result<LanePlan> {
     match decide(interpreter, sessions, &prepared.identity) {
         SpawnDecision::Launch => {
-            let admission = dispatch.admit_launch(prepared.tool_id.as_str(), model)?;
-            require_model_for_launch(admission.model.as_deref())?;
+            let mut admission = dispatch.admit_launch(prepared.tool_id.as_str(), model)?;
             let requested_cwd = canonicalize_cwd(requested_cwd)?;
             let cwd = requested_cwd.to_string_lossy();
             let prior_record = ledger.load(&prepared.key, &cwd)?;
@@ -2312,10 +2311,12 @@ fn plan_lane(
                     ),
                     (None, Some(prior)) => {
                         require_current_prior_policy(dispatch, &prior, &prepared.key)?;
+                        admission = dispatch.admit_resumed_assignment(&prior, model)?;
                     }
                     (None, None) => {}
                 }
             }
+            require_model_for_launch(admission.model.as_deref())?;
             Ok(LanePlan::Launch {
                 admission,
                 resume_decision,
@@ -5591,6 +5592,71 @@ mod tests {
         )
     }
 
+    fn unconstrained_dispatch(
+        default_model: Option<&str>,
+        allowed_models: Vec<String>,
+    ) -> AgentDispatch {
+        let spec = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Allow,
+            preference: None,
+        };
+        let policy = AgentPolicy::build(
+            std::collections::BTreeMap::from([("worker".to_owned(), spec)]),
+            None,
+            Some(false),
+        )
+        .unwrap();
+        AgentDispatch::new(
+            DispatchPolicy {
+                agent: policy,
+                default_model: default_model.map(str::to_owned),
+                allowed_models,
+                tool_models: std::collections::BTreeMap::new(),
+            },
+            AssignmentRequest::default(),
+        )
+    }
+
+    fn resumed_managed_prior(
+        root: &tempfile::TempDir,
+        key: &str,
+    ) -> (
+        SpawnLedger,
+        super::super::bridge::PendingBridgeStore,
+        TerminalSessionService,
+        Arc<FakeBackend>,
+    ) {
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let cwd = managed_workdir(root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let spawn_key = SpawnKey::new(key).unwrap();
+        ledger
+            .record(
+                &spawn_key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                &cwd,
+                Some("flash"),
+                Some("prior-session-id"),
+            )
+            .unwrap();
+        ledger
+            .bind_session(
+                &spawn_key,
+                &cwd,
+                "v1:kitty:spawn-prior:10",
+                Some(&prior_assignment("worker", "flash", Vec::new())),
+            )
+            .unwrap();
+        (ledger, pending, terminals, backend)
+    }
+
     fn managed_lane(key: &str, task_role: Option<AgentRole>) -> LaneSpec {
         LaneSpec {
             key: key.to_owned(),
@@ -6646,5 +6712,165 @@ mod tests {
         );
         assert_eq!(reused.model.as_deref(), Some("flash"));
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn an_unconstrained_resume_of_a_managed_prior_preserves_the_recorded_assignment() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (ledger, pending, terminals, backend) = resumed_managed_prior(&root, "lane-resume");
+        let cwd = managed_workdir(&root);
+        let dispatch = unconstrained_dispatch(None, vec!["flash".to_owned()]);
+
+        let outcome = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-resume",
+            None,
+            true,
+            Some("continue the work"),
+            &dispatch,
+        )
+        .unwrap();
+
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(outcome.resume, Some("applied"));
+        assert_eq!(outcome.agent_status, AgentStatus::Constrained);
+        assert_eq!(outcome.agent_assignment.as_ref().unwrap().profile, "worker");
+        assert_eq!(outcome.model.as_deref(), Some("flash"));
+
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        let args = &request.launch.args;
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--model" && pair[1] == "flash"),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--session" && pair[1] == "prior-session-id"),
+            "{args:?}"
+        );
+        let prompt = args.last().unwrap();
+        assert!(prompt.contains("[qol agent assignment]"), "{prompt}");
+
+        let record = ledger.find_by_session(&outcome.session).unwrap().unwrap();
+        assert_eq!(
+            record.agent_assignment,
+            Some(prior_assignment("worker", "flash", Vec::new()))
+        );
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        assert_eq!(
+            pending.recorded_assignment(&binding).unwrap(),
+            Some(prior_assignment("worker", "flash", Vec::new()))
+        );
+    }
+
+    #[test]
+    fn an_unconstrained_resume_refuses_a_differing_requested_model() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (ledger, pending, terminals, backend) = resumed_managed_prior(&root, "lane-differ");
+        let cwd = managed_workdir(&root);
+        let dispatch = unconstrained_dispatch(None, vec!["flash".to_owned(), "pro".to_owned()]);
+
+        let error = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-differ",
+            Some("pro"),
+            true,
+            Some("continue the work"),
+            &dispatch,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("flash"), "{error}");
+        assert!(error.contains("pro"), "{error}");
+        assert!(error.contains("resume=false"), "{error}");
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+        let record = ledger
+            .load(&SpawnKey::new("lane-differ").unwrap(), &cwd)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record.agent_assignment,
+            Some(prior_assignment("worker", "flash", Vec::new()))
+        );
+    }
+
+    #[test]
+    fn an_unconstrained_resume_keeps_the_recorded_model_over_spawn_model() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (ledger, pending, terminals, backend) =
+            resumed_managed_prior(&root, "lane-spawn-model");
+        let cwd = managed_workdir(&root);
+        let dispatch =
+            unconstrained_dispatch(Some("pro"), vec!["flash".to_owned(), "pro".to_owned()]);
+
+        let outcome = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-spawn-model",
+            None,
+            true,
+            Some("continue the work"),
+            &dispatch,
+        )
+        .unwrap();
+
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        let args = &request.launch.args;
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--model" && pair[1] == "flash"),
+            "{args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg == "pro"), "{args:?}");
+        assert_eq!(outcome.model.as_deref(), Some("flash"));
+        assert_eq!(outcome.agent_assignment.as_ref().unwrap().profile, "worker");
+        let record = ledger.find_by_session(&outcome.session).unwrap().unwrap();
+        assert_eq!(record.model.as_deref(), Some("flash"));
+        assert_eq!(
+            record.agent_assignment,
+            Some(prior_assignment("worker", "flash", Vec::new()))
+        );
+    }
+
+    #[test]
+    fn a_constrained_submit_inherits_a_resumed_lane_assignment() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (ledger, pending, terminals, _) = resumed_managed_prior(&root, "lane-submit");
+        let cwd = managed_workdir(&root);
+        let dispatch = unconstrained_dispatch(None, vec!["flash".to_owned()]);
+        let outcome = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-submit",
+            None,
+            true,
+            Some("continue the work"),
+            &dispatch,
+        )
+        .unwrap();
+
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        let recorded = recorded_assignment(&ledger, &pending, &binding).unwrap();
+        let admitted = worker_dispatch(Some("worker"), Some(AgentRole::Implement), None)
+            .admit_submit(recorded.as_ref())
+            .unwrap()
+            .unwrap();
+        assert_eq!(admitted.profile, "worker");
     }
 }
