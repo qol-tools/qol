@@ -145,7 +145,11 @@ impl BridgeOwner {
 
 impl Drop for BridgeOwner {
     fn drop(&mut self) {
-        if let (Some(attach), Ok(mut attaches)) = (&self.attach, self.attaches.lock()) {
+        let mut attaches = self
+            .attaches
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(attach) = &self.attach {
             if attaches
                 .get(&self.binding)
                 .is_some_and(|current| Arc::ptr_eq(current, attach))
@@ -812,11 +816,12 @@ impl PendingBridgeStore {
             .open(&path)
             .context("failed to open bridge owner lock")?;
         let deadline = Instant::now() + ATTACH_TAKEOVER_BUDGET;
-        loop {
+        let mut attaches = loop {
+            let attaches = self.attaches.lock().unwrap();
             match file.try_lock() {
-                Ok(()) => break,
+                Ok(()) => break attaches,
                 Err(TryLockError::WouldBlock) => {
-                    let local = self.supersede_local_attach(binding);
+                    let local = Self::supersede_local_attach(&attaches, binding);
                     let held_by_this_process = self
                         .owner_pid(binding)
                         .is_some_and(|owner| owner == process::id().to_string());
@@ -836,13 +841,14 @@ impl PendingBridgeStore {
                         );
                         bail!("{}", self.owner_conflict(binding, &path));
                     }
+                    drop(attaches);
                     std::thread::sleep(ATTACH_TAKEOVER_POLL);
                 }
                 Err(TryLockError::Error(error)) => {
                     return Err(error).context("failed to lock the bridge owner file");
                 }
             }
-        }
+        };
         fs::write(&path, process::id().to_string()).context("failed to record the bridge owner")?;
         let attach = cancel.map(|cancel| {
             Arc::new(BridgeAttach {
@@ -851,10 +857,7 @@ impl PendingBridgeStore {
             })
         });
         if let Some(attach) = &attach {
-            self.attaches
-                .lock()
-                .unwrap()
-                .insert(binding.token(), Arc::clone(attach));
+            attaches.insert(binding.token(), Arc::clone(attach));
         }
         Ok(BridgeOwner {
             file,
@@ -875,8 +878,11 @@ impl PendingBridgeStore {
         )
     }
 
-    fn supersede_local_attach(&self, binding: &SessionBinding) -> Option<Arc<BridgeAttach>> {
-        let attach = self.attaches.lock().ok()?.get(&binding.token()).cloned()?;
+    fn supersede_local_attach(
+        attaches: &HashMap<String, Arc<BridgeAttach>>,
+        binding: &SessionBinding,
+    ) -> Option<Arc<BridgeAttach>> {
+        let attach = attaches.get(&binding.token()).cloned()?;
         let freshly_superseded = !attach.superseded.swap(true, Ordering::SeqCst);
         attach.cancel.store(true, Ordering::SeqCst);
         if freshly_superseded {
@@ -3389,44 +3395,46 @@ mod tests {
 
     #[test]
     fn a_new_attach_supersedes_a_local_one_instead_of_conflicting() {
-        let root = tempfile::TempDir::new().unwrap();
-        let store = Arc::new(PendingBridgeStore::with_dir(root.path().to_path_buf()));
-        let binding = SessionBinding::from_str("v1:fake:9:900").unwrap();
-        let abandoned = Arc::new(AtomicBool::new(false));
-        let owner = store
-            .acquire_owner(&binding, Some(Arc::clone(&abandoned)))
-            .unwrap();
-        assert!(!owner.superseded());
+        for _ in 0..64 {
+            let root = tempfile::TempDir::new().unwrap();
+            let store = Arc::new(PendingBridgeStore::with_dir(root.path().to_path_buf()));
+            let binding = SessionBinding::from_str("v1:fake:9:900").unwrap();
+            let abandoned = Arc::new(AtomicBool::new(false));
+            let owner = store
+                .acquire_owner(&binding, Some(Arc::clone(&abandoned)))
+                .unwrap();
+            assert!(!owner.superseded());
 
-        let taker = {
-            let store = Arc::clone(&store);
-            let binding = binding.clone();
-            std::thread::spawn(move || {
-                store
-                    .acquire_owner(&binding, Some(Arc::new(AtomicBool::new(false))))
-                    .unwrap()
-            })
-        };
-        let started = Instant::now();
-        while !abandoned.load(Ordering::SeqCst) {
+            let taker = {
+                let store = Arc::clone(&store);
+                let binding = binding.clone();
+                std::thread::spawn(move || {
+                    store
+                        .acquire_owner(&binding, Some(Arc::new(AtomicBool::new(false))))
+                        .unwrap()
+                })
+            };
+            let started = Instant::now();
+            while !abandoned.load(Ordering::SeqCst) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(3),
+                    "a newer attach must signal the abandoned one"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
             assert!(
-                started.elapsed() < Duration::from_secs(3),
-                "a newer attach must signal the abandoned one"
+                owner.superseded(),
+                "the superseded attach must be able to say so"
             );
-            std::thread::sleep(Duration::from_millis(5));
+            drop(owner);
+            let taken = taker.join().unwrap();
+            assert!(!taken.superseded());
+            assert_eq!(
+                store.owner_pid(&binding),
+                Some(process::id().to_string()),
+                "the newer attach owns the session"
+            );
         }
-        assert!(
-            owner.superseded(),
-            "the superseded attach must be able to say so"
-        );
-        drop(owner);
-        let taken = taker.join().unwrap();
-        assert!(!taken.superseded());
-        assert_eq!(
-            store.owner_pid(&binding),
-            Some(process::id().to_string()),
-            "the newer attach owns the session"
-        );
     }
 
     #[test]
