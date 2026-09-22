@@ -400,9 +400,7 @@ fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
 
 #[cfg(target_os = "linux")]
 fn prepare_preview_window(title: &str) -> bool {
-    if !configure_popup_window(title) {
-        return false;
-    }
+    configure_popup_window(title);
     if !qol_gpui::popup_window::set_override_redirect_by_title(title) {
         return false;
     }

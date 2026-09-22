@@ -445,16 +445,15 @@ impl Surface {
         if passive_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-toast");
             let configured = crate::popup_window::configure_popup_window(&title);
-            if configured {
-                crate::popup_window::present_topmost(&title);
-            }
-            let shown = configured && crate::popup_window::show_window_interactive_by_title(&title);
+            crate::popup_window::present_topmost(&title);
+            let shown = crate::popup_window::show_window_interactive_by_title(&title);
             visible.set(shown);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=toast-ready configured={configured} shown={shown}"
             );
             if !shown {
+                crate::popup_window::restore_composite(&title);
                 release_surface_title(&title);
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
                 return Err(anyhow!("surface could not present passive toast"));

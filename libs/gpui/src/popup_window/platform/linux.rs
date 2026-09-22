@@ -912,12 +912,12 @@ pub fn configure_popup_window(title: &str) -> bool {
         return false;
     };
 
-    set_window_type_dock(&conn, wid);
+    let docked = apply_window_type_dock(&conn, wid, title, "configure_popup_window");
     set_qol_ghost(&conn, wid);
     set_window_manager_decorations(&conn, wid, false);
     set_window_manager_state(&conn, wid);
     let _ = conn.flush();
-    true
+    docked
 }
 
 pub fn set_window_type_dock_by_title(title: &str) -> bool {
@@ -929,9 +929,7 @@ pub fn set_window_type_dock_by_title(title: &str) -> bool {
         qol_runtime::probe!("DOCK_WIN", "title={title} wid=NONE");
         return false;
     };
-    let docked = set_window_type_dock(&conn, wid);
-    qol_runtime::probe!("DOCK_WIN", "title={title} wid={wid} docked={docked}");
-    docked
+    apply_window_type_dock(&conn, wid, title, "set_window_type_dock_by_title")
 }
 
 pub fn make_override_redirect(title: &str) -> bool {
@@ -1732,6 +1730,15 @@ fn set_window_type_dock(conn: &impl Connection, wid: u32) -> bool {
     .ok()
     .and_then(|cookie| cookie.check().ok())
     .is_some()
+}
+
+fn apply_window_type_dock(conn: &impl Connection, wid: u32, title: &str, path: &str) -> bool {
+    let docked = set_window_type_dock(conn, wid);
+    qol_runtime::probe!(
+        "DOCK_WIN",
+        "title={title} wid={wid} docked={docked} path={path}"
+    );
+    docked
 }
 
 fn set_qol_ghost(conn: &impl Connection, wid: u32) {
