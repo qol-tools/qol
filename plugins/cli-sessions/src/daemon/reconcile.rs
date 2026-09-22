@@ -166,10 +166,11 @@ pub fn tick_with_caches(
                     .collect()
             })
             .unwrap_or_default();
+        let reduction = reduce_with_policy(&prev, &evidence, mono_now, completion_policy(&tool));
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} driving={} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} completion_policy={:?} label={:?} title={:?}",
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} driving={} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} completion_policy={:?} label={:?} title={:?} reduction_phase={:?} transition={:?}",
             pane.id,
             tool,
             cli_tool,
@@ -182,10 +183,10 @@ pub fn tick_with_caches(
             evidence.file_quiet_secs,
             completion_policy(&tool),
             cli_session.display_name,
-            short(&pane.title)
+            short(&pane.title),
+            reduction.phase,
+            reduction.transition.map(|transition| transition.reason)
         );
-
-        let reduction = reduce_with_policy(&prev, &evidence, mono_now, completion_policy(&tool));
         let branch = caches.branch.branch(&pane.cwd, wall_now);
         if let Ok(mut reg) = registry.lock() {
             let (notice, status) = apply(

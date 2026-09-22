@@ -58,8 +58,9 @@ pub(super) fn claude_dialog(text: &str) -> bool {
         .filter(|(_, line)| is_rule_line(line))
         .map(|(index, _)| index)
         .collect();
+    let rule_less = rules.is_empty();
     let (start, end) = match rules.as_slice() {
-        [] => return false,
+        [] => (lines.len().saturating_sub(CLAUDE_STATUS_TAIL), lines.len()),
         [only] => (*only + 1, lines.len()),
         rest => (rest[rest.len() - 2] + 1, rest[rest.len() - 1]),
     };
@@ -67,9 +68,11 @@ pub(super) fn claude_dialog(text: &str) -> bool {
         return false;
     }
     let region = &lines[start..end];
+    let mut numbers = Vec::new();
     let mut numbered = 0usize;
     let mut selected = 0usize;
-    for is_selected in region.iter().filter_map(|line| claude_option(line)) {
+    for (number, is_selected) in region.iter().filter_map(|line| claude_option(line)) {
+        numbers.push(number);
         numbered += 1;
         selected += usize::from(is_selected);
     }
@@ -84,10 +87,19 @@ pub(super) fn claude_dialog(text: &str) -> bool {
         let lower = line.to_lowercase();
         lower.contains("do you want to proceed?") || lower.contains("would you like to proceed?")
     });
-    (selected >= 1 && numbered >= 2 && affordance) || (question && numbered >= 1)
+    let one_based_contiguous = numbers
+        .iter()
+        .enumerate()
+        .all(|(index, number)| *number == index + 1);
+    let dialog = selected >= 1 && numbered >= 2 && (affordance || question);
+    if rule_less {
+        dialog && one_based_contiguous
+    } else {
+        dialog
+    }
 }
 
-fn claude_option(line: &str) -> Option<bool> {
+fn claude_option(line: &str) -> Option<(usize, bool)> {
     let rest = line.trim_start();
     let (rest, selected) = match rest.strip_prefix('\u{276F}') {
         Some(rest) => (rest.trim_start(), true),
@@ -104,7 +116,11 @@ fn claude_option(line: &str) -> Option<bool> {
     if !matches!(tail.next(), Some('.') | Some(')')) {
         return None;
     }
-    matches!(tail.next(), None | Some(' ') | Some('\t')).then_some(selected)
+    if !matches!(tail.next(), None | Some(' ') | Some('\t')) {
+        return None;
+    }
+    let number = rest[..digits].parse::<usize>().ok()?;
+    Some((number, selected))
 }
 
 pub(super) fn has_braille_spinner(text: &str) -> bool {
@@ -665,6 +681,29 @@ mod tests {
         ]
         .join("\n");
         assert!(!claude_dialog(&draft));
+
+        let proceed_draft = [
+            rule,
+            "  \u{276F} Do you want to proceed?",
+            "    1. Yes",
+            rule,
+        ]
+        .join("\n");
+        assert!(!claude_dialog(&proceed_draft));
+
+        let ruleless_echo = [
+            " \u{276F} 404. open locally",
+            "   405. keep digging",
+            " Esc to cancel",
+        ]
+        .join("\n");
+        assert!(!claude_dialog(&ruleless_echo));
+    }
+
+    #[test]
+    fn claude_dialog_reads_a_ruleless_run_of_one_based_options() {
+        let options = [" \u{276F} 1.", "   2.", "   3.", " Esc to cancel"].join("\n");
+        assert!(claude_dialog(&options));
     }
 
     #[test]
@@ -679,6 +718,35 @@ mod tests {
         ]
         .join("\n");
         assert!(claude_dialog(&permission));
+    }
+
+    #[test]
+    fn claude_dialog_recognizes_a_permission_prompt_without_rules() {
+        let permission = [
+            " plugin hooks.json to update hooks",
+            "",
+            " Do you want to proceed?",
+            " \u{276F} 1. Yes",
+            "   2. No",
+            "",
+            " Esc to cancel \u{b7} Tab to amend \u{b7} ctrl+e to explain",
+        ]
+        .join("\n");
+        assert!(claude_dialog(&permission));
+    }
+
+    #[test]
+    fn claude_dialog_recognizes_a_proceed_question_without_an_affordance() {
+        let rule = "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}";
+        let plan = [
+            rule,
+            " Claude has written up a plan and is ready to execute. Would you like to proceed?",
+            " \u{276F} 1. Yes, and bypass permissions",
+            "   2. Yes, manually approve edits",
+            "   3. Tell Claude what to change",
+        ]
+        .join("\n");
+        assert!(claude_dialog(&plan));
     }
 
     #[test]

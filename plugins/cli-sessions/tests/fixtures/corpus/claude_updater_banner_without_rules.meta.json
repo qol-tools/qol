@@ -1,0 +1,8 @@
+{
+  "title": "✳ Claude Code",
+  "at_prompt": false,
+  "foreground_basenames": ["claude"],
+  "expect": "Unknown",
+  "screen_changed": false,
+  "source": "anomaly 1786170386_win11/frame_01.txt"
+}
