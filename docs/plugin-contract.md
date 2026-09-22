@@ -636,11 +636,19 @@ The rendering contract is the `libs/gpui` crate that such plugins depend on:
 
 - `keepalive::open_keepalive` - a hidden 1x1 window so the app process stays alive
   with no visible windows.
-- `popup_window` - `configure_popup_window` (on Linux, whether the
-  `_NET_WM_WINDOW_TYPE_DOCK` write was confirmed; on macOS, whether the window
-  resolved), `show_window_by_title`,
+- `popup_window` - `configure_popup_window` (on Linux, true only when the
+  `_NET_WM_WINDOW_TYPE_DOCK` write was confirmed, so a failed X connection or atom
+  intern, a window that did not resolve, and, in debug and sandbox builds,
+  `QOL_DOCK_FORCE_FAIL=1` all return false; on macOS, whether the window resolved;
+  the fallback platform returns false unconditionally),
+  `set_window_type_dock_by_title` (Linux only, true only on the same write
+  confirmation, false unconditionally on every other platform),
+  `show_window_by_title`,
   `hide_window_by_title`, `reposition_window_by_title`, `reason_scope` (RAII guard
-  recording why a show/hide happened, visible in probes), `set_ghost_debug`.
+  recording why a show/hide happened, visible in probes), `set_ghost_debug`. Linux
+  debug and sandbox builds accept `QOL_DOCK_FORCE_FAIL=1` and
+  `QOL_SHOW_FORCE_FAIL=1` to force a reported dock failure and a failed show for
+  guest verification.
 - `monitor::MonitorTracker` - `snapshot_monitor`, `snapshot_monitor_focus_first`,
   `all_monitors`; wraps `PlatformStateClient`.
 - `platform` - `set_accessory_policy` (macOS: no dock icon / no focus theft),
