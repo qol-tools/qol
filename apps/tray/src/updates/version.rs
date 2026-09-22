@@ -191,6 +191,10 @@ mod tests {
             ("1.2.3+build5", "1.2.3", false),
             ("1.2.3+build.5", "1.2.3", false),
             ("1.2.3", "1.2.3-rc.1", true),
+            ("1.0.0-rc.1", "1.0.0-beta.1", true),
+            ("1.0.0-rc.1", "1.0.0-beta.2", true),
+            ("1.0.0-rc.2", "1.0.0-rc.10", false),
+            ("1.0.0-rc.10", "1.0.0-rc.2", true),
         ];
         for (available, installed, expected) in cases {
             assert_eq!(

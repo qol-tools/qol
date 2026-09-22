@@ -419,6 +419,20 @@ mod tests {
     }
 
     #[test]
+    fn selected_plugin_prerelease_is_not_offered_over_its_stable() {
+        let tags = ["plugin-x-v3.67.0-rc.9"];
+        let selected =
+            select_release_tag(tags.iter().copied(), "plugin-x").expect("a tag is selected");
+        let version =
+            version_from_plugin_tag(selected, "plugin-x").expect("the tag carries a version");
+        assert_eq!(version, "3.67.0-rc.9");
+        assert!(
+            !crate::version::is_newer_version(&version, "3.67.0"),
+            "the selected prerelease must not be offered over the stable it precedes"
+        );
+    }
+
+    #[test]
     fn select_release_tag_prefers_stable_over_prerelease() {
         let tags = [
             "qol-alt-tab-v1.2.3-beta.1",
