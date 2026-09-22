@@ -506,6 +506,27 @@ impl AgentDispatch {
     pub(super) fn verify_prior_assignment(&self, recorded: &AgentAssignment) -> Result<()> {
         verify_recorded(&self.policy.agent, recorded, None, None).map(|_| ())
     }
+
+    pub(super) fn admit_resumed_assignment(
+        &self,
+        recorded: &AgentAssignment,
+        explicit_model: Option<&str>,
+    ) -> Result<Admission> {
+        if let Some(requested) = explicit_model {
+            if requested != recorded.model {
+                bail!(
+                    "this lane's recorded identity used model `{}`, so requesting model `{requested}` would report a model switch that does not happen; the recorded identity wins, or pass resume=false under a new key",
+                    recorded.model
+                );
+            }
+        }
+        enforce_allowed_model(recorded.model.as_str(), &self.policy.allowed_models)?;
+        enforce_tool_model(&recorded.tool, &recorded.model, &self.policy.tool_models)?;
+        Ok(Admission {
+            model: Some(recorded.model.clone()),
+            assignment: Some(recorded.clone()),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
