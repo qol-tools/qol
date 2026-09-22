@@ -47,43 +47,47 @@ pub fn pin_release_focus(title: &str) {
 pub fn configure_pin_window(title: String, origin: (f64, f64), source_preview: Option<String>) {
     let target = (origin.0 as i32, origin.1 as i32);
     let source_preview = std::sync::Arc::new(std::sync::Mutex::new(source_preview));
-    configure_window_async(title, "SHOT_PIN", move |title| {
-        if !qol_gpui::popup_window::configure_pinned_window(title) {
-            return false;
-        }
-        if qol_gpui::popup_window::window_position_by_title(title) != Some(target) {
-            qol_gpui::popup_window::reposition_window_by_title(title, origin.0, origin.1);
-            return false;
-        }
-        if !qol_gpui::popup_window::make_override_redirect(title) {
-            return false;
-        }
-        if qol_gpui::popup_window::window_position_by_title(title) != Some(target) {
-            qol_gpui::popup_window::reposition_window_by_title(title, origin.0, origin.1);
-            return false;
-        }
-        qol_gpui::popup_window::present_topmost(title);
-        if !qol_gpui::popup_window::show_window_by_title(title) {
-            qol_gpui::popup_window::restore_composite(title);
-            return false;
-        }
-        let source_preview = source_preview
-            .lock()
-            .ok()
-            .and_then(|mut source| source.take());
-        if let Some(source_preview) = source_preview {
-            qol_gpui::popup_window::hide_invisible(&source_preview);
-            qol_gpui::popup_window::restore_composite(&source_preview);
-            qol_runtime::probe!(
-                "SHOT_PIN_TRANSITION",
-                "source={} target={title} state=swapped",
-                source_preview
-            );
-        }
-        let focused = qol_gpui::popup_window::focus_window_by_title(title);
-        qol_runtime::probe!("SHOT_PIN_TRANSITION", "target={title} focused={focused}");
-        focused
-    });
+    configure_window_async(
+        title,
+        "SHOT_PIN",
+        move |title| {
+            if !qol_gpui::popup_window::configure_pinned_window(title) {
+                return false;
+            }
+            if qol_gpui::popup_window::window_position_by_title(title) != Some(target) {
+                qol_gpui::popup_window::reposition_window_by_title(title, origin.0, origin.1);
+                return false;
+            }
+            if !qol_gpui::popup_window::make_override_redirect(title) {
+                return false;
+            }
+            if qol_gpui::popup_window::window_position_by_title(title) != Some(target) {
+                qol_gpui::popup_window::reposition_window_by_title(title, origin.0, origin.1);
+                return false;
+            }
+            qol_gpui::popup_window::present_topmost(title);
+            if !qol_gpui::popup_window::show_window_by_title(title) {
+                return false;
+            }
+            let source_preview = source_preview
+                .lock()
+                .ok()
+                .and_then(|mut source| source.take());
+            if let Some(source_preview) = source_preview {
+                qol_gpui::popup_window::hide_invisible(&source_preview);
+                qol_gpui::popup_window::restore_composite(&source_preview);
+                qol_runtime::probe!(
+                    "SHOT_PIN_TRANSITION",
+                    "source={} target={title} state=swapped",
+                    source_preview
+                );
+            }
+            let focused = qol_gpui::popup_window::focus_window_by_title(title);
+            qol_runtime::probe!("SHOT_PIN_TRANSITION", "target={title} focused={focused}");
+            focused
+        },
+        qol_gpui::popup_window::restore_composite,
+    );
 }
 
 pub fn prepare_pin_window(title: &str, origin: (f64, f64)) -> bool {
@@ -112,9 +116,12 @@ pub(super) fn configure_selector_window(title: String, bounds: Rect) {
         );
         return;
     };
-    configure_window_async(title, "SHOT_SELECT_OVERLAY", move |title| {
-        configure_selector_window_once(title, expected)
-    });
+    configure_window_async(
+        title,
+        "SHOT_SELECT_OVERLAY",
+        move |title| configure_selector_window_once(title, expected),
+        |_| {},
+    );
 }
 
 pub(super) fn prepare_selector_window(title: &str, bounds: Rect) {
@@ -184,6 +191,7 @@ pub(super) fn configure_window_async(
     title: String,
     probe: &'static str,
     configure: impl Fn(&str) -> bool + Send + 'static,
+    on_timeout: impl FnOnce(&str) + Send + 'static,
 ) {
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
@@ -199,6 +207,7 @@ pub(super) fn configure_window_async(
             std::thread::sleep(std::time::Duration::from_millis(40));
         }
         qol_runtime::probe!(probe, "ms={} result=timeout", started.elapsed().as_millis());
+        on_timeout(&title);
     });
 }
 

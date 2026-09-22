@@ -420,6 +420,7 @@ impl Surface {
         let dismiss_state = dismisser.state.clone();
         let dismiss_visible = visible.clone();
         let dismiss_reveal_pending = reveal_pending.clone();
+        let lease_owner = title.clone();
         dismisser
             .state
             .close
@@ -427,8 +428,7 @@ impl Surface {
             .replace(Box::new(move |cx: &mut App| {
                 dismiss_visible.set(false);
                 dismiss_reveal_pending.set(false);
-                let owner = dismiss_state.title.borrow().clone();
-                crate::popup_window::restore_composite(&owner);
+                crate::popup_window::restore_composite(&lease_owner);
                 if retain_on_dismiss {
                     let current_title = dismiss_state.title.borrow().clone();
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
@@ -448,11 +448,18 @@ impl Surface {
             let _reason = crate::popup_window::reason_scope("surface-toast");
             let configured = crate::popup_window::configure_popup_window(&title);
             crate::popup_window::present_topmost(&title);
+            if !configured {
+                crate::popup_window::configure_popup_window(&title);
+            }
             let shown = crate::popup_window::show_window_interactive_by_title(&title);
             visible.set(shown);
+            #[cfg(target_os = "linux")]
+            let configure_key = "docked";
+            #[cfg(not(target_os = "linux"))]
+            let configure_key = "configured";
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={title} phase=toast-ready configured={configured} shown={shown}"
+                "title={title} phase=toast-ready {configure_key}={configured} shown={shown}"
             );
             if !shown {
                 crate::popup_window::restore_composite(&title);
