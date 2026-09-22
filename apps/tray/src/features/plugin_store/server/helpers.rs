@@ -188,8 +188,7 @@ pub(super) fn extract_actions(manifest: &PluginManifest) -> Vec<PluginAction> {
 }
 
 pub(super) fn is_newer_version(available: &str, installed: &str) -> bool {
-    use crate::version::Version;
-    Version::parse(available).is_newer_than(&Version::parse(installed))
+    crate::version::is_newer_version(available, installed)
 }
 
 pub(super) fn read_manifest_without_validation(

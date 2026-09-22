@@ -495,8 +495,7 @@ fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)
 }
 
 fn is_newer_version(latest: &str, current: &str) -> bool {
-    use crate::version::Version;
-    Version::parse(latest).is_newer_than(&Version::parse(current))
+    version::is_newer_version(latest, current)
 }
 
 pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus>) -> Result<()> {
@@ -766,6 +765,16 @@ mod tests {
                 "latest={latest} current={current}"
             );
         }
+    }
+
+    #[test]
+    fn selected_host_release_agrees_with_availability() {
+        let releases = vec![rel("qol-tray-v1.2.4-rc.1"), rel("qol-tray-v1.2.3")];
+        let (_, version) = pick_latest_host_release(&releases).expect("a host release is selected");
+        assert!(
+            is_newer_version(&version, "1.2.2"),
+            "selected host release {version} must be offered over 1.2.2"
+        );
     }
 
     #[test]
