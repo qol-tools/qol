@@ -2280,7 +2280,6 @@ fn plan_lane(
 ) -> Result<LanePlan> {
     match decide(interpreter, sessions, &prepared.identity) {
         SpawnDecision::Launch => {
-            let mut admission = dispatch.admit_launch(prepared.tool_id.as_str(), model)?;
             let requested_cwd = canonicalize_cwd(requested_cwd)?;
             let cwd = requested_cwd.to_string_lossy();
             let prior_record = ledger.load(&prepared.key, &cwd)?;
@@ -2291,30 +2290,42 @@ fn plan_lane(
                 &cwd,
                 interpreter,
             );
-            if matches!(&resume_decision, ResumeDecision::Apply { .. }) {
-                let prior = prior_record.and_then(|record| record.agent_assignment);
-                match (admission.assignment.as_ref(), prior) {
-                    (Some(assignment), Some(prior)) => {
-                        if prior.profile != assignment.profile {
-                            bail!(
-                                "a prior session for key `{}` was assigned agent profile `{}`, and this constrained resume selects `{}`; a resume never promotes a different profile. Pass resume=false for a fresh session",
-                                prepared.key,
-                                prior.profile,
-                                assignment.profile
-                            );
-                        }
-                        require_current_prior_policy(dispatch, &prior, &prepared.key)?;
-                    }
-                    (Some(_), None) => bail!(
+            let prior_assignment = if matches!(&resume_decision, ResumeDecision::Apply { .. }) {
+                prior_record
+                    .as_ref()
+                    .and_then(|record| record.agent_assignment.as_ref())
+            } else {
+                None
+            };
+            let admission = if let Some(prior) = prior_assignment.filter(|_| !dispatch.is_constrained())
+            {
+                require_current_prior_policy(dispatch, prior, &prepared.key)?;
+                dispatch.admit_resumed_assignment(prior, model)?
+            } else {
+                dispatch.admit_launch(prepared.tool_id.as_str(), model)?
+            };
+            if dispatch.is_constrained()
+                && matches!(&resume_decision, ResumeDecision::Apply { .. })
+            {
+                let assignment = admission
+                    .assignment
+                    .as_ref()
+                    .expect("constrained admission has an assignment");
+                let Some(prior) = prior_assignment else {
+                    bail!(
                         "a prior session for key `{}` has no recorded agent assignment, so this constrained resume cannot promote it. Pass resume=false for a fresh session",
                         prepared.key
-                    ),
-                    (None, Some(prior)) => {
-                        require_current_prior_policy(dispatch, &prior, &prepared.key)?;
-                        admission = dispatch.admit_resumed_assignment(&prior, model)?;
-                    }
-                    (None, None) => {}
+                    );
+                };
+                if prior.profile != assignment.profile {
+                    bail!(
+                        "a prior session for key `{}` was assigned agent profile `{}`, and this constrained resume selects `{}`; a resume never promotes a different profile. Pass resume=false for a fresh session",
+                        prepared.key,
+                        prior.profile,
+                        assignment.profile
+                    );
                 }
+                require_current_prior_policy(dispatch, prior, &prepared.key)?;
             }
             require_model_for_launch(admission.model.as_deref())?;
             Ok(LanePlan::Launch {
@@ -6872,5 +6883,102 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(admitted.profile, "worker");
+    }
+
+    #[test]
+    fn resumed_managed_lane_accepts_its_model_when_default_targets_another_tool() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (ledger, pending, terminals, backend) = resumed_managed_prior(&root, "lane-tool-model");
+        let cwd = managed_workdir(&root);
+        let mut dispatch =
+            unconstrained_dispatch(Some("pro"), vec!["flash".to_owned(), "pro".to_owned()]);
+        dispatch.policy.tool_models = std::collections::BTreeMap::from([
+            ("pi".to_owned(), vec!["flash".to_owned()]),
+            ("codex".to_owned(), vec!["pro".to_owned()]),
+        ]);
+
+        let outcome = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-tool-model",
+            None,
+            true,
+            Some("continue the work"),
+            &dispatch,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.resume, Some("applied"));
+        assert_eq!(outcome.model.as_deref(), Some("flash"));
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert!(request
+            .launch
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "flash"));
+        assert!(!request.launch.args.iter().any(|arg| arg == "pro"));
+    }
+
+    #[test]
+    fn resumed_managed_lane_reports_current_visual_review_permission() {
+        let root = tempfile::TempDir::new().unwrap();
+        let (ledger, pending, terminals, backend) =
+            resumed_managed_prior(&root, "lane-current-permission");
+        let cwd = managed_workdir(&root);
+        let mut dispatch = unconstrained_dispatch(None, vec!["flash".to_owned()]);
+        let updated_profile = AgentProfileSpec {
+            tool: "pi".to_owned(),
+            model: "flash".to_owned(),
+            provider: None,
+            roles: vec![AgentRole::Implement],
+            image_input: ImageInput::Native,
+            visual_review: VisualReview::Deny,
+            preference: None,
+        };
+        dispatch.policy.agent = AgentPolicy::build(
+            std::collections::BTreeMap::from([("worker".to_owned(), updated_profile)]),
+            None,
+            Some(false),
+        )
+        .unwrap();
+
+        let outcome = run_spawn_dispatched(
+            &terminals,
+            &ledger,
+            &pending,
+            &locks(&root),
+            &cwd,
+            "lane-current-permission",
+            None,
+            true,
+            Some("continue the work"),
+            &dispatch,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.resume, Some("applied"));
+        assert_eq!(
+            outcome.agent_assignment.as_ref().unwrap().visual_review,
+            VisualReview::Deny
+        );
+        let binding: SessionBinding = outcome.session.parse().unwrap();
+        let recorded = recorded_assignment(&ledger, &pending, &binding)
+            .unwrap()
+            .unwrap();
+        assert_eq!(recorded.visual_review, VisualReview::Deny);
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert!(
+            request
+                .launch
+                .args
+                .last()
+                .unwrap()
+                .contains("visual_review: deny"),
+            "{:?}",
+            request.launch.args
+        );
     }
 }

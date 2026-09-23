@@ -522,9 +522,11 @@ impl AgentDispatch {
         }
         enforce_allowed_model(recorded.model.as_str(), &self.policy.allowed_models)?;
         enforce_tool_model(&recorded.tool, &recorded.model, &self.policy.tool_models)?;
+        let profile = verify_recorded(&self.policy.agent, recorded, None, None)?;
+        let assignment = resolve_recorded_assignment(&self.request, recorded, profile)?;
         Ok(Admission {
-            model: Some(recorded.model.clone()),
-            assignment: Some(recorded.clone()),
+            model: Some(assignment.model.clone()),
+            assignment: Some(assignment),
         })
     }
 }
