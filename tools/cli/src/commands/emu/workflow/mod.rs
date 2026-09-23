@@ -17,6 +17,7 @@ mod hotkey_shadow_boot;
 mod hotkeys;
 mod launcher;
 mod portable_session;
+mod qol_install_cold_boot;
 mod qol_shot;
 mod qol_shot_cold_boot;
 pub(crate) mod resident_wave2;
@@ -133,6 +134,7 @@ pub(crate) enum DesktopWorkflow {
     HotkeyStorm,
     LauncherStorm,
     PortableSession,
+    QolInstallColdBoot,
     QolShotCapture,
     QolShotColdBoot,
     QolShotStorm,
@@ -156,6 +158,7 @@ pub(crate) fn run_desktop(
         DesktopWorkflow::HotkeyStorm => hotkeys::run(vm, platform),
         DesktopWorkflow::LauncherStorm => launcher::run(vm, platform),
         DesktopWorkflow::PortableSession => portable_session::run(vm, platform),
+        DesktopWorkflow::QolInstallColdBoot => qol_install_cold_boot::run(vm, platform),
         DesktopWorkflow::QolShotCapture => desktop::run(vm, platform),
         DesktopWorkflow::QolShotColdBoot => qol_shot_cold_boot::run(vm, platform),
         DesktopWorkflow::QolShotStorm => qol_shot::run(vm, platform),
@@ -211,6 +214,10 @@ const REGISTRY: &[Definition] = &[
     Definition::Desktop {
         id: "portable-session",
         run: DesktopWorkflow::PortableSession,
+    },
+    Definition::Desktop {
+        id: "qol-install-cold-boot",
+        run: DesktopWorkflow::QolInstallColdBoot,
     },
     Definition::Desktop {
         id: "qol-shot-capture",
@@ -275,6 +282,7 @@ mod tests {
             ("resident-wave2-package-contract", true),
             ("launcher-storm", true),
             ("portable-session", true),
+            ("qol-install-cold-boot", true),
             ("qol-shot-cold-boot", true),
             ("qol-shot-storm", true),
             ("shortcut-storm", true),
@@ -302,6 +310,7 @@ mod tests {
                 "hotkey-storm",
                 "launcher-storm",
                 "portable-session",
+                "qol-install-cold-boot",
                 "qol-shot-capture",
                 "qol-shot-cold-boot",
                 "qol-shot-storm",
@@ -329,6 +338,7 @@ mod tests {
             "hotkey-storm",
             "launcher-storm",
             "portable-session",
+            "qol-install-cold-boot",
             "qol-shot-capture",
             "qol-shot-cold-boot",
             "qol-shot-storm",
@@ -373,6 +383,7 @@ mod tests {
             "hotkey-storm",
             "launcher-storm",
             "portable-session",
+            "qol-install-cold-boot",
             "qol-shot-capture",
             "qol-shot-cold-boot",
             "qol-shot-storm",

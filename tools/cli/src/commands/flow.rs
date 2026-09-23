@@ -2792,17 +2792,32 @@ fn prepare_desktop_workflow_payload(
     let cargo = emu::find_on_path("cargo")
         .context("missing cargo on PATH")
         .map_err(|error| PayloadPreparationFailure::before_spawn(error, false))?;
-    step_label("build", StepKind::Pending, &payload_build_label(recipe));
+    let installer_cold_boot = workflow.id() == "qol-install-cold-boot";
+    let profile = if installer_cold_boot {
+        "release"
+    } else {
+        "sandbox"
+    };
+    let build_label = if installer_cold_boot {
+        "qol-tray + installer · release profile".to_string()
+    } else {
+        payload_build_label(recipe)
+    };
+    step_label("build", StepKind::Pending, &build_label);
     let mut build = Command::new(&cargo);
     build.current_dir(worktree).args([
         "build",
         "--profile",
-        "sandbox",
+        profile,
         "-p",
         "qol-tray",
         "--bin",
         "qol-tray",
     ]);
+    if installer_cold_boot {
+        build.args(["--bin", "qol-tray-install"]);
+        build.arg("--locked");
+    }
     if let Some(features) = recipe.tray_features {
         build.args(["--features", features]);
     }
@@ -2813,13 +2828,17 @@ fn prepare_desktop_workflow_payload(
     if !verbose {
         build.arg("--quiet");
     }
-    let identity =
-        qol_build_identity::BuildIdentityEnvironment::sandbox(worktree).map_err(|error| {
-            PayloadPreparationFailure::before_spawn(
-                anyhow!("failed to resolve sandbox build identity: {error}"),
-                false,
-            )
-        })?;
+    let identity = if installer_cold_boot {
+        qol_build_identity::BuildIdentityEnvironment::production(worktree)
+    } else {
+        qol_build_identity::BuildIdentityEnvironment::sandbox(worktree)
+    }
+    .map_err(|error| {
+        PayloadPreparationFailure::before_spawn(
+            anyhow!("failed to resolve desktop build identity: {error}"),
+            false,
+        )
+    })?;
     identity.apply_to(&mut build);
     dev_env::clear_host_session(&mut build);
     let status = run_owned_preparation_command(build, cancellation, &journals.build).map_err(
@@ -2845,7 +2864,7 @@ fn prepare_desktop_workflow_payload(
             }),
         });
     }
-    step_label("build", StepKind::Success, "sandbox binaries are ready");
+    step_label("build", StepKind::Success, "desktop binaries are ready");
     let mut preparation = FlowPreparation {
         status: "complete".to_string(),
         build_status: "pass".to_string(),
@@ -2871,12 +2890,28 @@ fn prepare_desktop_workflow_payload(
         Some(target) => worktree.join(target),
         None => worktree.join("target"),
     };
-    let binary_dir = target_root.join("sandbox");
+    let binary_dir = target_root.join(profile);
+    if installer_cold_boot {
+        verify_installer_cold_boot_artifacts(&binary_dir, identity.source()).map_err(|error| {
+            PayloadPreparationFailure {
+                error,
+                cancelled: false,
+                preparation: Box::new(failed_preparation(preparation.clone(), false)),
+            }
+        })?;
+    }
     let mut files = vec![qol_dev_env::payload::PayloadFileSpec {
         source: binary_dir.join(crate::workspace::exe_name("qol-tray")),
         relative_path: PathBuf::from("bin/qol-tray"),
         executable: true,
     }];
+    if installer_cold_boot {
+        files.push(qol_dev_env::payload::PayloadFileSpec {
+            source: binary_dir.join(crate::workspace::exe_name("qol-tray-install")),
+            relative_path: PathBuf::from("bin/qol-tray-install"),
+            executable: true,
+        });
+    }
     if let Some(companion) = recipe.companion {
         let plugin_id = companion.id();
         let plugin_files = desktop_plugin_payload_files(worktree, companion).map_err(|error| {
@@ -3028,6 +3063,25 @@ fn desktop_plugin_payload_files(
         .collect())
 }
 
+fn verify_installer_cold_boot_artifacts(
+    binary_dir: &Path,
+    source: &qol_conventions::artifact::SourceIdentity,
+) -> Result<()> {
+    for (binary, role) in [
+        ("qol-tray", qol_conventions::artifact::BuildRole::Host),
+        (
+            "qol-tray-install",
+            qol_conventions::artifact::BuildRole::Installer,
+        ),
+    ] {
+        let path = binary_dir.join(crate::workspace::exe_name(binary));
+        let expectation = qol_artifact::ArtifactExpectation::production(binary, "qol-tray", role)
+            .with_exact_source(source);
+        qol_artifact::verify_path(&path, &expectation)?;
+    }
+    Ok(())
+}
+
 fn payload_build_label(recipe: DesktopPayloadRecipe) -> String {
     match recipe.companion {
         Some(companion) => format!(
@@ -3062,6 +3116,12 @@ fn desktop_payload_recipe(workflow_id: &str) -> Option<DesktopPayloadRecipe> {
         },
         "qol-shot-capture" | "qol-shot-cold-boot" | "qol-shot-storm" => {
             DesktopCompanionRecipe { plugin_dir: "shot" }
+        }
+        "qol-install-cold-boot" => {
+            return Some(DesktopPayloadRecipe {
+                companion: None,
+                tray_features: Some("linux_evdev"),
+            });
         }
         "shortcut-storm" => {
             return Some(DesktopPayloadRecipe {
@@ -4831,6 +4891,13 @@ mod tests {
                         plugin_dir: "launcher",
                     }),
                     tray_features: None,
+                },
+            ),
+            (
+                "qol-install-cold-boot",
+                DesktopPayloadRecipe {
+                    companion: None,
+                    tray_features: Some("linux_evdev"),
                 },
             ),
             (
