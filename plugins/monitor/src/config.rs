@@ -27,6 +27,8 @@ pub struct DeviceConfig {
     pub layout_position: BTreeMap<String, LayoutPosition>,
     #[serde(default = "default_true")]
     pub notify_on_change: bool,
+    #[serde(default = "default_true")]
+    pub sync_brightness_levels: bool,
     #[serde(default = "default_night_temperature")]
     pub night_temperature: u16,
     #[serde(default = "default_night_schedule")]
@@ -70,6 +72,7 @@ impl Default for DeviceConfig {
             policy: BTreeMap::new(),
             layout_position: BTreeMap::new(),
             notify_on_change: default_true(),
+            sync_brightness_levels: default_true(),
             night_temperature: default_night_temperature(),
             night_schedule: default_night_schedule(),
             night_from: default_night_from(),
@@ -572,6 +575,7 @@ mod tests {
                 "id-a": { "x": -1920, "y": 0, "primary": false },
             },
             "notify_on_change": true,
+            "sync_brightness_levels": true,
             "night_temperature": 3500,
             "night_schedule": "off",
             "night_from": "20:00",
@@ -728,6 +732,15 @@ mod tests {
         assert!(!disabled.notify_on_change);
         let enabled = parse_store(&serde_json::json!({ "notify_on_change": true })).unwrap();
         assert!(enabled.notify_on_change);
+    }
+
+    #[test]
+    fn sync_brightness_levels_defaults_to_true_and_accepts_false() {
+        let defaults = parse_store(&serde_json::json!({})).unwrap();
+        assert!(defaults.sync_brightness_levels);
+        let disabled =
+            parse_store(&serde_json::json!({ "sync_brightness_levels": false })).unwrap();
+        assert!(!disabled.sync_brightness_levels);
     }
 
     #[test]

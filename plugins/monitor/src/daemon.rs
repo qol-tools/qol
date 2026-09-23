@@ -2175,14 +2175,18 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
 
     fn set_brightness(&mut self, display: &str, value: u8) -> Vec<String> {
         let handles = self.session.control().enumerate().unwrap_or_default();
-        let targets: Vec<&DisplayHandle> = if display == "all" {
-            handles.iter().collect()
-        } else {
-            handles
-                .iter()
-                .filter(|handle| handle.id() == display)
-                .collect()
-        };
+        if display != "all" && !handles.iter().any(|handle| handle.id() == display) {
+            return Vec::new();
+        }
+        let targets: Vec<&DisplayHandle> =
+            if display == "all" || self.config().sync_brightness_levels {
+                handles.iter().collect()
+            } else {
+                handles
+                    .iter()
+                    .filter(|handle| handle.id() == display)
+                    .collect()
+            };
         let mut applied = Vec::new();
         for handle in targets {
             if self.session.mutate(handle, value).is_ok() {
@@ -2194,14 +2198,31 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
 
     fn step(&mut self, direction: i8) {
         let handles = self.session.control().enumerate().unwrap_or_default();
+        let sync = self.config().sync_brightness_levels;
+        let shared_next = if sync {
+            handles
+                .iter()
+                .find_map(|handle| self.cached_brightness(handle))
+                .map(|state| step_value(state.value, direction).unwrap_or(state.value))
+        } else {
+            None
+        };
         let mut stepped: Vec<(u8, &'static str)> = Vec::new();
         for handle in &handles {
             let Some(current) = self.cached_brightness(handle) else {
                 continue;
             };
-            let Some(next) = step_value(current.value, direction) else {
+            let next = if sync {
+                shared_next
+            } else {
+                step_value(current.value, direction)
+            };
+            let Some(next) = next else {
                 continue;
             };
+            if current.value == next {
+                continue;
+            }
             if self.session.mutate(handle, next).is_err() {
                 continue;
             }
@@ -2210,6 +2231,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         let message = match stepped.as_slice() {
             [] => return,
             [(value, source)] => format!("Brightness {value}% ({source})"),
+            many if sync => format!("Brightness {}% on {} displays", many[0].0, many.len()),
             many => format!(
                 "Brightness {} on {} displays",
                 if direction > 0 { "up" } else { "down" },
@@ -5414,7 +5436,79 @@ mod tests {
         );
         assert_eq!(
             toasts.lock().unwrap().as_slice(),
-            ["Brightness down on 3 displays"]
+            ["Brightness 55% on 3 displays"]
+        );
+    }
+
+    #[test]
+    fn synced_hotkeys_align_different_levels_and_step_together() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
+            50,
+            BrightnessSource::Ddc,
+        ));
+        control.current.lock().unwrap().insert("id-2".into(), 70);
+        let mut runtime = runtime_with(control.clone(), store);
+        for expected in [55, 60] {
+            runtime.handle(Command::Brightness {
+                direction: 1,
+                phase: Phase::Start,
+            });
+            assert_eq!(
+                control
+                    .current
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![expected, expected]
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_sync_keeps_each_displays_level() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(FakeControl::new(
+            vec![handle("id-1", "card0-DP-1"), handle("id-2", "card0-HDMI-1")],
+            50,
+            BrightnessSource::Ddc,
+        ));
+        control.current.lock().unwrap().insert("id-2".into(), 70);
+        let mut runtime = runtime_with(control.clone(), store);
+        runtime.reload_config(&DeviceConfig {
+            sync_brightness_levels: false,
+            ..DeviceConfig::default()
+        });
+        runtime.handle(Command::Brightness {
+            direction: 1,
+            phase: Phase::Start,
+        });
+        assert_eq!(
+            control
+                .current
+                .lock()
+                .unwrap()
+                .values()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![55, 75]
+        );
+        runtime.handle(Command::SetBrightness {
+            display: "id-2".into(),
+            value: 30,
+        });
+        assert_eq!(
+            control
+                .current
+                .lock()
+                .unwrap()
+                .values()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![55, 30]
         );
     }
 
@@ -5442,6 +5536,10 @@ mod tests {
             },
             || false,
         );
+        runtime.reload_config(&DeviceConfig {
+            sync_brightness_levels: false,
+            ..DeviceConfig::default()
+        });
         runtime.handle(Command::SetBrightness {
             display: "id-2".into(),
             value: 25,
@@ -5458,15 +5556,16 @@ mod tests {
             "the tray-facing config never learns about preferred"
         );
         assert_eq!(saves.load(Ordering::SeqCst), 1);
+        runtime.reload_config(&DeviceConfig::default());
         control.calls.lock().unwrap().clear();
         runtime.handle(Command::SetBrightness {
-            display: "all".into(),
+            display: "id-2".into(),
             value: 80,
         });
         assert_eq!(
             control.calls(),
             vec![("id-1".to_string(), 80), ("id-2".to_string(), 80)],
-            "id all writes every connected display"
+            "a selected display writes every connected display when sync is on"
         );
         assert_eq!(
             config::load_preferred(Some(&config_root)),

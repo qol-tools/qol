@@ -147,6 +147,14 @@ section = "preferences"
 default = true
 description = "Show a notification with the new brightness level whenever brightness changes. Turn this off to silence the brightness toasts."
 
+[field.sync_brightness_levels]
+type = "boolean"
+config_key = "sync_brightness_levels"
+label = "Sync brightness levels"
+section = "preferences"
+default = true
+description = "Changing a display's brightness sets every connected display to the same percentage. Brightness hotkeys step them together."
+
 [section.arrangement]
 label = "Arrangement"
 description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."
