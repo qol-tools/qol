@@ -27,7 +27,7 @@ const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
 pub fn run_from_env() -> Result<()> {
     let runtime = runtime_state();
     core_daemon::run_stateful_listener(&DAEMON_CONFIG, runtime, handle_action)
-        .context("plugin-lights daemon listener failed")
+        .context(format!("{} daemon listener failed", store::PLUGIN_ID))
 }
 
 pub fn execute_action_once(action: &str) -> Result<()> {
@@ -223,7 +223,7 @@ fn map_outcome(action: &str, outcome: DaemonOutcome) -> Result<()> {
     match outcome {
         DaemonOutcome::Handled | DaemonOutcome::HandledWithData(_) => Ok(()),
         DaemonOutcome::Fallback => {
-            anyhow::bail!("plugin-lights fell back for action '{}'", action)
+            anyhow::bail!("{} fell back for action '{}'", store::PLUGIN_ID, action)
         }
         DaemonOutcome::Error(message) => anyhow::bail!(message),
     }

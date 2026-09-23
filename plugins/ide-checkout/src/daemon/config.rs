@@ -46,7 +46,7 @@ mod tests {
         for id in ["idea", "vscode", "cursor", "zed"] {
             assert!(config.apps.contains_key(id), "missing default app {id}");
         }
-        assert_eq!(config.temp_dir, PathBuf::from("/tmp/task-runner"));
+        assert_eq!(config.temp_dir, PathBuf::from("/tmp/qol-ide-checkout"));
     }
 
     #[test]

@@ -1,0 +1,915 @@
+use super::*;
+use proptest::prelude::*;
+
+fn manifest_from_toml(toml: &str) -> PluginManifest {
+    toml::from_str(toml).unwrap()
+}
+
+fn validate_toml(toml: &str) -> anyhow::Result<()> {
+    manifest_from_toml(toml).validate()
+}
+
+fn base_manifest() -> PluginManifest {
+    PluginManifest {
+        manifest_version: CURRENT_MANIFEST_VERSION,
+        plugin: PluginInfo {
+            id: Some("test-plugin".into()),
+            uid: None,
+            name: "P".to_string(),
+            description: "".to_string(),
+            version: "0.0.1".to_string(),
+            author: None,
+            platforms: None,
+        },
+        menu: MenuConfig {
+            label: "M".to_string(),
+            icon: None,
+            items: Vec::new(),
+        },
+        daemon: None,
+        dependencies: None,
+        runtime: None,
+        actions: Default::default(),
+        capabilities: Capabilities::default(),
+        build: BuildInfo::default(),
+        traits: None,
+        config: ConfigDeclarations::default(),
+        shortcuts: Vec::new(),
+        launcher: None,
+    }
+}
+
+fn valid_basename_strategy() -> impl Strategy<Value = String> {
+    proptest::string::string_regex("[a-zA-Z0-9_][a-zA-Z0-9_-]{0,62}").unwrap()
+}
+
+mod manifest_rules {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_unsupported_manifest_version() {
+        let toml = r#"
+            manifest_version = 999
+
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+}
+
+mod continuous_action_rules {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_continuous_action_with_socket_daemon() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "runner"
+
+            [daemon]
+            enabled = true
+            command = "runner"
+            socket = "/tmp/test-plugin.sock"
+
+            [action.glide]
+            label = "Glide"
+            continuous = true
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_continuous_action_without_socket_daemon() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "runner"
+
+            [action.glide]
+            label = "Glide"
+            continuous = true
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+}
+
+mod command_rules {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_absolute_runtime_command() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "/bin/sh"
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_relative_daemon_socket() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [daemon]
+            enabled = true
+            command = "daemon"
+            socket = "qol-p.sock"
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_script_runtime_command() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "run.sh"
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_accepts_binary_command_names() {
+        let manifest = PluginManifest {
+            daemon: Some(DaemonConfig {
+                enabled: true,
+                command: "qol-pointz".to_string(),
+                socket: None,
+                port: None,
+                extra_ports: Vec::new(),
+                inherit_listener: false,
+            }),
+            runtime: Some(RuntimeConfig {
+                command: "window_actions_2".to_string(),
+                actions: None,
+            }),
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn valid_action_ids_are_accepted(value in valid_basename_strategy()) {
+            prop_assert!(is_valid_action_id(&value));
+        }
+
+        #[test]
+        fn valid_command_basenames_are_accepted(value in valid_basename_strategy()) {
+            prop_assert!(is_valid_command_basename(&value));
+        }
+    }
+}
+
+mod menu_rules {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_invalid_action_id_in_menu() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "--bad", label = "Run", action = "run" }
+            ]
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_action_id_in_menu() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "run", label = "Run", action = "run" },
+                { type = "action", id = "run", label = "Run Again", action = "run" }
+            ]
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+}
+
+mod runtime_rules {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_doctor_capability_without_runtime() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [capabilities]
+            doctor = true
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("capabilities.doctor requires a standalone [runtime] command"));
+    }
+
+    #[test]
+    fn validate_accepts_doctor_capability_with_runtime() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "plugin-test"
+
+            [capabilities]
+            doctor = true
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_action_id_in_runtime_map() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "launcher"
+            actions = { "--bad" = ["show"] }
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_runtime_actions_missing_menu_action_mapping() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "run", label = "Run", action = "run" },
+                { type = "action", id = "settings", label = "Settings", action = "settings" }
+            ]
+
+            [runtime]
+            command = "launcher"
+            actions = { run = ["show"] }
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_accepts_runtime_actions_covering_all_menu_actions() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "run", label = "Run", action = "run" },
+                { type = "action", id = "settings", label = "Settings", action = "settings" }
+            ]
+
+            [runtime]
+            command = "launcher"
+            actions = { run = ["show"], settings = ["config"] }
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
+    fn validate_does_not_require_runtime_mapping_for_checkbox_items() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = [
+                { type = "action", id = "record", label = "Record", action = "run" },
+                { type = "checkbox", id = "audio-enable", label = "Audio", action = "toggle-config", config_key = "audio.enabled" }
+            ]
+
+            [runtime]
+            command = "qol-shot"
+            actions = { record = ["record"] }
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_action_type_runtime_menu_pair() {
+        let manifest = PluginManifest {
+            menu: MenuConfig {
+                label: "M".to_string(),
+                icon: None,
+                items: vec![MenuItem::Action {
+                    id: "run".to_string(),
+                    label: "Run".to_string(),
+                    action: ActionType::Run,
+                    config_key: None,
+                }],
+            },
+            runtime: Some(RuntimeConfig {
+                command: "runner".to_string(),
+                actions: Some(
+                    [("run".to_string(), vec!["exec".to_string()])]
+                        .into_iter()
+                        .collect(),
+                ),
+            }),
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_action_catalog_without_runtime_action_map() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "launcher"
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+
+            [action.settings]
+            label = "Settings"
+            kind = "settings"
+            args = ["settings"]
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_runtime_action_map_that_duplicates_catalog_entry() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "launcher"
+            actions = { open = ["show"] }
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_non_catalog_runtime_action_map_when_catalog_is_declared() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [runtime]
+            command = "launcher"
+            actions = { hidden = ["hidden"] }
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_toggle_config_catalog_entry_without_config_key() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [action.audio]
+            label = "Audio"
+            kind = "toggle-config"
+        "#;
+
+        assert!(validate_toml(toml).is_err());
+    }
+}
+
+mod dependency_rules {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_invalid_binary_dependency_name() {
+        let manifest = PluginManifest {
+            dependencies: Some(Dependencies {
+                binaries: vec![BinaryDependency {
+                    name: "runner.sh".to_string(),
+                    repo: "qol-tools/example".to_string(),
+                    pattern: "runner-{os}-{arch}".to_string(),
+                }],
+            }),
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_binary_dependency_name() {
+        let manifest = PluginManifest {
+            dependencies: Some(Dependencies {
+                binaries: vec![BinaryDependency {
+                    name: "runner".to_string(),
+                    repo: "qol-tools/example".to_string(),
+                    pattern: "runner-{os}-{arch}".to_string(),
+                }],
+            }),
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+}
+
+mod shortcut_rules {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_shortcut_for_executable_menu_action() {
+        let manifest = PluginManifest {
+            menu: MenuConfig {
+                label: "M".to_string(),
+                icon: None,
+                items: vec![MenuItem::Action {
+                    id: "open".to_string(),
+                    label: "Open".to_string(),
+                    action: ActionType::Run,
+                    config_key: None,
+                }],
+            },
+            shortcuts: vec![ShortcutDeclaration {
+                id: "open".to_string(),
+                name: "Open Plugin".to_string(),
+                enabled: true,
+                export_to_launcher: true,
+                action: "open".to_string(),
+            }],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_shortcut_for_catalog_action() {
+        let manifest = PluginManifest {
+            actions: [(
+                "open".to_string(),
+                ActionDeclaration {
+                    label: "Open".to_string(),
+                    kind: ActionType::Run,
+                    continuous: false,
+                    args: Some(vec!["open".to_string()]),
+                    config_key: None,
+                    checked: false,
+                    picture: None,
+                    hotkey: true,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            shortcuts: vec![ShortcutDeclaration {
+                id: "open".to_string(),
+                name: "Open Plugin".to_string(),
+                enabled: true,
+                export_to_launcher: true,
+                action: "open".to_string(),
+            }],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_shortcut_for_unknown_action() {
+        let manifest = PluginManifest {
+            shortcuts: vec![ShortcutDeclaration {
+                id: "open".to_string(),
+                name: "Open Plugin".to_string(),
+                enabled: true,
+                export_to_launcher: true,
+                action: "missing".to_string(),
+            }],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_shortcut_ids() {
+        let manifest = PluginManifest {
+            menu: MenuConfig {
+                label: "M".to_string(),
+                icon: None,
+                items: vec![MenuItem::Action {
+                    id: "open".to_string(),
+                    label: "Open".to_string(),
+                    action: ActionType::Run,
+                    config_key: None,
+                }],
+            },
+            shortcuts: vec![
+                ShortcutDeclaration {
+                    id: "open".to_string(),
+                    name: "Open".to_string(),
+                    enabled: true,
+                    export_to_launcher: true,
+                    action: "open".to_string(),
+                },
+                ShortcutDeclaration {
+                    id: "open".to_string(),
+                    name: "Open Again".to_string(),
+                    enabled: true,
+                    export_to_launcher: true,
+                    action: "open".to_string(),
+                },
+            ],
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_err());
+    }
+}
+
+mod launcher_rules {
+    use super::*;
+
+    #[test]
+    fn launcher_flow_requires_query() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            prompt = "Ask memory"
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.query is required for kind = \"flow\""));
+    }
+
+    #[test]
+    fn launcher_flow_rejects_invalid_query_name() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            query = "Rows"
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("invalid launcher.query name: Rows"));
+    }
+
+    #[test]
+    fn launcher_app_rejects_query_and_row_actions() {
+        let query_toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "app"
+            title = "App"
+            query = "rows"
+        "#;
+
+        let error = validate_toml(query_toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.query is only valid for kind = \"flow\""));
+
+        let row_actions_toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "app"
+            title = "App"
+
+            [[launcher.row_actions]]
+            action = "open"
+        "#;
+
+        let error = validate_toml(row_actions_toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.row_actions are only valid for kind = \"flow\""));
+    }
+
+    #[test]
+    fn launcher_row_action_must_be_declared() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            query = "rows"
+
+            [[launcher.row_actions]]
+            action = "missing"
+        "#;
+
+        let error = validate_toml(toml).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.row_actions references undeclared action: missing"));
+    }
+
+    #[test]
+    fn launcher_flow_parses_and_validates() {
+        let toml = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [action.open]
+            label = "Open"
+            args = ["open"]
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            prompt = "Ask memory"
+            query = "rows"
+
+            [[launcher.row_actions]]
+            action = "open"
+        "#;
+
+        assert!(validate_toml(toml).is_ok());
+    }
+
+    fn flow_manifest() -> PluginManifest {
+        manifest_from_toml(
+            r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "flow"
+            title = "qol memory"
+            query = "rows"
+        "#,
+        )
+    }
+
+    #[test]
+    fn launcher_runtime_rejects_undeclared_query() {
+        let manifest = flow_manifest();
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.other]\ndescription = \"Other\"\npoll_interval_ms = 1\n",
+        )
+        .unwrap();
+
+        let error = validate_launcher_runtime(&manifest, Some(&runtime)).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher flow query not declared: rows"));
+    }
+
+    #[test]
+    fn launcher_runtime_requires_query_input() {
+        let manifest = flow_manifest();
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.rows]\ndescription = \"Rows\"\npoll_interval_ms = 1\n",
+        )
+        .unwrap();
+
+        let error = validate_launcher_runtime(&manifest, Some(&runtime)).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher flow query rows must declare a query input"));
+    }
+
+    #[test]
+    fn launcher_runtime_accepts_declared_query() {
+        let manifest = flow_manifest();
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.rows]\ndescription = \"Rows\"\npoll_interval_ms = 1\ninput = { query = \"typed text\" }\n",
+        )
+        .unwrap();
+
+        assert!(validate_launcher_runtime(&manifest, Some(&runtime)).is_ok());
+    }
+}

@@ -1,14 +1,67 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use qol_windowing::display::DisplayHandle;
+use qol_host_session::SessionSnapshot;
+use qol_windowing::display::{DisplayHandle, DisplayPlacement, DisplaySnapshot};
 
-use crate::monitor::{BrightnessSource, DisplayControl, GammaTable, MonitorError};
+use crate::display_color;
+use crate::display_color::backends::{AppletControl, NoAppletControl};
+use crate::hotkeys::PLUGIN_ID;
+use crate::monitor::night::Tint;
+use crate::monitor::{BrightnessSource, BrightnessState, DisplayControl, GammaTable, MonitorError};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 pub const EVICTION_GENERATION: &str = "socket-eviction";
+pub const LAYOUT_SCHEMA_VERSION: u32 = 1;
+pub const LAYOUT_OWNER: &str = "layout";
+pub const LAYOUT_SNAPSHOT_ID: &str = "layout";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlacementRecord {
+    pub id: String,
+    pub connector: String,
+    pub x: i32,
+    pub y: i32,
+    pub primary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModeRecord {
+    pub id: String,
+    pub connector: String,
+    pub token: u64,
+    pub width: u32,
+    pub height: u32,
+    pub refresh_hz: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LayoutSnapshot {
+    pub schema_version: u32,
+    pub layout_id: String,
+    pub placements: Vec<PlacementRecord>,
+    pub modes: Vec<ModeRecord>,
+    pub mutations: u32,
+    #[serde(default)]
+    pub handoff: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopt_generation: Option<String>,
+}
+
+impl qol_host_session::SessionSnapshot for LayoutSnapshot {
+    const SCHEMA_VERSION: u32 = LAYOUT_SCHEMA_VERSION;
+    const SUBDIR: &'static str = LAYOUT_OWNER;
+
+    fn id(&self) -> &str {
+        &self.layout_id
+    }
+
+    fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Snapshot {
@@ -19,6 +72,8 @@ pub struct Snapshot {
     pub value: u8,
     pub source: String,
     pub last_value: u8,
+    #[serde(default, skip_serializing_if = "tint_is_neutral")]
+    pub last_tint: Tint,
     pub mutations: u32,
     pub clean: bool,
     #[serde(default)]
@@ -27,8 +82,28 @@ pub struct Snapshot {
     pub adopt_generation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lut: Option<GammaTable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compose_base: Option<GammaTable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compose_foreign: Option<bool>,
+    #[serde(default = "ownable_default", skip_serializing_if = "is_ownable")]
+    pub ownable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applet_claim: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub checksum: String,
+}
+
+fn tint_is_neutral(tint: &Tint) -> bool {
+    tint.is_neutral()
+}
+
+fn ownable_default() -> bool {
+    true
+}
+
+fn is_ownable(ownable: &bool) -> bool {
+    *ownable
 }
 
 impl Snapshot {
@@ -74,6 +149,14 @@ impl Snapshot {
             _ => None,
         }
     }
+
+    fn lut_percent(&self) -> u8 {
+        if self.source_kind() == Some(BrightnessSource::Gamma) {
+            self.last_value
+        } else {
+            100
+        }
+    }
 }
 
 impl qol_host_session::SessionSnapshot for Snapshot {
@@ -103,8 +186,24 @@ pub trait LutProvider: Send + Sync {
         handle: &DisplayHandle,
         original: &GammaTable,
         last_value: u8,
+        last_tint: Tint,
     ) -> LutRestoreOutcome;
-    fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8);
+    fn adopt_baseline(
+        &self,
+        handle: &DisplayHandle,
+        original: &GammaTable,
+        last_value: u8,
+        last_tint: Tint,
+    );
+    fn rebind_compose_base(
+        &self,
+        _handle: &DisplayHandle,
+        _base: &GammaTable,
+        _foreign: bool,
+        _tint_allowed: bool,
+    ) -> bool {
+        false
+    }
 }
 
 pub struct NoLutProvider;
@@ -119,11 +218,19 @@ impl LutProvider for NoLutProvider {
         _handle: &DisplayHandle,
         _original: &GammaTable,
         _last_value: u8,
+        _last_tint: Tint,
     ) -> LutRestoreOutcome {
         LutRestoreOutcome::Unavailable
     }
 
-    fn adopt_baseline(&self, _handle: &DisplayHandle, _original: &GammaTable, _last_value: u8) {}
+    fn adopt_baseline(
+        &self,
+        _handle: &DisplayHandle,
+        _original: &GammaTable,
+        _last_value: u8,
+        _last_tint: Tint,
+    ) {
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +268,69 @@ impl RestoreReport {
 pub enum RestoreMode {
     Exit,
     Recovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandoffVerdict {
+    Restore,
+    Defer,
+    Stale,
+}
+
+fn topology_match<'a>(
+    topology: &'a [DisplaySnapshot],
+    id: &str,
+    connector: &str,
+) -> Option<&'a DisplaySnapshot> {
+    topology
+        .iter()
+        .find(|entry| entry.handle.id() == id)
+        .or_else(|| {
+            topology.iter().find(|entry| {
+                entry.handle.identity_unstable() && entry.handle.connector() == connector
+            })
+        })
+}
+
+fn display_present(topology: &[DisplaySnapshot], id: &str, connector: &str) -> bool {
+    topology_match(topology, id, connector).is_some()
+}
+
+fn layout_displays_all_absent(snapshot: &LayoutSnapshot, topology: &[DisplaySnapshot]) -> bool {
+    snapshot
+        .placements
+        .iter()
+        .all(|record| !display_present(topology, &record.id, &record.connector))
+        && snapshot
+            .modes
+            .iter()
+            .all(|record| !display_present(topology, &record.id, &record.connector))
+}
+
+fn placement_match<'a>(
+    topology: &'a [DisplaySnapshot],
+    placement: &DisplayPlacement,
+) -> Option<&'a DisplaySnapshot> {
+    topology_match(
+        topology,
+        placement.handle.id(),
+        placement.handle.connector(),
+    )
+}
+
+fn placement_matches(topology: &[DisplaySnapshot], placement: &DisplayPlacement) -> bool {
+    let Some(snapshot) = placement_match(topology, placement) else {
+        return false;
+    };
+    snapshot.bounds.x.round() as i32 == placement.x
+        && snapshot.bounds.y.round() as i32 == placement.y
+        && snapshot.primary == placement.primary
+}
+
+fn placements_match(topology: &[DisplaySnapshot], placements: &[DisplayPlacement]) -> bool {
+    placements
+        .iter()
+        .all(|placement| placement_matches(topology, placement))
 }
 
 pub struct SessionStore {
@@ -254,7 +424,7 @@ impl SessionStore {
                 Ok(None) => {}
                 Err(error) => {
                     eprintln!(
-                        "[plugin-monitor] skipping unreadable snapshot {}: {error:#}",
+                        "[{PLUGIN_ID}] skipping unreadable snapshot {}: {error:#}",
                         path.display()
                     );
                     inventory.unreadable.push(path);
@@ -267,13 +437,99 @@ impl SessionStore {
     pub fn delete_snapshot(&self, display_id: &str) -> Result<()> {
         self.inner.delete(display_id)
     }
+
+    fn layout_store(&self) -> qol_host_session::SessionStore {
+        self.inner.owner_store(LAYOUT_OWNER)
+    }
+
+    pub fn claim_layout(&self, snapshot: &LayoutSnapshot) -> Result<()> {
+        let store = self.layout_store();
+        if store.load::<LayoutSnapshot>(snapshot.id())?.is_some() {
+            return Ok(());
+        }
+        store
+            .write(snapshot)
+            .with_context(|| "failed to commit the layout snapshot")
+    }
+
+    pub fn claim_layout_in_topology(
+        &self,
+        snapshot: &LayoutSnapshot,
+        topology: &[DisplaySnapshot],
+    ) -> Result<()> {
+        let store = self.layout_store();
+        let keep = store
+            .load::<LayoutSnapshot>(snapshot.id())?
+            .is_some_and(|existing| !layout_displays_all_absent(&existing, topology));
+        if keep {
+            return Ok(());
+        }
+        store
+            .write(snapshot)
+            .with_context(|| "failed to commit the layout snapshot")
+    }
+
+    pub fn touch_layout(&self) -> Result<()> {
+        let store = self.layout_store();
+        let Some(mut snapshot) = store.load::<LayoutSnapshot>(LAYOUT_SNAPSHOT_ID)? else {
+            return Ok(());
+        };
+        snapshot.mutations = snapshot.mutations.saturating_add(1);
+        store.write(&snapshot)
+    }
+
+    pub fn write_layout(&self, snapshot: &LayoutSnapshot) -> Result<()> {
+        self.layout_store()
+            .write(snapshot)
+            .with_context(|| "failed to update the layout snapshot")
+    }
+
+    pub fn load_layout(&self) -> Result<Option<LayoutSnapshot>> {
+        self.layout_store()
+            .load::<LayoutSnapshot>(LAYOUT_SNAPSHOT_ID)
+    }
+
+    pub fn delete_layout(&self) -> Result<()> {
+        self.layout_store().delete(LAYOUT_SNAPSHOT_ID)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DisplayAdjustment {
+    brightness: BrightnessState,
+    tint: Tint,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OwnedGamma {
+    pub handle: DisplayHandle,
+    pub tint: Tint,
+    pub expected: GammaTable,
+}
+
+pub(crate) fn expected_gamma_table(snapshot: &Snapshot) -> Option<GammaTable> {
+    let lut = snapshot.lut.as_ref()?;
+    let (derived_base, verdict) = display_color::compose_base(lut);
+    let base = snapshot.compose_base.as_ref().unwrap_or(&derived_base);
+    let foreign_base = snapshot
+        .compose_foreign
+        .unwrap_or(verdict.base == display_color::classifier::BaseChoice::Neutral);
+    Some(display_color::composed_target(
+        lut,
+        base,
+        foreign_base,
+        snapshot.lut_percent(),
+        snapshot.last_tint,
+    ))
 }
 
 pub struct Session<C: ?Sized> {
     control: Arc<C>,
     store: SessionStore,
     lut: Arc<dyn LutProvider>,
+    applet: Arc<dyn AppletControl>,
     snapshotted: Mutex<HashSet<String>>,
+    adjustments: Mutex<BTreeMap<String, DisplayAdjustment>>,
     adoption_generation: Option<String>,
 }
 
@@ -284,15 +540,26 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             control,
             store,
             lut,
+            applet: Arc::new(NoAppletControl),
             snapshotted: Mutex::new(HashSet::new()),
+            adjustments: Mutex::new(BTreeMap::new()),
             adoption_generation,
         }
+    }
+
+    pub(crate) fn with_applet(mut self, applet: Arc<dyn AppletControl>) -> Self {
+        self.applet = applet;
+        self
     }
 
     #[cfg(test)]
     pub fn with_adoption_generation(mut self, generation: Option<String>) -> Self {
         self.adoption_generation = generation;
         self
+    }
+
+    pub(crate) fn applet(&self) -> &Arc<dyn AppletControl> {
+        &self.applet
     }
 
     pub fn control(&self) -> &Arc<C> {
@@ -314,6 +581,95 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .insert(display_id.to_string());
     }
 
+    fn forget_snapshot(&self, display_id: &str) {
+        let _ = self.store.delete_snapshot(display_id);
+        self.snapshotted.lock().unwrap().remove(display_id);
+    }
+
+    pub(crate) fn brightness(
+        &self,
+        handle: &DisplayHandle,
+    ) -> Result<BrightnessState, MonitorError> {
+        if let Some(adjustment) = self.adjustments.lock().unwrap().get(handle.id()) {
+            return Ok(adjustment.brightness);
+        }
+        let brightness = self.control.get_brightness(handle)?;
+        self.adjustments.lock().unwrap().insert(
+            handle.id().into(),
+            DisplayAdjustment {
+                brightness,
+                tint: Tint::NEUTRAL,
+            },
+        );
+        Ok(brightness)
+    }
+
+    pub(crate) fn brightness_states(&self) -> BTreeMap<String, BrightnessState> {
+        let handles = self.control.enumerate().unwrap_or_default();
+        handles
+            .iter()
+            .filter_map(|handle| {
+                self.brightness(handle)
+                    .ok()
+                    .map(|state| (handle.id().into(), state))
+            })
+            .collect()
+    }
+
+    pub(crate) fn uses_gamma_brightness(&self) -> bool {
+        self.brightness_states()
+            .values()
+            .any(|state| state.source == BrightnessSource::Gamma)
+    }
+
+    pub(crate) fn brightness_cache(&self) -> BTreeMap<String, BrightnessState> {
+        self.adjustments
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, adjustment)| (id.clone(), adjustment.brightness))
+            .collect()
+    }
+
+    pub(crate) fn merge_brightness_cache(&self, cache: &BTreeMap<String, BrightnessState>) {
+        let mut adjustments = self.adjustments.lock().unwrap();
+        for (id, state) in cache {
+            adjustments.entry(id.clone()).or_insert(DisplayAdjustment {
+                brightness: *state,
+                tint: Tint::NEUTRAL,
+            });
+        }
+    }
+
+    pub(crate) fn tinted_displays(&self) -> HashSet<String> {
+        self.adjustments
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, state)| !state.tint.is_neutral())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    fn track_tint(&self, handle: &DisplayHandle, tint: Tint) {
+        if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
+            state.tint = tint;
+        }
+    }
+
+    fn adopt_adjustment(&self, handle: &DisplayHandle, snapshot: &Snapshot) {
+        self.adjustments.lock().unwrap().insert(
+            handle.id().into(),
+            DisplayAdjustment {
+                brightness: BrightnessState {
+                    value: snapshot.last_value,
+                    source: snapshot.source_kind().unwrap_or(BrightnessSource::Gamma),
+                },
+                tint: snapshot.last_tint,
+            },
+        );
+    }
+
     fn adopt_persisted(&self, handle: &DisplayHandle) -> bool {
         let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
             return false;
@@ -321,32 +677,86 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         if snapshot.clean {
             return false;
         }
-        if snapshot.source_kind() != Some(BrightnessSource::Gamma) {
-            return false;
-        }
         let Some(lut) = &snapshot.lut else {
             return false;
         };
-        self.lut.adopt_baseline(handle, lut, snapshot.last_value);
+        let (derived_base, verdict) = display_color::compose_base(lut);
+        let compose_base = snapshot.compose_base.clone().unwrap_or(derived_base);
+        let foreign_base = snapshot
+            .compose_foreign
+            .unwrap_or(verdict.base == display_color::classifier::BaseChoice::Neutral);
+        let legacy = snapshot
+            .compose_base
+            .as_ref()
+            .unwrap_or(lut)
+            .dimmed(snapshot.lut_percent())
+            .tinted(snapshot.last_tint);
+        let expected = expected_gamma_table(&snapshot).unwrap_or_else(|| legacy.clone());
+        if self
+            .lut
+            .capture(handle.connector())
+            .is_some_and(|current| current != expected && current != legacy)
+        {
+            qol_runtime::probe!(
+                "MONITOR_SESSION",
+                "event=baseline_adoption display={} outcome=external_change",
+                handle.id()
+            );
+            return false;
+        }
+        if snapshot.compose_base.as_ref() != Some(&compose_base)
+            || snapshot.ownable != verdict.tint_allowed
+            || snapshot.compose_foreign != Some(foreign_base)
+        {
+            let recorded = Snapshot {
+                compose_base: Some(compose_base.clone()),
+                compose_foreign: Some(foreign_base),
+                ownable: verdict.tint_allowed,
+                ..snapshot.clone()
+            };
+            let _ = self.store.write_snapshot(&recorded);
+        }
+        self.lut
+            .adopt_baseline(handle, lut, snapshot.lut_percent(), snapshot.last_tint);
+        self.lut
+            .rebind_compose_base(handle, &compose_base, foreign_base, verdict.tint_allowed);
+        self.adopt_adjustment(handle, &snapshot);
         self.mark_snapshotted(handle.id());
         true
     }
 
-    fn ensure_snapshot(&self, handle: &DisplayHandle) -> Result<(), MonitorError> {
+    fn ensure_snapshot(&self, handle: &DisplayHandle, need_lut: bool) -> Result<(), MonitorError> {
         if self.is_snapshotted(handle.id()) {
-            return Ok(());
+            return self.ensure_snapshot_lut(handle, need_lut);
         }
         if self.adopt_persisted(handle) {
-            return Ok(());
+            return self.ensure_snapshot_lut(handle, need_lut);
         }
         let state = self
             .control
             .get_brightness(handle)
             .map_err(|error| MonitorError::refused("brightness", format!("{error}")))?;
-        let lut = if state.source == BrightnessSource::Gamma {
+        let lut = if state.source == BrightnessSource::Gamma || need_lut {
             self.lut.capture(handle.connector())
         } else {
             None
+        };
+        if need_lut && lut.is_none() {
+            return Err(MonitorError::unsupported(
+                "tint",
+                format!("no gamma ramp is readable for {}", handle.connector()),
+            ));
+        }
+        let (compose_base, ownable, compose_foreign) = match &lut {
+            Some(table) => {
+                let (base, verdict) = display_color::compose_base(table);
+                (
+                    Some(base),
+                    verdict.tint_allowed,
+                    Some(verdict.base == display_color::classifier::BaseChoice::Neutral),
+                )
+            }
+            None => (None, true, None),
         };
         let snapshot = Snapshot {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
@@ -357,24 +767,83 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             value: state.value,
             source: state.source.label().to_string(),
             last_value: state.value,
+            last_tint: Tint::NEUTRAL,
             mutations: 0,
             clean: false,
             handoff: false,
             adopt_generation: None,
             lut,
+            compose_base,
+            compose_foreign,
+            ownable,
+            applet_claim: self.applet_claim(handle.id()),
             checksum: String::new(),
         };
         self.store
             .write_snapshot(&snapshot)
             .map_err(|error| MonitorError::refused("brightness", format!("{error:#}")))?;
+        self.adopt_adjustment(handle, &snapshot);
         self.mark_snapshotted(handle.id());
         Ok(())
     }
 
-    pub fn adopt(&self, handle: &DisplayHandle) {
-        if !self.adopt_persisted(handle) {
-            self.mark_snapshotted(handle.id());
+    fn ensure_snapshot_lut(
+        &self,
+        handle: &DisplayHandle,
+        need_lut: bool,
+    ) -> Result<(), MonitorError> {
+        if !need_lut {
+            return Ok(());
         }
+        let Some(mut snapshot) = self
+            .store
+            .load_snapshot(handle.id())
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?
+        else {
+            return Err(MonitorError::refused(
+                "tint",
+                "the display snapshot vanished",
+            ));
+        };
+        if snapshot.lut.is_some() {
+            return Ok(());
+        }
+        if snapshot.source_kind() == Some(BrightnessSource::Gamma) && snapshot.mutations > 0 {
+            return Err(MonitorError::refused(
+                "tint",
+                "the original gamma ramp was not captured before brightness changed",
+            ));
+        }
+        snapshot.lut = self.lut.capture(handle.connector());
+        let Some(table) = &snapshot.lut else {
+            return Err(MonitorError::unsupported(
+                "tint",
+                format!("no gamma ramp is readable for {}", handle.connector()),
+            ));
+        };
+        let (compose_base, verdict) = display_color::compose_base(table);
+        snapshot.compose_base = Some(compose_base);
+        snapshot.compose_foreign =
+            Some(verdict.base == display_color::classifier::BaseChoice::Neutral);
+        snapshot.ownable = verdict.tint_allowed;
+        self.store
+            .write_snapshot(&snapshot)
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))
+    }
+
+    pub fn adopt(&self, handle: &DisplayHandle) -> bool {
+        if self.adopt_persisted(handle) {
+            return true;
+        }
+        let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
+            return false;
+        };
+        if snapshot.clean || snapshot.lut.is_some() {
+            return false;
+        }
+        self.adopt_adjustment(handle, &snapshot);
+        self.mark_snapshotted(handle.id());
+        true
     }
 
     pub fn mark_handoff_all(&self, successor: Option<&str>) {
@@ -396,11 +865,39 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 .is_err()
             {
                 eprintln!(
-                    "[plugin-monitor] failed to mark snapshot {} for reload handoff",
+                    "[{PLUGIN_ID}] failed to mark snapshot {} for reload handoff",
                     display_id
                 );
             }
         }
+        let Ok(Some(layout)) = self.store.load_layout() else {
+            return;
+        };
+        if layout.mutations == 0 || layout.handoff {
+            return;
+        }
+        if self
+            .store
+            .write_layout(&LayoutSnapshot {
+                handoff: true,
+                adopt_generation: successor.map(str::to_string),
+                ..layout
+            })
+            .is_err()
+        {
+            eprintln!("[{PLUGIN_ID}] failed to mark the layout snapshot for reload handoff");
+        }
+    }
+
+    pub fn adopt_layout_handoff(&self) -> bool {
+        let Ok(Some(mut snapshot)) = self.store.load_layout() else {
+            return false;
+        };
+        if !(snapshot.handoff && self.layout_handoff_is_for_this_generation(&snapshot)) {
+            return false;
+        }
+        snapshot.handoff = false;
+        self.store.write_layout(&snapshot).is_ok()
     }
 
     pub fn retire_all(&self) {
@@ -413,7 +910,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     }
 
     pub fn mutate(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
-        self.ensure_snapshot(handle)?;
+        self.ensure_snapshot(handle, false)?;
         let snapshot = self
             .store
             .load_snapshot(handle.id())
@@ -429,27 +926,80 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         self.store
             .write_snapshot(&updated)
             .map_err(|error| MonitorError::refused("brightness", format!("{error:#}")))?;
-        self.control.set_brightness(handle, value)
+        self.control
+            .set_brightness_with_tint(handle, value, updated.last_tint)?;
+        if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
+            state.brightness.value = value;
+        }
+        Ok(())
+    }
+
+    pub fn mutate_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+        self.mutate_tint_with(handle, tint, || {})
+    }
+
+    pub(crate) fn mutate_tint_with(
+        &self,
+        handle: &DisplayHandle,
+        tint: Tint,
+        before_write: impl FnOnce(),
+    ) -> Result<(), MonitorError> {
+        self.ensure_snapshot(handle, true)?;
+        let snapshot = self
+            .store
+            .load_snapshot(handle.id())
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?
+            .ok_or_else(|| MonitorError::refused("tint", "the display snapshot vanished"))?;
+        let updated = Snapshot {
+            mutations: snapshot.mutations + 1,
+            last_tint: tint,
+            ..snapshot
+        };
+        self.store
+            .write_snapshot(&updated)
+            .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?;
+        before_write();
+        self.control
+            .set_gamma_adjustment(handle, updated.lut_percent(), tint)?;
+        self.track_tint(handle, tint);
+        Ok(())
     }
 
     fn restore_one(&self, snapshot: &Snapshot, handle: &DisplayHandle) -> RestoreOutcome {
-        if snapshot.source_kind() == Some(BrightnessSource::Gamma) {
-            if let Some(original) = &snapshot.lut {
-                return match self
-                    .lut
-                    .write_guarded(handle, original, snapshot.last_value)
-                {
+        if let Some(original) = &snapshot.lut {
+            let lut_outcome = self.lut.write_guarded(
+                handle,
+                original,
+                snapshot.lut_percent(),
+                snapshot.last_tint,
+            );
+            if snapshot.source_kind() == Some(BrightnessSource::Gamma) {
+                return match lut_outcome {
                     LutRestoreOutcome::Restored => RestoreOutcome::Restored,
                     LutRestoreOutcome::ForeignLutPreserved => RestoreOutcome::ForeignLutPreserved,
                     LutRestoreOutcome::Unavailable => RestoreOutcome::Failed,
                 };
             }
+            if snapshot.last_value != snapshot.value {
+                if let Err(error) = self.control.set_brightness(handle, snapshot.value) {
+                    eprintln!(
+                        "[{PLUGIN_ID}] restore of {} failed: {error}",
+                        handle.connector()
+                    );
+                    return RestoreOutcome::Failed;
+                }
+            }
+            return match lut_outcome {
+                LutRestoreOutcome::Restored => RestoreOutcome::Restored,
+                LutRestoreOutcome::ForeignLutPreserved => RestoreOutcome::ForeignLutPreserved,
+                LutRestoreOutcome::Unavailable => RestoreOutcome::Failed,
+            };
         }
         match self.control.set_brightness(handle, snapshot.value) {
             Ok(()) => RestoreOutcome::Restored,
             Err(error) => {
                 eprintln!(
-                    "[plugin-monitor] restore of {} failed: {error}",
+                    "[{PLUGIN_ID}] restore of {} failed: {error}",
                     handle.connector()
                 );
                 RestoreOutcome::Failed
@@ -458,9 +1008,36 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     }
 
     pub(crate) fn handoff_is_for_this_generation(&self, snapshot: &Snapshot) -> bool {
-        match &snapshot.adopt_generation {
+        self.handoff_matches_generation(snapshot.adopt_generation.as_deref())
+    }
+
+    fn handoff_verdict(
+        &self,
+        handoff: bool,
+        adopt_generation: Option<&str>,
+        mode: RestoreMode,
+    ) -> HandoffVerdict {
+        if !handoff {
+            return HandoffVerdict::Restore;
+        }
+        match mode {
+            RestoreMode::Recovery if self.handoff_matches_generation(adopt_generation) => {
+                HandoffVerdict::Defer
+            }
+            RestoreMode::Exit if adopt_generation.is_some() => HandoffVerdict::Defer,
+            RestoreMode::Recovery => HandoffVerdict::Stale,
+            RestoreMode::Exit => HandoffVerdict::Restore,
+        }
+    }
+
+    fn layout_handoff_is_for_this_generation(&self, snapshot: &LayoutSnapshot) -> bool {
+        self.handoff_matches_generation(snapshot.adopt_generation.as_deref())
+    }
+
+    fn handoff_matches_generation(&self, adopt_generation: Option<&str>) -> bool {
+        match adopt_generation {
             Some(addressed) if addressed == EVICTION_GENERATION => true,
-            Some(addressed) => self.adoption_generation.as_deref() == Some(addressed.as_str()),
+            Some(addressed) => self.adoption_generation.as_deref() == Some(addressed),
             None => self.adoption_generation.is_some(),
         }
     }
@@ -468,11 +1045,11 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     pub fn restore_all(&self, mode: RestoreMode) -> RestoreReport {
         let mut report = RestoreReport::default();
         let Ok(inventory) = self.store.load_all() else {
-            eprintln!("[plugin-monitor] session directory is unreadable; restore skipped");
+            eprintln!("[{PLUGIN_ID}] session directory is unreadable; restore skipped");
             return report;
         };
         report.unreadable = inventory.unreadable.len();
-        for snapshot in inventory.snapshots {
+        for mut snapshot in inventory.snapshots {
             if snapshot.mutations == 0 {
                 let _ = self.store.delete_snapshot(&snapshot.display_id);
                 report.record(RestoreOutcome::NothingToRestore);
@@ -483,22 +1060,19 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 report.record(RestoreOutcome::NothingToRestore);
                 continue;
             }
-            if snapshot.handoff
-                && mode == RestoreMode::Recovery
-                && self.handoff_is_for_this_generation(&snapshot)
-            {
+            let verdict =
+                self.handoff_verdict(snapshot.handoff, snapshot.adopt_generation.as_deref(), mode);
+            if verdict == HandoffVerdict::Defer {
                 report.record(RestoreOutcome::NothingToRestore);
                 continue;
             }
-            if snapshot.handoff && mode == RestoreMode::Exit && snapshot.adopt_generation.is_some()
-            {
-                report.record(RestoreOutcome::NothingToRestore);
-                continue;
-            }
-            let stale_handoff = snapshot.handoff
-                && mode == RestoreMode::Recovery
-                && !self.handoff_is_for_this_generation(&snapshot);
+            let stale_handoff = verdict == HandoffVerdict::Stale;
             let Some(handle) = self.find_handle(&snapshot) else {
+                let applet_released = self.release_applet(&mut snapshot).unwrap_or(true);
+                if !applet_released {
+                    report.record(RestoreOutcome::Failed);
+                    continue;
+                }
                 if stale_handoff {
                     let _ = self.store.delete_snapshot(&snapshot.display_id);
                 }
@@ -506,6 +1080,11 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 continue;
             };
             let outcome = self.restore_one(&snapshot, &handle);
+            let applet_released = self.release_applet(&mut snapshot).unwrap_or(true);
+            if !applet_released {
+                report.record(RestoreOutcome::Failed);
+                continue;
+            }
             match mode {
                 RestoreMode::Exit => match outcome {
                     RestoreOutcome::Restored => {
@@ -514,22 +1093,479 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                             ..snapshot
                         });
                     }
-                    RestoreOutcome::ForeignLutPreserved | RestoreOutcome::NothingToRestore => {
+                    RestoreOutcome::ForeignLutPreserved => {
+                        qol_runtime::probe!(
+                            "MONITOR_SESSION",
+                            "event=baseline_release display={} outcome=foreign_lut_preserved",
+                            handle.id()
+                        );
+                    }
+                    RestoreOutcome::NothingToRestore => {
                         let _ = self.store.delete_snapshot(&snapshot.display_id);
                     }
                     RestoreOutcome::SkippedDisplayGone | RestoreOutcome::Failed => {}
                 },
                 RestoreMode::Recovery => match outcome {
-                    RestoreOutcome::Restored
-                    | RestoreOutcome::ForeignLutPreserved
-                    | RestoreOutcome::NothingToRestore => {
+                    RestoreOutcome::Restored | RestoreOutcome::NothingToRestore => {
                         let _ = self.store.delete_snapshot(&snapshot.display_id);
+                    }
+                    RestoreOutcome::ForeignLutPreserved => {
+                        qol_runtime::probe!(
+                            "MONITOR_SESSION",
+                            "event=baseline_release display={} outcome=foreign_lut_preserved",
+                            handle.id()
+                        );
                     }
                     RestoreOutcome::SkippedDisplayGone | RestoreOutcome::Failed => {}
                 },
             }
             report.record(outcome);
         }
+        report
+    }
+
+    pub(crate) fn reassert_gamma(&self, handle: &DisplayHandle) -> RestoreOutcome {
+        let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
+            return RestoreOutcome::NothingToRestore;
+        };
+        if snapshot.lut.is_none() || snapshot.mutations == 0 {
+            return RestoreOutcome::NothingToRestore;
+        }
+        match self
+            .control
+            .set_gamma_adjustment(handle, snapshot.lut_percent(), snapshot.last_tint)
+        {
+            Ok(()) => RestoreOutcome::Restored,
+            Err(error) => {
+                eprintln!(
+                    "[{PLUGIN_ID}] gamma re-assert failed on {}: {error}",
+                    handle.connector()
+                );
+                RestoreOutcome::Failed
+            }
+        }
+    }
+
+    pub(crate) fn gamma_ownership(&self) -> Vec<OwnedGamma> {
+        let handles = self.control.enumerate().unwrap_or_default();
+        handles
+            .into_iter()
+            .filter_map(|handle| {
+                if !self.is_snapshotted(handle.id()) {
+                    return None;
+                }
+                let snapshot = self.store.load_snapshot(handle.id()).ok().flatten()?;
+                let lut = snapshot.lut.as_ref()?;
+                if snapshot.mutations == 0 {
+                    return None;
+                }
+                let expected = expected_gamma_table(&snapshot)?;
+                if expected.checksum() == lut.checksum() {
+                    return None;
+                }
+                Some(OwnedGamma {
+                    handle,
+                    tint: snapshot.last_tint,
+                    expected,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn capture_gamma(&self, handle: &DisplayHandle) -> Option<GammaTable> {
+        self.lut.capture(handle.connector())
+    }
+
+    pub(crate) fn ownable(&self, display_id: &str) -> Option<bool> {
+        self.store
+            .load_snapshot(display_id)
+            .ok()
+            .flatten()
+            .map(|snapshot| snapshot.ownable)
+    }
+
+    pub(crate) fn applet_claim(&self, display_id: &str) -> Option<String> {
+        self.store
+            .load_snapshot(display_id)
+            .ok()
+            .flatten()
+            .and_then(|snapshot| snapshot.applet_claim)
+    }
+
+    pub(crate) fn record_applet_claim(&self, display_id: &str, original: &str) -> bool {
+        let Ok(Some(snapshot)) = self.store.load_snapshot(display_id) else {
+            return false;
+        };
+        if snapshot.applet_claim.as_deref() == Some(original) {
+            return true;
+        }
+        let recorded = Snapshot {
+            applet_claim: Some(original.to_string()),
+            ..snapshot
+        };
+        self.store.write_snapshot(&recorded).is_ok()
+    }
+
+    pub(crate) fn clear_applet_claim(&self, display_id: &str) -> bool {
+        let Ok(Some(snapshot)) = self.store.load_snapshot(display_id) else {
+            return false;
+        };
+        if snapshot.applet_claim.is_none() {
+            return true;
+        }
+        self.store
+            .write_snapshot(&Snapshot {
+                applet_claim: None,
+                ..snapshot
+            })
+            .is_ok()
+    }
+
+    fn release_applet(&self, snapshot: &mut Snapshot) -> Option<bool> {
+        let claim = snapshot.applet_claim.as_deref()?;
+        if !self.applet.restore(claim) {
+            qol_runtime::probe!(
+                "MONITOR_SESSION",
+                "event=applet_release display={} outcome=failed",
+                snapshot.display_id
+            );
+            return Some(false);
+        }
+        snapshot.applet_claim = None;
+        if let Err(error) = self.store.write_snapshot(snapshot) {
+            eprintln!(
+                "[{PLUGIN_ID}] failed to clear the applet claim for {}: {error:#}",
+                snapshot.display_id
+            );
+        }
+        qol_runtime::probe!(
+            "MONITOR_SESSION",
+            "event=applet_release display={} outcome=restored",
+            snapshot.display_id
+        );
+        Some(true)
+    }
+
+    pub(crate) fn release_applet_claims(&self) -> usize {
+        let Ok(inventory) = self.store.load_all() else {
+            return 0;
+        };
+        let mut released = 0;
+        for mut snapshot in inventory.snapshots {
+            if self.release_applet(&mut snapshot) == Some(true) {
+                released += 1;
+            }
+        }
+        released
+    }
+
+    pub(crate) fn release_idle_baseline(&self, handle: &DisplayHandle) -> RestoreOutcome {
+        let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
+            return RestoreOutcome::NothingToRestore;
+        };
+        if snapshot.mutations == 0
+            || !snapshot.last_tint.is_neutral()
+            || snapshot.last_value != snapshot.value
+        {
+            return RestoreOutcome::NothingToRestore;
+        }
+        let outcome = self.restore_one(&snapshot, handle);
+        let mut released = snapshot;
+        if self.release_applet(&mut released) == Some(false) {
+            return RestoreOutcome::Failed;
+        }
+        if outcome != RestoreOutcome::Restored {
+            return outcome;
+        }
+        self.forget_snapshot(handle.id());
+        RestoreOutcome::Restored
+    }
+
+    pub(crate) fn adopt_compose_base(
+        &self,
+        handle: &DisplayHandle,
+        table: &GammaTable,
+        ownable: bool,
+    ) -> bool {
+        let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
+            return false;
+        };
+        let verdict = display_color::compose_base(table).1;
+        let foreign = verdict.base == display_color::classifier::BaseChoice::Neutral;
+        if (snapshot.compose_base.as_ref() != Some(table)
+            || snapshot.ownable != ownable
+            || snapshot.compose_foreign != Some(foreign))
+            && self
+                .store
+                .write_snapshot(&Snapshot {
+                    compose_base: Some(table.clone()),
+                    compose_foreign: Some(foreign),
+                    ownable,
+                    ..snapshot
+                })
+                .is_err()
+        {
+            return false;
+        }
+        self.lut
+            .rebind_compose_base(handle, table, foreign, verdict.tint_allowed);
+        true
+    }
+
+    pub(crate) fn write_current_gamma(&self, handle: &DisplayHandle) -> Result<(), MonitorError> {
+        let snapshot = self
+            .store
+            .load_snapshot(handle.id())
+            .map_err(|error| MonitorError::refused("gamma", format!("{error:#}")))?
+            .ok_or_else(|| MonitorError::refused("gamma", "the display snapshot vanished"))?;
+        self.control
+            .set_gamma_adjustment(handle, snapshot.lut_percent(), snapshot.last_tint)
+    }
+
+    pub(crate) fn reassert_gamma_guarded(
+        &self,
+        handle: &DisplayHandle,
+        observed_checksum: u64,
+    ) -> Result<RestoreOutcome, MonitorError> {
+        let Ok(Some(snapshot)) = self.store.load_snapshot(handle.id()) else {
+            return Ok(RestoreOutcome::NothingToRestore);
+        };
+        if snapshot.lut.is_none() || snapshot.mutations == 0 {
+            return Ok(RestoreOutcome::NothingToRestore);
+        }
+        let Some(expected) = expected_gamma_table(&snapshot) else {
+            return Ok(RestoreOutcome::NothingToRestore);
+        };
+        match self.lut.capture(handle.connector()) {
+            Some(current) if current.checksum() == observed_checksum => {}
+            Some(_) => {
+                qol_runtime::probe!(
+                    "MONITOR_SESSION",
+                    "event=gamma_drift display={} outcome=drifted_before_write",
+                    handle.id()
+                );
+                return Ok(RestoreOutcome::ForeignLutPreserved);
+            }
+            None => {
+                return Err(MonitorError::refused(
+                    "gamma",
+                    "the live gamma ramp is unreadable",
+                ));
+            }
+        }
+        match self.control.set_gamma_adjustment_guarded(
+            handle,
+            snapshot.lut_percent(),
+            snapshot.last_tint,
+            observed_checksum,
+        ) {
+            Ok(()) => {}
+            Err(error) if error.is_gamma_changed_under_write() => {
+                qol_runtime::probe!(
+                    "MONITOR_SESSION",
+                    "event=gamma_drift display={} outcome=drifted_under_write",
+                    handle.id()
+                );
+                return Ok(RestoreOutcome::ForeignLutPreserved);
+            }
+            Err(error) => {
+                eprintln!(
+                    "[{PLUGIN_ID}] gamma re-assert failed on {}: {error}",
+                    handle.connector()
+                );
+                return Err(error);
+            }
+        }
+        match self.lut.capture(handle.connector()) {
+            Some(back) if back.checksum() == expected.checksum() => Ok(RestoreOutcome::Restored),
+            Some(_) => {
+                qol_runtime::probe!(
+                    "MONITOR_SESSION",
+                    "event=gamma_drift display={} outcome=drifted_after_write",
+                    handle.id()
+                );
+                Ok(RestoreOutcome::ForeignLutPreserved)
+            }
+            None => Ok(RestoreOutcome::Failed),
+        }
+    }
+
+    pub fn restore_layout(&self, mode: RestoreMode) -> RestoreReport {
+        self.restore_layout_guarded(mode, |_| true)
+    }
+
+    pub(crate) fn restore_layout_guarded(
+        &self,
+        mode: RestoreMode,
+        reassert_allowed: impl Fn(&DisplayHandle) -> bool,
+    ) -> RestoreReport {
+        let mut report = RestoreReport::default();
+        let snapshot = match self.store.load_layout() {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                report.record(RestoreOutcome::NothingToRestore);
+                return report;
+            }
+            Err(error) => {
+                eprintln!("[{PLUGIN_ID}] layout snapshot is unreadable: {error:#}");
+                report.record(RestoreOutcome::Failed);
+                return report;
+            }
+        };
+        if snapshot.mutations == 0 {
+            let _ = self.store.delete_layout();
+            report.record(RestoreOutcome::NothingToRestore);
+            return report;
+        }
+        let verdict =
+            self.handoff_verdict(snapshot.handoff, snapshot.adopt_generation.as_deref(), mode);
+        if verdict == HandoffVerdict::Defer {
+            report.record(RestoreOutcome::NothingToRestore);
+            return report;
+        }
+        let stale_handoff = verdict == HandoffVerdict::Stale;
+        let current = match self.control.snapshot() {
+            Ok(current) => current,
+            Err(error) => {
+                eprintln!(
+                    "[{PLUGIN_ID}] display state is unavailable; layout restore skipped: {error}"
+                );
+                report.record(RestoreOutcome::Failed);
+                return report;
+            }
+        };
+        let mut absent = false;
+        for record in &snapshot.modes {
+            let Some(target) = topology_match(&current, &record.id, &record.connector) else {
+                absent = true;
+                continue;
+            };
+            let handle = target.handle.clone();
+            let modes = match self.control.list_modes(&handle) {
+                Ok(modes) => modes,
+                Err(error) => {
+                    eprintln!(
+                        "[{PLUGIN_ID}] mode list for {} is unreadable: {error}",
+                        handle.connector()
+                    );
+                    continue;
+                }
+            };
+            let selected = modes
+                .iter()
+                .find(|mode| mode.token == record.token)
+                .cloned()
+                .or_else(|| {
+                    crate::monitor::layout::resolve_mode(
+                        &modes,
+                        record.width,
+                        record.height,
+                        Some(record.refresh_hz),
+                    )
+                    .ok()
+                });
+            let Some(selected) = selected else {
+                eprintln!(
+                    "[{PLUGIN_ID}] recorded mode for {} is no longer available",
+                    handle.connector()
+                );
+                continue;
+            };
+            if let Err(error) = self.control.set_mode(&handle, &selected) {
+                qol_runtime::probe!(
+                    "MONITOR_DISPLAY_WRITE",
+                    "event=rejected op=restore display={} error=\"{}\"",
+                    qol_runtime::probe::token(handle.id()),
+                    qol_runtime::probe::quoted(&error.to_string(), 160)
+                );
+                eprintln!(
+                    "[{PLUGIN_ID}] mode restore failed on {}: {error}",
+                    handle.connector()
+                );
+            }
+        }
+        let mut placements = Vec::with_capacity(snapshot.placements.len());
+        for record in &snapshot.placements {
+            let Some(target) = topology_match(&current, &record.id, &record.connector) else {
+                absent = true;
+                continue;
+            };
+            placements.push(DisplayPlacement {
+                handle: target.handle.clone(),
+                x: record.x,
+                y: record.y,
+                primary: record.primary,
+            });
+        }
+        if placements.is_empty() {
+            if stale_handoff {
+                let _ = self.store.delete_layout();
+            }
+            report.record(if absent {
+                RestoreOutcome::SkippedDisplayGone
+            } else {
+                RestoreOutcome::Failed
+            });
+            return report;
+        }
+        let fresh = match self.control.snapshot() {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                eprintln!(
+                    "[{PLUGIN_ID}] display state is unavailable; layout restore skipped: {error}"
+                );
+                report.record(RestoreOutcome::Failed);
+                return report;
+            }
+        };
+        placements.retain(|placement| placement_match(&fresh, placement).is_some());
+        if placements.is_empty() {
+            if stale_handoff {
+                let _ = self.store.delete_layout();
+            }
+            report.record(RestoreOutcome::SkippedDisplayGone);
+            return report;
+        }
+        if let Err(error) = self.control.set_layout(&placements) {
+            qol_runtime::probe!(
+                "MONITOR_DISPLAY_WRITE",
+                "event=rejected op=restore display=none error=\"{}\"",
+                qol_runtime::probe::quoted(&error.to_string(), 160)
+            );
+            eprintln!("[{PLUGIN_ID}] layout restore failed: {error}");
+            report.record(RestoreOutcome::Failed);
+            return report;
+        }
+        let applied = match self.control.snapshot() {
+            Ok(applied) => applied,
+            Err(error) => {
+                eprintln!("[{PLUGIN_ID}] the restored layout could not be read back: {error}");
+                report.record(RestoreOutcome::Failed);
+                return report;
+            }
+        };
+        if !placements_match(&applied, &placements) {
+            eprintln!(
+                "[{PLUGIN_ID}] the restored layout does not match the snapshot; keeping it for the next attempt"
+            );
+            report.record(RestoreOutcome::Failed);
+            return report;
+        }
+        for placement in &placements {
+            if !reassert_allowed(&placement.handle) {
+                continue;
+            }
+            let _ = self.reassert_gamma(&placement.handle);
+        }
+        if absent {
+            report.record(RestoreOutcome::SkippedDisplayGone);
+        }
+        if let Err(error) = self.store.delete_layout() {
+            eprintln!(
+                "[{PLUGIN_ID}] restored the layout but could not clear the snapshot: {error:#}"
+            );
+        }
+        report.record(RestoreOutcome::Restored);
         report
     }
 
@@ -550,7 +1586,9 @@ impl<C: DisplayControl + ?Sized> Session<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display_color::backends::Claim;
     use crate::monitor::{BrightnessState, DisplayCapabilities, DisplayMode, GammaState, HdrState};
+    use qol_windowing::MonitorBounds;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
 
@@ -570,6 +1608,7 @@ mod tests {
         source: BrightnessSource,
         sets: AtomicUsize,
         calls: StdMutex<Vec<(String, u8)>>,
+        tints: StdMutex<Vec<(String, Tint)>>,
     }
 
     impl RecordingControl {
@@ -580,6 +1619,7 @@ mod tests {
                 source: BrightnessSource::Ddc,
                 sets: AtomicUsize::new(0),
                 calls: StdMutex::new(Vec::new()),
+                tints: StdMutex::new(Vec::new()),
             }
         }
 
@@ -619,6 +1659,26 @@ mod tests {
             Ok(())
         }
 
+        fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+            self.tints
+                .lock()
+                .unwrap()
+                .push((handle.id().to_string(), tint));
+            Ok(())
+        }
+
+        fn set_gamma_adjustment(
+            &self,
+            handle: &DisplayHandle,
+            value: u8,
+            _tint: Tint,
+        ) -> Result<(), MonitorError> {
+            if self.source == BrightnessSource::Gamma {
+                self.set_brightness(handle, value)?;
+            }
+            Ok(())
+        }
+
         fn get_gamma(&self, _handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
             Err(MonitorError::unsupported("gamma", "test"))
         }
@@ -646,6 +1706,14 @@ mod tests {
         fn set_hdr(&self, _handle: &DisplayHandle, _enabled: bool) -> Result<(), MonitorError> {
             Err(MonitorError::unsupported("hdr", "test"))
         }
+
+        fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+            Ok(Vec::new())
+        }
+
+        fn set_layout(&self, _placements: &[DisplayPlacement]) -> Result<(), MonitorError> {
+            Err(MonitorError::unsupported("layout", "test"))
+        }
     }
 
     fn snapshot(
@@ -665,13 +1733,262 @@ mod tests {
             value,
             source: "ddc".into(),
             last_value,
+            last_tint: Tint::NEUTRAL,
             mutations,
             clean,
             handoff,
             adopt_generation: None,
             lut: None,
+            compose_base: None,
+            compose_foreign: None,
+            ownable: true,
+            applet_claim: None,
             checksum: String::new(),
         }
+    }
+
+    struct StubApplet {
+        fails: bool,
+        restores: AtomicUsize,
+    }
+
+    impl StubApplet {
+        fn new(fails: bool) -> Self {
+            Self {
+                fails,
+                restores: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl AppletControl for StubApplet {
+        fn detect(&self) -> Option<Claim> {
+            None
+        }
+
+        fn disable(&self) -> Option<Claim> {
+            None
+        }
+
+        fn restore(&self, _claim: &str) -> bool {
+            self.restores.fetch_add(1, Ordering::SeqCst);
+            !self.fails
+        }
+    }
+
+    struct OnceFailingApplet {
+        restores: AtomicUsize,
+    }
+
+    impl AppletControl for OnceFailingApplet {
+        fn detect(&self) -> Option<Claim> {
+            None
+        }
+
+        fn disable(&self) -> Option<Claim> {
+            None
+        }
+
+        fn restore(&self, _claim: &str) -> bool {
+            self.restores.fetch_add(1, Ordering::SeqCst) > 0
+        }
+    }
+
+    struct RampApplet {
+        current: Arc<StdMutex<GammaTable>>,
+        ramp: GammaTable,
+        restores: AtomicUsize,
+    }
+
+    impl AppletControl for RampApplet {
+        fn detect(&self) -> Option<Claim> {
+            None
+        }
+
+        fn disable(&self) -> Option<Claim> {
+            None
+        }
+
+        fn restore(&self, _claim: &str) -> bool {
+            self.restores.fetch_add(1, Ordering::SeqCst);
+            *self.current.lock().unwrap() = self.ramp.clone();
+            true
+        }
+    }
+
+    #[test]
+    fn a_failed_applet_restore_keeps_the_claim_and_reports_failure() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(RecordingControl::new(vec![display], 60));
+        let applet = Arc::new(StubApplet::new(true));
+        let mut pending = snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false);
+        pending.applet_claim = Some("warm".into());
+        store.write_snapshot(&pending).unwrap();
+        let session = Session::new(control, store.clone(), Arc::new(NoLutProvider))
+            .with_applet(applet.clone());
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.restored, 0);
+        assert_eq!(
+            applet.restores.load(Ordering::SeqCst),
+            1,
+            "the applet restore is attempted once"
+        );
+        let kept = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(
+            kept.applet_claim.as_deref(),
+            Some("warm"),
+            "a failed applet restore keeps the claim"
+        );
+    }
+
+    #[test]
+    fn a_successful_applet_restore_clears_the_claim_before_the_snapshot_settles() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let control = Arc::new(RecordingControl::new(vec![display], 60));
+        let applet = Arc::new(StubApplet::new(false));
+        let mut pending = snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false);
+        pending.applet_claim = Some("warm".into());
+        store.write_snapshot(&pending).unwrap();
+        let session =
+            Session::new(control, store.clone(), Arc::new(NoLutProvider)).with_applet(applet);
+        let report = session.restore_all(RestoreMode::Exit);
+        assert_eq!(report.restored, 1);
+        let settled = store.load_snapshot("id-1").unwrap().unwrap();
+        assert!(settled.clean);
+        assert_eq!(settled.applet_claim, None);
+    }
+
+    #[test]
+    fn the_release_restores_the_table_before_the_applet_can_reapply_its_ramp() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.dimmed(60)));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let applet = Arc::new(RampApplet {
+            current: Arc::clone(&current),
+            ramp: gamma_table(2000),
+            restores: AtomicUsize::new(0),
+        });
+        let mut pending = Snapshot {
+            source: "gamma".into(),
+            lut: Some(original.clone()),
+            last_value: 60,
+            ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
+        };
+        pending.applet_claim = Some("warm".into());
+        store.write_snapshot(&pending).unwrap();
+        let control = Arc::new(RecordingControl::new(vec![display], 60));
+        let session = Session::new(control, store.clone(), lut.clone()).with_applet(applet.clone());
+        let report = session.restore_all(RestoreMode::Exit);
+        assert_eq!(
+            report.restored, 1,
+            "the guarded write must not see the applet's fresh ramp"
+        );
+        assert_eq!(applet.restores.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            store.load_snapshot("id-1").unwrap().unwrap().applet_claim,
+            None
+        );
+    }
+
+    #[test]
+    fn the_claim_stays_on_disk_only_while_the_applet_restore_fails() {
+        let display = handle("id-1", "card0-DP-1");
+        for fails in [true, false] {
+            let (_dir, store) = fake_store();
+            let original = gamma_table(1000);
+            let current = Arc::new(StdMutex::new(original.dimmed(55)));
+            let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+            let applet = Arc::new(StubApplet::new(fails));
+            let mut pending = Snapshot {
+                source: "gamma".into(),
+                lut: Some(original.clone()),
+                last_value: 60,
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
+            };
+            pending.applet_claim = Some("warm".into());
+            store.write_snapshot(&pending).unwrap();
+            let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
+            let session = Session::new(control, store.clone(), lut).with_applet(applet.clone());
+            let report = session.restore_all(RestoreMode::Exit);
+            let settled = store.load_snapshot("id-1").unwrap().unwrap();
+            if fails {
+                assert_eq!(report.failed, 1);
+                assert_eq!(
+                    settled.applet_claim.as_deref(),
+                    Some("warm"),
+                    "a failed applet restore keeps the claim on disk"
+                );
+            } else {
+                assert_eq!(report.foreign_lut_preserved, 1);
+                assert_eq!(
+                    settled.applet_claim, None,
+                    "a cleared claim reaches disk even when the LUT stays foreign"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_idle_release_frees_a_failed_applet_claim_before_the_lut_verifies() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let host = Arc::new(StdMutex::new(original.dimmed(55)));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&host)));
+        let applet = Arc::new(OnceFailingApplet {
+            restores: AtomicUsize::new(0),
+        });
+        let mut pending = Snapshot {
+            source: "gamma".into(),
+            lut: Some(original.clone()),
+            last_value: 60,
+            ..snapshot("id-1", "card0-DP-1", 60, 60, 3, false, false)
+        };
+        pending.applet_claim = Some("warm".into());
+        store.write_snapshot(&pending).unwrap();
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 60).with_source(BrightnessSource::Gamma),
+        );
+        let session = Session::new(control, store.clone(), lut).with_applet(applet);
+        assert_eq!(
+            session.release_idle_baseline(&display),
+            RestoreOutcome::Failed
+        );
+        assert_eq!(
+            store
+                .load_snapshot("id-1")
+                .unwrap()
+                .unwrap()
+                .applet_claim
+                .as_deref(),
+            Some("warm"),
+            "a failed applet restore keeps the claim"
+        );
+        *host.lock().unwrap() = original.dimmed(70);
+        assert_eq!(
+            session.release_idle_baseline(&display),
+            RestoreOutcome::ForeignLutPreserved
+        );
+        let kept = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(
+            kept.applet_claim, None,
+            "the claim clears independently of the refused table"
+        );
+        assert_eq!(kept.lut, Some(original.clone()));
+        *host.lock().unwrap() = original.dimmed(60);
+        assert_eq!(
+            session.release_idle_baseline(&display),
+            RestoreOutcome::Restored
+        );
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_none(),
+            "a verified restore drops the record"
+        );
     }
 
     #[test]
@@ -989,6 +2306,7 @@ mod tests {
     struct FakeLut {
         current: Arc<StdMutex<GammaTable>>,
         adoptions: StdMutex<Vec<(String, GammaTable, u8)>>,
+        captures: AtomicUsize,
     }
 
     impl FakeLut {
@@ -996,23 +2314,35 @@ mod tests {
             Self {
                 current,
                 adoptions: StdMutex::new(Vec::new()),
+                captures: AtomicUsize::new(0),
             }
         }
 
         fn adoptions(&self) -> Vec<(String, GammaTable, u8)> {
             self.adoptions.lock().unwrap().clone()
         }
+
+        fn captures(&self) -> usize {
+            self.captures.load(Ordering::SeqCst)
+        }
     }
 
     impl LutProvider for FakeLut {
         fn capture(&self, _connector: &str) -> Option<GammaTable> {
+            self.captures.fetch_add(1, Ordering::SeqCst);
             Some(self.current.lock().unwrap().clone())
         }
 
-        fn adopt_baseline(&self, handle: &DisplayHandle, original: &GammaTable, last_value: u8) {
+        fn adopt_baseline(
+            &self,
+            handle: &DisplayHandle,
+            original: &GammaTable,
+            last_value: u8,
+            last_tint: Tint,
+        ) {
             self.adoptions.lock().unwrap().push((
                 handle.id().to_string(),
-                original.clone(),
+                original.tinted(last_tint),
                 last_value,
             ));
         }
@@ -1022,9 +2352,10 @@ mod tests {
             _handle: &DisplayHandle,
             original: &GammaTable,
             last_value: u8,
+            last_tint: Tint,
         ) -> LutRestoreOutcome {
             let mut current = self.current.lock().unwrap();
-            if current.checksum() == original.dimmed(last_value).checksum() {
+            if current.checksum() == original.dimmed(last_value).tinted(last_tint).checksum() {
                 *current = original.clone();
                 LutRestoreOutcome::Restored
             } else {
@@ -1038,6 +2369,22 @@ mod tests {
             red: vec![base, base],
             green: vec![base, base],
             blue: vec![base, base],
+        }
+    }
+
+    fn warm_scale_table(size: usize) -> GammaTable {
+        let channel = |peak: f64| {
+            (0..size)
+                .map(|index| {
+                    let ratio = index as f64 / (size - 1) as f64;
+                    (peak * ratio.powf(1.001)).round() as u16
+                })
+                .collect::<Vec<u16>>()
+        };
+        GammaTable {
+            red: channel(65535.0),
+            green: channel(51110.0),
+            blue: channel(35808.0),
         }
     }
 
@@ -1068,6 +2415,78 @@ mod tests {
     }
 
     #[test]
+    fn tint_only_ddc_session_restores_the_lut_and_leaves_brightness_alone() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 75));
+        let session = Session::new(control.clone(), store.clone(), lut.clone());
+        let tint = Tint::from_kelvin(3500);
+        session.mutate_tint(&display, tint).unwrap();
+        *current.lock().unwrap() = original.tinted(tint);
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(snapshot.source_kind(), Some(BrightnessSource::Ddc));
+        assert_eq!(snapshot.lut.as_ref(), Some(&original));
+        assert_eq!(snapshot.last_tint, tint);
+
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(*current.lock().unwrap(), original);
+        assert!(
+            control.calls().is_empty(),
+            "a tint-only session never touched DDC brightness, so restore must not either"
+        );
+    }
+
+    #[test]
+    fn tinted_and_dimmed_ddc_session_restores_both_lut_and_brightness() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 75));
+        let session = Session::new(control.clone(), store.clone(), lut.clone());
+        let tint = Tint::from_kelvin(3500);
+        session.mutate_tint(&display, tint).unwrap();
+        session.mutate(&display, 40).unwrap();
+        *current.lock().unwrap() = original.tinted(tint);
+
+        let report = session.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(*current.lock().unwrap(), original);
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 40), ("id-1".to_string(), 75)]
+        );
+    }
+
+    #[test]
+    fn gamma_brightness_and_tint_share_one_captured_baseline() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.clone()));
+        let lut = Arc::new(FakeLut::new(current));
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100).with_source(BrightnessSource::Gamma),
+        );
+        let session = Session::new(control, store.clone(), lut.clone());
+        session.mutate(&display, 80).unwrap();
+        session
+            .mutate_tint(&display, Tint::from_kelvin(3500))
+            .unwrap();
+        assert_eq!(lut.captures(), 1);
+        let snapshot = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(snapshot.lut.as_ref(), Some(&original));
+        assert_eq!(snapshot.last_value, 80);
+        assert_eq!(snapshot.last_tint, Tint::from_kelvin(3500));
+        assert_eq!(snapshot.mutations, 2);
+    }
+
+    #[test]
     fn gamma_restore_preserves_a_foreign_lut() {
         let (_dir, store) = fake_store();
         let display = handle("id-1", "card0-DP-1");
@@ -1085,9 +2504,13 @@ mod tests {
             })
             .unwrap();
         let control = Arc::new(RecordingControl::new(vec![display.clone()], 60));
-        let session = Session::new(control.clone(), store, Arc::new(lut));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(lut));
         let report = session.restore_all(RestoreMode::Recovery);
         assert_eq!(report.foreign_lut_preserved, 1);
+        assert!(
+            store.load_snapshot("id-1").unwrap().is_some(),
+            "a foreign release keeps the baseline record"
+        );
         assert_eq!(
             current.lock().unwrap().checksum(),
             foreign.checksum(),
@@ -1175,6 +2598,14 @@ mod tests {
 
         fn set_hdr(&self, _handle: &DisplayHandle, _enabled: bool) -> Result<(), MonitorError> {
             Err(MonitorError::unsupported("hdr", "test"))
+        }
+
+        fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+            Ok(Vec::new())
+        }
+
+        fn set_layout(&self, _placements: &[DisplayPlacement]) -> Result<(), MonitorError> {
+            Err(MonitorError::unsupported("layout", "test"))
         }
     }
 
@@ -1286,6 +2717,14 @@ mod tests {
         fn set_hdr(&self, _handle: &DisplayHandle, _enabled: bool) -> Result<(), MonitorError> {
             Err(MonitorError::unsupported("hdr", "test"))
         }
+
+        fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+            Ok(Vec::new())
+        }
+
+        fn set_layout(&self, _placements: &[DisplayPlacement]) -> Result<(), MonitorError> {
+            Err(MonitorError::unsupported("layout", "test"))
+        }
     }
 
     #[test]
@@ -1382,6 +2821,7 @@ mod tests {
         let persisted = store.load_snapshot("id-1").unwrap().unwrap();
         assert_eq!(persisted.lut.as_ref(), Some(&baseline));
 
+        *current.lock().unwrap() = baseline.dimmed(80);
         drop(session1);
         drop(control1);
         let lut2 = Arc::new(FakeLut::new(Arc::clone(&current)));
@@ -1405,6 +2845,97 @@ mod tests {
         assert_eq!(adoptions[0].0, "id-1");
         assert_eq!(adoptions[0].1, baseline);
         assert_eq!(adoptions[0].2, 80, "the persisted last_value is adopted");
+    }
+
+    #[test]
+    fn an_external_reset_replaces_a_stale_warm_baseline_before_brightness() {
+        for handoff in [false, true] {
+            let (_dir, store) = fake_store();
+            let display = handle("id-1", "card0-DP-1");
+            let neutral = gamma_table(u16::MAX);
+            let warm = Tint::from_kelvin(3500);
+            let current = Arc::new(StdMutex::new(neutral.clone()));
+            let lut = Arc::new(FakeLut::new(current));
+            store
+                .write_snapshot(&Snapshot {
+                    source: "gamma".into(),
+                    lut: Some(neutral.dimmed(80).tinted(warm)),
+                    last_tint: warm,
+                    handoff,
+                    adopt_generation: Some("old-generation".into()),
+                    ..snapshot("id-1", "card0-DP-1", 100, 80, 3, false, handoff)
+                })
+                .unwrap();
+            let control = Arc::new(
+                RecordingControl::new(vec![display.clone()], 100)
+                    .with_source(BrightnessSource::Gamma),
+            );
+            let session = Session::new(control, store.clone(), lut.clone())
+                .with_adoption_generation(Some("new-generation".into()));
+            assert!(!session.adopt(&display));
+            session.mutate(&display, 80).unwrap();
+            let captured = store.load_snapshot("id-1").unwrap().unwrap();
+            assert_eq!(captured.lut, Some(neutral));
+            assert!(captured.last_tint.is_neutral());
+            assert_eq!(captured.last_value, 80);
+            assert!(lut.adoptions().is_empty());
+            assert!(session.tinted_displays().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_warm_persisted_ramp_never_becomes_the_compose_base() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let foreign = warm_scale_table(64);
+        let warm = Tint::from_kelvin(3500);
+        let current = Arc::new(StdMutex::new(foreign.dimmed(70).tinted(warm)));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(foreign.clone()),
+                last_tint: warm,
+                last_value: 70,
+                ..snapshot("id-1", "card0-DP-1", 100, 70, 3, false, false)
+            })
+            .unwrap();
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100).with_source(BrightnessSource::Gamma),
+        );
+        let session = Session::new(control, store.clone(), lut.clone());
+        assert!(session.adopt(&display));
+        let recorded = store.load_snapshot("id-1").unwrap().unwrap();
+        let base = recorded.compose_base.unwrap();
+        assert_eq!(base.red, base.blue);
+        assert_ne!(base, foreign);
+        assert_eq!(base.size(), foreign.size());
+        assert!(recorded.ownable);
+        assert_eq!(recorded.lut, Some(foreign));
+        assert_eq!(lut.adoptions().len(), 1);
+    }
+
+    #[test]
+    fn adoption_derives_and_persists_the_foreign_flag_a_legacy_envelope_lacks() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let foreign = warm_scale_table(64);
+        let current = Arc::new(StdMutex::new(foreign.dimmed(70)));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(foreign.clone()),
+                last_value: 70,
+                ..snapshot("id-1", "card0-DP-1", 100, 70, 3, false, false)
+            })
+            .unwrap();
+        let control = Arc::new(RecordingControl::new(vec![display.clone()], 100));
+        let session = Session::new(control, store.clone(), lut);
+        assert!(session.adopt(&display));
+        let recorded = store.load_snapshot("id-1").unwrap().unwrap();
+        assert_eq!(recorded.compose_foreign, Some(true));
+        assert_eq!(expected_gamma_table(&recorded), Some(foreign.dimmed(70)));
     }
 
     #[test]
@@ -1483,5 +3014,1097 @@ mod tests {
         );
         assert_eq!(snap.last_value, 80);
         assert_eq!(snap.mutations, 1);
+    }
+
+    struct LayoutControl {
+        snapshots: StdMutex<Vec<DisplaySnapshot>>,
+        snapshot_queue: StdMutex<Vec<Vec<DisplaySnapshot>>>,
+        modes: StdMutex<BTreeMap<String, Vec<DisplayMode>>>,
+        events: StdMutex<Vec<String>>,
+        mode_sets: StdMutex<Vec<(String, DisplayMode)>>,
+        layouts: StdMutex<Vec<Vec<DisplayPlacement>>>,
+        fail_layout: AtomicBool,
+        ignore_layouts: AtomicBool,
+        guarded_conflict: AtomicBool,
+        gamma_writes: StdMutex<Vec<(String, u8, Tint)>>,
+    }
+
+    impl LayoutControl {
+        fn new(snapshots: Vec<DisplaySnapshot>) -> Self {
+            Self {
+                snapshots: StdMutex::new(snapshots),
+                snapshot_queue: StdMutex::new(Vec::new()),
+                modes: StdMutex::new(BTreeMap::new()),
+                events: StdMutex::new(Vec::new()),
+                mode_sets: StdMutex::new(Vec::new()),
+                layouts: StdMutex::new(Vec::new()),
+                fail_layout: AtomicBool::new(false),
+                ignore_layouts: AtomicBool::new(false),
+                guarded_conflict: AtomicBool::new(false),
+                gamma_writes: StdMutex::new(Vec::new()),
+            }
+        }
+
+        fn with_modes(self, id: &str, modes: Vec<DisplayMode>) -> Self {
+            self.modes.lock().unwrap().insert(id.to_string(), modes);
+            self
+        }
+
+        fn with_snapshot_sequence(self, mut sequence: Vec<Vec<DisplaySnapshot>>) -> Self {
+            sequence.reverse();
+            *self.snapshot_queue.lock().unwrap() = sequence;
+            self
+        }
+
+        fn stop_applying_layouts(&self) {
+            self.ignore_layouts.store(true, Ordering::SeqCst);
+        }
+
+        fn with_guarded_conflict(self) -> Self {
+            self.guarded_conflict.store(true, Ordering::SeqCst);
+            self
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+
+        fn mode_sets(&self) -> Vec<(String, DisplayMode)> {
+            self.mode_sets.lock().unwrap().clone()
+        }
+
+        fn layouts(&self) -> Vec<Vec<DisplayPlacement>> {
+            self.layouts.lock().unwrap().clone()
+        }
+
+        fn gamma_writes(&self) -> Vec<(String, u8, Tint)> {
+            self.gamma_writes.lock().unwrap().clone()
+        }
+    }
+
+    impl DisplayControl for LayoutControl {
+        fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
+            Ok(self
+                .snapshots
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|snapshot| snapshot.handle.clone())
+                .collect())
+        }
+
+        fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
+            Ok(DisplayCapabilities::none())
+        }
+
+        fn get_brightness(&self, _handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
+            Ok(BrightnessState {
+                value: 70,
+                source: BrightnessSource::Ddc,
+            })
+        }
+
+        fn set_brightness(&self, _handle: &DisplayHandle, _value: u8) -> Result<(), MonitorError> {
+            Ok(())
+        }
+
+        fn get_gamma(&self, _handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
+            Err(MonitorError::unsupported("gamma", "test"))
+        }
+
+        fn set_gamma(&self, _handle: &DisplayHandle, _value: u8) -> Result<(), MonitorError> {
+            Err(MonitorError::unsupported("gamma", "test"))
+        }
+
+        fn list_modes(&self, handle: &DisplayHandle) -> Result<Vec<DisplayMode>, MonitorError> {
+            self.modes
+                .lock()
+                .unwrap()
+                .get(handle.id())
+                .cloned()
+                .ok_or_else(|| MonitorError::unsupported("modes", "test"))
+        }
+
+        fn set_mode(&self, handle: &DisplayHandle, mode: &DisplayMode) -> Result<(), MonitorError> {
+            self.mode_sets
+                .lock()
+                .unwrap()
+                .push((handle.id().to_string(), mode.clone()));
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("set_mode:{}", handle.id()));
+            if let Some(snapshot) = self
+                .snapshots
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|snapshot| snapshot.handle.id() == handle.id())
+            {
+                snapshot.mode = Some(mode.clone());
+            }
+            Ok(())
+        }
+
+        fn get_hdr(&self, _handle: &DisplayHandle) -> Result<HdrState, MonitorError> {
+            Err(MonitorError::unsupported("hdr", "test"))
+        }
+
+        fn set_hdr(&self, _handle: &DisplayHandle, _enabled: bool) -> Result<(), MonitorError> {
+            Err(MonitorError::unsupported("hdr", "test"))
+        }
+
+        fn set_gamma_adjustment(
+            &self,
+            handle: &DisplayHandle,
+            value: u8,
+            tint: Tint,
+        ) -> Result<(), MonitorError> {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("gamma:{}", handle.id()));
+            self.gamma_writes
+                .lock()
+                .unwrap()
+                .push((handle.id().to_string(), value, tint));
+            Ok(())
+        }
+
+        fn set_gamma_adjustment_guarded(
+            &self,
+            handle: &DisplayHandle,
+            value: u8,
+            tint: Tint,
+            _expected: u64,
+        ) -> Result<(), MonitorError> {
+            if self.guarded_conflict.load(Ordering::SeqCst) {
+                return Err(MonitorError::refused(
+                    "gamma",
+                    crate::monitor::GAMMA_CHANGED_UNDER_WRITE_REASON,
+                ));
+            }
+            self.set_gamma_adjustment(handle, value, tint)
+        }
+
+        fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+            if let Some(next) = self.snapshot_queue.lock().unwrap().pop() {
+                return Ok(next);
+            }
+            Ok(self.snapshots.lock().unwrap().clone())
+        }
+
+        fn set_layout(&self, placements: &[DisplayPlacement]) -> Result<(), MonitorError> {
+            if self.fail_layout.load(Ordering::SeqCst) {
+                return Err(MonitorError::refused("layout", "injected"));
+            }
+            if !self.ignore_layouts.load(Ordering::SeqCst) {
+                let mut snapshots = self.snapshots.lock().unwrap();
+                for snapshot in snapshots.iter_mut() {
+                    if let Some(placement) = placements
+                        .iter()
+                        .find(|placement| placement.handle.id() == snapshot.handle.id())
+                    {
+                        snapshot.bounds.x = placement.x as f32;
+                        snapshot.bounds.y = placement.y as f32;
+                        snapshot.primary = placement.primary;
+                    }
+                }
+            }
+            self.layouts.lock().unwrap().push(placements.to_vec());
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("set_layout:{}", placements.len()));
+            Ok(())
+        }
+    }
+
+    fn display_snapshot(
+        id: &str,
+        connector: &str,
+        x: f32,
+        y: f32,
+        primary: bool,
+        mode: Option<DisplayMode>,
+    ) -> DisplaySnapshot {
+        DisplaySnapshot {
+            handle: handle(id, connector),
+            bounds: MonitorBounds {
+                x,
+                y,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            primary,
+            mode,
+        }
+    }
+
+    fn display_mode(token: u64, width: u32, height: u32, refresh_hz: u32) -> DisplayMode {
+        DisplayMode {
+            token,
+            width,
+            height,
+            refresh_hz,
+        }
+    }
+
+    fn layout_snapshot_fixture() -> LayoutSnapshot {
+        layout_capture(
+            vec![PlacementRecord {
+                id: "id-1".into(),
+                connector: "card0-DP-1".into(),
+                x: 100,
+                y: 0,
+                primary: true,
+            }],
+            vec![ModeRecord {
+                id: "id-1".into(),
+                connector: "card0-DP-1".into(),
+                token: 7,
+                width: 1920,
+                height: 1080,
+                refresh_hz: 60,
+            }],
+        )
+    }
+
+    fn layout_capture(placements: Vec<PlacementRecord>, modes: Vec<ModeRecord>) -> LayoutSnapshot {
+        LayoutSnapshot {
+            schema_version: LAYOUT_SCHEMA_VERSION,
+            layout_id: LAYOUT_SNAPSHOT_ID.to_string(),
+            placements,
+            modes,
+            mutations: 0,
+            handoff: false,
+            adopt_generation: None,
+        }
+    }
+
+    #[test]
+    fn layout_snapshot_envelope_round_trips_and_rejects_a_tampered_body() {
+        let (_dir, store) = fake_store();
+        let snapshot = layout_snapshot_fixture();
+        store.claim_layout(&snapshot).unwrap();
+        assert_eq!(store.load_layout().unwrap(), Some(snapshot.clone()));
+        let path = store.dir().join("layout").join("layout.json");
+        let mut envelope: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        envelope["body"]["mutations"] = serde_json::json!(9);
+        std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+        assert!(
+            store.load_layout().is_err(),
+            "a body change must fail the layout envelope checksum"
+        );
+    }
+
+    #[test]
+    fn layout_snapshot_body_without_handoff_fields_loads_with_defaults() {
+        let body = serde_json::json!({
+            "schema_version": 1,
+            "layout_id": "layout",
+            "placements": [],
+            "modes": [],
+            "mutations": 3,
+        });
+        let snapshot: LayoutSnapshot = serde_json::from_value(body).unwrap();
+        assert!(!snapshot.handoff);
+        assert_eq!(snapshot.adopt_generation, None);
+    }
+
+    #[test]
+    fn claim_layout_keeps_the_first_capture_and_touch_advances_mutations() {
+        let (_dir, store) = fake_store();
+        let first = layout_snapshot_fixture();
+        let mut second = layout_snapshot_fixture();
+        second.placements[0].x = 999;
+        store.claim_layout(&first).unwrap();
+        store.claim_layout(&second).unwrap();
+        let loaded = store.load_layout().unwrap().unwrap();
+        assert_eq!(
+            loaded.placements[0].x, 100,
+            "the first claim is authoritative"
+        );
+        assert_eq!(loaded.mutations, 0);
+        store.touch_layout().unwrap();
+        assert_eq!(store.load_layout().unwrap().unwrap().mutations, 1);
+        store.delete_layout().unwrap();
+        assert!(store.load_layout().unwrap().is_none());
+    }
+
+    #[test]
+    fn layout_restore_sets_modes_before_placements_and_retires_the_snapshot() {
+        let (_dir, store) = fake_store();
+        let display = display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            0.0,
+            0.0,
+            true,
+            Some(display_mode(7, 1920, 1080, 60)),
+        );
+        let control = Arc::new(
+            LayoutControl::new(vec![display])
+                .with_modes("id-1", vec![display_mode(7, 1920, 1080, 60)]),
+        );
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(
+            control.events(),
+            vec!["set_mode:id-1".to_string(), "set_layout:1".to_string()],
+            "modes restore before the single placement set"
+        );
+        assert!(store.load_layout().unwrap().is_none());
+    }
+
+    #[test]
+    fn layout_restore_falls_back_to_width_height_and_refresh_when_the_token_is_stale() {
+        let (_dir, store) = fake_store();
+        let display = display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            0.0,
+            0.0,
+            true,
+            Some(display_mode(7, 1920, 1080, 60)),
+        );
+        let control = Arc::new(
+            LayoutControl::new(vec![display])
+                .with_modes("id-1", vec![display_mode(9, 1920, 1080, 60)]),
+        );
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(
+            control.mode_sets(),
+            vec![("id-1".to_string(), display_mode(9, 1920, 1080, 60))]
+        );
+    }
+
+    #[test]
+    fn layout_restore_skips_a_gone_display_and_keeps_the_snapshot() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.skipped_display_gone, 1);
+        assert_eq!(control.events(), Vec::<String>::new());
+        assert!(
+            store.load_layout().unwrap().is_some(),
+            "the snapshot survives for the display to return"
+        );
+    }
+
+    #[test]
+    fn layout_restore_keeps_the_snapshot_when_set_layout_fails() {
+        let (_dir, store) = fake_store();
+        let display = display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            0.0,
+            0.0,
+            true,
+            Some(display_mode(7, 1920, 1080, 60)),
+        );
+        let control = Arc::new(
+            LayoutControl::new(vec![display])
+                .with_modes("id-1", vec![display_mode(7, 1920, 1080, 60)]),
+        );
+        control.fail_layout.store(true, Ordering::SeqCst);
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.failed, 1);
+        assert!(control.layouts().is_empty());
+        assert!(
+            store.load_layout().unwrap().is_some(),
+            "a failed layout keeps the snapshot for the next attempt"
+        );
+    }
+
+    #[test]
+    fn layout_restore_without_a_snapshot_writes_nothing() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.nothing_to_restore, 1);
+        assert_eq!(control.events(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn mark_handoff_all_marks_the_layout_snapshot() {
+        let (_dir, store) = fake_store();
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        let control = Arc::new(RecordingControl::new(vec![], 60));
+        let session = Session::new(control, store.clone(), Arc::new(NoLutProvider));
+        session.mark_handoff_all(Some("successor-gen"));
+        let untouched = store.load_layout().unwrap().unwrap();
+        assert!(!untouched.handoff, "an unmutated layout is not marked");
+
+        store.touch_layout().unwrap();
+        session.mark_handoff_all(Some("successor-gen"));
+        let marked = store.load_layout().unwrap().unwrap();
+        assert!(marked.handoff, "a live layout is marked for handoff");
+        assert_eq!(marked.adopt_generation.as_deref(), Some("successor-gen"));
+    }
+
+    #[test]
+    fn layout_restore_skips_a_handoff_for_this_generation() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let mut snapshot = store.load_layout().unwrap().unwrap();
+        snapshot.handoff = true;
+        snapshot.adopt_generation = Some("gen-a".into());
+        store.write_layout(&snapshot).unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("gen-a".into()));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.nothing_to_restore, 1);
+        assert_eq!(control.events(), Vec::<String>::new());
+        assert!(
+            store.load_layout().unwrap().is_some(),
+            "the handoff survives for the successor to adopt"
+        );
+    }
+
+    #[test]
+    fn layout_restore_on_exit_restores_the_captured_layout() {
+        let (_dir, store) = fake_store();
+        let display = display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            0.0,
+            0.0,
+            true,
+            Some(display_mode(7, 1920, 1080, 60)),
+        );
+        let control = Arc::new(
+            LayoutControl::new(vec![display])
+                .with_modes("id-1", vec![display_mode(7, 1920, 1080, 60)]),
+        );
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Exit);
+        assert_eq!(report.restored, 1);
+        assert_eq!(
+            control.events(),
+            vec!["set_mode:id-1".to_string(), "set_layout:1".to_string()]
+        );
+        assert_eq!(control.layouts()[0][0].x, 100);
+        assert!(control.layouts()[0][0].primary);
+        assert!(store.load_layout().unwrap().is_none());
+    }
+
+    #[test]
+    fn layout_restore_keeps_an_addressed_handoff_on_a_handed_off_exit() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let mut snapshot = store.load_layout().unwrap().unwrap();
+        snapshot.handoff = true;
+        snapshot.adopt_generation = Some("successor-gen".into());
+        store.write_layout(&snapshot).unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("old-gen".into()));
+        let report = session.restore_layout(RestoreMode::Exit);
+        assert_eq!(report.nothing_to_restore, 1);
+        assert_eq!(control.events(), Vec::<String>::new());
+        assert!(
+            store.load_layout().unwrap().is_some(),
+            "an addressed handoff survives the predecessor's exit for the successor"
+        );
+    }
+
+    #[test]
+    fn layout_restore_clears_a_stale_handoff_when_the_display_is_gone() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let mut snapshot = store.load_layout().unwrap().unwrap();
+        snapshot.handoff = true;
+        snapshot.adopt_generation = Some("abandoned-generation".into());
+        store.write_layout(&snapshot).unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("current-generation".into()));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.skipped_display_gone, 1);
+        assert!(
+            store.load_layout().unwrap().is_none(),
+            "a handoff whose intended successor did not start for a disconnected display must not live forever"
+        );
+    }
+
+    #[test]
+    fn adopt_layout_handoff_clears_only_this_generations_marker() {
+        let (_dir, store) = fake_store();
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let mut snapshot = store.load_layout().unwrap().unwrap();
+        snapshot.handoff = true;
+        snapshot.adopt_generation = Some("gen-a".into());
+        store.write_layout(&snapshot).unwrap();
+        let control = Arc::new(RecordingControl::new(vec![], 60));
+        let other = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("gen-b".into()));
+        assert!(!other.adopt_layout_handoff());
+        assert!(
+            store.load_layout().unwrap().unwrap().handoff,
+            "another generation must not adopt"
+        );
+        let same = Session::new(control, store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("gen-a".into()));
+        assert!(same.adopt_layout_handoff());
+        let adopted = store.load_layout().unwrap().unwrap();
+        assert!(!adopted.handoff, "the adopting successor clears the marker");
+        assert_eq!(adopted.adopt_generation.as_deref(), Some("gen-a"));
+    }
+
+    #[test]
+    fn reassert_gamma_rewrites_the_current_adjustment() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(gamma_table(1000)),
+                last_value: 60,
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
+            })
+            .unwrap();
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        assert_eq!(session.reassert_gamma(&display), RestoreOutcome::Restored);
+        assert_eq!(
+            control.gamma_writes(),
+            vec![("id-1".to_string(), 60, Tint::NEUTRAL)]
+        );
+        store
+            .write_snapshot(&Snapshot {
+                last_value: 100,
+                ..snapshot("id-1", "card0-DP-1", 100, 100, 3, false, false)
+            })
+            .unwrap();
+        assert_eq!(
+            session.reassert_gamma(&display),
+            RestoreOutcome::NothingToRestore
+        );
+        assert_eq!(control.gamma_writes().len(), 1);
+    }
+
+    #[test]
+    fn reassert_gamma_rewrites_an_identity_adjustment() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(gamma_table(1000)),
+                last_value: 100,
+                ..snapshot("id-1", "card0-DP-1", 100, 100, 3, false, false)
+            })
+            .unwrap();
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        assert_eq!(session.reassert_gamma(&display), RestoreOutcome::Restored);
+        assert_eq!(
+            control.gamma_writes(),
+            vec![("id-1".to_string(), 100, Tint::NEUTRAL)],
+            "an identity ramp is rewritten after a mode write reset it"
+        );
+    }
+
+    #[test]
+    fn a_guarded_reassert_abandons_a_table_that_changed_after_the_read() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let foreign = warm_scale_table(64);
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(original),
+                last_value: 60,
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
+            })
+            .unwrap();
+        let current = Arc::new(StdMutex::new(foreign.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        let session = Session::new(control.clone(), store, lut);
+        assert!(matches!(
+            session.reassert_gamma_guarded(&display, foreign.checksum() + 1),
+            Ok(RestoreOutcome::ForeignLutPreserved)
+        ));
+        assert!(
+            control.gamma_writes().is_empty(),
+            "a table that changed after the classification read is never clobbered"
+        );
+        assert_eq!(current.lock().unwrap().checksum(), foreign.checksum());
+    }
+
+    #[test]
+    fn a_guarded_reassert_reports_drift_when_the_table_changes_under_the_write() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let foreign = warm_scale_table(64);
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(original),
+                last_value: 60,
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
+            })
+            .unwrap();
+        let current = Arc::new(StdMutex::new(foreign.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(LayoutControl::new(Vec::new()).with_guarded_conflict());
+        let session = Session::new(control.clone(), store, lut);
+        assert_eq!(
+            session
+                .reassert_gamma_guarded(&display, foreign.checksum())
+                .unwrap(),
+            RestoreOutcome::ForeignLutPreserved,
+            "a table that moved under the write is drift, not a lost display"
+        );
+        assert!(
+            control.gamma_writes().is_empty(),
+            "a refused guarded write must not count as a re-assert"
+        );
+        assert_eq!(current.lock().unwrap().checksum(), foreign.checksum());
+    }
+
+    #[test]
+    fn a_guarded_reassert_reports_drift_when_the_table_changes_after_the_write() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let foreign = warm_scale_table(64);
+        store
+            .write_snapshot(&Snapshot {
+                source: "gamma".into(),
+                lut: Some(original),
+                last_value: 60,
+                ..snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false)
+            })
+            .unwrap();
+        let current = Arc::new(StdMutex::new(foreign.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(LayoutControl::new(Vec::new()));
+        let session = Session::new(control.clone(), store, lut);
+        assert_eq!(
+            session
+                .reassert_gamma_guarded(&display, foreign.checksum())
+                .unwrap(),
+            RestoreOutcome::ForeignLutPreserved,
+            "a foreign table read back after the write is drift, not a failed re-assert"
+        );
+        assert_eq!(control.gamma_writes().len(), 1);
+    }
+
+    #[test]
+    fn gamma_ownership_requires_an_active_adjustment() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let original = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(original.clone()));
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100).with_source(BrightnessSource::Gamma),
+        );
+        let session = Session::new(control, store, lut);
+        assert!(
+            session.gamma_ownership().is_empty(),
+            "nothing is owned before the first write"
+        );
+        session.mutate(&display, 100).unwrap();
+        assert!(
+            session.gamma_ownership().is_empty(),
+            "a session composed back to the baseline has nothing to defend"
+        );
+        session.mutate(&display, 60).unwrap();
+        let owned = session.gamma_ownership();
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].handle.id(), "id-1");
+        assert_eq!(owned[0].expected, original.dimmed(60));
+        assert!(owned[0].tint.is_neutral());
+    }
+
+    #[test]
+    fn the_expected_table_mirrors_the_composed_target_rule() {
+        let foreign = warm_scale_table(64);
+        let neutral = Snapshot {
+            source: "gamma".into(),
+            lut: Some(foreign.clone()),
+            last_value: 70,
+            ..snapshot("id-1", "card0-DP-1", 100, 70, 3, false, false)
+        };
+        assert_eq!(
+            expected_gamma_table(&neutral),
+            Some(foreign.dimmed(70)),
+            "a neutral tint keeps the foreign host table and only dims it"
+        );
+        let warm = Tint::from_kelvin(3500);
+        let (derived_base, _) = display_color::compose_base(&foreign);
+        let tinted = Snapshot {
+            last_tint: warm,
+            ..neutral
+        };
+        assert_eq!(
+            expected_gamma_table(&tinted),
+            Some(derived_base.dimmed(70).tinted(warm)),
+            "a warm tint composes against the derived neutral base"
+        );
+    }
+
+    #[test]
+    fn claim_layout_replaces_a_snapshot_whose_displays_are_all_absent() {
+        let (_dir, store) = fake_store();
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        let current = vec![display_snapshot(
+            "id-9",
+            "card0-HDMI-1",
+            0.0,
+            0.0,
+            true,
+            Some(display_mode(4, 1280, 720, 60)),
+        )];
+        let replacement = layout_capture(
+            vec![PlacementRecord {
+                id: "id-9".into(),
+                connector: "card0-HDMI-1".into(),
+                x: 0,
+                y: 0,
+                primary: true,
+            }],
+            vec![],
+        );
+        store
+            .claim_layout_in_topology(&replacement, &current)
+            .unwrap();
+        let loaded = store.load_layout().unwrap().unwrap();
+        assert_eq!(loaded.placements[0].id, "id-9");
+        assert_eq!(loaded.mutations, 0);
+    }
+
+    #[test]
+    fn claim_layout_keeps_a_snapshot_while_any_display_remains() {
+        let (_dir, store) = fake_store();
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        let current = vec![display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None)];
+        let mut replacement = layout_snapshot_fixture();
+        replacement.placements[0].x = 500;
+        store
+            .claim_layout_in_topology(&replacement, &current)
+            .unwrap();
+        let loaded = store.load_layout().unwrap().unwrap();
+        assert_eq!(
+            loaded.placements[0].x, 100,
+            "a still-connected display keeps the original baseline"
+        );
+    }
+
+    #[test]
+    fn layout_snapshots_stay_out_of_the_per_display_session_directory() {
+        let (_dir, store) = fake_store();
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store
+            .write_snapshot(&snapshot("id-1", "card0-DP-1", 100, 60, 3, false, false))
+            .unwrap();
+        let inventory = store.load_all().unwrap();
+        assert_eq!(
+            inventory.snapshots.len(),
+            1,
+            "the layout store must not surface as a display snapshot"
+        );
+        assert_eq!(inventory.snapshots[0].display_id, "id-1");
+        assert!(store.load_layout().unwrap().is_some());
+        assert!(store.dir().join("layout").is_dir());
+    }
+
+    fn two_display_capture() -> LayoutSnapshot {
+        layout_capture(
+            vec![
+                PlacementRecord {
+                    id: "id-1".into(),
+                    connector: "card0-DP-1".into(),
+                    x: 0,
+                    y: 0,
+                    primary: true,
+                },
+                PlacementRecord {
+                    id: "id-2".into(),
+                    connector: "card0-HDMI-1".into(),
+                    x: 1920,
+                    y: 0,
+                    primary: false,
+                },
+            ],
+            vec![
+                ModeRecord {
+                    id: "id-1".into(),
+                    connector: "card0-DP-1".into(),
+                    token: 7,
+                    width: 1920,
+                    height: 1080,
+                    refresh_hz: 60,
+                },
+                ModeRecord {
+                    id: "id-2".into(),
+                    connector: "card0-HDMI-1".into(),
+                    token: 8,
+                    width: 1920,
+                    height: 1080,
+                    refresh_hz: 60,
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn layout_restore_skips_a_display_whose_mode_list_is_unreadable() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(
+            LayoutControl::new(vec![
+                display_snapshot(
+                    "id-1",
+                    "card0-DP-1",
+                    0.0,
+                    0.0,
+                    true,
+                    Some(display_mode(7, 1920, 1080, 60)),
+                ),
+                display_snapshot(
+                    "id-2",
+                    "card0-HDMI-1",
+                    1920.0,
+                    0.0,
+                    false,
+                    Some(display_mode(8, 1920, 1080, 60)),
+                ),
+            ])
+            .with_modes("id-1", vec![display_mode(7, 1920, 1080, 60)]),
+        );
+        store.claim_layout(&two_display_capture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(
+            control.mode_sets(),
+            vec![("id-1".to_string(), display_mode(7, 1920, 1080, 60))],
+            "the unreadable display's mode is skipped"
+        );
+        assert_eq!(control.layouts().len(), 1);
+        assert_eq!(control.layouts()[0].len(), 2);
+        assert!(store.load_layout().unwrap().is_none());
+    }
+
+    #[test]
+    fn layout_restore_restores_the_present_placement_subset() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(
+            LayoutControl::new(vec![display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                true,
+                Some(display_mode(7, 1920, 1080, 60)),
+            )])
+            .with_modes("id-1", vec![display_mode(7, 1920, 1080, 60)]),
+        );
+        store.claim_layout(&two_display_capture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(report.skipped_display_gone, 1);
+        assert_eq!(control.layouts().len(), 1);
+        assert_eq!(control.layouts()[0].len(), 1);
+        assert_eq!(control.layouts()[0][0].handle.id(), "id-1");
+        assert!(store.load_layout().unwrap().is_none());
+    }
+
+    #[test]
+    fn layout_restore_rechecks_the_topology_before_the_write() {
+        let (_dir, store) = fake_store();
+        let entering = display_snapshot("id-1", "card0-DP-1", 0.0, 0.0, true, None);
+        let control = Arc::new(
+            LayoutControl::new(Vec::new()).with_snapshot_sequence(vec![vec![entering], Vec::new()]),
+        );
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.skipped_display_gone, 1);
+        assert!(control.layouts().is_empty());
+        assert!(store.load_layout().unwrap().is_some());
+    }
+
+    #[test]
+    fn layout_restore_matches_an_unstable_identity_by_connector() {
+        let (_dir, store) = fake_store();
+        let unstable = DisplaySnapshot {
+            handle: DisplayHandle::new("id-new".into(), "card0-DP-1".into(), None, true),
+            bounds: MonitorBounds {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            primary: true,
+            mode: None,
+        };
+        let control = Arc::new(LayoutControl::new(vec![unstable]));
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(control.layouts()[0][0].handle.id(), "id-new");
+        assert!(store.load_layout().unwrap().is_none());
+    }
+
+    #[test]
+    fn layout_restore_does_not_match_a_stable_display_by_connector() {
+        let (_dir, store) = fake_store();
+        let stable = display_snapshot("id-new", "card0-DP-1", 0.0, 0.0, true, None);
+        let control = Arc::new(LayoutControl::new(vec![stable]));
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.skipped_display_gone, 1);
+        assert!(control.layouts().is_empty());
+        assert!(store.load_layout().unwrap().is_some());
+    }
+
+    #[test]
+    fn layout_restore_keeps_the_snapshot_when_the_read_back_differs() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(LayoutControl::new(vec![display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            0.0,
+            0.0,
+            true,
+            None,
+        )]));
+        control.stop_applying_layouts();
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.failed, 1);
+        assert_eq!(control.layouts().len(), 1);
+        assert!(
+            store.load_layout().unwrap().is_some(),
+            "a layout that did not take must be retried, never retired"
+        );
+    }
+
+    #[test]
+    fn layout_restore_reasserts_gamma_for_every_display_it_moved() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(
+            LayoutControl::new(vec![
+                display_snapshot(
+                    "id-1",
+                    "card0-DP-1",
+                    0.0,
+                    0.0,
+                    true,
+                    Some(display_mode(7, 1920, 1080, 60)),
+                ),
+                display_snapshot(
+                    "id-2",
+                    "card0-HDMI-1",
+                    1920.0,
+                    0.0,
+                    false,
+                    Some(display_mode(8, 1920, 1080, 60)),
+                ),
+            ])
+            .with_modes("id-1", vec![display_mode(7, 1920, 1080, 60)])
+            .with_modes("id-2", vec![display_mode(8, 1920, 1080, 60)]),
+        );
+        for (id, connector, last_value) in
+            [("id-1", "card0-DP-1", 70u8), ("id-2", "card0-HDMI-1", 40u8)]
+        {
+            store
+                .write_snapshot(&Snapshot {
+                    source: "gamma".into(),
+                    lut: Some(gamma_table(1000)),
+                    last_value,
+                    ..snapshot(id, connector, 100, last_value, 3, false, false)
+                })
+                .unwrap();
+        }
+        store.claim_layout(&two_display_capture()).unwrap();
+        store.touch_layout().unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(
+            control.events(),
+            vec![
+                "set_mode:id-1".to_string(),
+                "set_mode:id-2".to_string(),
+                "set_layout:2".to_string(),
+                "gamma:id-1".to_string(),
+                "gamma:id-2".to_string(),
+            ]
+        );
+        assert_eq!(
+            control.gamma_writes(),
+            vec![
+                ("id-1".to_string(), 70, Tint::NEUTRAL),
+                ("id-2".to_string(), 40, Tint::NEUTRAL),
+            ]
+        );
+    }
+
+    #[test]
+    fn layout_restore_restores_a_stale_handoff_when_the_display_is_present() {
+        let (_dir, store) = fake_store();
+        let control = Arc::new(
+            LayoutControl::new(vec![display_snapshot(
+                "id-1",
+                "card0-DP-1",
+                0.0,
+                0.0,
+                true,
+                Some(display_mode(7, 1920, 1080, 60)),
+            )])
+            .with_modes("id-1", vec![display_mode(7, 1920, 1080, 60)]),
+        );
+        store.claim_layout(&layout_snapshot_fixture()).unwrap();
+        store.touch_layout().unwrap();
+        let mut snapshot = store.load_layout().unwrap().unwrap();
+        snapshot.handoff = true;
+        snapshot.adopt_generation = Some("abandoned-generation".into());
+        store.write_layout(&snapshot).unwrap();
+        let session = Session::new(control.clone(), store.clone(), Arc::new(NoLutProvider))
+            .with_adoption_generation(Some("current-generation".into()));
+        let report = session.restore_layout(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(control.layouts().len(), 1);
+        assert!(store.load_layout().unwrap().is_none());
     }
 }

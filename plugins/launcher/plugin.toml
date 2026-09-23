@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-launcher"
+id = "qol-launcher"
 uid = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1"
 name = "Launcher"
 description = "Universal search with action modifiers"
-version = "1.59.0"
+version = "1.70.1"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "launcher"
+command = "qol-launcher"
 
 [action.open]
 label = "Open Launcher"
@@ -17,11 +17,13 @@ args = ["--show"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["--settings"]
 
 [daemon]
 enabled = true
-command = "launcher"
+command = "qol-launcher"
+inherit_listener = true
 socket = "/tmp/qol-launcher.sock"
 
 [capabilities]
@@ -33,6 +35,6 @@ label = "Launcher"
 items = []
 
 [[dependencies.binaries]]
-name = "launcher"
-repo = "qol-tools/plugin-launcher"
-pattern = "launcher-{os}-{arch}"
+name = "qol-launcher"
+repo = "qol-tools/qol-launcher"
+pattern = "qol-launcher-{os}-{arch}"

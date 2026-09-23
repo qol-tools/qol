@@ -5,7 +5,6 @@ use qol_headless::{Command, CommandContext, CommandResult, DoctorCheck, Headless
 use super::operational::Operation;
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "alt-tab";
 const OPERATIONS: [OperationSpec; 5] = [
     OperationSpec::new(
         "daemon",
@@ -95,7 +94,7 @@ where
     OPERATIONS
         .into_iter()
         .fold(
-            HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+            HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
                 .about("Switch desktop windows through a retained native picker.")
                 .default_command(["daemon"]),
             |app, spec| app.command(operation_command(spec, operations.clone())),
@@ -109,7 +108,7 @@ where
 {
     let mut command = Command::new(spec.name)
         .about(spec.about)
-        .usage(format!("{BINARY_NAME} {}", spec.name))
+        .usage(format!("{PLUGIN_ID} {}", spec.name))
         .output(spec.output)
         .exit_behavior(spec.exit_behavior);
     if spec.operation == Operation::Daemon {

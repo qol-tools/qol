@@ -1,0 +1,1811 @@
+use anyhow::Context as _;
+use anyhow::Result;
+use std::cell::{Cell, RefCell};
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
+#[cfg(target_os = "linux")]
+use futures::channel::oneshot;
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+
+use qol_gpui::format::format_bytes;
+use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
+use qol_gpui::kit::{action_row_width, kit, row_circle_state, wrap_index, ActionCircleSize};
+use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
+use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
+use qol_gpui::theme::{
+    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP,
+    RADIUS_THUMB, TEXT_CAPTION, TEXT_NANO,
+};
+use qol_gpui::window::{
+    centered_window_placement, cursor_window_placement, sync_cursor_window_layout,
+    target_monitor_key, ActiveWindows, CursorWindowPlacement, MonitorKey, ResolvedCursorPlacement,
+    WindowPlacement,
+};
+use qol_gpui::window_options::PopupWindowOptions;
+
+use crate::capture::actions::ShotAction;
+use crate::capture::screenshot::{CaptureFileReady, CaptureFileStart, PreviewCapture};
+use crate::config::CopyCommand;
+use crate::ui::controls::{
+    control_count, control_for_keystroke, controls, ControlSurface, SurfaceControl,
+};
+
+const MAX_THUMB_W: f32 = 360.0;
+const MAX_THUMB_H: f32 = 240.0;
+const MARGIN: f32 = 18.0;
+const LABEL_H: f32 = 30.0;
+const BLUR_GUARD: Duration = Duration::from_millis(400);
+const PARKED_REVEAL_GUARD: Duration = Duration::from_millis(5000);
+pub(crate) const PREVIEW_TITLE: &str = "qol-shot-preview";
+pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
+
+static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
+static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
+static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
+#[cfg(target_os = "linux")]
+static PIN_TRANSITIONS: LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(target_os = "linux")]
+fn register_pin_transition(title: &str) -> oneshot::Receiver<bool> {
+    let (sender, receiver) = oneshot::channel();
+    PIN_TRANSITIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(title.to_owned(), sender);
+    receiver
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn complete_pin_transition(title: &str, succeeded: bool) {
+    let sender = PIN_TRANSITIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(title);
+    if let Some(sender) = sender {
+        let _ = sender.send(succeeded);
+    }
+}
+
+pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
+    &CURRENT_PALETTE
+}
+
+pub(super) fn surface_shadow() -> Vec<BoxShadow> {
+    let system = runtime_theme().system;
+    vec![BoxShadow {
+        color: rgba((system.text_primary << 8) | 0x1a).into(),
+        offset: point(px(2.0), px(2.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(0.0),
+    }]
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MonitorTopology {
+    monitors: Vec<MonitorKey>,
+}
+
+impl MonitorTopology {
+    fn from_monitors(monitors: &[ActiveMonitor]) -> Self {
+        let mut monitors = monitors
+            .iter()
+            .map(|monitor| MonitorKey::from_bounds(&monitor.bounds()))
+            .collect::<Vec<_>>();
+        monitors.sort_by_key(|monitor| (monitor.x, monitor.y, monitor.width, monitor.height));
+        monitors.dedup();
+        Self { monitors }
+    }
+
+    fn matches(&self, live: &Self) -> bool {
+        self.monitors.is_empty() || live.monitors.is_empty() || self.monitors == live.monitors
+    }
+}
+
+pub(crate) fn live_topology(cx: &App) -> MonitorTopology {
+    MonitorTopology::from_monitors(&MonitorTracker::start(cx).all_monitors_or_snapshot())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WarmWindowKey {
+    kind: &'static str,
+    topology: MonitorTopology,
+    size: (i32, i32),
+}
+
+struct WarmWindow<T> {
+    key: WarmWindowKey,
+    handle: WindowHandle<T>,
+}
+
+pub(crate) struct WarmWindowPool<T> {
+    kind: &'static str,
+    capacity: usize,
+    entries: RefCell<Vec<WarmWindow<T>>>,
+}
+
+impl<T> WarmWindowPool<T> {
+    pub(crate) const fn new(kind: &'static str, capacity: usize) -> Self {
+        Self {
+            kind,
+            capacity,
+            entries: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn key(&self, topology: &MonitorTopology, size: (i32, i32)) -> WarmWindowKey {
+        WarmWindowKey {
+            kind: self.kind,
+            topology: topology.clone(),
+            size,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.borrow().len()
+    }
+}
+
+impl<T: Render + 'static> WarmWindowPool<T> {
+    pub(crate) fn take(
+        &self,
+        size: (i32, i32),
+        topology: &MonitorTopology,
+        cx: &mut App,
+    ) -> Option<WindowHandle<T>> {
+        self.retain_live(topology, cx);
+        let mut entries = self.entries.borrow_mut();
+        let index = self.index_for(entries.as_slice(), size, topology)?;
+        Some(entries.remove(index).handle)
+    }
+
+    pub(crate) fn peek(
+        &self,
+        size: (i32, i32),
+        topology: &MonitorTopology,
+        cx: &mut App,
+    ) -> Option<WindowHandle<T>> {
+        self.retain_live(topology, cx);
+        let entries = self.entries.borrow();
+        let index = self.index_for(entries.as_slice(), size, topology)?;
+        Some(entries[index].handle)
+    }
+
+    pub(crate) fn put(&self, key: WarmWindowKey, handle: WindowHandle<T>) -> bool {
+        let mut entries = self.entries.borrow_mut();
+        if entries.len() >= self.capacity {
+            return false;
+        }
+        entries.push(WarmWindow { key, handle });
+        true
+    }
+
+    fn retain_live(&self, topology: &MonitorTopology, cx: &mut App) {
+        let stale = {
+            let mut entries = self.entries.borrow_mut();
+            let mut stale = Vec::new();
+            entries.retain(|entry| {
+                if entry.key.topology.matches(topology) {
+                    return true;
+                }
+                stale.push(entry.handle);
+                false
+            });
+            stale
+        };
+        if stale.is_empty() {
+            return;
+        }
+        qol_runtime::probe!(
+            "SHOT_WARM_INVALIDATE",
+            "kind={} monitors={} dropped={}",
+            self.kind,
+            topology.monitors.len(),
+            stale.len()
+        );
+        Self::remove_windows(stale, cx);
+    }
+
+    fn remove_windows(handles: Vec<WindowHandle<T>>, cx: &mut App) {
+        for handle in handles {
+            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        }
+    }
+
+    fn index_for(
+        &self,
+        entries: &[WarmWindow<T>],
+        size: (i32, i32),
+        topology: &MonitorTopology,
+    ) -> Option<usize> {
+        let mut fallback = None;
+        for (index, entry) in entries.iter().enumerate() {
+            if !self.reusable(entry, topology) {
+                continue;
+            }
+            if entry.key.size == size {
+                return Some(index);
+            }
+            if fallback.is_none() {
+                fallback = Some(index);
+            }
+        }
+        fallback
+    }
+
+    fn reusable(&self, entry: &WarmWindow<T>, topology: &MonitorTopology) -> bool {
+        entry.key.kind == self.kind && entry.key.topology.matches(topology)
+    }
+}
+
+fn reveal_blur_guard(parked: bool) -> Duration {
+    if parked {
+        PARKED_REVEAL_GUARD
+    } else {
+        BLUR_GUARD
+    }
+}
+
+type Completion = Arc<Mutex<Option<Result<()>>>>;
+type DismissSub = (Subscription, Subscription, Option<Task<()>>);
+
+pub type PreviewWindows = Rc<RefCell<ActiveWindows<PreviewView>>>;
+
+#[derive(Clone, Copy, PartialEq)]
+enum DismissMode {
+    Quit,
+    Ghost,
+}
+
+pub fn show(path: &Path) -> Result<()> {
+    show_with_completion(path, None)
+}
+
+pub(crate) fn show_saved(
+    path: &Path,
+    completion: crate::capture::completion::PreviewCompletion,
+) -> Result<()> {
+    show_with_completion(path, Some(completion))
+}
+
+fn show_with_completion(
+    path: &Path,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
+) -> Result<()> {
+    let thumb = read_thumb(path)?;
+    let path = path.to_path_buf();
+    let completion: Completion = Arc::new(Mutex::new(None));
+    let run_completion = completion.clone();
+
+    Application::new().run(move |cx: &mut App| {
+        qol_gpui::fonts::install(cx);
+        qol_gpui::platform::set_accessory_policy();
+        if open_quit_window(
+            path.clone(),
+            thumb,
+            run_completion.clone(),
+            None,
+            saved_completion.clone(),
+            cx,
+        ) {
+            cx.activate(true);
+        } else {
+            if let Ok(mut slot) = run_completion.lock() {
+                *slot = Some(Err(anyhow::anyhow!(
+                    "failed to create screenshot preview window"
+                )));
+            }
+            cx.quit();
+        }
+    });
+
+    if let Some(result) = completion
+        .lock()
+        .expect("preview completion mutex poisoned")
+        .take()
+    {
+        return result;
+    }
+    Ok(())
+}
+
+pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut App) -> usize {
+    let default = window_dims(
+        MAX_THUMB_W,
+        MAX_THUMB_H,
+        control_count(ControlSurface::Preview),
+    );
+    let default_size = size(px(default.0), px(default.1));
+    let monitors = tracker.all_monitors_or_snapshot();
+    let existing = windows.borrow().keys();
+    let missing = missing_monitors(&existing, monitors.clone());
+    let mut created = 0;
+    for monitor in missing {
+        let placement = centered_window_placement(Some(&monitor), default_size, cx);
+        let target = placement.target;
+        let title = ghost_window_title(PREVIEW_TITLE, target);
+        let Some(handle) = open_ghost_window(cx, GhostContent::empty(), 0, &title, &placement)
+        else {
+            continue;
+        };
+        windows.borrow_mut().insert(target, handle);
+        if !prepare_preview_window(&title) {
+            windows.borrow_mut().remove(target);
+            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+            continue;
+        }
+        let _ = handle.update(cx, |view, window, _cx| {
+            view.set_showing(false);
+            park_ghost(&title, window, view.window_origin);
+        });
+        crate::platform::reassert_parked(&title, cx);
+        created += 1;
+    }
+    qol_runtime::probe!(
+        "SHOT_PREWARM",
+        "monitors={} created={} parked={}",
+        monitors.len(),
+        created,
+        windows.borrow().len()
+    );
+    created
+}
+
+fn missing_monitors(existing: &[MonitorKey], monitors: Vec<ActiveMonitor>) -> Vec<ActiveMonitor> {
+    monitors
+        .into_iter()
+        .filter(|monitor| !existing.contains(&target_monitor_key(Some(monitor))))
+        .collect()
+}
+
+pub fn park_idle(windows: &PreviewWindows, cx: &mut App) {
+    for (_, handle) in windows.borrow().iter() {
+        let _ = handle.update(cx, |view, window, _cx| {
+            view.dismiss(crate::capture::completion::PreviewExit::Superseded, window);
+        });
+    }
+}
+
+pub fn any_showing(windows: &PreviewWindows, cx: &mut App) -> bool {
+    let keys = windows.borrow().keys();
+    let mut stale = Vec::new();
+    let mut showing = false;
+
+    for key in keys {
+        let Some(handle) = windows.borrow().existing(key) else {
+            continue;
+        };
+        match handle.update(cx, |view, _window, _cx| view.is_showing) {
+            Ok(true) => showing = true,
+            Ok(false) => {}
+            Err(_) => stale.push(key),
+        }
+    }
+
+    if !stale.is_empty() {
+        let mut windows = windows.borrow_mut();
+        for key in stale {
+            windows.remove(key);
+        }
+    }
+
+    showing
+}
+
+pub(crate) fn apply_default_copy_action(
+    windows: &PreviewWindows,
+    default_copy_action: CopyCommand,
+    cx: &mut App,
+) -> usize {
+    windows
+        .borrow()
+        .iter()
+        .into_iter()
+        .filter(|(_, handle)| {
+            handle
+                .update(cx, |view, _window, cx| {
+                    view.default_copy_action = default_copy_action;
+                    view.selected = 0;
+                    cx.notify();
+                })
+                .is_ok()
+        })
+        .count()
+}
+
+fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
+    sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
+    hide_invisible(title);
+    qol_gpui::popup_window::restore_composite(title);
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_preview_window(title: &str) -> bool {
+    let configured = configure_popup_window(title);
+    if !qol_gpui::popup_window::set_override_redirect_by_title(title) {
+        return false;
+    }
+    if !configured {
+        configure_popup_window(title);
+    }
+    hide_invisible(title);
+    true
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prepare_preview_window(title: &str) -> bool {
+    configure_popup_window(title);
+    qol_gpui::popup_window::set_override_redirect_by_title(title);
+    hide_invisible(title);
+    true
+}
+
+pub(crate) fn fresh_cursor_token(
+    tracker: &MonitorTracker,
+    logical_size: Size<Pixels>,
+) -> Result<CursorWindowPlacement, CursorAnchorError> {
+    let anchor = tracker.cursor_anchor()?;
+    Ok(cursor_window_placement(anchor, logical_size))
+}
+
+fn trace_preview_place(resolved: &ResolvedCursorPlacement) {
+    let cursor = resolved.native_cursor();
+    let monitor = resolved.native_monitor();
+    let native = resolved.native_bounds();
+    let logical = resolved.logical_bounds();
+    qol_runtime::probe!(
+        "SHOT_PREVIEW_PLACE",
+        "cursor={:.0},{:.0} origin={:.0},{:.0} size={:.0}x{:.0} monitor_origin={:.0},{:.0} monitor_size={:.0}x{:.0} logical_size={:.0}x{:.0} native_scale={:.2}",
+        cursor.x,
+        cursor.y,
+        native.x,
+        native.y,
+        native.width,
+        native.height,
+        monitor.x,
+        monitor.y,
+        monitor.width,
+        monitor.height,
+        logical.size.width.to_f64(),
+        logical.size.height.to_f64(),
+        resolved.native_scale()
+    );
+}
+
+fn native_origin_size(resolved: &ResolvedCursorPlacement) -> (f64, f64, f64, f64) {
+    let native = resolved.native_bounds();
+    (native.x, native.y, native.width, native.height)
+}
+
+pub fn show_capture(
+    windows: &PreviewWindows,
+    tracker: &MonitorTracker,
+    capture: PreviewCapture,
+    cx: &mut App,
+) -> Result<()> {
+    let content = GhostContent::from_capture(capture)?;
+    let (win_w, win_h) = window_dims(
+        content.thumb.0,
+        content.thumb.1,
+        control_count(ControlSurface::Preview),
+    );
+    let token = match fresh_cursor_token(tracker, size(px(win_w), px(win_h))) {
+        Ok(token) => token,
+        Err(error) => {
+            qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=anchor-failed reason={error}");
+            return Err(anyhow::anyhow!("preview cursor anchor failed: {error}"));
+        }
+    };
+    let target = token.target();
+    let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
+
+    mark_non_target_hidden(windows, target, cx);
+    if reuse_existing(windows, target, &token, content.clone(), seq, cx) {
+        return Ok(());
+    }
+    if create_and_show(windows, &token, content, seq, cx) {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "failed to create screenshot preview window"
+    ))
+}
+
+#[derive(Clone)]
+struct GhostContent {
+    path: PathBuf,
+    thumb: (f32, f32),
+    image: Option<Arc<RenderImage>>,
+    file_ready: CaptureFileReady,
+    file_start: CaptureFileStart,
+    started_at: Instant,
+    ready: bool,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
+}
+
+impl GhostContent {
+    fn empty() -> Self {
+        Self {
+            path: PathBuf::new(),
+            thumb: window_thumb_default(),
+            image: None,
+            file_ready: CaptureFileReady::ready(),
+            file_start: CaptureFileStart::ready(),
+            started_at: Instant::now(),
+            ready: false,
+            saved_completion: None,
+        }
+    }
+
+    fn from_capture(capture: PreviewCapture) -> Result<Self> {
+        let image = capture.pixels.and_then(|pixels| {
+            let (data, w, h) = pixels.into_bgra_parts();
+            qol_gpui::image::render_image(data, w, h).map(|render_image| (render_image, w, h))
+        });
+        let (thumb, render_image) = match image {
+            Some((render_image, w, h)) => (thumbnail_size(w as f32, h as f32), Some(render_image)),
+            None => read_render_thumb(&capture.path)?,
+        };
+        Ok(Self {
+            path: capture.path,
+            thumb,
+            image: render_image,
+            file_ready: capture.file_ready,
+            file_start: capture.file_start,
+            started_at: capture.started_at,
+            ready: true,
+            saved_completion: capture.completion,
+        })
+    }
+}
+
+fn mark_non_target_hidden(windows: &PreviewWindows, target: MonitorKey, cx: &mut App) {
+    qol_gpui::window::hide_non_target(windows, target, cx, |view, window, _cx| {
+        view.dismiss(crate::capture::completion::PreviewExit::Superseded, window)
+    });
+}
+
+fn reuse_existing(
+    windows: &PreviewWindows,
+    target: MonitorKey,
+    token: &CursorWindowPlacement,
+    content: GhostContent,
+    seq: u64,
+    cx: &mut App,
+) -> bool {
+    let _reason = reason_scope("show");
+    let Some(handle) = windows.borrow().existing(target) else {
+        return false;
+    };
+    let title = ghost_window_title(PREVIEW_TITLE, target);
+    let all_titles = windows.borrow().titles(PREVIEW_TITLE);
+    let opened_at = Instant::now();
+    let reveal = PreviewReveal {
+        title: title.clone(),
+        all_titles,
+    };
+    let mut failed = false;
+    let updated = handle
+        .update(cx, |view, window, cx| {
+            let resolved = match token.resolve(window) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_PREVIEW_PLACE",
+                        "result=resolve-failed reason={error}"
+                    );
+                    failed = true;
+                    window.remove_window();
+                    return;
+                }
+            };
+            if !sync_cursor_window_layout(&title, window, &resolved) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=layout");
+                failed = true;
+                window.remove_window();
+                return;
+            }
+            let (nx, ny, nw, nh) = native_origin_size(&resolved);
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_LAYOUT",
+                "seq={seq} title={title} path=reuse placement=layout-sync applied=true origin={:.0},{:.0} size={:.0}x{:.0}",
+                nx,
+                ny,
+                nw,
+                nh
+            );
+            trace_preview_place(&resolved);
+            view.window_origin = resolved.logical_bounds().origin;
+            view.reset_for_show(content, seq, reveal);
+            window.activate_window();
+            window.focus(&view.focus_handle(cx));
+            cx.notify();
+            view.schedule_reveal_after_present(window, cx);
+        })
+        .is_ok();
+    if failed || !updated {
+        windows.borrow_mut().remove(target);
+        return false;
+    }
+    qol_runtime::probe!(
+        "SHOT_WINDOW_OPEN",
+        "ms={} seq={seq} path=reuse",
+        opened_at.elapsed().as_millis()
+    );
+    cx.activate(true);
+    FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
+    qol_gpui::popup_window::reassert_focus_until_held(&title, &FOCUS_REASSERT_GEN, seq);
+    true
+}
+
+fn create_and_show(
+    windows: &PreviewWindows,
+    token: &CursorWindowPlacement,
+    content: GhostContent,
+    seq: u64,
+    cx: &mut App,
+) -> bool {
+    let _reason = reason_scope("create");
+    let target = token.target();
+    let title = ghost_window_title(PREVIEW_TITLE, target);
+    let mut all_titles = windows.borrow().titles(PREVIEW_TITLE);
+    if !all_titles.contains(&title) {
+        all_titles.push(title.clone());
+    }
+    let reveal = PreviewReveal {
+        title: title.clone(),
+        all_titles,
+    };
+    let opened_at = Instant::now();
+    let provisional = WindowPlacement {
+        target,
+        bounds: Bounds::new(point(px(0.0), px(0.0)), token.logical_size()),
+        display_id: None,
+    };
+    let Some(handle) = open_ghost_window(cx, content, seq, &title, &provisional) else {
+        eprintln!("[qol-shot] preview window open failed");
+        return false;
+    };
+    let open_ms = opened_at.elapsed().as_millis();
+    windows.borrow_mut().insert(target, handle);
+    if !prepare_preview_window(&title) {
+        windows.borrow_mut().remove(target);
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        return false;
+    }
+    let park_ms = opened_at.elapsed().as_millis() - open_ms;
+    let mut failed = false;
+    let presented = handle
+        .update(cx, |view, window, cx| {
+            let resolved = match token.resolve(window) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_PREVIEW_PLACE",
+                        "result=resolve-failed reason={error}"
+                    );
+                    failed = true;
+                    window.remove_window();
+                    return;
+                }
+            };
+            if !sync_cursor_window_layout(&title, window, &resolved) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=layout");
+                failed = true;
+                window.remove_window();
+                return;
+            }
+            let (nx, ny, nw, nh) = native_origin_size(&resolved);
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_LAYOUT",
+                "seq={seq} title={title} path=create placement=layout-sync applied=true origin={:.0},{:.0} size={:.0}x{:.0}",
+                nx,
+                ny,
+                nw,
+                nh
+            );
+            trace_preview_place(&resolved);
+            view.window_origin = resolved.logical_bounds().origin;
+            view.set_showing(true);
+            view.pending_reveal = Some(reveal);
+            window.activate_window();
+            window.focus(&view.focus_handle(cx));
+            cx.notify();
+            view.schedule_reveal_after_present(window, cx);
+        })
+        .is_ok();
+    if failed || !presented {
+        windows.borrow_mut().remove(target);
+        return false;
+    }
+    qol_runtime::probe!(
+        "SHOT_WINDOW_OPEN",
+        "ms={} open_ms={open_ms} park_ms={park_ms} seq={seq} path=create",
+        opened_at.elapsed().as_millis()
+    );
+    cx.activate(true);
+    FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
+    qol_gpui::popup_window::reassert_focus_until_held(&title, &FOCUS_REASSERT_GEN, seq);
+    true
+}
+
+fn open_ghost_window(
+    cx: &mut App,
+    content: GhostContent,
+    seq: u64,
+    title: &str,
+    placement: &WindowPlacement,
+) -> Option<WindowHandle<PreviewView>> {
+    let options = ghost_window_options(placement);
+    let title = title.to_string();
+    let origin = placement.bounds.origin;
+    cx.open_window(options, move |window, cx| {
+        window.set_window_title(&title);
+        cx.new(|cx| PreviewView::new_ghost(content, seq, title.clone(), origin, cx))
+    })
+    .ok()
+}
+
+fn ghost_window_options(placement: &WindowPlacement) -> WindowOptions {
+    PopupWindowOptions::from_placement(placement)
+        .show(false)
+        .app_id(PREVIEW_APP_ID)
+        .build()
+}
+
+fn open_quit_window(
+    path: PathBuf,
+    thumb: (f32, f32),
+    completion: Completion,
+    image: Option<Arc<RenderImage>>,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
+    cx: &mut App,
+) -> bool {
+    let (win_w, win_h) = window_dims(thumb.0, thumb.1, control_count(ControlSurface::Preview));
+    let seq = PREVIEW_SEQ.fetch_add(1, Ordering::Relaxed);
+    let title = format!("qol-shot-preview-{}-{seq}", std::process::id());
+    let tracker = MonitorTracker::start(cx);
+    let token = match fresh_cursor_token(&tracker, size(px(win_w), px(win_h))) {
+        Ok(token) => token,
+        Err(error) => {
+            qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=anchor-failed reason={error}");
+            eprintln!("[qol-shot] preview cursor anchor failed: {error}");
+            return false;
+        }
+    };
+    let provisional = Bounds::new(point(px(0.0), px(0.0)), token.logical_size());
+    let options = PopupWindowOptions::new()
+        .bounds(provisional)
+        .background(WindowBackgroundAppearance::Opaque)
+        .show(false)
+        .build();
+
+    let content = GhostContent {
+        path,
+        thumb,
+        image,
+        file_ready: CaptureFileReady::ready(),
+        file_start: CaptureFileStart::ready(),
+        started_at: Instant::now(),
+        ready: true,
+        saved_completion,
+    };
+    let window_title = title.clone();
+    let opened = cx.open_window(options, move |window, cx| {
+        window.set_window_title(&window_title);
+        cx.new(|cx| PreviewView::new_quit(content, completion, seq, cx))
+    });
+    let Ok(handle) = opened else {
+        return false;
+    };
+    if !prepare_preview_window(&title) {
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        return false;
+    }
+    let mut failed = false;
+    let applied = handle
+        .update(cx, |view, window, cx| {
+            let resolved = match token.resolve(window) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_PREVIEW_PLACE",
+                        "result=resolve-failed reason={error}"
+                    );
+                    eprintln!("[qol-shot] preview placement resolve failed: {error}");
+                    failed = true;
+                    return;
+                }
+            };
+            if !sync_cursor_window_layout(&title, window, &resolved) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=layout");
+                eprintln!("[qol-shot] preview placement apply failed");
+                failed = true;
+                return;
+            }
+            trace_preview_place(&resolved);
+            if !qol_gpui::popup_window::show_normal_window_by_title(&title) {
+                qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=show");
+                eprintln!("[qol-shot] preview placement show failed");
+                failed = true;
+                return;
+            }
+            window.activate_window();
+            window.focus(&view.focus_handle(cx));
+        })
+        .is_ok();
+    if failed || !applied {
+        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+        return false;
+    }
+    true
+}
+
+fn read_thumb(path: &Path) -> Result<(f32, f32)> {
+    let started = Instant::now();
+    let (width, height) = image::image_dimensions(path)
+        .with_context(|| format!("failed to read image dimensions: {}", path.display()))?;
+    qol_runtime::probe!(
+        "SHOT_THUMB",
+        "ms={} dims={width}x{height}",
+        started.elapsed().as_millis()
+    );
+    Ok(thumbnail_size(width as f32, height as f32))
+}
+
+type RenderThumb = ((f32, f32), Option<Arc<RenderImage>>);
+
+fn read_render_thumb(path: &Path) -> Result<RenderThumb> {
+    let started = Instant::now();
+    let (render_image, width, height) = read_render_image(path)?;
+    qol_runtime::probe!(
+        "SHOT_THUMB",
+        "ms={} dims={width}x{height} path=decoded",
+        started.elapsed().as_millis()
+    );
+    Ok((
+        thumbnail_size(width as f32, height as f32),
+        Some(render_image),
+    ))
+}
+
+pub(super) fn read_render_image(path: &Path) -> Result<(Arc<RenderImage>, u32, u32)> {
+    let image = image::open(path)
+        .with_context(|| format!("failed to read preview image: {}", path.display()))?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let render_image = qol_gpui::image::render_image_rgba(rgba.into_raw(), width, height)
+        .with_context(|| format!("failed to prepare preview image: {}", path.display()))?;
+    Ok((render_image, width, height))
+}
+
+pub struct PreviewView {
+    path: PathBuf,
+    size_label: Option<String>,
+    thumb: (f32, f32),
+    image: Option<Arc<RenderImage>>,
+    file_ready: CaptureFileReady,
+    file_start: CaptureFileStart,
+    preview_started_at: Instant,
+    ready: bool,
+    mode: DismissMode,
+    title: String,
+    completion: Completion,
+    selected: usize,
+    seq: u64,
+    first_paint: bool,
+    is_showing: bool,
+    blur_guard_until: Instant,
+    window_origin: Point<Pixels>,
+    dismiss_sub: Option<DismissSub>,
+    default_copy_action: CopyCommand,
+    saved_completion: Option<crate::capture::completion::PreviewCompletion>,
+    action_pending: bool,
+    scheduled_reveal_seq: Option<u64>,
+    pending_reveal: Option<PreviewReveal>,
+    parked_reveal: bool,
+    focus_handle: FocusHandle,
+}
+
+struct PreviewReveal {
+    title: String,
+    all_titles: Vec<String>,
+}
+
+impl PreviewView {
+    fn new_ghost(
+        content: GhostContent,
+        seq: u64,
+        title: String,
+        origin: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new(
+            content,
+            DismissMode::Ghost,
+            title,
+            Arc::default(),
+            seq,
+            origin,
+            cx,
+        )
+    }
+
+    fn new_quit(
+        content: GhostContent,
+        completion: Completion,
+        seq: u64,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new(
+            content,
+            DismissMode::Quit,
+            String::new(),
+            completion,
+            seq,
+            point(px(0.0), px(0.0)),
+            cx,
+        )
+    }
+
+    fn new(
+        content: GhostContent,
+        mode: DismissMode,
+        title: String,
+        completion: Completion,
+        seq: u64,
+        origin: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            path: content.path,
+            size_label: None,
+            thumb: content.thumb,
+            image: content.image,
+            file_ready: content.file_ready,
+            file_start: content.file_start,
+            preview_started_at: content.started_at,
+            ready: content.ready,
+            mode,
+            title,
+            completion,
+            selected: 0,
+            seq,
+            first_paint: true,
+            is_showing: content.ready,
+            blur_guard_until: Instant::now() + BLUR_GUARD,
+            window_origin: origin,
+            dismiss_sub: None,
+            default_copy_action: crate::config::load().shortcuts.copy_command,
+            saved_completion: content.saved_completion,
+            action_pending: false,
+            scheduled_reveal_seq: None,
+            pending_reveal: None,
+            parked_reveal: false,
+            focus_handle: cx.focus_handle(),
+        }
+    }
+
+    fn set_showing(&mut self, showing: bool) {
+        self.is_showing = showing;
+    }
+
+    fn reset_for_show(&mut self, content: GhostContent, seq: u64, reveal: PreviewReveal) {
+        self.file_start.start();
+        self.finish_completion(crate::capture::completion::PreviewExit::Superseded);
+        self.path = content.path;
+        self.thumb = content.thumb;
+        self.image = content.image;
+        self.file_ready = content.file_ready;
+        self.file_start = content.file_start;
+        self.preview_started_at = content.started_at;
+        self.ready = content.ready;
+        self.selected = 0;
+        self.seq = seq;
+        self.first_paint = true;
+        self.is_showing = true;
+        self.blur_guard_until = Instant::now() + BLUR_GUARD;
+        self.default_copy_action = crate::config::load().shortcuts.copy_command;
+        self.saved_completion = content.saved_completion;
+        self.action_pending = false;
+        self.scheduled_reveal_seq = None;
+        self.pending_reveal = Some(reveal);
+        self.parked_reveal = false;
+        if let Ok(mut slot) = self.completion.lock() {
+            *slot = None;
+        }
+    }
+
+    fn schedule_reveal_after_present(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::platform::mark_reveal_requested(&self.title);
+        if self.pending_reveal.is_none() || self.scheduled_reveal_seq == Some(self.seq) {
+            return;
+        }
+        let seq = self.seq;
+        self.scheduled_reveal_seq = Some(seq);
+        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=scheduled");
+        if qol_gpui::popup_window::visible_windows_by_title_prefix(&self.title) > 0 {
+            self.schedule_reveal_proof(window, cx, seq);
+            return;
+        }
+        self.parked_reveal = true;
+        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-mapped");
+        if super::schedule_parked_reveal(&self.title, cx) {
+            self.schedule_reveal_proof(window, cx, seq);
+            return;
+        }
+        qol_runtime::probe!("SHOT_PREVIEW_REVEAL", "seq={seq} state=parked-deferred");
+        cx.spawn(async move |this, cx| {
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_seq(seq));
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_reveal_proof(&mut self, window: &mut Window, cx: &mut Context<Self>, seq: u64) {
+        let (width, height) = window_dims(
+            self.thumb.0,
+            self.thumb.1,
+            control_count(ControlSurface::Preview),
+        );
+        let expected = Rc::new(Cell::new(size(px(width), px(height))));
+        let Some(fresh_frame) = qol_gpui::surface::schedule_fresh_frame_in(window, cx, expected)
+        else {
+            self.reveal_presented_seq(seq);
+            return;
+        };
+        let title = self.title.clone();
+        let this = cx.entity().downgrade();
+        let cancelled = {
+            let this = this.clone();
+            move |cx: &AsyncApp| {
+                this.read_with(cx, |view, _| view.seq != seq)
+                    .unwrap_or(true)
+            }
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = qol_gpui::surface::await_reveal_readiness(
+                cx,
+                &title,
+                &fresh_frame,
+                cancelled,
+                || None,
+            )
+            .await;
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_REVEAL",
+                "seq={seq} state=proof ready={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={} expected={}x{} observed={}x{} rendered={}x{}",
+                outcome.proof.ready(),
+                outcome.proof.layout_confirmed,
+                outcome.proof.viewport_ready,
+                outcome.proof.fresh_frame,
+                outcome.proof.content_rendered,
+                outcome.attempts,
+                outcome.proof.expected_viewport.width.to_f64(),
+                outcome.proof.expected_viewport.height.to_f64(),
+                outcome.proof.observed_viewport.width.to_f64(),
+                outcome.proof.observed_viewport.height.to_f64(),
+                outcome.proof.rendered_viewport.width.to_f64(),
+                outcome.proof.rendered_viewport.height.to_f64()
+            );
+            let _ = cx.update(|cx| {
+                if let Some(view) = this.upgrade() {
+                    view.update(cx, |view, _cx| view.reveal_presented_seq(seq));
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn reveal_presented_seq(&mut self, seq: u64) {
+        if seq != self.seq {
+            qol_runtime::probe!(
+                "SHOT_PREVIEW_REVEAL",
+                "seq={seq} current={} state=stale",
+                self.seq
+            );
+            return;
+        }
+        self.scheduled_reveal_seq = None;
+        let Some(reveal) = self.pending_reveal.take() else {
+            return;
+        };
+        let parked = self.parked_reveal;
+        self.parked_reveal = false;
+        qol_runtime::probe!(
+            "SHOT_PREVIEW_REVEAL",
+            "seq={seq} state=presented preview_ms={}",
+            self.preview_started_at.elapsed().as_millis()
+        );
+        self.blur_guard_until = Instant::now() + reveal_blur_guard(parked);
+        show_ghost_window_topmost(&reveal.title, &reveal.all_titles);
+        self.file_start.start();
+        FOCUS_REASSERT_GEN.store(seq, Ordering::SeqCst);
+        qol_gpui::popup_window::reassert_focus_until_held(&reveal.title, &FOCUS_REASSERT_GEN, seq);
+    }
+
+    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        self.selected = wrap_index(self.selected, delta, control_count(ControlSurface::Preview));
+        cx.notify();
+    }
+
+    fn activate(&mut self, control: SurfaceControl, window: &mut Window, cx: &mut Context<Self>) {
+        match control {
+            SurfaceControl::Action(action) => self.choose(action, window, cx),
+            SurfaceControl::Edit => self.edit(window, cx),
+            SurfaceControl::Pin => self.pin(window, cx),
+        }
+    }
+
+    fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_pending {
+            return;
+        }
+        if self
+            .completion
+            .lock()
+            .expect("preview completion mutex poisoned")
+            .is_some()
+        {
+            return;
+        }
+        let Some(handle) = window.window_handle().downcast::<PreviewView>() else {
+            return;
+        };
+        self.action_pending = true;
+        self.file_start.start();
+        let file_ready = self.file_ready.clone();
+        let path = self.path.clone();
+        let seq = self.seq;
+        let quit_on_close = self.mode == DismissMode::Quit;
+        let tracker = MonitorTracker::start(cx);
+        let fallback_monitor = window
+            .display(cx)
+            .map(|display| ActiveMonitor::from_gpui_bounds(display.bounds()));
+        qol_runtime::probe!("SHOT_EDIT", "phase=request seq={seq}");
+        cx.spawn(async move |_view, cx| {
+            let opened = crate::ui::editor::open_from(
+                path,
+                file_ready,
+                quit_on_close,
+                tracker,
+                fallback_monitor,
+                cx,
+            )
+            .await;
+            let _ = handle.update(cx, move |view, window, cx| {
+                if view.seq != seq {
+                    return;
+                }
+                view.action_pending = false;
+                if opened {
+                    view.handoff_to_editor(window);
+                } else {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn handoff_to_editor(&mut self, window: &mut Window) {
+        match self.mode {
+            DismissMode::Quit => window.remove_window(),
+            DismissMode::Ghost => self.hide_to_ghost(window),
+        }
+        self.finish_completion(crate::capture::completion::PreviewExit::Edited);
+    }
+
+    fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_pending {
+            return;
+        }
+        self.action_pending = true;
+        #[cfg(target_os = "linux")]
+        let pin_transition =
+            (self.mode == DismissMode::Ghost).then(|| register_pin_transition(&self.title));
+        let started_at = Instant::now();
+        qol_runtime::probe!("SHOT_PIN_ACTION", "seq={}", self.seq);
+        self.file_start.start();
+        let content = crate::ui::pinned::PinnedContent {
+            path: self.path.clone(),
+            image: self.image.clone(),
+            size: self.thumb,
+            file_ready: self.file_ready.clone(),
+            started_at,
+        };
+        let pin_mode = match self.mode {
+            DismissMode::Quit => "quit",
+            DismissMode::Ghost => "ghost",
+        };
+        let dismiss = match self.mode {
+            DismissMode::Quit => crate::ui::pinned::PinnedDismiss::Quit,
+            DismissMode::Ghost => crate::ui::pinned::PinnedDismiss::Remove,
+        };
+        let source_preview = match self.mode {
+            DismissMode::Quit => None,
+            DismissMode::Ghost => Some(self.title.clone()),
+        };
+        let trace = format!("seq={} mode={pin_mode}", self.seq);
+        if !crate::ui::pinned::open_at_cursor(content, dismiss, source_preview, &trace, window, cx)
+        {
+            #[cfg(target_os = "linux")]
+            if pin_transition.is_some() {
+                complete_pin_transition(&self.title, false);
+            }
+            self.action_pending = false;
+            return;
+        }
+        match self.mode {
+            DismissMode::Quit => {
+                if let Ok(mut slot) = self.completion.lock() {
+                    if slot.is_none() {
+                        *slot = Some(Ok(()));
+                    }
+                }
+                window.remove_window();
+                self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
+            }
+            DismissMode::Ghost => {
+                self.set_showing(false);
+                #[cfg(target_os = "linux")]
+                {
+                    let receiver = pin_transition.expect("ghost pin registered its transition");
+                    let seq = self.seq;
+                    cx.spawn(async move |this, cx| {
+                        let succeeded = receiver.await.unwrap_or(false);
+                        let _ = cx.update(|cx| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |view, cx| {
+                                    if view.seq != seq {
+                                        return;
+                                    }
+                                    if succeeded {
+                                        view.finish_completion(
+                                            crate::capture::completion::PreviewExit::Pinned,
+                                        );
+                                    } else {
+                                        view.action_pending = false;
+                                        view.set_showing(true);
+                                        view.blur_guard_until = Instant::now() + BLUR_GUARD;
+                                        cx.notify();
+                                    }
+                                    qol_runtime::probe!(
+                                        "SHOT_PIN_TRANSITION",
+                                        "source={} state=preview-{}",
+                                        view.title,
+                                        if succeeded { "finalized" } else { "restored" }
+                                    );
+                                });
+                            }
+                        });
+                    })
+                    .detach();
+                }
+                #[cfg(not(target_os = "linux"))]
+                self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
+            }
+        }
+    }
+
+    fn choose(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_pending {
+            return;
+        }
+        if self
+            .completion
+            .lock()
+            .expect("preview completion mutex poisoned")
+            .is_some()
+        {
+            return;
+        }
+        let Some(handle) = window.window_handle().downcast::<PreviewView>() else {
+            return;
+        };
+        self.action_pending = true;
+        let file_ready = self.file_ready.clone();
+        let path = self.path.clone();
+        let saved_completion = self.saved_completion.clone();
+        let completion = self.completion.clone();
+        let seq = self.seq;
+        let exit = if action == ShotAction::OpenFolder {
+            crate::capture::completion::PreviewExit::OpenFolder
+        } else {
+            crate::capture::completion::PreviewExit::Intentional
+        };
+        let perform = move || match action {
+            ShotAction::OpenFolder => match saved_completion {
+                Some(completion) => completion.open("preview-action"),
+                None => crate::capture::completion::reveal(&path),
+            },
+            _ => action.perform(&path),
+        };
+        if self.mode == DismissMode::Ghost {
+            if let Err(error) =
+                crate::capture::actions::spawn_file_action("preview", action, file_ready, perform)
+            {
+                eprintln!("[qol-shot] preview action worker failed: {error:#}");
+                self.action_pending = false;
+                return;
+            }
+            self.action_pending = false;
+            self.close(exit, window, cx);
+            return;
+        }
+        let action_task = cx.background_spawn(async move {
+            crate::capture::actions::perform_when_file_ready("preview", action, file_ready, perform)
+        });
+        cx.spawn(async move |_view, cx| {
+            let result = action_task.await;
+            let _ = handle.update(cx, move |view, window, cx| {
+                if view.seq != seq {
+                    return;
+                }
+                if let Ok(mut slot) = completion.lock() {
+                    if slot.is_none() {
+                        *slot = Some(result);
+                    }
+                }
+                view.action_pending = false;
+                view.close(exit, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn close(
+        &mut self,
+        exit: crate::capture::completion::PreviewExit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.file_start.start();
+        match self.mode {
+            DismissMode::Quit => cx.quit(),
+            DismissMode::Ghost => self.hide_to_ghost(window),
+        }
+        self.finish_completion(exit);
+    }
+
+    fn hide_to_ghost(&mut self, window: &mut Window) {
+        self.set_showing(false);
+        // A parked window is 1x1: drop any reveal still in flight so it cannot
+        // present the parked window once its proof finally resolves.
+        self.pending_reveal = None;
+        self.parked_reveal = false;
+        park_ghost(&self.title, window, self.window_origin);
+    }
+
+    fn dismiss(&mut self, exit: crate::capture::completion::PreviewExit, window: &mut Window) {
+        FOCUS_REASSERT_GEN.store(u64::MAX, Ordering::SeqCst);
+        self.file_start.start();
+        self.hide_to_ghost(window);
+        self.finish_completion(exit);
+    }
+
+    fn finish_completion(&mut self, exit: crate::capture::completion::PreviewExit) {
+        let Some(completion) = self.saved_completion.take() else {
+            return;
+        };
+        completion.finish(exit);
+    }
+
+    fn begin_move(&mut self, _: &MouseDownEvent, window: &mut Window, _: &mut Context<Self>) {
+        qol_runtime::probe!("SHOT_PREVIEW_MOVE", "seq={} state=requested", self.seq);
+        qol_gpui::platform::start_window_move(window);
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let controls = controls(ControlSurface::Preview, self.default_copy_action);
+        let selected = controls.get(self.selected).copied();
+        if let Some(control) = selected.and_then(|selected| {
+            control_for_keystroke(
+                &event.keystroke,
+                ControlSurface::Preview,
+                self.default_copy_action,
+                selected,
+            )
+        }) {
+            self.activate(control, window, cx);
+            return;
+        }
+
+        match event.keystroke.key.as_str() {
+            "escape" | "esc" => self.close(
+                crate::capture::completion::PreviewExit::Intentional,
+                window,
+                cx,
+            ),
+            "left" | "up" => self.move_selection(-1, cx),
+            "right" | "down" | "tab" => self.move_selection(1, cx),
+            "enter" | "return" | "space" => {
+                if let Some(control) = controls.get(self.selected).copied() {
+                    self.activate(control, window, cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn thumbnail(&self, thumb_w: f32, thumb_h: f32) -> Img {
+        match &self.image {
+            Some(render_image) => img(render_image.clone()).w(px(thumb_w)).h(px(thumb_h)),
+            None => img(self.path.clone()).w(px(thumb_w)).h(px(thumb_h)),
+        }
+    }
+
+    fn ensure_dismiss_tracking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode != DismissMode::Ghost || self.dismiss_sub.is_some() {
+            return;
+        }
+        self.dismiss_sub = Some(qol_gpui::ghost::track_dismiss_confirmed(
+            "qol-shot",
+            &self.focus_handle,
+            window,
+            |this: &Self| this.blur_guard_until,
+            |this: &Self| dismissable(this.is_showing, this.pending_reveal.is_some()),
+            |this: &Self| {
+                combine_focus_truth(
+                    qol_gpui::popup_window::window_holds_input_focus(&this.title),
+                    qol_gpui::platform::process_focus_truth(),
+                )
+            },
+            cx,
+            |this, window, _cx| {
+                this.dismiss(crate::capture::completion::PreviewExit::LostFocus, window)
+            },
+        ));
+        if !self.is_showing {
+            hide_invisible(&self.title);
+        }
+    }
+}
+
+/// The focus watchers may only dismiss a preview that the user can actually see.
+/// Between `reset_for_show` and `reveal_presented_seq` the window is mapped at
+/// opacity 0 and cannot hold input focus, so every focus signal reads "not
+/// focused" and a lost-focus dismissal parks a preview that was never revealed.
+fn dismissable(is_showing: bool, reveal_pending: bool) -> bool {
+    is_showing && !reveal_pending
+}
+
+fn combine_focus_truth(window: Option<bool>, process: Option<bool>) -> Option<bool> {
+    match (window, process) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        (window, process) => window.and(process),
+    }
+}
+
+impl Focusable for PreviewView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for PreviewView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_dismiss_tracking(window, cx);
+        self.schedule_reveal_after_present(window, cx);
+        let palette = current_palette();
+
+        let mut root = div()
+            .font_family(qol_gpui::theme::font_ui())
+            .id("shot-preview")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_move))
+            .size_full()
+            .relative()
+            .bg(rgb(palette.window_bg))
+            .border_1()
+            .border_color(rgb(palette.thumb_border))
+            .shadow(surface_shadow());
+
+        if !self.ready {
+            return root;
+        }
+
+        if self.size_label.is_none() {
+            self.size_label = std::fs::metadata(&self.path)
+                .ok()
+                .map(|meta| format_bytes(meta.len()));
+        }
+
+        if self.first_paint {
+            self.first_paint = false;
+            qol_runtime::probe!(
+                "SHOT_RENDER",
+                "seq={} preview_ms={}",
+                self.seq,
+                self.preview_started_at.elapsed().as_millis()
+            );
+        }
+
+        let system = runtime_theme().system;
+        let kit = kit();
+        let controls = controls(ControlSurface::Preview, self.default_copy_action);
+        let (thumb_w, thumb_h) = self.thumb;
+        let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
+        let circles_width = action_row_width(controls.len(), ActionCircleSize::Full);
+        let start_x = (win_w - circles_width) / 2.0;
+        let circle_top = MARGIN + thumb_h - ActionCircleSize::Full.px() / 2.0;
+        let label = controls
+            .get(self.selected)
+            .map(|control| control.label())
+            .unwrap_or_default();
+
+        root = root
+            .child(
+                div()
+                    .absolute()
+                    .left(px(MARGIN))
+                    .top(px(MARGIN))
+                    .w(px(thumb_w))
+                    .h(px(thumb_h))
+                    .overflow_hidden()
+                    .rounded(px(RADIUS_THUMB))
+                    .border_1()
+                    .border_color(rgb(palette.thumb_border))
+                    .child(self.thumbnail(thumb_w, thumb_h)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom(px(MARGIN / 2.0))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .text_size(px(TEXT_CAPTION))
+                    .text_color(rgb(palette.label_text))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom(px(MARGIN / 2.0))
+                    .right(px(MARGIN))
+                    .font_family(SharedString::from(font_mono()))
+                    .text_size(px(TEXT_NANO))
+                    .text_color(rgb(system.text_muted))
+                    .when_some(self.size_label.clone(), |bar, size| bar.child(size)),
+            );
+
+        for (index, control) in controls.into_iter().enumerate() {
+            let left = start_x + index as f32 * (ActionCircleSize::Full.px() + ACTION_CIRCLE_GAP);
+            let selected = index == self.selected;
+            let state = row_circle_state(true, selected);
+            root = root.child(
+                kit.action_circle(ActionCircleSize::Full, state)
+                    .id(("shot-action", index))
+                    .absolute()
+                    .left(px(left))
+                    .top(px(circle_top))
+                    .child(control.glyph())
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.activate(control, window, cx)
+                    })),
+            );
+        }
+
+        root
+    }
+}
+
+fn window_thumb_default() -> (f32, f32) {
+    (MAX_THUMB_W, MAX_THUMB_H)
+}
+
+pub(crate) fn thumbnail_size(w: f32, h: f32) -> (f32, f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return (MAX_THUMB_W, MAX_THUMB_H);
+    }
+    let scale = (MAX_THUMB_W / w).min(MAX_THUMB_H / h).min(1.0);
+    (w * scale, h * scale)
+}
+
+fn window_dims(thumb_w: f32, thumb_h: f32, action_count: usize) -> (f32, f32) {
+    let width = thumb_w.max(action_row_width(action_count, ActionCircleSize::Full)) + 2.0 * MARGIN;
+    let height = MARGIN + thumb_h + ActionCircleSize::Full.px() / 2.0 + LABEL_H + MARGIN;
+    (width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "linux")]
+    use super::{complete_pin_transition, register_pin_transition};
+    use qol_gpui::window::target_monitor_key;
+    use qol_runtime::MonitorBounds;
+
+    use super::{
+        combine_focus_truth, dismissable, missing_monitors, read_render_image, reveal_blur_guard,
+        thumbnail_size, window_dims, ActiveMonitor, MonitorTopology, BLUR_GUARD, MAX_THUMB_H,
+        MAX_THUMB_W, PARKED_REVEAL_GUARD,
+    };
+    use qol_gpui::kit::{action_row_width, ActionCircleSize};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pin_transition_completion_reaches_the_preview_once() {
+        let source = "pin-transition-test-preview";
+        let failed = register_pin_transition(source);
+        complete_pin_transition(source, false);
+        assert!(!futures::executor::block_on(failed).unwrap());
+        complete_pin_transition(source, true);
+
+        let succeeded = register_pin_transition(source);
+        complete_pin_transition(source, true);
+        assert!(futures::executor::block_on(succeeded).unwrap());
+    }
+
+    #[test]
+    fn focus_truth_recovers_when_any_owned_window_holds_focus() {
+        let cases = [
+            (Some(true), Some(false), Some(true)),
+            (Some(false), Some(true), Some(true)),
+            (Some(true), None, Some(true)),
+            (None, Some(true), Some(true)),
+            (Some(false), Some(false), Some(false)),
+            (Some(false), None, None),
+            (None, Some(false), None),
+            (None, None, None),
+        ];
+        for (window, process, expected) in cases {
+            assert_eq!(
+                combine_focus_truth(window, process),
+                expected,
+                "window: {window:?} process: {process:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_preview_awaiting_its_reveal_is_never_dismissable() {
+        // 2026-09-12 host trace, first capture after a daemon start: the reveal was
+        // still pending 429 ms after the show, the 400 ms blur guard had expired, and
+        // the window could not hold X11 focus because it was mapped at opacity 0, so
+        // the focus poll dismissed it. Parking resized it to 1x1, the reveal proof
+        // then failed its 388x329 viewport check for all 40 attempts, and the preview
+        // finally "presented" as a 1x1 window the user never saw.
+        let cases = [
+            ((true, true), false, "reveal pending: not dismissable"),
+            ((true, false), true, "revealed: dismissable"),
+            (
+                (false, true),
+                false,
+                "parked with a pending reveal: not dismissable",
+            ),
+            ((false, false), false, "parked: not dismissable"),
+        ];
+        for ((is_showing, reveal_pending), expected, note) in cases {
+            assert_eq!(dismissable(is_showing, reveal_pending), expected, "{note}");
+        }
+    }
+
+    #[test]
+    fn parked_reveals_extend_the_blur_guard() {
+        assert_eq!(reveal_blur_guard(true), PARKED_REVEAL_GUARD);
+        assert_eq!(reveal_blur_guard(false), BLUR_GUARD);
+    }
+
+    #[test]
+    fn thumbnail_preserves_aspect_within_box() {
+        let (w, h) = thumbnail_size(1920.0, 1080.0);
+        assert!(w <= MAX_THUMB_W + 0.01, "width within box: {w}");
+        assert!(h <= MAX_THUMB_H + 0.01, "height within box: {h}");
+        assert!((w / h - 1920.0 / 1080.0).abs() < 0.01, "aspect preserved");
+    }
+
+    #[test]
+    fn thumbnail_does_not_upscale_small_images() {
+        assert_eq!(thumbnail_size(80.0, 60.0), (80.0, 60.0));
+    }
+
+    #[test]
+    fn full_resolution_loader_preserves_saved_pixel_dimensions() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "qol-shot-full-resolution-{}-{nonce}.png",
+            std::process::id()
+        ));
+        image::RgbaImage::from_pixel(720, 480, image::Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+
+        let (render_image, width, height) = read_render_image(&path).unwrap();
+        let first_pixel = render_image.as_bytes(0).unwrap()[..4].to_vec();
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!((width, height), (720, 480));
+        assert_eq!(render_image.as_bytes(0).unwrap().len(), 720 * 480 * 4);
+        assert_eq!(first_pixel, [30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn window_grows_to_fit_the_circle_row() {
+        let (width, _) = window_dims(40.0, 40.0, 2);
+        assert!(
+            width >= action_row_width(2, ActionCircleSize::Full),
+            "row fits inside window"
+        );
+    }
+
+    fn monitor(x: f32, y: f32) -> ActiveMonitor {
+        ActiveMonitor::from_bounds(MonitorBounds {
+            x,
+            y,
+            width: 1920.0,
+            height: 1080.0,
+        })
+    }
+
+    fn key(monitor: &ActiveMonitor) -> super::MonitorKey {
+        target_monitor_key(Some(monitor))
+    }
+
+    #[test]
+    fn missing_monitors_keeps_everything_when_no_windows_exist() {
+        let monitors = vec![monitor(0.0, 0.0), monitor(1920.0, 0.0)];
+        let missing = missing_monitors(&[], monitors.clone());
+        let expected: Vec<_> = monitors.iter().map(key).collect();
+        let actual: Vec<_> = missing.iter().map(key).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn missing_monitors_skips_monitors_that_already_have_windows() {
+        let first = monitor(0.0, 0.0);
+        let second = monitor(1920.0, 0.0);
+        let missing = missing_monitors(&[key(&first)], vec![first.clone(), second.clone()]);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(key(&missing[0]), key(&second));
+    }
+
+    #[test]
+    fn missing_monitors_returns_nothing_when_all_windows_exist() {
+        let monitors = vec![monitor(0.0, 0.0), monitor(1920.0, 0.0)];
+        let existing: Vec<_> = monitors.iter().map(key).collect();
+        assert!(missing_monitors(&existing, monitors).is_empty());
+    }
+
+    #[test]
+    fn monitor_topology_matches_known_equal_sets_only() {
+        let single = MonitorTopology::from_monitors(&[monitor(0.0, 0.0)]);
+        let same_single = MonitorTopology::from_monitors(&[monitor(0.0, 0.0)]);
+        let pair = MonitorTopology::from_monitors(&[monitor(0.0, 0.0), monitor(1920.0, 0.0)]);
+        let reversed_pair =
+            MonitorTopology::from_monitors(&[monitor(1920.0, 0.0), monitor(0.0, 0.0)]);
+        let unknown = MonitorTopology::from_monitors(&[]);
+        let cases = [
+            (single.clone(), same_single, true),
+            (pair.clone(), reversed_pair, true),
+            (single.clone(), pair.clone(), false),
+            (single.clone(), unknown.clone(), true),
+            (unknown.clone(), pair, true),
+            (unknown, single, true),
+        ];
+        for (stored, live, expected) in cases {
+            assert_eq!(
+                stored.matches(&live),
+                expected,
+                "stored={stored:?} live={live:?}"
+            );
+        }
+    }
+}

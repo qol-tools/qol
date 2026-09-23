@@ -38,5 +38,7 @@ config_key = "extra_file_scan_roots"
 label = "Extra File Scan Roots"
 description = "Additional folders whose files should appear in launcher search."
 section = "launcher"
+card_description = "Folders the launcher also searches."
+item_label = "folder"
 default = []
 placeholder = "/path/to/files"

@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-os-themes"
+id = "qol-os-themes"
 uid = "c0b6aa8d-2b51-4b03-a478-6ce3db8883eb"
 name = "OS Themes"
 description = "Cursor effects and OS-wide theming"
-version = "0.38.0"
+version = "0.48.0"
 author = "KMRH47"
 platforms = ["linux"]
 
 [runtime]
-command = "plugin-os-themes"
+command = "qol-os-themes"
 
 [action.run]
 label = "Cursor Grow"
@@ -21,6 +21,7 @@ args = ["toggle_theme"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [capabilities]
@@ -29,7 +30,8 @@ doctor = true
 
 [daemon]
 enabled = true
-command = "plugin-os-themes"
+inherit_listener = true
+command = "qol-os-themes"
 socket = "/tmp/qol-os-themes.sock"
 
 [menu]
@@ -37,6 +39,6 @@ label = "OS Themes"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-os-themes"
-repo = "qol-tools/plugin-os-themes"
-pattern = "plugin-os-themes-{os}-{arch}"
+name = "qol-os-themes"
+repo = "qol-tools/qol-os-themes"
+pattern = "qol-os-themes-{os}-{arch}"

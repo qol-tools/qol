@@ -472,7 +472,7 @@ fn enqueue_warmer_from_cache(inputs: &ListenerInputs, activity_generation: u64, 
 }
 
 fn active_picker_handle(inputs: &ListenerInputs) -> Option<WindowHandle<crate::app::AltTabApp>> {
-    let active_target = qol_gpui::ghost::active_monitor()
+    let active_target = qol_gpui::monitor::active_monitor()
         .or_else(|| inputs.tracker.snapshot_monitor())
         .map(|monitor| PopupPlacement::from_monitor(Some(monitor)).target());
     active_target
@@ -536,7 +536,7 @@ fn reposition_ghost_only(state: &ListenerState, event: &RuntimeEvent, app_cx: &m
     if let RuntimeEvent::ActiveMonitorChanged { monitor_idx, .. } = event {
         qol_runtime::probe!("PLUGIN_RECV_AMC", "monitor_idx={:?}", monitor_idx);
     }
-    qol_gpui::ghost::record_active_monitor(event);
+    qol_gpui::monitor::record_active_monitor(event);
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
         eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");
@@ -559,8 +559,8 @@ fn reposition_ghost_only(state: &ListenerState, event: &RuntimeEvent, app_cx: &m
 }
 
 fn recenter_single_ghost(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: &mut App) -> bool {
-    let monitor =
-        qol_gpui::ghost::record_active_monitor(event).or_else(|| inputs.tracker.snapshot_monitor());
+    let monitor = qol_gpui::monitor::record_active_monitor(event)
+        .or_else(|| inputs.tracker.snapshot_monitor());
     let Some(monitor) = monitor else {
         return false;
     };
@@ -779,7 +779,7 @@ async fn refresh_data(
             *crate::app::ACTIVE_PICKER_MONITOR.lock().unwrap()
         } else {
             let active_monitor =
-                qol_gpui::ghost::active_monitor().or_else(|| inputs.tracker.snapshot_monitor());
+                qol_gpui::monitor::active_monitor().or_else(|| inputs.tracker.snapshot_monitor());
             active_monitor.map(|m| PopupPlacement::from_monitor(Some(m)).target())
         };
 

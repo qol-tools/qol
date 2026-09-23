@@ -25,6 +25,8 @@ description = "Which Bluetooth adapter qol uses. Automatic follows the system de
 section = "devices"
 default = ""
 query = "adapter_options"
+lookup_label = "adapters"
+card_description = "The Bluetooth adapter qol uses."
 
 [field.search]
 type = "action"
@@ -36,6 +38,7 @@ action = "start_search"
 active_action = "stop_search"
 active_query = "search_status"
 active_value_from = "searching"
+label_map = { false = "Scan", true = "Stop" }
 
 [field.devices]
 type = "list"
@@ -44,45 +47,59 @@ section = "devices"
 query = "devices"
 active_query = "search_status"
 active_value_from = "searching"
-active_label = "LIVE"
+active_label = "Searching"
 row_label = "{name}"
 row_subtitle = "{detail}"
 search = true
 empty_message = "No paired devices. Start search to discover nearby devices."
+card_description = "Devices nearby and already paired."
 
 [[field.devices.row_actions]]
 action = "connect_device"
 label = "Connect"
+description = "Connects the device to this computer."
 when = "can_connect"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
+action = "reclaim_device"
+label = "Take back"
+description = "Moves the audio from the other device to this computer."
+when = "can_reclaim"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "disconnect_device"
 label = "Disconnect"
+description = "Drops the connection on this computer only."
 when = "can_disconnect"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "pair_device"
 label = "Pair"
+description = "Pairs the device with this computer."
 when = "can_pair"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "trust_device"
 label = "Trust"
+description = "Lets the device connect on its own."
 when = "can_trust"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "untrust_device"
 label = "Untrust"
+description = "Stops the device connecting on its own."
 when = "can_untrust"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
 action = "remove_device"
 label = "Remove"
+description = "Forgets the pairing."
 when = "can_remove"
 input = { address = "{address}" }
 
@@ -98,6 +115,7 @@ description = "Paired Bluetooth MAC addresses to reconnect automatically."
 section = "reconnection"
 placeholder = "AA:BB:CC:DD:EE:FF"
 default = []
+card_description = "Devices qol reconnects on its own."
 query = "managed_device_options"
 
 [field.auto_reconnect]
@@ -155,10 +173,12 @@ query = "host_fixes"
 row_label = "{title}"
 row_subtitle = "{detail}"
 empty_message = "Nothing to report about this computer's Bluetooth stack."
+card_description = "What the Bluetooth stack reports."
 
 [field.host_findings.row_action]
 action = "apply_host_fix"
 label = "Fix"
+description = "Applies the fix to this computer's Bluetooth stack."
 when = "actionable"
 input = { id = "{id}" }
 
@@ -169,6 +189,6 @@ description = "Where system audio goes when a Bluetooth audio device connects."
 [field.set_default_output]
 type = "boolean"
 label = "Set as default output on connect"
-description = "Make a connected audio device the system output. The mic stays on your current input because qol pins the high-quality A2DP profile, which carries no microphone."
+description = "Make a connected audio device the system output. If another output is already playing, qol leaves it alone and makes the device the output once that output stops, or on the device's next connect. The mic stays on your current input because qol pins the high-quality A2DP profile, which carries no microphone."
 section = "audio"
 default = true

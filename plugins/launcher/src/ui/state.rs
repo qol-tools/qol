@@ -1,6 +1,7 @@
 use super::layout::MAX_VISIBLE;
 use crate::discovery::search::{Fuzziness, SearchMode};
 use crate::flow::{FlowEntry, FlowRow, FlowVerdict};
+use qol_gpui::text_edit::TextField;
 use std::time::{Duration, Instant};
 
 const NAV_FAST_WINDOW: Duration = Duration::from_millis(95);
@@ -51,12 +52,14 @@ pub struct TrailFocus {
 }
 
 pub struct FlowSession {
+    pub epoch: u64,
     pub entry: FlowEntry,
     pub rows: Vec<FlowRow>,
     pub verdict: FlowVerdict,
     pub generation: u64,
     pub pending: bool,
     pub in_flight: bool,
+    pub verification_deadline: Option<Instant>,
     pub trail_from: f32,
     pub trail_from_index: usize,
     pub trail_to: usize,
@@ -68,9 +71,7 @@ pub struct FlowSession {
 pub struct LauncherState {
     pub mode: SearchMode,
     pub fuzziness: Fuzziness,
-    pub query: String,
-    pub cursor: usize,
-    pub selection_anchor: Option<usize>,
+    pub query: TextField,
     pub scroll_list: qol_gpui::scroll_list::ScrollList,
     pub previous_selected: Option<usize>,
     pub edge_hit: Option<EdgeHit>,
@@ -83,14 +84,18 @@ pub struct LauncherState {
     pub flow: Option<FlowSession>,
 }
 
+impl FlowSession {
+    pub fn matches_request(&self, epoch: u64, generation: u64) -> bool {
+        self.epoch == epoch && self.generation == generation
+    }
+}
+
 impl LauncherState {
     pub fn new() -> Self {
         Self {
             mode: SearchMode::Apps,
             fuzziness: Fuzziness::Balanced,
-            query: String::new(),
-            cursor: 0,
-            selection_anchor: None,
+            query: TextField::new(),
             scroll_list: qol_gpui::scroll_list::ScrollList::new(MAX_VISIBLE),
             previous_selected: None,
             edge_hit: None,
@@ -105,13 +110,16 @@ impl LauncherState {
     }
 
     pub fn enter_flow(&mut self, entry: FlowEntry) {
+        static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         self.flow = Some(FlowSession {
+            epoch: EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             entry,
             rows: Vec::new(),
             verdict: FlowVerdict::Answered,
             generation: 0,
             pending: false,
             in_flight: false,
+            verification_deadline: None,
             trail_from: 0.0,
             trail_from_index: 0,
             trail_to: 0,
@@ -120,8 +128,6 @@ impl LauncherState {
             detail: false,
         });
         self.query.clear();
-        self.cursor = 0;
-        self.clear_selection();
         self.clear_launch_error();
         self.reset_results_position();
     }
@@ -129,8 +135,6 @@ impl LauncherState {
     pub fn exit_flow(&mut self) {
         self.flow = None;
         self.query.clear();
-        self.cursor = 0;
-        self.clear_selection();
         self.clear_launch_error();
         self.reset_results_position();
     }
@@ -199,10 +203,6 @@ impl LauncherState {
             .unwrap_or(FlowVerdict::Answered)
     }
 
-    pub fn query_len(&self) -> usize {
-        self.query.chars().count()
-    }
-
     pub fn cycle_mode(&mut self, _reverse: bool) {
         self.mode = self.mode.next();
         self.clear_launch_error();
@@ -220,66 +220,6 @@ impl LauncherState {
         self.fuzziness != before
     }
 
-    pub fn selected_range(&self) -> Option<(usize, usize)> {
-        let anchor = self.selection_anchor?;
-        if anchor == self.cursor {
-            None
-        } else {
-            Some((anchor.min(self.cursor), anchor.max(self.cursor)))
-        }
-    }
-
-    pub fn clear_selection(&mut self) {
-        self.selection_anchor = None;
-    }
-
-    pub fn selection_text(&self) -> Option<String> {
-        let (start, end) = self.selected_range()?;
-        let start_b = Self::char_to_byte_index(&self.query, start);
-        let end_b = Self::char_to_byte_index(&self.query, end);
-        Some(self.query[start_b..end_b].to_string())
-    }
-
-    pub fn cut_selection(&mut self) -> Option<String> {
-        let selected = self.selection_text()?;
-        self.delete_selection();
-        Some(selected)
-    }
-
-    pub fn paste_text(&mut self, text: &str) -> bool {
-        if text.is_empty() {
-            return false;
-        }
-
-        self.delete_selection();
-        let idx = Self::char_to_byte_index(&self.query, self.cursor);
-        self.query.insert_str(idx, text);
-        self.cursor += text.chars().count();
-        self.clear_selection();
-        self.clear_launch_error();
-        true
-    }
-
-    pub(crate) fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
-        s.char_indices()
-            .nth(char_idx)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len())
-    }
-
-    pub(crate) fn delete_selection(&mut self) -> bool {
-        let Some((start, end)) = self.selected_range() else {
-            return false;
-        };
-        let start_b = Self::char_to_byte_index(&self.query, start);
-        let end_b = Self::char_to_byte_index(&self.query, end);
-        self.query.replace_range(start_b..end_b, "");
-        self.cursor = start;
-        self.clear_selection();
-        self.clear_launch_error();
-        true
-    }
-
     pub fn set_launch_error(&mut self, error: String) {
         self.launch_error = Some(error);
     }
@@ -295,7 +235,7 @@ impl LauncherState {
                 "LAUNCHER_SEL_RESET",
                 "reason=reset_position was={} q=\"{}\"",
                 self.scroll_list.selected,
-                self.query,
+                self.query.text(),
             );
         }
         self.scroll_list.reset();
@@ -319,7 +259,7 @@ impl LauncherState {
                 before,
                 self.scroll_list.selected,
                 result_count,
-                self.query,
+                self.query.text(),
             );
         }
     }
@@ -490,20 +430,18 @@ mod tests {
     #[test]
     fn enter_flow_clears_query_and_exit_flow_clears_session() {
         let mut state = LauncherState::new();
-        state.query = "leftover".to_string();
-        state.cursor = 8;
+        state.query = TextField::with_text("leftover");
         state.set_launch_error("stale".to_string());
 
         state.enter_flow(flow_entry("qol memory"));
         assert!(state.flow.is_some());
         assert_eq!(state.flow_result_count(), 0);
         assert!(state.query.is_empty());
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.query.cursor(), 0);
         assert!(state.launch_error.is_none());
         assert_eq!(state.scroll_list.selected, 0);
 
-        state.query = "look".to_string();
-        state.cursor = 4;
+        state.query = TextField::with_text("look");
         if let Some(session) = state.flow.as_mut() {
             session.rows.push(FlowRow {
                 title: "LookPose".to_string(),
@@ -518,9 +456,27 @@ mod tests {
         assert!(state.flow.is_none());
         assert_eq!(state.flow_result_count(), 0);
         assert!(state.query.is_empty());
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.query.cursor(), 0);
         assert!(state.launch_error.is_none());
         assert_eq!(state.scroll_list.selected, 0);
+    }
+
+    #[test]
+    fn stale_requests_cannot_match_changed_queries_or_reopened_flows() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        let flow = state.flow.as_mut().unwrap();
+        let epoch = flow.epoch;
+        assert!(flow.matches_request(epoch, 0));
+        flow.generation = 1;
+        assert!(!flow.matches_request(epoch, 0));
+        assert!(flow.matches_request(epoch, 1));
+        state.exit_flow();
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(!state.flow.as_ref().unwrap().matches_request(epoch, 0));
+        state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(!state.flow.as_ref().unwrap().matches_request(epoch, 0));
     }
 
     fn trail_fields(focus: Option<TrailFocus>) -> (usize, usize, u64) {

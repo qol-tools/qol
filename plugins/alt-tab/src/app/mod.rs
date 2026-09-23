@@ -14,7 +14,9 @@ use crate::preview_plane::{PreviewPlaneItem, PreviewPlanePayload, PreviewPlaneRe
 use crate::rendering::RenderingFlow;
 use gpui::*;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(debug_assertions)]
+use std::time::Instant;
 
 pub(crate) static PICKER_VISIBLE: AtomicBool = AtomicBool::new(false);
 pub(crate) static ACTIVE_PICKER_MONITOR: std::sync::Mutex<Option<qol_gpui::window::MonitorKey>> =
@@ -31,7 +33,7 @@ pub(crate) struct AltTabApp {
     pub(crate) rendering: RenderingFlow,
     pub(crate) action_mode: ActionMode,
     pub(crate) alt_was_held: bool,
-    pub(crate) blur_guard_until: Instant,
+    pub(crate) blur_guard: qol_gpui::ghost::BlurGuard,
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
     _dismiss_sub: (Subscription, Subscription, Option<Task<()>>),
@@ -155,7 +157,7 @@ impl AltTabApp {
             "alt-tab",
             &focus_handle,
             window,
-            |this: &Self| this.blur_guard_until,
+            |this: &Self| this.blur_guard.guard_until(),
             |this: &Self| this.is_active_visible(),
             cx,
             |this, window, cx| {
@@ -189,6 +191,9 @@ impl AltTabApp {
             },
         );
 
+        let mut blur_guard = qol_gpui::ghost::BlurGuard::new();
+        blur_guard.arm(Duration::from_millis(BLUR_GUARD_MS));
+
         let mut app = Self {
             _dismiss_sub: dismiss_sub,
             _live_preview_task: None,
@@ -200,7 +205,7 @@ impl AltTabApp {
             rendering,
             action_mode: action_mode.clone(),
             alt_was_held: true,
-            blur_guard_until: Instant::now() + Duration::from_millis(BLUR_GUARD_MS),
+            blur_guard,
             _alt_poll_task: None,
             #[cfg(debug_assertions)]
             pending_cycle: None,
@@ -264,7 +269,7 @@ impl AltTabApp {
         self.rendering = req.rendering;
         self.action_mode = req.config.action_mode.clone();
         self.alt_was_held = true;
-        self.blur_guard_until = Instant::now() + Duration::from_millis(BLUR_GUARD_MS);
+        self.blur_guard.arm(Duration::from_millis(BLUR_GUARD_MS));
         self.delegate.update(cx, |s, _| {
             s.apply_config(req.config, card_color, card_opacity, req.monitor_size)
         });

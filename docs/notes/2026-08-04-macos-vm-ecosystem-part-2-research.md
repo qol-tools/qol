@@ -47,8 +47,8 @@ backend's interface:
 - QEMU process and QMP assumptions in `tools/qol-cli/src/commands/emu/live.rs`;
 - qcow2 and `qemu-img` assumptions in
   `tools/qol-cli/src/commands/emu/image_import/`;
-- QEMU-specific cleanup fields in `libs/qol-dev-env/src/report.rs`;
-- Linux session assumptions in `libs/qol-dev-guest/src/lib.rs` and the Linux
+- QEMU-specific cleanup fields in `libs/dev-env/src/report.rs`;
+- Linux session assumptions in `libs/dev-guest/src/lib.rs` and the Linux
   implementation of `tools/qol-guest-runner`.
 
 The target shape is:
@@ -287,8 +287,8 @@ limited to newer guest versions. See [VZMacGuestProvisioningOptions](https://dev
 
 ## Repository owners to extend
 
-- `libs/qol-dev-env/`: artifact identity, registry, report, resource admission;
-- `libs/qol-dev-guest/`: transport-neutral guest protocol and identity;
+- `libs/dev-env/`: artifact identity, registry, report, resource admission;
+- `libs/dev-guest/`: transport-neutral guest protocol and identity;
 - `tools/qol-cli/src/commands/emu/strategy/`: machine and guest strategy
   facades;
 - `tools/qol-cli/src/commands/emu/`: orchestration only;

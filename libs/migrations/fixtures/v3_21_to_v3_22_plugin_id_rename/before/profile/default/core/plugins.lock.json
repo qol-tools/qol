@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "plugins": [
+    { "uid": "368871df-de60-4a7a-ab7c-8d33fcd22511", "id": "plugin-lights", "repo_url": "https://example/lights", "version": "1.0.0" },
+    { "uid": "368871df-de60-4a7a-ab7c-8d33fcd22511", "id": "qol-lights", "repo_url": "https://example/lights", "version": "1.1.0" },
+    { "uid": "00000000-0000-0000-0000-000000000000", "id": "plugin-unknown", "repo_url": "https://example/unknown", "version": "1.0.0" }
+  ]
+}

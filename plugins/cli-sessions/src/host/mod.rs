@@ -6,6 +6,9 @@ use qol_terminal_sessions::{SessionBinding, SessionId};
 pub trait TerminalHost {
     fn discover(&self) -> Vec<Pane>;
     fn get_text(&self, target: &SessionBinding) -> Option<String>;
+    fn visual_screen_is_current(&self, _target: &SessionBinding, _screen: &str) -> Option<bool> {
+        Some(true)
+    }
     fn focus(&self, target: &SessionBinding) -> anyhow::Result<()>;
 }
 

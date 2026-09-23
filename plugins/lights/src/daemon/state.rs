@@ -108,7 +108,8 @@ impl DaemonState {
         }
         if actions::is_run_action(action) {
             return DaemonOutcome::Error(format!(
-                "plugin-lights action '{}' is not implemented yet",
+                "{} action '{}' is not implemented yet",
+                store::PLUGIN_ID,
                 action
             ));
         }

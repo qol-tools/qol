@@ -1,6 +1,6 @@
 [package]
-name = "window-actions"
-version = "2.32.0"
+name = "qol-window-actions"
+version = "2.42.0"
 edition = "2021"
 
 [dependencies]
@@ -10,6 +10,8 @@ qol-config.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
+qol-plugin-api.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-windowing.workspace = true

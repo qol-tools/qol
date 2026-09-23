@@ -1,4 +1,3 @@
-pub(crate) mod image_registry;
 pub(crate) mod preview_image;
 #[cfg(debug_assertions)]
 pub(crate) mod preview_trace;

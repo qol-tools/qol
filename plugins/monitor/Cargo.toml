@@ -1,10 +1,11 @@
 [package]
-name = "plugin-monitor"
-version = "0.6.0"
+name = "qol-monitor"
+version = "0.16.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 qol-apps.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true

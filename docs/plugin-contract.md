@@ -42,11 +42,11 @@ qol-tray does four things with it:
 - **Dispatches actions** to it: a hotkey, a dashboard click, or a launcher entry all funnel to one executor that either talks to the plugin's daemon socket or spawns `the-binary <argv>`.
 - **Owns its lifetime**: spawns, tracks the PID, kills it on reload/exit, and arms a host-death watchdog so the process cannot outlive qol-tray.
 
-Source-of-truth crates: `libs/qol-plugin-api` (manifest schema + validation),
-`libs/qol-config` (config + runtime schema, config loader), `libs/qol-plugin-daemon`
-(the daemon helper a plugin links), `libs/qol-runtime` (state socket client +
-watchdog + wire protocol), `libs/qol-gpui` (gpui plugin building blocks), and
-`apps/qol-tray/src/{plugins,hotkeys,runtime,logging}` (the host side).
+Source-of-truth crates: `libs/plugin-api` (manifest schema + validation),
+`libs/config` (config + runtime schema, config loader), `libs/plugin-daemon`
+(the daemon helper a plugin links), `libs/runtime` (state socket client +
+watchdog + wire protocol), `libs/gpui` (gpui plugin building blocks), and
+`apps/tray/src/{plugins,hotkeys,runtime,logging}` (the host side).
 
 ### Channel inventory
 
@@ -55,27 +55,27 @@ watchdog + wire protocol), `libs/qol-gpui` (gpui plugin building blocks), and
 | Config delivery | host to plugin | `config.json` on disk + `QOL_TRAY_PLUGIN_ID` env | `qol-config/src/lib.rs` (`load_plugin_config_from_env`) |
 | Config form / query / action | host UI to plugin daemon | HTTP to daemon socket | `plugin_config_handlers/`, `qol-config/src/contract/runtime.rs` |
 | Config reload | host to plugin | `reload` daemon action (else daemon restart) | `.../plugin_config_handlers/notify.rs` |
-| Action dispatch | host to plugin | daemon socket OR runtime spawn | `apps/qol-tray/src/plugins/action_executor/` |
-| Platform state | host to plugin | `QOL_TRAY_STATE_SOCKET` UDS, `get_state` / `subscribe` | `libs/qol-runtime/src/client.rs`, `.../protocol.rs` |
+| Action dispatch | host to plugin | daemon socket OR runtime spawn | `apps/tray/src/plugins/action_executor/` |
+| Platform state | host to plugin | `QOL_TRAY_STATE_SOCKET` UDS, `get_state` / `subscribe` | `libs/runtime/src/client.rs`, `.../protocol.rs` |
 | `set_focus` | plugin to host | state socket, fire-and-forget | `runtime/server/socket/requests.rs` |
-| Notification / status push | plugin to host | state socket, `push_notification` / `push_status` | `libs/qol-runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
-| Lifeline (watchdog) | plugin and host | state socket, held open until EOF | `libs/qol-runtime/src/watchdog.rs` + `requests.rs` |
-| Logging | plugin to host | piped stderr/stdout relay | `apps/qol-tray/src/logging/relay.rs` |
-| OS notification (fallback) | plugin to OS | `osascript` / `notify-send`, only when the tray is unreachable | each plugin (e.g. `plugin-cli-sessions/src/notify.rs`) |
-| Inter-plugin event bus | plugin to plugin | broker UDS, publish/subscribe (same socket as the pane-field pull API) | `libs/qol-runtime/src/broker/{bus,client,protocol,topic}.rs` |
+| Notification / status push | plugin to host | state socket, `push_notification` / `push_status` | `libs/runtime/src/protocol.rs`, `runtime/server/socket/requests.rs` |
+| Lifeline (watchdog) | plugin and host | state socket, held open until EOF | `libs/runtime/src/watchdog.rs` + `requests.rs` |
+| Logging | plugin to host | piped stderr/stdout relay | `apps/tray/src/logging/relay.rs` |
+| OS notification (fallback) | plugin to OS | `osascript` / `notify-send`, only when the tray is unreachable | each plugin (e.g. `qol-cli-sessions/src/notify.rs`) |
+| Inter-plugin event bus | plugin to plugin | broker UDS, publish/subscribe (same socket as the pane-field pull API) | `libs/runtime/src/broker/{bus,client,protocol,topic}.rs` |
 
 ---
 
 ## 2. Declaration files
 
 Three independent files, three independent validators, plus one cross-validator
-(`qol-config` to `qol-runtime`). Source: `libs/qol-plugin-api/src/manifest/`
-(`plugin.toml`) and `libs/qol-config/src/contract/` (`qol-config.toml`,
+(`qol-config` to `qol-runtime`). Source: `libs/plugin-api/src/manifest/`
+(`plugin.toml`) and `libs/config/src/contract/` (`qol-config.toml`,
 `qol-runtime.toml`).
 
 ### 2.1 `plugin.toml` (required) - discovery, menu, shortcuts, runtime, daemon
 
-Schema structs in `libs/qol-plugin-api/src/manifest/schema.rs`
+Schema structs in `libs/plugin-api/src/manifest/schema.rs`
 (`PluginManifest`, `PluginInfo`, `ActionDeclaration`, `MenuConfig`, `MenuItem`,
 `ActionType`, `RuntimeConfig`, `DaemonConfig`, `Capabilities`, `Dependencies`,
 `ShortcutDeclaration`, `ConfigDeclarations`). Current manifest version is 3
@@ -100,9 +100,10 @@ Sections:
   catalog. `label` is required. `kind` defaults to `run` and may be `run`,
   `settings`, or `toggle-config`. `args` supplies runtime argv for `run` and
   `settings` actions; omit it to use `[id]`. `toggle-config` entries require
-  `config_key` and are not executable/hotkey-bindable. Dashboard actions,
-  hotkey choices, shortcut validation, and runtime argv resolution use this
-  catalog first.
+  `config_key` and are not executable/hotkey-bindable. `picture` optionally
+  names a picture spec (section 2.2) drawn on the action's card. Dashboard
+  actions, hotkey choices, shortcut validation, and runtime argv resolution
+  use this catalog first.
 - `[menu]` (`MenuConfig`): `label`, optional `icon`, and `items` (may be `[]`).
   `MenuItem` is tagged on `type`: `action {id,label,action,config_key?}`,
   `checkbox {id,label,checked?,action,config_key?}`, `separator`,
@@ -171,14 +172,14 @@ Minimal `plugin.toml`:
 
 ```toml
 [plugin]
-id = "plugin-template"
+id = "qol-template"
 name = "My Plugin"
 description = "A qol-tray plugin"
 version = "0.1.0"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "plugin-template"
+command = "qol-template"
 
 [action.run]
 label = "Run"
@@ -194,17 +195,17 @@ label = "My Plugin"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-template"
+name = "qol-template"
 repo = "qol-tools/plugin-template"
-pattern = "plugin-template-{os}-{arch}"
+pattern = "qol-template-{os}-{arch}"
 ```
 
 ### 2.2 `qol-config.toml` (optional) - the settings UI schema
 
-Schema in `libs/qol-config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
+Schema in `libs/config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
 `FieldSpec`, `FieldKind`); validation in `.../validation.rs`; normalization
 (defaults + override merge) in `.../normalized.rs`. Authoritative prose doc:
-`libs/qol-config/docs/v1.md` - but note it is **stale** (missing `color`, `action`,
+`libs/config/docs/v1.md` - but note it is **stale** (missing `color`, `action`,
 `list`, `status`, `qr_code` and several attributes); trust the structs.
 
 - Top level: `schema_version` (must be `1`), optional `title`, `description`.
@@ -212,24 +213,53 @@ Schema in `libs/qol-config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
   buttons referencing runtime action names). Order preserved.
 - `[field.<id>]`: required `type` (`FieldKind`, snake_case: `boolean`, `string`,
   `number`, `select`, `string_array`, `object_array`, `object_map`, `color`,
-  `action`, `list`, `status`, `qr_code`), plus `config_key`, `label`,
-  `description`, `placeholder`, `section`, `default`, `show_when`, `align`, `span`.
+  `action`, `list`, `status`, `qr_code`, `display_layout`), plus `config_key`, `label`,
+  `description`, `placeholder`, `section`, `default`, `lookup_label`, `show_when`, `align`,
+  `span`.
 
 Per-kind rules (validated, not ignored):
 
 - `number`: `min`/`max`/`step` (`step>0`, `min<=max`); rejected on other kinds.
 - `select`: `options` (non-empty) + optional `option_labels`; default/override must
-  be an option.
+  be a declared option. Static select overrides are canonicalized before validation
+  only when trimming surrounding whitespace, collapsing internal whitespace runs,
+  ASCII-lowercasing, and replacing `_` with `-` produces one unique declared option.
+  Canonical values are preserved;
+  unknown and ambiguous values remain invalid. Query-backed selects are not
+  canonicalized.
 - `object_array`: `[field.<id>.item.fields]`; `object_map`: `key_label` +
   `[field.<id>.entry_fields]`.
 - `color`: hex string, optional `alpha`; streamable.
-- **`action` / `list` / `status` / `qr_code` hold no stored value**: they must NOT
+- **`action` / `list` / `status` / `qr_code` / `display_layout` hold no stored value**: they must NOT
   have a `default`, and they require a matching `qol-runtime.toml` declaration. Every
   other kind **must** have a `default`.
 - `config_key` (dotted, e.g. `"audio.enabled"`) routes the value into a nested JSON
   path in `config.json`; defaults to the field id (so renaming a field id silently
   moves storage unless you pin `config_key`).
 - `show_when { field, equals }` conditionally renders a field.
+- Card copy: `card_description` is the card sub header (a sentence in sentence
+  case with a period, at most 36 characters) and is required on every field that
+  opens a card: `select`, `object_array`, `object_map`, a `string_array` with no
+  `options` and no `query`, `list`, `display_layout`, `gamepad`, `qr_code`.
+  `item_label` (at most 24 characters) is required on `object_array`,
+  `object_map` and card-opening `string_array` fields. `lookup_label` (at most
+  24 characters) is required on every `select` with a `query` and names what
+  the lookup is still finding; until the query answers, its card shows a
+  waiting tile named "Looking for {lookup_label}". `option_pictures` maps
+  every `select` option (from `options` and `option_labels`) to a picture spec.
+  A nested `string_array` under `item.fields` or `entry_fields` whose key does
+  not end in `_mods` needs a `[field.<id>.lists.<key>]` entry carrying
+  `item_label` and `card_description`; the description may use the literal
+  placeholder `{entry}`.
+- A picture spec is `name` or `name:argument`; `qol_config::contract::PICTURE_NAMES`
+  lists every name. Arguments: `icon-corner` (`left`/`right`), `aa` (8..=48),
+  `desktop-theme` (`bone`/`slate`), `web-theme` (`slate`/`midnight`), `swatch`
+  (`amber`/`green`/`cyan`/`magenta`/`blue`/`violet`), `letters` (1 to 3 chars, no
+  whitespace), `preset` (two integers 0..=100 joined by a comma), `format` (1 to
+  5 chars, no whitespace), `terminal-session` (1 to 24 chars), `local-engine`
+  (1 to 12 chars); every other name takes no argument. A looked-up option object
+  may carry `"picture": "<spec>"` next to `value`, `label` and `accent`; without
+  one the panel draws a letter tile.
 
 ```toml
 schema_version = 1
@@ -261,7 +291,7 @@ equals = "fixed"
 
 Distinct from `plugin.toml`'s `[runtime]` block. Declares the actions/queries/streams
 that `qol-config.toml` fields (and section `actions`) bind to. Schema in
-`libs/qol-config/src/contract/runtime.rs` (`RuntimeSpec`, `ActionSpec`, `QuerySpec`,
+`libs/config/src/contract/runtime.rs` (`RuntimeSpec`, `ActionSpec`, `QuerySpec`,
 `StreamSpec`); cross-validation in `.../cross_validate.rs`.
 
 - `[action.<name>]`: `description`, optional `confirm`, optional `input` map,
@@ -295,7 +325,9 @@ as today. The plain routes
 header into `input["agent_home"]` when the runable declares it.
 
 Cross-file: an `action` field's `action` and a `list`/`status`/`qr_code` field's
-`query` must reference a declared runtime entry; a `stream = "..."` attribute is
+`query` must reference a declared runtime entry; a `display_layout` field's
+`query` and `active_query` must reference declared queries and its `action` and
+`active_action` must reference declared actions; a `stream = "..."` attribute is
 allowed only on `color`/`number` fields.
 
 ---
@@ -308,7 +340,7 @@ A plugin reads its config on startup:
 let cfg: MyConfig = qol_config::load_plugin_config_from_env(PLUGIN_ID);
 ```
 
-Source: `libs/qol-config/src/lib.rs` (`load_plugin_config_from_env`,
+Source: `libs/config/src/lib.rs` (`load_plugin_config_from_env`,
 `plugin_id_from_env`, `load_plugin_config`, `plugin_config_paths`, `config_roots`).
 
 - Identity comes from the `QOL_TRAY_PLUGIN_ID` env var (injected by the host). If
@@ -321,7 +353,7 @@ Source: `libs/qol-config/src/lib.rs` (`load_plugin_config_from_env`,
   rather than erroring. Define `T: Deserialize + Default`.
 - The host writes that file from the editor form (`PUT /api/plugins/{id}/config`),
   merging on write to preserve daemon-owned fields, then signals reload (section 9.1).
-- `list`/`status`/`qr_code`/`action` fields are never serialized into `config.json`;
+- `list`/`status`/`qr_code`/`action`/`display_layout` fields are never serialized into `config.json`;
   they are driven live over the daemon socket (sections 4 and 9.1).
 
 ---
@@ -330,11 +362,11 @@ Source: `libs/qol-config/src/lib.rs` (`load_plugin_config_from_env`,
 
 Three entry points converge on one executor:
 `action_executor::try_execute_action(plugin_manager, plugin_id, action_id)`
-(`apps/qol-tray/src/plugins/action_executor/`).
+(`apps/tray/src/plugins/action_executor/`).
 
 ### 4.1 What is bindable, and who owns the key
 
-- The hotkey catalog (`apps/qol-tray/src/hotkeys/catalog.rs`) collects bindable
+- The hotkey catalog (`apps/tray/src/hotkeys/catalog.rs`) collects bindable
   actions from `manifest.executable_action_ids()`: executable `[action.<id>]`
   entries when the catalog is present, otherwise legacy executable menu actions
   (recursing into submenus). Checkbox/toggle-config ids are config controls, not
@@ -375,7 +407,7 @@ Three entry points converge on one executor:
   single-flight deduped via `RUNNING_ACTIONS` except the no-daemon `open` action
   (treated as an activation request, so a second `open` can focus an existing window).
 
-`DaemonActionDispatch` (`apps/qol-tray/src/plugins/action_transport/`) is the
+`DaemonActionDispatch` (`apps/tray/src/plugins/action_transport/`) is the
 transport: a newline-terminated `DaemonRequest{action}` JSON over the Unix socket,
 10s IO timeout, returning `Handled{payload?}` / `Fallback` / `Error` / `Unavailable`.
 The same transport carries config **queries**.
@@ -398,9 +430,9 @@ The same transport carries config **queries**.
   and to shortcuts: it writes a macOS `.app` / Linux `.desktop` that runs
   `qol-tray exec shortcut <id>` (Windows no-op, honoring "leave host as found").
 
-### 4.4 Worked trace: `plugin-cli-sessions` `open`
+### 4.4 Worked trace: `qol-cli-sessions` `open`
 
-`open` has no `[daemon]`, so it resolves to a runtime spawn of `cli-sessions open`
+`open` has no `[daemon]`, so it resolves to a runtime spawn of `qol-cli-sessions open`
 with `args=["open"]`. `main.rs` first tries `send_action(&CONFIG, "open", false)` to
 its own socket; if an instance is running, that instance receives `Command::Open`
 and shows the panel and the second process exits; if not, this process binds the
@@ -411,7 +443,7 @@ socket and runs the gpui panel itself (self-daemonizing). The spawn carries
 
 ## 5. Process lifecycle and ownership
 
-### 5.1 The daemon helper crate (`libs/qol-plugin-daemon`)
+### 5.1 The daemon helper crate (`libs/plugin-daemon`)
 
 A plugin links this to receive actions while running (`src/daemon.rs`):
 
@@ -436,11 +468,11 @@ A plugin links this to receive actions while running (`src/daemon.rs`):
 
 - **Host-owned daemon** (`[daemon] enabled=true`): qol-tray autostarts it
   (`plugins/daemon_lifecycle/`), supplies `QOL_TRAY_DAEMON_SOCKET`, and dispatches
-  actions over the socket. Examples: alt-tab, lights, launcher, pointz.
+  actions over the socket. Examples: qol-alt-tab, qol-lights, qol-launcher, qol-pointz.
 - **Self-daemonizing** (no `[daemon]`, only `[runtime]`): spawned fresh per action;
   the plugin itself becomes a daemon on first invocation (via `send_action` to its
   own socket, binding if that fails). qol-tray never sets `QOL_TRAY_DAEMON_SOCKET`.
-  Example: cli-sessions.
+  Example: qol-cli-sessions.
 
 ### 5.3 Spawn, track, kill
 
@@ -461,8 +493,8 @@ A plugin links this to receive actions while running (`src/daemon.rs`):
 ### 5.4 The host-death watchdog (orphan prevention)
 
 This is mission non-negotiable #3 (host left exactly as found, no orphaned daemons).
-Source: `libs/qol-runtime/src/watchdog.rs`; host side
-`apps/qol-tray/src/runtime/server/socket/requests.rs`.
+Source: `libs/runtime/src/watchdog.rs`; host side
+`apps/tray/src/runtime/server/socket/requests.rs`.
 
 - `spawn_host_death_watchdog()` **does nothing unless `QOL_TRAY_STATE_SOCKET` is in
   the environment.** When present, it spawns a thread that opens a `lifeline` to the
@@ -482,9 +514,9 @@ Source: `libs/qol-runtime/src/watchdog.rs`; host side
 ## 6. The platform-state socket
 
 A host-authoritative Unix socket (`QOL_TRAY_STATE_SOCKET`, default
-`/tmp/qol-tray-state.sock`, const in `apps/qol-tray/src/paths/mod.rs`). Client API in
-`libs/qol-runtime/src/client.rs` (`PlatformStateClient`, `Subscription`); protocol
-in `libs/qol-runtime/src/protocol.rs`; server in `apps/qol-tray/src/runtime/server/`.
+`/tmp/qol-tray-state.sock`, const in `apps/tray/src/paths/mod.rs`). Client API in
+`libs/runtime/src/client.rs` (`PlatformStateClient`, `Subscription`); protocol
+in `libs/runtime/src/protocol.rs`; server in `apps/tray/src/runtime/server/`.
 
 Requests (newline JSON, `cmd`-tagged): `get_state` (monitors etc.),
 `set_focus {monitor_idx}` (fire-and-forget), `subscribe {plugin_id, events}` (held-open
@@ -520,14 +552,14 @@ gpui plugins consume this via `qol_gpui::MonitorTracker` (placement) and
 > plugins can use today.
 
 The per-uid broker socket hosts a publish/subscribe bus beside the pane-field
-pull API (design: `libs/qol-runtime/docs/adr/RUNTIME-1-af-unix-broker-with-peer-cred-auth-and-pull-pane-f.md`).
+pull API (design: `libs/runtime/docs/adr/RUNTIME-1-af-unix-broker-with-peer-cred-auth-and-pull-pane-f.md`).
 Same transport, same identity model as the pull API: the socket file is mode
-`0600` inside a `0700` parent (`libs/qol-runtime/src/broker/path.rs`), and
+`0600` inside a `0700` parent (`libs/runtime/src/broker/path.rs`), and
 peer credentials are verified at accept (`peer_cred.rs`), so only same-uid
 processes connect. A plugin can therefore only publish to, and only receive
 events from, peers on its own uid - there is no cross-uid delivery.
 
-Source of truth: `libs/qol-runtime/src/broker/` - `bus.rs` (core), `topic.rs`
+Source of truth: `libs/runtime/src/broker/` - `bus.rs` (core), `topic.rs`
 (gate), `protocol.rs` (wire types), `client.rs` (plugin API).
 
 ### 7.1 Topics and the naming convention
@@ -600,13 +632,23 @@ opening another plugin replaces the view in that window; closing it leaves the h
 ready to create one fresh window on the next request. Custom pickers, overlays, and
 toasts remain plugin-owned.
 
-The rendering contract is the `libs/qol-gpui` crate that such plugins depend on:
+The rendering contract is the `libs/gpui` crate that such plugins depend on:
 
 - `keepalive::open_keepalive` - a hidden 1x1 window so the app process stays alive
   with no visible windows.
-- `popup_window` - `configure_popup_window`, `show_window_by_title`,
+- `popup_window` - `configure_popup_window` (on Linux, true only when the
+  `_NET_WM_WINDOW_TYPE_DOCK` write was confirmed, so a failed X connection or atom
+  intern, a window that did not resolve, and, in debug and sandbox builds,
+  `QOL_DOCK_FORCE_FAIL=1` all return false; on macOS, whether the window resolved;
+  the fallback platform returns false unconditionally),
+  `set_window_type_dock_by_title` (Linux only, true only on the same write
+  confirmation, false unconditionally on every other platform),
+  `show_window_by_title`,
   `hide_window_by_title`, `reposition_window_by_title`, `reason_scope` (RAII guard
-  recording why a show/hide happened, visible in probes), `set_ghost_debug`.
+  recording why a show/hide happened, visible in probes), `set_ghost_debug`. Linux
+  debug and sandbox builds accept `QOL_DOCK_FORCE_FAIL=1` and
+  `QOL_SHOW_FORCE_FAIL=1` to force a reported dock failure and a failed show for
+  guest verification.
 - `monitor::MonitorTracker` - `snapshot_monitor`, `snapshot_monitor_focus_first`,
   `all_monitors`; wraps `PlatformStateClient`.
 - `platform` - `set_accessory_policy` (macOS: no dock icon / no focus theft),
@@ -622,7 +664,7 @@ accessory policy, MonitorTracker placement, ghost decorations/kind,
 `open_window_with_focus`, and `spawn_command_loop`. Platform divergence is sharp
 (macOS `Normal` windows + opacity vs Linux/X11 `PopUp` + unmap; ghosts must be
 `is_movable`; Muffin drops cross-monitor moves) - see `qol-langs:gpui-conventions`
-and the `libs/qol-gpui` rules, and verify Linux ghost behavior via `qol trace`, not
+and the `libs/gpui` rules, and verify Linux ghost behavior via `qol trace`, not
 a live session.
 
 ---
@@ -641,7 +683,7 @@ treat `reload` as "re-read `config.json`".
 The host pipes plugin stderr (and stdout in dev). In prod, lines matching `ERROR`,
 `error`, `FATAL`, `panic`, or `PANIC` (so any line containing "error" is captured -
 deliberately aggressive) are forwarded into the host's structured error capture
-tagged `plugin.{id}.daemon_stderr` (`apps/qol-tray/src/logging/relay.rs`), so plugin
+tagged `plugin.{id}.daemon_stderr` (`apps/tray/src/logging/relay.rs`), so plugin
 errors surface in the host. `RUST_LOG` is injected per profile. `qol_runtime::probe!` is a
 debug-only per-process trace to `/tmp/qol-altmon.log` (not collected by the host);
 see `qol-project:qol-trace`.
@@ -658,7 +700,7 @@ stays host-authoritative for state.
 
 - `push_notification {plugin_id, title, body, level, action_label, action_payload}` -
   shows a toast through the tray's own notification surface
-  (`apps/qol-tray/src/surfaces/native_notifications/`): `notify-send` on Linux
+  (`apps/tray/src/surfaces/native_notifications/`): `notify-send` on Linux
   with urgency mapped from `level` (`info`=low, `warn`=normal, `error`=critical),
   `osascript display notification` on macOS. `body` and `level` default to `""`
   and `info`. `action_label` and `action_payload` are optional (default `null`):
@@ -679,7 +721,7 @@ is validated against the manifest id rules **and** the installed plugin set;
 an unknown id is rejected with `error` and nothing is displayed.
 
 Plugin API - one call, no async setup; the id comes from `QOL_TRAY_PLUGIN_ID`
-(`libs/qol-runtime/src/client.rs`, protocol types in `libs/qol-runtime/src/protocol.rs`):
+(`libs/runtime/src/client.rs`, protocol types in `libs/runtime/src/protocol.rs`):
 
 ```rust
 let client = qol_runtime::PlatformStateClient::from_env();
@@ -700,12 +742,12 @@ client.send_status(&serde_json::json!({ "state": "recording" }));
 Both return `true` when the host accepted the push, so a plugin can fall back
 to its own `notify-send`/`osascript` when the tray is unreachable (standalone
 run, or host rejection). Host receiver:
-`apps/qol-tray/src/runtime/server/socket/platform/unix/requests.rs`.
+`apps/tray/src/runtime/server/socket/platform/unix/requests.rs`.
 
 ### 8.4 Adding a new channel
 
 `qol-project:qol-arch-channels` is the canonical decision guide for picking or
-adding a host-plugin channel; reuse the infra in `libs/qol-runtime` rather than
+adding a host-plugin channel; reuse the infra in `libs/runtime` rather than
 inventing a socket.
 
 ---
@@ -757,7 +799,7 @@ Set when spawning daemon and/or runtime processes (`daemon_lifecycle/spawn.rs`,
   dispatch target.
 - The native tray menu does not surface plugin actions; the dashboard does.
 - `config_key` defaults to the field id - renaming an id moves storage silently.
-- `action`/`list`/`status`/`qr_code` config fields must omit `default` and need a
+- `action`/`list`/`status`/`qr_code`/`display_layout` config fields must omit `default` and need a
   `qol-runtime.toml` declaration.
 - `qol-config/docs/v1.md` is stale; trust the structs.
 - `qol-plugin-daemon` is Unix-only (`compile_error!`); do not add a non-Unix

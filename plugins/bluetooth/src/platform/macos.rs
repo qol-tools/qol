@@ -29,6 +29,7 @@ use crate::hostfix::BluetoothHostFixes;
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
+    audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
 };
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
@@ -552,12 +553,13 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
         "kill" => ReadResult::Command(DaemonCommand::Kill),
         "enable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
         "disable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
-        "pair_device" => device_daemon_command(request, DaemonCommand::Pair, "Pairing..."),
-        "connect_device" => device_daemon_command(request, DaemonCommand::Connect, "Connecting..."),
+        "pair_device" => device_daemon_command(request, DaemonCommand::Pair, "Pairing"),
+        "connect_device" => device_daemon_command(request, DaemonCommand::Connect, "Connecting"),
         "disconnect_device" => {
-            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting...")
+            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting")
         }
-        "remove_device" => device_daemon_command(request, DaemonCommand::Remove, "Removing..."),
+        "reclaim_device" => reclaim_command(request),
+        "remove_device" => device_daemon_command(request, DaemonCommand::Remove, "Removing"),
         "trust_device" | "untrust_device" => ReadResult::Error(TRUST_UNSUPPORTED.into()),
         "start_search" => ReadResult::Command(DaemonCommand::StartSearch),
         "stop_search" => match mark_search_stopped() {
@@ -603,19 +605,33 @@ fn device_daemon_command(
     command: fn(String) -> DaemonCommand,
     pending_status: &str,
 ) -> ReadResult<DaemonCommand> {
+    match request_address(request) {
+        Ok(address) => match begin_device_action(&address, pending_status) {
+            Ok(()) => ReadResult::Command(command(address)),
+            Err(error) => ReadResult::Error(error.to_string()),
+        },
+        Err(error) => ReadResult::Error(error),
+    }
+}
+
+fn request_address(request: &DaemonRequest) -> std::result::Result<String, String> {
     let Some(address) = request
         .input
         .get("address")
         .and_then(serde_json::Value::as_str)
     else {
-        return ReadResult::Error(format!("{} requires an address", request.action));
+        return Err(format!("{} requires an address", request.action));
     };
-    match normalize_address(address) {
-        Ok(address) => match begin_device_action(&address, pending_status) {
-            Ok(()) => ReadResult::Command(command(address)),
-            Err(error) => ReadResult::Error(error.to_string()),
+    normalize_address(address).map_err(|error| error.to_string())
+}
+
+fn reclaim_command(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
+    match request_address(request) {
+        Ok(address) => match crate::audio_claim::platform::reclaim_output(&address) {
+            Ok(()) => ReadResult::Handled,
+            Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        Err(error) => ReadResult::Error(error.to_string()),
+        Err(error) => ReadResult::Error(error),
     }
 }
 
@@ -774,7 +790,7 @@ fn run_retry_pass(
 pub fn run_daemon(mut config: ReconnectConfig) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx, parse_daemon_request) {
-        bail!("plugin-bluetooth daemon listener failed to start");
+        bail!("{} daemon listener failed to start", crate::PLUGIN_ID);
     }
 
     let mut retries: HashMap<String, RetryState> = HashMap::new();

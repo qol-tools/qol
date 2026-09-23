@@ -4,6 +4,7 @@ description = "Connected game controllers, active drivers, and available capabil
 
 [section.controllers]
 label = "Controllers"
+description = "Which pads this computer can see and whether they need a fix."
 
 [section.input_test]
 label = "Input Test"
@@ -26,6 +27,7 @@ query = "controllers_snapshot"
 row_label = "{name}"
 row_subtitle = "{transport} · {driver} · {verdict}"
 empty_message = "No controllers detected."
+card_description = "Pads this computer can see."
 
 [field.detected_pads.row_action]
 action = "apply_fixes"
@@ -38,3 +40,4 @@ label = "Controller Input"
 description = "Press a controller button, then move every stick, trigger, D-pad direction, and face button."
 section = "input_test"
 query = "controller_input"
+card_description = "Live input from the pad under test."

@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "../lib/store-path.js";
+import { qolMemoryStore, fixturesRoot } from "../lib/store-path.js";
 import { countPendingCandidates } from "../lib/retrieval-log.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
@@ -14,7 +14,7 @@ const pick = (flag, def) => {
   const i = args.indexOf(flag);
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 };
-const STORE_SRC = resolve(pick("--store", qolMemoryStore()));
+const STORE_SRC = resolve(pick("--store", fixturesRoot()));
 const SNAPSHOT_RUN = pick("--snapshot-run", "2026-08-12T18-46-58-129Z");
 const NOTES_RUN = pick("--notes-run", "2026-08-13T16:31:40.844Z");
 const REBUILD = args.includes("--rebuild");

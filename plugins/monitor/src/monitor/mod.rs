@@ -2,6 +2,8 @@ use std::fmt;
 
 pub mod backends;
 pub mod grant;
+pub mod layout;
+pub mod night;
 pub mod policy;
 
 pub use backends::i2c_ddc::I2cError;
@@ -10,6 +12,7 @@ pub use backends::x11_randr_gamma::X11GammaTransport;
 pub use backends::x11_randr_gamma::{GammaBackend, GammaError, GammaTable};
 pub use grant::{GrantBackend, GrantError, I2cGrantState, RevokeOutcome, UdevGrantBackend};
 pub use policy::{BrightnessPolicy, DdcStatus, PolicyControl};
+pub use qol_windowing::display::{DisplayMode, DisplayPlacement, DisplaySnapshot};
 
 use qol_windowing::display::{DisplayError, DisplayHandle};
 use qol_windowing::DisplayEnumerator;
@@ -59,13 +62,6 @@ pub struct GammaState {
     pub value: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DisplayMode {
-    pub width: u32,
-    pub height: u32,
-    pub refresh_hz: u32,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HdrState {
     pub enabled: bool,
@@ -100,6 +96,14 @@ impl MonitorError {
             reason: reason.into(),
         }
     }
+
+    pub fn is_gamma_changed_under_write(&self) -> bool {
+        matches!(
+            self,
+            Self::Refused { capability, reason }
+                if *capability == "gamma" && reason.as_str() == GAMMA_CHANGED_UNDER_WRITE_REASON
+        )
+    }
 }
 
 impl fmt::Display for MonitorError {
@@ -114,7 +118,7 @@ impl fmt::Display for MonitorError {
             Self::DisplayNotFound(selector) => {
                 write!(f, "no display matches `{selector}`")
             }
-            Self::Display(error) => write!(f, "display enumeration failed: {error}"),
+            Self::Display(error) => write!(f, "{error}"),
             Self::I2c(error) => write!(f, "{error}"),
         }
     }
@@ -149,13 +153,53 @@ impl From<I2cError> for MonitorError {
 
 pub trait DisplayControl: Send + Sync {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError>;
+    fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+        Ok(Vec::new())
+    }
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError>;
     fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError>;
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError>;
+    fn set_brightness_with_tint(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        _tint: night::Tint,
+    ) -> Result<(), MonitorError> {
+        self.set_brightness(handle, value)
+    }
+    fn set_tint(&self, _handle: &DisplayHandle, _tint: night::Tint) -> Result<(), MonitorError> {
+        Err(MonitorError::unsupported(
+            "tint",
+            "gamma tint is not implemented on this display or platform",
+        ))
+    }
+    fn set_gamma_adjustment(
+        &self,
+        _handle: &DisplayHandle,
+        _value: u8,
+        _tint: night::Tint,
+    ) -> Result<(), MonitorError> {
+        Err(MonitorError::unsupported(
+            "gamma",
+            "combined brightness and tint are not implemented on this platform",
+        ))
+    }
+    fn set_gamma_adjustment_guarded(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: night::Tint,
+        _expected: u64,
+    ) -> Result<(), MonitorError> {
+        self.set_gamma_adjustment(handle, value, tint)
+    }
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError>;
     fn set_gamma(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError>;
     fn list_modes(&self, handle: &DisplayHandle) -> Result<Vec<DisplayMode>, MonitorError>;
     fn set_mode(&self, handle: &DisplayHandle, mode: &DisplayMode) -> Result<(), MonitorError>;
+    fn set_layout(&self, _placements: &[DisplayPlacement]) -> Result<(), MonitorError> {
+        Err(MonitorError::unsupported("layout", LAYOUT_REASON))
+    }
     fn get_hdr(&self, handle: &DisplayHandle) -> Result<HdrState, MonitorError>;
     fn set_hdr(&self, handle: &DisplayHandle, enabled: bool) -> Result<(), MonitorError>;
 }
@@ -177,14 +221,22 @@ pub trait GammaStateControl: Send + Sync {
 pub struct StubControl;
 
 const BRIGHTNESS_REASON: &str = "the DDC and gamma backends are not implemented on this platform";
-pub(crate) const GAMMA_REASON: &str = "the gamma fallback lands in a later phase";
-pub(crate) const MODES_REASON: &str = "mode control lands in a later phase";
-pub(crate) const HDR_REASON: &str = "HDR control lands in a later phase";
+pub(crate) const GAMMA_REASON: &str = "gamma control is not implemented by this backend";
+pub(crate) const GAMMA_CHANGED_UNDER_WRITE_REASON: &str =
+    "the display changed under the gamma write; the other owner's table was kept";
+pub(crate) const LAYOUT_REASON: &str = "layout control is not implemented by this backend";
+pub(crate) const MODES_REASON: &str = "mode control is not implemented by this backend";
+pub(crate) const HDR_REASON: &str = "HDR control is not implemented by this backend";
 
 impl DisplayControl for StubControl {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
         Ok(qol_windowing::Platform.enumerate()?)
     }
+
+    fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+        Ok(Vec::new())
+    }
+
     fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
         Ok(DisplayCapabilities::none())
     }
@@ -211,6 +263,10 @@ impl DisplayControl for StubControl {
 
     fn set_mode(&self, _handle: &DisplayHandle, _mode: &DisplayMode) -> Result<(), MonitorError> {
         Err(MonitorError::unsupported("modes", MODES_REASON))
+    }
+
+    fn set_layout(&self, _placements: &[DisplayPlacement]) -> Result<(), MonitorError> {
+        Err(MonitorError::unsupported("layout", LAYOUT_REASON))
     }
 
     fn get_hdr(&self, _handle: &DisplayHandle) -> Result<HdrState, MonitorError> {
@@ -292,6 +348,7 @@ mod tests {
             control.set_mode(
                 &handle,
                 &DisplayMode {
+                    token: 60,
                     width: 1920,
                     height: 1080,
                     refresh_hz: 60
@@ -319,6 +376,19 @@ mod tests {
     }
 
     #[test]
+    fn stub_snapshot_is_empty_and_layout_is_unsupported() {
+        let control = StubControl;
+        assert!(control.snapshot().unwrap().is_empty());
+        assert!(matches!(
+            control.set_layout(&[]),
+            Err(MonitorError::Unsupported {
+                capability: "layout",
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn stub_probe_reports_no_capabilities_yet() {
         assert_eq!(
             StubControl.probe(&handle()).unwrap(),
@@ -331,8 +401,15 @@ mod tests {
         let error = MonitorError::unsupported("modes", MODES_REASON);
         assert_eq!(
             error.to_string(),
-            "modes control is unsupported: mode control lands in a later phase"
+            "modes control is unsupported: mode control is not implemented by this backend"
         );
+    }
+
+    #[test]
+    fn display_error_io_carries_no_enumeration_prefix() {
+        let error =
+            MonitorError::Display(DisplayError::Io(std::io::Error::other("the bus closed")));
+        assert_eq!(error.to_string(), "the bus closed");
     }
 
     #[test]

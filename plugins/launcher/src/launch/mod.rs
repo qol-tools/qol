@@ -171,7 +171,7 @@ mod tests {
             exec: vec![
                 "/Applications/qol-tray.app/Contents/MacOS/qol-courier".to_string(),
                 "exec".to_string(),
-                "plugin-monitor".to_string(),
+                "qol-monitor".to_string(),
                 "settings".to_string(),
             ],
             path: PathBuf::from("/Applications/Monitor Settings.app"),
@@ -194,7 +194,7 @@ mod tests {
             exec: vec![
                 "/Applications/qol-tray.app/Contents/MacOS/qol-courier".to_string(),
                 "exec".to_string(),
-                "plugin-monitor".to_string(),
+                "qol-monitor".to_string(),
                 "settings".to_string(),
             ],
             path: PathBuf::from("/Applications/Monitor Settings.app"),

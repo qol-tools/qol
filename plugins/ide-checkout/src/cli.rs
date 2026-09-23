@@ -6,7 +6,6 @@ use std::time::Duration;
 use qol_headless::{Command, CommandResult, HeadlessApp};
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "task-runner";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
@@ -21,13 +20,13 @@ where
     Daemon: Fn() -> u8 + Send + Sync + 'static,
     Status: Fn() -> u8 + Send + Sync + 'static,
 {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run the IDE Checkout checkout daemon and inspect its local runtime contract.")
         .default_command(["daemon"])
         .command(
             Command::new("daemon")
                 .about("Run the loopback IDE Checkout checkout daemon.")
-                .usage(format!("{BINARY_NAME} daemon"))
+                .usage(format!("{PLUGIN_ID} daemon"))
                 .detail("Loads the typed plugin config and serves checkout requests until stopped.")
                 .output("Runtime diagnostics are written to stderr.")
                 .exit_behavior("Exits non-zero if the daemon cannot bind or serve requests.")
@@ -36,7 +35,7 @@ where
         .command(
             Command::new("status")
                 .about("Probe the daemon health endpoint and show a desktop notification.")
-                .usage(format!("{BINARY_NAME} status"))
+                .usage(format!("{PLUGIN_ID} status"))
                 .detail("This preserves the plugin action used by qol-tray.")
                 .output("No stdout; the result is delivered as a desktop notification.")
                 .exit_behavior("Exits zero after reporting whether the daemon answered.")
@@ -49,7 +48,7 @@ where
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the IDE Checkout settings page in qol-tray.")
-        .usage(format!("{BINARY_NAME} settings"))
+        .usage(format!("{PLUGIN_ID} settings"))
         .output("No stdout on success; opens the settings URL through the platform launcher.")
         .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
         .run_result(move |_| Ok(result_for(crate::daemon::open_settings())))

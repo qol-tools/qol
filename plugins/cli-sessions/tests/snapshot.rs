@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
 
-use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
-use plugin_cli_sessions::snapshot::capture_all;
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
+use qol_cli_sessions::snapshot::capture_all;
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
 struct FakeHost {

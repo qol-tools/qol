@@ -36,11 +36,14 @@ pub struct DeviceInfo {
 pub struct DeviceOption {
     pub value: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BackendCapabilities {
     pub separate_trust_flag: bool,
+    pub audio_reclaim: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +86,10 @@ pub fn audio_profile_repairable(device: &DeviceInfo) -> bool {
     device.services_resolved && supports_audio_sink(device)
 }
 
+pub fn audio_output_degraded(active_profile: Option<&str>) -> bool {
+    active_profile.is_some_and(|profile| !profile.starts_with("a2dp-sink"))
+}
+
 pub fn connection_ready(device: &DeviceInfo) -> bool {
     if !device.connected {
         return false;
@@ -104,6 +111,10 @@ impl DiscoveryState {
     pub fn start(&mut self) {
         self.addresses.clear();
         self.devices.clear();
+        self.searching = true;
+    }
+
+    pub fn request(&mut self) {
         self.searching = true;
     }
 
@@ -270,6 +281,7 @@ pub fn devices_payload(
                 "can_connect": device.paired && !device.connected,
                 "can_disconnect": device.connected,
                 "can_pair": !device.paired,
+                "can_reclaim": capabilities.audio_reclaim && ready && audio,
                 "can_remove": device.paired || device.trusted,
                 "can_trust": capabilities.separate_trust_flag && device.paired && !device.trusted,
                 "can_untrust": capabilities.separate_trust_flag && device.trusted,
@@ -314,6 +326,7 @@ pub fn managed_device_options(devices: &[DeviceInfo]) -> Vec<DeviceOption> {
         .map(|device| DeviceOption {
             value: device.address.clone(),
             label: format!("{} · {}", device.alias, device.address),
+            picture: None,
         })
         .collect()
 }
@@ -328,6 +341,7 @@ pub fn adapter_options(adapters: &[AdapterInfo]) -> Vec<DeviceOption> {
     let mut options = vec![DeviceOption {
         value: String::new(),
         label: "Automatic · system default".to_string(),
+        picture: Some("adapter-auto".to_string()),
     }];
     options.extend(sorted.into_iter().map(|adapter| DeviceOption {
         value: adapter.address.clone(),
@@ -335,6 +349,7 @@ pub fn adapter_options(adapters: &[AdapterInfo]) -> Vec<DeviceOption> {
             "{} · {} · {} paired",
             adapter.name, adapter.address, adapter.paired_count
         ),
+        picture: Some("adapter-chip".to_string()),
     }));
     options
 }
@@ -353,9 +368,11 @@ mod tests {
 
     const TRUST_CAPABLE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: true,
+        audio_reclaim: false,
     };
     const TRUST_FREE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
+        audio_reclaim: false,
     };
 
     #[test]
@@ -412,6 +429,7 @@ mod tests {
                         "can_connect": false,
                         "can_disconnect": true,
                         "can_pair": false,
+                        "can_reclaim": false,
                         "can_remove": true,
                         "can_trust": false,
                         "can_untrust": true,
@@ -438,6 +456,7 @@ mod tests {
                         "can_connect": true,
                         "can_disconnect": false,
                         "can_pair": false,
+                        "can_reclaim": false,
                         "can_remove": true,
                         "can_trust": false,
                         "can_untrust": true,
@@ -464,6 +483,7 @@ mod tests {
                         "can_connect": false,
                         "can_disconnect": false,
                         "can_pair": true,
+                        "can_reclaim": false,
                         "can_remove": false,
                         "can_trust": false,
                         "can_untrust": false,
@@ -502,10 +522,12 @@ mod tests {
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:01".into(),
                     label: "Alpha · AA:BB:CC:DD:EE:01".into(),
+                    picture: None,
                 },
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:02".into(),
                     label: "Luna 2 · AA:BB:CC:DD:EE:02".into(),
+                    picture: None,
                 },
             ]
         );
@@ -532,14 +554,17 @@ mod tests {
                 DeviceOption {
                     value: "".into(),
                     label: "Automatic · system default".into(),
+                    picture: Some("adapter-auto".into()),
                 },
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:01".into(),
                     label: "hci0 · AA:BB:CC:DD:EE:01 · 0 paired".into(),
+                    picture: Some("adapter-chip".into()),
                 },
                 DeviceOption {
                     value: "AA:BB:CC:DD:EE:02".into(),
                     label: "hci1 · AA:BB:CC:DD:EE:02 · 3 paired".into(),
+                    picture: Some("adapter-chip".into()),
                 },
             ]
         );
@@ -552,12 +577,12 @@ mod tests {
         discovery.record("AA:BB:CC:DD:EE:03");
         let action = DeviceActionState {
             address: "AA:BB:CC:DD:EE:03".into(),
-            status: "Connecting...".into(),
+            status: "Connecting".into(),
             pending: true,
         };
         let payload = devices_payload(&devices, &[], &discovery, Some(&action), TRUST_CAPABLE);
         let item = &payload["items"][0];
-        assert_eq!(item["status"], "Connecting...");
+        assert_eq!(item["status"], "Connecting");
         assert_eq!(item["action_pending"], true);
         assert_eq!(item["can_connect"], false);
         assert_eq!(item["can_pair"], true);
@@ -729,6 +754,26 @@ mod tests {
         assert_eq!(item["can_connect"], false);
         assert_eq!(item["can_disconnect"], true);
         assert_eq!(item["ready"], true);
+    }
+
+    #[test]
+    fn audio_output_degraded_flags_only_non_a2dp_profiles() {
+        let cases = [
+            ("a2dp-sink", false),
+            ("a2dp-sink-sbc_xq", false),
+            ("a2dp-sink-aac", false),
+            ("headset-head-unit", true),
+            ("headset-head-unit-msbc", true),
+            ("off", true),
+        ];
+        for (profile, expected) in cases {
+            assert_eq!(
+                audio_output_degraded(Some(profile)),
+                expected,
+                "profile={profile}"
+            );
+        }
+        assert!(!audio_output_degraded(None));
     }
 
     fn audio_device(connected: bool, services_resolved: bool, uuids: &[&str]) -> DeviceInfo {

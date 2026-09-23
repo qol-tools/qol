@@ -8,6 +8,7 @@ use crate::picker::{IconMap, PickerWindowState, PreviewMap, SharedIconCache};
 use crate::rendering::RenderingFlow;
 use gpui::*;
 use qol_gpui::window::PopupPlacement;
+use qol_gpui::window_options::PopupWindowOptions;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -191,16 +192,13 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool, focus: bool)
     } else {
         WindowBackgroundAppearance::Opaque
     };
-    let decor = super::platform::picker_window_decorations(transparent);
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: None,
-        window_decorations: Some(decor),
-        kind: super::platform::picker_window_kind(),
-        focus,
-        window_background: bg,
-        ..Default::default()
-    }
+    PopupWindowOptions::new()
+        .bounds(bounds)
+        .kind(super::platform::picker_window_kind())
+        .decorations(super::platform::picker_window_decorations(transparent))
+        .background(bg)
+        .focus(focus)
+        .build()
 }
 
 fn on_open_failure() {

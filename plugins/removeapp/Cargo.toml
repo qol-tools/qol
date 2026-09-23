@@ -1,17 +1,13 @@
 [package]
-name = "plugin-removeapp"
-version = "0.46.0"
+name = "qol-removeapp"
+version = "0.57.1"
 edition = "2021"
 description = "Uninstall an app and its leftovers for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [lib]
-name = "plugin_removeapp"
+name = "qol_removeapp"
 path = "src/lib.rs"
-
-[[bin]]
-name = "removeapp"
-path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"

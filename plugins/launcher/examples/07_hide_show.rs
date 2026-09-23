@@ -5,7 +5,7 @@ use gpui::*;
 
 #[path = "hide_show/platform/mod.rs"]
 mod platform;
-use launcher::open_window_with_focus;
+use qol_launcher::open_window_with_focus;
 
 actions!(test, [Quit, Hide]);
 

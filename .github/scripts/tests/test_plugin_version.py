@@ -65,10 +65,10 @@ class DiscoverPluginsTests(unittest.TestCase):
 
     def test_discovers_plugins_by_manifest_identity(self):
         write_plugin(self.root / "plugins", "qol-shot", "qol-shot", "1.7.1", "qol-shot")
-        write_plugin(self.root / "plugins", "alt-tab", "plugin-alt-tab", "0.1.0", "alt-tab")
-        plugins = pv.discover_plugins(self.root, package_map("qol-shot", "alt-tab"), None)
+        write_plugin(self.root / "plugins", "alt-tab", "qol-alt-tab", "0.1.0", "qol-alt-tab")
+        plugins = pv.discover_plugins(self.root, package_map("qol-shot", "qol-alt-tab"), None)
         ids = sorted(p.id for p in plugins)
-        self.assertEqual(ids, ["plugin-alt-tab", "qol-shot"])
+        self.assertEqual(ids, ["qol-alt-tab", "qol-shot"])
 
     def test_ignores_dirs_without_plugin_toml(self):
         write_plugin(self.root / "plugins", "qol-shot", "qol-shot", "1.7.1", "qol-shot")
@@ -78,7 +78,7 @@ class DiscoverPluginsTests(unittest.TestCase):
         self.assertEqual([p.id for p in plugins], ["qol-shot"])
 
     def test_excludes_template(self):
-        write_plugin(self.root / "plugins", "template", "plugin-template", "0.1.0", "tmpl")
+        write_plugin(self.root / "plugins", "template", "qol-template", "0.1.0", "tmpl")
         write_plugin(self.root / "plugins", "qol-shot", "qol-shot", "1.7.1", "qol-shot")
         plugins = pv.discover_plugins(self.root, package_map("tmpl", "qol-shot"), None)
         self.assertEqual([p.id for p in plugins], ["qol-shot"])
@@ -106,28 +106,28 @@ class ManifestParityTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _units(self):
-        return pv.discover_plugins(self.root, package_map("qol-shot", "keyremap"), None)
+        return pv.discover_plugins(self.root, package_map("qol-shot", "qol-keyremap"), None)
 
     def test_matching_manifests_pass(self):
-        write_plugin(self.root / "plugins", "keyremap", "plugin-keyremap", "1.29.0", "keyremap")
+        write_plugin(self.root / "plugins", "keyremap", "qol-keyremap", "1.29.0", "qol-keyremap")
         pv.assert_manifest_parity(self._units())
 
     def test_plugin_toml_bumped_alone_is_rejected(self):
         crate = write_plugin(
-            self.root / "plugins", "keyremap", "plugin-keyremap", "1.29.0", "keyremap"
+            self.root / "plugins", "keyremap", "qol-keyremap", "1.29.0", "qol-keyremap"
         )
         (crate / "plugin.toml").write_text(
             (crate / "plugin.toml").read_text().replace('version = "1.29.0"', 'version = "1.30.0"')
         )
         with self.assertRaises(RuntimeError) as caught:
             pv.assert_manifest_parity(self._units())
-        self.assertIn("plugin-keyremap", str(caught.exception))
+        self.assertIn("qol-keyremap", str(caught.exception))
         self.assertIn("cargo=1.29.0", str(caught.exception))
         self.assertIn("plugin=1.30.0", str(caught.exception))
 
     def test_cargo_toml_bumped_alone_is_rejected(self):
         crate = write_plugin(
-            self.root / "plugins", "keyremap", "plugin-keyremap", "1.29.0", "keyremap"
+            self.root / "plugins", "keyremap", "qol-keyremap", "1.29.0", "qol-keyremap"
         )
         (crate / "Cargo.toml").write_text(
             (crate / "Cargo.toml").read_text().replace('version = "1.29.0"', 'version = "1.30.0"')
@@ -137,6 +137,16 @@ class ManifestParityTests(unittest.TestCase):
 
 
 class InitialReleasePlanTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        git(self.root, "init", "--quiet")
+        git(self.root, "config", "user.name", "Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
     def _plugin(self, plugin_id: str, version: str) -> "pv.ReleaseUnit":
         return pv.ReleaseUnit(
             id=plugin_id,
@@ -149,7 +159,7 @@ class InitialReleasePlanTests(unittest.TestCase):
         )
 
     def test_bootstraps_manifest_version_with_id_prefixed_tag(self):
-        plan = pv.initial_release_plan(self._plugin("qol-shot", "1.7.1"))
+        plan = pv.initial_release_plan(self.root, self._plugin("qol-shot", "1.7.1"))
         self.assertEqual(plan.new_version, "1.7.1")
         self.assertEqual(plan.old_version, "1.7.1")
         self.assertEqual(plan.tag, "qol-shot-v1.7.1", "tag prefix is the manifest id, no plugin- assumption")
@@ -158,14 +168,64 @@ class InitialReleasePlanTests(unittest.TestCase):
     def test_host_unit_tag_uses_id_prefix_without_plugin_manifest(self):
         host = pv.ReleaseUnit(
             id="qol-tray",
-            directory=Path("/x/apps/qol-tray"),
+            directory=Path("/x/apps/tray"),
             package_name="qol-tray",
-            cargo_manifest=Path("/x/apps/qol-tray/Cargo.toml"),
+            cargo_manifest=Path("/x/apps/tray/Cargo.toml"),
             cargo_version="3.16.0",
         )
         self.assertIsNone(host.plugin_manifest, "host app has no plugin.toml")
-        plan = pv.initial_release_plan(host)
+        plan = pv.initial_release_plan(self.root, host)
         self.assertEqual(plan.tag, "qol-tray-v3.16.0")
+
+
+class LegacyTagInitialPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        git(self.root, "init", "--quiet")
+        git(self.root, "config", "user.name", "Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        (self.root / "README.md").write_text("baseline\n")
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "baseline")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _unit(self, plugin_id: str, version: str) -> "pv.ReleaseUnit":
+        return pv.ReleaseUnit(
+            id=plugin_id,
+            directory=Path("/x") / plugin_id,
+            package_name=plugin_id,
+            cargo_manifest=Path("/x/Cargo.toml"),
+            cargo_version=version,
+            plugin_manifest=Path("/x/plugin.toml"),
+            plugin_version=version,
+        )
+
+    def test_legacy_tag_below_planned_version_is_accepted(self):
+        git(self.root, "tag", "plugin-lights-v1.44.0")
+        plan = pv.initial_release_plan(self.root, self._unit("qol-lights", "1.45.0"))
+        self.assertEqual(plan.old_version, "1.45.0")
+        self.assertEqual(plan.new_version, "1.45.0")
+        self.assertEqual(plan.tag, "qol-lights-v1.45.0")
+        self.assertEqual(plan.bump, "initial")
+
+    def test_legacy_tag_equal_to_planned_version_is_rejected(self):
+        git(self.root, "tag", "plugin-lights-v1.45.0")
+        with self.assertRaisesRegex(RuntimeError, "plugin-lights-v1.45.0"):
+            pv.initial_release_plan(self.root, self._unit("qol-lights", "1.45.0"))
+
+    def test_legacy_tag_above_planned_version_is_rejected(self):
+        git(self.root, "tag", "plugin-lights-v1.46.0")
+        with self.assertRaisesRegex(RuntimeError, "must be greater"):
+            pv.initial_release_plan(self.root, self._unit("qol-lights", "1.45.0"))
+
+    def test_without_legacy_tags_initial_plan_is_unchanged(self):
+        plan = pv.initial_release_plan(self.root, self._unit("qol-lights", "1.45.0"))
+        self.assertEqual(plan.new_version, "1.45.0")
+        self.assertEqual(plan.tag, "qol-lights-v1.45.0")
+        self.assertEqual(plan.bump, "initial")
 
 
 def write_host(root: Path, rel_dir: str, package: str, version: str) -> Path:
@@ -188,24 +248,24 @@ class DiscoverHostUnitsTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_discovers_host_app_without_plugin_toml(self):
-        write_host(self.root, "apps/qol-tray", "qol-tray", "3.16.0")
+        write_host(self.root, "apps/tray", "qol-tray", "3.16.0")
         units = pv.discover_host_units(self.root, package_map("qol-tray"), None)
         self.assertEqual([u.id for u in units], ["qol-tray"])
         self.assertIsNone(units[0].plugin_manifest)
         self.assertEqual(units[0].cargo_version, "3.16.0")
 
     def test_selection_picks_host_unit(self):
-        write_host(self.root, "apps/qol-tray", "qol-tray", "3.16.0")
+        write_host(self.root, "apps/tray", "qol-tray", "3.16.0")
         units = pv.discover_host_units(self.root, package_map("qol-tray"), "qol-tray")
         self.assertEqual([u.id for u in units], ["qol-tray"])
 
     def test_selection_excludes_unmatched_host(self):
-        write_host(self.root, "apps/qol-tray", "qol-tray", "3.16.0")
+        write_host(self.root, "apps/tray", "qol-tray", "3.16.0")
         self.assertEqual(pv.discover_host_units(self.root, package_map("qol-tray"), "qol-shot"), [])
 
     def test_unknown_selection_raises_across_all_units(self):
         (self.root / "plugins").mkdir()
-        write_host(self.root, "apps/qol-tray", "qol-tray", "3.16.0")
+        write_host(self.root, "apps/tray", "qol-tray", "3.16.0")
         with self.assertRaises(RuntimeError):
             pv.discover_release_units(self.root, package_map("qol-tray"), "does-not-exist")
 
@@ -221,7 +281,7 @@ class ApplyHostPlanTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_bumps_cargo_and_lock_without_touching_plugin_manifest(self):
-        crate = write_host(self.root, "apps/qol-tray", "qol-tray", "3.16.0")
+        crate = write_host(self.root, "apps/tray", "qol-tray", "3.16.0")
         (self.root / "Cargo.lock").write_text(
             '[[package]]\nname = "qol-tray"\nversion = "3.16.0"\n'
         )
@@ -278,7 +338,7 @@ class VersionBumpCommitTests(unittest.TestCase):
         git(self.root, "init", "--quiet")
         git(self.root, "config", "user.name", "Fixture")
         git(self.root, "config", "user.email", "fixture@example.invalid")
-        write_host(self.root, "apps/qol-tray", "qol-tray", "3.40.5")
+        write_host(self.root, "apps/tray", "qol-tray", "3.40.5")
         write_plugin(
             self.root / "plugins",
             "fixture",
@@ -328,7 +388,7 @@ class VersionBumpCommitTests(unittest.TestCase):
 
     def test_accepts_matching_release_unit_and_lock_versions(self):
         changes = [
-            ("apps/qol-tray/Cargo.toml", "3.40.5", "3.40.6"),
+            ("apps/tray/Cargo.toml", "3.40.5", "3.40.6"),
             ("plugins/fixture/Cargo.toml", "1.2.3", "1.3.0"),
             ("plugins/fixture/plugin.toml", "1.2.3", "1.3.0"),
             ("Cargo.lock", "3.40.5", "3.40.6"),
@@ -344,9 +404,9 @@ class VersionBumpCommitTests(unittest.TestCase):
         )
 
     def test_rejects_manifest_changes_beyond_versions(self):
-        self.replace("apps/qol-tray/Cargo.toml", "3.40.5", "3.40.6")
+        self.replace("apps/tray/Cargo.toml", "3.40.5", "3.40.6")
         self.replace("Cargo.lock", "3.40.5", "3.40.6")
-        with (self.root / "apps/qol-tray/Cargo.toml").open("a") as handle:
+        with (self.root / "apps/tray/Cargo.toml").open("a") as handle:
             handle.write('description = "changed"\n')
         sha = self.commit()
 
@@ -363,12 +423,71 @@ class VersionBumpCommitTests(unittest.TestCase):
             pv.verified_version_bump_parent(self.root, sha)
 
     def test_rejects_non_bot_commits(self):
-        self.replace("apps/qol-tray/Cargo.toml", "3.40.5", "3.40.6")
+        self.replace("apps/tray/Cargo.toml", "3.40.5", "3.40.6")
         self.replace("Cargo.lock", "3.40.5", "3.40.6")
         sha = self.commit(bot=False)
 
         with self.assertRaisesRegex(RuntimeError, "not an exact"):
             pv.verified_version_bump_parent(self.root, sha)
+
+
+class RootManifestImpactTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        git(self.root, "init", "--quiet")
+        git(self.root, "config", "user.name", "Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        self.write_root(
+            '[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n\n'
+            "[profile.dev.package.png]\nopt-level = 2\n"
+        )
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "feat: baseline")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_root(self, text: str) -> None:
+        (self.root / "Cargo.toml").write_text(text)
+
+    def commit(self) -> str:
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", "chore: root manifest")
+        return git(self.root, "rev-parse", "HEAD")
+
+    def test_root_profile_change_affects_all(self):
+        self.write_root(
+            '[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n\n'
+            "[profile.dev.package.png]\nopt-level = 1\n"
+        )
+        sha = self.commit()
+
+        impact = pv.root_manifest_impact(self.root, sha)
+
+        self.assertTrue(impact.affects_all)
+        self.assertEqual(impact.dependencies, frozenset())
+
+    def test_root_profile_entry_removal_affects_all(self):
+        self.write_root('[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n')
+        sha = self.commit()
+
+        impact = pv.root_manifest_impact(self.root, sha)
+
+        self.assertTrue(impact.affects_all)
+
+    def test_root_workspace_dependency_change_is_classified(self):
+        self.write_root(
+            '[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n\n'
+            '[workspace.dependencies]\nqol-fs = { path = "libs/fs" }\n\n'
+            "[profile.dev.package.png]\nopt-level = 2\n"
+        )
+        sha = self.commit()
+
+        impact = pv.root_manifest_impact(self.root, sha)
+
+        self.assertFalse(impact.affects_all)
+        self.assertEqual(impact.dependencies, frozenset({"qol-fs"}))
 
 
 class HighestVersionTagTests(unittest.TestCase):
@@ -377,16 +496,32 @@ class HighestVersionTagTests(unittest.TestCase):
             (["qol-tray-v3.16.0"], "qol-tray-v", "qol-tray-v3.16.0"),
             (["qol-tray-v3.9.0", "qol-tray-v3.16.0", "qol-tray-v3.10.1"], "qol-tray-v", "qol-tray-v3.16.0"),
             ([], "qol-tray-v", None),
-            (["plugin-alt-tab-v1.0.0"], "qol-tray-v", None),
+            (["qol-alt-tab-v1.0.0"], "qol-tray-v", None),
             (["qol-tray-v3.16.0", "qol-tray-vbogus"], "qol-tray-v", "qol-tray-v3.16.0"),
         ]
         for tags, prefix, expected in cases:
             self.assertEqual(pv.highest_version_tag(tags, prefix), expected, f"tags={tags}")
 
 
+class SelectionMatchesTests(unittest.TestCase):
+    def test_matches_id_and_short_name_forms(self):
+        cases = [
+            ("qol-lights", "qol-lights", True),
+            ("qol-lights", "lights", True),
+            ("qol-lights", "plugin-lights", True),
+            ("qol-lights", "qol-shot", False),
+            ("plugin-lights", "lights", True),
+            ("lights", "qol-lights", True),
+            ("lights", "qol-shot", False),
+        ]
+        for plugin_id, selected, expected in cases:
+            with self.subTest(plugin_id=plugin_id, selected=selected):
+                self.assertEqual(pv.selection_matches(plugin_id, selected), expected)
+
+
 class ReservedPluginIdsTests(unittest.TestCase):
     def test_auto_excluded_derives_from_qol_conventions(self):
-        self.assertEqual(pv.AUTO_EXCLUDED_PLUGIN_IDS, {"plugin-template"})
+        self.assertEqual(pv.AUTO_EXCLUDED_PLUGIN_IDS, {"qol-template"})
 
 
 if __name__ == "__main__":

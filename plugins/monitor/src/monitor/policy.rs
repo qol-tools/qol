@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
-    DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome, HDR_REASON,
-    MODES_REASON,
+    DisplayMode, DisplaySnapshot, GammaState, GammaStateControl, HdrState, MonitorError,
+    RestoreOutcome, HDR_REASON, MODES_REASON,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,19 +92,28 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> PolicyControl<D, G> {
         }
     }
 
-    fn set_auto(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
+    fn set_auto(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Option<Tint>,
+    ) -> Result<(), MonitorError> {
+        let gamma = || match tint {
+            Some(tint) => self.gamma.set_gamma_adjustment(handle, value, tint),
+            None => self.gamma.set_brightness(handle, value),
+        };
         if self.ddc.writes_dropped(handle.connector()) {
-            return self.gamma.set_brightness(handle, value);
+            return gamma();
         }
         match self.ddc.set_brightness(handle, value) {
             Ok(()) => {
                 if self.ddc.writes_dropped(handle.connector()) {
-                    self.gamma.set_brightness(handle, value)
+                    gamma()
                 } else {
                     Ok(())
                 }
             }
-            Err(_) => self.gamma.set_brightness(handle, value),
+            Err(_) => gamma(),
         }
     }
 
@@ -127,6 +137,10 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> PolicyControl<D, G> {
 impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for PolicyControl<D, G> {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
         self.ddc.enumerate()
+    }
+
+    fn snapshot(&self) -> Result<Vec<DisplaySnapshot>, MonitorError> {
+        self.ddc.snapshot()
     }
 
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
@@ -163,8 +177,45 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for Policy
             )),
             BrightnessPolicy::Gamma => self.gamma.set_brightness(handle, value),
             BrightnessPolicy::Ddc => self.ddc.set_brightness(handle, value),
-            BrightnessPolicy::Auto => self.set_auto(handle, value),
+            BrightnessPolicy::Auto => self.set_auto(handle, value, None),
         }
+    }
+
+    fn set_brightness_with_tint(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        match self.selection(handle.id()) {
+            BrightnessPolicy::Gamma => self.gamma.set_gamma_adjustment(handle, value, tint),
+            BrightnessPolicy::Auto => self.set_auto(handle, value, Some(tint)),
+            BrightnessPolicy::Ddc | BrightnessPolicy::Off => self.set_brightness(handle, value),
+        }
+    }
+
+    fn set_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+        self.gamma.set_tint(handle, tint)
+    }
+
+    fn set_gamma_adjustment(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+    ) -> Result<(), MonitorError> {
+        self.gamma.set_gamma_adjustment(handle, value, tint)
+    }
+
+    fn set_gamma_adjustment_guarded(
+        &self,
+        handle: &DisplayHandle,
+        value: u8,
+        tint: Tint,
+        expected: u64,
+    ) -> Result<(), MonitorError> {
+        self.gamma
+            .set_gamma_adjustment_guarded(handle, value, tint, expected)
     }
 
     fn get_gamma(&self, handle: &DisplayHandle) -> Result<GammaState, MonitorError> {
@@ -344,6 +395,7 @@ mod tests {
         warned: Arc<Mutex<bool>>,
         restore_outcome: Arc<Mutex<RestoreOutcome>>,
         restore_calls: Arc<Mutex<usize>>,
+        tints: Arc<Mutex<Vec<Tint>>>,
     }
 
     impl FakeGamma {
@@ -355,6 +407,7 @@ mod tests {
                 warned: Arc::new(Mutex::new(false)),
                 restore_outcome: Arc::new(Mutex::new(RestoreOutcome::Restored)),
                 restore_calls: Arc::new(Mutex::new(0)),
+                tints: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -389,6 +442,11 @@ mod tests {
         fn set_brightness(&self, _handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
             *self.sets.lock().unwrap() += 1;
             *self.value.lock().unwrap() = value;
+            Ok(())
+        }
+
+        fn set_tint(&self, _handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
+            self.tints.lock().unwrap().push(tint);
             Ok(())
         }
 
@@ -450,6 +508,7 @@ mod tests {
             _handle: &DisplayHandle,
             _original: &crate::monitor::GammaTable,
             _last_value: u8,
+            _last_tint: Tint,
         ) -> crate::session::LutRestoreOutcome {
             crate::session::LutRestoreOutcome::Unavailable
         }
@@ -459,6 +518,7 @@ mod tests {
             _handle: &DisplayHandle,
             _original: &crate::monitor::GammaTable,
             _last_value: u8,
+            _last_tint: Tint,
         ) {
         }
     }
@@ -685,6 +745,14 @@ mod tests {
     }
 
     #[test]
+    fn a_control_without_a_display_backend_reports_no_displays() {
+        let ddc = FakeDdc::healthy(42);
+        assert!(ddc.snapshot().unwrap().is_empty());
+        let control = policy(FakeDdc::healthy(42), FakeGamma::new());
+        assert!(control.snapshot().unwrap().is_empty());
+    }
+
+    #[test]
     fn explicit_gamma_calls_route_to_the_gamma_backend() {
         let display = handle("id-1", "card0-DP-1");
         let gamma = FakeGamma::new();
@@ -693,6 +761,17 @@ mod tests {
         assert_eq!(control.gamma.set_counts(), 1);
         assert_eq!(control.gamma.value(), 33);
         assert_eq!(control.get_gamma(&display).unwrap().value, 33);
+    }
+
+    #[test]
+    fn tint_always_routes_to_gamma_even_under_ddc_policy() {
+        let control = policy(FakeDdc::healthy(40), FakeGamma::new());
+        let display = handle("id-1", "card0-DP-1");
+        control.select(display.id(), BrightnessPolicy::Ddc);
+        let tint = Tint::from_kelvin(3500);
+        control.set_tint(&display, tint).unwrap();
+        assert_eq!(control.gamma.tints.lock().unwrap().as_slice(), [tint]);
+        assert_eq!(control.ddc.set_counts(), 0);
     }
 
     #[test]

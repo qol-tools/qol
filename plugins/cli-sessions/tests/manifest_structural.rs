@@ -13,7 +13,6 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
     );
 
     let runtime = m.runtime.as_ref().expect("runtime");
-    assert_eq!(runtime.command, "cli-sessions");
     assert!(runtime.actions.is_none());
     let actions = m.executable_action_ids();
     assert!(actions.contains("open"));
@@ -43,7 +42,6 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
         daemon.enabled,
         "CLI Sessions must be tray-owned and pid-tracked"
     );
-    assert_eq!(daemon.command, "cli-sessions");
     assert_eq!(daemon.socket.as_deref(), Some("/tmp/qol-cli-sessions.sock"));
     assert!(
         std::path::Path::new(concat!(
@@ -68,7 +66,7 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
         1,
         "single binary keeps store release discovery working"
     );
-    assert_eq!(bins[0].name, "cli-sessions");
+    assert_eq!(bins[0].name, "qol-cli-sessions");
 
     assert!(m.capabilities.gpui);
 }

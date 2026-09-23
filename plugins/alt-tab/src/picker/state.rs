@@ -3,8 +3,8 @@ use crate::config::{AltTabConfig, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::picker::create::PickerInit;
 use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
-use crate::rendering::image_registry::{extend_with, replace_map, retain_or_release, REGISTRY};
 use gpui::{App, Window};
+use qol_gpui::image_registry::{extend_with, replace_map, retain_or_release, REGISTRY};
 
 pub(crate) struct PickerState {
     pub(crate) windows: Vec<WindowInfo>,

@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-monitor"
+id = "qol-monitor"
 uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
 name = "Monitor"
 description = "Display brightness, gamma, and mode control"
-version = "0.6.0"
+version = "0.16.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "plugin-monitor"
+command = "qol-monitor"
 
 [action.brightness-up]
 label = "Brightness Up"
@@ -24,6 +24,22 @@ continuous = true
 label = "Set Brightness"
 args = ["set_brightness"]
 
+[action.set_mode]
+label = "Set Display Mode"
+args = ["set-mode"]
+
+[action.set_primary]
+label = "Set Primary Display"
+args = ["primary"]
+
+[action.arrange]
+label = "Arrange Displays"
+args = ["arrange"]
+
+[action.apply_layout]
+label = "Apply positions"
+args = ["apply-layout"]
+
 [action.apply]
 label = "Apply Preferred Brightness"
 args = ["apply"]
@@ -32,9 +48,22 @@ args = ["apply"]
 label = "Reload Monitor Config"
 args = ["reload"]
 
+[action.night_toggle]
+label = "Toggle Night Mode"
+args = ["night_toggle"]
+
+[action.night_on]
+label = "Night Mode On"
+args = ["night_on"]
+
+[action.night_off]
+label = "Night Mode Off"
+args = ["night_off"]
+
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [capabilities]
@@ -43,7 +72,7 @@ doctor = true
 
 [daemon]
 enabled = true
-command = "plugin-monitor"
+command = "qol-monitor"
 socket = "/tmp/qol-plugin-monitor.sock"
 
 [menu]
@@ -51,6 +80,6 @@ label = "Monitor"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-monitor"
-repo = "qol-tools/plugin-monitor"
-pattern = "plugin-monitor-{os}-{arch}"
+name = "qol-monitor"
+repo = "qol-tools/qol-monitor"
+pattern = "qol-monitor-{os}-{arch}"

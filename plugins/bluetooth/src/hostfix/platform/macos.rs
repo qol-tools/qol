@@ -24,8 +24,8 @@ pub(crate) fn restart_service() -> Result<()> {
     bail!("Bluetooth host fixes have no macOS backend yet")
 }
 
-pub(crate) fn read_autostart() -> Option<String> {
-    None
+pub(crate) fn read_autostart() -> Result<Option<String>> {
+    Ok(None)
 }
 
 pub(crate) fn write_autostart(_content: &str) -> Result<()> {

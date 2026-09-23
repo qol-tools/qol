@@ -1,0 +1,46 @@
+[package]
+name = "qol-shot"
+version = "1.69.1"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+qol-apps.workspace = true
+qol-color.workspace = true
+qol-config.workspace = true
+qol-conventions.workspace = true
+qol-fs.workspace = true
+qol-plugin-daemon.workspace = true
+qol-headless.workspace = true
+qol-process.workspace = true
+qol-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+gpui.workspace = true
+qol-cinnamon.workspace = true
+qol-gpui.workspace = true
+qol-hotkeys.workspace = true
+qol-platform.workspace = true
+qol-plugin-api.workspace = true
+smallvec = "1.13"
+workspace-hack.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+qol-audio.workspace = true
+x11rb = { workspace = true, features = ["shm", "xfixes"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

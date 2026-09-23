@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
-import { mergeStep } from "./lib/merge.js";
+import { qolMemoryStore, researchOutputRoot, researchRunDir } from "./lib/store-path.js";
+import { mergeUnits } from "./lib/merge.js";
 import { countPendingCandidates } from "./lib/retrieval-log.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
@@ -32,7 +32,13 @@ if (!snapRun) {
   process.exit(1);
 }
 
-mergeStep(STORE_ROOT, snapRun);
+const snapUnits = readFileSync(join(researchRunDir("snapshot", snapRun), "snapshot.jsonl"), "utf8")
+  .trim()
+  .split("\n")
+  .filter(Boolean)
+  .map((l) => JSON.parse(l));
+const { merged, added } = mergeUnits(STORE_ROOT, snapUnits);
+console.log(`[ingest] merge done (${merged.length} units in store, ${added.length} new from run ${snapRun})`);
 
 const decArgs = [join(BASE, "decisions.mjs"), "--snapshot-run", snapRun];
 const decEnv = NO_LLM ? { ...process.env, QOL_MEMORY_MODEL_DISABLE: "1" } : process.env;
@@ -84,7 +90,7 @@ const report = {
     verdict: grab(verdictOut, /verdict-eval \| ([^\n]+)/),
   },
 };
-const outDir = join(STORE_ROOT, "ingest");
+const outDir = join(researchOutputRoot(), "ingest-reports");
 mkdirSync(outDir, { recursive: true });
 const outPath = join(outDir, `report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
 writeFileSync(outPath, JSON.stringify(report, null, 2));

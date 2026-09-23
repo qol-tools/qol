@@ -1,0 +1,404 @@
+use anyhow::{Context, Result};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::daemon::{DaemonEvent, EventBus};
+use crate::features::plugin_store::release_integrity;
+
+use super::super::{latest_version, verify_host_update, GITHUB_REPO};
+use super::unix;
+use super::InstallKind;
+use crate::installer::platform::macos::codesign;
+
+const APP_BUNDLE_NAME: &str = "QoL Tray.app";
+const MACOS_RELEASE_ASSET: &str = "qol-tray-macos-universal.tar.gz";
+
+fn extract_tar_gz_dir(archive: &Path, dir_name: &str) -> Result<PathBuf> {
+    unix::extract_tar_gz_entry(archive, dir_name, true)
+}
+
+pub(super) fn detect_install_kind() -> InstallKind {
+    let executable = std::env::current_exe()
+        .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
+        .ok();
+    let executable = executable
+        .as_deref()
+        .and_then(|path| path.to_str())
+        .unwrap_or_default();
+    let home = dirs::home_dir().and_then(|path| path.to_str().map(String::from));
+    InstallKind::for_path(
+        executable,
+        home.as_deref(),
+        is_user_app_bundle(executable, home.as_deref()),
+    )
+}
+
+fn is_user_app_bundle(executable: &str, home: Option<&str>) -> bool {
+    executable.contains(".app/Contents/MacOS/")
+        && home.is_some_and(|home| executable.starts_with(home))
+}
+
+fn find_app_bundle(exe_path: &Path) -> Option<PathBuf> {
+    let mut current = exe_path;
+    while let Some(parent) = current.parent() {
+        if let Some(name) = parent.file_name() {
+            if name.to_string_lossy().ends_with(".app") {
+                return Some(parent.to_path_buf());
+            }
+        }
+        current = parent;
+    }
+    None
+}
+
+fn replace_app_bundle(source_bundle: &Path, target_bundle: &Path) -> Result<()> {
+    let parent = target_bundle
+        .parent()
+        .context("Current app bundle has no parent directory")?;
+    let staging = staged_bundle_path(parent, target_bundle)?;
+    let backup = backup_bundle_path(parent, target_bundle)?;
+
+    cleanup_dir_if_exists(&staging);
+    cleanup_dir_if_exists(&backup);
+    copy_bundle_dir(source_bundle, &staging)?;
+
+    if !target_bundle.exists() {
+        fs::rename(&staging, target_bundle).with_context(|| {
+            format!(
+                "Failed to move staged bundle {} into place at {}",
+                staging.display(),
+                target_bundle.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    fs::rename(target_bundle, &backup).with_context(|| {
+        format!(
+            "Failed to move current bundle {} to backup {}",
+            target_bundle.display(),
+            backup.display()
+        )
+    })?;
+
+    let swap_result = fs::rename(&staging, target_bundle);
+    if let Err(error) = swap_result {
+        let rollback_result = fs::rename(&backup, target_bundle);
+        if let Err(rollback_error) = rollback_result {
+            anyhow::bail!(
+                "Failed to replace app bundle: {}; rollback failed: {}",
+                error,
+                rollback_error
+            );
+        }
+        anyhow::bail!("Failed to replace app bundle: {}", error);
+    }
+
+    cleanup_dir_if_exists(&backup);
+    Ok(())
+}
+
+fn staged_bundle_path(parent: &Path, target_bundle: &Path) -> Result<PathBuf> {
+    let name = target_bundle
+        .file_name()
+        .context("Current app bundle has no file name")?
+        .to_string_lossy();
+    Ok(parent.join(format!(".{}.updating.{}", name, unique_suffix())))
+}
+
+fn backup_bundle_path(parent: &Path, target_bundle: &Path) -> Result<PathBuf> {
+    let name = target_bundle
+        .file_name()
+        .context("Current app bundle has no file name")?
+        .to_string_lossy();
+    Ok(parent.join(format!(".{}.backup.{}", name, unique_suffix())))
+}
+
+fn unique_suffix() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{}.{}", std::process::id(), nanos)
+}
+
+fn cleanup_dir_if_exists(path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    let _ = fs::remove_dir_all(path);
+}
+
+fn copy_bundle_dir(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)
+        .with_context(|| format!("Failed to create {}", destination.display()))?;
+
+    for entry in walkdir::WalkDir::new(source) {
+        let entry = entry?;
+        let Ok(relative) = entry.path().strip_prefix(source) else {
+            continue;
+        };
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+
+        let target = destination.join(relative);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target)
+                .with_context(|| format!("Failed to create {}", target.display()))?;
+            continue;
+        }
+
+        fs::copy(entry.path(), &target).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                entry.path().display(),
+                target.display()
+            )
+        })?;
+        let permissions = fs::metadata(entry.path())?.permissions();
+        fs::set_permissions(&target, permissions)
+            .with_context(|| format!("Failed to set permissions on {}", target.display()))?;
+    }
+
+    Ok(())
+}
+
+pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
+    let install_kind = InstallKind::detect();
+    log::info!("Install kind: {install_kind:?}");
+    let dev_url = unix::dev_update_url();
+    let dev_override = dev_url.is_some();
+
+    if !dev_override {
+        match install_kind {
+            InstallKind::SystemWide => {
+                log::warn!(
+                    "Updating a system-wide installation — binary will be replaced in place"
+                );
+            }
+            InstallKind::Development => {
+                anyhow::bail!("Self-update is disabled in development builds")
+            }
+            InstallKind::UserLocal => {}
+        }
+    }
+
+    let work_dir = tempfile::Builder::new()
+        .prefix("qol-tray-update-")
+        .tempdir()?;
+    let dest = work_dir.path().join("update.tar.gz");
+    let expected_version = if dev_override {
+        None
+    } else {
+        Some(latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?)
+    };
+    let verified_asset = if let Some(version) = expected_version.as_deref() {
+        let release =
+            release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
+        Some(release_integrity::verified_asset(
+            &release,
+            MACOS_RELEASE_ASSET,
+        )?)
+    } else {
+        None
+    };
+    let url = dev_url
+        .or_else(|| {
+            verified_asset
+                .as_ref()
+                .map(|asset| asset.browser_download_url.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
+
+    log::info!("Downloading update from {}", url);
+    unix::download_asset(&url, &dest, &events).await?;
+    if let Some(asset) = &verified_asset {
+        release_integrity::verify_file(asset, &dest)?;
+    }
+
+    let current_exe = std::env::current_exe()?;
+    let current_bundle =
+        find_app_bundle(&current_exe).context("Current executable is not inside an app bundle")?;
+    let install_result = extract_tar_gz_dir(&dest, APP_BUNDLE_NAME).and_then(|bundle| {
+        let binary = bundle
+            .join("Contents")
+            .join("MacOS")
+            .join(qol_conventions::artifact::TRAY_HOST_BINARY_NAME);
+        verify_host_update(
+            &binary,
+            expected_version.as_deref(),
+            qol_artifact::ArtifactExpectation::with_compatible_target,
+        )?;
+        replace_app_bundle(&bundle, &current_bundle)
+    });
+    install_result?;
+
+    if dev_override || codesign::configured_identity().is_some() {
+        codesign::codesign_bundle(&current_bundle);
+    }
+
+    events.send(DaemonEvent::UpdateComplete);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    log::info!("Update installed, restarting...");
+    exec_restart_on_main_thread()?;
+    Ok(())
+}
+
+fn exec_restart_on_main_thread() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let binary = std::env::current_exe()?;
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+
+    extern "C" {
+        static _dispatch_main_q: std::ffi::c_void;
+        fn dispatch_async_f(
+            queue: *const std::ffi::c_void,
+            context: *mut std::ffi::c_void,
+            work: extern "C" fn(*mut std::ffi::c_void),
+        );
+    }
+
+    type ExecData = (PathBuf, Vec<std::ffi::OsString>);
+    let data = Box::into_raw(Box::new((binary, args))) as *mut std::ffi::c_void;
+
+    extern "C" fn do_exec(ctx: *mut std::ffi::c_void) {
+        let (binary, args) = unsafe { *Box::from_raw(ctx as *mut ExecData) };
+        eprintln!(
+            "[qol-tray] exec'ing: {} (exists={}, args={:?})",
+            binary.display(),
+            binary.exists(),
+            args
+        );
+        let error = std::process::Command::new(&binary).args(&args).exec();
+        eprintln!("[qol-tray] update exec restart failed: {error}");
+        std::process::exit(1);
+    }
+
+    unsafe {
+        dispatch_async_f(&_dispatch_main_q, data, do_exec);
+    }
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    anyhow::bail!("exec did not happen within expected time")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn create_app_bundle(root: &Path, contents: &[(&str, &str)]) -> PathBuf {
+        let app = root.join(APP_BUNDLE_NAME);
+        for (relative, body) in contents {
+            let path = app.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        app
+    }
+
+    #[test]
+    fn find_app_bundle_from_exe_path() {
+        let cases = [
+            (
+                "/a/Applications/Foo.app/Contents/MacOS/foo",
+                Some("/a/Applications/Foo.app"),
+            ),
+            ("/a/.local/bin/foo", None),
+            ("/usr/bin/foo", None),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                find_app_bundle(Path::new(path))
+                    .as_deref()
+                    .map(|p| p.to_str().unwrap()),
+                expected,
+                "path: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_release_asset_name_is_stable() {
+        assert_eq!(MACOS_RELEASE_ASSET, "qol-tray-macos-universal.tar.gz");
+    }
+
+    #[test]
+    fn user_app_bundle_requires_an_app_path_under_home() {
+        let cases = [
+            (
+                "/a/Applications/Foo.app/Contents/MacOS/foo",
+                Some("/a"),
+                true,
+            ),
+            (
+                "/Applications/Foo.app/Contents/MacOS/foo",
+                Some("/a"),
+                false,
+            ),
+            ("/a/.local/bin/foo", Some("/a"), false),
+            ("/a/Applications/Foo.app/Contents/MacOS/foo", None, false),
+        ];
+        for (executable, home, expected) in cases {
+            assert_eq!(
+                is_user_app_bundle(executable, home),
+                expected,
+                "executable={executable} home={home:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn replace_app_bundle_replaces_existing_bundle_contents() {
+        let root = TempDir::new().unwrap();
+        let source = create_app_bundle(
+            root.path().join("source").as_path(),
+            &[
+                ("Contents/MacOS/qol-tray", "new-binary"),
+                ("Contents/Info.plist", "new-plist"),
+            ],
+        );
+        let target = create_app_bundle(
+            root.path().join("target").as_path(),
+            &[
+                ("Contents/MacOS/qol-tray", "old-binary"),
+                ("Contents/Resources/old.txt", "old-resource"),
+            ],
+        );
+
+        replace_app_bundle(&source, &target).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("Contents/MacOS/qol-tray")).unwrap(),
+            "new-binary"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("Contents/Info.plist")).unwrap(),
+            "new-plist"
+        );
+        assert!(!target.join("Contents/Resources/old.txt").exists());
+    }
+
+    #[test]
+    fn replace_app_bundle_installs_when_target_is_missing() {
+        let root = TempDir::new().unwrap();
+        let source = create_app_bundle(
+            root.path().join("source").as_path(),
+            &[("Contents/MacOS/qol-tray", "new-binary")],
+        );
+        let target = root.path().join("Applications").join(APP_BUNDLE_NAME);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+        replace_app_bundle(&source, &target).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("Contents/MacOS/qol-tray")).unwrap(),
+            "new-binary"
+        );
+    }
+}

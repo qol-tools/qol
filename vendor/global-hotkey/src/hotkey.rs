@@ -30,6 +30,8 @@
 pub use keyboard_types::{Code, Modifiers};
 use std::{borrow::Borrow, fmt::Display, hash::Hash, str::FromStr};
 
+const KEYSYM_ID_FLAG: u32 = 0x8000;
+
 #[cfg(target_os = "macos")]
 pub const CMD_OR_CTRL: Modifiers = Modifiers::SUPER;
 #[cfg(not(target_os = "macos"))]
@@ -54,6 +56,9 @@ pub struct HotKey {
     pub mods: Modifiers,
     /// The hotkey key.
     pub key: Code,
+    /// The X11 keysym to grab instead of the one the key implies, for keys a
+    /// physical code cannot name on the user's layout.
+    pub keysym: Option<u32>,
     /// The hotkey id.
     pub id: u32,
 }
@@ -94,8 +99,18 @@ impl HotKey {
         Self {
             mods,
             key,
+            keysym: None,
             id: (mods.bits() << 16) | key as u32,
         }
+    }
+
+    /// Creates a hotkey on an X11 keysym, for keys whose position carries a
+    /// different symbol on the user's layout than any [`Code`] can name.
+    pub fn with_keysym(mods: Option<Modifiers>, keysym: u32) -> Self {
+        let mut hotkey = Self::new(mods, Code::Unidentified);
+        hotkey.keysym = Some(keysym);
+        hotkey.id = (hotkey.mods.bits() << 16) | KEYSYM_ID_FLAG | (keysym & 0x7fff);
+        hotkey
     }
 
     /// Returns the id associated with this hotKey
@@ -371,6 +386,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::empty(),
             key: Code::KeyX,
+            keysym: None,
             id: 0,
         }
     );
@@ -380,6 +396,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::CONTROL,
             key: Code::KeyX,
+            keysym: None,
             id: 0,
         }
     );
@@ -389,6 +406,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::SHIFT,
             key: Code::KeyC,
+            keysym: None,
             id: 0,
         }
     );
@@ -398,6 +416,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::SHIFT,
             key: Code::KeyC,
+            keysym: None,
             id: 0,
         }
     );
@@ -407,6 +426,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::SUPER | Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT,
             key: Code::ArrowUp,
+            keysym: None,
             id: 0,
         }
     );
@@ -415,6 +435,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::empty(),
             key: Code::Digit5,
+            keysym: None,
             id: 0,
         }
     );
@@ -423,6 +444,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::empty(),
             key: Code::KeyG,
+            keysym: None,
             id: 0,
         }
     );
@@ -432,6 +454,7 @@ fn test_parse_hotkey() {
         HotKey {
             mods: Modifiers::SHIFT,
             key: Code::F12,
+            keysym: None,
             id: 0,
         }
     );
@@ -444,6 +467,7 @@ fn test_parse_hotkey() {
             #[cfg(not(target_os = "macos"))]
             mods: Modifiers::CONTROL,
             key: Code::Space,
+            keysym: None,
             id: 0,
         }
     );

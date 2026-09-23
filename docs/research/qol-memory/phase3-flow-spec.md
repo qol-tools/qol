@@ -18,16 +18,16 @@ Deviation from the plan, decided by the architect: rows come pre-shaped from the
 
 | Lane | Owned paths |
 |---|---|
-| `flow-contract` | `libs/qol-plugin-api/src/manifest/schema.rs`, `libs/qol-plugin-api/src/manifest/validation/launcher_rules.rs` (new), `libs/qol-plugin-api/src/manifest/validation/mod.rs`, `libs/qol-plugin-api/src/manifest/validation/manifest_rules.rs`, `libs/qol-plugin-api/src/manifest/validation_tests.rs`, `libs/qol-plugin-api/src/manifest/mod.rs`, `libs/qol-plugin-api/src/launcher_flows/mod.rs` (new), `libs/qol-plugin-api/src/lib.rs`, `libs/qol-plugin-api/src/capability.rs`, `libs/qol-plugin-api/tests/capability_declarations_structural.rs`, `docs/plugin-contract.md` |
+| `flow-contract` | `libs/plugin-api/src/manifest/schema.rs`, `libs/plugin-api/src/manifest/validation/launcher_rules.rs` (new), `libs/plugin-api/src/manifest/validation/mod.rs`, `libs/plugin-api/src/manifest/validation/manifest_rules.rs`, `libs/plugin-api/src/manifest/validation_tests.rs`, `libs/plugin-api/src/manifest/mod.rs`, `libs/plugin-api/src/launcher_flows/mod.rs` (new), `libs/plugin-api/src/lib.rs`, `libs/plugin-api/src/capability.rs`, `libs/plugin-api/tests/capability_declarations_structural.rs`, `docs/plugin-contract.md` |
 | `flow-host` | `apps/qol-tray/src/features/launcher_apps/mod.rs`, `apps/qol-tray/src/features/plugin_store/server/plugin_handlers.rs` |
 | `flow-launcher` | everything under `plugins/launcher/src/`, `plugins/launcher/Cargo.toml` |
-| `flow-memory` | `plugins/qol-memory/plugin.toml`, `plugins/qol-memory/qol-runtime.toml`, `plugins/qol-memory/src/ask/rows.rs` (new), `plugins/qol-memory/src/ask/mod.rs` (only the `pub mod rows;` line), `plugins/qol-memory/src/app/request.rs`, `plugins/qol-memory/src/cli.rs` |
+| `flow-memory` | `plugins/memory/plugin.toml`, `plugins/memory/qol-runtime.toml`, `plugins/memory/src/ask/rows.rs` (new), `plugins/memory/src/ask/mod.rs` (only the `pub mod rows;` line), `plugins/memory/src/app/request.rs`, `plugins/memory/src/cli.rs` |
 
 No two lanes share a file. Lanes compile only after the fan-in; write against the signatures here, not against the current tree.
 
 ## 3. Lane `flow-contract`
 
-### 3.1 `libs/qol-plugin-api/src/manifest/schema.rs`
+### 3.1 `libs/plugin-api/src/manifest/schema.rs`
 
 Add after `ShortcutDeclaration` handling, before `PluginManifest`:
 
@@ -61,7 +61,7 @@ pub struct LauncherSpec {
 
 `RowActionSpec` is re-exported from `qol_config::contract` (contract/mod.rs:15 `pub use v1::{...}`); verify the name is in that list and use the shortest existing public path.
 
-### 3.2 `libs/qol-plugin-api/src/manifest/validation/launcher_rules.rs` (new)
+### 3.2 `libs/plugin-api/src/manifest/validation/launcher_rules.rs` (new)
 
 ```rust
 pub(super) fn validate_optional_launcher(
@@ -95,7 +95,7 @@ Register the module in `validation/mod.rs` the way the sibling rule modules are 
 
 Tests in `validation_tests.rs` (use the existing `validate_toml` helper and `base_manifest()` style): `launcher_flow_requires_query`, `launcher_flow_rejects_invalid_query_name`, `launcher_app_rejects_query_and_row_actions`, `launcher_row_action_must_be_declared`, `launcher_flow_parses_and_validates` (a full `[launcher]` flow section with one `[[launcher.row_actions]]` naming a catalogued action). For `validate_launcher_runtime`: `launcher_runtime_rejects_undeclared_query` (error text contains `launcher flow query not declared: rows`), `launcher_runtime_requires_query_input`, `launcher_runtime_accepts_declared_query` (build the `RuntimeSpec` with `qol_config::contract::parse_runtime_spec_str`, runtime.rs:193).
 
-### 3.3 `libs/qol-plugin-api/src/launcher_flows/mod.rs` (new), `lib.rs`
+### 3.3 `libs/plugin-api/src/launcher_flows/mod.rs` (new), `lib.rs`
 
 ```rust
 pub const FLOWS_FILE_NAME: &str = "launcher-flows.json";
@@ -115,7 +115,7 @@ pub fn write_flows(path: &Path, entries: &[FlowEntry]) -> std::io::Result<()>
 pub fn read_flows(path: &Path) -> Vec<FlowEntry>
 ```
 
-- `flows_path` = `qol_config::data_dir()` (libs/qol-config/src/lib.rs:38) joined with `FLOWS_FILE_NAME`.
+- `flows_path` = `qol_config::data_dir()` (libs/config/src/lib.rs:38) joined with `FLOWS_FILE_NAME`.
 - `write_flows` creates the parent directory, writes pretty JSON (an array) to `<path>.tmp` and renames it over `path`.
 - `read_flows` returns an empty vector when the file is missing or unparseable; it never panics.
 - `lib.rs` adds `pub mod launcher_flows;`.
@@ -284,7 +284,7 @@ Only if a needed crate is missing: `serde_json` and `qol-config` are already wor
 
 ## 6. Lane `flow-memory`
 
-### 6.1 `plugins/qol-memory/qol-runtime.toml`
+### 6.1 `plugins/memory/qol-runtime.toml`
 
 Add after `[query.continue]`:
 
@@ -297,7 +297,7 @@ input = { query = "question typed in the launcher" }
 
 Not an agent tool.
 
-### 6.2 `plugins/qol-memory/plugin.toml`
+### 6.2 `plugins/memory/plugin.toml`
 
 Add after `[capabilities]`:
 
@@ -309,7 +309,7 @@ prompt = "Ask memory"
 query = "rows"
 ```
 
-### 6.3 `plugins/qol-memory/src/ask/rows.rs` (new), `ask/mod.rs`
+### 6.3 `plugins/memory/src/ask/rows.rs` (new), `ask/mod.rs`
 
 ```rust
 pub const MAX_ROWS: usize = 8;
@@ -338,7 +338,7 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
 
 Tests in `rows.rs`: `title_of_collapses_and_caps`, `from_output_orders_answer_recalled_skills_and_caps` (build the `AskOutput` with `serde_json::from_value` over a JSON fixture; units and notes layers constructed directly).
 
-### 6.4 `plugins/qol-memory/src/app/request.rs`
+### 6.4 `plugins/memory/src/app/request.rs`
 
 Add `"rows" => rows(state, &request.input)` to the dispatch match (request.rs:17-22).
 
@@ -350,7 +350,7 @@ fn rows(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value>
 
 Test `request_rows_returns_the_answer_row_first`: same fixture as `request_capture_from_text_is_idempotent_and_recallable` (four filler units plus the 14-rare-word capture), then a `rows` request with that text answers `rows[0].kind == "answer"` and `rows[0].title == title_of(text)`; `request_rows_rejects_empty_query`.
 
-### 6.5 `plugins/qol-memory/src/cli.rs`
+### 6.5 `plugins/memory/src/cli.rs`
 
 New verb `rows`: usage `qol-memory rows "<query>" [--store PATH]`, about `Print the launcher rows for a question.`, detail `Rows are the answer, the recalled units and the skill hits, in that order.` Socket first exactly like `continue_payload` (cli.rs:682-694): `crate::app::send_request("rows", json!({ "query": query }))` when `--store` is absent, falling back in-process on an unreachable daemon: `Store::resolve`, `store.read_units()?`, `store.read_notes()?`, the alias map the way `ask` loads it, `crate::ask::run_with_layers` (ask/mod.rs:282) with the same `AskRequest` as 6.4, then `from_output`. Plain output: one line per row, `title` then a tab then the subtitle (empty when absent). JSON output: the same object 6.4 returns. Register the verb in the command list and `help`; usage errors follow the `ask` conventions (missing query -> usage, exit 64).
 

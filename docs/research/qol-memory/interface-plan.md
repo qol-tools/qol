@@ -40,17 +40,17 @@ Phase 5 is optional and blocked on a design decision (section 8, item 9).
 
 ### 3.1 Facts the design rests on
 
-- The tray is axum 0.8 bound to `127.0.0.1:42700` (`apps/qol-tray/src/features/plugin_store/server/mod.rs:56-97`, `libs/qol-conventions/src/lib.rs:8`).
+- The tray is axum 0.8 bound to `127.0.0.1:42700` (`apps/qol-tray/src/features/plugin_store/server/mod.rs:56-97`, `libs/conventions/src/lib.rs:8`).
 - Token auth is `require_api_access` (`server/security.rs:47-62`): header `x-qol-token` or cookie fragment, applied to the `/api` nest; `require_local_host` wraps the whole app.
 - Queries dispatch through `action_executor::dispatch_query` (`apps/qol-tray/src/plugins/action_executor/mod.rs:210-250`) with no input and a 750 ms timeout; actions go through `execute_action_with_input`.
-- The daemon wire type already carries input: `DaemonRequest { action, input: Value }` (`libs/qol-runtime/src/protocol.rs:10-16`), one JSON line per request over the plugin socket.
-- Query and action specs live in `libs/qol-config/src/contract/runtime.rs` (`QuerySpec` :33, `ActionSpec` :24); unknown fields are ignored, so new optional fields are backward compatible.
+- The daemon wire type already carries input: `DaemonRequest { action, input: Value }` (`libs/runtime/src/protocol.rs:10-16`), one JSON line per request over the plugin socket.
+- Query and action specs live in `libs/config/src/contract/runtime.rs` (`QuerySpec` :33, `ActionSpec` :24); unknown fields are ignored, so new optional fields are backward compatible.
 - No JSON-RPC or MCP code exists in `apps/` or `libs/`; `tools/qol-cli/src/commands/sessions/mcp.rs` hand-rolls JSON-RPC 2.0 over stdio with tool specs in `contract.rs`.
 - Harness support for remote HTTP MCP: Claude Code (`type: "http"`, `url`, `headers` or `headersHelper`), Codex (`[mcp_servers.<name>] url`, `http_headers`, `env_http_headers`, `bearer_token_env_var`), pi via `pi-mcp-adapter` (`url`, `headers` with `!command` values, `requestHeadersCommand`), kimi (`url`, `headers`, `bearerTokenEnvVar`).
 
 ### 3.2 Contract change
 
-File: `libs/qol-config/src/contract/runtime.rs`.
+File: `libs/config/src/contract/runtime.rs`.
 
 - `QuerySpec` gains `agent_tool: bool` (default false), `tool_description: Option<String>`, `input: Option<IndexMap<String, String>>` (same shape as `ActionSpec.input`: parameter name to description).
 - `ActionSpec` gains `agent_tool: bool` and `tool_description: Option<String>`.
@@ -61,7 +61,7 @@ The exposure gate is the flag on the runable, not a `[capabilities]` key; capabi
 
 ### 3.3 Shared protocol lib
 
-New crate `libs/qol-mcp`, transport-agnostic, no tokio, no axum.
+New crate `libs/mcp`, transport-agnostic, no tokio, no axum.
 
 - `jsonrpc`: `Request`, `Response`, `Notification`, `ErrorCode` (`-32700`, `-32600`, `-32601`, `-32602`), one message per value.
 - `ToolSpec { name, description, input_schema: Value }` and `ToolResult { content: Vec<Content>, structured: Option<Value>, is_error: bool }`.
@@ -112,17 +112,17 @@ Acceptance:
 - Write path is JS: `snapshot.mjs` walks `~/.pi/agent/sessions` and `~/.claude/projects` (`snapshot.mjs:16-17`), `lib/merge.js` dedupes by `unitKey` and rewrites `units.jsonl` sealed, `notes.mjs` is a pure trigger extractor, `decisions.mjs` is the only LLM consumer.
 - Detection is not incremental: every run re-walks and re-parses; `ingest.jsonl` records size, mtime, and sha256 per file.
 - The pi extension appends live units to `units.jsonl` itself and triggers `decisions.mjs --live` on compaction with a 15 min debounce.
-- The daemon pattern to copy is qol-voice for stateful request handling (`run_stateful_request_listener`, `plugins/qol-voice/src/app/mod.rs:37-58`) and cli-sessions for lifecycle (`plugins/cli-sessions/plugin.toml:34-38`, `daemon/actions.rs:5-8`, socket via `QOL_TRAY_DAEMON_SOCKET`).
+- The daemon pattern to copy is qol-voice for stateful request handling (`run_stateful_request_listener`, `plugins/voice/src/app/mod.rs:37-58`) and cli-sessions for lifecycle (`plugins/cli-sessions/plugin.toml:34-38`, `daemon/actions.rs:5-8`, socket via `QOL_TRAY_DAEMON_SOCKET`).
 - No surveyed daemon implements idle exit; the host-death watchdog and `kill` are the lifecycle contract.
 
 ### 4.2 Manifest and contract
 
-`plugins/qol-memory/plugin.toml`:
+`plugins/memory/plugin.toml`:
 
 - `[daemon] enabled = true, command = "qol-memory", socket = "/tmp/qol-memory.sock"`.
 - `[capabilities] doctor = true` unchanged; no gpui.
 
-New `plugins/qol-memory/qol-runtime.toml`:
+New `plugins/memory/qol-runtime.toml`:
 
 - `[query.ask] agent_tool = true`, description "Retrieve settled facts from agent session history", `input = { query = "question in plain words", cwd = "optional working directory for scoping", exclude_session = "optional session id to exclude" }`.
 - `[query.status] agent_tool = true`, description "Store size, index freshness, pending candidates".
@@ -133,7 +133,7 @@ New `plugins/qol-memory/qol-runtime.toml`:
 ### 4.3 Crate layout
 
 ```
-plugins/qol-memory/src/
+plugins/memory/src/
   app/            daemon lifecycle: listener, request router, warm index cache, shutdown
   ingest/         transcript walkers (claude, pi), unit key, dedupe, sealed rewrite, ingest-state offsets
   watch/          qol-watch subscription over the transcript roots with debounce
@@ -170,13 +170,13 @@ Acceptance:
 - Entries are `AppEntry` and `FileEntry` unified by `ResultItem`/`ResultSource` (`plugins/launcher/src/discovery/search.rs:64-76`); ranking ends in `sort_by_score` with `manual_boost` in the score (`search.rs:230-248`).
 - State is fields on `LauncherState` (`src/ui/state.rs:43-59`); keys map to `InputEffect` (`src/ui/input.rs:6-14`); Enter runs `launch_selected` (`src/ui/controller.rs:152-194`).
 - The host already contributes entries to the launcher: `apps/qol-tray/src/features/launcher_apps/mod.rs` (`LauncherEntry` :12, `sync_entries` :97) delivered through `RuntimeEventKind::LauncherAppsSynced`.
-- The launcher reaches the host through `qol_plugin_api::host_exec` (`libs/qol-plugin-api/src/host_exec.rs:38-46`) with the token file.
+- The launcher reaches the host through `qol_plugin_api::host_exec` (`libs/plugin-api/src/host_exec.rs:38-46`) with the token file.
 - Window height adapts per render without an OS resize (`src/ui/render.rs:220-232`).
-- A dead `LauncherProviderCapability` marker exists in `libs/qol-plugin-api/src/capability.rs:58` and is consumed nowhere.
+- A dead `LauncherProviderCapability` marker exists in `libs/plugin-api/src/capability.rs:58` and is consumed nowhere.
 
 ### 5.2 Contract change
 
-File: `libs/qol-plugin-api/src/manifest/schema.rs`, new `launcher: Option<LauncherSpec>` on `PluginManifest`.
+File: `libs/plugin-api/src/manifest/schema.rs`, new `launcher: Option<LauncherSpec>` on `PluginManifest`.
 
 ```toml
 [launcher]
@@ -194,7 +194,7 @@ action = "copy_fact"
 
 - `kind = "app"` is the shim: the entry launches the plugin's settings or window exactly as the host app export does today.
 - `kind = "flow"` requires `query` to exist in the plugin's runtime contract with an `input` that has a `query` parameter; validated in a new `validate_launcher` called from `PluginManifest::validate()`.
-- `row_actions` reuse `RowActionSpec` from `libs/qol-config/src/contract/v1.rs:141-148`.
+- `row_actions` reuse `RowActionSpec` from `libs/config/src/contract/v1.rs:141-148`.
 - `LauncherProviderCapability` is removed in the same change; the manifest section replaces it.
 - Docs: `docs/plugin-contract.md` section 2.1.
 
@@ -236,8 +236,8 @@ Two lanes never share a file.
 
 Phase 1, round 1 (parallel):
 
-- `mcp-lib`: `libs/qol-mcp/**`, workspace `Cargo.toml` member line.
-- `mcp-contract`: `libs/qol-config/src/contract/runtime.rs`, its tests, `docs/plugin-contract.md`.
+- `mcp-lib`: `libs/mcp/**`, workspace `Cargo.toml` member line.
+- `mcp-contract`: `libs/config/src/contract/runtime.rs`, its tests, `docs/plugin-contract.md`.
 
 Phase 1, round 2:
 
@@ -246,10 +246,10 @@ Phase 1, round 2:
 
 Phase 2 (parallel with phase 1, own worktree):
 
-- `qm-daemon`: `plugins/qol-memory/src/app/**`, `src/cli.rs`, `src/lib.rs`, `plugin.toml`, `qol-runtime.toml`, `Cargo.toml`.
-- `qm-ingest`: `plugins/qol-memory/src/ingest/**`, `src/watch/**`, `src/continue_recall/**`, fixtures under `tests/fixtures/**`.
+- `qm-daemon`: `plugins/memory/src/app/**`, `src/cli.rs`, `src/lib.rs`, `plugin.toml`, `qol-runtime.toml`, `Cargo.toml`.
+- `qm-ingest`: `plugins/memory/src/ingest/**`, `src/watch/**`, `src/continue_recall/**`, fixtures under `tests/fixtures/**`.
 
-Phase 3, round 1: `flow-contract` (`libs/qol-plugin-api/src/manifest/schema.rs`, validation, `capability.rs`, docs).
+Phase 3, round 1: `flow-contract` (`libs/plugin-api/src/manifest/schema.rs`, validation, `capability.rs`, docs).
 Phase 3, round 2 (parallel): `flow-host` (`features/launcher_apps/**`, `plugin_handlers.rs` body route) and `flow-launcher` (`plugins/launcher/src/**`).
 
 Each lane brief carries the role word, the owned paths, this document's path, the prohibitions (edit only owned paths, no build, test, lint, format, or git commands, no code comments, no em-dash), and the report shape.

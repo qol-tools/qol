@@ -1,6 +1,6 @@
 [package]
-name = "plugin-bluetooth"
-version = "0.32.0"
+name = "qol-bluetooth"
+version = "0.44.0"
 edition = "2021"
 
 [dependencies]
@@ -10,6 +10,7 @@ serde_json.workspace = true
 qol-apps.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
+qol-fs.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
 qol-runtime.workspace = true
@@ -24,14 +25,15 @@ objc2.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-bluetooth.workspace = true
-qol-gpui.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
+dbus = "0.9"
+dbus-tokio = "0.7"
 futures = "0.3"
-qol-gpui.workspace = true
+qol-audio.workspace = true
 qol-process.workspace = true
-tokio = { version = "1.35", features = ["process", "rt", "signal", "sync", "time"] }
+tokio = { version = "1.35", features = ["macros", "process", "rt", "signal", "sync", "time"] }
 
 [build-dependencies]
 qol-conventions.workspace = true

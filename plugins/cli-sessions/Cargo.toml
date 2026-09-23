@@ -1,12 +1,12 @@
 [package]
-name = "plugin-cli-sessions"
-version = "0.53.0"
+name = "qol-cli-sessions"
+version = "0.64.1"
 edition = "2021"
 description = "Always-on-top overview of live CLI sessions (Claude Code, Codex, any command) for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [[bin]]
-name = "cli-sessions"
+name = "qol-cli-sessions"
 path = "src/main.rs"
 
 [dependencies]

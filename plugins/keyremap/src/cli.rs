@@ -9,7 +9,6 @@ use serde_json::json;
 use crate::platform::{ConfigInspection, Platform, PlatformAdapter, TrustStatus};
 
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "keyremap";
 
 pub(crate) fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app(Platform).run(args)
@@ -19,7 +18,9 @@ fn app<A>(adapter: A) -> HeadlessApp
 where
     A: PlatformAdapter,
 {
-    app_with_handlers(adapter, launch_settings_page)
+    app_with_handlers(adapter, || {
+        qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
+    })
 }
 
 fn app_with_handlers<A, Settings>(adapter: A, settings: Settings) -> HeadlessApp
@@ -32,13 +33,13 @@ where
     let toggle = adapter.clone();
     let kill = adapter.clone();
 
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run and control native key, mouse, and scroll remapping.")
         .default_command(["run"])
         .command(
             Command::new("run")
                 .about("Run the key-remap daemon and native event tap.")
-                .usage(format!("{BINARY_NAME} run"))
+                .usage(format!("{PLUGIN_ID} run"))
                 .detail("Loads and resolves config before enabling interception.")
                 .detail("Waits for Accessibility trust before installing CGEventTap.")
                 .output("Lifecycle diagnostics on stderr.")
@@ -52,7 +53,7 @@ where
             Command::new("reload")
                 .alias("--reload")
                 .about("Ask the running daemon to reload config atomically.")
-                .usage(format!("{BINARY_NAME} reload"))
+                .usage(format!("{PLUGIN_ID} reload"))
                 .output("The daemon delivery result on stderr.")
                 .exit_behavior("Exits zero whether or not a daemon is currently running.")
                 .run_result(move |context| {
@@ -64,7 +65,7 @@ where
             Command::new("toggle")
                 .alias("--toggle")
                 .about("Turn key remapping on or off.")
-                .usage(format!("{BINARY_NAME} toggle"))
+                .usage(format!("{PLUGIN_ID} toggle"))
                 .output("The new remapping state on stderr.")
                 .exit_behavior("Exits non-zero if the new state cannot be saved.")
                 .run_result(move |context| {
@@ -76,7 +77,7 @@ where
             Command::new("kill")
                 .alias("--kill")
                 .about("Ask the running daemon to shut down.")
-                .usage(format!("{BINARY_NAME} kill"))
+                .usage(format!("{PLUGIN_ID} kill"))
                 .output("The daemon delivery result on stderr.")
                 .exit_behavior("Exits zero whether or not a daemon is currently running.")
                 .run_result(move |context| {
@@ -88,15 +89,11 @@ where
         .doctor_checks(doctor_checks(adapter))
 }
 
-fn launch_settings_page() -> std::io::Result<()> {
-    qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
-}
-
 fn settings_command(settings: impl Fn() -> std::io::Result<()> + Send + Sync + 'static) -> Command {
     Command::new("settings")
         .alias("--settings")
         .about("Open the Key Remap settings page in qol-tray.")
-        .usage(format!("{BINARY_NAME} settings"))
+        .usage(format!("{PLUGIN_ID} settings"))
         .output("No stdout on success; opens the settings URL through the platform launcher.")
         .exit_behavior("Exits non-zero if the settings URL cannot be launched.")
         .run_result(move |_| Ok(result_for(settings())))

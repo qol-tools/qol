@@ -464,6 +464,20 @@ Every later tier plugs into this without redesign.
 
 ## 10. Iterations
 
+- 2026-09-14 store hygiene (branch store-hygiene): research outputs no
+  longer default into the memory store. snapshot.mjs writes runs under
+  reports/qol-memory/snapshot/ and its walk ledger to
+  reports/qol-memory/ingest.jsonl; eval/eval.mjs lands under
+  reports/qol-memory/eval/ (10 newest runs kept), skills-eval under
+  reports/qol-memory/skills-eval/, parity under reports/qol-memory/parity/,
+  ingest reports under reports/qol-memory/ingest-reports/, the candidates
+  harvest report at reports/qol-memory/candidates-report.json, the ask
+  manifest at reports/qol-memory/manifest.json, and distinctive.json at
+  reports/qol-memory/distinctive.json. Pinned research fixtures live under
+  reports/qol-memory/fixtures/ (snapshot pins 2026-08-10T21-38-02-273Z and
+  2026-08-12T18-46-58-129Z, notes pin 2026-08-13T16:31:40.844Z) and every
+  pinned-run reader resolves them there. --store and QOL_MEMORY_STORE keep
+  their meaning: the memory store, used only for memory data.
 - 2026-08-10: initial distillation. Vision, field survey, corpus facts, tier
   architecture, loop architecture, MVP seed (observability + eval).
 - 2026-08-10 (second pass): first loop-seed artifact landed, the corpus
@@ -741,13 +755,13 @@ Every later tier plugs into this without redesign.
     shape: plugin-memory, host-owned daemon (like alt-tab/lights/
     launcher/pointz).
     (2) HIGH - store must live under qol_config::data_dir()
-    ($XDG_DATA_HOME/qol-tray) via data_subdir("plugins/qol-memory"),
+    ($XDG_DATA_HOME/qol-tray) via data_subdir("plugins/memory"),
     not an unregistered qol-memory sibling (cli-sessions and qol-voice
     already do this). Also stop re-deriving XDG in every script - one
     resolver + QOL_MEMORY_STORE override.
     (3) HIGH - the tier1 Rust probe is a silo (own [workspace] under
-    docs/, not a monorepo member). Migrate to libs/qol-memory (or the
-    existing libs/qol-search candidate owner), declare candle/tokenizers
+    docs/, not a monorepo member). Migrate to libs/memory (or the
+    existing libs/search candidate owner), declare candle/tokenizers
     as root workspace deps gated like qol-voice, so CI builds/tests/
     clippys it.
     Also flagged: broker (s7) is NOT served today - status/retrieval
@@ -774,7 +788,7 @@ Every later tier plugs into this without redesign.
     70 / hybrid 70, notes 10/10, combined 21/30, held-out 12/16,
     coverage 30/30. Remaining foundation items: #2 daemon socket via the
     [daemon] contract (not /tmp/qol-memory.sock), #3 de-silo the tier1
-    probe into libs/qol-*.
+    probe into libs/*.
   - 2026-08-11 (ask surface + shared retrieval core): built the first
     usable consumer - ask.mjs wraps the JSON retrieval over the store.
     Reads redacted user units + derived notes, BM25-ranks units (snippet
@@ -1556,7 +1570,7 @@ Workflow rule (2026-08-14): one worktree = one remote branch per feature. New wo
 
 ## Plugin
 
-Plugin: `plugins/qol-memory` (id `qol-memory`, binary `qol-memory`, Rust port of the JS read path).
+Plugin: `plugins/memory` (id `qol-memory`, binary `qol-memory`, Rust port of the JS read path).
 
 Spec: `docs/research/qol-memory/plugin-mvp-scope.md`.
 

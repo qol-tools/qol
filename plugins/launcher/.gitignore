@@ -1,6 +1,6 @@
 /target
-launcher
-launcher.exe
+qol-launcher
+qol-launcher.exe
 *.db
 /.idea
 /.worktrees

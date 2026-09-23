@@ -1,12 +1,12 @@
 # Spec: qol-windowing macOS display enumeration
 
-`libs/qol-windowing/src/display/platform/macos.rs` is a stub returning
+`libs/windowing/src/display/platform/macos.rs` is a stub returning
 `DisplayError::UnsupportedPlatform`, which blocks all monitor-plugin work on
 macOS. Implement real enumeration.
 
 All work happens in this worktree on branch `windowing-macos-displays`.
-Scope: `libs/qol-windowing/src/display/platform/macos.rs` and, only if a
-framework link stanza is required, `libs/qol-windowing/Cargo.toml` /
+Scope: `libs/windowing/src/display/platform/macos.rs` and, only if a
+framework link stanza is required, `libs/windowing/Cargo.toml` /
 `build.rs`. Prefer `#[link(name = "CoreGraphics", kind = "framework")]`
 extern "C" declarations inside macos.rs; add NO new crate dependencies.
 Do not touch any other file.

@@ -4,7 +4,7 @@ Status: accepted 2026-08-27 (user). Engine = Rust port of the read path. Daemon 
 
 ## What the MVP is
 
-A monorepo plugin `plugins/qol-memory` (id `qol-memory`) whose binary `qol-memory` answers
+A monorepo plugin `plugins/memory` (id `qol-memory`) whose binary `qol-memory` answers
 `qol-memory ask "<query>"` from the existing store with output that is semantically identical to
 `node docs/research/qol-memory/ask.mjs "<query>"`. The Node scripts stay the write-path tooling
 (snapshot, notes, decisions, ingest, live capture) and the eval harness. The plugin owns the read
@@ -28,8 +28,8 @@ Acceptance gate (architect runs it, lanes never do):
   and `retrievals.jsonl`. `manifest.json` is written by ask.mjs only; the Rust binary never touches it.
 - `qol-headless` gives `Command::run_plain_text` and `Command::run_json` on the same command, a global `--json`
   flag (before or after the command path), `help` routing, and `DoctorCheck`/`DoctorCheckResult` (read
-  `libs/qol-headless/src/doctor/` for the exact API and `DoctorStatus` variants). `CommandContext::args()` carries
-  the tokens after the command path; confirm in `libs/qol-headless/src/lib.rs` before parsing.
+  `libs/headless/src/doctor/` for the exact API and `DoctorStatus` variants). `CommandContext::args()` carries
+  the tokens after the command path; confirm in `libs/headless/src/lib.rs` before parsing.
 - Deps already in `Cargo.lock`: `sha1 0.10`, `flate2 1`, `regex 1`, `serde`, `serde_json` (workspace). Nothing new
   is compiled into the workspace.
 - ask.mjs line 153 calls `readFile` which is not imported; the skills layer therefore always reports
@@ -51,7 +51,7 @@ Acceptance gate (architect runs it, lanes never do):
 ## Crate layout (qol-arch-code)
 
 ```text
-plugins/qol-memory/
+plugins/memory/
   plugin.toml  Cargo.toml  build.rs  README.md  LICENSE  .gitignore
   assets/concept-aliases.json      moved from docs/research/qol-memory/ (Lane E)
   assets/skills-glossary.json      moved from docs/research/qol-memory/ (Lane E)
@@ -480,16 +480,16 @@ missing: warn "no memory yet", fix "run a session with live capture or ingest a 
 units: Fresh ok, Stale warn "rebuilt on next ask", Missing warn), `skills_index` (Fresh ok; Stale warn, fix
 `node docs/research/qol-memory/skills.mjs`; Unavailable warn; missing warn), `retrieval_log` (size under cap ok,
 else warn), `aliases_valid` (`aliases::validate(CONCEPT_ALIASES_JSON)` empty: ok; else fail listing the errors).
-Use `DoctorCheckResult::ok/warn/fail` as the qol-headless API names them; read `libs/qol-headless/src/doctor/` first.
+Use `DoctorCheckResult::ok/warn/fail` as the qol-headless API names them; read `libs/headless/src/doctor/` first.
 
 ## Lane E: JS side, assets, parity harness
 
-Files: `docs/research/qol-memory/**` and `plugins/qol-memory/assets/**` only.
+Files: `docs/research/qol-memory/**` and `plugins/memory/assets/**` only.
 
 1. `git mv` is a git command and forbidden for lanes: copy `concept-aliases.json` and `skills-glossary.json` to
-   `plugins/qol-memory/assets/` and delete the originals with `rm`; the architect stages the rename.
+   `plugins/memory/assets/` and delete the originals with `rm`; the architect stages the rename.
 2. Update every reference (`ask.mjs`, `skills.mjs`, `test-alias.mjs`, any doc that names the path) to
-   `../../../plugins/qol-memory/assets/<file>` resolved from the script's own directory.
+   `../../../plugins/memory/assets/<file>` resolved from the script's own directory.
 3. Fix ask.mjs line 153 `readFile` -> `readFileSync`.
 4. Write `docs/research/qol-memory/parity.mjs`:
    - Inputs: `--bin PATH` (default `QOL_MEMORY_BIN` env, then `<repo>/target/debug/qol-memory`), `--store PATH`

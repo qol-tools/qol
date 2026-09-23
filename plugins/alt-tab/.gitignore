@@ -1,6 +1,6 @@
 /target
-alt-tab
-alt-tab.new
+qol-alt-tab
+qol-alt-tab.new
 /.vscode
 *.log
 scratch.rs

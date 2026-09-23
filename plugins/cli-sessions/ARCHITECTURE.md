@@ -1,6 +1,6 @@
 # Architecture
 
-`plugin-cli-sessions` watches the CLI sessions running in a terminal and shows
+`qol-cli-sessions` watches the CLI sessions running in a terminal and shows
 an always-on-top panel, one row per session, colored by how much each session
 wants your attention.
 
@@ -75,7 +75,7 @@ registry and presentation model.
 ### Adding a terminal host
 
 1. Implement the segregated terminal capability traits in
-   `libs/qol-terminal-sessions`.
+   `libs/terminal-sessions`.
 2. Register the backend in `TerminalSessionService`.
 3. Keep dashboard-specific selection and attention behavior in this plugin.
 
@@ -93,13 +93,17 @@ state (status + monotonic timers) and the current evidence, with one explicit
 precedence order:
 
 1. **Strong live work wins.** Descriptor `Working` (e.g. the Codex title) is
-   live regardless of the viewport. Screen `Working` (spinner in the recent
-   tail) is live while the screen is moving or a fresh transcript write landed
-   inside the settled stretch (`file_quiet_secs` shorter than the settle); a
-   settled spinner with no writes since settling is a stale leftover, not live
-   work. Descriptor `Ready` (the harness's own runtime state) wins over a
-   settled screen spinner, so a Codex "Ready" title never stays green on weak
-   freshness.
+   live regardless of the viewport, except when screen `NeedsInput` is strong
+   (rule 3): a settled, non-stale dialog then outranks it, and an alert
+   already given is retained while the dialog's screen stays settled and
+   `Live`, including after the transcript stops being fresh. The `Historical`
+   hold in rule 2 still precedes alerting. Screen `Working`
+   (spinner in the recent tail) is live while the screen is moving or a fresh
+   transcript write landed inside the settled stretch (`file_quiet_secs`
+   shorter than the settle); a settled spinner with no writes since settling
+   is a stale leftover, not live work. Descriptor `Ready` (the harness's own
+   runtime state) wins over a settled screen spinner, so a Codex "Ready"
+   title never stays green on weak freshness.
 2. **Historical viewport holds.** `viewport == Historical` (startup chrome)
    preserves the prior status and can never create attention. It is checked
    before any awaiting/blocked short-circuit, so a stale questionnaire in
@@ -126,8 +130,9 @@ precedence order:
    debounce). Weak file freshness never overrides authoritative runtime
    state: a descriptor `Ready` (the Codex title) completes on settle plus
    grace even while transcript writes stay fresh. First sightings never
-   complete. A prior `NeedsYou` state with no confirmed input settles to
-   `Unknown` after the same stable grace; it never becomes `YourTurn`.
+   complete. A prior `NeedsYou` state settles to `Unknown` after the same
+   stable grace once the settled live input screen is gone; the retained
+   alert keeps `NeedsYou` while it remains, and it never becomes `YourTurn`.
 6. **Generic shells stay busy-by-default.** A non-prompt generic pane is
    `Working` unless it is a declared service; at the prompt a command that ran
    past the grace window completes, a quick command returns to `Unknown`, and
@@ -231,7 +236,7 @@ Jumping to the next session that wants you must work when the panel is *not*
 focused (you are in an editor or another terminal), so it is not an in-view key -
 it is a qol-tray-bound action. The manifest declares a `next` catalog action plus
 a bindable `[[shortcuts]]` entry; a hotkey fires
-`cli-sessions next`, which forwards to the running daemon over its socket
+`qol-cli-sessions next`, which forwards to the running daemon over its socket
 (`Command::NextAttention`). The daemon focuses the next attention session's
 terminal window via the host and advances its selection cursor, so repeated
 presses cycle through just the rows that want you (`nav::next_attention`, pure and
@@ -277,7 +282,7 @@ The flap recorder only sees one direction: a *false positive* (a NeedsYou that
 self-clears). A *false negative* - a session that genuinely wants you but reads
 idle/working - has no temporal tell, so the daemon, whose own classification is
 the thing that is wrong, cannot detect it. Only you can. The `snapshot` action
-(`cli-sessions snapshot`, bindable to a hotkey) is that escape hatch: one press
+(`qol-cli-sessions snapshot`, bindable to a hotkey) is that escape hatch: one press
 dumps every live session's frame in the moment - screen, title, and the status
 the panel is currently showing - to `paths::snapshots_dir` in the same
 corpus-fixture shape (`snapshot::capture_all`). When the panel is wrong in any

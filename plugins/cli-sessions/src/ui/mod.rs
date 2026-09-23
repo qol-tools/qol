@@ -14,7 +14,7 @@ use gpui::{
     App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, WeakEntity, Window,
 };
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::surface::DragGestureState;
+use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::host::TerminalHost;
@@ -29,6 +29,8 @@ static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
 pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
     pub host: Arc<dyn TerminalHost + Send + Sync>,
+    title: String,
+    dismisser: SurfaceDismisser,
     selection: Selection,
     is_showing: bool,
     collapse_state: collapse::CollapseState,
@@ -36,7 +38,6 @@ pub struct SessionsView {
     key_hold: KeyHold,
     nav_guard: qol_gpui::phantom_nav::PhantomNavGuard,
     list_scroll: qol_gpui::scroll_list::SelectionScroll,
-    pinned: std::cell::RefCell<qol_gpui::pinned_order::PinnedOrder<SessionId>>,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
 }
@@ -46,14 +47,17 @@ impl SessionsView {
         registry: Arc<Mutex<Registry>>,
         host: Arc<dyn TerminalHost + Send + Sync>,
         corner: Corner,
+        dismisser: SurfaceDismisser,
         cx: &mut Context<Self>,
     ) -> Self {
+        let title = dismisser.current_title();
         Self {
             registry,
             host,
+            title,
+            dismisser,
             selection: Selection::default(),
             list_scroll: qol_gpui::scroll_list::SelectionScroll::new(),
-            pinned: std::cell::RefCell::new(qol_gpui::pinned_order::PinnedOrder::new()),
             is_showing: true,
             collapse_state: collapse::CollapseState::new(corner),
             drag_gesture: std::rc::Rc::new(std::cell::RefCell::new(DragGestureState::new(4.0))),
@@ -65,13 +69,7 @@ impl SessionsView {
     }
 
     pub fn rows(&self) -> Vec<crate::session::registry::SessionState> {
-        let sorted = self.registry.lock().map(|r| r.sorted()).unwrap_or_default();
-        let ids: Vec<SessionId> = sorted.iter().map(|row| row.id.clone()).collect();
-        let pinned = self.pinned.borrow_mut().apply(&ids);
-        pinned
-            .into_iter()
-            .filter_map(|id| sorted.iter().find(|row| row.id == id).cloned())
-            .collect()
+        self.registry.lock().map(|r| r.sorted()).unwrap_or_default()
     }
 
     pub fn is_showing(&self) -> bool {
@@ -79,9 +77,6 @@ impl SessionsView {
     }
 
     pub fn set_showing(&mut self, showing: bool) {
-        if showing && !self.is_showing {
-            self.pinned.borrow_mut().reset();
-        }
         self.is_showing = showing;
     }
 
@@ -121,14 +116,13 @@ impl SessionsView {
         true
     }
 
-    pub fn dismiss_with_reason(&mut self, reason: &'static str) -> bool {
+    pub fn dismiss_with_reason(&mut self, reason: &'static str, cx: &mut Context<Self>) -> bool {
         let _scope = qol_gpui::popup_window::reason_scope(reason);
-        let hidden = qol_gpui::popup_window::hide_window_by_title(WINDOW_TITLE);
-        if hidden {
-            self.is_showing = false;
-        }
-        trace::dismiss(reason, hidden);
-        hidden
+        let showing = self.is_showing;
+        self.is_showing = false;
+        self.dismisser.dismiss(cx);
+        trace::dismiss(reason, showing);
+        showing
     }
 
     fn key_repeat_guard(&mut self, key: &str) -> bool {
@@ -203,6 +197,7 @@ impl SessionsView {
         cx: &mut Context<Self>,
     ) {
         let host = self.host.clone();
+        let title = self.title.clone();
         trace::focus_start(reason, target.session_id());
         let result_id = target.session_id().clone();
         let retain_panel_focus = reason == "cycle-implementer";
@@ -215,7 +210,7 @@ impl SessionsView {
                         if retain_panel_focus {
                             let commit = CYCLE_FOCUS_GEN.fetch_add(1, Ordering::SeqCst) + 1;
                             qol_gpui::popup_window::reassert_focus_until_held(
-                                WINDOW_TITLE,
+                                &title,
                                 &CYCLE_FOCUS_GEN,
                                 commit,
                             );
@@ -229,15 +224,24 @@ impl SessionsView {
         .detach();
     }
 
-    pub fn acknowledge(&self, id: &SessionId) {
+    pub fn acknowledge(&mut self, id: &SessionId) {
         if let Ok(mut reg) = self.registry.lock() {
             if let Some(s) = reg.get_mut(id) {
+                let previous = s.status;
                 s.acknowledge();
+                if previous != s.status {
+                    self.selection.select(id.clone());
+                    qol_runtime::probe!(
+                        "CLI_SESSIONS_ACK",
+                        "id={id} previous={previous:?} status={:?}",
+                        s.status
+                    );
+                }
             }
         }
     }
 
-    pub fn acknowledge_selected(&self) {
+    pub fn acknowledge_selected(&mut self) {
         let order = self.order();
         if let Some(id) = self.selection.resolved(&order) {
             self.acknowledge(&id);
@@ -321,25 +325,16 @@ fn schedule_panel_bounds(
     on_failure: fn(&mut SessionsView, Bounds<Pixels>),
 ) {
     cx.spawn_in(window, async move |view, cx| {
-        let applied = apply_panel_bounds(bounds);
-        let _ = view.update_in(cx, |view, _window, cx| {
-            if !applied {
+        let _ = view.update_in(cx, |view, window, cx| {
+            let resized = view.dismisser.resize_window(bounds.size, window);
+            let moved = view.dismisser.reposition_window(bounds.origin);
+            if !(resized && moved) {
                 on_failure(view, bounds);
             }
             cx.notify();
         });
     })
     .detach();
-}
-
-fn apply_panel_bounds(bounds: Bounds<Pixels>) -> bool {
-    let locked = qol_gpui::popup_window::set_window_fixed_size_by_title(WINDOW_TITLE, bounds.size);
-    let synced = qol_gpui::popup_window::sync_window_layout_by_title(
-        WINDOW_TITLE,
-        bounds.origin,
-        bounds.size,
-    );
-    locked && synced
 }
 
 fn clamp_to_monitor(bounds: Bounds<Pixels>, cx: &mut Context<SessionsView>) -> Bounds<Pixels> {
@@ -378,12 +373,14 @@ mod tests {
 
     #[test]
     fn key_hold_accepts_fresh_presses_and_denies_repeats_until_release() {
-        let mut hold = KeyHold::default();
-        assert!(hold.press("enter"));
-        assert!(!hold.press("enter"));
-        assert!(!hold.press("enter"));
-        hold.release("enter");
-        assert!(hold.press("enter"));
+        for key in ["enter", "a"] {
+            let mut hold = KeyHold::default();
+            assert!(hold.press(key));
+            assert!(!hold.press(key));
+            assert!(!hold.press(key));
+            hold.release(key);
+            assert!(hold.press(key));
+        }
     }
 
     #[test]

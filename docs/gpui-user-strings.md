@@ -2,41 +2,44 @@
 
 Inventory of string literals that reach the user through gpui surfaces: settings panels, toasts, pickers, overlays, and window titles. Generated 2026-08-21 by scanning every crate that imports gpui (`use gpui` / `use qol_gpui`), excluding `examples/`, `tests/`, and `#[cfg(test)]` blocks, then hand-curating out trace probes, X11 atom names, element ids, and log/assert text.
 
-Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessions 8, launcher 8, qol-tray settings surface 3, plus shared key-cap fragments.
+Per-crate counts: qol-gpui 12, qol-shot 30, qol-alt-tab 14, qol-removeapp 14, qol-cli-sessions 8, qol-launcher 8, qol-tray settings surface 3, plus shared key-cap fragments.
 
 ## Window and panel titles
 
 | String | Location |
 |---|---|
-| `{} Settings` (generic plugin settings window) | apps/qol-tray/src/settings_surface/platform/unix_common.rs:561 |
-| `qol Settings` | apps/qol-tray/src/settings_surface/platform/unix_common.rs:538 |
+| `{} Settings` (generic plugin settings window) | apps/tray/src/settings_surface/platform/unix_common.rs:561 |
+| `qol Settings` | apps/tray/src/settings_surface/platform/unix_common.rs:538 |
 | `Alt Tab Settings` | plugins/alt-tab/src/picker/run.rs:181 |
 | `Alt Tab` | plugins/alt-tab/src/app/render.rs:189 |
 | `Alt Tab · Live Window Grid` | plugins/alt-tab/src/app/render.rs:196 |
 | `Launcher Settings` | plugins/launcher/src/ui/run.rs:129 |
-| `QoL Shot Settings` | plugins/qol-shot/src/ui/settings_panel.rs:8 |
-| `QoL Shot Editor` | plugins/qol-shot/src/ui/editor/mod.rs:224 |
+| `QoL Shot Settings` | plugins/shot/src/ui/settings_panel.rs:8 |
+| `QoL Shot Editor` | plugins/shot/src/ui/editor/mod.rs:224 |
 | `CLI SESSIONS` | plugins/cli-sessions/src/ui/render.rs:190 |
 
 ## qol-gpui shared kit
 
 | String | Location | Used for |
 |---|---|---|
-| `Save` | settings_panel/view.rs:2947 | panel footer button |
-| `+ Add` | settings_panel/view.rs:2692 | list add button |
-| `On` / `Off` | settings_panel/view.rs:1872 | toggle row |
-| `No matching results.` | settings_panel/view.rs:2429 | options filter empty state |
-| `Unsupported: {reason}` | settings_panel/view.rs:1812 | unsupported field row |
-| `{} found` / `{visible}/{}` | settings_panel/view.rs:1691,1694 | list count footer |
-| `{count} items` | settings_panel/view.rs:3844 | list count |
-| `{primary} +{}` | settings_panel/view.rs:3794 | shortcut display |
+| `Save the new {item_label}?` | settings_panel/entry_form.rs | leave question, Add card |
+| `Save changes to {crumb}?` | settings_panel/entry_form.rs | leave question, entry card |
+| `{Label} is empty, so this {item_label} cannot be saved yet.` | settings_panel/entry_form.rs | leave question, blocked save |
+| `Empty` | settings_panel/view/structured_list_editor.rs | empty list or field |
+| `+ Add` | settings_panel/view/mod.rs:2692 | list add button |
+| `On` / `Off` | settings_panel/view/mod.rs:1872 | toggle row |
+| `No matching results.` | settings_panel/view/mod.rs:2429 | options filter empty state |
+| `Unsupported: {reason}` | settings_panel/view/mod.rs:1812 | unsupported field row |
+| `{} found` / `{visible}/{}` | settings_panel/view/mod.rs:1691,1694 | list count footer |
+| `{count} items` | settings_panel/view/mod.rs:3844 | list count |
+| `{primary} +{}` | settings_panel/view/list_card.rs (list_action_affordance) | list-item action label |
 | `action `{action}` is unavailable` | settings_panel/mod.rs:225 | settings action error |
-| `{edit}_` / `{text}_` | settings_panel/view.rs:1620,2881 | in-edit text cursor suffix |
-| `{step}` / `{value:.0}` / `#{}` / `#{value}` | settings_panel/view.rs:3610,3668,3678,246 | slider readouts |
-| `{}` | settings_panel/view.rs:3670 | slider value fallback |
-| `px` / `ms` / `{:.0}%` | settings_panel/view.rs:3694,3697,3734 | unit suffixes |
-| `true` / `false` | settings_panel/view.rs:3762 | read-only toggle value |
-| `{r:02x}{g:02x}{b:02x}` / `#{:06x}` | color_wheel.rs:454, settings_panel/view.rs:1570 | hex color field |
+| `{edit}_` / `{text}_` | settings_panel/view/mod.rs:1620,2881 | in-edit text cursor suffix |
+| `{step}` / `{value:.0}` / `#{}` / `#{value}` | settings_panel/view/mod.rs:3610,3668,3678,246 | slider readouts |
+| `{}` | settings_panel/view/mod.rs:3670 | slider value fallback |
+| `px` / `ms` / `{:.0}%` | settings_panel/view/mod.rs:3694,3697,3734 | unit suffixes |
+| `true` / `false` | settings_panel/view/mod.rs:3762 | read-only toggle value |
+| `{r:02x}{g:02x}{b:02x}` / `#{:06x}` | color_wheel.rs:454, settings_panel/view/mod.rs:1570 | hex color field |
 | `{:.2}` / `{:+.2}` | gamepad/view.rs:302,364 | stick/trigger values |
 | `{} of {} · Enter to switch` / `Live native input` | gamepad/view.rs:102,107 | device selector |
 | `Waiting for movement` | gamepad/view.rs:215 | calibration hint |
@@ -44,7 +47,7 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 | `Wake a controller` / `Controller input unavailable` | gamepad/view.rs:418,420 | empty state |
 | `Left ` / `L ` / `Right ` / `R ` / `D-pad ` / `D ` | gamepad/view.rs:369-371 | button name prefix + abbreviation |
 
-## alt-tab
+## qol-alt-tab
 
 | String | Location |
 |---|---|
@@ -53,7 +56,7 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 | `{app} · {title}` / `[{}] {}` | app/render.rs:540,531 window card label |
 | `...` | app/render.rs:647 truncated label |
 
-## cli-sessions overview
+## qol-cli-sessions overview
 
 | String | Location |
 |---|---|
@@ -63,7 +66,7 @@ Per-crate counts: qol-gpui 12, qol-shot 30, alt-tab 14, removeapp 14, cli-sessio
 | `\u{25B2}` | ui/render.rs:587 needs-you marker |
 | `{secs}s` / `{}m` / `{}h` | ui/render.rs:39-43 session age |
 
-## launcher
+## qol-launcher
 
 | String | Location |
 |---|---|
@@ -115,9 +118,9 @@ Overlay hints:
 | `{} h {} min` / `{} min` / `{} sec` | ui/region_selector/mod.rs:1378-1382 |
 | `{:.0},{:.0}` | ui/preview.rs:312 cursor coords |
 
-Windows doctor text (plugins/qol-shot/src/platform/windows/mod.rs): full-sentence messages at 181-206, short `qol-shot: ...` errors at 38-127.
+Windows doctor text (plugins/shot/src/platform/windows/mod.rs): full-sentence messages at 181-206, short `qol-shot: ...` errors at 38-127.
 
-## removeapp
+## qol-removeapp
 
 | String | Location |
 |---|---|
@@ -145,12 +148,12 @@ Status as of 2026-08-21, after the cleanup pass (commits 35a95cf1b, d2239d9fa, 1
 
 **Fixed**
 
-1. Ellipsis style. Every user-visible string now uses the real ellipsis escape. The first pass covered only the two sites listed in this inventory; a follow-up caught the shared settings kit (`qol-gpui/src/settings_panel/view.rs` loading / Waiting / working) and qol-shot's platform recording notifications, which this inventory had missed.
-2. Escape key cap. Named keys read `Esc` everywhere. Two more sites turned up beyond the ones listed here: alt-tab's second (debug-overlay) header bar, and removeapp's `("esc", "back")` hint, so the claim that removeapp was already capitalized was wrong. Single-letter caps (`d`, `T`, `a`) keep their case: it tells you which key to press.
+1. Ellipsis style. Every user-visible string now uses the real ellipsis escape. The first pass covered only the two sites listed in this inventory; a follow-up caught the shared settings kit (`qol-gpui/src/settings_panel/view/mod.rs` loading / Waiting / working) and qol-shot's platform recording notifications, which this inventory had missed.
+2. Escape key cap. Named keys read `Esc` everywhere. Two more sites turned up beyond the ones listed here: qol-alt-tab's second (debug-overlay) header bar, and qol-removeapp's `("esc", "back")` hint, so the claim that qol-removeapp was already capitalized was wrong. Single-letter caps (`d`, `T`, `a`) keep their case: it tells you which key to press.
 3. `Capture area` duplication, folded into `CAPTURE_AREA_LABEL`.
 4. `Could not open screenshot editor` duplication, folded into `EDITOR_OPEN_FAILED_TOAST`.
 5. The `Enter to continue` / `Esc to quit` hint duplication, folded into `CONTINUE_OR_QUIT_HINT`.
-7. Size formatting. This was not a precision difference: qol-shot was decimal, removeapp was 1024-based while labelling the result GB/MB/KB, so removeapp reported 90.4 GB for what Finder calls 97.0 GB. Both now call one `qol_gpui::format_bytes`, decimal, which also rolls 999_999 bytes up to `1.0 MB` instead of showing `1000 KB`. `qol-dev-build` has its own binary formatter, correctly labelled GiB/MiB/KiB; that is a different unit system and stays.
+7. Size formatting. This was not a precision difference: qol-shot was decimal, qol-removeapp was 1024-based while labelling the result GB/MB/KB, so qol-removeapp reported 90.4 GB for what Finder calls 97.0 GB. Both now call one `qol_gpui::format_bytes`, decimal, which also rolls 999_999 bytes up to `1.0 MB` instead of showing `1000 KB`. `qol-dev-build` has its own binary formatter, correctly labelled GiB/MiB/KiB; that is a different unit system and stays.
 
 **Rejected**
 
@@ -168,5 +171,5 @@ Status as of 2026-08-21, after the cleanup pass (commits 35a95cf1b, d2239d9fa, 1
 - Trace probes and `qol_runtime::probe!` messages (`title={title} phase=...`, `context={context} stage=...`, GHOSTDUMP lines).
 - X11 atom names (`_NET_WM_STATE`, `_NET_WM_WINDOW_TYPE`, `_MOTIF_WM_HINTS`, `WM_PROTOCOLS`).
 - Element/state ids (`qol-toast-host-{}-{sequence}`, `qol-shot-pin-{}-{seq}`, `show#{}`, `reuse`, `superseded`, `picker_visible`, `gap`, `toggle`, `ghost`, `danger`, `primary`, `accent`).
-- Log/assert/error text (`invalid plugin ID...`, `failed to launch...`, `couldn't confirm package ownership` reason, alt-tab state-machine strings, keepalive/ghost internals).
+- Log/assert/error text (`invalid plugin ID...`, `failed to launch...`, `couldn't confirm package ownership` reason, qol-alt-tab state-machine strings, keepalive/ghost internals).
 - `#[cfg(test)]` blocks and tests/ directories (inventory covers only shipped surfaces).

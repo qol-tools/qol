@@ -6,8 +6,6 @@ use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp, PlainTextOu
 use crate::daemon::actions::CONFIG;
 use crate::storage::paths::PLUGIN_ID;
 
-const BINARY_NAME: &str = "cli-sessions";
-
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
 }
@@ -34,14 +32,14 @@ where
     let next_send = Arc::clone(&send);
     let snapshot_send = send;
 
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Track live terminal sessions and summon the retained CLI Sessions panel.")
         .default_command(["run"])
         .command(
             Command::new("run")
                 .alias("daemon")
                 .about("Run the resident session monitor and retained GPUI panel host.")
-                .usage(format!("{BINARY_NAME} run"))
+                .usage(format!("{PLUGIN_ID} run"))
                 .detail("The legacy `daemon` command is an alias.")
                 .detail(
                     "The panel starts hidden and reconciles terminal sessions in the background.",
@@ -53,7 +51,7 @@ where
         .command(
             Command::new("open")
                 .about("Show the retained CLI Sessions panel.")
-                .usage(format!("{BINARY_NAME} open"))
+                .usage(format!("{PLUGIN_ID} open"))
                 .detail("Signals the resident daemon, or starts it with the panel visible.")
                 .output("No stdout on success.")
                 .exit_behavior("Exits non-zero only if fallback daemon startup fails.")
@@ -67,7 +65,7 @@ where
         .command(
             Command::new("next")
                 .about("Focus the next terminal session that needs attention.")
-                .usage(format!("{BINARY_NAME} next"))
+                .usage(format!("{PLUGIN_ID} next"))
                 .detail("Sends the request to the resident daemon without starting a new one.")
                 .output("No stdout; daemon availability is intentionally best-effort.")
                 .exit_behavior("Exits zero after attempting delivery.")
@@ -79,7 +77,7 @@ where
         .command(
             Command::new("snapshot")
                 .about("Ask the resident daemon to snapshot all observed sessions.")
-                .usage(format!("{BINARY_NAME} snapshot"))
+                .usage(format!("{PLUGIN_ID} snapshot"))
                 .detail("The daemon owns terminal reads and snapshot persistence.")
                 .output("No stdout; snapshot diagnostics are emitted by the daemon.")
                 .exit_behavior("Exits zero after attempting delivery.")
@@ -91,7 +89,7 @@ where
         .command(
             Command::new("settings")
                 .about("Open the CLI Sessions settings in the qol settings surface.")
-                .usage(format!("{BINARY_NAME} settings"))
+                .usage(format!("{PLUGIN_ID} settings"))
                 .detail("Opens the unified qol settings surface.")
                 .output("No stdout on success.")
                 .exit_behavior("Exits non-zero if the settings surface cannot be opened.")
@@ -107,7 +105,7 @@ where
 fn run_daemon(show_on_start: bool) -> CommandResult {
     match crate::daemon::run(show_on_start) {
         Ok(()) => CommandResult::success(""),
-        Err(error) => CommandResult::runtime_error(format!("plugin-cli-sessions: {error:#}")),
+        Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID}: {error:#}")),
     }
 }
 

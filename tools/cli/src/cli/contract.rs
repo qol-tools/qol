@@ -1,0 +1,461 @@
+use super::CliArgs;
+use anyhow::{anyhow, Result};
+use qol_headless::{Command, Execution, HeadlessApp};
+
+use crate::commands::{agents, sessions};
+
+pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
+    let has_help = args.values.iter().any(|value| {
+        value
+            .to_str()
+            .is_some_and(|value| matches!(value, "help" | "-h" | "--help"))
+    });
+    let is_agents = args.values.first().and_then(|value| value.to_str()) == Some("agents");
+    if !is_agents && !args.values.is_empty() && !has_help && !args.json {
+        return Ok(None);
+    }
+    if !has_help
+        && args.json
+        && args.values.first().and_then(|value| value.to_str()) == Some("doctor")
+    {
+        return Ok(None);
+    }
+    if !has_help
+        && args.json
+        && args.values.first().and_then(|value| value.to_str()) == Some("sessions")
+    {
+        return Ok(None);
+    }
+
+    let mut values = args
+        .values
+        .iter()
+        .map(|value| {
+            value
+                .to_str()
+                .map(ToString::to_string)
+                .ok_or_else(|| anyhow!("help and JSON command paths must be valid UTF-8"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if values.is_empty() {
+        values.push("help".to_string());
+    }
+    for value in &mut values {
+        if value == "-h" {
+            *value = "--help".to_string();
+        }
+    }
+    if args.json {
+        values.insert(0, "--json".to_string());
+    }
+
+    let general_help = general_help_request(&values);
+    let doctor_help = contextual_doctor_help(&values);
+    let mut execution = app().execute(values);
+    if general_help && execution.exit_code == qol_headless::EXIT_SUCCESS {
+        execution.stdout = render_general_help();
+    } else if doctor_help && execution.exit_code == qol_headless::EXIT_SUCCESS {
+        execution.stdout = crate::commands::doctor::help_text().to_string();
+    }
+    Ok(Some(execution))
+}
+
+pub(super) fn general_help() -> String {
+    render_general_help()
+}
+
+fn general_help_request(values: &[String]) -> bool {
+    matches!(values, [value] if matches!(value.as_str(), "help" | "--help"))
+}
+
+fn contextual_doctor_help(values: &[String]) -> bool {
+    let values = values
+        .iter()
+        .filter(|value| value.as_str() != "--json")
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    matches!(values.as_slice(), ["help", "doctor"] | ["doctor", "help"])
+}
+
+fn render_general_help() -> String {
+    app()
+        .execute(["help".to_string()])
+        .stdout
+        .replace(
+            "Global flags:\n  --json  Request structured JSON output from commands that support it.\n",
+            "Global flags:\n  -v, --verbose     Show child command output.\n  -n, --no-plugins  qol dev: skip plugin rebuilds.\n  --json             Request structured JSON from commands that support it.\n  --                 Stop global option parsing.\n",
+        )
+}
+
+fn app() -> HeadlessApp {
+    let agent_tools = sessions::tool_names();
+    HeadlessApp::new("qol", "qol")
+        .about("Build, inspect, diagnose, and run the qol-tools workspace.")
+        .command(command(
+            "setup",
+            "Build and install local qol development tooling.",
+            "qol setup",
+            "Updates local development binaries and repository-owned integration.",
+            "Progress on stdout; diagnostics on stderr.",
+            "Exits non-zero when setup cannot complete.",
+        ))
+        .command(command(
+            "dev",
+            "Run the development dashboard and tray.",
+            "qol dev [worktree|--base] [--no-plugins]",
+            "Use -v for child output and --no-plugins to skip plugin rebuilds.",
+            "Interactive dashboard output.",
+            "Exits non-zero when the development session cannot start.",
+        ))
+        .command(command(
+            "env",
+            "Manage disposable development environments.",
+            "qol env <list|doctor|up|image|cancel|runs|down|shot|exec|drag>",
+            "Environment subcommands own their operation-specific flags.",
+            "Human-readable environment state and progress.",
+            "Exits non-zero when discovery, validation, or an operation fails.",
+        ))
+        .command(command(
+            "flow",
+            "Run and inspect disposable environment workflows.",
+            "qol flow <run|runs>",
+            "Run accepts workflow, environment, repeat, job, and resource options.",
+            "Human-readable workflow progress and reports.",
+            "Exits non-zero when a workflow cannot be prepared or completed.",
+        ))
+        .command(command(
+            "emu",
+            "Discover, prepare, run, and control local emulators.",
+            "qol emu <list|add|open|doctor|desktop|up|run|check|shot|key|insert|pull|snap|sh|exec|drag|down>",
+            "Launch and control subcommands own their operation-specific flags.",
+            "Human-readable emulator state, progress, and report paths.",
+            "Exits non-zero when discovery, validation, launch, or control fails.",
+        ))
+        .command(command(
+            "cat",
+            "Render a source file or stdin with deterministic line numbers.",
+            "qol cat [--no-less] [--plain|--color=auto|always|never] <path|->",
+            "Paging and color default to terminal-aware automatic behavior.",
+            "Rendered source on stdout; diagnostics on stderr.",
+            "Exits non-zero when input cannot be read or rendered.",
+        ))
+        .command(command(
+            "build",
+            "Build the workspace or a named target.",
+            "qol build [name]",
+            "Use -v to show child command output.",
+            "Build progress on stdout; diagnostics on stderr.",
+            "Exits non-zero when the selected build fails.",
+        ))
+        .command(
+            command(
+                "check",
+                "Run affected workspace checks.",
+                "qol check [--staged|--lint] [--base REV] [--report PATH] [--format-owned PATH]",
+                "--staged checks the exact staged tree instead of the working tree. --base REV pins the comparison base for affected planning. --report PATH publishes the machine report. Repeatable --format-owned PATH formats exactly the named Rust source files before full worktree checks.",
+                "Check plan and command progress on stdout; diagnostics on stderr.",
+                "Exits non-zero when planning, formatting, or a selected check fails, or when the source changes mid-run.",
+            )
+            .detail("--lint runs clippy only over uncommitted changes plus dependents, with its own lint cache.")
+            .detail("--format-owned validates every named file and the formatter before any write, never follows modules, and records before/after hashes, keeping completed rewrites when a later file fails.")
+            .detail("A --report destination is refused when it is a tracked source path, a symlink, a directory, or an existing file that is not a prior qol-check report.")
+            .detail("Publication is recorded in the run-directory report and starts as pending until the external rename succeeds, and a failed publication never leaves a verified report behind.")
+            .detail("Full checks fingerprint the source before and after, and a mismatch marks the run stale instead of passing."),
+        )
+        .command(command(
+            "clean",
+            "Clean workspace or named build artifacts.",
+            "qol clean [name]",
+            "Use -v to show child command output.",
+            "Cleanup progress on stdout; diagnostics on stderr.",
+            "Exits non-zero when cleanup fails.",
+        ))
+        .command(command(
+            "install",
+            "Install built qol applications and plugins. --dev builds with the dev feature and installs a dev-mode runtime.",
+            "qol install",
+            "Use -v to show child command output.",
+            "Installation progress on stdout; diagnostics on stderr.",
+            "Exits non-zero when installation fails.",
+        ))
+        .command(
+            command(
+                "sync",
+                "Sync the active profile with its configured cloud repository.",
+                "qol sync",
+                "Pulls the latest profile from the configured git repository, merges changes field-level, and pushes local changes back. Conflicts keep local data and write a backup.",
+                "Human summary on stdout; diagnostics on stderr.",
+                "Exits non-zero when sync cannot complete or conflicts need review.",
+            )
+            .run_json(|context| {
+                if !context.args().is_empty() {
+                    return Err(anyhow!("usage: qol sync"));
+                }
+                crate::commands::sync::run_json()
+            }),
+        )
+        .command(
+            command(
+                "sessions",
+                "Bridge work between independent terminal sessions.",
+                &format!(
+                    "qol sessions <{}>",
+                    sessions::SUBCOMMANDS
+                        .iter()
+                        .map(|entry| entry.name)
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
+                "Use list to discover a stable token, then bridge to submit and await one bounded implementation task.",
+                "Session rows or bridge JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when discovery, identity, capability, validation, or delivery fails.",
+            )
+            .detail(format!("The agent surface is {agent_tools}."))
+            .detail("spawn launches a tagged harness for a registered tool or reuses its live match under the same key.")
+            .detail("Agent assignment binds a dispatch to a named agent_profiles entry with a closed role and explicit image_input or visual_review requirements; configuring any profile enables enforcement unless enforce_agent_profiles is false, and the profile's declared tool and model must match the launch while allowed_models still governs spending.")
+            .detail("bridge owns submission, completion signalling, waiting, and result delivery.")
+            .detail("next prints the exact command for each open round; resume re-attaches to a pending round and waits without submitting.")
+            .detail("read, send, wait, and focus remain human diagnostics.")
+            .detail("export renders a per-client agent surface from the shared tool contract.")
+            .subcommand(command(
+                "list",
+                "Discover live terminal sessions.",
+                "qol sessions list [--json]",
+                "Returns stable session tokens with current directory, display identity, activity hint, and capabilities.",
+                "Session rows on stdout.",
+                "Exits non-zero when discovery fails.",
+            ))
+            .subcommand(command(
+                "capability",
+                "Report whether a lane can be spawned, optionally at a named tier.",
+                "qol sessions capability [--tier TOKEN]",
+                "Answers whether spawning a lane is possible right now: lane_spawn is true when a registered tool is installed and a model is resolvable, and --tier TOKEN narrows that to models whose id carries the token, so a caller asks for a tier without naming a vendor or a model. Each tool row reports its launch program, whether that program is installed, the models its catalog lists, and the subset matching the tier. A tool whose harness exposes no model catalog reports no models and answers only the untiered question. The same JSON lists the configured agent_profiles sorted by preference with their tool, model, roles, image_input and visual_review declarations plus spend_allowed against allowed_models, so a caller can choose a profile within budget without any vendor ranking being baked in.",
+                "Capability JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when a flag is invalid or the spawn model config cannot be read.",
+            ))
+            .subcommand(command(
+                "spawn",
+                "Launch a tagged tool session or reuse its live match.",
+                "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--no-resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]",
+                "Launches a tagged harness for a registered tool in a new tab, or reuses the single live session already carrying the key when its tool matches. The result JSON reports the live session token, tool, key, reused, cwd, surface, model, and title, plus agent_assignment and agent_status when the dispatch is constrained. A key spanning tools conflicts, multiple matches are ambiguous, and the CLI generates a key when --key is omitted. The surface default comes from spawn_surface in ~/.config/qol-tray/sessions.toml, then tab; an explicit --model overrides the spawned session's model, with spawn_model in the same file as the fallback, while a selected agent profile supplies its declared model and refuses a conflicting --model or --tool. The tool_models mapping in the same file binds models to harnesses, and a pair it does not declare is refused before launch. --title names the new tab (the lane key by default); --task delivers the first round at spawn time so the round is already open when the command returns. Resume is automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out, and the spawn JSON reports resume and resume_detail; a constrained resume cannot promote a prior session without a compatible recorded assignment and asks for resume=false instead. --agent-profile names an agent_profiles entry, --task-role is required for every constrained assignment even when --requires is empty, and --requires is a comma-separated list drawn from image_input and visual_review: image_input needs a native declaration and visual_review needs native plus allow. Configuring any profile enables enforcement unless enforce_agent_profiles is false, and a lane set inherits top-level assignment fields while refusing a field set both top-level and on a lane.",
+                "Spawn JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on orchestration, identity, capability, readiness, or task delivery failure.",
+            ))
+            .subcommand(command(
+                "fork",
+                "Launch a detached architect that never reports back.",
+                "qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]",
+                "Launches a new terminal that owns the brief end to end and reports to the user in its own terminal, not back to the caller. Use it when a second problem surfaces mid-session and chasing it would cost the thread already being held. A fork is the root of a new tree, not a lane: no round is opened on it, no completion signal is embedded in its launch, and bridge refuses it by name. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. --model is optional: an explicit value wins, then the selected agent profile's declared model, then spawn_model in sessions.toml, and a value that conflicts with the selected profile is refused. --tool is optional and resolves from the selected profile or the model's tool_models entry; a pair the mapping does not declare is refused. --effort is passed to tools that take one (claude: low, medium, high, xhigh, max). --agent-profile binds the fork to an agent_profiles entry; --task-role and --requires declare the role and capabilities, and the resolved assignment is recorded with the fork. A key already held by a live session is refused because a fork always starts fresh.",
+                "Fork JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on validation, key conflict, readiness, or launch failure.",
+            ))
+            .subcommand(command(
+                "forks",
+                "List the detached forks recorded on this host.",
+                "qol sessions forks",
+                "Prints one row per recorded fork: key, tool, tier, session token, and the path to its brief. Forks are never collected, so this listing is the only link back to a tree that was deliberately cut loose.",
+                "Fork rows on stdout; diagnostics on stderr.",
+                "Exits non-zero when the fork directory cannot be read.",
+            ))
+            .subcommand(command(
+                "submit",
+                "Deliver one bounded task and return with the round open.",
+                "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]",
+                "Submits exactly once with a generated completion signal and returns immediately with the round recorded and open, so several lanes can run in parallel before any of them is awaited. Refuses when a round is already pending on that session; pass the reviewed completion_marker as --acknowledge-marker to start the next round. --agent-profile, --task-role and --requires declare a constrained round; omitted, they inherit the assignment recorded against the session, and in every case the recorded profile is revalidated against current policy before the task is dispatched. A constrained submit to a session with no recorded identity is refused instead of relabelling it. Wait for the completion with `qol sessions bridge <session>` (no task) or resume.",
+                "Submit JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on validation or delivery failure; the round is open only when delivery is observed.",
+            ))
+            .subcommand(command(
+                "bridge",
+                "Submit and await one bounded implementation task.",
+                "qol sessions bridge <session> [<task...>] [--timeout-ms N]",
+                "Submits exactly once, waits for a generated completion signal, and returns completed, session, completion_marker, screen, reads, and elapsed_ms as JSON. Without a task it re-attaches to the pending round and waits for its completion marker. Timeout defaults to 24h.",
+                "Bridge JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero on validation or delivery failure; a timeout returns completed=false.",
+            ))
+            .subcommand(command(
+                "next",
+                "Print the exact next command for each open bridge round.",
+                "qol sessions next [<session>] [--json]",
+                "Reads the durable per-session bridge state: a waiting round prints its resume command; a round whose target already printed its completion signal prints phase=collect with the resume command that collects it; a round whose target went idle without its completion signal prints resume --kickstart; a round whose target's terminal is gone prints discard; a completed round prints a review instruction with the acknowledge-marker bridge template; no rounds prints phase=idle. Every row also carries agent_status and the recorded agent_assignment when one exists, so a reviewer sees what policy was checked for the dispatch.",
+                "Round phases and commands on stdout.",
+                "Exits non-zero when the bridge state cannot be read.",
+            ))
+            .subcommand(command(
+                "discard",
+                "Drop the checkpoint of a round whose terminal is gone.",
+                "qol sessions discard <session>",
+                "Removes the pending-bridge checkpoint of a session that no longer has a live terminal (verified via discovery); it refuses a live session, refuses when no checkpoint exists, and never touches last-send state or spawn locks. The session token comes from `qol sessions next`, which prints phase=gone with the exact discard command for orphaned rounds.",
+                "Removal confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when the session is live, has no checkpoint, or discovery fails.",
+            ))
+            .subcommand(command(
+                "resume",
+                "Re-attach to the pending bridge round and await its completion.",
+                "qol sessions resume <session> [--timeout-ms N] [--kickstart]",
+                "Waits for the recorded completion marker without submitting anything and returns the same JSON as bridge with submitted=false. --kickstart first nudges an interrupted session to continue or emit the signal. An idle target returns stalled=true instead of blocking until timeout. Timeout defaults to 24h.",
+                "Bridge JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when no round is pending; a timeout returns completed=false.",
+            ))
+            .subcommand(command(
+                "interrupt",
+                "Send the target tool's stop key while a bridge round is open.",
+                "qol sessions interrupt <session>",
+                "Resolves the per-tool stop gesture (agent TUIs: esc, plain shells: ctrl+c) and delivers it as a key event, never as text. The round and any queued input stay intact; follow with `qol sessions next`.",
+                "Confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when no round is open or delivery fails.",
+            ))
+            .subcommand(
+                command(
+                    "mcp",
+                    "Serve the session tools over stdio as a Model Context Protocol server.",
+                    "qol sessions mcp",
+                    &format!("One JSON-RPC 2.0 message per line (protocol 2025-03-26); tools are {agent_tools}. session_spawn takes optional title, model, and task; session_submit delivers a task without waiting. A bridge submits once and waits for the generated completion signal before returning; loop closure records an explicit accepted or paused transition. The round envelope is generated server-side from the target's durable role record (lane marker written at spawn; absent means architect): bridging a non-lane session is an architect-receiver round - the receiver may accept the request into its own loop or decline with a reason, and returns the completion fragments either way. The caller never chooses the receiver's role."),
+                    "Protocol responses on stdout.",
+                    "Exits zero on EOF.",
+                )
+                .run_plain_text(|context| {
+                    let mut args = Vec::with_capacity(context.args().len() + 1);
+                    args.push(std::ffi::OsString::from("mcp"));
+                    args.extend(context.args().iter().map(std::ffi::OsString::from));
+                    crate::commands::sessions::run(
+                        &args,
+                        qol_headless::OutputFormat::PlainText,
+                    )?;
+                    Ok(qol_headless::PlainTextOutput::empty())
+                }),
+            ),
+        )
+        .command(
+            command(
+                "agents",
+                "Inspect and manage the agent home registry.",
+                "qol agents <list|current|add|remove>",
+                "One registry file (agents.toml in the qol config directory) declares the agent homes this machine knows; see docs/agent-homes.md.",
+                "Home rows, home ids, or confirmation lines on stdout; diagnostics on stderr.",
+                "Exits non-zero when a harness name or path is invalid or the registry file cannot be read or written.",
+            )
+            .run_plain_text(|context| agents::run(context.args()))
+            .subcommand(
+                command(
+                    "list",
+                    "List every registered agent home plus unregistered env homes.",
+                    "qol agents list [--json]",
+                    "One tab-separated row per home: harness, id, shared or -, default or -, then declared, implicit, or unregistered; each harness whose env home is set but not registered adds one extra unregistered row.",
+                    "Tab-separated rows on stdout, or the homes JSON object with --json.",
+                    "Exits non-zero when the registry cannot be read.",
+                )
+                .run_plain_text(|_| agents::list_plain())
+                .run_json(|_| agents::list_json()),
+            )
+            .subcommand(
+                command(
+                    "current",
+                    "Print the current agent home for a harness.",
+                    "qol agents current <claude|codex|kimi|pi> [--json]",
+                    "The harness home env var wins when set; otherwise the harness default home applies. Scripts call this verb.",
+                    "The home id on stdout, or the AgentHome JSON with --json.",
+                    "Exits non-zero when the harness name is unknown.",
+                )
+                .run_plain_text(|context| agents::current_plain(context.args()))
+                .run_json(|context| agents::current_json(context.args())),
+            )
+            .subcommand(
+                command(
+                    "add",
+                    "Add or update an agent home in the registry file.",
+                    "qol agents add <claude|codex|kimi|pi> <path> [--shared] [--default]",
+                    "Appends or updates the [[home]] entry in agents.toml, creating the file; --default clears default on that harness's other entries; prints the resulting row after the confirmation.",
+                    "A confirmation line on stdout; diagnostics on stderr.",
+                    "Exits non-zero when the harness name or path is invalid or the registry file cannot be written.",
+                )
+                .run_plain_text(|context| agents::add_plain(context.args())),
+            )
+            .subcommand(
+                command(
+                    "remove",
+                    "Remove an agent home from the registry file.",
+                    "qol agents remove <path>",
+                    "Removes every [[home]] entry whose normalized path matches, regardless of harness, and errors when nothing matched; comments and formatting survive.",
+                    "A confirmation line naming the removed harnesses on stdout; diagnostics on stderr.",
+                    "Exits non-zero when the entry is absent or the registry file cannot be written.",
+                )
+                .run_plain_text(|context| agents::remove_plain(context.args())),
+            ),
+        )
+        .command(
+            command(
+                "mcp",
+                "Print qol-tray MCP endpoint facts and configure agent harnesses.",
+                "qol mcp <url|token|headers|configure>",
+                "Covers the stateless streamable HTTP MCP endpoint that qol-tray serves behind its token auth: url prints the endpoint URL, token prints the auth token, headers prints a JSON headers object, and configure writes or replaces the qol MCP entry for claude, codex, pi, or kimi.",
+                "URL, token, headers JSON, or configure confirmation on stdout; diagnostics on stderr.",
+                "Exits non-zero when the tray token or the harness config file is missing or a harness name is unknown.",
+            )
+            .subcommand(command(
+                "url",
+                "Print the MCP endpoint URL.",
+                "qol mcp url",
+                "Prints the local streamable HTTP endpoint URL that qol-tray serves.",
+                "The URL on stdout.",
+                "Exits zero.",
+            ))
+            .subcommand(command(
+                "token",
+                "Print the tray HTTP auth token.",
+                "qol mcp token",
+                "Reads the token from the qol config directory; it exists once qol-tray has run.",
+                "The token on stdout.",
+                "Exits non-zero when the token file is missing.",
+            ))
+            .subcommand(command(
+                "headers",
+                "Print a JSON headers object carrying the auth token.",
+                "qol mcp headers",
+                "Prints a compact JSON object mapping the auth header name to the token, ready to paste into a harness config.",
+                "The headers JSON on stdout.",
+                "Exits non-zero when the token file is missing.",
+            ))
+            .subcommand(command(
+                "configure",
+                "Write or replace the qol MCP entry in a harness's user config.",
+                "qol mcp configure <claude|codex|pi|kimi>",
+                "Writes or replaces the qol entry under mcpServers for claude, pi, and kimi, or the codex TOML table; claude and pi reference the qol CLI for headers and token while codex and kimi embed the token value directly. Other servers, tables, and comments survive. The config file must already exist.",
+                "updated <path> and the written entry on stdout; diagnostics on stderr.",
+                "Exits non-zero when the harness name is unknown or the config file does not exist.",
+            )),
+        )
+        .command(command(
+            "trace",
+            "Inspect a named runtime trace target.",
+            "qol trace [name]",
+            "Without a target, shows available trace guidance.",
+            "Trace output on stdout; diagnostics on stderr.",
+            "Exits non-zero when the trace target cannot run.",
+        ))
+        .command(command(
+            "trace-rs",
+            "Inspect the Rust runtime trace stream.",
+            "qol trace-rs [options]",
+            "Supports replay, filtering, detail, and marker options.",
+            "Formatted trace events on stdout; diagnostics on stderr.",
+            "Exits non-zero when the trace log cannot be read.",
+        ))
+        .doctor_provider(|| Ok(Vec::new()))
+}
+
+fn command(
+    name: &str,
+    about: &str,
+    usage: &str,
+    detail: &str,
+    output: &str,
+    exit_behavior: &str,
+) -> Command {
+    Command::new(name)
+        .about(about)
+        .usage(usage)
+        .detail(detail)
+        .output(output)
+        .exit_behavior(exit_behavior)
+}

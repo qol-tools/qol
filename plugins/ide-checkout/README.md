@@ -2,13 +2,13 @@
 
 # IDE Checkout
 
-A [QoL Tray](../../apps/qol-tray) plugin that checks out a git branch and opens it in a configured app.
+A [QoL Tray](../../apps/tray) plugin that checks out a git branch and opens it in a configured app.
 
 </div>
 
 ## Quick start
 
-Install from the [QoL Tray](../../apps/qol-tray) plugin store.
+Install from the [QoL Tray](../../apps/tray) plugin store.
 
 ## About
 

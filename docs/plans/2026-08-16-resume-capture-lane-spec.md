@@ -16,8 +16,8 @@ Two defects behind "an accidentally closed lane cannot be resumed":
 All work happens in this worktree on branch `resume-capture`.
 Scope: `tools/qol-cli/src/commands/sessions/spawn.rs`,
 `tools/qol-cli/src/commands/sessions/watch.rs`,
-`libs/qol-terminal-sessions/src/cli/builtins/pi/mod.rs`,
-`libs/qol-terminal-sessions/src/cli/interpreter.rs` (test expectation only).
+`libs/terminal-sessions/src/cli/builtins/pi/mod.rs`,
+`libs/terminal-sessions/src/cli/interpreter.rs` (test expectation only).
 `bridge.rs` callers of `capture_lane_external_id` stay untouched; they may
 ignore the new return value. Do not touch any other file.
 Code comments are banned in this repo; use self-explanatory names.
@@ -52,7 +52,7 @@ Tests (`watch.rs mod tests`, existing FakeBackend/facts/harness style):
   (encoded dir name for cwd `/work` is `--work--`; the fake pid has no live
   process, so resolution falls back to the newest session file). Save and
   restore the env var exactly like
-  `libs/qol-terminal-sessions/src/cli/builtins/pi/environment.rs` tests do.
+  `libs/terminal-sessions/src/cli/builtins/pi/environment.rs` tests do.
   Screens: two idle reads, then the backend dies (existing `die_after_reads`
   seam) so the round goes `gone` without ever completing. Assert the gone
   event fired AND the ledger dir now holds a record whose `external_id` is

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-CARGO_GATE = re.compile(r"\bcargo (?:build|test|clippy|check)\b")
+CARGO_GATE = re.compile(r"\bcargo (?:build|test|clippy|check|nextest run)\b")
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -79,6 +79,24 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             workflow,
             "--no-deps skips resolution and exits 0 against a stale lockfile",
         )
+
+    def test_nextest_preserves_affected_scope_and_documentation_on_each_platform(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check_job = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        test_steps = re.findall(r"      - name: Test\n(.*?)(?=\n      - name:|\Z)", check_job, re.S)
+        self.assertEqual(len(test_steps), 2)
+        self.assertRegex(check_job, r"tool: cargo-nextest@\d+\.\d+\.\d+")
+        for step in test_steps:
+            with self.subTest(step=step.splitlines()[0]):
+                self.assertIn("TEST_ARGS: ${{ matrix.test_args }}", step)
+                self.assertIn("DOCTEST: ${{ matrix.doctest }}", step)
+                self.assertIn('if [ "$DOCTEST" = "true" ]; then', step)
+                self.assertIn(
+                    "cargo nextest run --locked $TEST_ARGS --no-fail-fast --retries 0 --no-tests=pass --ignore-default-filter",
+                    step,
+                )
+                self.assertIn("cargo test --locked $TEST_ARGS --doc", step)
+                self.assertLess(step.index("cargo nextest run"), step.index("cargo test"))
 
     def test_windows_dev_build_tests_follow_the_affected_plan(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

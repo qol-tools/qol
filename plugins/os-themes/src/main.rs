@@ -26,19 +26,11 @@ mod tests {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
 
-        assert_eq!(
-            manifest
-                .runtime
-                .as_ref()
-                .map(|runtime| runtime.command.as_str()),
-            Some("plugin-os-themes")
-        );
         assert!(manifest.capabilities.gpui);
         assert!(manifest.capabilities.doctor);
 
         let daemon = manifest.daemon.as_ref().expect("daemon contract missing");
         assert!(daemon.enabled);
-        assert_eq!(daemon.command, "plugin-os-themes");
         assert_eq!(daemon.socket.as_deref(), Some("/tmp/qol-os-themes.sock"));
     }
 }

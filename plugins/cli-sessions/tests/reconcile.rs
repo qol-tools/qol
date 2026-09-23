@@ -1,18 +1,18 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use plugin_cli_sessions::attention::{Evidence, GRACE_SECS};
-use plugin_cli_sessions::daemon::reconcile::{
+use qol_cli_sessions::attention::{Evidence, GRACE_SECS};
+use qol_cli_sessions::daemon::reconcile::{
     tick, tick_with_caches, transition_line, ReconcileCaches,
 };
-use plugin_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
-use plugin_cli_sessions::registry::{Registry, SessionState};
-use plugin_cli_sessions::service::{NoServiceProbe, ServiceProbe};
-use plugin_cli_sessions::status::Status;
+use qol_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
+use qol_cli_sessions::registry::{Registry, SessionState};
+use qol_cli_sessions::service::{NoServiceProbe, ServiceProbe};
+use qol_cli_sessions::status::Status;
 use qol_terminal_sessions::cli::{
-    codex_tool, generic_tool, kimi_tool, CliActivityEvidence, CliRuntimeState,
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionInterpreter,
-    CliSessionStrategy, CliSessionSubscription, CliTool, CliViewportState,
+    claude_tool, codex_tool, generic_tool, kimi_tool, CliActivityEvidence, CliRuntimeState,
+    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
+    CliSessionInterpreter, CliSessionStrategy, CliSessionSubscription, CliTool, CliViewportState,
 };
 use qol_terminal_sessions::SessionBinding;
 
@@ -123,6 +123,70 @@ struct FakeCodex {
     touched: bool,
 }
 
+struct WorkingClaude {
+    tool: CliTool,
+}
+
+impl CliSessionStrategy for WorkingClaude {
+    fn tool(&self) -> &CliTool {
+        &self.tool
+    }
+
+    fn matches(&self, pane: &Pane) -> bool {
+        pane.foreground_basenames
+            .iter()
+            .any(|name| name == "claude")
+    }
+
+    fn describe(&self, _pane: &Pane) -> CliSessionDescriptor {
+        CliSessionDescriptor {
+            tool: self.tool.clone(),
+            display_name: Some("Claude".to_owned()),
+            external_id: None,
+            external_id_authoritative: false,
+            has_activity: Some(true),
+            evidence: CliSessionEvidence {
+                runtime: CliRuntimeState::Working,
+                activity: CliActivityEvidence {
+                    file_fresh: Some(true),
+                    file_has_work: Some(true),
+                    file_quiet_secs: Some(0),
+                },
+            },
+        }
+    }
+
+    fn classify_screen(&self, pane: &Pane, screen: &str) -> CliScreenEvidence {
+        CliSessionInterpreter::system().classify_screen(pane, screen)
+    }
+}
+
+struct ClaudeViewportHost {
+    pane: Pane,
+    screen: String,
+    current: Mutex<Option<bool>>,
+    checks: AtomicUsize,
+}
+
+impl TerminalHost for ClaudeViewportHost {
+    fn discover(&self) -> Vec<Pane> {
+        vec![self.pane.clone()]
+    }
+
+    fn get_text(&self, _target: &SessionBinding) -> Option<String> {
+        Some(self.screen.clone())
+    }
+
+    fn visual_screen_is_current(&self, _target: &SessionBinding, _screen: &str) -> Option<bool> {
+        self.checks.fetch_add(1, Ordering::Relaxed);
+        *self.current.lock().unwrap()
+    }
+
+    fn focus(&self, _target: &SessionBinding) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 impl CliSessionStrategy for FakeCodex {
     fn tool(&self) -> &CliTool {
         &self.tool
@@ -224,10 +288,89 @@ fn restored(window_id: u64, status: Status) -> SessionState {
         settled_since: None,
         bridged: false,
         driving: Vec::new(),
+        runtime_status: None,
     }
 }
 
 const SELECTION: &str = "\u{276F} 1. Yes\n  2. No\n  enter to confirm";
+
+#[test]
+fn claude_scrolled_old_dialog_never_overrides_a_fresh_working_transcript() {
+    let interpreter = CliSessionInterpreter::from_strategies([Arc::new(WorkingClaude {
+        tool: claude_tool(),
+    })
+        as Arc<dyn CliSessionStrategy>])
+    .unwrap();
+    for (current, expected) in [(false, Status::Working), (true, Status::NeedsYou)] {
+        let reg = Arc::new(Mutex::new(Registry::default()));
+        reg.lock()
+            .unwrap()
+            .restore(vec![restored(52, Status::Working)]);
+        let host = ClaudeViewportHost {
+            pane: pane(52, "Claude", false, &["zsh", "claude"], "claude"),
+            screen: "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel".into(),
+            current: Mutex::new(Some(current)),
+            checks: AtomicUsize::new(0),
+        };
+        let mut caches = ReconcileCaches::default();
+        let first = tick_with_caches(
+            &reg,
+            &host,
+            &interpreter,
+            &NoServiceProbe,
+            100,
+            100,
+            &mut caches,
+        );
+        let second = tick_with_caches(
+            &reg,
+            &host,
+            &interpreter,
+            &NoServiceProbe,
+            101,
+            101,
+            &mut caches,
+        );
+        assert!(first.is_empty());
+        assert_eq!(reg.lock().unwrap().sorted()[0].status, expected);
+        assert_eq!(second.len(), usize::from(current));
+        assert_eq!(host.checks.load(Ordering::Relaxed), 1);
+    }
+
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    reg.lock()
+        .unwrap()
+        .restore(vec![restored(52, Status::Working)]);
+    let host = ClaudeViewportHost {
+        pane: pane(52, "Claude", false, &["zsh", "claude"], "claude"),
+        screen: "Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel".into(),
+        current: Mutex::new(None),
+        checks: AtomicUsize::new(0),
+    };
+    let mut caches = ReconcileCaches::default();
+    tick_with_caches(
+        &reg,
+        &host,
+        &interpreter,
+        &NoServiceProbe,
+        100,
+        100,
+        &mut caches,
+    );
+    *host.current.lock().unwrap() = Some(true);
+    let notices = tick_with_caches(
+        &reg,
+        &host,
+        &interpreter,
+        &NoServiceProbe,
+        101,
+        101,
+        &mut caches,
+    );
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::NeedsYou);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(host.checks.load(Ordering::Relaxed), 2);
+}
 const CODEX_DONE: &str = "";
 const CLAUDE_WORKING: &str = "\u{273B} Processing\u{2026} (5s \u{00B7} \u{2193} 1k tokens)";
 const CLAUDE_DONE: &str = "\u{273B} Brewed for 1m";
@@ -784,7 +927,7 @@ fn tick_codex_ready_state_clears_a_stale_needs_you_status() {
 }
 
 #[test]
-fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
+fn tick_codex_requires_ready_evidence_even_when_answer_ends_in_numbered_list() {
     let reg = Arc::new(Mutex::new(Registry::default()));
     let mut host = FakeHost {
         panes: vec![pane(16, "qol-monorepo", false, &["zsh", "codex"], "codex")],
@@ -806,9 +949,13 @@ fn tick_codex_your_turn_when_answer_ends_in_numbered_list() {
     }
     assert_eq!(
         reg.lock().unwrap().sorted()[0].status,
-        Status::YourTurn,
-        "a codex answer is your-turn once the grace window closes"
+        Status::Working,
+        "a quiet answer is not proof of completion"
     );
+
+    host.panes[0].title = "project | Ready | finished".into();
+    tick(&reg, &host, &interpreter(), &NoServiceProbe, 108, 108);
+    assert_eq!(reg.lock().unwrap().sorted()[0].status, Status::YourTurn);
 }
 
 #[test]
@@ -1060,6 +1207,7 @@ fn tick_refreshes_restored_identity_fields() {
         settled_since: None,
         bridged: false,
         driving: Vec::new(),
+        runtime_status: None,
     }]);
     let host = FakeHost {
         panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
@@ -1138,7 +1286,7 @@ fn transition_diagnostics_are_redacted_and_carry_the_reason() {
         "claude",
         Status::Working,
         Status::YourTurn,
-        plugin_cli_sessions::attention::Reason::GraceCompleted,
+        qol_cli_sessions::attention::Reason::GraceCompleted,
         5,
         &evidence,
     );
@@ -1274,6 +1422,7 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         settled_since: None,
         bridged: false,
         driving: Vec::new(),
+        runtime_status: None,
     }]);
     let mut caches = ReconcileCaches::default();
 
@@ -1319,4 +1468,31 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         Status::YourTurn,
         "the restart observes a full fresh grace before completing"
     );
+}
+
+#[test]
+fn pi_embedded_working_recovers_and_stays_busy_across_quiet_ticks() {
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(1, "sl-skill", false, &["pi"], "pi")],
+        screen: include_str!("fixtures/corpus/pi_embedded_working.txt").into(),
+    };
+    let mut caches = ReconcileCaches::default();
+    let interpreter = CliSessionInterpreter::system();
+    for now in [100, 101, 106, 160, 700] {
+        tick_with_caches(
+            &reg,
+            &host,
+            &interpreter,
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        );
+        assert_eq!(
+            reg.lock().unwrap().sorted()[0].status,
+            Status::Working,
+            "time={now}"
+        );
+    }
 }

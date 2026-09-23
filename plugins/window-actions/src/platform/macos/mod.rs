@@ -19,7 +19,7 @@ use geometry::{
     snap_right,
 };
 
-pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
+pub(crate) use doctor::{platform_supported_check, required_binaries_check};
 
 pub(crate) struct GlideController;
 

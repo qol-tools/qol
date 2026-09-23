@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const pluginDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoDir = resolve(pluginDir, '../..');
-const binary = resolve(process.argv[2] || resolve(repoDir, 'target/debug/plugin-bluetooth'));
+const binary = resolve(process.argv[2] || resolve(repoDir, 'target/debug/qol-bluetooth'));
 const runId = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
 const reportDir = resolve(pluginDir, 'reports/bluetooth-search', runId);
 const reportPath = resolve(reportDir, 'report.json');

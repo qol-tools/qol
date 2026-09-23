@@ -24,6 +24,10 @@ input = { address = "string" }
 description = "Disconnect a connected Bluetooth device"
 input = { address = "string" }
 
+[action.reclaim_device]
+description = "Switch a shared Bluetooth audio device back to this computer"
+input = { address = "string" }
+
 [action.trust_device]
 description = "Trust a paired Bluetooth device"
 input = { address = "string" }

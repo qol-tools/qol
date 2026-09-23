@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { readdirSync, readFileSync, mkdirSync, writeFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, mkdirSync, writeFileSync, statSync, rmSync } from "node:fs";
 import { join, resolve, basename, dirname } from "node:path";
 import { homedir } from "node:os";
-import { qolMemoryStore } from "../lib/store-path.js";
+import { researchOutputRoot, researchRunDir } from "../lib/store-path.js";
 
 const args = process.argv.slice(2);
 const pick = (flag, def) => {
@@ -10,18 +10,19 @@ const pick = (flag, def) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 };
 const BASE = dirname(dirname(new URL(import.meta.url).pathname));
-const STORE_ROOT = resolve(pick("--store", qolMemoryStore()));
-const SNAPSHOT_ROOT = resolve(pick("--snapshot-root", join(STORE_ROOT, "snapshot")));
+const EXPLICIT_SNAPSHOT_ROOT = pick("--snapshot-root", null);
+const SNAPSHOT_ROOT = resolve(EXPLICIT_SNAPSHOT_ROOT || join(researchOutputRoot(), "snapshot"));
 const PINNED = JSON.parse(readFileSync(join(BASE, "eval", "questions.json"), "utf8")).run_pin || null;
+const SNAPSHOT_RUN_DIR = (run) => (EXPLICIT_SNAPSHOT_ROOT ? join(SNAPSHOT_ROOT, run) : researchRunDir("snapshot", run));
 const RUN_ID = pick("--run", null) || PINNED || latestRun(SNAPSHOT_ROOT);
 if (PINNED && !pick("--run", null)) {
   try {
-    if (!statSync(join(SNAPSHOT_ROOT, PINNED)).isDirectory()) throw new Error("missing");
+    if (!statSync(SNAPSHOT_RUN_DIR(PINNED)).isDirectory()) throw new Error("missing");
   } catch {
-    throw new Error(`pinned run ${PINNED} not found under ${SNAPSHOT_ROOT} - the pinned snapshot is machine-local (reports/ is gitignored); re-pin questions.json run_pin or pass --run`);
+    throw new Error(`pinned run ${PINNED} not found at ${SNAPSHOT_RUN_DIR(PINNED)} - the pinned snapshot is machine-local (reports/ is gitignored); stage fixtures under reports/qol-memory/fixtures or pass --run`);
   }
 }
-const OUT_DIR = resolve(pick("--out", join(STORE_ROOT, "eval", new Date().toISOString().replace(/[:.]/g, "-"))));
+const OUT_DIR = resolve(pick("--out", join(researchOutputRoot(), "eval", new Date().toISOString().replace(/[:.]/g, "-"))));
 const DENSE = pick("--dense", null);
 const KINDS = (pick("--kinds", "user") || "user").split(",");
 const RRF_K = Number(pick("--rrf-k", "200"));
@@ -119,7 +120,7 @@ function rrfRanks(bm25Ranked, denseRanked) {
 const questionsDoc = JSON.parse(readFileSync(join(BASE, "eval", "questions.json"), "utf8"));
 const questions = questionsDoc.questions;
 const denseDump = DENSE ? JSON.parse(readFileSync(DENSE, "utf8")) : null;
-const units = readFileSync(join(SNAPSHOT_ROOT, RUN_ID, "snapshot.jsonl"), "utf8")
+const units = readFileSync(join(SNAPSHOT_RUN_DIR(RUN_ID), "snapshot.jsonl"), "utf8")
   .trim()
   .split("\n")
   .map((l) => JSON.parse(l));
@@ -308,3 +309,8 @@ if (stats.heldout) {
   }
 }
 console.log(`report: ${reportPath}`);
+try {
+  const evalRoot = dirname(OUT_DIR);
+  const runs = readdirSync(evalRoot).filter((n) => /^\d{4}-\d{2}-\d{2}T/.test(n)).sort().reverse();
+  for (const run of runs.slice(10)) rmSync(join(evalRoot, run), { recursive: true, force: true });
+} catch {}

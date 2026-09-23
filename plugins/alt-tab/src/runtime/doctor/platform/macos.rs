@@ -1,14 +1,4 @@
-use super::{Inspection, PermissionInspection};
-
-#[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-}
-
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
-}
+use super::Inspection;
 
 pub(in crate::runtime::doctor) fn inspect() -> Inspection {
     Inspection {
@@ -19,14 +9,5 @@ pub(in crate::runtime::doctor) fn inspect() -> Inspection {
         display_env_set: false,
         wayland_env_set: false,
         session_type: None,
-    }
-}
-
-pub(in crate::runtime::doctor) fn inspect_permissions() -> PermissionInspection {
-    PermissionInspection {
-        platform: "macos",
-        supported: true,
-        accessibility_trusted: Some(unsafe { AXIsProcessTrusted() }),
-        screen_recording_trusted: Some(unsafe { CGPreflightScreenCaptureAccess() }),
     }
 }

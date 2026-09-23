@@ -140,7 +140,7 @@ This is a hard cutover, because the command MAC and the discovery contract both 
 Because one author controls both the desktop plugin and the Flutter client and the whole fleet, a lockstep release is realistic and simpler than a dual-stack transition.
 
 Desktop (this repo, `plugins/pointz`):
-- Re-scope `PairingSecret` to a server identity seed used only for `server_id`; add a persisted `DeviceRegistry` (`plugins/plugin-pointz/devices.json`, written with `qol_fs::atomic_write_private`) with add, lookup, remove, and list.
+- Re-scope `PairingSecret` to a server identity seed used only for `server_id`; add a persisted `DeviceRegistry` (`plugins/qol-pointz/devices.json`, written with `qol_fs::atomic_write_private`) with add, lookup, remove, and list.
 - Add `src/security/pairing.rs` for the X25519 + HKDF + HMAC + AEAD state machine, PIN generation, and the three-attempt limiter.
 - Move `src/security/wire.rs` to envelope v2 with `device_id`; delete v1 verification (no dual stack).
 - Update `CommandGate` to resolve `K_dev` by `device_id` and to own the active pairing session; update `begin_pairing` to produce and surface the PIN.

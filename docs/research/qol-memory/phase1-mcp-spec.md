@@ -17,8 +17,8 @@ Four lanes run in parallel. Two lanes never touch the same file.
 
 | Lane | Role | Owned paths |
 |---|---|---|
-| `mcp-lib` | implement | `libs/qol-mcp/**` (new crate), root `Cargo.toml` (one line under `[workspace.dependencies]`) |
-| `mcp-contract` | implement | `libs/qol-config/src/contract/runtime.rs`, `docs/plugin-contract.md` |
+| `mcp-lib` | implement | `libs/mcp/**` (new crate), root `Cargo.toml` (one line under `[workspace.dependencies]`) |
+| `mcp-contract` | implement | `libs/config/src/contract/runtime.rs`, `docs/plugin-contract.md` |
 | `mcp-host` | implement | `apps/qol-tray/src/features/mcp/**` (new), `apps/qol-tray/src/features/mod.rs`, `apps/qol-tray/src/features/plugin_store/server/mod.rs`, `apps/qol-tray/src/plugins/action_executor/mod.rs`, `apps/qol-tray/src/plugins/action_transport/mod.rs`, `apps/qol-tray/Cargo.toml` |
 | `mcp-cli` | implement | `tools/qol-cli/src/commands/mcp/**` (new), `tools/qol-cli/src/commands/mod.rs`, `tools/qol-cli/src/main.rs`, `tools/qol-cli/src/cli/contract.rs` |
 
@@ -29,11 +29,11 @@ Lane report shape: the list of files changed with line ranges, plus any consciou
 
 The host and CLI lanes write against the signatures in sections 3 and 4 exactly, even though the crate and fields do not exist yet in their view; the architect compiles the whole round once.
 
-## 3. Crate `libs/qol-mcp` (lane `mcp-lib`)
+## 3. Crate `libs/mcp` (lane `mcp-lib`)
 
 Transport-agnostic MCP tool protocol. No tokio, no axum, no I/O.
 
-### 3.1 `libs/qol-mcp/Cargo.toml`
+### 3.1 `libs/mcp/Cargo.toml`
 
 ```toml
 [package]
@@ -49,12 +49,12 @@ serde.workspace = true
 serde_json.workspace = true
 ```
 
-Root `Cargo.toml`: add `qol-mcp = { path = "libs/qol-mcp" }` under `[workspace.dependencies]` next to the other internal crates (alphabetical position after `qol-hotkeys`). The `members` glob already includes `libs/*`.
+Root `Cargo.toml`: add `qol-mcp = { path = "libs/mcp" }` under `[workspace.dependencies]` next to the other internal crates (alphabetical position after `qol-hotkeys`). The `members` glob already includes `libs/*`.
 
 ### 3.2 Layout
 
 ```
-libs/qol-mcp/src/
+libs/mcp/src/
   lib.rs        re-exports only
   jsonrpc.rs    message shapes and error codes
   tool.rs       ToolSpec, Content, ToolResult, input_schema
@@ -170,9 +170,9 @@ pub fn handle(host: &dyn ToolHost, message: serde_json::Value) -> Option<serde_j
 A `FakeHost` with two tools (`echo` returning `ToolResult::structured(arguments)`, `fail` returning `ToolResult::error("boom")`).
 Cover every rule in 3.5, both branches of `initialize`, the serialized shape of `ToolSpec` (`inputSchema` key), `ToolResult` (`structuredContent` omitted when None, `isError` always present), `input_schema` with two parameters and with zero, `ErrorCode::code` values, and one round trip `initialize -> notifications/initialized -> tools/list -> tools/call echo` asserting the exact JSON of each response.
 
-## 4. Contract change `libs/qol-config` (lane `mcp-contract`)
+## 4. Contract change `libs/config` (lane `mcp-contract`)
 
-### 4.1 `libs/qol-config/src/contract/runtime.rs`
+### 4.1 `libs/config/src/contract/runtime.rs`
 
 ```rust
 pub struct ActionSpec {

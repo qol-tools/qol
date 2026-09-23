@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       plugin_id:
-        description: Optional plugin id, for example alt-tab
+        description: Optional plugin id, for example qol-alt-tab
         required: false
         type: string
   workflow_run:
@@ -119,7 +119,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock plugins/*/Cargo.toml plugins/*/plugin.toml apps/qol-tray/Cargo.toml
+          git add Cargo.lock plugins/*/Cargo.toml plugins/*/plugin.toml apps/tray/Cargo.toml
           if ! git diff --cached --quiet; then
             git commit -m "chore(plugins): bump plugin versions"
             if ! git push origin "HEAD:main"; then
@@ -237,7 +237,7 @@ jobs:
         run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
       - name: Install cargo-deb
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
         with:
           tool: cargo-deb
 

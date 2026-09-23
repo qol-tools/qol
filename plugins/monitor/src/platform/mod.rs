@@ -12,6 +12,8 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod platform_control;
 mod support;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -22,6 +24,8 @@ pub(crate) use fallback::{control, current_support};
 pub(crate) use linux::{control, current_support};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{control, current_support};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use platform_control::PlatformControl;
 pub(crate) use support::PlatformSupport;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{control, current_support};

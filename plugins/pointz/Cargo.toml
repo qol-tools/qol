@@ -1,6 +1,6 @@
 [package]
-name = "pointzerver"
-version = "1.33.0"
+name = "qol-pointz"
+version = "1.43.0"
 edition = "2021"
 description = "PointZerver - Headless server for remote PC control from mobile devices"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -16,6 +16,7 @@ hmac.workspace = true
 qol-config.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-conventions.workspace = true
 log = "0.4"
@@ -65,5 +66,5 @@ depends = "$auto, libx11-6, libxdo3"
 section = "utils"
 priority = "optional"
 assets = [
-    ["target/release/pointzerver", "usr/bin/", "755"],
+    ["target/release/qol-pointz", "usr/bin/", "755"],
 ]

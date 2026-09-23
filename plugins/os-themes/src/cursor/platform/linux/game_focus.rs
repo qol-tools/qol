@@ -17,6 +17,8 @@ pub(super) struct GameFocusDetector {
     root: xlib::Window,
     active_window_atom: xlib::Atom,
     window_pid_atom: xlib::Atom,
+    window_state_atom: xlib::Atom,
+    window_fullscreen_atom: xlib::Atom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +50,23 @@ impl GameFocusDetector {
             root: unsafe { xlib::XDefaultRootWindow(display) },
             active_window_atom: intern_atom(display, c"_NET_ACTIVE_WINDOW"),
             window_pid_atom: intern_atom(display, c"_NET_WM_PID"),
+            window_state_atom: intern_atom(display, c"_NET_WM_STATE"),
+            window_fullscreen_atom: intern_atom(display, c"_NET_WM_STATE_FULLSCREEN"),
         })
+    }
+
+    pub fn active_window_is_fullscreen(&self) -> bool {
+        let Some(window_id) = property_ulong(
+            self.display,
+            self.root,
+            self.active_window_atom,
+            xlib::XA_WINDOW,
+        )
+        .filter(|window| *window != 0) else {
+            return false;
+        };
+        let states = property_atoms(self.display, window_id, self.window_state_atom);
+        contains_fullscreen(&states, self.window_fullscreen_atom)
     }
 
     pub fn probe(&self) -> GameFocus {
@@ -201,6 +219,59 @@ fn property_ulong(
     Some(value)
 }
 
+fn contains_fullscreen(states: &[xlib::Atom], fullscreen: xlib::Atom) -> bool {
+    states.contains(&fullscreen)
+}
+
+fn property_atoms(
+    display: *mut xlib::Display,
+    window: xlib::Window,
+    property: xlib::Atom,
+) -> Vec<xlib::Atom> {
+    if property == 0 {
+        return Vec::new();
+    }
+
+    let mut actual_type = 0;
+    let mut actual_format = 0;
+    let mut item_count = 0;
+    let mut bytes_after = 0;
+    let mut data = ptr::null_mut();
+    let status = unsafe {
+        xlib::XGetWindowProperty(
+            display,
+            window,
+            property,
+            0,
+            64,
+            xlib::False,
+            xlib::XA_ATOM,
+            &mut actual_type,
+            &mut actual_format,
+            &mut item_count,
+            &mut bytes_after,
+            &mut data,
+        )
+    };
+    if status != i32::from(xlib::Success)
+        || actual_type != xlib::XA_ATOM
+        || actual_format != 32
+        || item_count == 0
+        || data.is_null()
+    {
+        if !data.is_null() {
+            unsafe { xlib::XFree(data.cast()) };
+        }
+        return Vec::new();
+    }
+
+    let atoms = unsafe {
+        std::slice::from_raw_parts(data.cast::<xlib::Atom>(), item_count as usize).to_vec()
+    };
+    unsafe { xlib::XFree(data.cast()) };
+    atoms
+}
+
 fn window_classes(display: *mut xlib::Display, window: xlib::Window) -> Vec<String> {
     let mut hint = xlib::XClassHint {
         res_name: ptr::null_mut(),
@@ -311,6 +382,17 @@ mod tests {
         for (label, classes, environment) in cases {
             assert_eq!(game_evidence(classes, environment), None, "case={label}");
         }
+    }
+
+    #[test]
+    fn contains_fullscreen_detects_a_present_fullscreen_atom() {
+        assert!(contains_fullscreen(&[1, 2, 3], 2));
+    }
+
+    #[test]
+    fn contains_fullscreen_rejects_an_absent_fullscreen_atom() {
+        assert!(!contains_fullscreen(&[1, 2, 3], 4));
+        assert!(!contains_fullscreen(&[], 0));
     }
 
     #[test]

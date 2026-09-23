@@ -1,0 +1,1481 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
+use gpui::*;
+
+use crate::monitor::{ActiveMonitor, MonitorTracker};
+use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN};
+
+mod platform;
+mod reveal;
+
+use self::platform::{Platform, SurfacePlatform};
+
+pub use self::reveal::{
+    await_reveal_readiness, schedule_fresh_frame, schedule_fresh_frame_in, FreshFrame,
+    RevealOutcome, RevealProof,
+};
+
+const REUSED_REVEAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
+const REUSED_REVEAL_MAX_ATTEMPTS: usize = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceKind {
+    Toast,
+    Panel,
+    OverlayPanel,
+}
+
+pub struct DragGestureState {
+    press: Option<Point<Pixels>>,
+    moving: bool,
+    threshold: f64,
+}
+
+impl DragGestureState {
+    pub fn new(threshold_px: f32) -> Self {
+        Self {
+            press: None,
+            moving: false,
+            threshold: f64::from(threshold_px),
+        }
+    }
+
+    pub fn on_down(&mut self, position: Point<Pixels>) {
+        self.press = Some(position);
+        self.moving = false;
+    }
+
+    pub fn on_move(&mut self, position: Point<Pixels>, dragging: bool) -> bool {
+        let Some(start) = self.press else {
+            return false;
+        };
+        if !dragging || self.moving {
+            return false;
+        }
+        if moved_past(start, position, self.threshold) {
+            self.moving = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn on_up(&mut self) {
+        self.press = None;
+    }
+
+    pub fn is_moving(&self) -> bool {
+        self.moving
+    }
+
+    pub fn threshold(&self) -> f64 {
+        self.threshold
+    }
+}
+
+fn moved_past(start: Point<Pixels>, current: Point<Pixels>, threshold: f64) -> bool {
+    let dx = current.x.to_f64() - start.x.to_f64();
+    let dy = current.y.to_f64() - start.y.to_f64();
+    (dx * dx + dy * dy).sqrt() >= threshold
+}
+
+/// Marks non-interactive panel chrome as a native window drag area.
+///
+/// The surface root cannot safely own this listener because mouse events from
+/// interactive children bubble through it. Views should apply this only to
+/// their semantic top chrome.
+pub trait PanelDragArea: InteractiveElement + Sized {
+    fn panel_drag_area(self) -> Self {
+        self.on_mouse_down(MouseButton::Left, |_, window, _| {
+            crate::platform::start_window_move(window);
+        })
+    }
+
+    fn panel_drag_after(self, gesture: &Rc<RefCell<DragGestureState>>) -> Self {
+        let down = gesture.clone();
+        let r#move = gesture.clone();
+        let up = gesture.clone();
+        self.on_mouse_down(MouseButton::Left, move |event, _, _| {
+            down.borrow_mut().on_down(event.position);
+        })
+        .on_mouse_move(move |event, window, _| {
+            if r#move
+                .borrow_mut()
+                .on_move(event.position, event.dragging())
+            {
+                crate::platform::start_window_move(window);
+            }
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, _| {
+            up.borrow_mut().on_up();
+        })
+    }
+}
+
+impl<T: InteractiveElement> PanelDragArea for T {}
+
+pub struct Surface {
+    kind: SurfaceKind,
+    title: String,
+    app_id: Option<String>,
+    placement: MonitorPlacement,
+    timeout: Option<Duration>,
+    size: Size<Pixels>,
+    retain_on_dismiss: bool,
+}
+
+pub struct OpenedSurface<V> {
+    pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
+    pub(crate) dismisser: SurfaceDismisser,
+    kind: SurfaceKind,
+    placement: MonitorPlacement,
+    bounds: Bounds<Pixels>,
+    constrains_size: bool,
+    visible: Rc<Cell<bool>>,
+    reveal_pending: Rc<Cell<bool>>,
+}
+
+type CloseWindow = Box<dyn Fn(&mut App)>;
+
+struct DismissState {
+    close: RefCell<Option<CloseWindow>>,
+    generation: Cell<u64>,
+    reusable: bool,
+    title: RefCell<String>,
+    size: Cell<Size<Pixels>>,
+    expected_viewport: Rc<Cell<Size<Pixels>>>,
+    constrains_size: bool,
+    visible: Rc<Cell<bool>>,
+    reveal_pending: Rc<Cell<bool>>,
+}
+
+#[derive(Clone)]
+pub struct SurfaceDismisser {
+    state: Rc<DismissState>,
+}
+
+impl SurfaceDismisser {
+    fn new(
+        reusable: bool,
+        title: String,
+        size: Size<Pixels>,
+        constrains_size: bool,
+        visible: Rc<Cell<bool>>,
+        reveal_pending: Rc<Cell<bool>>,
+    ) -> Self {
+        Self {
+            state: Rc::new(DismissState {
+                close: RefCell::new(None),
+                generation: Cell::new(0),
+                reusable,
+                title: RefCell::new(title),
+                size: Cell::new(size),
+                expected_viewport: Rc::new(Cell::new(size)),
+                constrains_size,
+                visible,
+                reveal_pending,
+            }),
+        }
+    }
+
+    pub fn window_size(&self) -> Size<Pixels> {
+        self.state.size.get()
+    }
+
+    pub fn resize_window(&self, size: Size<Pixels>, window: &mut Window) -> bool {
+        if !self.state.visible.get() && !self.state.reveal_pending.get() {
+            return false;
+        }
+        let title = self.current_title();
+        if self.state.constrains_size && !constrain_native_size(&title, size) {
+            return false;
+        }
+        window.resize(size);
+        self.state.size.set(size);
+        self.state.expected_viewport.set(size);
+        true
+    }
+
+    pub fn reposition_window(&self, origin: Point<Pixels>) -> bool {
+        crate::popup_window::reposition_window_by_title(
+            &self.current_title(),
+            origin.x.to_f64(),
+            origin.y.to_f64(),
+        )
+    }
+
+    /// The reserved window title; carries a "-N" suffix when the requested title was still live at open.
+    pub fn current_title(&self) -> String {
+        self.state.title.borrow().clone()
+    }
+
+    pub(crate) fn retitle(&self, window: &mut Window, title: String) {
+        release_surface_title(&self.state.title.borrow());
+        let reserved = reserve_surface_title(&title);
+        window.set_window_title(&reserved);
+        *self.state.title.borrow_mut() = reserved;
+    }
+
+    pub fn dismiss(&self, cx: &mut App) {
+        cancel_focus_reassert();
+        self.state
+            .generation
+            .set(self.state.generation.get().wrapping_add(1));
+        if self.state.reusable {
+            let state = self.state.clone();
+            cx.defer(move |cx| {
+                if let Some(close) = state.close.borrow().as_ref() {
+                    close(cx);
+                }
+            });
+            return;
+        }
+        if let Some(close) = self.state.close.borrow_mut().take() {
+            cx.defer(move |cx| close(cx));
+        }
+    }
+}
+
+impl Surface {
+    pub fn new(kind: SurfaceKind) -> Self {
+        let placement = match kind {
+            SurfaceKind::Toast => MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => MonitorPlacement::center(),
+        };
+        Self {
+            kind,
+            title: "qol-surface".into(),
+            app_id: None,
+            placement,
+            timeout: None,
+            size: size(px(320.0), px(72.0)),
+            retain_on_dismiss: false,
+        }
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = Some(app_id.into());
+        self
+    }
+
+    pub fn placement(mut self, placement: MonitorPlacement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn size(mut self, size: Size<Pixels>) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub(crate) fn retain_on_dismiss(mut self) -> Self {
+        self.retain_on_dismiss = true;
+        self
+    }
+
+    pub fn show<V: Render + 'static>(
+        self,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<SurfaceDismisser> {
+        self.open(tracker, cx, |dismisser, window, cx| {
+            build(dismisser, window, cx)
+        })
+        .map(|opened| opened.dismisser)
+    }
+
+    pub fn show_focused<V: Render + Focusable + 'static>(
+        self,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<OpenedSurface<V>> {
+        self.open(tracker, cx, |dismisser, window, cx| {
+            let view = build(dismisser, window, cx);
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view
+        })
+    }
+
+    pub fn show_focused_on<V: Render + Focusable + 'static>(
+        self,
+        monitor: &ActiveMonitor,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<OpenedSurface<V>> {
+        self.open_on(Some(monitor), cx, |dismisser, window, cx| {
+            let view = build(dismisser, window, cx);
+            window.focus(&view.focus_handle(cx));
+            window.activate_window();
+            view
+        })
+    }
+
+    /// Panel and OverlayPanel surfaces center on the primary display when no monitor
+    /// state is available; Toast requires cursor state.
+    pub(crate) fn open<V: Render + 'static>(
+        self,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<OpenedSurface<V>> {
+        let monitor = match self.kind {
+            SurfaceKind::Toast => Some(
+                tracker
+                    .snapshot_cursor()
+                    .map(|(monitor, _)| monitor)
+                    .ok_or_else(|| anyhow!("no monitor state available for surface placement"))?,
+            ),
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => tracker.snapshot_monitor(),
+        };
+        self.open_on(monitor.as_ref(), cx, build)
+    }
+
+    fn open_on<V: Render + 'static>(
+        self,
+        monitor: Option<&ActiveMonitor>,
+        cx: &mut App,
+        build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
+    ) -> Result<OpenedSurface<V>> {
+        let bounds = monitor
+            .map(|m| self.resolved_bounds(m))
+            .unwrap_or_else(|| Bounds::centered(None, self.size, cx));
+        let title = reserve_surface_title(&self.title);
+        let constrains_size = self.constrains_size();
+        let reveal_after_move = matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel);
+        let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
+        let passive_reveal_gate =
+            matches!(self.kind, SurfaceKind::Toast) && supports_native_reveal_gate();
+        let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
+        let resolved_app_id = resolved_app_id(&self.app_id, &title);
+        let applies_settings_identity = resolved_app_id == qol_conventions::SETTINGS_SURFACE_APP_ID;
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id: crate::window::display_id_for_monitor(monitor, cx),
+            titlebar: None,
+            window_decorations: Some(WindowDecorations::Client),
+            kind: self.window_kind(),
+            focus: self.takes_focus(),
+            show: !native_reveal_gate && !passive_reveal_gate,
+            is_movable: true,
+            is_resizable: !constrains_size,
+            window_background: WindowBackgroundAppearance::Transparent,
+            app_id: Some(resolved_app_id),
+            ..Default::default()
+        };
+        let visible = Rc::new(Cell::new(!native_reveal_gate && !passive_reveal_gate));
+        let reveal_pending = Rc::new(Cell::new(native_reveal_gate));
+        let dismisser = SurfaceDismisser::new(
+            retain_on_dismiss,
+            title.clone(),
+            self.size,
+            constrains_size,
+            visible.clone(),
+            reveal_pending.clone(),
+        );
+        let build_dismisser = dismisser.clone();
+        let window_title = title.clone();
+        if self.takes_focus() {
+            crate::popup_window::capture_focus_return();
+        }
+        let handle = match cx.open_window(options, move |window, cx| {
+            window.set_window_title(&window_title);
+            crate::platform::square_window_corners(window);
+            if applies_settings_identity {
+                crate::platform::apply_settings_surface_identity(window);
+            }
+            let inner = cx.new(|cx| build(build_dismisser, window, cx));
+            cx.new(|cx| {
+                let bounds_subscription = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
+                SurfaceRoot {
+                    inner,
+                    _bounds_subscription: bounds_subscription,
+                }
+            })
+        }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                release_surface_title(&title);
+                return Err(error);
+            }
+        };
+        let dismiss_state = dismisser.state.clone();
+        let dismiss_visible = visible.clone();
+        let dismiss_reveal_pending = reveal_pending.clone();
+        let lease_owner = title.clone();
+        dismisser
+            .state
+            .close
+            .borrow_mut()
+            .replace(Box::new(move |cx: &mut App| {
+                dismiss_visible.set(false);
+                dismiss_reveal_pending.set(false);
+                crate::popup_window::restore_composite(&lease_owner);
+                if retain_on_dismiss {
+                    let current_title = dismiss_state.title.borrow().clone();
+                    let _reason = crate::popup_window::reason_scope("surface-dismiss");
+                    let _presentation = crate::popup_window::presentation_guard();
+                    crate::popup_window::set_window_type_dock_by_title(&current_title);
+                    if crate::popup_window::hide_invisible(&current_title) {
+                        return;
+                    }
+                }
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                release_surface_title(&dismiss_state.title.borrow());
+            }));
+        if let Some(timeout) = self.timeout {
+            schedule_dismiss(dismisser.clone(), timeout, cx);
+        }
+        if passive_reveal_gate {
+            let _reason = crate::popup_window::reason_scope("surface-toast");
+            let mut configured = crate::popup_window::configure_popup_window(&title);
+            crate::popup_window::present_topmost(&title);
+            if !configured {
+                configured = crate::popup_window::configure_popup_window(&title);
+            }
+            let shown = crate::popup_window::show_window_interactive_by_title(&title);
+            visible.set(shown);
+            #[cfg(target_os = "linux")]
+            let configure_key = "docked";
+            #[cfg(not(target_os = "linux"))]
+            let configure_key = "configured";
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=toast-ready {configure_key}={configured} shown={shown}"
+            );
+            if !shown {
+                crate::popup_window::restore_composite(&title);
+                release_surface_title(&title);
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                return Err(anyhow!("surface could not present passive toast"));
+            }
+        }
+        if native_reveal_gate {
+            let _reason = crate::popup_window::reason_scope("surface-open");
+            let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
+            let size_constrained = !constrains_size || constrain_native_size(&title, bounds.size);
+            let fresh_frame = (hidden && size_constrained)
+                .then(|| {
+                    schedule_fresh_frame(handle, dismisser.state.expected_viewport.clone(), cx)
+                })
+                .flatten();
+            let frame_scheduled = fresh_frame.is_some();
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=opened hidden={hidden} fixed_size={} size_constrained={size_constrained} frame_scheduled={frame_scheduled} x={} y={}",
+                constrains_size,
+                bounds.origin.x.to_f64(),
+                bounds.origin.y.to_f64()
+            );
+            if !frame_scheduled {
+                release_surface_title(&title);
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                if !size_constrained {
+                    return Err(anyhow!(
+                        "surface could not constrain its native window size"
+                    ));
+                }
+                return Err(anyhow!("surface could not prepare a fresh frame"));
+            }
+            settle_then_reveal(
+                PendingReveal {
+                    handle,
+                    title: title.clone(),
+                    kind: self.kind,
+                    anchor: RevealAnchor {
+                        placement: self.placement,
+                        bounds,
+                    },
+                    visible: visible.clone(),
+                    reveal_pending: reveal_pending.clone(),
+                    fresh_frame: fresh_frame.expect("fresh frame was scheduled"),
+                    dismiss_generation: dismisser.state.generation.get(),
+                    dismiss_state: dismisser.state.clone(),
+                },
+                cx,
+            );
+        }
+        Ok(OpenedSurface {
+            handle,
+            dismisser,
+            kind: self.kind,
+            placement: self.placement,
+            bounds,
+            constrains_size,
+            visible,
+            reveal_pending,
+        })
+    }
+
+    fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
+        self.placement.bounds(monitor.bounds(), self.size)
+    }
+
+    fn window_kind(&self) -> WindowKind {
+        match self.kind {
+            SurfaceKind::Toast => WindowKind::PopUp,
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => WindowKind::Normal,
+        }
+    }
+
+    fn takes_focus(&self) -> bool {
+        match self.kind {
+            SurfaceKind::Toast => false,
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => true,
+        }
+    }
+
+    fn constrains_size(&self) -> bool {
+        matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel)
+    }
+}
+
+pub(crate) struct SurfaceRoot<V> {
+    pub(crate) inner: Entity<V>,
+    _bounds_subscription: Subscription,
+}
+
+impl<V: Render + 'static> Render for SurfaceRoot<V> {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .font_family(qol_theme::font_ui())
+            .child(self.inner.clone())
+    }
+}
+
+static PANEL_FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
+static LIVE_SURFACE_TITLES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn cancel_focus_reassert() {
+    PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+fn reserve_surface_title(base: &str) -> String {
+    let mut live = LIVE_SURFACE_TITLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if live.insert(base.to_owned()) {
+        return base.to_owned();
+    }
+    let mut suffix = 1;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if live.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn release_surface_title(title: &str) {
+    LIVE_SURFACE_TITLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(title);
+}
+
+fn resolved_app_id(app_id: &Option<String>, title: &str) -> String {
+    app_id.clone().unwrap_or_else(|| title.to_owned())
+}
+
+fn supports_native_reveal_gate() -> bool {
+    Platform::supports_native_reveal_gate()
+}
+
+fn constrain_native_size(title: &str, size: Size<Pixels>) -> bool {
+    !supports_native_reveal_gate()
+        || crate::popup_window::set_window_fixed_size_by_title(title, size)
+}
+
+#[derive(Clone, Copy)]
+struct RevealAnchor {
+    placement: MonitorPlacement,
+    bounds: Bounds<Pixels>,
+}
+
+impl RevealAnchor {
+    fn origin_for(self, content: Size<Pixels>) -> Point<Pixels> {
+        self.placement.resized(self.bounds, content).origin
+    }
+}
+
+struct PendingReveal<V: Render + 'static> {
+    handle: WindowHandle<SurfaceRoot<V>>,
+    title: String,
+    kind: SurfaceKind,
+    anchor: RevealAnchor,
+    visible: Rc<Cell<bool>>,
+    reveal_pending: Rc<Cell<bool>>,
+    fresh_frame: FreshFrame,
+    dismiss_generation: u64,
+    dismiss_state: Rc<DismissState>,
+}
+
+const STATE_RESTORE_MAX_ATTEMPTS: u32 = 2;
+
+fn state_restore_needs_retry(attempts: u32, normal: bool) -> bool {
+    !normal && attempts < STATE_RESTORE_MAX_ATTEMPTS
+}
+
+fn restore_window_state_verified(title: &str, reused: bool, reason: &str) -> bool {
+    let mut attempts = 0u32;
+    let (shown, normal) = loop {
+        attempts += 1;
+        let shown = {
+            let _reason = crate::popup_window::reason_scope(reason);
+            crate::popup_window::show_normal_window_by_title(title)
+        };
+        let normal = crate::popup_window::window_presentation_is_normal_by_title(title);
+        if !state_restore_needs_retry(attempts, normal) {
+            break (shown, normal);
+        }
+    };
+    qol_runtime::probe!(
+        "SURFACE_REVEAL",
+        "title={title} phase=state-restored attempts={attempts} shown={shown} normal={normal} reused={reused}"
+    );
+    shown
+}
+
+fn restore_reveal_state_verified(
+    title: &str,
+    reused: bool,
+    reason: &str,
+    kind: SurfaceKind,
+) -> bool {
+    match kind {
+        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason),
+        SurfaceKind::Toast | SurfaceKind::Panel => {
+            restore_window_state_verified(title, reused, reason)
+        }
+    }
+}
+
+fn restore_overlay_state(title: &str, reused: bool, reason: &str) -> bool {
+    let configured = crate::popup_window::configure_overlay_window(title);
+    let shown = {
+        let _reason = crate::popup_window::reason_scope(reason);
+        crate::popup_window::show_window_by_title(title)
+    };
+    qol_runtime::probe!(
+        "SURFACE_REVEAL",
+        "title={title} phase=state-restored shown={shown} overlay_configured={configured} reused={reused}"
+    );
+    shown
+}
+
+fn show_after_timeout(title: &str, reused: bool, reason: &str, kind: SurfaceKind) -> bool {
+    match kind {
+        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason),
+        SurfaceKind::Toast | SurfaceKind::Panel => {
+            let _reason = crate::popup_window::reason_scope(reason);
+            crate::popup_window::show_normal_window_by_title(title)
+        }
+    }
+}
+
+fn reassert_revealed_focus(title: &str, commit_gen: u64, kind: SurfaceKind) {
+    match kind {
+        SurfaceKind::OverlayPanel => crate::popup_window::reassert_focus_until_held(
+            title,
+            &PANEL_FOCUS_GENERATION,
+            commit_gen,
+        ),
+        SurfaceKind::Toast | SurfaceKind::Panel => {
+            crate::popup_window::reassert_normal_focus_until_held(
+                title,
+                &PANEL_FOCUS_GENERATION,
+                commit_gen,
+            )
+        }
+    }
+}
+
+fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut App) {
+    let PendingReveal {
+        handle,
+        title,
+        kind,
+        anchor,
+        visible,
+        reveal_pending,
+        fresh_frame,
+        dismiss_generation,
+        dismiss_state,
+    } = pending;
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let outcome = await_reveal_readiness(
+            cx,
+            &title,
+            &fresh_frame,
+            |_| reveal_cancelled(&dismiss_state, dismiss_generation),
+            || Some(anchor.origin_for(dismiss_state.size.get())),
+        )
+        .await;
+        let readiness = RevealReadiness {
+            moved: outcome.moved,
+            layout_confirmed: outcome.proof.layout_confirmed,
+            viewport_ready: outcome.proof.viewport_ready,
+            fresh_frame: outcome.proof.fresh_frame,
+            content_rendered: outcome.proof.content_rendered,
+        };
+        let attempts = outcome.attempts;
+        #[cfg(not(debug_assertions))]
+        let _ = &attempts;
+        if outcome.cancelled {
+            reveal_pending.set(false);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=cancelled attempts={attempts} session={} reason=dismissed",
+                outcome.session_connected()
+            );
+            return;
+        }
+        let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
+        if !matches!(window_exists, Ok(true)) {
+            reveal_pending.set(false);
+            return;
+        }
+        if dismiss_state.generation.get() != dismiss_generation {
+            reveal_pending.set(false);
+            return;
+        }
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} layout_epoch={}/{} render_epoch={}/{} gpu_completed_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
+            readiness.moved,
+            readiness.layout_confirmed,
+            readiness.viewport_ready,
+            readiness.fresh_frame,
+            readiness.content_rendered,
+            outcome.proof.layout_epoch,
+            outcome.proof.required_layout_epoch,
+            outcome.proof.render_epoch,
+            outcome.proof.required_render_epoch,
+            outcome.proof.presented_epoch,
+            outcome.proof.expected_viewport.width.to_f64(),
+            outcome.proof.expected_viewport.height.to_f64(),
+            outcome.proof.observed_viewport.width.to_f64(),
+            outcome.proof.observed_viewport.height.to_f64(),
+            outcome.proof.rendered_viewport.width.to_f64(),
+            outcome.proof.rendered_viewport.height.to_f64()
+        );
+        if !readiness.ready() {
+            reveal_pending.set(false);
+            if Platform::reveal_fail_open() {
+                let shown = show_after_timeout(&title, false, "surface-reveal-timeout", kind);
+                visible.set(shown);
+                qol_runtime::probe!(
+                    "SURFACE_REVEAL",
+                    "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} reason=frame-not-ready fallback=fail-open",
+                    readiness.moved,
+                    readiness.layout_confirmed,
+                    readiness.viewport_ready,
+                    readiness.fresh_frame,
+                    readiness.content_rendered
+                );
+                return;
+            }
+            let _ = cx.update(|cx| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            });
+            release_surface_title(&dismiss_state.title.borrow());
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reason=frame-not-ready",
+                readiness.moved,
+                readiness.layout_confirmed,
+                readiness.viewport_ready,
+                readiness.fresh_frame,
+                readiness.content_rendered
+            );
+            return;
+        }
+        let shown = restore_reveal_state_verified(&title, false, "surface-reveal", kind);
+        let repaint_requested = shown
+            && cx
+                .update(|cx| request_surface_repaint(handle, cx))
+                .unwrap_or(false);
+        #[cfg(not(debug_assertions))]
+        let _ = &repaint_requested;
+        visible.set(shown);
+        reveal_pending.set(false);
+        #[cfg(debug_assertions)]
+        {
+            if shown && repaint_requested {
+                let paint_started = std::time::Instant::now();
+                let paint_title = title.clone();
+                let registered = cx
+                    .update(|cx| {
+                        handle
+                            .update(cx, |_, window, _| {
+                                window.on_next_frame(move |_, _| {
+                                    trace_revealed(
+                                        &paint_title,
+                                        readiness,
+                                        attempts,
+                                        shown,
+                                        repaint_requested,
+                                        Some(paint_started.elapsed().as_millis()),
+                                    );
+                                });
+                            })
+                            .is_ok()
+                    })
+                    .unwrap_or(false);
+                if !registered {
+                    trace_revealed(&title, readiness, attempts, shown, repaint_requested, None);
+                }
+            } else {
+                trace_revealed(&title, readiness, attempts, shown, repaint_requested, None);
+            }
+        }
+        let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        reassert_revealed_focus(&title, focus_commit, kind);
+        for _ in 0..3 {
+            if reveal_cancelled(&dismiss_state, dismiss_generation) {
+                break;
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            if reveal_cancelled(&dismiss_state, dismiss_generation) {
+                break;
+            }
+            outcome.reposition(&title, anchor.origin_for(dismiss_state.size.get()));
+        }
+        let _ = cx.update(|cx| trace_ready(title, false, cx));
+    })
+    .detach();
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RevealReadiness {
+    moved: bool,
+    layout_confirmed: bool,
+    viewport_ready: bool,
+    fresh_frame: bool,
+    content_rendered: bool,
+}
+
+#[cfg(debug_assertions)]
+fn trace_revealed(
+    title: &str,
+    readiness: RevealReadiness,
+    attempts: usize,
+    shown: bool,
+    repaint_requested: bool,
+    first_paint_latency_ms: Option<u128>,
+) {
+    qol_runtime::probe!(
+        "SURFACE_REVEAL",
+        "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} repaint_requested={repaint_requested} first_paint_latency_ms={}",
+        readiness.moved,
+        readiness.layout_confirmed,
+        readiness.viewport_ready,
+        readiness.fresh_frame,
+        readiness.content_rendered,
+        first_paint_latency_ms.map_or_else(|| "none".to_owned(), |ms| ms.to_string())
+    );
+}
+
+impl RevealReadiness {
+    fn ready(self) -> bool {
+        self.moved
+            && self.layout_confirmed
+            && self.viewport_ready
+            && self.fresh_frame
+            && self.content_rendered
+    }
+}
+
+fn request_surface_repaint<V: Render + 'static>(
+    handle: WindowHandle<SurfaceRoot<V>>,
+    cx: &mut App,
+) -> bool {
+    handle
+        .update(cx, |root, window, cx| {
+            root.inner.update(cx, |_, cx| cx.notify());
+            cx.notify();
+            window.refresh();
+        })
+        .is_ok()
+}
+
+fn reveal_cancelled(dismiss_state: &DismissState, dismiss_generation: u64) -> bool {
+    dismiss_state.generation.get() != dismiss_generation
+}
+
+impl<V> OpenedSurface<V> {
+    pub(crate) fn anchored_origin(&self, content: Size<Pixels>) -> Point<Pixels> {
+        RevealAnchor {
+            placement: self.placement,
+            bounds: self.bounds,
+        }
+        .origin_for(content)
+    }
+}
+
+impl<V: Render + 'static> OpenedSurface<V> {
+    pub fn update_view<R>(
+        &self,
+        cx: &mut App,
+        f: impl FnOnce(&mut V, &mut Window, &mut Context<V>) -> R,
+    ) -> Option<R> {
+        self.handle
+            .update(cx, |root, window, cx| {
+                let inner = root.inner.clone();
+                inner.update(cx, |view, cx| f(view, window, cx))
+            })
+            .ok()
+    }
+}
+
+impl<V: Render + Focusable + 'static> OpenedSurface<V> {
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible.get()
+    }
+
+    fn size(&self) -> Size<Pixels> {
+        self.dismisser.window_size()
+    }
+
+    pub fn present(&mut self, tracker: &MonitorTracker, cx: &mut App) -> bool {
+        if self.handle.update(cx, |_, _, _| ()).is_err() {
+            return false;
+        }
+        if !self.visible.get() {
+            if self.reveal_pending.get() {
+                self.dismisser
+                    .state
+                    .generation
+                    .set(self.dismisser.state.generation.get().wrapping_add(1));
+                self.reveal_pending.set(false);
+            }
+            let bounds = match (self.kind, tracker.snapshot_monitor()) {
+                (_, Some(monitor)) => self.placement.bounds(monitor.bounds(), self.size()),
+                (SurfaceKind::Toast, None) => return false,
+                (SurfaceKind::Panel | SurfaceKind::OverlayPanel, None) => {
+                    Bounds::centered(None, self.size(), cx)
+                }
+            };
+            crate::popup_window::capture_focus_return();
+            let title = self.dismisser.current_title();
+            if self.constrains_size && !constrain_native_size(&title, bounds.size) {
+                return false;
+            }
+            let resized = self
+                .handle
+                .update(cx, |_, window, _| window.resize(bounds.size))
+                .is_ok();
+            if !resized {
+                return false;
+            }
+            let prepared = {
+                let _reason = crate::popup_window::reason_scope("surface-reuse");
+                crate::popup_window::prepare_window_reveal_by_title(&title)
+            };
+            if !prepared {
+                return false;
+            }
+            self.dismisser.state.expected_viewport.set(bounds.size);
+            let expected = self.dismisser.state.expected_viewport.clone();
+            let Some(fresh_frame) = schedule_fresh_frame(self.handle, expected, cx) else {
+                let _ = crate::popup_window::hide_invisible(&title);
+                return false;
+            };
+            self.reveal_pending.set(true);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=opened hidden=true frame_scheduled=true reused=true x={} y={}",
+                bounds.origin.x.to_f64(),
+                bounds.origin.y.to_f64()
+            );
+            settle_then_reveal_reused(
+                PendingReveal {
+                    handle: self.handle,
+                    title,
+                    kind: self.kind,
+                    anchor: RevealAnchor {
+                        placement: self.placement,
+                        bounds,
+                    },
+                    visible: self.visible.clone(),
+                    reveal_pending: self.reveal_pending.clone(),
+                    fresh_frame,
+                    dismiss_generation: self.dismisser.state.generation.get(),
+                    dismiss_state: self.dismisser.state.clone(),
+                },
+                cx,
+            );
+            return true;
+        }
+        self.handle
+            .update(cx, |root, window, cx| {
+                let focus = root.inner.read(cx).focus_handle(cx);
+                window.activate_window();
+                window.focus(&focus);
+            })
+            .is_ok()
+    }
+
+    pub(crate) fn resize(&mut self, size: Size<Pixels>, cx: &mut App) -> anyhow::Result<()> {
+        let title = self.dismisser.current_title();
+        if self.constrains_size && !constrain_native_size(&title, size) {
+            return Err(anyhow!(
+                "surface could not update its native size constraint"
+            ));
+        }
+        self.handle.update(cx, |_, window, _| window.resize(size))?;
+        self.dismisser.state.size.set(size);
+        self.dismisser.state.expected_viewport.set(size);
+        Ok(())
+    }
+}
+
+fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
+    pending: PendingReveal<V>,
+    cx: &mut App,
+) {
+    let PendingReveal {
+        handle,
+        title,
+        kind,
+        anchor,
+        visible,
+        reveal_pending,
+        fresh_frame,
+        dismiss_generation,
+        dismiss_state,
+    } = pending;
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let outcome = await_reveal_readiness(
+            cx,
+            &title,
+            &fresh_frame,
+            |_| reveal_cancelled(&dismiss_state, dismiss_generation),
+            || Some(anchor.origin_for(dismiss_state.size.get())),
+        )
+        .await;
+        let readiness = RevealReadiness {
+            moved: outcome.moved,
+            layout_confirmed: outcome.proof.layout_confirmed,
+            viewport_ready: outcome.proof.viewport_ready,
+            fresh_frame: outcome.proof.fresh_frame,
+            content_rendered: outcome.proof.content_rendered,
+        };
+        let attempts = outcome.attempts;
+        #[cfg(not(debug_assertions))]
+        let _ = &attempts;
+        if outcome.cancelled {
+            reveal_pending.set(false);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=cancelled attempts={attempts} reused=true session={} reason=dismissed",
+                outcome.session_connected()
+            );
+            return;
+        }
+        let window_exists = cx.update(|cx| handle.update(cx, |_, _, _| ()).is_ok());
+        if !matches!(window_exists, Ok(true)) {
+            reveal_pending.set(false);
+            return;
+        }
+        if dismiss_state.generation.get() != dismiss_generation {
+            reveal_pending.set(false);
+            return;
+        }
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=frame-ready moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} reused=true layout_epoch={}/{} render_epoch={}/{} gpu_completed_epoch={} expected={}x{} observed={}x{} rendered={}x{}",
+            readiness.moved,
+            readiness.layout_confirmed,
+            readiness.viewport_ready,
+            readiness.fresh_frame,
+            readiness.content_rendered,
+            outcome.proof.layout_epoch,
+            outcome.proof.required_layout_epoch,
+            outcome.proof.render_epoch,
+            outcome.proof.required_render_epoch,
+            outcome.proof.presented_epoch,
+            outcome.proof.expected_viewport.width.to_f64(),
+            outcome.proof.expected_viewport.height.to_f64(),
+            outcome.proof.observed_viewport.width.to_f64(),
+            outcome.proof.observed_viewport.height.to_f64(),
+            outcome.proof.rendered_viewport.width.to_f64(),
+            outcome.proof.rendered_viewport.height.to_f64()
+        );
+        if !readiness.ready() {
+            reveal_pending.set(false);
+            if Platform::reveal_fail_open() {
+                let shown = show_after_timeout(&title, true, "surface-reuse-timeout", kind);
+                visible.set(shown);
+                qol_runtime::probe!(
+                    "SURFACE_REVEAL",
+                    "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown={shown} reused=true reason=frame-not-ready fallback=fail-open",
+                    readiness.moved,
+                    readiness.layout_confirmed,
+                    readiness.viewport_ready,
+                    readiness.fresh_frame,
+                    readiness.content_rendered
+                );
+                return;
+            }
+            let _reason = crate::popup_window::reason_scope("surface-reuse-timeout");
+            let _ = crate::popup_window::hide_invisible(&title);
+            qol_runtime::probe!(
+                "SURFACE_REVEAL",
+                "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reused=true reason=frame-not-ready",
+                readiness.moved,
+                readiness.layout_confirmed,
+                readiness.viewport_ready,
+                readiness.fresh_frame,
+                readiness.content_rendered
+            );
+            return;
+        }
+        let shown = restore_reveal_state_verified(&title, true, "surface-reuse-reveal", kind);
+        visible.set(shown);
+        reveal_pending.set(false);
+        if !shown {
+            return;
+        }
+        let repaint_requested = cx
+            .update(|cx| {
+                handle
+                    .update(cx, |root, window, cx| {
+                        let focus = root.inner.read(cx).focus_handle(cx);
+                        window.activate_window();
+                        window.focus(&focus);
+                        root.inner.update(cx, |_, cx| cx.notify());
+                        cx.notify();
+                        window.refresh();
+                    })
+                    .is_ok()
+            })
+            .unwrap_or(false);
+        #[cfg(not(debug_assertions))]
+        let _ = &repaint_requested;
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=true reused=true repaint_requested={repaint_requested}",
+            readiness.moved,
+            readiness.layout_confirmed,
+            readiness.viewport_ready,
+            readiness.fresh_frame,
+            readiness.content_rendered
+        );
+        let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        reassert_revealed_focus(&title, focus_commit, kind);
+        let _ = cx.update(|cx| trace_ready(title, true, cx));
+    })
+    .detach();
+}
+
+fn trace_ready(title: String, reused: bool, cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        for attempt in 0..=REUSED_REVEAL_MAX_ATTEMPTS {
+            #[cfg(not(debug_assertions))]
+            let _ = attempt;
+            let visible = cx
+                .update(|_| crate::popup_window::visible_windows_by_title_prefix(&title))
+                .unwrap_or_default()
+                > 0;
+            let focused = visible
+                && cx
+                    .update(|_| crate::popup_window::window_holds_input_focus(&title))
+                    .ok()
+                    .flatten()
+                    .unwrap_or(false);
+            if focused {
+                qol_runtime::probe!(
+                    "SURFACE_REVEAL",
+                    "title={title} phase=ready focus=true attempts={attempt} reused={reused}"
+                );
+                return;
+            }
+            cx.background_executor()
+                .timer(REUSED_REVEAL_SAMPLE_INTERVAL)
+                .await;
+        }
+        qol_runtime::probe!(
+            "SURFACE_REVEAL",
+            "title={title} phase=ready focus=false attempts={REUSED_REVEAL_MAX_ATTEMPTS} reused={reused}"
+        );
+    })
+    .detach();
+}
+
+fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App) {
+    let scheduled = dismisser.state.generation.get();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        cx.background_executor().timer(timeout).await;
+        if dismisser.state.generation.get() != scheduled {
+            return;
+        }
+        let _ = cx.update(|cx| dismisser.dismiss(cx));
+    })
+    .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::platform::SurfacePlatform;
+    use super::{
+        cancel_focus_reassert, resolved_app_id, reveal_cancelled, state_restore_needs_retry,
+        DragGestureState, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+        PANEL_FOCUS_GENERATION,
+    };
+    use crate::placement::MonitorPlacement;
+    use gpui::{point, px, size, Pixels, WindowKind};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::atomic::Ordering;
+
+    fn at(x: f32, y: f32) -> gpui::Point<Pixels> {
+        point(px(x), px(y))
+    }
+
+    #[test]
+    fn drag_gesture_plain_click_never_starts_a_move() {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(at(10.0, 10.0));
+        assert!(!g.on_move(at(11.0, 10.0), true));
+        assert!(!g.is_moving());
+        g.on_up();
+        assert!(!g.is_moving());
+    }
+
+    #[test]
+    fn drag_gesture_starts_exactly_once_past_the_threshold() {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(at(0.0, 0.0));
+        assert!(!g.on_move(at(3.9, 0.0), true));
+        assert!(g.on_move(at(4.0, 0.0), true));
+        assert!(g.is_moving());
+        assert!(!g.on_move(at(100.0, 100.0), true));
+        assert!(!g.on_move(at(0.0, 0.0), true));
+        g.on_up();
+        assert!(g.is_moving());
+    }
+
+    #[test]
+    fn drag_gesture_ignores_moves_without_a_press_or_button() {
+        let mut g = DragGestureState::new(4.0);
+        assert!(!g.on_move(at(50.0, 50.0), true));
+        g.on_down(at(0.0, 0.0));
+        assert!(!g.on_move(at(50.0, 50.0), false));
+        assert!(!g.is_moving());
+        g.on_up();
+        assert!(!g.on_move(at(50.0, 50.0), true));
+    }
+
+    #[test]
+    fn drag_gesture_next_press_resets_the_machine() {
+        let mut g = DragGestureState::new(4.0);
+        g.on_down(at(0.0, 0.0));
+        assert!(g.on_move(at(10.0, 0.0), true));
+        assert!(g.is_moving());
+        g.on_down(at(30.0, 30.0));
+        assert!(!g.is_moving());
+        assert!(!g.on_move(at(32.0, 30.0), true));
+        assert!(g.on_move(at(35.0, 30.0), true));
+    }
+
+    #[test]
+    fn drag_gesture_threshold_uses_euclidean_distance() {
+        let mut g = DragGestureState::new(5.0);
+        g.on_down(at(0.0, 0.0));
+        assert!(!g.on_move(at(3.0, 3.0), true));
+        assert!(g.on_move(at(4.0, 3.0), true));
+    }
+
+    #[test]
+    fn surface_app_id_defaults_to_the_unique_title_and_accepts_a_stable_override() {
+        let title = super::reserve_surface_title("QoL Shot Settings");
+        super::release_surface_title(&title);
+        let stable = qol_conventions::SETTINGS_SURFACE_APP_ID;
+
+        assert_eq!(resolved_app_id(&None, &title), title);
+        assert_eq!(
+            resolved_app_id(&Some(stable.to_owned()), &title),
+            stable,
+            "an opted-in identity must not name the plugin that opened the surface"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_surface_is_never_reshown_by_its_focus_reassert() {
+        let commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+
+        cancel_focus_reassert();
+
+        let mut shown = false;
+        let outcome =
+            crate::popup_window::reassert_if_current(&PANEL_FOCUS_GENERATION, commit, || {
+                shown = true;
+                true
+            });
+        assert_eq!(outcome, None);
+        assert!(
+            !shown,
+            "a reassert that outlives the dismiss re-shows a window the surface believes is hidden"
+        );
+    }
+
+    #[test]
+    fn panel_surfaces_are_normal_focusable_windows() {
+        let surface = Surface::new(SurfaceKind::Panel);
+
+        assert_eq!(surface.window_kind(), WindowKind::Normal);
+        assert_eq!(surface.placement, MonitorPlacement::center());
+        assert!(surface.takes_focus());
+        assert!(surface.constrains_size());
+    }
+
+    #[test]
+    fn overlay_panels_are_normal_focusable_windows_centered_on_the_active_monitor() {
+        let surface = Surface::new(SurfaceKind::OverlayPanel);
+
+        assert_eq!(surface.window_kind(), WindowKind::Normal);
+        assert_eq!(surface.placement, MonitorPlacement::center());
+        assert!(surface.takes_focus());
+        assert!(surface.constrains_size());
+    }
+
+    #[test]
+    fn reveal_requires_placement_layout_viewport_content_and_a_completed_frame() {
+        let cases = [
+            (false, false, false, false, false, false),
+            (true, false, true, true, true, false),
+            (true, true, false, true, true, false),
+            (true, true, true, false, true, false),
+            (true, true, true, true, false, false),
+            (true, true, true, true, true, true),
+        ];
+        for (moved, layout_confirmed, viewport_ready, fresh_frame, content_rendered, expected) in
+            cases
+        {
+            assert_eq!(
+                RevealReadiness {
+                    moved,
+                    layout_confirmed,
+                    viewport_ready,
+                    fresh_frame,
+                    content_rendered,
+                }
+                .ready(),
+                expected,
+                "moved={moved} layout_confirmed={layout_confirmed} viewport_ready={viewport_ready} fresh_frame={fresh_frame} content_rendered={content_rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn reveal_wait_is_cancelled_when_the_surface_generation_changes() {
+        let visible = Rc::new(Cell::new(false));
+        let pending = Rc::new(Cell::new(true));
+        let dismisser = SurfaceDismisser::new(
+            true,
+            "test".to_owned(),
+            size(px(10.0), px(10.0)),
+            true,
+            visible,
+            pending,
+        );
+        let generation = dismisser.state.generation.get();
+        assert!(!reveal_cancelled(&dismisser.state, generation));
+        dismisser.state.generation.set(generation.wrapping_add(1));
+        assert!(reveal_cancelled(&dismisser.state, generation));
+    }
+
+    #[test]
+    fn viewport_matching_accepts_native_rounding_only() {
+        let expected = size(px(520.0), px(644.0));
+        let cases = [
+            ("exact", size(px(520.0), px(644.0)), true),
+            ("one point taller", size(px(520.0), px(645.0)), true),
+            ("one point narrower", size(px(519.0), px(644.0)), true),
+            ("too tall", size(px(520.0), px(646.0)), false),
+            ("too wide", size(px(522.0), px(644.0)), false),
+        ];
+
+        for (name, actual, matches) in cases {
+            assert_eq!(
+                super::platform::Platform::viewport_matches(actual, expected, 1.0),
+                matches,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn state_restore_retries_an_unverified_restore_at_most_once() {
+        assert!(state_restore_needs_retry(1, false));
+        assert!(!state_restore_needs_retry(2, false));
+        assert!(!state_restore_needs_retry(1, true));
+        assert!(!state_restore_needs_retry(2, true));
+        assert!(!state_restore_needs_retry(0, true));
+    }
+
+    #[test]
+    fn surface_titles_use_the_base_when_free_and_a_suffix_only_on_collision() {
+        let first = super::reserve_surface_title("Title Registry Panel");
+        assert_eq!(first, "Title Registry Panel");
+
+        let second = super::reserve_surface_title("Title Registry Panel");
+        assert_eq!(second, "Title Registry Panel-1");
+
+        let third = super::reserve_surface_title("Title Registry Panel");
+        assert_eq!(third, "Title Registry Panel-2");
+
+        super::release_surface_title(&first);
+        super::release_surface_title(&second);
+        super::release_surface_title(&third);
+    }
+
+    #[test]
+    fn releasing_a_surface_title_frees_the_base_for_the_next_surface() {
+        let held = super::reserve_surface_title("Title Release Panel");
+        assert_eq!(held, "Title Release Panel");
+        let fallback = super::reserve_surface_title("Title Release Panel");
+        assert_eq!(fallback, "Title Release Panel-1");
+
+        super::release_surface_title(&held);
+        let reused = super::reserve_surface_title("Title Release Panel");
+        assert_eq!(reused, "Title Release Panel");
+
+        super::release_surface_title(&fallback);
+        super::release_surface_title(&reused);
+    }
+
+    #[test]
+    fn a_reserved_title_is_never_handed_out_twice() {
+        let first = super::reserve_surface_title("Title Uniqueness Panel");
+        let second = super::reserve_surface_title("Title Uniqueness Panel");
+        assert_ne!(first, second);
+
+        super::release_surface_title(&first);
+        super::release_surface_title(&second);
+    }
+}

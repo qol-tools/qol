@@ -587,7 +587,7 @@ fn commit_icons_foreground(
         // None. View update enters handle.update where window IS leased and
         // forwards Some(window) into the registry release path.
         if let Ok(mut icache) = cache.lock() {
-            crate::rendering::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
+            qol_gpui::image_registry::extend_with(&mut *icache, rendered.clone(), cx, None);
         }
         let _ = handle.update(cx, |view, window, cx| {
             view.update_icons(rendered, window, cx);
@@ -598,17 +598,10 @@ fn commit_icons_foreground(
 pub(crate) fn build_icon_cache(raw_icons: HashMap<String, crate::discovery::RgbaImage>) -> IconMap {
     let mut cache: IconMap = HashMap::new();
     for (app_name, icon) in raw_icons {
-        let buf = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
-            icon.width as u32,
-            icon.height as u32,
-            icon.data,
-        );
-        if let Some(buf) = buf {
-            let frame = image::Frame::new(buf);
-            cache.insert(
-                app_name,
-                Arc::new(gpui::RenderImage::new(smallvec::smallvec![frame])),
-            );
+        if let Some(image) =
+            qol_gpui::image::render_image(icon.data, icon.width as u32, icon.height as u32)
+        {
+            cache.insert(app_name, image);
         }
     }
     cache
@@ -652,7 +645,7 @@ async fn run_capture(
     job: Queued<PreviewCaptureRequest>,
     scheduler: &PreviewCaptureScheduler,
 ) -> CaptureResult {
-    use crate::rendering::preview_image::{bgra_to_render_image, shot_request_dims};
+    use crate::rendering::preview_image::shot_request_dims;
 
     let generation = job.generation;
     let request = job.value;
@@ -718,7 +711,9 @@ async fn run_capture(
             CaptureResult::with_capture(outcome, capture_duration)
         }
         BlockingCaptureResult::Preview(Some(rgba)) => {
-            let Some(image) = bgra_to_render_image(rgba.data, rgba.width, rgba.height) else {
+            let Some(image) =
+                qol_gpui::image::render_image(rgba.data, rgba.width as u32, rgba.height as u32)
+            else {
                 return CaptureResult::with_capture(
                     CaptureOutcome::Empty("decode_failed"),
                     capture_duration,
@@ -865,12 +860,7 @@ fn commit_preview(
                 return false;
             }
             if let Ok(mut cache) = cache.lock() {
-                crate::rendering::image_registry::extend_with(
-                    &mut *cache,
-                    shared_previews,
-                    cx,
-                    None,
-                );
+                qol_gpui::image_registry::extend_with(&mut *cache, shared_previews, cx, None);
                 #[cfg(debug_assertions)]
                 crate::rendering::preview_trace::record_shared_fill([wid]);
             }

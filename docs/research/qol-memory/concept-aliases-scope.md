@@ -135,7 +135,7 @@ admission (human-invoked, gate-gated, the ONLY alias admission)
 
 Recommendation: a curated (query_term -> [expansion_terms]) mapping at
 TOKEN level, stored in
-../../../plugins/qol-memory/assets/concept-aliases.json
+../../../plugins/memory/assets/concept-aliases.json
 (schema {schema: 1, note, aliases: {term: [terms]}}), maintained by the
 human/architect only, admission by the gate-local instrument (E). NOT
 (canonical -> variants) in the inverted sense, and NOT query-phrase ->
@@ -372,7 +372,7 @@ Rationale:
 
 ### G. Where the mapping lives
 
-Recommendation: repo file ../../../plugins/qol-memory/assets/concept-aliases.json,
+Recommendation: repo file ../../../plugins/memory/assets/concept-aliases.json,
 committed with the system (eval-as-artifact, qol-memory.md:172), read-only
 at runtime, loaded once by ask.mjs at startup like the glossary. NOT
 store-side.

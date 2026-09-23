@@ -12,11 +12,16 @@ type = "select"
 label = "Center Size Mode"
 section = "center"
 default = "pixels"
+card_description = "How big a centered window gets."
 options = ["pixels", "percent"]
 
 [field.center_mode.option_labels]
 pixels = "Fixed Size"
 percent = "Relative Size"
+
+[field.center_mode.option_pictures]
+pixels = "fixed-size"
+percent = "relative-size"
 
 [field.center_width_px]
 type = "number"

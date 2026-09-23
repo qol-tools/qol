@@ -1,17 +1,18 @@
 [plugin]
-id = "plugin-window-actions"
+id = "qol-window-actions"
 uid = "9fb4b550-714a-4723-b342-7a62c766cf56"
 name = "Window Actions"
 description = "Window snapping, centering, and multi-monitor management"
-version = "2.32.0"
+version = "2.42.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "window-actions"
+command = "qol-window-actions"
 
 [capabilities]
 doctor = true
+permissions = ["input-capture"]
 gpui = true
 
 [action.snap-left]
@@ -73,11 +74,12 @@ continuous = true
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [daemon]
 enabled = true
-command = "window-actions"
+command = "qol-window-actions"
 socket = "/tmp/qol-window-actions.sock"
 
 [menu]
@@ -85,6 +87,6 @@ label = "Window Actions"
 items = []
 
 [[dependencies.binaries]]
-name = "window-actions"
-repo = "qol-tools/plugin-window-actions"
-pattern = "window-actions-{os}-{arch}"
+name = "qol-window-actions"
+repo = "qol-tools/qol-window-actions"
+pattern = "qol-window-actions-{os}-{arch}"

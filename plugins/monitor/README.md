@@ -2,7 +2,7 @@
 
 # Monitor Plugin
 
-Display brightness, gamma, and mode control for [QoL Tray](../../apps/qol-tray).
+Display brightness, gamma, and mode control for [QoL Tray](../../apps/tray).
 
 </div>
 

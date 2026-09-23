@@ -1,0 +1,111 @@
+import { html } from '../../lib/html.js';
+import { useCallback, useMemo, useRef } from 'preact/hooks';
+import { usePluginConfigContext } from './context.js';
+import {
+    buildBranchOwnerMap,
+    collectVariantGroups,
+    isFieldVisible,
+    optionLabel,
+    selectorDensityClass,
+    selectorGridTemplate,
+} from '../../lib/qol-config.js';
+import { renderField, fieldSurfaceAttrs } from './field-map.js';
+import { dissolveIn, DISSOLVE_PRESETS } from '../../fx/dissolve/index.js';
+import { Surface } from '../../lib/components/Surface.js';
+import { PageShell } from '../../components/PageShell.js';
+import { PluginVersion } from '../../components/PluginVersion.js';
+import { findPluginById, readInstalledCache } from '../plugins/data.js';
+
+export function PluginConfigSectionView({ pluginId, sectionId, onClose }) {
+    const ctx = usePluginConfigContext();
+    const plugin = useMemo(() => findPluginById(readInstalledCache()?.plugins ?? [], pluginId), [pluginId]);
+    if (!ctx || ctx.pluginId !== pluginId) return null;
+    if (ctx.loading || !ctx.sections) return null;
+    const section = ctx.sections.find(s => s.id === sectionId);
+    if (!section) return null;
+    const subtitle = section.id !== '_root' ? (section.description || '') : '';
+    const badge = html`<${PluginVersion} plugin=${plugin} />`;
+    return html`
+        <${PageShell} subtitle=${subtitle} badge=${badge} frameClassName="plugin-config-detail">
+            <div class="config-detail-content">
+                ${ctx.error && html`<p class="error-msg" role="alert">${ctx.error}</p>`}
+                <${ConfigSection} fields=${section.fields} />
+            </div>
+        <//>
+    `;
+}
+
+function ConfigSection({ fields }) {
+    const ctx = usePluginConfigContext();
+    const groups = collectVariantGroups(fields);
+    const selectorIds = new Set(groups.map(group => group.selector.id));
+    const branchOwners = buildBranchOwnerMap(groups);
+    const rendered = new Set();
+
+    return html`
+        <div class="config-section">
+            ${fields.map(field => {
+                if (selectorIds.has(field.id)) return null;
+                const owner = branchOwners.get(field.id);
+                if (owner) {
+                    if (rendered.has(owner.selector.id)) return null;
+                    rendered.add(owner.selector.id);
+                    return html`<${VariantPanel} key=${owner.selector.id} group=${owner} />`;
+                }
+                if (!isFieldVisible(field, fieldId => ctx.getFieldValueById(fieldId))) return null;
+                return renderField(field);
+            })}
+        </div>
+    `;
+}
+
+function VariantPanel({ group }) {
+    const ctx = usePluginConfigContext();
+    const contentRef = useRef(null);
+    const activeOption = ctx.getFieldValue(group.selector);
+    const densityClass = selectorDensityClass(group.selector);
+    const widthStyle = `grid-template-columns: ${selectorGridTemplate(group.selector)}`;
+
+    const onSelect = useCallback((option) => {
+        if (option === ctx.getFieldValue(group.selector)) return;
+        ctx.setFieldValue(group.selector, option);
+        ctx.bumpRender();
+        ctx.save();
+        if (contentRef.current) {
+            dissolveIn(contentRef.current, DISSOLVE_PRESETS.variantSwitch);
+        }
+    }, [group, ctx]);
+    const onFocusSelector = useCallback(() => {
+        ctx.setSelectedFieldId(group.selector.id);
+    }, [ctx, group.selector.id]);
+
+    return html`
+        <div class="variant-panel">
+            <div ...${fieldSurfaceAttrs(group.selector, ctx, `variant-selector ${densityClass}`)}
+                onMouseDown=${onFocusSelector}
+                onFocus=${onFocusSelector}>
+                <div class="variant-selector-label">${group.selector.label}</div>
+                <div class="variant-selector-card">
+                    <div class="variant-selector-options segmented-control" style=${widthStyle}>
+                        ${group.selector.options.map(option => html`
+                            <${Surface} as="button" key=${option} type="button"
+                                className=${`variant-option segmented-control__option ${option === activeOption ? 'active is-active' : ''}`}
+                                onActivate=${() => onSelect(option)}>
+                                ${optionLabel(group.selector, option)}
+                            <//>
+                        `)}
+                    </div>
+                </div>
+            </div>
+            <div class="variant-content" ref=${contentRef}>
+                ${group.selector.options.map(option => html`
+                    <div key=${option} class="variant-content-branch ${option === activeOption ? 'active' : ''}">
+                        ${group.fields
+                            .filter(field => field.show_when?.equals === option)
+                            .map(renderField)}
+                    </div>
+                `)}
+            </div>
+        </div>
+    `;
+}

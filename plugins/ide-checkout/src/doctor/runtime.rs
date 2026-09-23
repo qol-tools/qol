@@ -23,7 +23,10 @@ pub(super) fn required_binaries_check() -> DoctorCheckResult {
 pub(super) fn runtime_assets_check() -> DoctorCheckResult {
     DoctorCheckResult::ok(
         "runtime_assets",
-        "The daemon is compiled into task-runner; no Python interpreter or packaged script is required",
+        format!(
+            "The daemon is compiled into {}; no Python interpreter or packaged script is required",
+            env!("QOL_PLUGIN_ID")
+        ),
     )
     .with_details(json!({
         "daemon": "native-rust",

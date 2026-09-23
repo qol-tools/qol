@@ -1,0 +1,619 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "id": "exact-question",
+      "concept": "Exact question",
+      "query": "What language is the Lumen service written in?",
+      "memories": [
+        {
+          "id": "lumen-language",
+          "question": "What language is the Lumen service written in?",
+          "answer": "Rust."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "lumen-language",
+      "why": "The record directly supplies the requested fact."
+    },
+    {
+      "id": "ordinary-paraphrase",
+      "concept": "Ordinary paraphrase",
+      "query": "Which programming language does Lumen use?",
+      "memories": [
+        {
+          "id": "lumen-language",
+          "question": "What language is the Lumen service written in?",
+          "answer": "Rust."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "lumen-language",
+      "why": "Different wording, same entity and requested property."
+    },
+    {
+      "id": "evidence-in-explanation",
+      "concept": "Evidence in explanation",
+      "query": "How do I launch Cedar retail?",
+      "memories": [
+        {
+          "id": "cedar-retail",
+          "question": "How to run Cedar in normal mode?",
+          "answer": "Run ./cedar play. This boots the retail game as-is."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "cedar-retail",
+      "why": "The explanation explicitly connects the requested mode to the command."
+    },
+    {
+      "id": "vague-topic",
+      "concept": "Vague topic",
+      "query": "Cedar retail",
+      "memories": [
+        {
+          "id": "cedar-retail",
+          "question": "How to run Cedar in normal mode?",
+          "answer": "Run ./cedar play. This boots the retail game as-is."
+        },
+        {
+          "id": "cedar-rcon",
+          "question": "Does Cedar retail support Lua over RCON?",
+          "answer": "Not proven; only cvar reads have been confirmed."
+        }
+      ],
+      "expected": "clarify",
+      "why": "Both launch and RCON are relevant; the topic does not specify an action."
+    },
+    {
+      "id": "near-topic-different-intent",
+      "concept": "Near topic, different intent",
+      "query": "How do I stop Cedar debug?",
+      "memories": [
+        {
+          "id": "cedar-debug",
+          "question": "How to run Cedar in debug mode?",
+          "answer": "Run ./cedar dev."
+        }
+      ],
+      "expected": "abstain",
+      "why": "A launch instruction does not answer a shutdown question."
+    },
+    {
+      "id": "retain-versus-lose",
+      "concept": "Retain versus lose",
+      "query": "Does Fern lose offline edits after restarting?",
+      "memories": [
+        {
+          "id": "fern-offline",
+          "question": "Does Fern retain offline edits after restarting?",
+          "answer": "Yes. The local journal survives restarts."
+        }
+      ],
+      "expected": "qualify",
+      "why": "The supported answer is no, not the stored yes; it requires a polarity-preserving restatement."
+    },
+    {
+      "id": "explicit-negation",
+      "concept": "Explicit negation",
+      "query": "Does Fern not retain offline edits after restarting?",
+      "memories": [
+        {
+          "id": "fern-offline",
+          "question": "Does Fern retain offline edits after restarting?",
+          "answer": "Yes. The local journal survives restarts."
+        }
+      ],
+      "expected": "qualify",
+      "why": "Negation changes the yes/no polarity; the underlying evidence remains useful."
+    },
+    {
+      "id": "different-identifier",
+      "concept": "Different identifier",
+      "query": "What version is Topaz2 protocol?",
+      "memories": [
+        {
+          "id": "topaz-version",
+          "question": "What version is Topaz protocol?",
+          "answer": "v3.2."
+        }
+      ],
+      "expected": "abstain",
+      "why": "A different project identifier cannot inherit this answer."
+    },
+    {
+      "id": "symbolic-identity",
+      "concept": "Symbolic identity",
+      "query": "Where is C# documentation stored?",
+      "memories": [
+        {
+          "id": "cpp-docs",
+          "question": "Where is C++ documentation stored?",
+          "answer": "/docs/cpp"
+        }
+      ],
+      "expected": "abstain",
+      "why": "C# and C++ are different subjects."
+    },
+    {
+      "id": "reversed-relationship",
+      "concept": "Reversed relationship",
+      "query": "How to copy beta to alpha?",
+      "memories": [
+        {
+          "id": "copy-alpha-beta",
+          "question": "How to copy alpha to beta?",
+          "answer": "Run copy-alpha-beta."
+        }
+      ],
+      "expected": "abstain",
+      "why": "The direction of the operation changed."
+    },
+    {
+      "id": "unknown-platform",
+      "concept": "Unknown platform",
+      "query": "How to create Atlas backups?",
+      "memories": [
+        {
+          "id": "atlas-backup",
+          "question": "How to create Atlas backups on Linux?",
+          "answer": "Run atlas-backup-linux."
+        }
+      ],
+      "expected": "clarify",
+      "why": "The query omits the platform required by the instruction."
+    },
+    {
+      "id": "wrong-platform",
+      "concept": "Wrong platform",
+      "query": "How to create Atlas backups on Windows?",
+      "memories": [
+        {
+          "id": "atlas-backup",
+          "question": "How to create Atlas backups on Linux?",
+          "answer": "Run atlas-backup-linux."
+        }
+      ],
+      "expected": "abstain",
+      "why": "Linux-only evidence does not establish Windows support."
+    },
+    {
+      "id": "explicit-condition",
+      "concept": "Explicit condition",
+      "query": "Can Juniper synchronize offline?",
+      "memories": [
+        {
+          "id": "juniper-sync",
+          "question": "Can Juniper synchronize offline?",
+          "answer": "Only between devices on the same local network. Remote synchronization needs internet."
+        }
+      ],
+      "expected": "qualify",
+      "why": "The condition is part of the answer and must remain visible."
+    },
+    {
+      "id": "unknown-outcome",
+      "concept": "Unknown outcome",
+      "query": "Does Juniper preserve attachments during migration?",
+      "memories": [
+        {
+          "id": "juniper-migration",
+          "question": "Does Juniper preserve attachments during migration?",
+          "answer": "Not proven. Text migration passed; attachments have not been tested."
+        }
+      ],
+      "expected": "qualify",
+      "why": "It is justified to report that this is unknown, not to certify preservation."
+    },
+    {
+      "id": "hearsay",
+      "concept": "Hearsay",
+      "query": "What language is Birch written in?",
+      "memories": [
+        {
+          "id": "birch-language",
+          "question": "What language is Birch written in?",
+          "answer": "I think Rust, but I have not checked."
+        }
+      ],
+      "expected": "qualify",
+      "why": "Stored speculation must not become a verified fact."
+    },
+    {
+      "id": "direct-contradiction",
+      "concept": "Direct contradiction",
+      "query": "What language is Lumen written in?",
+      "memories": [
+        {
+          "id": "lumen-rust",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-python",
+          "question": "What language is Lumen written in?",
+          "answer": "Python."
+        }
+      ],
+      "expected": "clarify",
+      "why": "Neither source is established as superseding the other."
+    },
+    {
+      "id": "contradiction-after-first-sentence",
+      "concept": "Contradiction after first sentence",
+      "query": "Does Finch save edits offline?",
+      "memories": [
+        {
+          "id": "finch-text",
+          "question": "Does Finch save edits offline?",
+          "answer": "Yes. Only text edits are saved; images are discarded."
+        },
+        {
+          "id": "finch-images",
+          "question": "Does Finch save edits offline?",
+          "answer": "Yes. Text edits are discarded; only images are saved."
+        }
+      ],
+      "expected": "clarify",
+      "why": "The identical opening yes hides contradictory guarantees."
+    },
+    {
+      "id": "duplicate-volume-versus-contradiction",
+      "concept": "Duplicate volume versus contradiction",
+      "query": "What language is Lumen written in?",
+      "memories": [
+        {
+          "id": "lumen-copy-0",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-copy-1",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-copy-2",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-copy-3",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-copy-4",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-copy-5",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-copy-6",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-copy-7",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-conflict",
+          "question": "What language is Lumen written in?",
+          "answer": "Python."
+        }
+      ],
+      "expected": "clarify",
+      "why": "Repeated copies do not resolve an opposing record."
+    },
+    {
+      "id": "equivalent-answers-different-wording",
+      "concept": "Equivalent answers, different wording",
+      "query": "What language is Lumen written in?",
+      "memories": [
+        {
+          "id": "lumen-rust",
+          "question": "What language is Lumen written in?",
+          "answer": "Rust."
+        },
+        {
+          "id": "lumen-implementation",
+          "question": "What language is Lumen written in?",
+          "answer": "The implementation language is Rust."
+        }
+      ],
+      "expected": "answer",
+      "why": "These answers agree despite their different wording, so either key is a match."
+    },
+    {
+      "id": "version-specific-evidence",
+      "concept": "Version-specific evidence",
+      "query": "What port does Iris version 2 use?",
+      "memories": [
+        {
+          "id": "iris-ports",
+          "question": "What port does Iris use?",
+          "answer": "Version 1 uses port 8123. Version 2 uses port 9123."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "iris-ports",
+      "why": "The complete answer explicitly identifies the requested version."
+    },
+    {
+      "id": "no-current-evidence",
+      "concept": "No current evidence",
+      "query": "What port does Iris currently use?",
+      "memories": [
+        {
+          "id": "iris-ports",
+          "question": "What port does Iris use?",
+          "answer": "In version 1, released in 2021, the default was 8123. The current version has not been checked."
+        }
+      ],
+      "expected": "qualify",
+      "why": "Historical evidence can be reported, but does not establish the current default."
+    },
+    {
+      "id": "exact-unit-conversion",
+      "concept": "Exact unit conversion",
+      "query": "What is Nimbus retry delay in seconds?",
+      "memories": [
+        {
+          "id": "nimbus-retry",
+          "question": "What is Nimbus retry delay?",
+          "answer": "2000 milliseconds."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "nimbus-retry",
+      "why": "A deterministic conversion gives two seconds without adding a new fact."
+    },
+    {
+      "id": "multiple-requested-facts",
+      "concept": "Multiple requested facts",
+      "query": "Where is Juniper configuration stored and how do I reset it?",
+      "memories": [
+        {
+          "id": "juniper-config",
+          "question": "Where is Juniper configuration stored?",
+          "answer": "/etc/juniper/settings.toml"
+        }
+      ],
+      "expected": "qualify",
+      "why": "Only the location is supported; reset instructions must be marked missing."
+    },
+    {
+      "id": "inference-beyond-evidence",
+      "concept": "Inference beyond evidence",
+      "query": "Does Oak encrypt backups?",
+      "memories": [
+        {
+          "id": "oak-backups",
+          "question": "Where does Oak store backups?",
+          "answer": "On a password-protected account."
+        }
+      ],
+      "expected": "abstain",
+      "why": "An account password does not establish backup encryption."
+    },
+    {
+      "id": "legacy-capture-mid-question-suffix",
+      "concept": "Legacy capture with mid-question and explanatory suffix",
+      "query": "Where is the Driftwood sync log written?",
+      "memories": [
+        {
+          "id": "driftwood-log",
+          "text": "I set up the Driftwood sync daemon last week. Where is the Driftwood sync log written? It goes to /var/log/driftwood-sync.log by default."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "driftwood-log",
+      "why": "The question sits inside prose and the suffix carries the queried term."
+    },
+    {
+      "id": "legacy-capture-suffix-answer",
+      "concept": "Legacy capture with suffix carrying the answer",
+      "query": "What does the Waxwing cron job do?",
+      "memories": [
+        {
+          "id": "waxwing-cron",
+          "text": "It repacks the object store every Sunday at 03:00. What does the Waxwing cron job do: the repack runs from the maintenance runbook."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "waxwing-cron",
+      "why": "The explanatory suffix supplies the requested schedule."
+    },
+    {
+      "id": "declarative-capture",
+      "concept": "Declarative capture without a question",
+      "query": "Where is the Saltmarsh cache directory?",
+      "memories": [
+        {
+          "id": "saltmarsh-cache",
+          "text": "The Saltmarsh cache directory is ~/.cache/saltmarsh."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "saltmarsh-cache",
+      "why": "A plain statement of the fact should still answer the location question."
+    },
+    {
+      "id": "platform-scoped-instruction",
+      "concept": "Platform-scoped instruction asked without a platform",
+      "query": "How do I build Pommel?",
+      "memories": [
+        {
+          "id": "pommel-build",
+          "question": "How to build Pommel on Linux?",
+          "answer": "Run pommel-build-linux."
+        }
+      ],
+      "expected": "clarify",
+      "why": "The stored instruction is Linux-only and the query omits the platform."
+    },
+    {
+      "id": "hearsay-legacy",
+      "concept": "Hearsay memory",
+      "query": "What language is Thistle written in?",
+      "memories": [
+        {
+          "id": "thistle-language",
+          "question": "What language is Thistle written in?",
+          "answer": "I think Go, but I have not checked."
+        }
+      ],
+      "expected": "qualify",
+      "why": "Stored speculation must not become a verified fact."
+    },
+    {
+      "id": "dated-historical-fact",
+      "concept": "Dated historical fact asked as current",
+      "query": "What port does Gullwing currently use?",
+      "memories": [
+        {
+          "id": "gullwing-port",
+          "question": "What port does Gullwing use?",
+          "answer": "In version 1, released in 2021, the default was 7100. The current version has not been checked."
+        }
+      ],
+      "expected": "qualify",
+      "why": "Historical evidence can be reported, but does not establish the current default."
+    },
+    {
+      "id": "multi-part-partial-support",
+      "concept": "Multi part question with only partial support",
+      "query": "Where is Marrow configuration stored and how do I reset it?",
+      "memories": [
+        {
+          "id": "marrow-config",
+          "question": "Where is Marrow configuration stored?",
+          "answer": "/etc/marrow/settings.toml"
+        }
+      ],
+      "expected": "qualify",
+      "why": "Only the location is supported; reset instructions must be marked missing."
+    },
+    {
+      "id": "exact-rerun-legacy-capture",
+      "concept": "Exact rerun of a legacy capture question",
+      "query": "How do I update Tidewater plugins?",
+      "memories": [
+        {
+          "id": "tidewater-update",
+          "text": "Run tidewater-plugin-update. How do I update Tidewater plugins: this refreshes every installed plugin in one pass."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "tidewater-update",
+      "why": "Asking the embedded question verbatim must retrieve the same legacy capture."
+    },
+    {
+      "id": "near-topic-abstain",
+      "concept": "Near topic, different intent",
+      "query": "How do I stop Ravine debug?",
+      "memories": [
+        {
+          "id": "ravine-debug",
+          "question": "How to run Ravine in debug mode?",
+          "answer": "Run ./ravine dev."
+        }
+      ],
+      "expected": "abstain",
+      "why": "A launch instruction does not answer a shutdown question."
+    },
+    {
+      "id": "evidence-in-explanation-legacy",
+      "concept": "Evidence in explanation of an answer-first legacy capture",
+      "query": "How do I launch Kestrel retail?",
+      "memories": [
+        {
+          "id": "kestrel-retail",
+          "text": "Run ./kestrel play. How do I launch Kestrel in retail mode: this command boots the retail mode with the shipping configuration."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "kestrel-retail",
+      "why": "The explanation explicitly connects the requested retail mode to the captured command."
+    },
+    {
+      "id": "agreeing-records-different-wording",
+      "concept": "Agreeing records with different wording",
+      "query": "Where does Maplewood store its configuration?",
+      "memories": [
+        {
+          "id": "maplewood-config-a",
+          "question": "Where does Maplewood keep its settings?",
+          "answer": "~/.config/maplewood/settings.toml."
+        },
+        {
+          "id": "maplewood-config-b",
+          "question": "What is the location of the Maplewood configuration file?",
+          "answer": "It lives at ~/.config/maplewood/settings.toml."
+        },
+        {
+          "id": "maplewood-config-c",
+          "question": "Where are Maplewood preferences stored on disk?",
+          "answer": "In ~/.config/maplewood/settings.toml, next to the theme overrides."
+        }
+      ],
+      "expected": "answer",
+      "expected_key": "maplewood-config-a",
+      "why": "The three answers agree on one fact, so the lexicographically smallest key is the expected answer."
+    },
+    {
+      "id": "contradicting-records-different-wording",
+      "concept": "Contradicting records with different wording",
+      "query": "Does Sablewood have a dark mode?",
+      "memories": [
+        {
+          "id": "sablewood-dark-yes",
+          "question": "Does Sablewood ship a dark theme?",
+          "answer": "Yes. Dark mode ships in version 2."
+        },
+        {
+          "id": "sablewood-dark-no",
+          "question": "Is a dark theme available in Sablewood?",
+          "answer": "No. There is no dark mode in any release."
+        }
+      ],
+      "expected": "clarify",
+      "why": "Differently worded questions carry contradicting answers about one fact."
+    },
+    {
+      "id": "explanation-restricts-scope",
+      "concept": "Explanation restricts the command to one platform",
+      "query": "How do I export Harborlight reports on macOS?",
+      "memories": [
+        {
+          "id": "harborlight-export",
+          "question": "How to export Harborlight reports?",
+          "answer": "Run harborlight-export. This command works only on Linux."
+        }
+      ],
+      "expected": "abstain",
+      "why": "The explanation limits the command to Linux, so it cannot answer a macOS request."
+    },
+    {
+      "id": "explanation-negates",
+      "concept": "Explanation negates the requested mode",
+      "query": "Can Winterhale run in headless mode?",
+      "memories": [
+        {
+          "id": "winterhale-modes",
+          "question": "What run modes does Winterhale support?",
+          "answer": "Run winterhale start for the desktop mode. Headless mode is not supported."
+        }
+      ],
+      "expected": "answer",
+      "why": "The recorded answer explicitly states that the requested mode is not supported, which answers the yes/no question verbatim; relabeled from abstain after review because withholding an explicit negative answer would hide known evidence.",
+      "expected_key": "winterhale-modes"
+    }
+  ]
+}

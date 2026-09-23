@@ -3,18 +3,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use qol_terminal_sessions::cli::{
-    CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription, CliToolId,
+    CliRuntimeState, CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription,
+    CliToolId, CliViewportState,
 };
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
-use crate::attention::{reduce, Attention, Evidence, Reason, Reduction};
+use super::screen_analysis::ScreenAnalysis;
+use crate::attention::{reduce_with_policy, Attention, Evidence, Reason, Reduction};
 use crate::host::{project_of, Pane, TerminalHost};
 use crate::session::git;
 use crate::session::registry::{meaningful_name, summary_for, Registry, SessionState};
 use crate::session::service::ServiceProbe;
 use crate::session::status::Status;
-use crate::session::tool::{from_cli_session, is_generic, Tool};
-use crate::signal::screen::{screen_hash, stable_screen};
+use crate::session::tool::{completion_policy, from_cli_session, is_generic, Tool};
 use crate::storage::{paths, persist};
 use crate::ui::notify::{self, Notice};
 
@@ -30,7 +31,7 @@ pub struct ReconcileCaches {
 
 struct ScreenCache {
     identity: ScreenIdentity,
-    text: Option<String>,
+    analysis: Option<Arc<ScreenAnalysis>>,
     last_read: u64,
     dirty: Arc<AtomicBool>,
     subscription: Option<CliSessionSubscription>,
@@ -124,9 +125,7 @@ pub fn tick_with_caches(
             caches.screens.remove(&pane.id);
             None
         };
-        let new_hash = screen
-            .as_deref()
-            .map(|text| screen_hash(stable_screen(text, &tool).as_ref()));
+        let new_hash = screen.as_ref().map(|screen| screen.hash);
 
         let screen_changed = match (new_hash, prev_hash) {
             (Some(new_hash), Some(prev_hash)) => new_hash != prev_hash,
@@ -137,7 +136,7 @@ pub fn tick_with_caches(
         let is_service = is_generic(&tool) && !pane.at_prompt && service_probe.is_service(pane);
         let screen_evidence = screen
             .as_deref()
-            .map(|text| cli_interpreter.classify_screen(pane, text))
+            .map(|screen| screen.evidence)
             .unwrap_or_default();
         let evidence = Evidence {
             descriptor_runtime: cli_session.evidence.runtime,
@@ -168,10 +167,11 @@ pub fn tick_with_caches(
                     .collect()
             })
             .unwrap_or_default();
+        let reduction = reduce_with_policy(&prev, &evidence, mono_now, completion_policy(&tool));
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} driving={} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} label={:?} title={:?}",
+            "phase=pane id={} tool={:?} cli_tool={} at_prompt={} wants_screen={wants_screen} screen_changed={screen_changed} bridged={is_bridged} driving={} descriptor_runtime={:?} screen_runtime={:?} viewport={:?} fresh={:?} quiet={:?} completion_policy={:?} label={:?} title={:?} reduction_phase={:?} transition={:?}",
             pane.id,
             tool,
             cli_tool,
@@ -182,11 +182,12 @@ pub fn tick_with_caches(
             evidence.viewport,
             evidence.file_fresh,
             evidence.file_quiet_secs,
+            completion_policy(&tool),
             cli_session.display_name,
-            short(&pane.title)
+            short(&pane.title),
+            reduction.phase,
+            reduction.transition.map(|transition| transition.reason)
         );
-
-        let reduction = reduce(&prev, &evidence, mono_now);
         let branch = caches.branch.branch(&pane.cwd, wall_now);
         if let Ok(mut reg) = registry.lock() {
             let (notice, status) = apply(
@@ -213,7 +214,7 @@ pub fn tick_with_caches(
                 pane.id.clone(),
                 wall_now,
                 &pane.title,
-                screen.as_deref(),
+                screen.as_ref().map(|screen| screen.text.as_str()),
                 reduction.phase,
                 status,
             );
@@ -278,7 +279,7 @@ fn cached_screen(
     refresh_active: bool,
     now: u64,
     caches: &mut ReconcileCaches,
-) -> Option<String> {
+) -> Option<Arc<ScreenAnalysis>> {
     let id = pane.id.clone();
     let identity = ScreenIdentity::new(pane, cli_session);
     let replace = caches
@@ -290,7 +291,7 @@ fn cached_screen(
             id.clone(),
             ScreenCache {
                 identity,
-                text: None,
+                analysis: None,
                 last_read: 0,
                 dirty: Arc::new(AtomicBool::new(true)),
                 subscription: None,
@@ -318,7 +319,14 @@ fn cached_screen(
     let signaled = entry.dirty.swap(false, Ordering::AcqRel);
     let reason = refresh_active
         .then_some("active")
-        .or_else(|| entry.text.is_none().then_some("initial"))
+        .or_else(|| entry.analysis.is_none().then_some("initial"))
+        .or_else(|| {
+            entry
+                .analysis
+                .as_ref()
+                .is_some_and(|screen| screen.pane != *pane)
+                .then_some("pane_changed")
+        })
         .or_else(|| entry.subscription.is_none().then_some("unsubscribed"))
         .or_else(|| signaled.then_some("signal"))
         .or_else(|| {
@@ -330,7 +338,7 @@ fn cached_screen(
             "phase=screen id={id} source=cache age_secs={} subscription=active",
             now.saturating_sub(entry.last_read)
         );
-        return entry.text.clone();
+        return entry.analysis.clone();
     };
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
@@ -343,18 +351,53 @@ fn cached_screen(
     #[cfg(not(debug_assertions))]
     let elapsed_ms = 0_u128;
     if let Some(text) = fresh {
-        entry.text = Some(text);
+        let mut analysis = ScreenAnalysis::refresh(
+            entry.analysis.as_ref(),
+            text,
+            pane,
+            &cli_session.tool,
+            cli_interpreter,
+        );
+        let reused = entry
+            .analysis
+            .as_ref()
+            .is_some_and(|previous| Arc::ptr_eq(previous, &analysis));
+        let mut cacheable = true;
+        if !reused
+            && analysis.evidence.runtime == CliRuntimeState::NeedsInput
+            && analysis.evidence.viewport == CliViewportState::Live
+        {
+            let current = pane
+                .binding()
+                .ok()
+                .and_then(|binding| host.visual_screen_is_current(&binding, &analysis.text));
+            if current != Some(true) {
+                Arc::get_mut(&mut analysis)
+                    .expect("a new screen analysis has one owner")
+                    .evidence
+                    .viewport = CliViewportState::Historical;
+                cacheable = current.is_some();
+            }
+        }
+        #[cfg(debug_assertions)]
+        let analysis_reused = reused;
+        #[cfg(not(debug_assertions))]
+        let analysis_reused = false;
+        entry.analysis = cacheable.then(|| analysis.clone());
+        if !cacheable {
+            entry.dirty.store(true, Ordering::Release);
+        }
         entry.last_read = now;
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=screen id={id} source=read reason={reason} elapsed_ms={elapsed_ms} subscription={}",
+            "phase=screen id={id} source=read reason={reason} elapsed_ms={elapsed_ms} analysis_reused={analysis_reused} subscription={}",
             if entry.subscription.is_some() {
                 "active"
             } else {
                 "unsupported"
             }
         );
-        return entry.text.clone();
+        return Some(analysis);
     }
     entry.dirty.store(true, Ordering::Release);
     qol_runtime::probe!(
@@ -456,7 +499,15 @@ fn snapshot(registry: &Arc<Mutex<Registry>>, id: &SessionId) -> (Attention, Opti
     match reg.get(id) {
         Some(s) => (
             Attention {
-                status: s.status,
+                status: s.runtime_status.unwrap_or(match s.status {
+                    Status::Coordinating | Status::AwaitingReview => Status::Unknown,
+                    Status::Working
+                    | Status::Service
+                    | Status::YourTurn
+                    | Status::NeedsYou
+                    | Status::Unknown
+                    | Status::Acknowledged => s.status,
+                }),
                 working_since: s.working_since,
                 settled_since: s.settled_since,
             },
@@ -504,7 +555,22 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
             input.label
         );
     }
-    let status = input.reduction.attention.status;
+    let status = crate::session::status::bridge_status(
+        input.reduction.attention.status,
+        input.bridged,
+        !input.driving.is_empty(),
+    );
+    if status != input.reduction.attention.status {
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=bridge id={} runtime={:?} display={:?} delegated={} agents={}",
+            pane_id,
+            input.reduction.attention.status,
+            status,
+            input.bridged,
+            input.driving.len()
+        );
+    }
     let summary = summary_for(status, &input.tool);
     let notice = attention_notice(
         prev_status,
@@ -546,6 +612,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
             s.last_activity = input.wall_now;
         }
         s.status = status;
+        s.runtime_status = Some(input.reduction.attention.status);
         s.tool = input.tool;
         s.summary = summary;
         s.root_pid = input.pane.root_pid;
@@ -578,6 +645,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         settled_since: input.reduction.attention.settled_since,
         bridged: input.bridged,
         driving: input.driving,
+        runtime_status: Some(input.reduction.attention.status),
     });
     (notice, status)
 }
@@ -590,4 +658,105 @@ fn live_bridge_sessions() -> qol_terminal_sessions::bridge::LiveBridges {
 
 fn tool_id(tool: &Tool) -> &str {
     tool.id.as_str()
+}
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::*;
+    use crate::attention::Phase;
+    use qol_terminal_sessions::cli::claude_tool;
+
+    fn pane() -> Pane {
+        Pane {
+            id: crate::host::kitty_session_id(1),
+            root_pid: 1,
+            cwd: "/project".into(),
+            title: "architect".into(),
+            at_prompt: false,
+            reported_cmd: Some("claude".into()),
+            foreground_basenames: vec!["claude".into()],
+            foreground_pids: Vec::new(),
+            capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
+            spawn_identity: None,
+        }
+    }
+
+    fn frame(
+        reg: &mut Registry,
+        pane: &Pane,
+        runtime: Status,
+        bridged: bool,
+        driving: bool,
+    ) -> (Option<Notice>, Status) {
+        apply(
+            reg,
+            ApplyInput {
+                pane,
+                tool: claude_tool(),
+                label: Some("architect"),
+                reduction: Reduction {
+                    attention: Attention {
+                        status: runtime,
+                        ..Attention::default()
+                    },
+                    phase: Phase::Hold,
+                    transition: None,
+                },
+                evidence: &Evidence::default(),
+                new_hash: None,
+                branch: None,
+                now: 100,
+                wall_now: 100,
+                bridged,
+                driving: driving
+                    .then(|| crate::host::kitty_session_id(2))
+                    .into_iter()
+                    .collect(),
+            },
+        )
+    }
+
+    #[test]
+    fn open_agent_loops_suppress_human_attention_until_the_loop_closes() {
+        for (bridged, driving, expected) in [
+            (false, true, Status::Coordinating),
+            (true, false, Status::AwaitingReview),
+            (true, true, Status::Coordinating),
+        ] {
+            let pane = pane();
+            let reg = Arc::new(Mutex::new(Registry::default()));
+            for _ in 0..3 {
+                let (notice, status) = frame(
+                    &mut reg.lock().unwrap(),
+                    &pane,
+                    Status::YourTurn,
+                    bridged,
+                    driving,
+                );
+                assert_eq!(status, expected);
+                assert!(notice.is_none());
+                assert!(!status.is_attention());
+                assert_eq!(snapshot(&reg, &pane.id).0.status, Status::YourTurn);
+            }
+            let (notice, status) = frame(
+                &mut reg.lock().unwrap(),
+                &pane,
+                Status::YourTurn,
+                false,
+                false,
+            );
+            assert_eq!(status, Status::YourTurn);
+            assert!(notice.is_some());
+        }
+    }
+
+    #[test]
+    fn human_approval_still_interrupts_an_agent_loop() {
+        let pane = pane();
+        let mut reg = Registry::default();
+        frame(&mut reg, &pane, Status::Working, false, true);
+        let (notice, status) = frame(&mut reg, &pane, Status::NeedsYou, false, true);
+        assert_eq!(status, Status::NeedsYou);
+        assert!(notice.is_some());
+    }
 }

@@ -1,0 +1,1386 @@
+use super::super::diagnosis::FixAction;
+use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
+use crate::plugins::registry::{self, Registry, SlotSource};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+const ID: &str = "dev_link_paths";
+const RENAMED_PLUGINS: &[(&str, &str, &str)] = &[("plugin-screen-recorder", "qol-shot", "shot")];
+
+pub(super) struct DevLinkPathsCheck;
+
+impl DoctorCheck for DevLinkPathsCheck {
+    fn meta(&self) -> CheckMeta {
+        CheckMeta::new(ID, "Dev-link paths", CheckCategory::Runtime)
+            .group(&["dev-loop"])
+            .dev_only()
+    }
+
+    fn run(&self, ctx: &DoctorContext) -> CheckReport {
+        let registry = match ctx.registry() {
+            Ok(registry) => registry,
+            Err(error) => {
+                return CheckReport::ok(format!("could not read plugin registry: {error}"));
+            }
+        };
+
+        let dev_root = qol_workspace::workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .ok()
+            .map(|root| qol_workspace::plugins_dir(&root));
+        let mut findings = collect_findings(
+            registry,
+            dev_root.as_deref(),
+            &fs_manifest_probe,
+            &fs_subplugins_probe,
+        );
+        let config_dir = ctx.config_dir();
+        if let Some(branch) = crate::dev::get_active_worktree_branch(config_dir) {
+            let links = registry::dev_linked_paths(config_dir);
+            let resolved = crate::dev::resolve_worktree_paths(&links, Some(&branch));
+            for (plugin_id, path) in links {
+                if !resolved.contains_key(&plugin_id) {
+                    findings.push(Finding::Detached { plugin_id, path });
+                }
+            }
+        }
+
+        if findings.is_empty() {
+            return CheckReport::ok("no dev-link path corruption detected".to_string());
+        }
+
+        let fixes = findings
+            .iter()
+            .filter_map(|finding| finding.fix_action())
+            .collect::<Vec<_>>();
+        CheckReport::warn(format_message(&findings), ID, fixes)
+    }
+}
+
+pub(crate) fn relocate_dev_link(
+    config_dir: &Path,
+    plugin_id: &str,
+    to: &Path,
+) -> Result<(), String> {
+    let mut reg = registry::load_registry(config_dir)?;
+    let Some(entry) = reg.entries.iter_mut().find(|e| e.id == plugin_id) else {
+        return Err(format!("registry entry for {plugin_id} not found"));
+    };
+    let new_source = match &entry.active.source {
+        SlotSource::DevLink { .. } => SlotSource::DevLink {
+            origin_path: to.to_path_buf(),
+        },
+        SlotSource::WorktreeLink { branch, .. } => SlotSource::WorktreeLink {
+            origin_path: to.to_path_buf(),
+            branch: branch.clone(),
+        },
+        SlotSource::ReleaseAsset => {
+            return Err(format!(
+                "registry entry for {plugin_id} is not a live-source slot; refusing to relocate"
+            ));
+        }
+    };
+    entry.active.path = to.to_path_buf();
+    entry.active.source = new_source;
+    registry::save_registry(config_dir, &reg)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ManifestStatus {
+    Missing,
+    NoManifest,
+    WithId(String),
+    Unparseable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Finding {
+    NoManifest {
+        plugin_id: String,
+        path: PathBuf,
+        resolution: Resolution,
+    },
+    Missing {
+        plugin_id: String,
+        path: PathBuf,
+        resolution: Resolution,
+    },
+    IdMismatch {
+        plugin_id: String,
+        path: PathBuf,
+        found: String,
+    },
+    Unparseable {
+        plugin_id: String,
+        path: PathBuf,
+    },
+    Detached {
+        plugin_id: String,
+        path: PathBuf,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Resolution {
+    Relocate(PathBuf),
+    Ambiguous(Vec<PathBuf>),
+    RemoveStaleRenamed { successor_id: String },
+    NoMatch,
+}
+
+impl Finding {
+    fn fix_action(&self) -> Option<FixAction> {
+        match self {
+            Finding::NoManifest {
+                plugin_id,
+                resolution: Resolution::Relocate(to),
+                ..
+            }
+            | Finding::Missing {
+                plugin_id,
+                resolution: Resolution::Relocate(to),
+                ..
+            } => Some(FixAction::RelocateDevLink {
+                plugin_id: plugin_id.clone(),
+                to: to.clone(),
+            }),
+            Finding::NoManifest {
+                plugin_id,
+                resolution: Resolution::RemoveStaleRenamed { .. },
+                ..
+            }
+            | Finding::Missing {
+                plugin_id,
+                resolution: Resolution::RemoveStaleRenamed { .. },
+                ..
+            } => Some(FixAction::RemoveDevLinkEntries {
+                ids: vec![plugin_id.clone()],
+            }),
+            Finding::Detached { .. } => None,
+            _ => None,
+        }
+    }
+}
+
+fn is_live_source(source: &SlotSource) -> bool {
+    match source {
+        SlotSource::DevLink { .. } | SlotSource::WorktreeLink { .. } => true,
+        SlotSource::ReleaseAsset => false,
+    }
+}
+
+pub(crate) fn collect_findings(
+    registry: &Registry,
+    dev_root: Option<&Path>,
+    manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
+    subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
+) -> Vec<Finding> {
+    registry
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            if !is_live_source(&entry.active.source) {
+                return None;
+            }
+            classify(
+                registry,
+                &entry.id,
+                &entry.active.path,
+                dev_root,
+                manifest_probe,
+                subplugins_probe,
+            )
+        })
+        .collect()
+}
+
+fn classify(
+    registry: &Registry,
+    plugin_id: &str,
+    path: &Path,
+    dev_root: Option<&Path>,
+    manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
+    subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
+) -> Option<Finding> {
+    match manifest_probe(path) {
+        ManifestStatus::Missing => Some(Finding::Missing {
+            plugin_id: plugin_id.to_string(),
+            path: path.to_path_buf(),
+            resolution: resolve(
+                registry,
+                plugin_id,
+                path,
+                dev_root,
+                manifest_probe,
+                subplugins_probe,
+            ),
+        }),
+        ManifestStatus::WithId(found) if found == plugin_id => None,
+        ManifestStatus::WithId(found) => Some(Finding::IdMismatch {
+            plugin_id: plugin_id.to_string(),
+            path: path.to_path_buf(),
+            found,
+        }),
+        ManifestStatus::Unparseable => Some(Finding::Unparseable {
+            plugin_id: plugin_id.to_string(),
+            path: path.to_path_buf(),
+        }),
+        ManifestStatus::NoManifest => Some(Finding::NoManifest {
+            plugin_id: plugin_id.to_string(),
+            path: path.to_path_buf(),
+            resolution: resolve(
+                registry,
+                plugin_id,
+                path,
+                dev_root,
+                manifest_probe,
+                subplugins_probe,
+            ),
+        }),
+    }
+}
+
+fn resolve(
+    registry: &Registry,
+    plugin_id: &str,
+    path: &Path,
+    dev_root: Option<&Path>,
+    manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
+    subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
+) -> Resolution {
+    if let Some(successor_id) = registered_successor(registry, plugin_id, manifest_probe) {
+        return Resolution::RemoveStaleRenamed {
+            successor_id: successor_id.to_string(),
+        };
+    }
+
+    if let Some(successor_id) = disk_successor(plugin_id, dev_root, manifest_probe) {
+        return Resolution::RemoveStaleRenamed {
+            successor_id: successor_id.to_string(),
+        };
+    }
+
+    if let Some(root) = dev_root {
+        let repository_root = root.parent().unwrap_or(root);
+        let matches = matching_subplugins(repository_root, plugin_id, subplugins_probe);
+        match matches.as_slice() {
+            [path] => return Resolution::Relocate(path.clone()),
+            [_, _, ..] => return Resolution::Ambiguous(matches),
+            [] => {}
+        }
+        let monorepo = root.join(plugin_id);
+        if matches!(manifest_probe(&monorepo), ManifestStatus::WithId(ref id) if id == plugin_id) {
+            return Resolution::Relocate(monorepo);
+        }
+    }
+    let direct = path.join("plugins").join(plugin_id);
+    if matches!(manifest_probe(&direct), ManifestStatus::WithId(ref id) if id == plugin_id) {
+        return Resolution::Relocate(direct);
+    }
+    let matches = matching_subplugins(path, plugin_id, subplugins_probe);
+    match matches.len() {
+        0 => Resolution::NoMatch,
+        1 => Resolution::Relocate(matches.into_iter().next().expect("len checked")),
+        _ => Resolution::Ambiguous(matches),
+    }
+}
+
+fn matching_subplugins(
+    root: &Path,
+    plugin_id: &str,
+    subplugins_probe: &dyn Fn(&Path) -> Vec<(String, PathBuf)>,
+) -> Vec<PathBuf> {
+    subplugins_probe(root)
+        .into_iter()
+        .filter_map(|(found_id, sub_path)| (found_id == plugin_id).then_some(sub_path))
+        .collect()
+}
+
+fn registered_successor(
+    registry: &Registry,
+    plugin_id: &str,
+    manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
+) -> Option<&'static str> {
+    for (legacy, successor, _folder) in RENAMED_PLUGINS {
+        if *legacy != plugin_id {
+            continue;
+        }
+        let Some(entry) = registry.entries.iter().find(|entry| entry.id == *successor) else {
+            continue;
+        };
+        if !is_live_source(&entry.active.source) {
+            continue;
+        }
+        if matches!(manifest_probe(&entry.active.path), ManifestStatus::WithId(ref id) if id == successor)
+        {
+            return Some(*successor);
+        }
+    }
+    None
+}
+
+fn disk_successor(
+    plugin_id: &str,
+    dev_root: Option<&Path>,
+    manifest_probe: &dyn Fn(&Path) -> ManifestStatus,
+) -> Option<&'static str> {
+    let root = dev_root?;
+    for (legacy, successor, folder) in RENAMED_PLUGINS {
+        if *legacy != plugin_id {
+            continue;
+        }
+        if matches!(manifest_probe(&root.join(folder)), ManifestStatus::WithId(ref id) if id == successor)
+        {
+            return Some(*successor);
+        }
+    }
+    None
+}
+
+fn fs_manifest_probe(path: &Path) -> ManifestStatus {
+    if !path.exists() {
+        return ManifestStatus::Missing;
+    }
+    if !path.is_dir() {
+        return ManifestStatus::Missing;
+    }
+    let manifest_path = path.join("plugin.toml");
+    if !manifest_path.is_file() {
+        return ManifestStatus::NoManifest;
+    }
+    read_plugin_id(&manifest_path).map_or(ManifestStatus::Unparseable, ManifestStatus::WithId)
+}
+
+fn fs_subplugins_probe(path: &Path) -> Vec<(String, PathBuf)> {
+    let plugins_dir = path.join("plugins");
+    let Ok(entries) = std::fs::read_dir(&plugins_dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let sub = entry.path();
+        if !sub.is_dir() {
+            continue;
+        }
+        let manifest_path = sub.join("plugin.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        if let Some(id) = read_plugin_id(&manifest_path) {
+            out.push((id, sub));
+        }
+    }
+    out
+}
+
+#[derive(Deserialize)]
+struct ManifestSlice {
+    plugin: PluginIdSlice,
+}
+
+#[derive(Deserialize)]
+struct PluginIdSlice {
+    id: Option<String>,
+}
+
+fn read_plugin_id(manifest_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    let slice: ManifestSlice = toml::from_str(&content).ok()?;
+    slice.plugin.id
+}
+
+fn format_message(findings: &[Finding]) -> String {
+    let mut by_kind: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for finding in findings {
+        match finding {
+            Finding::NoManifest {
+                plugin_id,
+                path,
+                resolution,
+            } => {
+                let label = match resolution {
+                    Resolution::Relocate(to) => {
+                        format!("{plugin_id} ({} -> {})", path.display(), to.display())
+                    }
+                    Resolution::Ambiguous(candidates) => format!(
+                        "{plugin_id} ({}: ambiguous candidates: {})",
+                        path.display(),
+                        candidates
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    Resolution::NoMatch => format!(
+                        "{plugin_id} ({}: no matching plugin subdir found)",
+                        path.display()
+                    ),
+                    Resolution::RemoveStaleRenamed { successor_id } => format!(
+                        "{plugin_id} ({}: successor {successor_id} already registered)",
+                        path.display()
+                    ),
+                };
+                by_kind
+                    .entry("dev-link path has no plugin.toml")
+                    .or_default()
+                    .push(label);
+            }
+            Finding::Missing {
+                plugin_id,
+                path,
+                resolution: Resolution::Relocate(to),
+            } => by_kind
+                .entry("dev-link path missing")
+                .or_default()
+                .push(format!(
+                    "{plugin_id} ({} -> {})",
+                    path.display(),
+                    to.display()
+                )),
+            Finding::Missing {
+                plugin_id, path, ..
+            } => by_kind
+                .entry("dev-link path missing")
+                .or_default()
+                .push(format!("{plugin_id} ({})", path.display())),
+            Finding::IdMismatch {
+                plugin_id,
+                path,
+                found,
+            } => by_kind
+                .entry("dev-link plugin.toml id mismatch")
+                .or_default()
+                .push(format!(
+                    "{plugin_id} ({}: manifest declares {found})",
+                    path.display()
+                )),
+            Finding::Unparseable { plugin_id, path } => by_kind
+                .entry("dev-link plugin.toml unparseable")
+                .or_default()
+                .push(format!("{plugin_id} ({})", path.display())),
+            Finding::Detached { plugin_id, path } => by_kind
+                .entry("dev-link outside active selection")
+                .or_default()
+                .push(format!("{plugin_id} ({})", path.display())),
+        }
+    }
+    let parts: Vec<String> = by_kind
+        .into_iter()
+        .map(|(kind, items)| format!("{kind}: {}", items.join(", ")))
+        .collect();
+    format!("dev-link path corruption detected — {}", parts.join("; "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doctor::framework::{DoctorCheck, DoctorContext};
+    use crate::plugins::registry::{Entry, Registry, Slot};
+    use std::collections::HashMap;
+
+    fn devlink(id: &str, path: &str) -> Entry {
+        Entry {
+            id: id.into(),
+            active: Slot {
+                path: PathBuf::from(path),
+                source: SlotSource::DevLink {
+                    origin_path: PathBuf::from(path),
+                },
+            },
+            fallback: None,
+        }
+    }
+
+    fn worktree_link(id: &str, path: &str, branch: &str) -> Entry {
+        Entry {
+            id: id.into(),
+            active: Slot {
+                path: PathBuf::from(path),
+                source: SlotSource::WorktreeLink {
+                    origin_path: PathBuf::from(path),
+                    branch: branch.into(),
+                },
+            },
+            fallback: None,
+        }
+    }
+
+    fn release(id: &str, path: &str) -> Entry {
+        Entry {
+            id: id.into(),
+            active: Slot {
+                path: PathBuf::from(path),
+                source: SlotSource::ReleaseAsset,
+            },
+            fallback: None,
+        }
+    }
+
+    fn registry_with(entries: Vec<Entry>) -> Registry {
+        Registry {
+            version: registry::CURRENT_REGISTRY_VERSION,
+            entries,
+        }
+    }
+
+    fn map_probe(map: HashMap<PathBuf, ManifestStatus>) -> impl Fn(&Path) -> ManifestStatus {
+        move |p: &Path| map.get(p).cloned().unwrap_or(ManifestStatus::Missing)
+    }
+
+    fn empty_subprobe() -> impl Fn(&Path) -> Vec<(String, PathBuf)> {
+        |_: &Path| Vec::new()
+    }
+
+    #[test]
+    fn healthy_devlink_yields_no_findings() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/ws/plugins/plugin-foo")]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/ws/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert!(findings.is_empty(), "got: {findings:?}");
+    }
+
+    #[test]
+    fn release_asset_entries_are_ignored() {
+        let registry = registry_with(vec![release("plugin-foo", "/installed/plugin-foo")]);
+        let probe = HashMap::new();
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert!(findings.is_empty(), "got: {findings:?}");
+    }
+
+    #[test]
+    fn missing_path_with_no_monorepo_match_reports_missing_no_fix() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/gone")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/gone"), ManifestStatus::Missing);
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/gone"),
+                resolution: Resolution::NoMatch,
+            }]
+        );
+        assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn missing_legacy_screen_recorder_is_removed_when_qol_shot_is_registered() {
+        let registry = registry_with(vec![
+            devlink(
+                "plugin-screen-recorder",
+                "/Users/kaho/repos/private/qol-monorepo/plugins/plugin-screen-recorder",
+            ),
+            devlink(
+                "qol-shot",
+                "/Users/kaho/repos/private/qol-monorepo/plugins/shot",
+            ),
+        ]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/Users/kaho/repos/private/qol-monorepo/plugins/plugin-screen-recorder"),
+            ManifestStatus::Missing,
+        );
+        probe.insert(
+            PathBuf::from("/Users/kaho/repos/private/qol-monorepo/plugins/shot"),
+            ManifestStatus::WithId("qol-shot".into()),
+        );
+
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-screen-recorder".into(),
+                path: PathBuf::from(
+                    "/Users/kaho/repos/private/qol-monorepo/plugins/plugin-screen-recorder"
+                ),
+                resolution: Resolution::RemoveStaleRenamed {
+                    successor_id: "qol-shot".into(),
+                },
+            }]
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RemoveDevLinkEntries {
+                ids: vec!["plugin-screen-recorder".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn missing_legacy_screen_recorder_is_removed_when_qol_shot_present_on_disk_unregistered() {
+        let registry = registry_with(vec![devlink(
+            "plugin-screen-recorder",
+            "/mono/plugins/plugin-screen-recorder",
+        )]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+            ManifestStatus::Missing,
+        );
+        probe.insert(
+            PathBuf::from("/mono/plugins/shot"),
+            ManifestStatus::WithId("qol-shot".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-screen-recorder".into(),
+                path: PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+                resolution: Resolution::RemoveStaleRenamed {
+                    successor_id: "qol-shot".into(),
+                },
+            }]
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RemoveDevLinkEntries {
+                ids: vec!["plugin-screen-recorder".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn missing_legacy_screen_recorder_no_fix_when_qol_shot_absent_everywhere() {
+        let registry = registry_with(vec![devlink(
+            "plugin-screen-recorder",
+            "/mono/plugins/plugin-screen-recorder",
+        )]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+            ManifestStatus::Missing,
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-screen-recorder".into(),
+                path: PathBuf::from("/mono/plugins/plugin-screen-recorder"),
+                resolution: Resolution::NoMatch,
+            }]
+        );
+        assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn missing_path_relocates_to_monorepo_plugin_when_present() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/old/external/plugin-foo")]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/old/external/plugin-foo"),
+            ManifestStatus::Missing,
+        );
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings,
+            vec![Finding::Missing {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/old/external/plugin-foo"),
+                resolution: Resolution::Relocate(PathBuf::from("/mono/plugins/plugin-foo")),
+            }],
+            "a dead external dev-link relocates to the monorepo plugin of the same id",
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/plugin-foo"),
+            })
+        );
+    }
+
+    #[test]
+    fn missing_path_resolves_prefixless_monorepo_directory_by_manifest_id() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/old/plugin-foo")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/old/plugin-foo"), ManifestStatus::Missing);
+        let dev_root = PathBuf::from("/mono/plugins");
+        let subprobe = |path: &Path| {
+            if path == Path::new("/mono") {
+                vec![("plugin-foo".to_string(), PathBuf::from("/mono/plugins/foo"))]
+            } else {
+                Vec::new()
+            }
+        };
+
+        let findings = collect_findings(&registry, Some(&dev_root), &map_probe(probe), &subprobe);
+
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/foo"),
+            })
+        );
+    }
+
+    #[test]
+    fn monorepo_resolution_wins_over_registered_subdir() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/ws")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/ws"), ManifestStatus::NoManifest);
+        probe.insert(
+            PathBuf::from("/ws/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/plugin-foo"),
+            }),
+            "the monorepo candidate is preferred over a match under the registered path",
+        );
+    }
+
+    #[test]
+    fn monorepo_candidate_with_mismatched_id_is_skipped() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/ws")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/ws"), ManifestStatus::NoManifest);
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-bar".into()),
+        );
+        probe.insert(
+            PathBuf::from("/ws/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/ws/plugins/plugin-foo"),
+            }),
+            "a monorepo dir whose manifest declares a different id is not trusted; falls through",
+        );
+    }
+
+    #[test]
+    fn missing_path_with_unusable_monorepo_candidate_yields_no_fix() {
+        let cases = [
+            ManifestStatus::Missing,
+            ManifestStatus::NoManifest,
+            ManifestStatus::Unparseable,
+        ];
+        for status in cases {
+            let registry = registry_with(vec![devlink("plugin-foo", "/gone")]);
+            let mut probe = HashMap::new();
+            probe.insert(PathBuf::from("/gone"), ManifestStatus::Missing);
+            probe.insert(PathBuf::from("/mono/plugins/plugin-foo"), status.clone());
+            let dev_root = PathBuf::from("/mono/plugins");
+            let findings = collect_findings(
+                &registry,
+                Some(&dev_root),
+                &map_probe(probe),
+                &empty_subprobe(),
+            );
+            assert!(
+                findings[0].fix_action().is_none(),
+                "monorepo candidate status {status:?} is not a usable target",
+            );
+        }
+    }
+
+    #[test]
+    fn missing_worktree_link_also_relocates_to_monorepo() {
+        let registry = registry_with(vec![worktree_link("plugin-foo", "/gone", "feature")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/gone"), ManifestStatus::Missing);
+        probe.insert(
+            PathBuf::from("/mono/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let dev_root = PathBuf::from("/mono/plugins");
+        let findings = collect_findings(
+            &registry,
+            Some(&dev_root),
+            &map_probe(probe),
+            &empty_subprobe(),
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/mono/plugins/plugin-foo"),
+            }),
+            "worktree-link entries resolve to the monorepo the same way dev-links do",
+        );
+    }
+
+    #[test]
+    fn id_mismatch_warns_but_no_auto_fix() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/other/plugin-bar")]);
+        let mut probe = HashMap::new();
+        probe.insert(
+            PathBuf::from("/other/plugin-bar"),
+            ManifestStatus::WithId("plugin-bar".into()),
+        );
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert_eq!(
+            findings,
+            vec![Finding::IdMismatch {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/other/plugin-bar"),
+                found: "plugin-bar".into(),
+            }]
+        );
+        assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn no_manifest_resolves_via_direct_plugins_subdir() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/workspace")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/workspace"), ManifestStatus::NoManifest);
+        probe.insert(
+            PathBuf::from("/workspace/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert_eq!(
+            findings,
+            vec![Finding::NoManifest {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/workspace"),
+                resolution: Resolution::Relocate(PathBuf::from("/workspace/plugins/plugin-foo")),
+            }]
+        );
+        assert_eq!(
+            findings[0].fix_action(),
+            Some(FixAction::RelocateDevLink {
+                plugin_id: "plugin-foo".into(),
+                to: PathBuf::from("/workspace/plugins/plugin-foo"),
+            })
+        );
+    }
+
+    #[test]
+    fn no_manifest_resolves_via_shallow_scan_when_direct_subdir_absent() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/workspace")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/workspace"), ManifestStatus::NoManifest);
+        let sub_probe = |p: &Path| {
+            if p == Path::new("/workspace") {
+                vec![(
+                    "plugin-foo".to_string(),
+                    PathBuf::from("/workspace/apps/plugin-foo"),
+                )]
+            } else {
+                Vec::new()
+            }
+        };
+        let findings = collect_findings(&registry, None, &map_probe(probe), &sub_probe);
+        assert_eq!(
+            findings,
+            vec![Finding::NoManifest {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/workspace"),
+                resolution: Resolution::Relocate(PathBuf::from("/workspace/apps/plugin-foo")),
+            }]
+        );
+    }
+
+    #[test]
+    fn no_manifest_with_multiple_matches_is_ambiguous_no_fix() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/workspace")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/workspace"), ManifestStatus::NoManifest);
+        let sub_probe = |p: &Path| {
+            if p == Path::new("/workspace") {
+                vec![
+                    (
+                        "plugin-foo".into(),
+                        PathBuf::from("/workspace/a/plugin-foo"),
+                    ),
+                    (
+                        "plugin-foo".into(),
+                        PathBuf::from("/workspace/b/plugin-foo"),
+                    ),
+                ]
+            } else {
+                Vec::new()
+            }
+        };
+        let findings = collect_findings(&registry, None, &map_probe(probe), &sub_probe);
+        match &findings[..] {
+            [Finding::NoManifest {
+                resolution: Resolution::Ambiguous(candidates),
+                ..
+            }] => {
+                assert_eq!(candidates.len(), 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn no_manifest_with_no_subdir_match_yields_no_match_no_fix() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/workspace")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/workspace"), ManifestStatus::NoManifest);
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert_eq!(
+            findings,
+            vec![Finding::NoManifest {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/workspace"),
+                resolution: Resolution::NoMatch,
+            }]
+        );
+        assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn shallow_scan_only_runs_when_direct_subdir_missing() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/workspace")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/workspace"), ManifestStatus::NoManifest);
+        probe.insert(
+            PathBuf::from("/workspace/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        use std::cell::Cell;
+        let calls = Cell::new(0_usize);
+        let sub_probe = |_: &Path| {
+            calls.set(calls.get() + 1);
+            Vec::new()
+        };
+        let findings = collect_findings(&registry, None, &map_probe(probe), &sub_probe);
+        assert!(matches!(
+            findings[0],
+            Finding::NoManifest {
+                resolution: Resolution::Relocate(_),
+                ..
+            }
+        ));
+        assert_eq!(
+            calls.get(),
+            0,
+            "shallow scan must not run when direct plugins/<id> subdir resolves"
+        );
+    }
+
+    #[test]
+    fn unparseable_manifest_warns_without_auto_fix() {
+        let registry = registry_with(vec![devlink("plugin-foo", "/path")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/path"), ManifestStatus::Unparseable);
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert_eq!(
+            findings,
+            vec![Finding::Unparseable {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/path"),
+            }]
+        );
+        assert!(findings[0].fix_action().is_none());
+    }
+
+    #[test]
+    fn message_groups_findings_by_kind() {
+        let findings = vec![
+            Finding::NoManifest {
+                plugin_id: "plugin-a".into(),
+                path: PathBuf::from("/ws"),
+                resolution: Resolution::Relocate(PathBuf::from("/ws/plugins/plugin-a")),
+            },
+            Finding::Missing {
+                plugin_id: "plugin-b".into(),
+                path: PathBuf::from("/gone"),
+                resolution: Resolution::NoMatch,
+            },
+            Finding::IdMismatch {
+                plugin_id: "plugin-c".into(),
+                path: PathBuf::from("/x"),
+                found: "plugin-z".into(),
+            },
+        ];
+        let message = format_message(&findings);
+        assert!(
+            message.contains(
+                "dev-link path has no plugin.toml: plugin-a (/ws -> /ws/plugins/plugin-a)"
+            ),
+            "actual: {message}"
+        );
+        assert!(
+            message.contains("dev-link path missing: plugin-b (/gone)"),
+            "actual: {message}"
+        );
+        assert!(
+            message.contains(
+                "dev-link plugin.toml id mismatch: plugin-c (/x: manifest declares plugin-z)"
+            ),
+            "actual: {message}"
+        );
+    }
+
+    #[test]
+    fn read_plugin_id_extracts_kebab_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manifest = tmp.path().join("plugin.toml");
+        std::fs::write(&manifest, "[plugin]\nid = \"plugin-foo\"\nname = \"Foo\"\n").unwrap();
+        assert_eq!(read_plugin_id(&manifest).as_deref(), Some("plugin-foo"));
+    }
+
+    #[test]
+    fn read_plugin_id_returns_none_when_id_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manifest = tmp.path().join("plugin.toml");
+        std::fs::write(&manifest, "[plugin]\nname = \"Foo\"\n").unwrap();
+        assert_eq!(read_plugin_id(&manifest), None);
+    }
+
+    #[test]
+    fn read_plugin_id_returns_none_for_unparseable_toml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manifest = tmp.path().join("plugin.toml");
+        std::fs::write(&manifest, "not valid toml [[[").unwrap();
+        assert_eq!(read_plugin_id(&manifest), None);
+    }
+
+    #[test]
+    fn fs_manifest_probe_classifies_real_directories() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let missing = tmp.path().join("absent");
+        assert_eq!(fs_manifest_probe(&missing), ManifestStatus::Missing);
+
+        let no_manifest_dir = tmp.path().join("no-manifest");
+        std::fs::create_dir(&no_manifest_dir).unwrap();
+        assert_eq!(
+            fs_manifest_probe(&no_manifest_dir),
+            ManifestStatus::NoManifest
+        );
+
+        let with_id_dir = tmp.path().join("with-id");
+        std::fs::create_dir(&with_id_dir).unwrap();
+        std::fs::write(
+            with_id_dir.join("plugin.toml"),
+            "[plugin]\nid = \"plugin-foo\"\nname = \"Foo\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fs_manifest_probe(&with_id_dir),
+            ManifestStatus::WithId("plugin-foo".into())
+        );
+
+        let bad_dir = tmp.path().join("bad");
+        std::fs::create_dir(&bad_dir).unwrap();
+        std::fs::write(bad_dir.join("plugin.toml"), "not toml [[[").unwrap();
+        assert_eq!(fs_manifest_probe(&bad_dir), ManifestStatus::Unparseable);
+    }
+
+    #[test]
+    fn fs_subplugins_probe_finds_id_matches_in_plugins_subdirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let plugins = tmp.path().join("plugins");
+        std::fs::create_dir(&plugins).unwrap();
+        for (subdir, id) in [
+            ("plugin-foo", "plugin-foo"),
+            ("plugin-bar", "plugin-bar"),
+            ("renamed-on-disk", "plugin-baz"),
+        ] {
+            let sub = plugins.join(subdir);
+            std::fs::create_dir(&sub).unwrap();
+            std::fs::write(
+                sub.join("plugin.toml"),
+                format!("[plugin]\nid = \"{id}\"\nname = \"X\"\n"),
+            )
+            .unwrap();
+        }
+        std::fs::create_dir(plugins.join("no-manifest-dir")).unwrap();
+
+        let mut out = fs_subplugins_probe(tmp.path());
+        out.sort();
+        let mut want = vec![
+            ("plugin-bar".to_string(), plugins.join("plugin-bar")),
+            ("plugin-baz".to_string(), plugins.join("renamed-on-disk")),
+            ("plugin-foo".to_string(), plugins.join("plugin-foo")),
+        ];
+        want.sort();
+        assert_eq!(out, want);
+    }
+
+    #[test]
+    fn relocate_dev_link_rewrites_path_and_origin() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let reg = registry_with(vec![devlink("plugin-foo", "/workspace")]);
+        registry::save_registry(tmp.path(), &reg).unwrap();
+
+        relocate_dev_link(
+            tmp.path(),
+            "plugin-foo",
+            Path::new("/workspace/plugins/plugin-foo"),
+        )
+        .unwrap();
+
+        let loaded = registry::load_registry(tmp.path()).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(
+            loaded.entries[0].active.path,
+            PathBuf::from("/workspace/plugins/plugin-foo")
+        );
+        match &loaded.entries[0].active.source {
+            SlotSource::DevLink { origin_path } => {
+                assert_eq!(origin_path, Path::new("/workspace/plugins/plugin-foo"))
+            }
+            other => panic!("expected DevLink, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relocate_dev_link_is_idempotent_when_path_already_correct() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let reg = registry_with(vec![devlink("plugin-foo", "/workspace/plugins/plugin-foo")]);
+        registry::save_registry(tmp.path(), &reg).unwrap();
+
+        relocate_dev_link(
+            tmp.path(),
+            "plugin-foo",
+            Path::new("/workspace/plugins/plugin-foo"),
+        )
+        .unwrap();
+
+        let loaded = registry::load_registry(tmp.path()).unwrap();
+        assert_eq!(loaded, reg);
+    }
+
+    #[test]
+    fn relocate_dev_link_refuses_to_touch_release_asset_entries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let reg = registry_with(vec![release("plugin-foo", "/installed/plugin-foo")]);
+        registry::save_registry(tmp.path(), &reg).unwrap();
+
+        let err = relocate_dev_link(
+            tmp.path(),
+            "plugin-foo",
+            Path::new("/workspace/plugins/plugin-foo"),
+        )
+        .expect_err("must refuse to mutate ReleaseAsset entries");
+        assert!(err.contains("not a live-source slot"), "actual: {err}");
+
+        let loaded = registry::load_registry(tmp.path()).unwrap();
+        assert_eq!(loaded, reg);
+    }
+
+    #[test]
+    fn relocate_dev_link_errors_when_plugin_id_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let reg = registry_with(vec![devlink("plugin-bar", "/some/path")]);
+        registry::save_registry(tmp.path(), &reg).unwrap();
+
+        let err = relocate_dev_link(tmp.path(), "plugin-foo", Path::new("/anywhere"))
+            .expect_err("must refuse to invent entries");
+        assert!(err.contains("not found"), "actual: {err}");
+
+        let loaded = registry::load_registry(tmp.path()).unwrap();
+        assert_eq!(loaded, reg);
+    }
+
+    #[test]
+    fn worktree_link_entries_are_also_classified_as_live_sources() {
+        let registry = registry_with(vec![worktree_link("plugin-foo", "/workspace", "feat-x")]);
+        let mut probe = HashMap::new();
+        probe.insert(PathBuf::from("/workspace"), ManifestStatus::NoManifest);
+        probe.insert(
+            PathBuf::from("/workspace/plugins/plugin-foo"),
+            ManifestStatus::WithId("plugin-foo".into()),
+        );
+        let findings = collect_findings(&registry, None, &map_probe(probe), &empty_subprobe());
+        assert_eq!(
+            findings,
+            vec![Finding::NoManifest {
+                plugin_id: "plugin-foo".into(),
+                path: PathBuf::from("/workspace"),
+                resolution: Resolution::Relocate(PathBuf::from("/workspace/plugins/plugin-foo")),
+            }],
+            "WorktreeLink must be checked the same way as DevLink",
+        );
+    }
+
+    #[test]
+    fn relocate_preserves_worktree_link_variant_and_branch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let reg = registry_with(vec![worktree_link("plugin-foo", "/workspace", "feat-x")]);
+        registry::save_registry(tmp.path(), &reg).unwrap();
+
+        relocate_dev_link(
+            tmp.path(),
+            "plugin-foo",
+            Path::new("/workspace/plugins/plugin-foo"),
+        )
+        .unwrap();
+
+        let loaded = registry::load_registry(tmp.path()).unwrap();
+        assert_eq!(
+            loaded.entries[0].active.path,
+            PathBuf::from("/workspace/plugins/plugin-foo")
+        );
+        match &loaded.entries[0].active.source {
+            SlotSource::WorktreeLink {
+                origin_path,
+                branch,
+            } => {
+                assert_eq!(origin_path, Path::new("/workspace/plugins/plugin-foo"));
+                assert_eq!(branch, "feat-x", "branch must survive relocation");
+            }
+            other => panic!("expected WorktreeLink, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relocate_dev_link_does_not_disturb_other_entries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let reg = registry_with(vec![
+            devlink("plugin-foo", "/workspace"),
+            devlink("plugin-bar", "/workspace/plugins/plugin-bar"),
+            release("plugin-baz", "/installed/plugin-baz"),
+        ]);
+        registry::save_registry(tmp.path(), &reg).unwrap();
+
+        relocate_dev_link(
+            tmp.path(),
+            "plugin-foo",
+            Path::new("/workspace/plugins/plugin-foo"),
+        )
+        .unwrap();
+
+        let loaded = registry::load_registry(tmp.path()).unwrap();
+        assert_eq!(loaded.entries.len(), 3);
+        let by_id: HashMap<_, _> = loaded.entries.iter().map(|e| (e.id.clone(), e)).collect();
+        assert_eq!(
+            by_id["plugin-foo"].active.path,
+            PathBuf::from("/workspace/plugins/plugin-foo")
+        );
+        assert_eq!(
+            by_id["plugin-bar"].active.path,
+            PathBuf::from("/workspace/plugins/plugin-bar")
+        );
+        assert!(matches!(
+            by_id["plugin-baz"].active.source,
+            SlotSource::ReleaseAsset
+        ));
+        assert_eq!(
+            by_id["plugin-baz"].active.path,
+            PathBuf::from("/installed/plugin-baz")
+        );
+    }
+
+    #[test]
+    fn detached_finding_is_report_only() {
+        let finding = Finding::Detached {
+            plugin_id: "plugin-foo".to_string(),
+            path: PathBuf::from("/wt/plugin-foo"),
+        };
+        assert!(
+            finding.fix_action().is_none(),
+            "a selection change must never auto-remove registry entries"
+        );
+    }
+
+    #[test]
+    fn run_reports_detached_link_when_selection_moves_away() {
+        let repo = crate::test_support::GitRepo::new();
+        let feat = repo.add_worktree("feat");
+        repo.add_worktree("other");
+        let link = repo.plugin(&feat, "plugin-foo");
+
+        let config_dir = tempfile::TempDir::new().unwrap();
+        let registry = Registry {
+            version: 1,
+            entries: vec![devlink("plugin-foo", link.to_str().unwrap())],
+        };
+        crate::plugins::registry::save_registry(config_dir.path(), &registry).unwrap();
+        qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("other")).unwrap();
+
+        let ctx = DoctorContext::with_config_dir(config_dir.path().to_path_buf());
+        let report = DevLinkPathsCheck.run(&ctx);
+
+        assert!(
+            report.summary.contains("outside active selection"),
+            "summary: {}",
+            report.summary
+        );
+        assert!(
+            report.fixes.is_empty(),
+            "detached links must be report-only, got fixes: {:?}",
+            report.fixes
+        );
+    }
+
+    #[test]
+    fn run_skips_detached_without_selection() {
+        let repo = crate::test_support::GitRepo::new();
+        let feat = repo.add_worktree("feat");
+        let link = repo.plugin(&feat, "plugin-foo");
+
+        let config_dir = tempfile::TempDir::new().unwrap();
+        let registry = Registry {
+            version: 1,
+            entries: vec![devlink("plugin-foo", link.to_str().unwrap())],
+        };
+        crate::plugins::registry::save_registry(config_dir.path(), &registry).unwrap();
+
+        let ctx = DoctorContext::with_config_dir(config_dir.path().to_path_buf());
+        let report = DevLinkPathsCheck.run(&ctx);
+
+        assert!(
+            !report.summary.contains("outside active selection"),
+            "no selection must not report detached: {}",
+            report.summary
+        );
+        assert!(report.fixes.is_empty());
+    }
+}

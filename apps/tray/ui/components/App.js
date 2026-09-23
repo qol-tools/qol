@@ -1,0 +1,797 @@
+import { html } from '../lib/html.js';
+import { useRef, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'preact/hooks';
+import { PaletteProvider, usePaletteContext } from '../palette/context.js';
+import { createDebug, elLabel } from '../lib/debug.js';
+import { traceWorld } from '../lib/trace.js';
+import { prettyLabel } from '../lib/qol-config.js';
+import { createNavigation, selectorFor, animateTransition } from '../lib/world-navigation.js';
+import { setAscend, setDiveFromSurface, setDiveViaSelector } from '../lib/world-navigation-singleton.js';
+import { getWorldSettings, subscribeWorldSettings } from '../lib/world-settings.js';
+import { applyThemeAccent } from '../lib/theme-accent-sync.js';
+import { applyThemeSelection } from '../lib/theme-sync.js';
+import { installCrtBandSync } from '../lib/crt-band-sync.js';
+
+const log = createDebug('qol:app');
+import { PluginConfigProvider } from '../views/plugin-config/context.js';
+import { useApp } from '../app/useApp.js';
+import { useAppKeyboardRouting } from '../app/useAppKeyboardRouting.js';
+import { ViewKeyboardProvider } from '../app/view-keyboard-context.js';
+import { buildViewOrder, renderPageContent, renderWorldViews, CONTENT_SIZED_PAGES } from '../app/views.js';
+import { RecompileDissolve } from '../lib/components/RecompileDissolve.js';
+import { GlobalToast } from './ApiErrorToast.js';
+import { BootHealedBanner } from './BootHealedBanner.js';
+import { AuthRecoveryOverlay } from './AuthRecoveryOverlay.js';
+import { SelectionCursorOverlay } from '../lib/components/SelectionCursorOverlay.js';
+import { CommandPalette } from './CommandPalette.js';
+import { createCamera } from '../lib/world-camera.js';
+import { createFocusRetention } from '../lib/focus-retention.js';
+import { createWorldRegistry } from '../lib/world-registry.js';
+import {
+    boundsOfEntries,
+    computeBaseScale,
+    computeSlotScale,
+    maxEntryExtent,
+    paddedWorldBounds,
+    withPadding,
+} from '../lib/world-geometry.js';
+import { pageMode } from '../lib/peripheral-geometry.js';
+import { resolveViewport } from '../lib/viewport-resolve.js';
+import { WorldViewport } from './shell/WorldViewport.js';
+import { MinimapContainer } from './shell/Minimap.js';
+import { RegionLabels } from './shell/RegionLabels.js';
+import { useWorldNav } from '../app/WorldNav.js';
+import { SHOWCASE_KEYS } from '../views/dev/components/ComponentsCatalog.js';
+
+function applySlotScales(worldEl, registry, camera, baseScale, viewportRef) {
+    const slots = worldEl.querySelectorAll('.world-view-slot');
+    if (baseScale === 1) {
+        if (!worldEl.__slotScalesActive) return;
+        for (const s of slots) {
+            if (s.__slotScale !== undefined) {
+                s.style.removeProperty('--slot-scale');
+                s.__slotScale = undefined;
+            }
+        }
+        worldEl.__slotScalesActive = false;
+        return;
+    }
+    const vp = resolveViewport(viewportRef);
+    const viewportW = vp?.clientWidth || window.innerWidth;
+    const viewportH = vp?.clientHeight || window.innerHeight;
+    let active = false;
+    for (const slot of slots) {
+        const entry = registry.getEntry(slot.dataset.viewId);
+        if (!entry) continue;
+        const slotScale = computeSlotScale({
+            entry,
+            cameraX: camera.x,
+            cameraY: camera.y,
+            viewportW,
+            viewportH,
+            zoom: camera.zoom,
+            baseScale,
+        });
+        const next = slotScale.toFixed(3);
+        if (slot.__slotScale !== next) {
+            slot.style.setProperty('--slot-scale', next);
+            slot.__slotScale = next;
+        }
+        active = true;
+    }
+    worldEl.__slotScalesActive = active;
+}
+
+function measuredLayer0Entries(worldEl, entries, registry) {
+    const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
+    const heightById = new Map();
+    for (const el of slots) {
+        const entry = registry.getEntry(el.dataset.viewId);
+        if (entry) heightById.set(entry.id, el.offsetHeight);
+    }
+    return entries.map(e => ({ ...e, height: Math.max(e.height, heightById.get(e.id) || 0) }));
+}
+
+function computeGroundConfinement(registry, viewOrder) {
+    const entries = registry.getEntriesForLayer(0);
+    if (!entries.length) return undefined;
+    const rect = boundsOfEntries(entries);
+    const { padX, padY } = maxEntryExtent(entries);
+    return { bounds: { ...withPadding(rect, padX, padY), layer: 0 }, pages: viewOrder };
+}
+
+function registerStaticDiveTargets(registry) {
+    const PAGE_WIDTH = 1280;
+    const PAGE_FRAME_HEIGHT = 900;
+    const staticTargets = [
+        { parentId: 'hotkeys', subId: 'hotkeys-editor', label: 'Hotkey Editor' },
+        { parentId: 'shortcuts', subId: 'shortcuts-editor', label: 'Shortcut Editor' },
+        { parentId: 'logs', subId: 'logs-detail', label: 'Log Detail' },
+        { parentId: 'task-runner', subId: 'task-runner-editor', label: 'Action Editor' },
+        { parentId: 'task-runner', subId: 'task-runner-test-runner', label: 'Test Runner', sourceSelector: '[data-dive-source="task-runner-test-runner"]' },
+        { parentId: 'profile', subId: 'profile-backup-detail', label: 'Backup Detail' },
+        { parentId: 'profile', subId: 'profile-sync-conflicts', label: 'Resolve Conflicts', sourceSelector: '[data-dive-source="profile-sync-conflicts"]' },
+        { parentId: 'dev', subId: 'dev-log-filters', label: 'Edit Log Filters' },
+        { parentId: 'dev', subId: 'dev-plugin-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="dev-plugin-actions"]' },
+        { parentId: 'dev', subId: 'dev-gpui', label: 'GPUI', sourceSelector: '[data-dive-source="dev-gpui"]' },
+        { parentId: 'plugins', subId: 'plugins-uninstall-confirm', label: 'Confirm Uninstall' },
+        { parentId: 'plugins', subId: 'plugins-actions', label: 'Plugin Actions', sourceSelector: '[data-dive-source="plugins-actions"]' },
+    ];
+    for (const t of staticTargets) {
+        const parent = registry.getEntry(t.parentId);
+        if (!parent) continue;
+        const claim = {
+            x: parent.x,
+            y: parent.y,
+            width: PAGE_WIDTH,
+            height: PAGE_FRAME_HEIGHT,
+            layer: parent.layer - 1,
+        };
+        registry.addEntry({
+            id: t.subId,
+            x: claim.x,
+            y: claim.y,
+            width: PAGE_WIDTH,
+            height: PAGE_FRAME_HEIGHT,
+            layer: claim.layer,
+            label: t.label,
+            contentSized: true,
+        });
+        registry.addDiveTarget({
+            sourceSelector: t.sourceSelector || `[data-view-id="${t.parentId}"]`,
+            claim,
+            pages: [t.subId],
+        });
+    }
+
+    const devEntry = registry.getEntry('dev');
+    if (devEntry) {
+        const N = SHOWCASE_KEYS.length;
+        const inner = {
+            x: devEntry.x,
+            y: devEntry.y,
+            width: (N - 1) * PLUGIN_PAGE_STRIDE + PLUGIN_PAGE_WIDTH,
+            height: PLUGIN_PAGE_HEIGHT,
+            layer: devEntry.layer - 1,
+        };
+        const claim = withPadding(inner, PLUGIN_PAGE_WIDTH, PLUGIN_PAGE_HEIGHT);
+        const pages = SHOWCASE_KEYS.map((key, i) => {
+            const id = `dev-gallery-${key}`;
+            registry.addEntry({
+                id,
+                x: inner.x + i * PLUGIN_PAGE_STRIDE,
+                y: inner.y,
+                width: PLUGIN_PAGE_WIDTH,
+                height: PLUGIN_PAGE_HEIGHT,
+                layer: inner.layer,
+                label: key,
+                contentSized: true,
+            });
+            return id;
+        });
+        registry.addDiveTarget({
+            sourceSelector: '[data-dive-source="dev-component-gallery"]',
+            claim,
+            pages,
+        });
+    }
+
+    registerRowDetailDive(registry, 'dev-gallery-log-row', 'dev-gallery-log-row-detail', 'Log Detail');
+    registerRowDetailDive(registry, 'dev-gallery-backup-row', 'dev-gallery-backup-row-detail', 'Backup Preview');
+    registerRowDetailDive(registry, 'dev-gallery-hotkey-row', 'dev-gallery-hotkey-row-editor', 'Hotkey Editor');
+    registerRowDetailDive(registry, 'dev-gallery-shortcut-row', 'dev-gallery-shortcut-row-editor', 'Shortcut Editor');
+}
+
+function registerRowDetailDive(registry, hostId, detailId, label) {
+    const host = registry.getEntry(hostId);
+    if (!host) return;
+    const claim = {
+        x: host.x, y: host.y,
+        width: PLUGIN_PAGE_WIDTH, height: PLUGIN_PAGE_HEIGHT,
+        layer: host.layer - 1,
+    };
+    registry.addEntry({
+        id: detailId,
+        x: claim.x, y: claim.y,
+        width: PLUGIN_PAGE_WIDTH, height: PLUGIN_PAGE_HEIGHT,
+        layer: claim.layer, label, contentSized: true,
+    });
+    registry.addDiveTarget({
+        sourceSelector: `[data-view-id="${hostId}"]`,
+        claim,
+        pages: [detailId],
+    });
+}
+
+const PLUGIN_PAGE_WIDTH = 1280;
+const PLUGIN_PAGE_HEIGHT = 900;
+const PLUGIN_PAGE_STRIDE = 10000;
+
+async function fetchInstalledPlugins() {
+    const res = await fetch('/api/installed');
+    if (!res.ok) return [];
+    const payload = await res.json();
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.plugins)) return payload.plugins;
+    return [];
+}
+
+async function fetchPluginContract(pluginId) {
+    const res = await fetch(`/api/plugins/${pluginId}/config-form`);
+    if (!res.ok) return { sections: [], traits: null };
+    const form = await res.json();
+    const traits = (form?.traits && typeof form.traits === 'object') ? form.traits : null;
+    const sections = (form?.sections || []).filter(s => s.fields?.length);
+    if (sections.length > 0) return { sections, traits };
+    if (form?.fields?.length > 0) return { sections: [{ id: '_root', label: form.title || '' }], traits };
+    return { sections: [], traits };
+}
+
+function registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEntry, pluginIndex) {
+    const N = Math.max(1, sections.length);
+    const yOffset = pluginIndex * PLUGIN_PAGE_STRIDE;
+    const inner = {
+        x: pluginsEntry.x,
+        y: pluginsEntry.y + yOffset,
+        width: (N - 1) * PLUGIN_PAGE_STRIDE + PLUGIN_PAGE_WIDTH,
+        height: PLUGIN_PAGE_HEIGHT,
+        layer: pluginsEntry.layer - 1,
+    };
+    const claim = withPadding(inner, PLUGIN_PAGE_WIDTH, PLUGIN_PAGE_HEIGHT);
+    const pageIds = [];
+    for (let i = 0; i < N; i++) {
+        const section = sections[i];
+        const sectionId = section?.id || 'config';
+        const pageId = `${plugin.id}-${sectionId}`;
+        registry.addEntry({
+            id: pageId,
+            x: inner.x + i * PLUGIN_PAGE_STRIDE,
+            y: inner.y,
+            width: PLUGIN_PAGE_WIDTH,
+            height: PLUGIN_PAGE_HEIGHT,
+            layer: inner.layer,
+            label: section?.label || prettyLabel(sectionId),
+            contentSized: true,
+            pluginConfig: true,
+        });
+        pageIds.push(pageId);
+    }
+    registry.addDiveTarget({
+        sourceSelector: `[data-plugin-id="${plugin.id}"]`,
+        claim,
+        pages: pageIds,
+        ...(traits ? { traits } : {}),
+    });
+}
+
+async function registerAllPluginDiveTargets(registry, registered, isCancelled, onPlaceholdersReady) {
+    const plugins = await fetchInstalledPlugins();
+    if (isCancelled()) { log('diveTargets: cancelled'); return; }
+    if (!plugins.length) { log('diveTargets: no plugins'); return; }
+    const pluginsEntry = registry.getEntry('plugins');
+    if (!pluginsEntry) { log('diveTargets: no plugins entry in registry'); return; }
+
+    const pending = plugins.filter(p => !registered.has(p.id));
+    pending.forEach((plugin, i) => {
+        registerPluginDiveTarget(registry, plugin, [], null, pluginsEntry, registered.size + i);
+        registered.add(plugin.id);
+    });
+    log('diveTargets: pre-registered', pending.length, 'placeholders');
+    onPlaceholdersReady?.();
+
+    await Promise.all(pending.map(async (plugin, i) => {
+        if (isCancelled()) return;
+        const { sections, traits } = await fetchPluginContract(plugin.id);
+        if (isCancelled()) return;
+        const pluginIndex = registered.size - pending.length + i;
+        registerPluginDiveTarget(registry, plugin, sections, traits, pluginsEntry, pluginIndex);
+    }));
+    log('diveTargets: resolved', registered.size, 'plugins:', [...registered].join(', '));
+}
+
+export function App() {
+    return html`<${PaletteProvider}><${AppShell} /><//>`;
+}
+
+function AppShell() {
+    const dissolveRef = useRef(null);
+    const onDissolve = useCallback((reload) => dissolveRef.current?.(reload), []);
+    const {
+        devEnabled,
+        appVersion,
+        viewOrder,
+        activeViewId,
+        activePluginId,
+        switchView,
+        openPluginConfig,
+        closePluginConfig,
+        updateState,
+        handleSidebarAction,
+        branches,
+        repoBranch,
+        defaultBranch,
+        setDefaultBranch,
+        syncStatus,
+        syncProviders,
+        setSyncStatus,
+        refreshSyncStatus,
+    } = useApp({ onDissolve });
+
+    const viewportRef = useRef(null);
+
+    useEffect(() => {
+        const el = document.getElementById('viewport');
+        viewportRef.current = el;
+    }, []);
+
+    useEffect(() => {
+        applyThemeAccent();
+        applyThemeSelection();
+    }, []);
+
+    useEffect(() => {
+        const retention = createFocusRetention();
+        return () => retention.dispose();
+    }, []);
+
+    const cameraRef = useRef(null);
+    if (!cameraRef.current) {
+        cameraRef.current = createCamera({
+            zoom: getWorldSettings().defaultZoom,
+            getViewportSize: () => {
+                const vp = resolveViewport(viewportRef);
+                return {
+                    w: vp?.clientWidth || window.innerWidth,
+                    h: vp?.clientHeight || window.innerHeight,
+                };
+            },
+        });
+    }
+    const camera = cameraRef.current;
+
+    const registryRef = useRef(null);
+    if (!registryRef.current) {
+        const reg = createWorldRegistry(buildViewOrder(true), {}, { contentSizedIds: CONTENT_SIZED_PAGES });
+        registerStaticDiveTargets(reg);
+        registryRef.current = reg;
+    }
+    const registry = registryRef.current;
+
+    const [cameraLayer, setCameraLayer] = useState(0);
+    const [targetsVersion, setTargetsVersion] = useState(0);
+    const layerAnimatingRef = useRef(false);
+    const diveTargetsRegisteredRef = useRef(new Set());
+
+    useEffect(() => {
+        let cancelled = false;
+        let retryTimer;
+        function attempt(delay) {
+            registerAllPluginDiveTargets(
+                registry,
+                diveTargetsRegisteredRef.current,
+                () => cancelled,
+                () => { if (!cancelled) setTargetsVersion(v => v + 1); },
+            )
+                .then(() => {
+                    if (!cancelled) {
+                        navigationRef.current?.refreshCurrentDive?.();
+                        setTargetsVersion(v => v + 1);
+                    }
+                })
+                .catch(err => {
+                    log('diveTargets: registration failed, retry in', delay, 'ms');
+                    if (!cancelled) retryTimer = setTimeout(() => attempt(Math.min(delay * 2, 5000)), delay);
+                });
+        }
+        attempt(500);
+        return () => { cancelled = true; clearTimeout(retryTimer); };
+    }, [registry]);
+
+    useEffect(() => {
+        for (const id of viewOrder) {
+            if (!registry.getEntry(id)) registry.placeNew(id);
+        }
+        if (navigationRef.current) {
+            navigationRef.current.setGroundPages(viewOrder);
+            setTargetsVersion(v => v + 1);
+        }
+    }, [viewOrder, registry]);
+
+    useEffect(() => {
+        const worldEl = document.getElementById('world');
+        if (!worldEl) return undefined;
+        const recomputeBounds = () => {
+            const entries = registry.getEntriesForLayer(0);
+            if (!entries.length) return;
+            const measured = measuredLayer0Entries(worldEl, entries, registry);
+            const rect = boundsOfEntries(measured);
+            const vpEl = resolveViewport(viewportRef);
+            const vp = vpEl ? { w: vpEl.clientWidth, h: vpEl.clientHeight } : null;
+            camera.setBounds(paddedWorldBounds({ ...rect, layer: 0 }, vp, 1, entries));
+        };
+        let rafId = 0;
+        const scheduleRecompute = () => {
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => { rafId = 0; recomputeBounds(); });
+        };
+        const ro = new ResizeObserver(scheduleRecompute);
+        const slots = worldEl.querySelectorAll('.world-view-slot[data-layer="0"]');
+        for (const el of slots) ro.observe(el);
+        const vpForObserver = resolveViewport(viewportRef);
+        if (vpForObserver) ro.observe(vpForObserver);
+        let lastZoom = camera.zoom;
+        const unsub = camera.subscribe(() => {
+            if (camera.zoom !== lastZoom) {
+                lastZoom = camera.zoom;
+                scheduleRecompute();
+            }
+        });
+        recomputeBounds();
+        return () => {
+            ro.disconnect();
+            unsub();
+            if (rafId) cancelAnimationFrame(rafId);
+        };
+    }, [camera, registry, targetsVersion]);
+
+    const navigationRef = useRef(null);
+    if (!navigationRef.current) {
+        const groundConfinement = computeGroundConfinement(registry, viewOrder);
+        navigationRef.current = createNavigation({
+            registry,
+            camera,
+            getSettings: getWorldSettings,
+            groundConfinement,
+            domHelpers: {
+                resolveSelector: (selector) => {
+                    const el = document.querySelector(selector);
+                    if (!el) return null;
+                    const vpEl = resolveViewport(viewportRef);
+                    if (!vpEl) return null;
+                    const vr = el.getBoundingClientRect();
+                    const vpr = vpEl.getBoundingClientRect();
+                    const relCenterX = (vr.left + vr.width / 2) - vpr.left;
+                    const relCenterY = (vr.top + vr.height / 2) - vpr.top;
+                    return {
+                        x: camera.x + relCenterX / camera.zoom,
+                        y: camera.y + relCenterY / camera.zoom,
+                    };
+                },
+                getViewportSize: () => {
+                    const vp = resolveViewport(viewportRef);
+                    return {
+                        w: vp?.clientWidth || window.innerWidth,
+                        h: vp?.clientHeight || window.innerHeight,
+                    };
+                },
+                crossLayerTransition: (entry, applyAndPan) => {
+                    const vp = resolveViewport(viewportRef);
+                    if (!vp) { applyAndPan(); return; }
+                    const outClass = entry.layer < camera.layer ? 'dive-out' : 'ascend-out';
+                    animateTransition(vp, layerAnimatingRef, outClass, applyAndPan, null);
+                },
+            },
+        });
+    }
+    const navigation = navigationRef.current;
+
+    useEffect(() => {
+        const unsub = camera.subscribe(({ layer }) => setCameraLayer(layer));
+        return unsub;
+    }, [camera]);
+
+    const [activeAnchorId, setActiveAnchorId] = useState(() => activeViewId || navigation.getCurrentAnchor()?.pageId || null);
+    const [diveDepth, setDiveDepth] = useState(() => navigation.stackDepth());
+    useEffect(() => {
+        return navigation.subscribeAnchor((anchor) => {
+            setActiveAnchorId(anchor?.pageId || null);
+            setDiveDepth(navigation.stackDepth());
+        });
+    }, [navigation]);
+    const activeSectionId = (activeAnchorId && activePluginId && activeAnchorId.startsWith(`${activePluginId}-`))
+        ? activeAnchorId.slice(activePluginId.length + 1)
+        : null;
+
+    const prevViewRef = useRef(activeViewId);
+    const prevViewOrderRef = useRef(viewOrder);
+    useEffect(() => {
+        const prevOrder = prevViewOrderRef.current;
+        prevViewOrderRef.current = viewOrder;
+        const viewChanged = prevViewRef.current !== activeViewId;
+        const becameAvailable = !viewChanged && prevOrder !== viewOrder
+            && viewOrder.includes(activeViewId) && !prevOrder.includes(activeViewId);
+        if (!viewChanged && !becameAvailable) return;
+        prevViewRef.current = activeViewId;
+        log('viewChange:', activeViewId, viewChanged ? '→ switched' : '→ became available');
+        navigation.setCurrentAnchor({ pageId: activeViewId });
+        const s = getWorldSettings();
+        navigation.gotoAnchor(
+            { pageId: activeViewId },
+            {
+                respectKnob: true,
+                instant: becameAvailable,
+                useFocusMemory: false,
+                resetZoom: viewChanged && s.resetZoomOnNav ? s.defaultZoom : null,
+            },
+        );
+    }, [activeViewId, viewOrder, navigation]);
+
+    useLayoutEffect(() => {
+        const worldEl = document.getElementById('world');
+        if (worldEl) camera.setWorldElement(worldEl);
+        if (!activeViewId) return;
+        navigation.setCurrentAnchor({ pageId: activeViewId });
+        navigation.gotoAnchor({ pageId: activeViewId }, { respectKnob: false, instant: true });
+    }, []);
+
+    useEffect(() => installCrtBandSync(), []);
+
+    useWorldNav({ camera, registry, viewportRef });
+
+    const diveViaSelector = useCallback((selector) => {
+        if (layerAnimatingRef.current) return false;
+        return Boolean(navigation.diveInto(selector));
+    }, [navigation]);
+
+    useEffect(() => {
+        setDiveViaSelector(diveViaSelector);
+        return () => setDiveViaSelector(null);
+    }, [diveViaSelector]);
+
+    const dive = useCallback((targetId, sourceSurface) => {
+        if (layerAnimatingRef.current) return;
+        if (sourceSurface) {
+            const sourcePageId = sourceSurface.closest('[data-view-id]')?.dataset?.viewId;
+            const selector = selectorFor(sourceSurface);
+            if (sourcePageId && selector) navigation.setFocus(sourcePageId, selector);
+        }
+        if (targetId && diveViaSelector(`[data-dive-source="${targetId}"]`)) return;
+        const pluginId = sourceSurface?.dataset?.pluginId
+            || sourceSurface?.closest?.('[data-plugin-id]')?.dataset?.pluginId;
+        if (pluginId && diveViaSelector(`[data-plugin-id="${pluginId}"]`)) return;
+        const parentPageId = sourceSurface?.closest?.('[data-view-id]')?.dataset?.viewId;
+        if (parentPageId && diveViaSelector(`[data-view-id="${parentPageId}"]`)) return;
+        log('dive:', targetId, '→ no DiveTarget matched');
+    }, [navigation, diveViaSelector]);
+
+    useEffect(() => {
+        setDiveFromSurface((surface) => {
+            const target = surface?.getAttribute?.('data-dive-target');
+            if (!target) return false;
+            dive(target, surface);
+            return true;
+        });
+        return () => setDiveFromSurface(null);
+    }, [dive]);
+
+    const ascend = useCallback(() => navigation.ascend(), [navigation]);
+
+    useEffect(() => {
+        setAscend(ascend);
+        return () => setAscend(null);
+    }, [ascend]);
+
+    const activePluginDiveRef = useRef(null);
+    const lastActivePluginIdRef = useRef(activePluginId);
+    const [hiddenUntilDive, setHiddenUntilDive] = useState(() => {
+        try { return !!window.localStorage?.getItem('qoltray.activePlugin'); } catch { return false; }
+    });
+    useEffect(() => {
+        const previousPluginId = lastActivePluginIdRef.current;
+        const pluginChanged = previousPluginId !== activePluginId;
+        if (pluginChanged) {
+            traceWorld('route', {
+                action: 'active_plugin_change',
+                from_plugin_id: previousPluginId || '',
+                to_plugin_id: activePluginId || '',
+                dive_ref: activePluginDiveRef.current ? 'true' : 'false',
+                active_plugin_dive: activePluginDiveRef.current || '',
+                camera_layer: cameraLayer,
+            });
+            lastActivePluginIdRef.current = activePluginId;
+        }
+        const currentPluginDive = activePluginDiveRef.current;
+        if (activePluginId && !currentPluginDive) {
+            const selector = `[data-plugin-id="${activePluginId}"]`;
+            const didDive = diveViaSelector(selector);
+            traceWorld('dive', {
+                action: 'auto_plugin_config_dive',
+                plugin_id: activePluginId,
+                selector,
+                outcome: didDive ? 'dove' : 'no_target',
+                stack_depth: navigation.stackDepth(),
+            });
+            traceWorldSnapshot(registry, 'plugin_config_world_snapshot', {
+                plugin_id: activePluginId,
+                reason: 'after_auto_dive',
+            });
+            if (didDive) {
+                activePluginDiveRef.current = activePluginId;
+            }
+        }
+        if (activePluginId && currentPluginDive && currentPluginDive !== activePluginId) {
+            const selector = `[data-plugin-id="${activePluginId}"]`;
+            const target = navigation.replaceCurrentDive?.(selector);
+            const didRetarget = Boolean(target);
+            if (didRetarget) {
+                activePluginDiveRef.current = activePluginId;
+            }
+            traceWorld('dive', {
+                action: 'auto_plugin_config_dive',
+                plugin_id: activePluginId,
+                previous_plugin_id: currentPluginDive || '',
+                selector,
+                outcome: didRetarget ? 'retargeted' : 'no_target',
+                stack_depth: navigation.stackDepth(),
+            });
+            traceWorldSnapshot(registry, 'plugin_config_world_snapshot', {
+                plugin_id: activePluginId,
+                previous_plugin_id: currentPluginDive || '',
+                reason: didRetarget ? 'after_retarget' : 'after_retarget_failed',
+            });
+        }
+        if (!activePluginId && currentPluginDive) {
+            activePluginDiveRef.current = null;
+            const didAscend = ascend();
+            traceWorld('dive', {
+                action: 'clear_plugin_config_dive',
+                previous_plugin_id: previousPluginId || '',
+                outcome: didAscend ? 'ascended' : 'no_stack',
+                stack_depth: navigation.stackDepth(),
+            });
+            traceWorldSnapshot(registry, 'plugin_config_world_snapshot', {
+                previous_plugin_id: previousPluginId || '',
+                reason: 'after_clear',
+            });
+        }
+        if (!activePluginId && hiddenUntilDive) setHiddenUntilDive(false);
+    }, [activePluginId, diveViaSelector, ascend, targetsVersion, hiddenUntilDive, cameraLayer, navigation]);
+    useEffect(() => {
+        if (hiddenUntilDive && cameraLayer !== 0) setHiddenUntilDive(false);
+    }, [cameraLayer, hiddenUntilDive]);
+    useLayoutEffect(() => {
+        document.documentElement.classList.toggle('qol-bootstrapping-dive', hiddenUntilDive);
+        if (!hiddenUntilDive) return undefined;
+        const failsafe = setTimeout(() => setHiddenUntilDive(false), 2000);
+        return () => clearTimeout(failsafe);
+    }, [hiddenUntilDive]);
+
+    const onJumpTo = useCallback((pageId) => {
+        if (pageId === activeViewId) {
+            const s = getWorldSettings();
+            navigation.gotoAnchor({ pageId }, { respectKnob: false, resetZoom: s.defaultZoom });
+            return;
+        }
+        switchView(pageId);
+    }, [activeViewId, switchView, navigation]);
+
+    useEffect(() => {
+        const syncMode = () => {
+            const worldEl = document.getElementById('world');
+            if (!worldEl) return;
+            const { ghostThreshold, uiScaleOnZoomOut } = getWorldSettings();
+            const zoom = Math.max(camera.zoom, 0.05);
+            const baseScale = uiScaleOnZoomOut ? computeBaseScale(zoom, ghostThreshold) : 1;
+            worldEl.setAttribute('data-page-mode', pageMode(camera.zoom, ghostThreshold));
+            document.documentElement.style.setProperty('--zoom', zoom.toFixed(4));
+            applySlotScales(worldEl, registry, camera, baseScale, viewportRef);
+        };
+        const rafId = requestAnimationFrame(syncMode);
+        const unsub = camera.subscribe(syncMode);
+        const unsubSettings = subscribeWorldSettings(syncMode);
+        return () => {
+            cancelAnimationFrame(rafId);
+            unsub();
+            unsubSettings();
+        };
+    }, [camera, registry]);
+
+    const renderCtx = useMemo(() => ({
+        activeViewId,
+        activeAnchorId,
+        activePluginId,
+        openPluginConfig,
+        closePluginConfig,
+        syncStatus,
+        syncProviders,
+        onSyncStatusChange: setSyncStatus,
+        refreshSyncStatus,
+        devEnabled,
+        onJumpTo,
+    }), [activeViewId, activeAnchorId, activePluginId, openPluginConfig, closePluginConfig,
+        syncStatus, syncProviders, setSyncStatus, refreshSyncStatus, devEnabled, onJumpTo]);
+    const renderPage = useCallback((pageId) => renderPageContent(pageId, renderCtx), [renderCtx]);
+
+    return html`
+        <${PluginConfigProvider} pluginId=${activePluginId} activeSectionId=${activeSectionId}>
+            <${ViewKeyboardProvider}>
+                <${AppKeyboardRouting}
+                    activePluginId=${activePluginId}
+                    activeViewId=${activeViewId}
+                    camera=${camera}
+                    closePluginConfig=${closePluginConfig}
+                    switchView=${switchView}
+                    viewOrder=${viewOrder}
+                    dive=${dive}
+                    ascend=${ascend}
+                    navigation=${navigation}
+                    registry=${registry}
+                />
+                <div class="app-container">
+                    <${WorldViewport} camera=${camera} onViewChange=${switchView} navigation=${navigation} registry=${registry} renderPage=${renderPage}>
+                        ${hiddenUntilDive ? null : html`
+                            ${renderWorldViews({ ...renderCtx, registry, cameraLayer, confinedPages: navigation.getConfinedPages(), diveDepth })}
+                        `}
+                    <//>
+                    ${hiddenUntilDive ? null : html`
+                        <${RegionLabels} registry=${registry} cameraLayer=${cameraLayer} navigation=${navigation} diveDepth=${diveDepth} camera=${camera} />
+                    `}
+                    <${CommandPalette} camera=${camera} navigation=${navigation} />
+                    <${MinimapContainer} camera=${camera} registry=${registry} viewportRef=${viewportRef}
+                        diveDepth=${diveDepth} navigation=${navigation}
+                        version=${appVersion} updateState=${updateState} isDevMode=${devEnabled} onAction=${handleSidebarAction}
+                        branches=${branches} defaultBranch=${defaultBranch} setDefaultBranch=${setDefaultBranch}
+                        repoBranch=${repoBranch} />
+                    <${SelectionCursorOverlay} camera=${camera} />
+                    <${RecompileDissolve} triggerRef=${dissolveRef} />
+                    <${BootHealedBanner} />
+                    <${AuthRecoveryOverlay} />
+                    <${GlobalToast} />
+                </div>
+            <//>
+        <//>
+    `;
+}
+
+function AppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, dive, ascend, navigation, registry }) {
+    const palette = usePaletteContext();
+    useAppKeyboardRouting({ activePluginId, activeViewId, camera, closePluginConfig, switchView, viewOrder, palette, dive, ascend, navigation, registry });
+    return null;
+}
+
+function traceWorldSnapshot(registry, action, fields = {}) {
+    afterNextPaint(() => {
+        const visibleIds = visibleWorldSlotIds();
+        const visibleConfigIds = visibleIds.filter(id => registry.getEntry(id)?.pluginConfig === true);
+        const visibleLayers = visibleWorldSlotLayers();
+        traceWorld('dive', {
+            action,
+            ...fields,
+            hash: window.location.hash || '#',
+            visible_slots: visibleIds.length,
+            visible_slot_ids: visibleIds.slice(0, 8).join(',') || 'none',
+            visible_config_slots: visibleConfigIds.length,
+            visible_config_slot_ids: visibleConfigIds.slice(0, 8).join(',') || 'none',
+            visible_layers: visibleLayers.join(',') || 'none',
+            world_transform: document.querySelector('#world')?.style.transform || 'none',
+        });
+    });
+}
+
+function afterNextPaint(callback) {
+    requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
+function visibleWorldSlotIds() {
+    return Array.from(document.querySelectorAll('.world-view-slot'))
+        .filter(isVisibleWorldSlot)
+        .map(el => el.dataset.viewId)
+        .filter(Boolean);
+}
+
+function visibleWorldSlotLayers() {
+    return Array.from(new Set(
+        Array.from(document.querySelectorAll('.world-view-slot'))
+            .filter(isVisibleWorldSlot)
+            .map(el => el.dataset.layer)
+            .filter(layer => layer !== undefined),
+    )).sort();
+}
+
+function isVisibleWorldSlot(el) {
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0) {
+        return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}

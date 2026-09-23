@@ -7,9 +7,10 @@ use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
 use crate::rendering::RenderingFlow;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
 use qol_gpui::kit::float_shadow;
 use qol_gpui::theme::{
-    runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_BODY, TEXT_CAPTION, TEXT_NANO,
+    runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_CAPTION, TEXT_NANO,
 };
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
@@ -155,7 +156,7 @@ impl Render for AltTabApp {
 
         let (panel_w, panel_h) = (layout.width, layout.height);
 
-        self.grid_scroll.follow(d.selected_index);
+        self.grid_scroll.follow(d.selected_index, None, px(0.));
         let grid_scroll = self.grid_scroll.handle().clone();
         let render_context = CardRenderContext {
             snap: &snap,
@@ -171,14 +172,17 @@ impl Render for AltTabApp {
         let grid = render_grid(&d.windows, &render_context);
 
         let panel = div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("alt-tab-panel")
             .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
             .w(px(panel_w))
             .h(px(panel_h))
-            .when(!snap.transparent_bg, |s| s.bg(rgb(snap.palette.panel_bg)))
-            .shadow(float_shadow(snap.system.text_primary))
+            .when(!snap.transparent_bg, |s| {
+                s.bg(rgb(snap.palette.panel_bg))
+                    .shadow(float_shadow(snap.system.text_primary))
+            })
             .on_key_down(key_handler)
             .when(snap.visible, |s| {
                 s.on_modifiers_changed(modifiers_handler)
@@ -194,7 +198,7 @@ impl Render for AltTabApp {
                 ))
             })
             .child(grid)
-            .when(snap.show_hotkey_hints, |s| s.child(hint_bar()));
+            .when(snap.show_hotkey_hints, |s| s.child(hint_bar(panel_w)));
 
         let root = div()
             .id("alt-tab-backdrop")
@@ -273,14 +277,24 @@ fn probe_rendered_front(
     }
 }
 
-fn hint_bar() -> Div {
+fn hint_bar(available_width: f32) -> Div {
     let kit = qol_gpui::kit::kit();
-    kit.hint_bar()
-        .justify_center()
-        .gap(px(26.0))
-        .child(kit.hint("\u{2325}\u{21E5}", "next"))
-        .child(kit.hint("\u{2325}\u{21E7}\u{21E5}", "previous"))
-        .child(kit.hint("W", "close window"))
+    let items = [
+        BarItem::Hint(HintDescriptor::new("\u{2325}\u{21E5}", "next", 3)),
+        BarItem::Hint(HintDescriptor::new(
+            "\u{2325}\u{21E7}\u{21E5}",
+            "previous",
+            2,
+        )),
+        BarItem::Hint(HintDescriptor::new("W", "close window", 1)),
+    ];
+    let mut bar = kit.hint_bar().justify_center().gap(px(26.0));
+    for item in fit_hints(available_width, &items) {
+        if let BarItem::Hint(hint) = item {
+            bar = bar.child(kit.hint(hint.key, hint.label));
+        }
+    }
+    bar
 }
 
 fn header_bar(left: &str, right: &str, snap: &RenderSnap) -> Div {
@@ -325,12 +339,11 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
             .py(px(18.0))
             .gap_4()
             .when(windows.is_empty(), |s| {
-                s.items_center().justify_center().child(
-                    div()
-                        .text_size(px(TEXT_BODY))
-                        .text_color(rgb(context.snap.palette.grid_empty_text))
-                        .child("Scanning windows\u{2026}"),
-                )
+                s.items_center().justify_center().child(qol_gpui::Busy::new(
+                    "alt-tab-scanning",
+                    "Scanning windows",
+                    rgb(context.snap.palette.grid_empty_text),
+                ))
             })
             .children(
                 windows
@@ -560,7 +573,15 @@ fn render_single_label(
     window: &Window,
     cx: &App,
 ) -> Div {
-    let label = truncate_label(label, width_px, font_weight, window, cx);
+    let label = qol_gpui::text::truncate_to_width(
+        &label,
+        window.text_style().font(),
+        TEXT_CAPTION,
+        font_weight,
+        width_px,
+        "…",
+        cx,
+    );
     div()
         .w(px(width_px))
         .max_w(px(width_px))
@@ -574,25 +595,6 @@ fn render_single_label(
         .truncate()
         .overflow_hidden()
         .child(label)
-}
-
-fn truncate_label(
-    label: String,
-    max_width_px: f32,
-    font_weight: FontWeight,
-    window: &Window,
-    cx: &App,
-) -> SharedString {
-    if label.is_empty() {
-        return SharedString::from(label);
-    }
-
-    let mut text_style = window.text_style();
-    text_style.font_weight = font_weight;
-    let mut runs = vec![text_style.to_run(label.len())];
-    cx.text_system()
-        .line_wrapper(text_style.font(), px(TEXT_CAPTION))
-        .truncate_line(SharedString::from(label), px(max_width_px), "…", &mut runs)
 }
 
 fn preview_tile(

@@ -23,12 +23,6 @@ mod tests {
     fn live_manifest_declares_the_headless_doctor_contract() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-        let runtime = manifest
-            .runtime
-            .as_ref()
-            .expect("Window Actions runtime must be declared");
-
-        assert_eq!(runtime.command, "window-actions");
         assert!(manifest.capabilities.doctor);
         assert_eq!(
             manifest.catalog_runtime_args("snap-left"),

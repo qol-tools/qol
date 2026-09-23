@@ -1,14 +1,14 @@
 [plugin]
-id = "plugin-lights"
+id = "qol-lights"
 uid = "368871df-de60-4a7a-ab7c-8d33fcd22511"
 name = "Lights"
 description = "Control lights through backend adapters"
-version = "1.35.0"
+version = "1.45.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "plugin-lights"
+command = "qol-lights"
 
 [action.toggle_main]
 label = "Toggle Main Light"
@@ -73,6 +73,7 @@ args = ["preset_8"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [action.pair]
@@ -106,7 +107,8 @@ serial = true
 
 [daemon]
 enabled = true
-command = "plugin-lights"
+command = "qol-lights"
+inherit_listener = true
 socket = "/tmp/plugin-lights.sock"
 port = 42710
 
@@ -114,7 +116,15 @@ port = 42710
 label = "Lights"
 items = []
 
+[traits.confined]
+
+[traits.peripheral-preview]
+neighbors = 1
+
+[traits.atmosphere]
+preset = "wood"
+
 [[dependencies.binaries]]
-name = "plugin-lights"
-repo = "qol-tools/plugin-lights"
-pattern = "plugin-lights-{os}-{arch}"
+name = "qol-lights"
+repo = "qol-tools/qol-lights"
+pattern = "qol-lights-{os}-{arch}"

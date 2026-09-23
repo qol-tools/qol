@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use wait_timeout::ChildExt;
 
+use crate::cli::PLUGIN_ID;
 use crate::core::guards::{
     sanitize_stderr, ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
 };
@@ -21,7 +22,7 @@ use crate::core::{
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const STDERR_CAP: usize = 4096;
-const SELF_LAUNCHERS: &[&str] = &["qol-tray.desktop", "removeapp.desktop"];
+const SELF_LAUNCHERS: &[&str] = &["qol-tray.desktop", "qol-removeapp.desktop"];
 const GENERIC_KEYS: &[&str] = &[
     "applications",
     "autostart",
@@ -261,22 +262,22 @@ impl Platform {
             .tools
             .apt_get
             .as_ref()
-            .context("removeapp: apt-get not found")?;
+            .context(format!("{PLUGIN_ID}: apt-get not found"))?;
         let dpkg_query = self
             .tools
             .dpkg_query
             .as_ref()
-            .context("removeapp: dpkg-query not found")?;
+            .context(format!("{PLUGIN_ID}: dpkg-query not found"))?;
         let pkexec = self
             .tools
             .pkexec
             .as_ref()
-            .context("removeapp: pkexec not found")?;
+            .context(format!("{PLUGIN_ID}: pkexec not found"))?;
 
         ensure_dpkg_owns_launcher(dpkg_query, &app.path, package.id())?;
         ensure_apt_package_is_removable(dpkg_query, package.id())?;
         eprintln!(
-            "[removeapp] package-preflight manager=apt id={}",
+            "[{PLUGIN_ID}] package-preflight manager=apt id={}",
             package.id()
         );
         let simulation = run_command(
@@ -286,14 +287,14 @@ impl Platform {
         )?;
         if !simulation.status.success() {
             anyhow::bail!(
-                "removeapp: apt preflight failed: {}",
+                "{PLUGIN_ID}: apt preflight failed: {}",
                 sanitize_stderr(&simulation.stderr, STDERR_CAP)
             );
         }
         ensure_apt_removes_only_target(&simulation.stdout, package.id())?;
 
         eprintln!(
-            "[removeapp] package-remove manager=apt id={} scope=system",
+            "[{PLUGIN_ID}] package-remove manager=apt id={} scope=system",
             package.id()
         );
         let args = vec![
@@ -312,14 +313,14 @@ impl Platform {
             .tools
             .flatpak
             .as_ref()
-            .context("removeapp: flatpak not found")?;
+            .context(format!("{PLUGIN_ID}: flatpak not found"))?;
         let scope = match package.scope() {
             PackageScope::User => "--user",
             PackageScope::System => "--system",
         };
         if flatpak_id(app).as_deref() != Some(package.id()) {
             anyhow::bail!(
-                "removeapp: Flatpak ownership changed for {}",
+                "{PLUGIN_ID}: Flatpak ownership changed for {}",
                 app.path.display()
             )
         }
@@ -330,12 +331,12 @@ impl Platform {
         )?;
         if !info.status.success() {
             anyhow::bail!(
-                "removeapp: cannot confirm Flatpak ownership: {}",
+                "{PLUGIN_ID}: cannot confirm Flatpak ownership: {}",
                 sanitize_stderr(&info.stderr, STDERR_CAP)
             )
         }
         eprintln!(
-            "[removeapp] package-remove manager=flatpak id={} scope={scope}",
+            "[{PLUGIN_ID}] package-remove manager=flatpak id={} scope={scope}",
             package.id()
         );
         let output = run_command(
@@ -387,7 +388,7 @@ impl AppPlatform for Platform {
 
     fn scan(&self, app: &InstalledApp, inventory: &[InstalledApp]) -> Result<RemovalPlan> {
         let desktop = qol_apps::desktop::parse_desktop_entry_file(&app.path)
-            .with_context(|| format!("removeapp: cannot read {}", app.path.display()))?;
+            .with_context(|| format!("{PLUGIN_ID}: cannot read {}", app.path.display()))?;
         let mut items = vec![Leftover {
             path: app.path.clone(),
             kind: LeftoverKind::DesktopEntry,
@@ -512,7 +513,7 @@ impl AppPlatform for Platform {
             if let Err(error) = qol_process::signal_term_pid(process.pid) {
                 if error.kind() != std::io::ErrorKind::NotFound {
                     return Err(error)
-                        .context(format!("removeapp: could not stop pid {}", process.pid));
+                        .context(format!("{PLUGIN_ID}: could not stop pid {}", process.pid));
                 }
             }
         }
@@ -531,7 +532,7 @@ impl AppPlatform for Platform {
             PackageManager::Apt => self.uninstall_apt(app, package),
             PackageManager::Flatpak => self.uninstall_flatpak(app, package),
             PackageManager::Homebrew => {
-                anyhow::bail!("removeapp: Homebrew packages are not supported on Linux")
+                anyhow::bail!("{PLUGIN_ID}: Homebrew packages are not supported on Linux")
             }
         }
     }
@@ -557,10 +558,10 @@ fn run_command(program: &Path, args: &[OsString], timeout: Duration) -> Result<O
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     qol_process::isolate_owned_command(&mut command)
-        .context("removeapp: failed to isolate package command")?;
+        .context(format!("{PLUGIN_ID}: failed to isolate package command"))?;
     let mut child = command
         .spawn()
-        .with_context(|| format!("removeapp: failed to run {}", program.display()))?;
+        .with_context(|| format!("{PLUGIN_ID}: failed to run {}", program.display()))?;
     let mut stdout = child.stdout.take().expect("piped stdout");
     let mut stderr = child.stderr.take().expect("piped stderr");
     let stdout_reader = std::thread::spawn(move || {
@@ -578,7 +579,7 @@ fn run_command(program: &Path, args: &[OsString], timeout: Duration) -> Result<O
         None => {
             let _ = qol_process::kill_group(child.id());
             let _ = child.wait();
-            anyhow::bail!("removeapp: {} timed out", program.display())
+            anyhow::bail!("{PLUGIN_ID}: {} timed out", program.display())
         }
     };
     Ok(Output {
@@ -593,7 +594,7 @@ fn ensure_success(manager: &str, output: Output) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!(
-            "removeapp: {manager} uninstall failed: {}",
+            "{PLUGIN_ID}: {manager} uninstall failed: {}",
             sanitize_stderr(&output.stderr, STDERR_CAP)
         )
     }
@@ -680,7 +681,7 @@ fn ensure_dpkg_owns_launcher(dpkg_query: &Path, launcher: &Path, package: &str) 
         return Ok(());
     }
     anyhow::bail!(
-        "removeapp: dpkg ownership changed for {}",
+        "{PLUGIN_ID}: dpkg ownership changed for {}",
         launcher.display()
     )
 }
@@ -698,7 +699,7 @@ fn ensure_apt_package_is_removable(dpkg_query: &Path, package: &str) -> Result<(
     )?;
     if !output.status.success() {
         anyhow::bail!(
-            "removeapp: cannot inspect apt package {package}: {}",
+            "{PLUGIN_ID}: cannot inspect apt package {package}: {}",
             sanitize_stderr(&output.stderr, STDERR_CAP)
         );
     }
@@ -708,10 +709,12 @@ fn ensure_apt_package_is_removable(dpkg_query: &Path, package: &str) -> Result<(
     let essential = fields.next().unwrap_or_default();
     let priority = fields.next().unwrap_or_default();
     if !status.starts_with("ii") {
-        anyhow::bail!("removeapp: apt package {package} is not installed")
+        anyhow::bail!("{PLUGIN_ID}: apt package {package} is not installed")
     }
     if essential == "yes" || matches!(priority, "required" | "important") {
-        anyhow::bail!("removeapp: refusing to remove protected apt package {package} ({priority})")
+        anyhow::bail!(
+            "{PLUGIN_ID}: refusing to remove protected apt package {package} ({priority})"
+        )
     }
     Ok(())
 }
@@ -735,10 +738,10 @@ fn ensure_apt_removes_only_target(raw: &[u8], target: &str) -> Result<()> {
         return Ok(());
     }
     if removals.is_empty() {
-        anyhow::bail!("removeapp: apt preflight did not plan removal of {target}")
+        anyhow::bail!("{PLUGIN_ID}: apt preflight did not plan removal of {target}")
     }
     anyhow::bail!(
-        "removeapp: apt would also remove {}; use the system package manager to review that plan",
+        "{PLUGIN_ID}: apt would also remove {}; use the system package manager to review that plan",
         removals.into_iter().collect::<Vec<_>>().join(", ")
     )
 }
@@ -1064,8 +1067,8 @@ mod tests {
             &format!("[Desktop Entry]\nName=Widget\nExec={}\n", binary.display()),
         );
         write(
-            &applications.join("qol-shortcut-plugin-removeapp-open.desktop"),
-            "[Desktop Entry]\nName=Remove App\nExec=qol-tray exec shortcut removeapp\n",
+            &applications.join("qol-shortcut-qol-removeapp-open.desktop"),
+            "[Desktop Entry]\nName=Remove App\nExec=qol-tray exec shortcut qol-removeapp\n",
         );
         write(&home.join(".config/widget/settings"), "config");
         write(&home.join(".cache/widgetish/keep"), "near miss");

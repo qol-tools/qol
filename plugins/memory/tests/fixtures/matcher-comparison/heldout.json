@@ -1,0 +1,293 @@
+{
+  "schema": 1,
+  "split": "heldout",
+  "facts": [
+    {
+      "id": "nova-debug",
+      "question": "How to start Nova with debug logging?",
+      "answer": "Run nova --debug."
+    },
+    {
+      "id": "nova-stop",
+      "question": "How to stop Nova gracefully?",
+      "answer": "Run nova shutdown."
+    },
+    {
+      "id": "larch-language",
+      "question": "Which language is the Larch service implemented in?",
+      "answer": "Python."
+    },
+    {
+      "id": "atlas-backups",
+      "question": "Where are Atlas backups stored?",
+      "answer": "/fixture/atlas/snapshots"
+    },
+    {
+      "id": "cedar-retention",
+      "question": "How long does Cedar retain its audit logs?",
+      "answer": "14 days."
+    },
+    {
+      "id": "birch-port",
+      "question": "What port does the Birch API listen on?",
+      "answer": "8123."
+    },
+    {
+      "id": "delta-copy",
+      "question": "How to copy files from delta to epsilon?",
+      "answer": "Run transfer delta epsilon."
+    },
+    {
+      "id": "spruce-restart",
+      "question": "Does the Spruce update require a restart?",
+      "answer": "Yes, restart Spruce after the update."
+    },
+    {
+      "id": "ash-local",
+      "question": "Why does Ash process recordings locally?",
+      "answer": "Recordings must remain on the device for privacy."
+    }
+  ],
+  "cases": [
+    {
+      "id": "heldout-01",
+      "category": "exact",
+      "query": "How to start Nova with debug logging?",
+      "expected": "nova-debug"
+    },
+    {
+      "id": "heldout-02",
+      "category": "synonym",
+      "query": "how do I bring up Nova with debug logging",
+      "expected": "nova-debug"
+    },
+    {
+      "id": "heldout-03",
+      "category": "synonym",
+      "query": "how to spin up Nova with debug logging",
+      "expected": "nova-debug"
+    },
+    {
+      "id": "heldout-04",
+      "category": "wording",
+      "query": "which command gets Nova going with debug logging",
+      "expected": "nova-debug"
+    },
+    {
+      "id": "heldout-05",
+      "category": "wording",
+      "query": "how can Nova be started with debug logging enabled",
+      "expected": "nova-debug"
+    },
+    {
+      "id": "heldout-06",
+      "category": "typo",
+      "query": "how to strt Nova with debug logging",
+      "expected": "nova-debug"
+    },
+    {
+      "id": "heldout-07",
+      "category": "opposite_action_answerable",
+      "query": "how do I shut Nova down gracefully",
+      "expected": "nova-stop"
+    },
+    {
+      "id": "heldout-08",
+      "category": "exact",
+      "query": "How to stop Nova gracefully?",
+      "expected": "nova-stop"
+    },
+    {
+      "id": "heldout-09",
+      "category": "word_order",
+      "query": "Larch service: which language is it implemented in?",
+      "expected": "larch-language"
+    },
+    {
+      "id": "heldout-10",
+      "category": "synonym",
+      "query": "what programming language was used to build Larch",
+      "expected": "larch-language"
+    },
+    {
+      "id": "heldout-11",
+      "category": "wording",
+      "query": "Larch is coded in what language",
+      "expected": "larch-language"
+    },
+    {
+      "id": "heldout-12",
+      "category": "exact",
+      "query": "Where are Atlas backups stored?",
+      "expected": "atlas-backups"
+    },
+    {
+      "id": "heldout-13",
+      "category": "synonym",
+      "query": "where can I locate the Atlas backup files",
+      "expected": "atlas-backups"
+    },
+    {
+      "id": "heldout-14",
+      "category": "wording",
+      "query": "which folder holds backups for Atlas",
+      "expected": "atlas-backups"
+    },
+    {
+      "id": "heldout-15",
+      "category": "exact",
+      "query": "How long does Cedar retain its audit logs?",
+      "expected": "cedar-retention"
+    },
+    {
+      "id": "heldout-16",
+      "category": "wording",
+      "query": "what is the audit log retention period for Cedar",
+      "expected": "cedar-retention"
+    },
+    {
+      "id": "heldout-17",
+      "category": "exact",
+      "query": "What port does the Birch API listen on?",
+      "expected": "birch-port"
+    },
+    {
+      "id": "heldout-18",
+      "category": "wording",
+      "query": "which network port is used by the Birch API",
+      "expected": "birch-port"
+    },
+    {
+      "id": "heldout-19",
+      "category": "synonym",
+      "query": "how do I move copies of files from delta to epsilon",
+      "expected": "delta-copy"
+    },
+    {
+      "id": "heldout-20",
+      "category": "exact",
+      "query": "Does the Spruce update require a restart?",
+      "expected": "spruce-restart"
+    },
+    {
+      "id": "heldout-21",
+      "category": "wording",
+      "query": "must I restart Spruce after updating it",
+      "expected": "spruce-restart"
+    },
+    {
+      "id": "heldout-22",
+      "category": "wording",
+      "query": "why are Ash recordings processed on the device",
+      "expected": "ash-local"
+    },
+    {
+      "id": "heldout-23",
+      "category": "negation",
+      "query": "how to start Nova without debug logging",
+      "expected": null
+    },
+    {
+      "id": "heldout-24",
+      "category": "unsupported_scope",
+      "query": "how to start Nova with debug logging over SSH",
+      "expected": null
+    },
+    {
+      "id": "heldout-25",
+      "category": "platform",
+      "query": "how to start Nova with debug logging on Windows",
+      "expected": null
+    },
+    {
+      "id": "heldout-26",
+      "category": "wrong_project",
+      "query": "how to start Vega with debug logging",
+      "expected": null
+    },
+    {
+      "id": "heldout-27",
+      "category": "different_action",
+      "query": "how to install Nova with debug logging",
+      "expected": null
+    },
+    {
+      "id": "heldout-28",
+      "category": "under_specified",
+      "query": "how to start Nova",
+      "expected": null
+    },
+    {
+      "id": "heldout-29",
+      "category": "different_property",
+      "query": "what license does the Larch service use",
+      "expected": null
+    },
+    {
+      "id": "heldout-30",
+      "category": "wrong_project",
+      "query": "which language is the Atlas service implemented in",
+      "expected": null
+    },
+    {
+      "id": "heldout-31",
+      "category": "unsupported_scope",
+      "query": "where are Atlas backups stored on the remote server",
+      "expected": null
+    },
+    {
+      "id": "heldout-32",
+      "category": "temporal",
+      "query": "where were Atlas backups stored last year",
+      "expected": null
+    },
+    {
+      "id": "heldout-33",
+      "category": "different_property",
+      "query": "how long does Cedar retain application logs",
+      "expected": null
+    },
+    {
+      "id": "heldout-34",
+      "category": "wrong_project",
+      "query": "what port does the Cedar API listen on",
+      "expected": null
+    },
+    {
+      "id": "heldout-35",
+      "category": "numeric_entity",
+      "query": "what port does the Birch2 API listen on",
+      "expected": null
+    },
+    {
+      "id": "heldout-36",
+      "category": "direction",
+      "query": "how to copy files from epsilon to delta",
+      "expected": null
+    },
+    {
+      "id": "heldout-37",
+      "category": "negation",
+      "query": "does the Spruce update require no restart",
+      "expected": null
+    },
+    {
+      "id": "heldout-38",
+      "category": "opposite_action",
+      "query": "why does Ash upload recordings for processing",
+      "expected": null
+    },
+    {
+      "id": "heldout-39",
+      "category": "different_property",
+      "query": "how can I decrypt Ash recordings",
+      "expected": null
+    },
+    {
+      "id": "heldout-40",
+      "category": "no_memory",
+      "query": "what is the office door access code",
+      "expected": null
+    }
+  ]
+}

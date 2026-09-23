@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchOutputRoot } from "./lib/store-path.js";
 import { bm25Ranks, snippet, tokens, buildIndex } from "./lib/retrieval.js";
 import { buildOrLoad } from "./lib/indexcache.js";
 import { trySealedText, parseUnitsText } from "./lib/seal.js";
@@ -28,13 +28,13 @@ const LOG_FACT = pick("--log-fact", null);
 const NO_LOG = args.includes("--no-log");
 
 try {
-  mkdirSync(STORE_ROOT, { recursive: true });
-  writeFileSync(join(STORE_ROOT, "manifest.json"), JSON.stringify({ schema: 1, ask_mjs: join(ASK_BASE, "ask.mjs"), retrievals: "qol-memory-retrieval-v1", candidates: "qol-memory-candidates-v1", concept_aliases: "qol-memory-concept-aliases-v1" }));
+  mkdirSync(researchOutputRoot(), { recursive: true });
+  writeFileSync(join(researchOutputRoot(), "manifest.json"), JSON.stringify({ schema: 1, ask_mjs: join(ASK_BASE, "ask.mjs"), retrievals: "qol-memory-retrieval-v1", candidates: "qol-memory-candidates-v1", concept_aliases: "qol-memory-concept-aliases-v1" }));
 } catch {}
 
 const STOPWORDS = new Set(["what", "when", "where", "which", "who", "how", "do", "does", "did", "is", "are", "the", "a", "an", "to", "for", "of", "in", "on", "with", "and", "or", "me", "you", "my", "we", "i", "it", "have", "has", "be", "been", "was", "were", "many", "much", "exist", "really", "want", "should", "could", "would", "can", "work", "fix", "this", "that", "these", "those", "there", "about", "get", "make", "use", "tell", "explain"]);
 
-const ALIASES = process.env.QOL_MEMORY_ALIASES_DISABLE === "1" ? new Map() : loadAliases(join(ASK_BASE, "..", "..", "..", "plugins", "qol-memory", "assets", "concept-aliases.json"));
+const ALIASES = process.env.QOL_MEMORY_ALIASES_DISABLE === "1" ? new Map() : loadAliases(join(ASK_BASE, "..", "..", "..", "plugins", "memory", "assets", "concept-aliases.json"));
 
 const BOILERPLATE_MARKERS = [
   "[qol session bridge]",

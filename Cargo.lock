@@ -61,40 +61,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "alt-tab"
-version = "0.70.0"
-dependencies = [
- "block2",
- "core-foundation 0.10.0",
- "core-video",
- "futures",
- "gpui",
- "image",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "qol-app-icon",
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-fs",
- "qol-gpui",
- "qol-headless",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-runtime",
- "qol-windowing",
- "serde",
- "serde_json",
- "smallvec",
- "tempfile",
- "workspace-hack",
- "x11rb",
- "zbus",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2210,6 +2176,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum-primitive-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba7795da175654fe16979af73f81f26a8ea27638d8d9823d317016888a63dc4c"
+dependencies = [
+ "num-traits",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4228,30 +4205,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyremap"
-version = "1.34.0"
-dependencies = [
- "anyhow",
- "core-foundation 0.10.0",
- "core-graphics 0.25.0",
- "foreign-types-shared 0.3.1",
- "objc2",
- "objc2-app-kit",
- "proptest",
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-headless",
- "qol-hotkeys",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-runtime",
- "serde",
- "serde_json",
- "workspace-hack",
-]
-
-[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4306,39 +4259,6 @@ name = "lab"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
-
-[[package]]
-name = "launcher"
-version = "1.59.0"
-dependencies = [
- "anyhow",
- "block2",
- "gpui",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "proptest",
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-frecency",
- "qol-gpui",
- "qol-headless",
- "qol-platform",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-process",
- "qol-runtime",
- "qol-search",
- "qol-watch",
- "serde",
- "serde_json",
- "tempfile",
- "toml 0.9.12+spec-1.1.0",
- "workspace-hack",
- "x11rb",
-]
 
 [[package]]
 name = "lazy_static"
@@ -5789,192 +5709,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "plugin-bluetooth"
-version = "0.32.0"
-dependencies = [
- "anyhow",
- "bluer",
- "futures",
- "libc",
- "objc2",
- "objc2-core-foundation",
- "objc2-foundation",
- "objc2-io-bluetooth",
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-gpui",
- "qol-headless",
- "qol-host-fixes",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-process",
- "qol-runtime",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "workspace-hack",
-]
-
-[[package]]
-name = "plugin-cli-sessions"
-version = "0.53.0"
-dependencies = [
- "anyhow",
- "gpui",
- "proptest",
- "qol-apps",
- "qol-color",
- "qol-config",
- "qol-conventions",
- "qol-fs",
- "qol-gpui",
- "qol-headless",
- "qol-hotkeys",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-process",
- "qol-runtime",
- "qol-terminal-sessions",
- "serde",
- "serde_json",
- "tempfile",
- "toml 0.9.12+spec-1.1.0",
- "workspace-hack",
-]
-
-[[package]]
-name = "plugin-controllers"
-version = "0.25.0"
-dependencies = [
- "anyhow",
- "evdev",
- "qol-apps",
- "qol-conventions",
- "qol-headless",
- "qol-host-fixes",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "serde_json",
- "tempfile",
- "workspace-hack",
-]
-
-[[package]]
-name = "plugin-lights"
-version = "1.35.0"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "getrandom 0.3.4",
- "libc",
- "qol-apps",
- "qol-color",
- "qol-config",
- "qol-conventions",
- "qol-headless",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-runtime",
- "qol-zigbee",
- "serde",
- "serde_json",
- "serialport",
- "tempfile",
- "tungstenite 0.26.2",
- "workspace-hack",
-]
-
-[[package]]
-name = "plugin-monitor"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "libc",
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-fs",
- "qol-headless",
- "qol-host-fixes",
- "qol-host-session",
- "qol-hotkeys",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-profile-sync",
- "qol-runtime",
- "qol-windowing",
- "serde",
- "serde_json",
- "signal-hook",
- "tempfile",
- "workspace-hack",
- "x11rb",
-]
-
-[[package]]
-name = "plugin-os-themes"
-version = "0.38.0"
-dependencies = [
- "anyhow",
- "libc",
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-fs",
- "qol-headless",
- "qol-host-fixes",
- "qol-host-session",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-runtime",
- "serde",
- "serde_json",
- "workspace-hack",
- "x11",
-]
-
-[[package]]
-name = "plugin-removeapp"
-version = "0.46.0"
-dependencies = [
- "anyhow",
- "dirs 6.0.0",
- "gpui",
- "libc",
- "objc2",
- "objc2-app-kit",
- "qol-apps",
- "qol-conventions",
- "qol-gpui",
- "qol-headless",
- "qol-hotkeys",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-process",
- "serde",
- "serde_json",
- "tempfile",
- "trash",
- "wait-timeout",
- "workspace-hack",
-]
-
-[[package]]
-name = "plugin-template"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "qol-apps",
- "qol-conventions",
- "qol-headless",
- "qol-plugin-api",
- "serde_json",
- "workspace-hack",
-]
-
-[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5998,41 +5732,6 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide",
-]
-
-[[package]]
-name = "pointzerver"
-version = "1.33.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chacha20poly1305",
- "chrono",
- "env_logger",
- "gethostname",
- "getrandom 0.3.4",
- "hkdf",
- "hmac",
- "if-addrs",
- "libc",
- "log",
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-fs",
- "qol-headless",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "rdev",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "windows 0.52.0",
- "workspace-hack",
- "x11",
- "x25519-dalek",
 ]
 
 [[package]]
@@ -6278,6 +5977,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
+name = "pulseaudio"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d70623bd7967a9ca4c2ae0e807fc380b291f98480fc037042305ec643a4d3373"
+dependencies = [
+ "bitflags 2.13.0",
+ "byteorder",
+ "enum-primitive-derive",
+ "futures",
+ "log",
+ "mio",
+ "num-traits",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6347,6 +6062,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-alt-tab"
+version = "0.81.1"
+dependencies = [
+ "block2",
+ "core-foundation 0.10.0",
+ "core-video",
+ "futures",
+ "gpui",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "qol-app-icon",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-gpui",
+ "qol-headless",
+ "qol-platform",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "qol-windowing",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "workspace-hack",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
 name = "qol-app-icon"
 version = "1.0.0"
 dependencies = [
@@ -6385,6 +6133,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-audio"
+version = "1.0.0"
+dependencies = [
+ "mio",
+ "pulseaudio",
+ "socket2",
+ "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-bluetooth"
+version = "0.44.0"
+dependencies = [
+ "anyhow",
+ "bluer",
+ "dbus",
+ "dbus-tokio",
+ "futures",
+ "libc",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "objc2-io-bluetooth",
+ "qol-apps",
+ "qol-audio",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-host-fixes",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-process",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-build-identity"
 version = "1.0.0"
 dependencies = [
@@ -6392,7 +6183,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6401,6 +6191,33 @@ version = "1.0.0"
 dependencies = [
  "workspace-hack",
  "zbus",
+]
+
+[[package]]
+name = "qol-cli-sessions"
+version = "0.64.1"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "proptest",
+ "qol-apps",
+ "qol-color",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-gpui",
+ "qol-headless",
+ "qol-hotkeys",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-process",
+ "qol-runtime",
+ "qol-terminal-sessions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6428,13 +6245,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-controllers"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "evdev",
+ "qol-apps",
+ "qol-conventions",
+ "qol-headless",
+ "qol-host-fixes",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "serde_json",
+ "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-conventions"
 version = "0.1.0"
 dependencies = [
  "proptest",
  "serde",
  "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6543,10 +6376,12 @@ dependencies = [
  "qol-theme",
  "qrcode",
  "raw-window-handle",
+ "resvg",
  "serde",
  "serde_json",
  "smallvec",
  "taffy",
+ "ttf-parser 0.25.1",
  "tungstenite 0.26.2",
  "workspace-hack",
  "x11rb",
@@ -6614,6 +6449,106 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-ide-checkout"
+version = "1.41.0"
+dependencies = [
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-headless",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-keyremap"
+version = "1.44.0"
+dependencies = [
+ "anyhow",
+ "core-foundation 0.10.0",
+ "core-graphics 0.25.0",
+ "foreign-types-shared 0.3.1",
+ "objc2",
+ "objc2-app-kit",
+ "proptest",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-headless",
+ "qol-hotkeys",
+ "qol-platform",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-launcher"
+version = "1.70.1"
+dependencies = [
+ "anyhow",
+ "block2",
+ "gpui",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "proptest",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-frecency",
+ "qol-gpui",
+ "qol-headless",
+ "qol-platform",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-process",
+ "qol-runtime",
+ "qol-search",
+ "qol-watch",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
+ "x11rb",
+]
+
+[[package]]
+name = "qol-lights"
+version = "1.45.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "getrandom 0.3.4",
+ "libc",
+ "qol-apps",
+ "qol-color",
+ "qol-config",
+ "qol-conventions",
+ "qol-headless",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "qol-zigbee",
+ "serde",
+ "serde_json",
+ "serialport",
+ "tempfile",
+ "tungstenite 0.26.2",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-log"
 version = "1.0.0"
 dependencies = [
@@ -6636,7 +6571,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.3.0"
+version = "0.12.2"
 dependencies = [
  "anyhow",
  "flate2",
@@ -6648,6 +6583,7 @@ dependencies = [
  "qol-headless",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-process",
  "qol-runtime",
  "qol-watch",
  "regex",
@@ -6655,12 +6591,13 @@ dependencies = [
  "serde_json",
  "sha1 0.10.6",
  "sha2",
+ "ureq",
  "workspace-hack",
 ]
 
 [[package]]
 name = "qol-migrations"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6680,11 +6617,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-monitor"
+version = "0.16.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "libc",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-host-fixes",
+ "qol-host-session",
+ "qol-hotkeys",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-profile-sync",
+ "qol-runtime",
+ "qol-windowing",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
+ "workspace-hack",
+ "x11rb",
+]
+
+[[package]]
+name = "qol-os-themes"
+version = "0.48.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-host-fixes",
+ "qol-host-session",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "workspace-hack",
+ "x11",
+]
+
+[[package]]
 name = "qol-platform"
 version = "0.2.0"
 dependencies = [
+ "core-foundation 0.10.0",
  "dirs 6.0.0",
  "libc",
+ "serde",
  "workspace-hack",
 ]
 
@@ -6698,6 +6687,8 @@ dependencies = [
  "proptest",
  "qol-config",
  "qol-conventions",
+ "qol-headless",
+ "qol-platform",
  "qol-runtime",
  "serde",
  "serde_json",
@@ -6709,6 +6700,7 @@ dependencies = [
 name = "qol-plugin-daemon"
 version = "1.0.0"
 dependencies = [
+ "cc",
  "libc",
  "qol-config",
  "qol-conventions",
@@ -6718,6 +6710,42 @@ dependencies = [
  "serde_json",
  "workspace-hack",
  "zbus",
+]
+
+[[package]]
+name = "qol-pointz"
+version = "1.43.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "chrono",
+ "env_logger",
+ "gethostname",
+ "getrandom 0.3.4",
+ "hkdf",
+ "hmac",
+ "if-addrs",
+ "libc",
+ "log",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-platform",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "rdev",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "windows 0.52.0",
+ "workspace-hack",
+ "x11",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -6749,6 +6777,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-removeapp"
+version = "0.57.1"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "gpui",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "qol-apps",
+ "qol-conventions",
+ "qol-gpui",
+ "qol-headless",
+ "qol-hotkeys",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-process",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "trash",
+ "wait-timeout",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-runtime"
 version = "0.1.0"
 dependencies = [
@@ -6772,7 +6826,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.59.0"
+version = "1.69.1"
 dependencies = [
  "anyhow",
  "block2",
@@ -6783,6 +6837,7 @@ dependencies = [
  "libc",
  "objc2",
  "qol-apps",
+ "qol-audio",
  "qol-cinnamon",
  "qol-color",
  "qol-config",
@@ -6799,8 +6854,40 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "toml 0.9.12+spec-1.1.0",
  "workspace-hack",
  "x11rb",
+]
+
+[[package]]
+name = "qol-sound"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "qol-apps",
+ "qol-audio",
+ "qol-config",
+ "qol-conventions",
+ "qol-headless",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-template"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "qol-apps",
+ "qol-conventions",
+ "qol-headless",
+ "qol-plugin-api",
+ "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -6833,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.61.0"
+version = "3.72.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -6864,6 +6951,7 @@ dependencies = [
  "qol-apps",
  "qol-artifact",
  "qol-build-identity",
+ "qol-color",
  "qol-config",
  "qol-conventions",
  "qol-dev-build",
@@ -6875,6 +6963,7 @@ dependencies = [
  "qol-log",
  "qol-mcp",
  "qol-migrations",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -6909,7 +6998,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.22.0"
+version = "0.31.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6919,6 +7008,7 @@ dependencies = [
  "futures-util",
  "hf-hub",
  "qol-apps",
+ "qol-audio",
  "qol-config",
  "qol-conventions",
  "qol-headless",
@@ -6942,6 +7032,29 @@ version = "1.0.0"
 dependencies = [
  "notify",
  "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-window-actions"
+version = "2.42.0"
+dependencies = [
+ "proptest",
+ "qol-apps",
+ "qol-cinnamon",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-platform",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "qol-windowing",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
  "workspace-hack",
 ]
 
@@ -8708,23 +8821,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
-name = "task-runner"
-version = "1.31.0"
-dependencies = [
- "qol-apps",
- "qol-config",
- "qol-conventions",
- "qol-headless",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-runtime",
- "serde",
- "serde_json",
- "tempfile",
- "workspace-hack",
-]
-
-[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10187,28 +10283,6 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
-
-[[package]]
-name = "window-actions"
-version = "2.32.0"
-dependencies = [
- "proptest",
- "qol-apps",
- "qol-cinnamon",
- "qol-config",
- "qol-conventions",
- "qol-fs",
- "qol-headless",
- "qol-plugin-api",
- "qol-plugin-daemon",
- "qol-runtime",
- "qol-windowing",
- "serde",
- "serde_json",
- "tempfile",
- "toml 0.9.12+spec-1.1.0",
- "workspace-hack",
-]
 
 [[package]]
 name = "windows"

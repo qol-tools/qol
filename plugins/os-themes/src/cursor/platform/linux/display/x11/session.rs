@@ -84,14 +84,20 @@ impl CursorSession {
         true
     }
 
+    pub fn live_cursor_hidden(&mut self) -> bool {
+        load_live_cursor_image(self.display, self.base.default_size)
+            .is_some_and(|image| is_empty_cursor(&image))
+    }
+
     pub fn refresh(&mut self) -> bool {
+        let notified = self.take_cursor_notification();
         if self.active_cursor.is_none() {
             return false;
         }
         if self.current_scale <= 1.0 + f32::EPSILON {
             return false;
         }
-        if !self.take_cursor_notification() {
+        if !notified {
             return false;
         }
         if !live_refresh_enabled() {
@@ -183,7 +189,7 @@ impl CursorSession {
         };
         if is_empty_cursor(&live_cursor) {
             eprintln!(
-                "[shake-to-grow] live cursor is hidden at grow-start, growing the base cursor"
+                "[shake-to-grow] live cursor is hidden at grow-start, growing the base cursor (guard missed)"
             );
             return;
         }

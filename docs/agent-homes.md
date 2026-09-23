@@ -2,7 +2,7 @@
 
 An agent home is one harness instance's home directory: where a Claude Code,
 codex, kimi, or pi installation keeps its config and transcripts.
-`libs/qol-agent-homes` is the single source of truth for the home rules, and one
+`libs/agent-homes` is the single source of truth for the home rules, and one
 host file declares which homes this machine has.
 Everything that needs an agent home reads the registry instead of copying env
 var rules into each consumer.

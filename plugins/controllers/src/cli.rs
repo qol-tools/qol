@@ -6,14 +6,12 @@ use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTe
 use crate::platform::PlatformSupport;
 use crate::{app, PLUGIN_ID};
 
-const BINARY_NAME: &str = "plugin-controllers";
-
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
 }
 
 fn app() -> HeadlessApp {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Inspect connected game controllers and apply relevant driver-specific fixes.")
         .default_command(["status"])
         .command(apply_command())
@@ -25,7 +23,7 @@ fn app() -> HeadlessApp {
 fn apply_command() -> Command {
     Command::new("apply_fixes")
         .about("Apply fixes that match each controller's currently bound driver.")
-        .usage(format!("{BINARY_NAME} apply_fixes"))
+        .usage(format!("{PLUGIN_ID} apply_fixes"))
         .detail("The current compatibility fix applies only when xpadneo is active.")
         .detail("xpadneo is optional and is never installed by this command.")
         .detail("Writes /etc/modprobe.d/qol-controllers.conf and the live sysfs quirk.")
@@ -41,7 +39,7 @@ fn apply_command() -> Command {
 fn status_command() -> Command {
     Command::new("status")
         .about("Print connected controllers and their verdicts.")
-        .usage(format!("{BINARY_NAME} status"))
+        .usage(format!("{PLUGIN_ID} status"))
         .output("One line per connected controller.")
         .exit_behavior("Exits zero even when no controller is connected.")
         .run_plain_text(|_| {
@@ -60,7 +58,7 @@ fn status_command() -> Command {
 fn settings_command() -> Command {
     Command::new("settings")
         .about("Open the plugin settings page.")
-        .usage(format!("{BINARY_NAME} settings"))
+        .usage(format!("{PLUGIN_ID} settings"))
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
         .run_plain_text(|_| {
@@ -146,7 +144,7 @@ fn fixes_check() -> Result<DoctorCheckResult> {
     let summary = summary_lines(&snapshot.rows);
     if snapshot.rows.iter().any(|row| row.fixable) {
         return Ok(DoctorCheckResult::warn("controller_fixes", summary)
-            .with_fix(format!("run: {BINARY_NAME} apply_fixes")));
+            .with_fix(format!("run: {PLUGIN_ID} apply_fixes")));
     }
     Ok(DoctorCheckResult::ok("controller_fixes", summary))
 }

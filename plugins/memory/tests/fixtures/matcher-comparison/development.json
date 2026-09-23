@@ -1,0 +1,276 @@
+{
+  "schema": 1,
+  "split": "development",
+  "facts": [
+    {
+      "id": "kcd2-debug",
+      "question": "How to run KCD2 in debug mode?",
+      "answer": "Run ./kcd2-forge dev or ./kcd2-forge -d."
+    },
+    {
+      "id": "kcd2-normal",
+      "question": "How to run KCD2 in normal mode?",
+      "answer": "Run ./kcd2-forge play."
+    },
+    {
+      "id": "qol-language",
+      "question": "What language is the QOL monorepo written in?",
+      "answer": "Rust, with a JavaScript UI layer."
+    },
+    {
+      "id": "maple-config",
+      "question": "Where is the Maple configuration stored?",
+      "answer": "/fixture/maple/settings.toml"
+    },
+    {
+      "id": "quartz-history",
+      "question": "Does the Quartz clipboard survive restarts?",
+      "answer": "Yes, clipboard history is persisted."
+    },
+    {
+      "id": "topaz-version",
+      "question": "What version of the Topaz protocol is current?",
+      "answer": "v3.2"
+    },
+    {
+      "id": "alpha-copy",
+      "question": "How to copy files from alpha to beta?",
+      "answer": "Run copy-alpha-beta."
+    },
+    {
+      "id": "qol-incremental",
+      "question": "Why was incremental compilation disabled for QOL?",
+      "answer": "It exceeded the build memory budget."
+    }
+  ],
+  "cases": [
+    {
+      "id": "development-01",
+      "category": "exact",
+      "query": "How to run KCD2 in debug mode?",
+      "expected": "kcd2-debug"
+    },
+    {
+      "id": "development-02",
+      "category": "synonym",
+      "query": "how to boot kcd2 debug",
+      "expected": "kcd2-debug"
+    },
+    {
+      "id": "development-03",
+      "category": "synonym",
+      "query": "how do I fire up kcd2 debug",
+      "expected": "kcd2-debug"
+    },
+    {
+      "id": "development-04",
+      "category": "wording",
+      "query": "how can I get kcd2 running in debug mode",
+      "expected": "kcd2-debug"
+    },
+    {
+      "id": "development-05",
+      "category": "wording",
+      "query": "what command starts kcd2 debug",
+      "expected": "kcd2-debug"
+    },
+    {
+      "id": "development-06",
+      "category": "synonym",
+      "query": "how to open kcd2 debug",
+      "expected": "kcd2-debug"
+    },
+    {
+      "id": "development-07",
+      "category": "mode",
+      "query": "how to launch kcd2 in normal mode",
+      "expected": "kcd2-normal"
+    },
+    {
+      "id": "development-08",
+      "category": "wording",
+      "query": "what language is qol monorepo",
+      "expected": "qol-language"
+    },
+    {
+      "id": "development-09",
+      "category": "wording",
+      "query": "what is QOL written in",
+      "expected": "qol-language"
+    },
+    {
+      "id": "development-10",
+      "category": "typo",
+      "query": "what langauge is the QOL monorepo written in",
+      "expected": "qol-language"
+    },
+    {
+      "id": "development-11",
+      "category": "word_order",
+      "query": "QOL monorepo: which language is it written in?",
+      "expected": "qol-language"
+    },
+    {
+      "id": "development-12",
+      "category": "exact",
+      "query": "Where is the Maple configuration stored?",
+      "expected": "maple-config"
+    },
+    {
+      "id": "development-13",
+      "category": "synonym",
+      "query": "where can I find Maple settings",
+      "expected": "maple-config"
+    },
+    {
+      "id": "development-14",
+      "category": "wording",
+      "query": "what is the location of the Maple config file",
+      "expected": "maple-config"
+    },
+    {
+      "id": "development-15",
+      "category": "exact",
+      "query": "Does the Quartz clipboard survive restarts?",
+      "expected": "quartz-history"
+    },
+    {
+      "id": "development-16",
+      "category": "wording",
+      "query": "is Quartz clipboard history kept after a restart",
+      "expected": "quartz-history"
+    },
+    {
+      "id": "development-17",
+      "category": "exact",
+      "query": "What version of the Topaz protocol is current?",
+      "expected": "topaz-version"
+    },
+    {
+      "id": "development-18",
+      "category": "wording",
+      "query": "which protocol version does Topaz use",
+      "expected": "topaz-version"
+    },
+    {
+      "id": "development-19",
+      "category": "wording",
+      "query": "how do I transfer files from alpha to beta",
+      "expected": "alpha-copy"
+    },
+    {
+      "id": "development-20",
+      "category": "wording",
+      "query": "why did QOL turn off incremental compilation",
+      "expected": "qol-incremental"
+    },
+    {
+      "id": "development-21",
+      "category": "opposite_action",
+      "query": "how to stop kcd2 debug",
+      "expected": null
+    },
+    {
+      "id": "development-22",
+      "category": "negation_answerable",
+      "query": "how to run kcd2 without debug",
+      "expected": "kcd2-normal"
+    },
+    {
+      "id": "development-23",
+      "category": "unsupported_scope",
+      "query": "how to run kcd2 debug remotely",
+      "expected": null
+    },
+    {
+      "id": "development-24",
+      "category": "platform",
+      "query": "how to boot kcd2 in debug mode on macos",
+      "expected": null
+    },
+    {
+      "id": "development-25",
+      "category": "wrong_project",
+      "query": "how to boot Skyrim in debug mode",
+      "expected": null
+    },
+    {
+      "id": "development-26",
+      "category": "different_action",
+      "query": "how to restart kcd2 debug",
+      "expected": null
+    },
+    {
+      "id": "development-27",
+      "category": "under_specified",
+      "query": "how to boot kcd2",
+      "expected": null
+    },
+    {
+      "id": "development-28",
+      "category": "negation",
+      "query": "how to run kcd2 without normal mode",
+      "expected": null
+    },
+    {
+      "id": "development-29",
+      "category": "wrong_project",
+      "query": "what language is the Topaz monorepo written in",
+      "expected": null
+    },
+    {
+      "id": "development-30",
+      "category": "different_property",
+      "query": "what license is the QOL monorepo under",
+      "expected": null
+    },
+    {
+      "id": "development-31",
+      "category": "platform",
+      "query": "where is the Maple configuration stored on Windows",
+      "expected": null
+    },
+    {
+      "id": "development-32",
+      "category": "negation",
+      "query": "does Quartz clipboard not survive restarts",
+      "expected": null
+    },
+    {
+      "id": "development-33",
+      "category": "numeric_entity",
+      "query": "what version is Topaz2 protocol",
+      "expected": null
+    },
+    {
+      "id": "development-34",
+      "category": "temporal",
+      "query": "what version of Topaz was used in 2020",
+      "expected": null
+    },
+    {
+      "id": "development-35",
+      "category": "direction",
+      "query": "how to copy files from beta to alpha",
+      "expected": null
+    },
+    {
+      "id": "development-36",
+      "category": "opposite_action",
+      "query": "why was incremental compilation enabled for QOL",
+      "expected": null
+    },
+    {
+      "id": "development-37",
+      "category": "unsupported_scope",
+      "query": "how to run kcd2 debug without installing it",
+      "expected": null
+    },
+    {
+      "id": "development-38",
+      "category": "no_memory",
+      "query": "what is the wifi password for this office",
+      "expected": null
+    }
+  ]
+}

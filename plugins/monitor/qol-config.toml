@@ -6,6 +6,10 @@ description = "Display brightness, gamma, and mode control."
 label = "Displays"
 description = "Live brightness state for every connected display, read from the monitor daemon."
 
+[section.night]
+label = "Night mode"
+description = "Warm display colours manually or on a daily schedule."
+
 [section.preferences]
 label = "Preferences"
 description = "Per-display preferred brightness and control policy, applied at daemon start and when changed."
@@ -27,6 +31,7 @@ query = "displays"
 row_label = "{connector}"
 row_subtitle = "{detail}"
 empty_message = "No displays connected."
+card_description = "Live brightness for every display."
 row_slider = { value_from = "brightness", min = 0, max = 100, step = 5, action = "set_brightness", input = { id = "{id}", value = "{value}" } }
 
 [field.apply_preferred]
@@ -37,6 +42,91 @@ action = "apply"
 variant = "primary"
 description = "Set every connected display to its preferred brightness immediately."
 
+[field.night_status]
+type = "status"
+label = "Night mode status"
+section = "night"
+query = "night_mode"
+value_from = "state"
+label_map = { active = "Night mode on", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "OS night light could not be taken over", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid", controlled = "Under qol control", limited = "Another program keeps taking it", uncontrolled = "Warm calibration blocks the tint" }
+tone_map = { active = "success", inactive = "neutral", unsupported = "warning", conflict = "danger", failed = "danger", invalid_schedule = "danger" }
+
+[field.night_toggle]
+type = "action"
+label = "Night mode"
+active_label = "Night mode"
+description = "Switch the warm colour filter on or off."
+section = "night"
+action = "night_on"
+active_action = "night_off"
+active_query = "night_mode"
+active_value_from = "active"
+variant = "toggle"
+
+[field.night_temperature]
+type = "number"
+variant = "slider"
+config_key = "night_temperature"
+label = "Colour temperature"
+description = "Colour temperature in kelvin while night mode is on; lower is warmer."
+section = "night"
+default = 3500
+min = 1500
+max = 6500
+step = 100
+
+[field.night_schedule]
+type = "select"
+config_key = "night_schedule"
+label = "Schedule"
+description = "Run night mode between the daily start and end times."
+section = "night"
+default = "off"
+card_description = "When night mode turns on."
+options = ["off", "daily"]
+
+[field.night_schedule.option_labels]
+off = "Off"
+daily = "Daily"
+
+[field.night_schedule.option_pictures]
+off = "schedule-off"
+daily = "schedule-daily"
+
+[field.night_from]
+type = "string"
+config_key = "night_from"
+label = "From"
+description = "Daily start time in 24-hour HH:MM format."
+section = "night"
+default = "20:00"
+
+[field.night_to]
+type = "string"
+config_key = "night_to"
+label = "To"
+description = "Daily end time in 24-hour HH:MM format."
+section = "night"
+default = "06:00"
+
+[field.night_coordination]
+type = "select"
+config_key = "night_coordination"
+label = "Coordination"
+description = "Choose whether qol owns displays or only watches them while night mode runs."
+section = "night"
+default = "own"
+card_description = "Who owns the display in night mode."
+options = ["own", "detect"]
+
+[field.night_coordination.option_labels]
+own = "Own"
+detect = "Detect"
+
+[field.night_coordination.option_pictures]
+own = "letters:O"
+detect = "letters:D"
+
 [field.policy]
 type = "object_map"
 config_key = "policy"
@@ -44,6 +134,8 @@ label = "Control Policy"
 section = "preferences"
 key_label = "Display ID"
 description = "How each display is controlled. Labels: auto (prefer DDC, fall back to gamma), ddc, gamma, or off. Unknown labels are ignored."
+card_description = "How each display is controlled."
+item_label = "display policy"
 entry_fields = { policy = "string" }
 default = {}
 
@@ -54,3 +146,18 @@ label = "Brightness notifications"
 section = "preferences"
 default = true
 description = "Show a notification with the new brightness level whenever brightness changes. Turn this off to silence the brightness toasts."
+
+[section.arrangement]
+label = "Arrangement"
+description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."
+
+[field.arrangement]
+type = "display_layout"
+label = "Arrangement"
+section = "arrangement"
+query = "layout"
+active_query = "modes"
+action = "arrange"
+active_action = "set_mode"
+description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."
+card_description = "Where each display sits."

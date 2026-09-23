@@ -1,6 +1,6 @@
 /target
-keyremap
-keyremap.new
+qol-keyremap
+qol-keyremap.new
 /.vscode
 *.log
 .idea/

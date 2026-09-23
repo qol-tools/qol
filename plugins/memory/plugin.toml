@@ -1,0 +1,42 @@
+[plugin]
+id = "qol-memory"
+uid = "a2d9cb99-1d62-4f73-ab8e-51de1fa7ac63"
+name = "QoL Memory"
+description = "Long-context memory: retrieve settled facts from your agent session history"
+version = "0.12.2"
+author = "KMRH47"
+platforms = ["linux", "macos"]
+
+[runtime]
+command = "qol-memory"
+
+[daemon]
+enabled = true
+command = "qol-memory"
+socket = "/tmp/qol-memory.sock"
+
+[action.status]
+label = "Status"
+args = ["status"]
+
+[action.capture]
+label = "Capture"
+args = ["capture"]
+
+[capabilities]
+doctor = true
+
+[launcher]
+kind = "flow"
+title = "qol memory"
+prompt = "Ask memory"
+query = "rows"
+
+[menu]
+label = "QoL Memory"
+items = []
+
+[[dependencies.binaries]]
+name = "qol-memory"
+repo = "qol-tools/qol-memory"
+pattern = "qol-memory-{os}-{arch}"

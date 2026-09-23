@@ -166,6 +166,7 @@ const ATOM_NAMES: &[&str] = &[
     "_NET_WM_WINDOW_TYPE_NORMAL",
     "_NET_WM_STATE",
     "_NET_WM_STATE_HIDDEN",
+    "_NET_WM_WINDOW_OPACITY",
     "_NET_WM_STATE_ABOVE",
     "_NET_WM_STATE_FOCUSED",
     "WM_CLASS",
@@ -291,6 +292,7 @@ struct ResolvedProps {
     wm_name: Vec<Option<GetPropertyReply>>,
     wm_class: Vec<Option<GetPropertyReply>>,
     state: Vec<Option<GetPropertyReply>>,
+    opacity: Vec<Option<GetPropertyReply>>,
     geom: Vec<Option<WindowRect>>,
 }
 
@@ -327,6 +329,12 @@ fn pipeline_and_resolve(conn: &impl Connection, ids: &[u32], atoms: &AtomMap) ->
     let wm_class_atom = atoms.get("WM_CLASS").copied().unwrap_or(0);
 
     ResolvedProps {
+        opacity: batch_prop(conn, ids, |c, id| {
+            atoms.get("_NET_WM_WINDOW_OPACITY").and_then(|&atom| {
+                c.get_property(false, id, atom, AtomEnum::CARDINAL, 0, 1)
+                    .ok()
+            })
+        }),
         state: batch_prop(conn, ids, |c, id| {
             state_atom.and_then(|a| c.get_property(false, id, a, AtomEnum::ATOM, 0, 64).ok())
         }),
@@ -377,6 +385,17 @@ fn build_window_info(
     above_atom: u32,
     focused_atom: u32,
 ) -> Option<(WindowInfo, bool, bool)> {
+    let opacity = props.opacity[idx]
+        .as_ref()
+        .and_then(|reply| reply.value32())
+        .and_then(|mut values| values.next());
+    if opacity == Some(0) {
+        qol_runtime::probe!(
+            "WINDOW_DISCOVERY",
+            "wid={id} outcome=excluded reason=transparent"
+        );
+        return None;
+    }
     let title = resolve_title(idx, props);
     if title.is_empty() || title == "Desktop" {
         return None;
@@ -584,6 +603,48 @@ fn argb_to_bgra(pixels: &[u32], src_w: usize, src_h: usize, target: usize) -> Rg
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transparent_retained_windows_are_not_switchable() {
+        for (opacity, minimized, expected) in [
+            (Some(0), false, false),
+            (Some(0), true, false),
+            (None, false, true),
+            (None, true, true),
+            (Some(u32::MAX), false, true),
+            (Some(1), false, true),
+        ] {
+            let mut props = ResolvedProps {
+                net_name: vec![Some(GetPropertyReply {
+                    format: 8,
+                    value: b"cli-sessions-panel".to_vec(),
+                    ..Default::default()
+                })],
+                wm_name: vec![None],
+                wm_class: vec![None],
+                state: vec![minimized.then(|| GetPropertyReply {
+                    format: 32,
+                    value: 7_u32.to_ne_bytes().to_vec(),
+                    ..Default::default()
+                })],
+                opacity: vec![opacity.map(|value| GetPropertyReply {
+                    format: 32,
+                    value: value.to_ne_bytes().to_vec(),
+                    ..Default::default()
+                })],
+                geom: vec![None],
+            };
+            let result = build_window_info(42, 0, &mut props, 7, 8, 9);
+            assert_eq!(
+                result.is_some(),
+                expected,
+                "opacity={opacity:?} minimized={minimized}"
+            );
+            if let Some((window, _, _)) = result {
+                assert_eq!(window.is_minimized, minimized);
+            }
+        }
+    }
 
     fn icon(byte: u8) -> RgbaImage {
         RgbaImage {

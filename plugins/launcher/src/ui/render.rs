@@ -46,7 +46,7 @@ impl Render for LauncherView {
                 "launcher",
                 &self.focus_handle,
                 window,
-                |this: &Self| this.blur_guard_until,
+                |this: &Self| this.blur_guard.guard_until(),
                 |this: &Self| this.is_showing,
                 |_| qol_gpui::popup_window::input_held(),
                 cx,
@@ -101,6 +101,7 @@ impl Render for LauncherView {
             }
 
             return div()
+                .font_family(qol_gpui::theme::font_ui())
                 .id("launcher")
                 .track_focus(&self.focus_handle)
                 .w(px(WINDOW_WIDTH))
@@ -122,8 +123,11 @@ impl Render for LauncherView {
         let t0 = std::time::Instant::now();
         let flow_active = self.state.flow.is_some();
         if !flow_active {
-            self.store
-                .ensure_filtered(&self.state.query, self.state.mode, self.state.fuzziness);
+            self.store.ensure_filtered(
+                self.state.query.text(),
+                self.state.mode,
+                self.state.fuzziness,
+            );
         }
         #[cfg(debug_assertions)]
         let filter_us = t0.elapsed().as_micros();
@@ -160,12 +164,15 @@ impl Render for LauncherView {
         } else if flow_active {
             if result_count > 0 {
                 window_height_for_trail(
-                    flow_verdict == FlowVerdict::Vague,
+                    matches!(flow_verdict, FlowVerdict::Vague | FlowVerdict::Checking),
                     self.state
                         .flow
                         .as_ref()
                         .and_then(|session| {
-                            view::answer_lead(flow_verdict == FlowVerdict::Vague, &session.rows)
+                            view::answer_lead(
+                                matches!(flow_verdict, FlowVerdict::Vague | FlowVerdict::Checking),
+                                &session.rows,
+                            )
                         })
                         .map_or(qol_gpui::trail::motion::ROW_H, |_| view::CARD_HEIGHT),
                 )
@@ -221,7 +228,7 @@ impl Render for LauncherView {
             if n.is_multiple_of(10) {
                 eprintln!(
                     "[render #{n}] total={total_us}us filter={filter_us}us rows={rows_us}us gap={gap_us}us visible={visible} results={result_count} q={:?}",
-                    self.state.query
+                    self.state.query.text()
                 );
             }
         }
@@ -241,6 +248,7 @@ impl Render for LauncherView {
             .as_ref()
             .is_some_and(|session| session.pending);
         div()
+            .font_family(qol_gpui::theme::font_ui())
             .id("launcher")
             .track_focus(&self.focus_handle)
             .w(px(WINDOW_WIDTH))
@@ -268,8 +276,6 @@ impl Render for LauncherView {
             .child(view::search_bar(
                 &self.state.query,
                 self.state.launch_error.as_deref(),
-                self.state.cursor,
-                self.state.selected_range(),
                 self.state.scroll_list.selected,
                 result_count,
                 flow_pending,

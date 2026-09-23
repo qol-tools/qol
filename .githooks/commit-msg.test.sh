@@ -27,9 +27,9 @@ test_singular() {
 # The smart strip: redundant family prefix dies, namespace prefix survives.
 test_member_scope() {
   local cases=(
-    "plugins:plugin-alt-tab:alt-tab"
-    "plugins:plugin-os-themes:os-themes"
-    "plugins:plugin-window-actions:window-actions"
+    "plugins:alt-tab:alt-tab"
+    "plugins:os-themes:os-themes"
+    "plugins:window-actions:window-actions"
     "libs:qol-color:qol-color"
     "libs:qol-plugin-api:qol-plugin-api"
     "libs:qol-plugin-daemon:qol-plugin-daemon"
@@ -73,10 +73,10 @@ test_derive_today() {
   local root; root="$(mktemp -d)"
   mk_fixture "$root" \
     plugins/alt-tab plugins/template \
-    libs/qol-color libs/qol-plugin-api apps/qol-tray tools/qol-cli
+    libs/color libs/plugin-api apps/tray tools/cli
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
-  exp="alt-tab apps build ci cli color deps dev emu libs plugin-api plugins qol-cli qol-color qol-plugin-api qol-tray settings template tools tray workspace "
+  exp="alt-tab apps build ci cli color deps dev emu libs plugin-api plugins settings template tools tray workspace "
   eq "derive(today's layout)" "$exp" "$got"
   rm -rf "$root"
 }
@@ -94,11 +94,11 @@ test_derive_scales_to_new_family() {
 
 test_derive_skips_dirs_without_a_manifest() {
   local root; root="$(mktemp -d)"
-  mk_fixture "$root" tools/qol-cli
+  mk_fixture "$root" tools/cli
   mkdir -p "$root/tools/__pycache__"
   local got exp
   got="$(qol_derive_scopes "$root" | tr '\n' ' ')"
-  exp="build ci cli deps dev emu qol-cli settings tools workspace "
+  exp="build ci cli deps dev emu settings tools workspace "
   eq "derive(stray non-crate dir)" "$exp" "$got"
   rm -rf "$root"
 }
@@ -111,7 +111,7 @@ test_derive_accepts_the_repo_scopes_in_daily_use() {
   fi
   local allowed; allowed="$(qol_derive_scopes "$root")"
   local s
-  for s in qol-tray tray terminal-sessions build-identity config runtime alt-tab \
+  for s in tray cli guest-runner terminal-sessions build-identity config runtime alt-tab \
            workspace build ci deps dev emu settings; do
     if printf '%s\n' "$allowed" | grep -qxF "$s"; then
       ok "repo scope: $s"
@@ -143,8 +143,8 @@ test_check_subject() {
     "wip(launcher): half-built picker@@ok@@"
     "fix(qol-tray, garbage): tail token is not validated@@ok@@"
     "fix(tray): regrab on resume@@no@@unknown scope 'tray'"
-    "chore(plugin-template): bump version@@no@@unknown scope 'plugin-template'"
-    "fix(plugin-alt-tab): redundant prefix form@@no@@unknown scope 'plugin-alt-tab'"
+    "chore(qol-template): bump version@@no@@unknown scope 'qol-template'"
+    "fix(qol-alt-tab): redundant prefix form@@no@@unknown scope 'qol-alt-tab'"
     "fix(nonsense): nope@@no@@unknown scope 'nonsense'"
     "fix(hotkeys, qol-tray): member must be first@@no@@unknown scope 'hotkeys'"
     "Fix(alt-tab): capitalised type@@no@@conventional"

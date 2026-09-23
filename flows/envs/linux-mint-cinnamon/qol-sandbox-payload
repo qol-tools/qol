@@ -164,8 +164,11 @@ def validate_prod_payload(files):
     plugin_paths = [path for path in files if path.startswith("plugins/")]
     base_allowed = {
         "bin/qol-tray",
+        "bin/qol-tray-install",
         "installer/qol-sandbox-payload",
     }
+    if "bin/qol-tray-install" in files:
+        require(files["bin/qol-tray-install"][3], "installer binary is not executable")
     if not plugin_paths:
         require(set(files) <= base_allowed, "tray-only payload contains an unowned file")
         return None
@@ -210,6 +213,11 @@ def publish(staged, stage, plugin_id):
         (mode_file, QOL_HOME / ".config/qol-tray/mode.json"),
         (first_run, QOL_HOME / ".config/qol-tray/.first-run-done"),
     ]
+    if (staged / "bin/qol-tray-install").is_file():
+        destinations.insert(
+            1,
+            (staged / "bin/qol-tray-install", QOL_HOME / ".local/bin/qol-tray-install"),
+        )
     if plugin_id is not None:
         destinations.insert(
             1,

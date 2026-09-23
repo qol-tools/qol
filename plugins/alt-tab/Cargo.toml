@@ -1,6 +1,6 @@
 [package]
-name = "alt-tab"
-version = "0.70.0"
+name = "qol-alt-tab"
+version = "0.81.1"
 edition = "2021"
 description = "Alt-Tab window switcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -8,17 +8,17 @@ license = "PolyForm-Noncommercial-1.0.0"
 [dependencies]
 futures = "0.3"
 gpui.workspace = true
-image = { version = "0.25", default-features = false }
 qol-apps.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-smallvec = "1.13"
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-plugin-daemon.workspace = true
 qol-app-icon.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
+qol-plugin-api.workspace = true
 qol-runtime.workspace = true
 qol-windowing.workspace = true
 workspace-hack.workspace = true
@@ -69,5 +69,4 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
-qol-plugin-api.workspace = true
 tempfile = "3"

@@ -11,7 +11,7 @@ This is a findings list, not an implementation plan. Nothing below has been fixe
 ## Resolved since 2026-07-01 (do not re-propose)
 
 **Platform-support computed two ways, opposite answers on `platforms: []`.**
-`tools/qol-cli/src/workspace.rs`'s divergent `supports_host` free function is gone entirely - deleted as part of extracting build/workspace logic into the new `libs/qol-dev-build` crate. That crate depends directly on `qol-plugin-api` and calls `manifest.plugin.supports_current_platform()`, confirmed to be a thin wrapper (`libs/qol-plugin-api/src/manifest/schema.rs:278`) around the one canonical free function (`libs/qol-plugin-api/src/manifest/mod.rs:32`). Likely an incidental side effect of the qol-dev-build consolidation, not a deliberate fix - still counts.
+`tools/qol-cli/src/workspace.rs`'s divergent `supports_host` free function is gone entirely - deleted as part of extracting build/workspace logic into the new `libs/dev-build` crate. That crate depends directly on `qol-plugin-api` and calls `manifest.plugin.supports_current_platform()`, confirmed to be a thin wrapper (`libs/plugin-api/src/manifest/schema.rs:278`) around the one canonical free function (`libs/plugin-api/src/manifest/mod.rs:32`). Likely an incidental side effect of the qol-dev-build consolidation, not a deliberate fix - still counts.
 
 ---
 
@@ -40,9 +40,9 @@ The same unhoisted-literal pattern has since spread to at least 4 more sibling h
 
 **This is not simply "pick one" - one side is internally correct, the other side conflates two concepts it shouldn't.**
 
-`libs/qol-hotkeys/src/grammar.rs` already has both `NamedKey::Backspace` and `NamedKey::Delete` as **separate** variants (line 97: `"backspace" => NamedKey::Backspace`; line 98: `"delete" | "del" => NamedKey::Delete`). `macos_keycode.rs::named_to_keycode` resolves them to different physical keys: `NamedKey::Backspace => DELETE` (`0x33`, the everyday Mac "delete" key that behaves like backspace), `NamedKey::Delete => FORWARD_DELETE` (`0x75`, `fn+delete` / the PC-style forward-delete). This matches the standard cross-platform convention (Backspace deletes left, Delete deletes right) and is covered by an existing test asserting `code("delete") == Some(FORWARD_DELETE)`. This path is used by `apps/qol-tray/src/hotkeys/{parser.rs, capture/binding.rs, capture/platform/macos.rs}` - the shortcuts/hotkey-capture feature.
+`libs/hotkeys/src/grammar.rs` already has both `NamedKey::Backspace` and `NamedKey::Delete` as **separate** variants (line 97: `"backspace" => NamedKey::Backspace`; line 98: `"delete" | "del" => NamedKey::Delete`). `macos_keycode.rs::named_to_keycode` resolves them to different physical keys: `NamedKey::Backspace => DELETE` (`0x33`, the everyday Mac "delete" key that behaves like backspace), `NamedKey::Delete => FORWARD_DELETE` (`0x75`, `fn+delete` / the PC-style forward-delete). This matches the standard cross-platform convention (Backspace deletes left, Delete deletes right) and is covered by an existing test asserting `code("delete") == Some(FORWARD_DELETE)`. This path is used by `apps/qol-tray/src/hotkeys/{parser.rs, capture/binding.rs, capture/platform/macos.rs}` - the shortcuts/hotkey-capture feature.
 
-The standalone `libs/qol-hotkeys/src/macos_keycode.rs::parse_key` (line 91, the **only** entry point used by `plugins/keyremap/src/remap.rs`) instead **conflates** the two: line 133, `"delete" | "backspace" => Some(DELETE)` (`0x33`) - treating them as synonyms - while requiring a separate string `"forwarddelete"` (line 134) to reach `0x75`.
+The standalone `libs/hotkeys/src/macos_keycode.rs::parse_key` (line 91, the **only** entry point used by `plugins/keyremap/src/remap.rs`) instead **conflates** the two: line 133, `"delete" | "backspace" => Some(DELETE)` (`0x33`) - treating them as synonyms - while requiring a separate string `"forwarddelete"` (line 134) to reach `0x75`.
 
 **Read on which side is the bug:** `parse_key` is the outlier. The rest of the same crate already encodes the "Backspace ≠ Delete" distinction correctly and has a test enforcing it; `parse_key` re-implements a second, informal string table that quietly drops that distinction, most likely written by someone thinking of "the key labeled delete on my Mac keyboard" without checking that the crate already has a canonical answer two files away.
 
@@ -52,7 +52,7 @@ The standalone `libs/qol-hotkeys/src/macos_keycode.rs::parse_key` (line 91, the 
 
 ### 4. Version-string parsing disagrees on a `v`/`V` prefix
 
-`libs/qol-migrations/src/lib.rs:288` `parse_semver("v1.2.3")`: splits on `.` first (`"v1"`, `"2"`, `"3"`), then for `"v1"` splits again on the first non-digit char and takes `.next()`, which is the segment *before* that split point - i.e. `""`. Major silently becomes `0`. `apps/qol-tray/src/version.rs:36` `Version::parse` strips `['v','V']` first via `trim_start_matches` and is correct (has a test explicitly covering `"v1.2.3"` and `"v0.1.0"`). Both functions are private to their own crate - `parse_semver`'s only 2 callers are internal to `lib.rs` (`reject_if_below_oldest_supported`, `compare_semver`).
+`libs/migrations/src/lib.rs:288` `parse_semver("v1.2.3")`: splits on `.` first (`"v1"`, `"2"`, `"3"`), then for `"v1"` splits again on the first non-digit char and takes `.next()`, which is the segment *before* that split point - i.e. `""`. Major silently becomes `0`. `apps/qol-tray/src/version.rs:36` `Version::parse` strips `['v','V']` first via `trim_start_matches` and is correct (has a test explicitly covering `"v1.2.3"` and `"v0.1.0"`). Both functions are private to their own crate - `parse_semver`'s only 2 callers are internal to `lib.rs` (`reject_if_below_oldest_supported`, `compare_semver`).
 
 **This may not be theoretical - there's already a workaround for what looks like the same symptom.** `reject_if_below_oldest_supported` (`lib.rs:269`) contains this:
 
@@ -72,10 +72,10 @@ This is a runtime safety-valve that already exists specifically to tolerate `ins
 
 ### 5. "Safe identifier" rule reimplemented independently in 3 places
 
-- Canonical: `libs/qol-plugin-api/src/manifest/validation/command_rules.rs:22` `is_valid_command_basename` - rejects null bytes and leading/trailing whitespace (`value.trim() == value`), plus the shared shape check (non-empty, len ≤ 64, no leading `-`, charset `[A-Za-z0-9_-]`).
+- Canonical: `libs/plugin-api/src/manifest/validation/command_rules.rs:22` `is_valid_command_basename` - rejects null bytes and leading/trailing whitespace (`value.trim() == value`), plus the shared shape check (non-empty, len ≤ 64, no leading `-`, charset `[A-Za-z0-9_-]`).
 - `apps/qol-tray/src/paths.rs:81` `is_safe_path_component` and `apps/qol-tray/src/shortcuts/validation.rs:14` `validate_id` both drop the null-byte/whitespace checks, otherwise identical shape.
 
-(The `libs/qol-migrations` copies of this same rule were already unified internally in an earlier simplification pass - that dedup didn't touch these 3.)
+(The `libs/migrations` copies of this same rule were already unified internally in an earlier simplification pass - that dedup didn't touch these 3.)
 
 ### 6. Malformed-hex-color fallback differs 3 ways inside plugin-lights
 
@@ -83,7 +83,7 @@ This is a runtime safety-valve that already exists specifically to tolerate `ins
 - `src/daemon/state.rs:340,349` `parse_color`/`parse_hex_pair` - falls back to `0x00` per channel (toward black), does strip a leading `#`.
 - `src/config/validation.rs:57` `is_hex_color` - strict len==6 reject, no `#` handling, validation-only.
 
-`libs/qol-color::parse_hex_color` is the correct `Option`-returning version, already used by plugin-alt-tab. plugin-lights' `Cargo.toml` has no `qol-color` dependency at all.
+`libs/color::parse_hex_color` is the correct `Option`-returning version, already used by plugin-alt-tab. plugin-lights' `Cargo.toml` has no `qol-color` dependency at all.
 
 **Call-site tracing changes the priority here - these two fallbacks are not equally reachable:**
 
@@ -94,7 +94,7 @@ This is a runtime safety-valve that already exists specifically to tolerate `ins
 
 ### 7. Settings/URL opener hand-rolled 8+ times, with confirmed behavioral drift
 
-`plugins/qol-shot/src/platform/macos/system.rs` alone has 3 separate call sites (lines 33, 110, 122) independently doing `Command::new("open")`, plus `platform/linux.rs:373` (`xdg-open`). Also `plugin-template/src/platform/{linux,macos}.rs`, `plugin-pointz/src/platform/{linux,macos}.rs` (confirmed: `let _ = std::process::Command::new(...)` - silently discards the result, no error propagation, unlike the others), and `plugin-os-themes/src/cursor/platform/linux/mod.rs` (at least names a local `const OPENER = "xdg-open"`). The `open` crate (v5) is already a dependency of `apps/qol-tray` and `plugin-alt-tab` - unused by any of these.
+`plugins/shot/src/platform/macos/system.rs` alone has 3 separate call sites (lines 33, 110, 122) independently doing `Command::new("open")`, plus `platform/linux.rs:373` (`xdg-open`). Also `plugin-template/src/platform/{linux,macos}.rs`, `plugin-pointz/src/platform/{linux,macos}.rs` (confirmed: `let _ = std::process::Command::new(...)` - silently discards the result, no error propagation, unlike the others), and `plugin-os-themes/src/cursor/platform/linux/mod.rs` (at least names a local `const OPENER = "xdg-open"`). The `open` crate (v5) is already a dependency of `apps/qol-tray` and `plugin-alt-tab` - unused by any of these.
 
 **Confirmed broader still**: plugin-pointz also has `src/platform/windows.rs`, and it has the *same* silent-discard bug: line 2, `let _ = std::process::Command::new("cmd")...`. So pointz alone hand-rolls this on all 3 platforms with the same flaw, not 2. Swapping pointz's 3 platform files to the `open` crate (already proven elsewhere in the workspace) fixes all 3 at once.
 
@@ -102,8 +102,8 @@ This is a runtime safety-valve that already exists specifically to tolerate `ins
 
 Not just one duplicated function - two complete 4-file platform splits for the same concept:
 
-- `libs/qol-gpui/src/platform/{mod.rs:43, macos.rs:48, linux.rs:68, fallback.rs:27}` - used internally by `qol-gpui`'s own `ghost.rs:310`.
-- `libs/qol-plugin-daemon/src/focus/{mod.rs:7, platform/macos.rs:7, platform/linux.rs:13, platform/fallback.rs:5}`
+- `libs/gpui/src/platform/{mod.rs:43, macos.rs:48, linux.rs:68, fallback.rs:27}` - used internally by `qol-gpui`'s own `ghost.rs:310`.
+- `libs/plugin-daemon/src/focus/{mod.rs:7, platform/macos.rs:7, platform/linux.rs:13, platform/fallback.rs:5}`
 
 **Reconfirmed independently this pass, not just carried from memory**: a fresh repo-wide grep for `has_process_focus` across every crate found only the qol-plugin-daemon module's own internal wiring (`focus/mod.rs` calling its own `platform::has_process_focus()`, and the 3 platform submodules re-exporting into it) - **zero callers anywhere outside `qol-plugin-daemon` itself.** This is why `cargo clippy`/`dead_code` never flagged it: Rust doesn't lint unused `pub` items in a library crate, since they're presumptively public API for external consumers - even other crates in the same workspace that never actually import them.
 
@@ -121,28 +121,28 @@ Not just one duplicated function - two complete 4-file platform splits for the s
 
 `ghost_opacity`/`ghost_debug_color` field blocks are byte-identical TOML between `plugins/launcher/qol-config.toml` (lines 15-28) and `plugins/alt-tab/qol-config.toml` (lines 124-137) - same `config_key` strings, same field definitions.
 
-**Checked: `qol-config.toml` has no include/extends mechanism.** `libs/qol-config/src/lib.rs`'s loaders (`load_plugin_config`, `load_plugin_config_with_contract`, etc.) parse a single file each - there's no multi-file merge or `[import]`-style feature to hang a "shared schema" off of. Inventing one would be a real format-design change touching every plugin's config loading, not a small fix.
+**Checked: `qol-config.toml` has no include/extends mechanism.** `libs/config/src/lib.rs`'s loaders (`load_plugin_config`, `load_plugin_config_with_contract`, etc.) parse a single file each - there's no multi-file merge or `[import]`-style feature to hang a "shared schema" off of. Inventing one would be a real format-design change touching every plugin's config loading, not a small fix.
 
 **Better path:** don't invent TOML includes for this. Add a cheap regression test (in whichever crate already tests config-schema validity) that reads both `qol-config.toml` files and asserts the `display_ghost_opacity`/`display_ghost_debug_color` blocks stay byte-identical. Matches this repo's existing convention of using a `--check`-style guard test rather than a new sharing mechanism (see how `qol-theme-css` enforces generated-CSS staleness).
 
 ### 11. Linux desktop-entry directory enumeration diverges
 
-`libs/qol-app-icon/src/linux.rs:96,98` includes user-level `~/.local/share/flatpak/exports/share/applications` plus the system flatpak path. `libs/qol-apps/src/desktop.rs:121,124` includes `/usr/share/applications` plus the same system flatpak path but not the user-level one (at least not in the lines matched). Not a full side-by-side diff of every directory each checks.
+`libs/app-icon/src/linux.rs:96,98` includes user-level `~/.local/share/flatpak/exports/share/applications` plus the system flatpak path. `libs/apps/src/desktop.rs:121,124` includes `/usr/share/applications` plus the same system flatpak path but not the user-level one (at least not in the lines matched). Not a full side-by-side diff of every directory each checks.
 
 ### 12. `codesign.rs` platform-boundary violation, relocated but unaddressed
 
-Moved wholesale from `apps/qol-tray/src/dev/build/cargo_build/codesign.rs` to `libs/qol-dev-build/src/cargo_build/codesign.rs` during the qol-dev-build extraction. Still exactly 13 `cfg(target_os = "macos")` splits, still no `platform/` facade - and `qol-dev-build` has no `platform/` directory at all. Arguably worth more attention now: this convention (strategy-pattern platform code, see `qol-project:qol-arch-code`) matters most for shared library crates that compile across the full CI platform matrix, and this file just moved from an app into exactly such a crate without being restructured.
+Moved wholesale from `apps/qol-tray/src/dev/build/cargo_build/codesign.rs` to `libs/dev-build/src/cargo_build/codesign.rs` during the qol-dev-build extraction. Still exactly 13 `cfg(target_os = "macos")` splits, still no `platform/` facade - and `qol-dev-build` has no `platform/` directory at all. Arguably worth more attention now: this convention (strategy-pattern platform code, see `qol-project:qol-arch-code`) matters most for shared library crates that compile across the full CI platform matrix, and this file just moved from an app into exactly such a crate without being restructured.
 
 Files with `cfg(target_os` outside any `platform/` directory, repo-wide, as of 2026-07-06 (**21 total**, not individually triaged for legitimacy - several are likely fine, e.g. `qol-platform/src/lib.rs` is probably the platform-detection entry point itself):
 
 ```
-libs/qol-plugin-daemon/src/activation.rs
-libs/qol-migrations/src/portability/paths.rs
-libs/qol-dev-build/src/cargo_build/codesign.rs
-libs/qol-runtime/src/broker/peer_cred.rs
-libs/qol-app-icon/src/lib.rs
-libs/qol-platform/src/lib.rs
-libs/qol-gpui/src/popup_window/mod.rs
+libs/plugin-daemon/src/activation.rs
+libs/migrations/src/portability/paths.rs
+libs/dev-build/src/cargo_build/codesign.rs
+libs/runtime/src/broker/peer_cred.rs
+libs/app-icon/src/lib.rs
+libs/platform/src/lib.rs
+libs/gpui/src/popup_window/mod.rs
 apps/qol-tray/src/main.rs
 apps/qol-tray/src/doctor/checks/hotkey_shadows/mod.rs
 apps/qol-tray/src/features/plugin_store/server/boot.rs
@@ -151,7 +151,7 @@ apps/qol-tray/src/installer/mod.rs
 plugins/window-actions/src/state_store.rs
 plugins/launcher/examples/07_hide_show.rs
 plugins/launcher/src/launch/mod.rs
-plugins/qol-shot/src/region_selector.rs
+plugins/shot/src/region_selector.rs
 plugins/keyremap/src/main.rs
 plugins/pointz/src/input/mod.rs
 plugins/alt-tab/src/preview_plane/backends/mod.rs
@@ -161,7 +161,7 @@ plugins/cli-sessions/src/notify.rs
 
 ### 13. Frecency silent error swallow (carried from 2026-07-01 backlog, still open)
 
-`libs/qol-frecency/src/lib.rs:95` - `save()`'s `create_dir_all` error is silently dropped (`let _ = ...`) while the other 3 fallible calls in the same function `eprintln!` on error. Add the matching `eprintln!`.
+`libs/frecency/src/lib.rs:95` - `save()`'s `create_dir_all` error is silently dropped (`let _ = ...`) while the other 3 fallible calls in the same function `eprintln!` on error. Add the matching `eprintln!`.
 
 ### 14. Dead file (carried from 2026-07-01 backlog, still open)
 

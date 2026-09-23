@@ -22,7 +22,7 @@ commands, add no code comments, and never use the em-dash character.
    window is override-redirect and receives focus through `set_input_focus`,
    but nothing holds the keyboard, so a WM focus change (a new window mapping,
    a terminal tab opening) moves keyboard input away. gpui sees FocusOut, the
-   blur and activation subscriptions in `libs/qol-gpui/src/ghost.rs`
+   blur and activation subscriptions in `libs/gpui/src/ghost.rs`
    (`track_dismiss`) debounce 120 ms, `has_process_focus` reports false, and
    `hide_to_ghost("blur")` runs; `reset_for_show` then wipes the query and the
    trail. On macOS the launcher is a `WindowKind::Normal` NSWindow inside an
@@ -95,7 +95,7 @@ blur or deactivation never dismisses it. Dismissal happens only on Esc, on a
 launch, on the hotkey toggle, or on a pointer click outside the launcher.
 Everything is event-driven; the one bounded retry is documented below.
 
-Shared contract in `libs/qol-gpui/src/popup_window/platform/mod.rs`, exported
+Shared contract in `libs/gpui/src/popup_window/platform/mod.rs`, exported
 for every cfg:
 
 ```rust
@@ -105,7 +105,7 @@ pub fn release_input(title: &str);
 pub fn input_held() -> bool;
 ```
 
-`libs/qol-gpui/src/ghost.rs`: a new `track_dismiss_held` that takes one more
+`libs/gpui/src/ghost.rs`: a new `track_dismiss_held` that takes one more
 closure, `input_held: impl Fn(&V) -> bool + 'static`. The blur and activation
 handlers return early with a `skip_held` trace while it is true, and the
 debounce verdict returns `Recover` while it is true (`debounce_verdict` gains a
@@ -173,7 +173,7 @@ before `dismiss_to_ghost`.
 
 #### macOS
 
-- `hold_input` in `libs/qol-gpui/src/popup_window/platform/macos.rs`: locate
+- `hold_input` in `libs/gpui/src/popup_window/platform/macos.rs`: locate
   the NSWindow by title with the helpers already in that file, set
   `level = NSFloatingWindowLevel`, `setHidesOnDeactivate(false)`, add
   `NSWindowCollectionBehaviorCanJoinAllSpaces | FullScreenAuxiliary`, and
@@ -196,20 +196,20 @@ before `dismiss_to_ghost`.
 ## Lane ownership (no file appears twice)
 
 - Lane A `lh-memory-latency`: `Cargo.toml` (root, profile section only),
-  `plugins/qol-memory/src/retrieval/mod.rs`,
-  `plugins/qol-memory/src/app/warm.rs`,
-  `plugins/qol-memory/src/app/request.rs`,
-  `plugins/qol-memory/src/app/mod.rs`,
-  `plugins/qol-memory/src/watch/mod.rs`,
-  `plugins/qol-memory/src/ask/mod.rs`.
+  `plugins/memory/src/retrieval/mod.rs`,
+  `plugins/memory/src/app/warm.rs`,
+  `plugins/memory/src/app/request.rs`,
+  `plugins/memory/src/app/mod.rs`,
+  `plugins/memory/src/watch/mod.rs`,
+  `plugins/memory/src/ask/mod.rs`.
 - Lane B `lh-input-width`: `plugins/launcher/src/ui/view.rs`,
   `plugins/launcher/src/ui/layout.rs`.
-- Lane C `lh-hold-linux`: `libs/qol-gpui/src/ghost.rs`,
-  `libs/qol-gpui/src/popup_window/mod.rs`,
-  `libs/qol-gpui/src/popup_window/platform/mod.rs`,
-  `libs/qol-gpui/src/popup_window/platform/linux.rs`,
-  `libs/qol-gpui/src/popup_window/platform/fallback.rs`,
-  `libs/qol-gpui/Cargo.toml`,
+- Lane C `lh-hold-linux`: `libs/gpui/src/ghost.rs`,
+  `libs/gpui/src/popup_window/mod.rs`,
+  `libs/gpui/src/popup_window/platform/mod.rs`,
+  `libs/gpui/src/popup_window/platform/linux.rs`,
+  `libs/gpui/src/popup_window/platform/fallback.rs`,
+  `libs/gpui/Cargo.toml`,
   `plugins/launcher/Cargo.toml`,
   `plugins/launcher/src/ui/mod.rs`,
   `plugins/launcher/src/ui/render.rs`,
@@ -218,7 +218,7 @@ before `dismiss_to_ghost`.
   `plugins/launcher/src/ui/platform/fallback.rs`,
   `plugins/launcher/src/ui/click_away/platform/linux.rs`.
 - Lane D `lh-hold-macos`:
-  `libs/qol-gpui/src/popup_window/platform/macos.rs`,
+  `libs/gpui/src/popup_window/platform/macos.rs`,
   `plugins/launcher/src/ui/platform/macos.rs` (new).
 
 ## Gate (architect, once per round)

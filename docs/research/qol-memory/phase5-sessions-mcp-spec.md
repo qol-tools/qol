@@ -1,12 +1,12 @@
 # Phase 5 spec: fold `qol sessions mcp` onto the shared MCP lib
 
-Status: architect contract for the `sessions-mcp-fold` lane. Source plan: `docs/research/qol-memory/interface-plan.md` section 2 row 5 and section 8 item 9. Facts from the 2026-08-28 scout of `tools/qol-cli/src/commands/sessions/` and `libs/qol-mcp`.
+Status: architect contract for the `sessions-mcp-fold` lane. Source plan: `docs/research/qol-memory/interface-plan.md` section 2 row 5 and section 8 item 9. Facts from the 2026-08-28 scout of `tools/qol-cli/src/commands/sessions/` and `libs/mcp`.
 
 Rules: edit only the owned paths; never run build, test, lint, format or git commands; add no code comments; never use the em-dash character anywhere. Report changed files and lines plus conscious deviations, nothing else.
 
 ## 1. Decision
 
-Phase 5 has two halves. The first, folding the JSON-RPC protocol layer of `qol sessions mcp` onto `libs/qol-mcp`, is delivered here. The second, serving the sessions tools from the tray `/api/mcp` endpoint, is closed as not viable and stays out:
+Phase 5 has two halves. The first, folding the JSON-RPC protocol layer of `qol sessions mcp` onto `libs/mcp`, is delivered here. The second, serving the sessions tools from the tray `/api/mcp` endpoint, is closed as not viable and stays out:
 
 - `session_bridge` blocks inside the call for up to 24 h (`round_timeout = bridge::TIMEOUT_MAX_MS`); the tray handles a tool call inside one `spawn_blocking` request and every HTTP MCP client applies a request timeout, so a hosted bridge would time out or pin tokio blocking threads for hours.
 - The owner identity (`watch_owner.rs:30-48`) is the calling terminal (`terminals.is_current`); the tray is not in any caller's terminal, so every caller would collapse onto one `unknown-<pid>` key and race on `watch-owner-<key>.json` and its watcher child. A per-caller header would require threading an owner token through spawn, bridge, watch and the pi export; that is a redesign of the sessions loop, not a memory-interface change.
@@ -21,7 +21,7 @@ Lane `sessions-mcp-fold`: `tools/qol-cli/src/commands/sessions/mcp.rs`, `tools/q
 
 ### 3.1 `tools/qol-cli/Cargo.toml`
 
-Add `qol-mcp.workspace = true` under `[dependencies]` (the workspace declares `qol-mcp = { path = "libs/qol-mcp" }` at root Cargo.toml:39).
+Add `qol-mcp.workspace = true` under `[dependencies]` (the workspace declares `qol-mcp = { path = "libs/mcp" }` at root Cargo.toml:39).
 
 ### 3.2 `contract.rs`
 

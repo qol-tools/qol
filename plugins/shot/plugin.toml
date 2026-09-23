@@ -1,0 +1,62 @@
+[plugin]
+id = "qol-shot"
+uid = "e8208e3e-58b3-4f8c-ad4b-ddbecafa3375"
+name = "QoL Shot"
+description = "Capture screenshots and record screen regions"
+version = "1.69.1"
+author = "KMRH47"
+platforms = ["linux", "macos"]
+
+[config]
+default_scope = "os"
+
+[runtime]
+command = "qol-shot"
+
+[action.record]
+label = "Start/Stop Recording"
+args = ["record"]
+
+[action.screenshot]
+label = "Take Screenshot"
+args = ["screenshot"]
+
+[action.preview]
+label = "Preview Last Screenshot"
+args = ["preview"]
+
+[action.copy]
+label = "Copy Screenshot"
+args = ["copy"]
+
+[action.copy-path]
+label = "Copy Screenshot Path"
+args = ["copy-path"]
+
+[action.settings]
+label = "Settings..."
+kind = "settings"
+picture = "gear"
+args = ["settings"]
+
+[capabilities]
+gpui = true
+doctor = true
+permissions = ["screen-capture"]
+
+[menu]
+label = "QoL Shot"
+items = [
+    { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
+]
+
+[daemon]
+enabled = true
+inherit_listener = true
+command = "qol-shot"
+socket = "/tmp/qol-shot.sock"
+
+[[dependencies.binaries]]
+name = "qol-shot"
+repo = "qol-tools/qol-shot"
+pattern = "qol-shot-{os}-{arch}"

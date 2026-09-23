@@ -1,6 +1,6 @@
-use plugin_cli_sessions::host::kitty_session_id;
-use plugin_cli_sessions::selection::Selection;
 use proptest::prelude::*;
+use qol_cli_sessions::host::kitty_session_id;
+use qol_cli_sessions::selection::Selection;
 use qol_terminal_sessions::SessionId;
 
 type EdgeCase = (&'static [u64], Option<u64>, Option<usize>, Option<u64>);

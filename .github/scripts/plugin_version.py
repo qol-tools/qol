@@ -22,6 +22,8 @@ RELEASE_SUBJECT_RE = re.compile(r"^chore\(release\):", re.IGNORECASE)
 DEPENDENCY_TABLES = {"dependencies", "build-dependencies"}
 WORKSPACE_HACK_PACKAGE = "workspace-hack"
 PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+PLUGIN_ID_PREFIX = "qol-"
+LEGACY_PLUGIN_ID_PREFIX = "plugin-"
 ROOT_MANIFEST = "Cargo.toml"
 ROOT_LOCKFILE = "Cargo.lock"
 ROOT_MANIFEST_AFFECT_ALL_SECTIONS = {"profile", "patch"}
@@ -44,7 +46,7 @@ VERSION_BUMP_IDENTITY = (
 )
 VERSION_BUMP_FORMAT = "%P%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%s"
 VERSION_CARGO_MANIFEST_RE = re.compile(
-    r"^(?:apps/qol-tray|plugins/[A-Za-z0-9_.-]+)/Cargo\.toml$"
+    r"^(?:apps/tray|plugins/[A-Za-z0-9_.-]+)/Cargo\.toml$"
 )
 VERSION_PLUGIN_MANIFEST_RE = re.compile(
     r"^plugins/[A-Za-z0-9_.-]+/plugin\.toml$"
@@ -52,7 +54,7 @@ VERSION_PLUGIN_MANIFEST_RE = re.compile(
 
 
 def _reserved_plugin_ids() -> set[str]:
-    lib = Path(__file__).resolve().parents[2] / "libs/qol-conventions/src/lib.rs"
+    lib = Path(__file__).resolve().parents[2] / "libs/conventions/src/lib.rs"
     match = re.search(
         r"RESERVED_PLUGIN_IDS:\s*&\[&str\]\s*=\s*&\[(.*?)\]", lib.read_text(), re.DOTALL
     )
@@ -62,7 +64,7 @@ def _reserved_plugin_ids() -> set[str]:
 
 
 AUTO_EXCLUDED_PLUGIN_IDS = _reserved_plugin_ids()
-HOST_RELEASE_UNITS = (("qol-tray", "apps/qol-tray"),)
+HOST_RELEASE_UNITS = (("qol-tray", "apps/tray"),)
 
 
 @dataclass(frozen=True)
@@ -688,6 +690,12 @@ def tag_version(prefix: str, tag: str) -> str:
     return value
 
 
+def legacy_tag_prefix(plugin_id: str) -> str | None:
+    if not plugin_id.startswith(PLUGIN_ID_PREFIX):
+        return None
+    return f"{LEGACY_PLUGIN_ID_PREFIX}{plugin_id[len(PLUGIN_ID_PREFIX):]}-v"
+
+
 def existing_tags(root: Path, prefix: str) -> list[str]:
     output = run_git(["tag", "--list", f"{prefix}*"], root)
     return [line.strip() for line in output.splitlines() if line.strip()]
@@ -707,9 +715,16 @@ def highest_version_tag(tags: list[str], prefix: str) -> str | None:
     return best[1] if best else None
 
 
+def selection_short_name(value: str) -> str:
+    for prefix in (PLUGIN_ID_PREFIX, LEGACY_PLUGIN_ID_PREFIX):
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    return value
+
+
 def selection_matches(plugin_id: str, selected: str) -> bool:
-    return plugin_id == selected or plugin_id.removeprefix("plugin-") == selected.removeprefix(
-        "plugin-"
+    return plugin_id == selected or selection_short_name(plugin_id) == selection_short_name(
+        selected
     )
 
 
@@ -817,8 +832,18 @@ def relevant_commits(
     return relevant
 
 
-def initial_release_plan(unit: ReleaseUnit) -> ReleasePlan:
+def initial_release_plan(root: Path, unit: ReleaseUnit) -> ReleasePlan:
     version = unit.cargo_version
+    legacy_prefix = legacy_tag_prefix(unit.id)
+    if legacy_prefix is not None:
+        legacy_tag = highest_version_tag(existing_tags(root, legacy_prefix), legacy_prefix)
+        if legacy_tag is not None:
+            legacy_version = tag_version(legacy_prefix, legacy_tag)
+            if not version_greater(version, legacy_version):
+                raise RuntimeError(
+                    f"{unit.id} {version} must be greater than legacy tag {legacy_tag}; "
+                    f"bump it above {legacy_version} before the first release under {unit.id}"
+                )
     return ReleasePlan(
         unit=unit,
         old_version=version,
@@ -857,7 +882,7 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
         prefix = f"{unit.id}-v"
         tag = last_tag(root, prefix) or highest_version_tag(existing_tags(root, prefix), prefix)
         if tag is None:
-            plans.append(initial_release_plan(unit))
+            plans.append(initial_release_plan(root, unit))
             continue
 
         base_version = tag_version(prefix, tag)

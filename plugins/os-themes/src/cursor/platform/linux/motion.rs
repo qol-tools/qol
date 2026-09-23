@@ -338,15 +338,17 @@ mod tests {
         Config {
             enabled: true,
             pause_in_games: true,
-            shake_strictness: 6.5,
+            pause_in_fullscreen: true,
+            shake_strictness: 5.0,
             regrow_strictness: 2.5,
             shake_min_extent_px: 150,
             regrow_min_extent_px: 60,
-            shake_window_ms: 1000,
+            shake_window_ms: 600,
             scale_factor: 4,
             calm_duration_ms: 100,
-            grow_ms: 250,
+            grow_ms: 120,
             shrink_ms: 225,
+            tuning_revision: 1,
         }
     }
 
@@ -363,14 +365,15 @@ mod tests {
 
     fn wiggle(amplitude: i32, half_period_ms: u64, duration_ms: u64) -> Vec<(u64, i32, i32)> {
         let mut trace = Vec::new();
-        let mut t = 0;
+        let mut t = 0.0_f64;
         let mut sign = 1;
-        while t < duration_ms {
-            let steps = (half_period_ms / 16).max(1);
+        while t < duration_ms as f64 {
+            let steps = ((half_period_ms as f64) / 16.0).round().max(1.0) as u64;
             let step_px = amplitude / steps as i32;
+            let step_ms = half_period_ms as f64 / steps as f64;
             for _ in 0..steps {
-                t += 16;
-                trace.push((t, step_px * sign, 0));
+                t += step_ms;
+                trace.push((t.round() as u64, step_px * sign, 0));
             }
             sign = -sign;
         }
@@ -379,10 +382,10 @@ mod tests {
 
     #[test]
     fn shake_trigger_table() {
-        let cases: [ShakeCase; 8] = [
-            ("side-to-side rub triggers", wiggle(200, 125, 2000), true),
+        let cases: [ShakeCase; 10] = [
             ("vigorous shake triggers", wiggle(240, 64, 2000), true),
-            ("big fast arm shake triggers", wiggle(700, 125, 2000), true),
+            ("moderate shake is too slow", wiggle(200, 125, 3000), false),
+            ("big fast arm shake triggers", wiggle(700, 96, 2000), true),
             ("small wiggle never triggers", wiggle(90, 96, 3000), false),
             (
                 "straight glide never triggers",
@@ -401,12 +404,18 @@ mod tests {
             ),
             (
                 "vertical rub triggers too",
-                wiggle(200, 125, 2000)
+                wiggle(240, 96, 2000)
                     .iter()
                     .map(|(t, dx, dy)| (*t, *dy, *dx))
                     .collect(),
                 true,
             ),
+            (
+                "sustained 5.2Hz wiggle triggers",
+                wiggle(240, 96, 3000),
+                true,
+            ),
+            ("4.5Hz wiggle triggers", wiggle(240, 110, 3000), true),
         ];
         for (label, trace, expect_grow) in cases {
             let mut detector = ShakeDetector::new(&config());
@@ -420,11 +429,14 @@ mod tests {
     }
 
     #[test]
-    fn vigorous_shake_triggers_within_a_second() {
+    fn vigorous_shake_triggers_within_the_window() {
         let mut detector = ShakeDetector::new(&config());
         let grew_at = feed(&mut detector, Instant::now(), &wiggle(240, 64, 2000));
         let at = grew_at.expect("vigorous shake must trigger");
-        assert!(at <= 1000, "trigger should land within 1s, got {at}ms");
+        assert!(
+            at <= 600,
+            "trigger should land within the 600ms window, got {at}ms"
+        );
     }
 
     fn tick(detector: &mut ShakeDetector, t0: Instant, from_ms: u64, to_ms: u64) -> f32 {
@@ -446,27 +458,27 @@ mod tests {
 
         let mut grower = ShakeDetector::new(&config());
         grower.growing = true;
-        let mid = tick(&mut grower, t0, 0, 176);
-        assert!(mid < 4.0, "grow must not finish before 250ms, got {mid}");
+        let mid = tick(&mut grower, t0, 0, 80);
+        assert!(mid < 4.0, "grow must not finish before 120ms, got {mid}");
         assert!(mid > 3.1, "grow must front-load via ease-out, got {mid}");
-        let full = tick(&mut grower, t0, 192, 280);
-        assert_eq!(full, 4.0, "grow must complete within 250ms, got {full}");
+        let full = tick(&mut grower, t0, 96, 144);
+        assert_eq!(full, 4.0, "grow must complete within 120ms, got {full}");
 
         let mut shrinker = ShakeDetector::new(&config());
         shrinker.growing = true;
-        tick(&mut shrinker, t0, 0, 280);
+        tick(&mut shrinker, t0, 0, 136);
         shrinker.growing = false;
         shrinker.last_shake = None;
-        let mid = tick(&mut shrinker, t0, 296, 400);
+        let mid = tick(&mut shrinker, t0, 152, 240);
         assert!(mid > 1.0, "shrink must not finish before 225ms, got {mid}");
         assert!(mid < 2.5, "shrink must front-load via ease-out, got {mid}");
-        let done = tick(&mut shrinker, t0, 416, 640);
+        let done = tick(&mut shrinker, t0, 256, 400);
         assert_eq!(done, 1.0, "shrink must complete within 225ms, got {done}");
     }
 
     #[test]
     fn sustained_shakes_hold_full_scale_across_shake_speeds() {
-        for half_period_ms in [48, 64, 96, 128] {
+        for half_period_ms in [48, 64, 96] {
             let mut detector = ShakeDetector::new(&config());
             let t0 = Instant::now();
             let mut grown = false;

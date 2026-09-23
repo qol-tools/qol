@@ -4,7 +4,7 @@
 
 **Goal:** Switchable full dark theme palettes for the qol-tray web UI, every view built from gallery components with a CI guard, and a global depth/typography/density pass.
 
-**Architecture:** Theme presets live as data in `libs/qol-theme`; the `qol-theme-css` generator emits a default `:root` block plus one `:root[data-qol-theme="<key>"]` diff block per extra theme (mirroring the existing `data-qol-accent` diff machinery), and `QOL_THEMES` metadata into the tray JS tokens.
+**Architecture:** Theme presets live as data in `libs/theme`; the `qol-theme-css` generator emits a default `:root` block plus one `:root[data-qol-theme="<key>"]` diff block per extra theme (mirroring the existing `data-qol-accent` diff machinery), and `QOL_THEMES` metadata into the tray JS tokens.
 The tray persists the selection in `theme.json` beside `accent`, injects it via `__QOL_BOOT__`, and sets the attribute before first paint.
 Views consume only semantic tokens, enforced by migrating the 3 remaining `--slate-*` consumers and by a stray-interactive-element guard test.
 
@@ -27,13 +27,13 @@ Views consume only semantic tokens, enforced by migrating the 3 remaining `--sla
 ### Task 1: Theme presets and contrast tests in qol-theme
 
 **Files:**
-- Modify: `libs/qol-theme/src/lib.rs` (after `DARK_SYSTEM`, line ~209)
-- Test: `libs/qol-theme/tests/theme.rs`
+- Modify: `libs/theme/src/lib.rs` (after `DARK_SYSTEM`, line ~209)
+- Test: `libs/theme/tests/theme.rs`
 
 **Interfaces:**
 - Produces: `OverlayPalette`, `TrayThemePreset { key, label, system: SystemPalette, overlay: OverlayPalette }`, `DEFAULT_TRAY_THEME_KEY: &str = "slate"`, `tray_theme_presets() -> &'static [TrayThemePreset]`, `tray_theme_preset(key: &str) -> Option<TrayThemePreset>`.
 
-- [ ] **Step 1: Write the failing tests** (append to `libs/qol-theme/tests/theme.rs`)
+- [ ] **Step 1: Write the failing tests** (append to `libs/theme/tests/theme.rs`)
 
 ```rust
 fn relative_luminance(rgb: u32) -> f64 {
@@ -108,7 +108,7 @@ fn tray_theme_palettes_hold_contrast_floors() {
 Run: `cargo test -p qol-theme --test theme tray_theme -- --nocapture`
 Expected: compile error, `tray_theme_presets` not found.
 
-- [ ] **Step 3: Implement presets** (in `libs/qol-theme/src/lib.rs`, after `DARK_SYSTEM`)
+- [ ] **Step 3: Implement presets** (in `libs/theme/src/lib.rs`, after `DARK_SYSTEM`)
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,7 +216,7 @@ If a floor fails for `graphite`/`void`, adjust that palette's failing color (lig
 Run: `cargo fmt --all && cargo clippy -p qol-theme -- -D warnings && cargo test -p qol-theme`
 
 ```bash
-git add libs/qol-theme/src/lib.rs libs/qol-theme/tests/theme.rs
+git add libs/theme/src/lib.rs libs/theme/tests/theme.rs
 git commit -m "feat(qol-theme): add tray theme presets with contrast floors"
 ```
 
@@ -225,16 +225,16 @@ git commit -m "feat(qol-theme): add tray theme presets with contrast floors"
 ### Task 2: Generator emits theme blocks and metadata
 
 **Files:**
-- Modify: `libs/qol-theme/src/css.rs` (`tray_css` line 17, `tray_theme_js` line 57, `tray_variables` line 256)
+- Modify: `libs/theme/src/css.rs` (`tray_css` line 17, `tray_theme_js` line 57, `tray_variables` line 256)
 - Modify: `apps/qol-tray/ui/styles/theme-tokens.css` (overlay/scrim lines 48-51)
 - Regenerate: `apps/qol-tray/ui/styles/generated-theme-tokens.css`, `apps/qol-tray/ui/lib/generated-theme-tokens.js`
-- Test: `libs/qol-theme/tests/theme.rs`
+- Test: `libs/theme/tests/theme.rs`
 
 **Interfaces:**
 - Consumes: `tray_theme_presets()`, `TrayThemePreset`, `DEFAULT_TRAY_THEME_KEY` from Task 1.
 - Produces: CSS vars `--qol-system-overlay-surface-rgb`, `--qol-system-overlay-deep-rgb`, `--qol-system-overlay-ink-rgb`, `--qol-system-scrim-rgb` on `:root`; `:root[data-qol-theme="graphite"]` and `:root[data-qol-theme="void"]` diff blocks; JS exports `QOL_THEMES` (array of `{ key, label }`) and `QOL_DEFAULT_THEME`.
 
-- [ ] **Step 1: Write the failing tests** (append to `libs/qol-theme/tests/theme.rs`)
+- [ ] **Step 1: Write the failing tests** (append to `libs/theme/tests/theme.rs`)
 
 ```rust
 #[test]
@@ -269,7 +269,7 @@ fn tray_theme_js_emits_theme_metadata() {
 Run: `cargo test -p qol-theme --test theme tray_css_emits_theme -- --nocapture`
 Expected: FAIL (no overlay vars, no blocks).
 
-- [ ] **Step 3: Implement generator changes** (in `libs/qol-theme/src/css.rs`)
+- [ ] **Step 3: Implement generator changes** (in `libs/theme/src/css.rs`)
 
 Add imports `tray_theme_presets, DEFAULT_TRAY_THEME_KEY, TrayThemePreset` to the `use crate::{...}` list, then:
 
@@ -359,7 +359,7 @@ Expected: all PASS including stale-checks.
 Manual smoke: open the tray UI, run `document.documentElement.setAttribute('data-qol-theme','void')` in devtools, confirm surfaces go black.
 
 ```bash
-git add libs/qol-theme/src/css.rs libs/qol-theme/tests/theme.rs apps/qol-tray/ui/styles/generated-theme-tokens.css apps/qol-tray/ui/lib/generated-theme-tokens.js apps/qol-tray/ui/styles/theme-tokens.css
+git add libs/theme/src/css.rs libs/theme/tests/theme.rs apps/qol-tray/ui/styles/generated-theme-tokens.css apps/qol-tray/ui/lib/generated-theme-tokens.js apps/qol-tray/ui/styles/theme-tokens.css
 git commit -m "feat(qol-theme): emit tray theme override blocks and metadata"
 ```
 
@@ -369,7 +369,7 @@ git commit -m "feat(qol-theme): emit tray theme override blocks and metadata"
 
 **Files:**
 - Modify: `apps/qol-tray/src/features/theme.rs`
-- Modify: `libs/qol-conventions/src/lib.rs` (find the `ENV_THEME_ACCENT` const and add a sibling)
+- Modify: `libs/conventions/src/lib.rs` (find the `ENV_THEME_ACCENT` const and add a sibling)
 - Modify: the two `apply_accent_env` call sites: `apps/qol-tray/src/plugins/action_executor/execution.rs`, `apps/qol-tray/src/plugins/daemon_lifecycle/spawn.rs`
 
 **Interfaces:**
@@ -478,7 +478,7 @@ Expected: all theme tests PASS, including the pre-existing accent tests.
 Run: `cargo clippy -p qol-tray --features dev -- -D warnings && cargo fmt --all -- --check`
 
 ```bash
-git add apps/qol-tray/src/features/theme.rs libs/qol-conventions/src/lib.rs apps/qol-tray/src/plugins/action_executor/execution.rs apps/qol-tray/src/plugins/daemon_lifecycle/spawn.rs
+git add apps/qol-tray/src/features/theme.rs libs/conventions/src/lib.rs apps/qol-tray/src/plugins/action_executor/execution.rs apps/qol-tray/src/plugins/daemon_lifecycle/spawn.rs
 git commit -m "feat(qol-tray): persist selected theme beside accent"
 ```
 
@@ -894,7 +894,7 @@ git commit -m "refactor(qol-tray): finish gallery consolidation, drop grandfathe
 ### Task 13: Slate depth retune
 
 **Files:**
-- Modify: `libs/qol-theme/src/lib.rs` (slate preset only; `DARK_REFERENCE`/`DARK_SYSTEM` stay untouched so plugin profiles are unaffected)
+- Modify: `libs/theme/src/lib.rs` (slate preset only; `DARK_REFERENCE`/`DARK_SYSTEM` stay untouched so plugin profiles are unaffected)
 - Regenerate: both tray token files (commands from Task 2 Step 5)
 
 - [ ] **Step 1: Give slate its own retuned SystemPalette**
@@ -919,7 +919,7 @@ Iterate the four hexes until it does; the numbers above are the starting point, 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add libs/qol-theme/src/lib.rs apps/qol-tray/ui/styles/generated-theme-tokens.css apps/qol-tray/ui/lib/generated-theme-tokens.js
+git add libs/theme/src/lib.rs apps/qol-tray/ui/styles/generated-theme-tokens.css apps/qol-tray/ui/lib/generated-theme-tokens.js
 git commit -m "feat(qol-theme): retune slate surface tiers for depth"
 ```
 

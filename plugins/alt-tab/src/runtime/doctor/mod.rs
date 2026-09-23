@@ -24,11 +24,7 @@ pub(super) fn checks() -> Vec<DoctorCheck> {
             "Read and validate the typed Alt Tab config without changing it.",
             || Ok(config_readable_check()),
         ),
-        DoctorCheck::new(
-            CHECK_IDS[2],
-            "Query required OS permission state without prompting or exercising protected capabilities.",
-            || Ok(permissions_check()),
-        ),
+        qol_plugin_api::permissions_check!("Alt Tab"),
         DoctorCheck::new(
             CHECK_IDS[3],
             "Inspect display-session metadata without opening a display connection.",
@@ -125,53 +121,6 @@ fn display_backend_check() -> DoctorCheckResult {
     .with_details(details)
 }
 
-fn permissions_check() -> DoctorCheckResult {
-    permissions_result(platform::inspect_permissions())
-}
-
-fn permissions_result(inspection: platform::PermissionInspection) -> DoctorCheckResult {
-    let details = json!({
-        "platform": inspection.platform,
-        "accessibility_trusted": inspection.accessibility_trusted,
-        "screen_recording_trusted": inspection.screen_recording_trusted,
-        "prompted": false,
-        "window_discovery_run": false,
-        "preview_capture_run": false,
-    });
-    if !inspection.supported {
-        return DoctorCheckResult::fail(
-            CHECK_IDS[2],
-            format!(
-                "Alt Tab permissions cannot be inspected on {}.",
-                inspection.platform
-            ),
-        )
-        .with_fix("Run Alt Tab on Linux or macOS.")
-        .with_details(details);
-    }
-    if inspection.accessibility_trusted == Some(false) {
-        return DoctorCheckResult::fail(
-            CHECK_IDS[2],
-            "macOS Accessibility permission is not granted to Alt Tab.",
-        )
-        .with_fix("Enable Alt Tab in System Settings > Privacy & Security > Accessibility.")
-        .with_details(details);
-    }
-    if inspection.screen_recording_trusted == Some(false) {
-        return DoctorCheckResult::fail(
-            CHECK_IDS[2],
-            "macOS Screen Recording permission is not granted to Alt Tab.",
-        )
-        .with_fix("Enable Alt Tab in System Settings > Privacy & Security > Screen & System Audio Recording.")
-        .with_details(details);
-    }
-    DoctorCheckResult::ok(
-        CHECK_IDS[2],
-        "Required Alt Tab permissions are ready; protected capabilities were not exercised.",
-    )
-    .with_details(details)
-}
-
 fn platform_details(inspection: &platform::Inspection) -> serde_json::Value {
     json!({
         "platform": inspection.platform,
@@ -185,43 +134,4 @@ fn platform_details(inspection: &platform::Inspection) -> serde_json::Value {
         "window_discovery_run": false,
         "preview_capture_run": false,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use qol_headless::DoctorStatus;
-
-    use super::*;
-
-    #[test]
-    fn permission_result_reports_each_denied_macos_capability_without_prompting() {
-        let cases = [
-            (
-                platform::PermissionInspection {
-                    platform: "macos",
-                    supported: true,
-                    accessibility_trusted: Some(false),
-                    screen_recording_trusted: Some(true),
-                },
-                "Accessibility",
-            ),
-            (
-                platform::PermissionInspection {
-                    platform: "macos",
-                    supported: true,
-                    accessibility_trusted: Some(true),
-                    screen_recording_trusted: Some(false),
-                },
-                "Screen Recording",
-            ),
-        ];
-
-        for (inspection, capability) in cases {
-            let result = permissions_result(inspection);
-
-            assert_eq!(result.status, DoctorStatus::Fail);
-            assert!(result.message.contains(capability));
-            assert_eq!(result.details.unwrap()["prompted"], false);
-        }
-    }
 }

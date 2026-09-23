@@ -6,7 +6,6 @@ use qol_headless::{
 };
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
-const BINARY_NAME: &str = "plugin-template";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
@@ -16,7 +15,7 @@ fn app() -> HeadlessApp {
     app_with_handlers(
         |_| Ok(PlainTextOutput::text("Hello from My Plugin")),
         |_| {
-            qol_apps::desktop_integration::open_plugin_settings(PLUGIN_ID)
+            qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
                 .context("failed to open settings URL")?;
             Ok(PlainTextOutput::empty())
         },
@@ -28,13 +27,13 @@ where
     Run: Fn(&CommandContext) -> Result<PlainTextOutput> + Send + Sync + 'static,
     Settings: Fn(&CommandContext) -> Result<PlainTextOutput> + Send + Sync + 'static,
 {
-    HeadlessApp::new(PLUGIN_ID, BINARY_NAME)
+    HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run the canonical qol-tray plugin scaffold.")
         .default_command(["run"])
         .command(
             Command::new("run")
                 .about("Run the plugin example action.")
-                .usage(format!("{BINARY_NAME} run"))
+                .usage(format!("{PLUGIN_ID} run"))
                 .output("Prints the example greeting.")
                 .exit_behavior("Exits non-zero if the action cannot run.")
                 .run_plain_text(run),
@@ -42,7 +41,7 @@ where
         .command(
             Command::new("settings")
                 .about("Open the plugin settings.")
-                .usage(format!("{BINARY_NAME} settings"))
+                .usage(format!("{PLUGIN_ID} settings"))
                 .output("No stdout on success.")
                 .exit_behavior("Exits non-zero if the settings URL cannot be opened.")
                 .run_plain_text(settings),

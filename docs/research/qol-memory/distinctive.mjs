@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchOutputRoot } from "./lib/store-path.js";
 
 const BASE = dirname(fileURLToPath(import.meta.url));
 const ARGS = process.argv.slice(2);
@@ -64,7 +64,9 @@ const out = {
   min_df: minDf,
   terms: selected,
 };
-const tmp = join(STORE_ROOT, "distinctive.json.tmp");
+const outPath = join(researchOutputRoot(), "distinctive.json");
+mkdirSync(researchOutputRoot(), { recursive: true });
+const tmp = outPath + ".tmp";
 writeFileSync(tmp, JSON.stringify(out));
-renameSync(tmp, join(STORE_ROOT, "distinctive.json"));
-console.log(`distinctive: ${selected.length} terms (min idf ${minIdf.toFixed(1)}, corpus N=${N}) -> distinctive.json`);
+renameSync(tmp, outPath);
+console.log(`distinctive: ${selected.length} terms (min idf ${minIdf.toFixed(1)}, corpus N=${N}) -> ${outPath}`);

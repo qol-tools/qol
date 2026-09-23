@@ -12,22 +12,32 @@ type = "select"
 label = "Action Mode"
 section = "behavior"
 default = "hold_to_switch"
+card_description = "What letting go of the hotkey does."
 options = ["hold_to_switch", "sticky"]
 
 [field.action_mode.option_labels]
 hold_to_switch = "Hold To Switch"
 sticky = "Sticky"
 
+[field.action_mode.option_pictures]
+hold_to_switch = "hold-to-switch"
+sticky = "sticky"
+
 [field.open_behavior]
 type = "select"
 label = "Open Behavior"
 section = "behavior"
 default = "cycle_once"
+card_description = "What opening the switcher does."
 options = ["cycle_once", "show_only"]
 
 [field.open_behavior.option_labels]
 cycle_once = "Cycle Once"
 show_only = "Show Only"
+
+[field.open_behavior.option_pictures]
+cycle_once = "cycle-once"
+show_only = "show-only"
 
 [field.reset_selection_on_open]
 type = "boolean"
@@ -45,6 +55,8 @@ type = "object_array"
 label = "Switchable Panels"
 description = "Overrides for always-on-top panels, which the picker hides by default. Add an app with the toggle on to make it switchable, or add one qol already includes with the toggle off to hide it again."
 section = "windows"
+card_description = "Panels the picker may switch to."
+item_label = "switchable panel"
 default = []
 
 [field.switchable_panels.item.fields]
@@ -93,11 +105,16 @@ label = "Preview Icon Position"
 description = "Where the app icon appears over each window preview."
 section = "layout"
 default = "top_right"
+card_description = "Where the app icon sits."
 options = ["top_right", "top_left"]
 
 [field.display_icon_position.option_labels]
 top_right = "Top Right"
 top_left = "Top Left"
+
+[field.display_icon_position.option_pictures]
+top_right = "icon-corner:right"
+top_left = "icon-corner:left"
 
 [field.display_max_columns]
 type = "number"
@@ -198,12 +215,18 @@ label = "Label Size"
 description = "Text size relative to the card size."
 section = "labels"
 default = "medium"
+card_description = "Text size relative to the card size."
 options = ["small", "medium", "large"]
 
 [field.label_size.option_labels]
 small = "Small"
 medium = "Medium"
 large = "Large"
+
+[field.label_size.option_pictures]
+small = "aa:15"
+medium = "aa:22"
+large = "aa:30"
 
 [field.label_show_app_name]
 type = "boolean"

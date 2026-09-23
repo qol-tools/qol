@@ -20,7 +20,7 @@ fn doctor_never_changes_config_key_state_or_runtime_paths() {
     let plugin_config = data_home
         .join("qol-tray")
         .join("plugins")
-        .join("plugin-lights")
+        .join("qol-lights")
         .join("config.json");
     let daemon_socket = root.path().join("daemon.sock");
     let state_socket = root.path().join("state.sock");
@@ -53,7 +53,7 @@ fn doctor_never_changes_config_key_state_or_runtime_paths() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(output.stderr.is_empty());
-        assert_eq!(report.plugin_id, "plugin-lights");
+        assert_eq!(report.plugin_id, "qol-lights");
         assert_eq!(
             report
                 .checks
@@ -90,12 +90,12 @@ fn run_doctor(
     state_socket: &Path,
     args: [&str; 2],
 ) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_plugin-lights"))
+    Command::new(env!("CARGO_BIN_EXE_qol-lights"))
         .args(args)
         .current_dir(root)
         .env("XDG_DATA_HOME", data_home)
         .env("XDG_CONFIG_HOME", config_home)
-        .env(qol_conventions::ENV_PLUGIN_ID, "plugin-lights")
+        .env(qol_conventions::ENV_PLUGIN_ID, "qol-lights")
         .env(qol_conventions::ENV_DAEMON_SOCKET, daemon_socket)
         .env(qol_conventions::ENV_STATE_SOCKET, state_socket)
         .env_remove(qol_conventions::ENV_INSTALL_ID)

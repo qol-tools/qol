@@ -1,0 +1,281 @@
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+
+use crate::dev::state::DiscoveryStatus;
+use crate::dev::GpuiRuntimeConfig;
+
+use super::dev_services;
+use super::dev_validation::sanitize_monitored_plugin_ids;
+use super::types::{
+    AppState, BuildStateResponse, DiscoveryStateResponse, RuntimeGpuiPayload,
+    SetPluginCpuMonitoringRequest,
+};
+
+pub(super) fn routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            qol_conventions::dev_routes::DISCOVER,
+            post(trigger_discovery),
+        )
+        .route(
+            qol_conventions::dev_routes::DISCOVERY_STATE,
+            get(get_discovery_state),
+        )
+        .route(
+            qol_conventions::dev_routes::BUILD_STATE,
+            get(get_build_state),
+        )
+        .route(qol_conventions::dev_routes::PLUGIN_CPU, get(get_plugin_cpu))
+        .route(
+            qol_conventions::dev_routes::PLUGIN_CPU_MONITORING,
+            axum::routing::put(set_plugin_cpu_monitoring),
+        )
+        .route(
+            qol_conventions::dev_routes::RUNTIME_GPUI,
+            get(get_runtime_gpui).post(set_runtime_gpui),
+        )
+}
+
+pub(super) async fn get_runtime_gpui() -> Json<RuntimeGpuiPayload> {
+    let cfg = tokio::task::spawn_blocking(|| GpuiRuntimeConfig::load().unwrap_or_default())
+        .await
+        .unwrap_or_default();
+    Json(RuntimeGpuiPayload {
+        ghost_opacity: cfg.ghost_opacity,
+        ghost_debug_color: cfg.ghost_debug_color,
+    })
+}
+
+pub(super) async fn set_runtime_gpui(
+    State(state): State<AppState>,
+    Json(payload): Json<RuntimeGpuiPayload>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        persist_runtime_gpui(payload)?;
+        notify_gpui_plugins(&state);
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(error)) => {
+            log::error!("Failed to write runtime gpui config: {error:#}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to persist runtime gpui config",
+            )
+                .into_response()
+        }
+        Err(error) => {
+            log::error!("set_runtime_gpui join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Handler crashed").into_response()
+        }
+    }
+}
+
+fn persist_runtime_gpui(payload: RuntimeGpuiPayload) -> anyhow::Result<()> {
+    let mut cfg = GpuiRuntimeConfig::load().unwrap_or_default();
+    if let Some(field) = payload.ghost_opacity {
+        cfg.ghost_opacity = clamp_payload_opacity(Some(field));
+    }
+    if let Some(field) = payload.ghost_debug_color.as_deref() {
+        cfg.ghost_debug_color = qol_color::normalize_hex(field);
+    }
+    cfg.save()
+}
+
+fn notify_gpui_plugins(state: &AppState) {
+    for plugin_id in gpui_plugin_ids(state) {
+        if let Err(error) = super::settings::notify_plugin_reload(state, &plugin_id) {
+            log::warn!("runtime gpui reload notify failed for {plugin_id}: {error}");
+        }
+    }
+}
+
+fn gpui_plugin_ids(state: &AppState) -> Vec<String> {
+    let Ok(manager) = state.plugin_manager.lock() else {
+        return Vec::new();
+    };
+    manager
+        .plugins()
+        .filter(|plugin| plugin.manifest.capabilities.gpui)
+        .map(|plugin| plugin.id.as_str().to_string())
+        .collect()
+}
+
+fn clamp_payload_opacity(value: Option<f32>) -> Option<f32> {
+    let raw = value?;
+    if !raw.is_finite() {
+        return None;
+    }
+    Some(raw.clamp(0.0, 1.0))
+}
+
+pub(super) async fn get_discovery_state(
+    State(state): State<AppState>,
+) -> Json<DiscoveryStateResponse> {
+    let guard = match state.dev_state.discovery.read() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!("Discovery state lock poisoned: {}", error);
+            return Json(DiscoveryStateResponse {
+                status: "idle".to_string(),
+                plugins: Vec::new(),
+            });
+        }
+    };
+    let status = match guard.status {
+        DiscoveryStatus::Idle => "idle",
+        DiscoveryStatus::Discovering => "discovering",
+        DiscoveryStatus::Complete => "complete",
+    };
+    Json(DiscoveryStateResponse {
+        status: status.to_string(),
+        plugins: guard.plugins.clone(),
+    })
+}
+
+pub(super) async fn get_build_state(State(state): State<AppState>) -> Json<BuildStateResponse> {
+    Json(state.runtime.build_state_snapshot())
+}
+
+pub(super) async fn get_plugin_cpu(
+    State(state): State<AppState>,
+) -> Json<super::dev_plugin_cpu::PluginCpuResponse> {
+    Json(state.plugin_cpu.snapshot())
+}
+
+pub(super) async fn set_plugin_cpu_monitoring(
+    State(state): State<AppState>,
+    Json(req): Json<SetPluginCpuMonitoringRequest>,
+) -> impl IntoResponse {
+    let plugin_ids = match sanitize_monitored_plugin_ids(req.plugin_ids) {
+        Ok(plugin_ids) => plugin_ids,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
+    state.plugin_cpu.set_monitored_plugins(plugin_ids);
+    StatusCode::OK.into_response()
+}
+
+pub(super) async fn trigger_discovery(State(state): State<AppState>) -> impl IntoResponse {
+    log::info!("Discovery refresh requested");
+    dev_services::refresh_discovery(&state);
+    StatusCode::OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    async fn isolated_env() -> (
+        tokio::sync::MutexGuard<'static, ()>,
+        TempDir,
+        crate::paths::TestEnvPathRootGuard,
+    ) {
+        let guard = crate::test_support::env_lock().lock().await;
+        let tmp = TempDir::new().unwrap();
+        let path_guard = crate::paths::push_test_env_path_root(tmp.path());
+        (guard, tmp, path_guard)
+    }
+
+    #[tokio::test]
+    async fn gpui_payload_round_trips_opacity_and_color() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        persist_runtime_gpui(RuntimeGpuiPayload {
+            ghost_opacity: Some(0.42),
+            ghost_debug_color: Some("FF8800".to_string()),
+        })
+        .unwrap();
+
+        let Json(payload) = get_runtime_gpui().await;
+        assert_eq!(payload.ghost_opacity, Some(0.42));
+        assert_eq!(payload.ghost_debug_color.as_deref(), Some("#ff8800"));
+    }
+
+    #[tokio::test]
+    async fn gpui_partial_payload_preserves_other_field() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        persist_runtime_gpui(RuntimeGpuiPayload {
+            ghost_opacity: Some(0.5),
+            ghost_debug_color: Some("#112233".to_string()),
+        })
+        .unwrap();
+
+        persist_runtime_gpui(RuntimeGpuiPayload {
+            ghost_opacity: Some(0.9),
+            ghost_debug_color: None,
+        })
+        .unwrap();
+
+        let Json(after_opacity) = get_runtime_gpui().await;
+        assert_eq!(after_opacity.ghost_opacity, Some(0.9));
+        assert_eq!(after_opacity.ghost_debug_color.as_deref(), Some("#112233"));
+
+        persist_runtime_gpui(RuntimeGpuiPayload {
+            ghost_opacity: None,
+            ghost_debug_color: Some("#445566".to_string()),
+        })
+        .unwrap();
+
+        let Json(after_color) = get_runtime_gpui().await;
+        assert_eq!(after_color.ghost_opacity, Some(0.9));
+        assert_eq!(after_color.ghost_debug_color.as_deref(), Some("#445566"));
+    }
+
+    #[tokio::test]
+    async fn gpui_invalid_hex_color_clears_color_field() {
+        let (_guard, _tmp, _path_guard) = isolated_env().await;
+
+        persist_runtime_gpui(RuntimeGpuiPayload {
+            ghost_opacity: None,
+            ghost_debug_color: Some("#abcdef".to_string()),
+        })
+        .unwrap();
+
+        persist_runtime_gpui(RuntimeGpuiPayload {
+            ghost_opacity: None,
+            ghost_debug_color: Some("not-a-color".to_string()),
+        })
+        .unwrap();
+
+        let Json(payload) = get_runtime_gpui().await;
+        assert_eq!(payload.ghost_debug_color, None);
+    }
+
+    #[test]
+    fn gpui_payload_deserialization_table() {
+        let cases: &[(&str, Option<f32>, Option<&str>)] = &[
+            (r##"{}"##, None, None),
+            (r##"{"ghost_opacity":0.5}"##, Some(0.5), None),
+            (r##"{"ghost_debug_color":"#abc"}"##, None, Some("#abc")),
+            (
+                r##"{"ghost_opacity":0.3,"ghost_debug_color":"#ff8800"}"##,
+                Some(0.3),
+                Some("#ff8800"),
+            ),
+            (
+                r##"{"ghost_opacity":null,"ghost_debug_color":null}"##,
+                None,
+                None,
+            ),
+        ];
+        for (raw, opacity, color) in cases {
+            let payload: RuntimeGpuiPayload =
+                serde_json::from_str(raw).unwrap_or_else(|e| panic!("failed to parse {raw}: {e}"));
+            assert_eq!(payload.ghost_opacity, *opacity, "opacity for {raw}");
+            assert_eq!(
+                payload.ghost_debug_color.as_deref(),
+                *color,
+                "color for {raw}"
+            );
+        }
+    }
+}

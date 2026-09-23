@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { readdirSync, statSync, lstatSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, unlinkSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, unlinkSync, rmdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
 import { join, resolve, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
-import { qolMemoryStore } from "./lib/store-path.js";
+import { qolMemoryStore, researchOutputRoot } from "./lib/store-path.js";
 import { redact } from "./lib/redact.js";
 
 const args = process.argv.slice(2);
@@ -25,7 +25,7 @@ const PINNED_RUN = (() => {
   }
 })();
 const STORE_ROOT = resolve(pick("--store", qolMemoryStore()));
-const OUT_DIR = resolve(pick("--out", join(STORE_ROOT, "snapshot", RUN_ID)));
+const OUT_DIR = resolve(pick("--out", join(researchOutputRoot(), "snapshot", RUN_ID)));
 const rawMaxSamples = Number(pick("--max-samples", "500"));
 const MAX_SAMPLES = Number.isInteger(rawMaxSamples) && rawMaxSamples > 0 ? rawMaxSamples : 500;
 const KEEP = Number.isInteger(Number(pick("--keep", "5"))) ? Math.max(1, Number(pick("--keep", "5"))) : 5;
@@ -59,7 +59,8 @@ function isIgnored(p) {
 }
 function escapeRegExp(x) { return x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-const INGEST_PATH = join(STORE_ROOT, "ingest.jsonl");
+const INGEST_PATH = join(researchOutputRoot(), "ingest.jsonl");
+mkdirSync(researchOutputRoot(), { recursive: true });
 
 function sha256FileSync(file) {
   try {
@@ -407,6 +408,7 @@ try {
           unlinkSync(join(runDir, f));
         } catch {}
       }
+      rmdirSync(runDir);
     } catch {}
   }
 } catch {}

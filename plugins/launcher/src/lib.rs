@@ -5,7 +5,6 @@ pub mod discovery;
 mod doctor;
 pub mod flow;
 pub mod launch;
-mod qol;
 pub mod ui;
 
 pub use qol_frecency as frecency;

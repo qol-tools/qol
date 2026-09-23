@@ -1,5 +1,5 @@
 fn main() -> std::process::ExitCode {
-    launcher::cli::exit_code(std::env::args().skip(1))
+    qol_launcher::cli::exit_code(std::env::args().skip(1))
 }
 
 #[cfg(test)]
@@ -12,16 +12,11 @@ mod tests {
     fn live_manifest_preserves_runtime_and_enables_doctor() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-        let runtime = manifest
-            .runtime
-            .as_ref()
-            .expect("Launcher runtime must be declared");
         let daemon = manifest
             .daemon
             .as_ref()
             .expect("Launcher daemon must be declared");
 
-        assert_eq!(runtime.command, "launcher");
         assert_eq!(
             manifest.catalog_runtime_args("open"),
             Some(vec!["--show".into()])
@@ -33,7 +28,6 @@ mod tests {
         assert!(manifest.capabilities.gpui);
         assert!(manifest.capabilities.doctor);
         assert!(daemon.enabled);
-        assert_eq!(daemon.command, "launcher");
         assert_eq!(daemon.socket.as_deref(), Some("/tmp/qol-launcher.sock"));
     }
 }

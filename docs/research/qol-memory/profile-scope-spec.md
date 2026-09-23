@@ -29,9 +29,9 @@ the tray already owns a profile feature (settings sync). The wire argument,
 the unit field, the CLI flag, the request input and the ask output key are
 all `agent_home`; the qol-memory module is `src/agent_home/mod.rs`.
 
-## Layer 1: crate `libs/qol-agent-homes` (lane qm-homes)
+## Layer 1: crate `libs/agent-homes` (lane qm-homes)
 
-Workspace member, `[workspace.dependencies]` entry `qol-agent-homes = { path = "libs/qol-agent-homes" }`.
+Workspace member, `[workspace.dependencies]` entry `qol-agent-homes = { path = "libs/agent-homes" }`.
 Dependencies: `serde`, `toml`, `dirs`, `qol-config` (for `config_dir()`).
 No dependency on qol-terminal-sessions.
 
@@ -131,7 +131,7 @@ default = true
   `//` normalizes like `/`.
 
 Lane qm-homes also moves the harness home rules in
-`libs/qol-terminal-sessions/src/cli/builtins/{claude,codex,kimi,pi}/` onto the
+`libs/terminal-sessions/src/cli/builtins/{claude,codex,kimi,pi}/` onto the
 crate: `claude/environment.rs` and `claude/metadata.rs` derive the home from
 `Registry::load().current(Harness::Claude).path`, `pi/environment.rs`
 `agent_dir()` and `session_dir_override()` (r3: the override comes from the
@@ -180,7 +180,7 @@ Owned: `tools/qol-cli/src/commands/agents/mod.rs`, `tools/qol-cli/src/commands/m
 
 ## Layer 3: identity on the wire (lane qm-caller)
 
-Owned: `libs/qol-mcp/src/handler.rs`, `libs/qol-mcp/src/lib.rs`, `libs/qol-conventions/src/lib.rs`, `apps/qol-tray/src/features/mcp/handlers.rs`, `apps/qol-tray/src/features/mcp/tool_host.rs`, `apps/qol-tray/src/features/agents/mod.rs`, `apps/qol-tray/src/features/mod.rs`, `apps/qol-tray/src/features/plugin_store/server/mod.rs`, `apps/qol-tray/src/features/plugin_store/server/plugin_handlers.rs` (r3), `apps/qol-tray/Cargo.toml`, `tools/qol-cli/src/commands/mcp/mod.rs`, `tools/qol-cli/src/commands/mcp/configure.rs`, `tools/qol-cli/src/commands/sessions/mcp.rs`, `docs/plugin-contract.md`.
+Owned: `libs/mcp/src/handler.rs`, `libs/mcp/src/lib.rs`, `libs/conventions/src/lib.rs`, `apps/qol-tray/src/features/mcp/handlers.rs`, `apps/qol-tray/src/features/mcp/tool_host.rs`, `apps/qol-tray/src/features/agents/mod.rs`, `apps/qol-tray/src/features/mod.rs`, `apps/qol-tray/src/features/plugin_store/server/mod.rs`, `apps/qol-tray/src/features/plugin_store/server/plugin_handlers.rs` (r3), `apps/qol-tray/Cargo.toml`, `tools/qol-cli/src/commands/mcp/mod.rs`, `tools/qol-cli/src/commands/mcp/configure.rs`, `tools/qol-cli/src/commands/sessions/mcp.rs`, `docs/plugin-contract.md`.
 
 - `qol_conventions::HTTP_AGENT_HOME_HEADER: &str = "x-qol-agent-home"` next to `HTTP_AUTH_HEADER`.
 - `qol_mcp`: `pub struct Caller { pub agent_home: Option<String> }`;
@@ -231,7 +231,7 @@ captures) to the default claude home; that mapping is a documented decision.
 
 ### Lane qm-roots
 
-Owned: `plugins/qol-memory/Cargo.toml`, `plugins/qol-memory/qol-runtime.toml`, `plugins/qol-memory/src/lib.rs`, `plugins/qol-memory/src/agent_home/mod.rs` (r3, renamed from `profile`), `plugins/qol-memory/src/store/mod.rs`, `plugins/qol-memory/src/ingest/mod.rs`, `plugins/qol-memory/src/ingest/transcript.rs`, `plugins/qol-memory/src/watch/mod.rs`, `plugins/qol-memory/src/app/mod.rs`, `plugins/qol-memory/src/doctor/mod.rs`.
+Owned: `plugins/memory/Cargo.toml`, `plugins/memory/qol-runtime.toml`, `plugins/memory/src/lib.rs`, `plugins/memory/src/agent_home/mod.rs` (r3, renamed from `profile`), `plugins/memory/src/store/mod.rs`, `plugins/memory/src/ingest/mod.rs`, `plugins/memory/src/ingest/transcript.rs`, `plugins/memory/src/watch/mod.rs`, `plugins/memory/src/app/mod.rs`, `plugins/memory/src/doctor/mod.rs`.
 
 - `src/agent_home/mod.rs` (r3 rename): `unit_home(unit, registry) -> &str`,
   `visible(unit, caller, registry) -> bool`, `cache_slug(caller) -> String`
@@ -290,7 +290,7 @@ Owned: `src/ask/mod.rs`, `src/ask/rows.rs`, `src/retrieval/cache.rs`, `src/retri
 
 ## Layer 5: bridge scripts (lane qm-bridge2, repo qol-skills)
 
-Owned: `plugins/qol-memory/bin/inject-qol-memory-continue.cjs`, `plugins/qol-memory/bin/agent-home.cjs`, `plugins/qol-memory/.pi/extensions/qol-memory-tool.ts`, `plugins/qol-memory/test/*`, `plugins/qol-memory/.claude-plugin/plugin.json` (version 0.1.0 to 0.1.1 only).
+Owned: `plugins/memory/bin/inject-qol-memory-continue.cjs`, `plugins/memory/bin/agent-home.cjs`, `plugins/memory/.pi/extensions/qol-memory-tool.ts`, `plugins/memory/test/*`, `plugins/memory/.claude-plugin/plugin.json` (version 0.1.0 to 0.1.1 only).
 
 - `bin/agent-home.cjs` exports `agentHome(harness, timeoutMs)`: runs
   `qol agents current <harness>` with `execFile`, returns the trimmed stdout

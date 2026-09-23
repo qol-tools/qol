@@ -17,6 +17,8 @@ type = "string_array"
 label = "Excluded Apps"
 description = "Bundle IDs where non-global remaps should be ignored."
 section = "general"
+card_description = "Apps where remaps stay off."
+item_label = "app"
 placeholder = "com.example.app"
 default = [
   "net.kovidgoyal.kitty",
@@ -42,6 +44,8 @@ description = "Translate modifier combinations directly into emitted characters.
 type = "object_array"
 label = "Character Rules"
 section = "char_rules"
+card_description = "Shortcuts that type a character."
+item_label = "character rule"
 default = []
 
 [field.char_rules.item.fields]
@@ -58,6 +62,8 @@ description = "Translate keys or key groups into other modifier or key combinati
 type = "object_array"
 label = "Key Rules"
 section = "key_rules"
+card_description = "Keys that become other keys."
+item_label = "key rule"
 default = [
   { from_mods = ["ctrl"], to_mods = ["cmd"], keys = ["c", "v", "x", "a", "z", "s", "p", "f", "t", "w", "n", "d", "r", "return"] },
   { from_mods = ["ctrl"], to_mods = ["alt"], keys = ["left", "right", "delete", "backspace"] },
@@ -74,6 +80,10 @@ from_key = "string"
 to_key = "string"
 global = "boolean"
 
+[field.key_rules.lists.keys]
+item_label = "key"
+card_description = "Keys this rule translates."
+
 [section.mouse_rules]
 label = "Mouse Rules"
 description = "Apply modifier remaps to mouse button clicks."
@@ -82,6 +92,8 @@ description = "Apply modifier remaps to mouse button clicks."
 type = "object_array"
 label = "Mouse Rules"
 section = "mouse_rules"
+card_description = "Modifier remaps for mouse clicks."
+item_label = "mouse rule"
 default = [
   { from_mods = ["ctrl"], button = "left", to_mods = ["cmd"] },
 ]
@@ -100,6 +112,8 @@ description = "Apply modifier remaps to scroll gestures."
 type = "object_array"
 label = "Scroll Rules"
 section = "scroll_rules"
+card_description = "Modifier remaps for scrolling."
+item_label = "scroll rule"
 default = [
   { from_mods = ["ctrl"], to_mods = ["cmd"] },
 ]

@@ -1,0 +1,1139 @@
+use crate::contract::runtime::RuntimeSpec;
+use crate::contract::v1::{ConfigSpec, FieldKind, FieldSpec};
+use crate::validation::ValidationError;
+
+const STREAMABLE_KINDS: &[FieldKind] = &[FieldKind::Color, FieldKind::Number];
+
+pub fn validate_contracts(
+    config: &ConfigSpec,
+    runtime: Option<&RuntimeSpec>,
+) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
+    for (id, field) in &config.fields {
+        validate_runable_ref(id, field, runtime, &mut errors);
+        validate_runtime_active_refs(id, field, runtime, &mut errors);
+        validate_display_layout_refs(id, field, runtime, &mut errors);
+        validate_stream_ref(id, field, runtime, &mut errors);
+        validate_row_action_ref(id, field, runtime, &mut errors);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn validate_runtime_active_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.active_action.is_none()
+        && field.active_query.is_none()
+        && field.active_value_from.is_none()
+        && field.active_label.is_none()
+    {
+        return;
+    }
+    match field.kind {
+        FieldKind::Action => validate_action_active_refs(id, field, runtime, errors),
+        FieldKind::List | FieldKind::Select => {
+            validate_list_active_refs(id, field, runtime, errors)
+        }
+        FieldKind::Number => {
+            validate_list_active_refs(id, field, runtime, errors);
+            validate_live_number_action_ref(id, field, runtime, errors);
+        }
+        FieldKind::DisplayLayout => {}
+        _ => errors.push(ValidationError::new(
+            format!("field.{id}"),
+            "runtime active state is only valid for action, list, select, and number fields",
+        )),
+    }
+}
+
+fn validate_action_active_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(action) = field.active_action.as_deref() else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_action"),
+            "is required when runtime active state is configured",
+        ));
+        return;
+    };
+    validate_active_query_refs(id, field, runtime, errors);
+    let Some(runtime) = runtime else {
+        return;
+    };
+    if !runtime.actions.contains_key(action) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_action"),
+            format!("references undeclared action: {action}"),
+        ));
+    }
+}
+
+fn validate_list_active_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.active_action.is_some() {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_action"),
+            "is only valid for action fields",
+        ));
+    }
+    validate_active_query_refs(id, field, runtime, errors);
+}
+
+fn validate_live_number_action_ref(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.active_query.is_none() {
+        return;
+    }
+    let Some(action) = field.action.as_deref() else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.action"),
+            "is required when runtime active state is configured",
+        ));
+        return;
+    };
+    let Some(runtime) = runtime else {
+        return;
+    };
+    if !runtime.actions.contains_key(action) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.action"),
+            format!("references undeclared action: {action}"),
+        ));
+    }
+}
+
+fn validate_active_query_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(query) = field.active_query.as_deref() else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_query"),
+            "is required when runtime active state is configured",
+        ));
+        return;
+    };
+    if field.active_value_from.as_deref().is_none_or(str::is_empty) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_value_from"),
+            "is required when runtime active state is configured",
+        ));
+        return;
+    }
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            "runtime active state requires qol-runtime.toml",
+        ));
+        return;
+    };
+    if !runtime.queries.contains_key(query) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.active_query"),
+            format!("references undeclared query: {query}"),
+        ));
+    }
+}
+
+fn validate_display_layout_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.kind != FieldKind::DisplayLayout {
+        return;
+    }
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            format!(
+                "kind {:?} requires qol-runtime.toml but none is present",
+                field.kind
+            ),
+        ));
+        return;
+    };
+    validate_declared_query_ref(id, field.query.as_deref(), "query", runtime, errors);
+    validate_declared_query_ref(
+        id,
+        field.active_query.as_deref(),
+        "active_query",
+        runtime,
+        errors,
+    );
+    validate_declared_action_ref(id, field.action.as_deref(), "action", runtime, errors);
+    validate_declared_action_ref(
+        id,
+        field.active_action.as_deref(),
+        "active_action",
+        runtime,
+        errors,
+    );
+}
+
+fn validate_declared_query_ref(
+    id: &str,
+    name: Option<&str>,
+    key: &str,
+    runtime: &RuntimeSpec,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(name) = name else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.{key}"),
+            "is required for display_layout fields",
+        ));
+        return;
+    };
+    if runtime.queries.contains_key(name) {
+        return;
+    }
+    errors.push(ValidationError::new(
+        format!("field.{id}.{key}"),
+        format!("references undeclared query: {name}"),
+    ));
+}
+
+fn validate_declared_action_ref(
+    id: &str,
+    name: Option<&str>,
+    key: &str,
+    runtime: &RuntimeSpec,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(name) = name else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.{key}"),
+            "is required for display_layout fields",
+        ));
+        return;
+    };
+    if runtime.actions.contains_key(name) {
+        return;
+    }
+    errors.push(ValidationError::new(
+        format!("field.{id}.{key}"),
+        format!("references undeclared action: {name}"),
+    ));
+}
+
+fn validate_runable_ref(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(ref_name) = runable_reference_for(field) else {
+        return;
+    };
+    let Some(rt) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            format!(
+                "kind {:?} requires qol-runtime.toml but none is present",
+                field.kind
+            ),
+        ));
+        return;
+    };
+    match field.kind {
+        FieldKind::Action if !rt.actions.contains_key(ref_name) => {
+            errors.push(ValidationError::new(
+                format!("field.{id}.action"),
+                format!("references undeclared action: {ref_name}"),
+            ));
+        }
+        FieldKind::List
+        | FieldKind::Status
+        | FieldKind::QrCode
+        | FieldKind::Gamepad
+        | FieldKind::Select
+        | FieldKind::StringArray
+            if !rt.queries.contains_key(ref_name) =>
+        {
+            errors.push(ValidationError::new(
+                format!("field.{id}.query"),
+                format!("references undeclared query: {ref_name}"),
+            ));
+        }
+        _ => {}
+    }
+}
+
+fn validate_stream_ref(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(ref stream_name) = field.stream else {
+        return;
+    };
+    if !STREAMABLE_KINDS.contains(&field.kind) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.stream"),
+            format!("kind {:?} does not support streams", field.kind),
+        ));
+        return;
+    }
+    let Some(rt) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.stream"),
+            "stream requires qol-runtime.toml but none is present".to_string(),
+        ));
+        return;
+    };
+    if !rt.streams.contains_key(stream_name.as_str()) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.stream"),
+            format!("references undeclared stream: {stream_name}"),
+        ));
+    }
+}
+
+fn validate_row_action_ref(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let actions = field
+        .row_action
+        .iter()
+        .chain(field.row_actions.iter())
+        .collect::<Vec<_>>();
+    if actions.is_empty() && field.row_slider.is_none() {
+        return;
+    }
+    let Some(rt) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_action"),
+            "row_action requires qol-runtime.toml but none is present".to_string(),
+        ));
+        return;
+    };
+    for (index, action) in actions.into_iter().enumerate() {
+        if rt.actions.contains_key(action.action.as_str()) {
+            continue;
+        }
+        let path = if index == 0 && field.row_action.is_some() {
+            format!("field.{id}.row_action.action")
+        } else {
+            format!("field.{id}.row_actions.action")
+        };
+        errors.push(ValidationError::new(
+            path,
+            format!("references undeclared action: {}", action.action),
+        ));
+    }
+    if let Some(slider) = field.row_slider.as_ref() {
+        if !rt.actions.contains_key(slider.action.as_str()) {
+            errors.push(ValidationError::new(
+                format!("field.{id}.row_slider.action"),
+                format!("references undeclared action: {}", slider.action),
+            ));
+        }
+    }
+}
+
+fn runable_reference_for(field: &FieldSpec) -> Option<&str> {
+    match field.kind {
+        FieldKind::Action => field.action.as_deref(),
+        FieldKind::List
+        | FieldKind::Status
+        | FieldKind::QrCode
+        | FieldKind::Gamepad
+        | FieldKind::Select
+        | FieldKind::StringArray => field.query.as_deref(),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::runtime::parse_runtime_spec_str;
+    use crate::contract::v1::parse_spec_str;
+
+    #[test]
+    fn dynamic_option_queries_must_be_declared_in_runtime() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+query = "audio_sources"
+
+[field.devices]
+type = "string_array"
+config_key = "managed_devices"
+default = []
+query = "device_options"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.other]
+description = "something else"
+poll_interval_ms = 1000
+"#,
+        )
+        .expect("parse runtime");
+
+        let errors = validate_contracts(&config, Some(&runtime)).expect_err("must fail");
+        assert!(
+            errors.iter().any(|error| error.path == "field.device.query"
+                && error.message.contains("audio_sources")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.devices.query"
+                    && error.message.contains("device_options")),
+            "{errors:?}"
+        );
+
+        let declared = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.audio_sources]
+description = "PulseAudio capture sources"
+poll_interval_ms = 5000
+
+[query.device_options]
+description = "Bluetooth devices"
+poll_interval_ms = 5000
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&declared)).is_ok());
+    }
+
+    #[test]
+    fn accepts_consistent_contracts() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.pair_btn]
+type = "action"
+label = "Pair"
+action = "pair_device"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.pair_device]
+description = "Pair device"
+"#,
+        )
+        .expect("parse runtime");
+        assert!(
+            validate_contracts(&config, Some(&runtime)).is_ok(),
+            "consistent contracts should validate"
+        );
+    }
+
+    #[test]
+    fn validates_action_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.search]
+type = "action"
+action = "start_search"
+active_action = "stop_search"
+active_query = "search_status"
+active_value_from = "searching"
+"#,
+        )
+        .expect("parse config");
+        let valid_runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.start_search]
+description = "Start searching"
+
+[action.stop_search]
+description = "Stop searching"
+
+[query.search_status]
+description = "Search status"
+poll_interval_ms = 500
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&valid_runtime)).is_ok());
+
+        let invalid_runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.start_search]
+description = "Start searching"
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&invalid_runtime)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.search.active_action"));
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.search.active_query"));
+    }
+
+    #[test]
+    fn validates_list_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+active_query = "search_status"
+active_value_from = "searching"
+active_label = "LIVE"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.devices]
+description = "Devices"
+poll_interval_ms = 1000
+
+[query.search_status]
+description = "Search status"
+poll_interval_ms = 500
+"#,
+        )
+        .expect("parse runtime");
+
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        let missing_activity = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.devices]
+description = "Devices"
+poll_interval_ms = 1000
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&missing_activity)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.devices.active_query"));
+    }
+
+    #[test]
+    fn validates_select_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+query = "outputs"
+active_query = "output_status"
+active_value_from = "applied"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.outputs]
+description = "Outputs"
+poll_interval_ms = 5000
+
+[query.output_status]
+description = "Applied output"
+poll_interval_ms = 5000
+"#,
+        )
+        .expect("parse runtime");
+
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        let undeclared = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.outputs]
+description = "Outputs"
+poll_interval_ms = 5000
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&undeclared)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.device.active_query"));
+
+        let with_action = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.device]
+type = "select"
+config_key = "audio.device"
+default = "default"
+query = "outputs"
+active_action = "switch_output"
+active_query = "output_status"
+active_value_from = "applied"
+"#,
+        )
+        .expect("parse config");
+        let errors = validate_contracts(&with_action, Some(&runtime)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.device.active_action"));
+    }
+
+    #[test]
+    fn validates_number_runtime_active_state_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "wide_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.volume]
+description = "Volume"
+poll_interval_ms = 2000
+
+[action.set_volume]
+description = "Set the volume"
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        let without_action = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+variant = "wide_slider"
+active_query = "volume"
+active_value_from = "volume"
+"#,
+        )
+        .expect("parse config");
+        let errors = validate_contracts(&without_action, Some(&runtime)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.volume.action"
+                    && error.message.contains("is required")),
+            "{errors:?}"
+        );
+
+        let undeclared_action = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.volume]
+description = "Volume"
+poll_interval_ms = 2000
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&undeclared_action)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.volume.action"
+                    && error.message.contains("set_volume")),
+            "{errors:?}"
+        );
+
+        let undeclared = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.set_volume]
+description = "Set the volume"
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&undeclared)).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.path == "field.volume.active_query"));
+    }
+
+    #[test]
+    fn rejects_dangling_action_reference() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.pair_btn]
+type = "action"
+label = "Pair"
+action = "pair_device"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str("schema_version = 1\n").expect("parse runtime");
+        let result = validate_contracts(&config, Some(&runtime));
+        assert!(result.is_err(), "dangling action reference should fail");
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.to_string().contains("pair_device")),
+            "error should mention the dangling reference, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn rejects_runable_field_without_runtime_spec() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.pair_btn]
+type = "action"
+label = "Pair"
+action = "pair_device"
+"#,
+        )
+        .expect("parse config");
+        let result = validate_contracts(&config, None);
+        assert!(result.is_err(), "action field without runtime should fail");
+    }
+
+    #[test]
+    fn accepts_color_field_with_stream() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.color]
+type = "color"
+stream = "live_color"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[stream.live_color]
+description = "Color control"
+throttle_ms = 100
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    #[test]
+    fn rejects_dangling_stream_reference() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.color]
+type = "color"
+stream = "nonexistent"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str("schema_version = 1\n").expect("parse runtime");
+        let result = validate_contracts(&config, Some(&runtime));
+        assert!(result.is_err(), "dangling stream should fail");
+    }
+
+    #[test]
+    fn rejects_stream_on_non_streamable_kind() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.name]
+type = "string"
+stream = "live_name"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[stream.live_name]
+description = "test"
+throttle_ms = 100
+"#,
+        )
+        .expect("parse runtime");
+        let result = validate_contracts(&config, Some(&runtime));
+        assert!(result.is_err(), "string field with stream should fail");
+    }
+
+    #[test]
+    fn rejects_row_slider_with_dangling_action() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volumes]
+type = "list"
+query = "list_volumes"
+
+[field.volumes.row_slider]
+value_from = "volume"
+action = "nonexistent"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.list_volumes]
+description = "test"
+poll_interval_ms = 1000
+
+[action.set_volume]
+description = "Set volume"
+"#,
+        )
+        .expect("parse runtime");
+        let result = validate_contracts(&config, Some(&runtime));
+        assert!(result.is_err(), "dangling row_slider should fail");
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|error| {
+                error.path == "field.volumes.row_slider.action"
+                    && error.message.contains("nonexistent")
+            }),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_list_with_row_action() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "list_devices"
+row_label = "{name}"
+
+[field.devices.row_action]
+action = "remove_device"
+label = "Remove"
+key = "Delete"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.list_devices]
+description = "List devices"
+poll_interval_ms = 2000
+
+[action.remove_device]
+description = "Remove a device"
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    #[test]
+    fn validates_every_state_driven_row_action() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "devices"
+
+[[field.devices.row_actions]]
+action = "pair_device"
+when = "can_pair"
+
+[[field.devices.row_actions]]
+action = "connect_device"
+when = "can_connect"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.devices]
+description = "Devices"
+poll_interval_ms = 1000
+
+[action.pair_device]
+description = "Pair"
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
+        assert!(errors.iter().any(|error| {
+            error.path == "field.devices.row_actions.action"
+                && error.message.contains("connect_device")
+        }));
+    }
+
+    #[test]
+    fn accepts_gamepad_with_native_input_query() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.input_test]
+type = "gamepad"
+query = "controller_input"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.controller_input]
+description = "Native controller input supplement"
+poll_interval_ms = 32
+"#,
+        )
+        .expect("parse runtime");
+
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    fn display_layout_config() -> ConfigSpec {
+        parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.arrangement]
+type = "display_layout"
+query = "layout"
+active_query = "modes"
+action = "arrange"
+active_action = "set_mode"
+"#,
+        )
+        .expect("parse config")
+    }
+
+    fn display_layout_runtime(missing: Option<&str>) -> RuntimeSpec {
+        let mut runtime = String::from("schema_version = 1\n");
+        for name in ["layout", "modes"] {
+            if missing == Some(name) {
+                continue;
+            }
+            runtime.push_str(&format!(
+                "\n[query.{name}]\ndescription = \"runtime query\"\npoll_interval_ms = 1000\n"
+            ));
+        }
+        for name in ["arrange", "set_mode"] {
+            if missing == Some(name) {
+                continue;
+            }
+            runtime.push_str(&format!(
+                "\n[action.{name}]\ndescription = \"runtime action\"\n"
+            ));
+        }
+        parse_runtime_spec_str(&runtime).expect("parse runtime")
+    }
+
+    #[test]
+    fn accepts_display_layout_with_all_references() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(None);
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_query() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("layout"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared layout query");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.query"
+                    && error.message.contains("layout")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_active_query() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("modes"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared modes query");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.active_query"
+                    && error.message.contains("modes")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_action() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("arrange"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared arrange action");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.action"
+                    && error.message.contains("arrange")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_undeclared_active_action() {
+        let config = display_layout_config();
+        let runtime = display_layout_runtime(Some("set_mode"));
+        let errors =
+            validate_contracts(&config, Some(&runtime)).expect_err("undeclared set_mode action");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.arrangement.active_action"
+                    && error.message.contains("set_mode")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_display_layout_with_missing_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.arrangement]
+type = "display_layout"
+"#,
+        )
+        .expect("parse config");
+        let runtime = display_layout_runtime(None);
+        let errors = validate_contracts(&config, Some(&runtime)).expect_err("missing references");
+        for path in [
+            "field.arrangement.query",
+            "field.arrangement.active_query",
+            "field.arrangement.action",
+            "field.arrangement.active_action",
+        ] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.path == path && error.message.contains("required")),
+                "missing {path}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_row_action_with_dangling_action() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.devices]
+type = "list"
+query = "list_devices"
+
+[field.devices.row_action]
+action = "nonexistent"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.list_devices]
+description = "test"
+poll_interval_ms = 1000
+"#,
+        )
+        .expect("parse runtime");
+        let result = validate_contracts(&config, Some(&runtime));
+        assert!(result.is_err(), "dangling row_action should fail");
+    }
+}

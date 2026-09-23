@@ -66,7 +66,7 @@ is between 1ms and 20ms.
 
 ### 1. Every rail keystroke restarts the whole poller synchronously
 
-`libs/qol-gpui/src/settings_panel/view.rs:706` `select_source` ends with:
+`libs/gpui/src/settings_panel/view.rs:706` `select_source` ends with:
 
 ```rust
 self.pause_runtime_poll();
@@ -107,9 +107,9 @@ for 10.4s, three concurrent `/api/core/queries/profiles` calls returned in
 
 ### 3. The settings host silently pays the timeout twice
 
-`libs/qol-gpui/src/settings_panel/persistence.rs` builds its client with
+`libs/gpui/src/settings_panel/persistence.rs` builds its client with
 `with_io_timeout(Duration::from_secs(2))`, but `Session::request`
-(`libs/qol-runtime/src/local_http.rs:123`) retries on **any** error:
+(`libs/runtime/src/local_http.rs:123`) retries on **any** error:
 
 ```rust
 match self.request_on_open_connection(method, path, body) {
@@ -220,9 +220,9 @@ second screen-bounds refresh. Not part of the panel work.
 
 Two debug-only probes, both compiled out in release:
 
-- `libs/qol-gpui/src/settings_panel/persistence.rs`: the existing
+- `libs/gpui/src/settings_panel/persistence.rs`: the existing
   `SURFACE_ACTIVATION ... phase=runtime-query` line now carries `elapsed_ms`.
-- `libs/qol-gpui/src/settings_panel/view.rs`: `select_source` emits
+- `libs/gpui/src/settings_panel/view.rs`: `select_source` emits
   `SETTINGS_NAV plugin=<id> phase=source-switch queries=<n>`.
 
 Reader: `scratchpad/navtrace.py <epoch_ms>` correlates switches with the

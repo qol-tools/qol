@@ -3,6 +3,6 @@
 __pycache__/
 *.pyc
 target/
-task-runner
-task-runner.new
+qol-ide-checkout
+qol-ide-checkout.new
 .cargo/config.toml

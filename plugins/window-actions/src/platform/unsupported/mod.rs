@@ -4,11 +4,12 @@ use std::path::PathBuf;
 
 use qol_windowing::{WindowId, WindowOps, WindowRect};
 
+use crate::cli::PLUGIN_ID;
 use crate::config::WindowActionsConfig;
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::{self, WindowSystem};
 
-pub(crate) use doctor::{permissions_check, platform_supported_check, required_binaries_check};
+pub(crate) use doctor::{platform_supported_check, required_binaries_check};
 
 pub(crate) struct GlideController;
 
@@ -116,7 +117,7 @@ impl WindowSystem for UnsupportedWindowSystem {
 
 fn unsupported(operation: &str) -> String {
     format!(
-        "window-actions: {operation} is not implemented on {}",
+        "{PLUGIN_ID}: {operation} is not implemented on {}",
         std::env::consts::OS
     )
 }

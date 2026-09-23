@@ -1,17 +1,17 @@
 [plugin]
-id = "plugin-template"
+id = "qol-template"
 # uid = "run: uuidgen | tr A-F a-f"   # frozen, mint once and never change
 name = "My Plugin"
 description = "A qol-tray plugin"
 
 
-version = "0.1.0"
+version = "0.2.0"
 
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
 [runtime]
-command = "plugin-template"
+command = "qol-template"
 
 [action.run]
 label = "Run"
@@ -20,6 +20,7 @@ args = ["run"]
 [action.settings]
 label = "Settings"
 kind = "settings"
+picture = "gear"
 args = ["settings"]
 
 [capabilities]
@@ -31,6 +32,6 @@ label = "My Plugin"
 items = []
 
 [[dependencies.binaries]]
-name = "plugin-template"
-repo = "qol-tools/plugin-template"
-pattern = "plugin-template-{os}-{arch}"
+name = "qol-template"
+repo = "qol-tools/qol-template"
+pattern = "qol-template-{os}-{arch}"

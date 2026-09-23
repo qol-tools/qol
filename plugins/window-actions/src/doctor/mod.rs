@@ -30,11 +30,7 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
             "Inspect required platform tools or libraries without executing window operations.",
             || Ok(crate::platform::required_binaries_check()),
         ),
-        DoctorCheck::new(
-            CHECK_IDS[3],
-            "Query platform authorization without prompting or performing a window operation.",
-            || Ok(crate::platform::permissions_check()),
-        ),
+        qol_plugin_api::permissions_check!("Window Actions"),
         DoctorCheck::new(
             CHECK_IDS[4],
             "Inspect existing minimized-window state metadata without changing it.",

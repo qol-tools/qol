@@ -7,23 +7,23 @@ use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind};
 
+use crate::cli::PLUGIN_ID;
 use crate::daemon::actions::{self, Command};
 use crate::ui::{RemoveAppView, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
-
-const APP_ID: &str = "plugin-removeapp";
 
 type SharedPanel = Rc<RefCell<OpenedSurface<RemoveAppView>>>;
 
 pub fn run() -> anyhow::Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     if !actions::start_listener(cmd_tx) {
-        anyhow::bail!("removeapp: action listener failed to bind");
+        anyhow::bail!("{PLUGIN_ID}: action listener failed to bind");
     }
 
     let failure = Rc::new(RefCell::new(None));
     let reported_failure = failure.clone();
     Application::new().run(move |cx: &mut App| {
-        qol_gpui::keepalive::open_keepalive(cx, Some(APP_ID));
+        qol_gpui::fonts::install(cx);
+        qol_gpui::keepalive::open_keepalive(cx, Some(PLUGIN_ID));
         qol_gpui::platform::set_accessory_policy();
 
         let tracker = MonitorTracker::start(cx);
@@ -69,7 +69,7 @@ fn spawn_command_poll(
                         .update(move |cx| panel.borrow_mut().present(&tracker, cx))
                         .unwrap_or(false);
                     if !presented {
-                        eprintln!("[removeapp] panel activation failed");
+                        eprintln!("[{PLUGIN_ID}] panel activation failed");
                     }
                     LoopFlow::Continue
                 }

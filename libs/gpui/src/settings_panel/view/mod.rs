@@ -1,0 +1,6931 @@
+mod choose_card;
+mod display_layout_card;
+mod list_card;
+mod structured_list_editor;
+
+use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
+use std::cell::Cell;
+use std::rc::Rc;
+
+use futures::StreamExt as _;
+use gpui::prelude::FluentBuilder;
+use gpui::*;
+
+use super::components::{
+    number_field, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
+    settings_action_affordance, settings_action_spinner, settings_label_group, settings_page,
+    settings_query_spinner, settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue,
+    SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
+    SettingsToggle, SettingsValueTone, SliderStyle,
+};
+use super::display_layout::DisplayLayoutState;
+use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
+use super::object_array_row::ObjectArrayState;
+use super::persistence::{panel_base, save_values};
+use super::rows::{
+    apply_runtime_query, filtered_list_items, merged_config, query_flag_value, retire_number_holds,
+    row_action, row_query_names, row_streams, runtime_query_names, stream_gated, Row, RowControl,
+    RowQueryState, RowSection, SliderHold,
+};
+use super::{
+    AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
+    CustomPanelInvalidator, CustomPanelNotifier, CustomPanelView, PanelSourceGroup,
+    SettingsDestination, SettingsPanel, SettingsRuntime, SourceState,
+};
+use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
+use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
+use crate::gamepad::{gamepad_panel, GamepadPalette};
+use crate::phantom_nav::{NavAxis, PhantomNavGuard};
+use crate::pictures::PictureContext;
+use crate::status_indicator::{StatusIndicator, StatusTone};
+use crate::surface::{PanelDragArea, SurfaceDismisser};
+use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
+
+type SampledQueryResults =
+    std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
+
+const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
+/// How long the rail selection must hold still before its source starts polling.
+const QUERY_SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
+/// How long a runtime query may take before its row admits it is waiting.
+const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+const LIST_FIT_MIN_VISIBLE: usize = 3;
+const RAIL_CARD_OVERLAP: f32 = 98.0;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PanelFocus {
+    Sources,
+    Body,
+}
+
+fn focus_level(source_menu: bool, sources: usize) -> PanelFocus {
+    if source_menu && sources > 1 {
+        PanelFocus::Sources
+    } else {
+        PanelFocus::Body
+    }
+}
+
+const RAIL_TRANSITION: std::time::Duration = std::time::Duration::from_millis(180);
+const RAIL_SECTION_OPACITY: f32 = 0.55;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TransitionAction {
+    Animate,
+    Snap,
+}
+
+#[derive(Debug, Default)]
+struct TransitionTracker {
+    step: usize,
+    started: Option<std::time::Instant>,
+    snapped: bool,
+}
+
+impl TransitionTracker {
+    fn state_changed(&mut self, changed: bool, now: std::time::Instant) {
+        let Some(action) = transition_policy(transition_in_flight(self.started, now), changed)
+        else {
+            return;
+        };
+        match action {
+            TransitionAction::Animate => {
+                self.step = self.step.wrapping_add(1);
+                self.started = Some(now);
+                self.snapped = false;
+            }
+            TransitionAction::Snap => self.snapped = true,
+        }
+    }
+}
+
+fn transition_policy(in_flight: bool, state_changed: bool) -> Option<TransitionAction> {
+    if !state_changed {
+        return None;
+    }
+    if in_flight {
+        return Some(TransitionAction::Snap);
+    }
+    Some(TransitionAction::Animate)
+}
+
+fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    started.is_some_and(|started| now.duration_since(started) < RAIL_TRANSITION)
+}
+
+/// Collapses the states of every query a row depends on into the one the row
+/// should show. Unavailable wins over loading, loading wins over ready, and a
+/// query still inside its grace period is treated as ready so healthy plugins
+/// never flash an indicator.
+fn rollup_query_state<'a>(
+    states: impl Iterator<Item = Option<&'a RowQueryState>>,
+    grace: std::time::Duration,
+    now: std::time::Instant,
+) -> RowQueryState {
+    let mut rolled = RowQueryState::Idle;
+    for state in states {
+        match state {
+            Some(RowQueryState::Unavailable(message)) => {
+                return RowQueryState::Unavailable(message.clone());
+            }
+            Some(RowQueryState::Loading { since })
+                if now.saturating_duration_since(*since) >= grace =>
+            {
+                rolled = RowQueryState::Loading { since: *since };
+            }
+            Some(RowQueryState::Ready) if rolled == RowQueryState::Idle => {
+                rolled = RowQueryState::Ready
+            }
+            _ => {}
+        }
+    }
+    rolled
+}
+
+fn query_is_due(due: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    due.is_none_or(|due| due <= now)
+}
+
+fn due_query_indices(due: &[Option<std::time::Instant>], now: std::time::Instant) -> Vec<usize> {
+    due.iter()
+        .enumerate()
+        .filter_map(|(index, due)| query_is_due(*due, now).then_some(index))
+        .collect()
+}
+
+#[derive(Debug, Default)]
+struct HeightCache {
+    revision: u64,
+    cached: Option<f32>,
+}
+
+impl HeightCache {
+    fn value(&mut self, revision: u64, compute: impl FnOnce() -> f32) -> f32 {
+        if self.cached.is_none() || self.revision != revision {
+            self.revision = revision;
+            self.cached = Some(compute());
+        }
+        self.cached.unwrap()
+    }
+}
+
+use std::sync::PoisonError;
+
+#[derive(Default)]
+struct SampleSignal {
+    state: std::sync::Mutex<SampleSignalState>,
+    requested: std::sync::Condvar,
+}
+
+#[derive(Default)]
+struct SampleSignalState {
+    requested: bool,
+    stopped: bool,
+}
+
+impl SampleSignal {
+    fn request(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.requested = true;
+        self.requested.notify_one();
+    }
+
+    fn stop(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.stopped = true;
+        self.requested.notify_one();
+    }
+
+    fn wait_for_request(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        while !state.requested && !state.stopped {
+            state = self
+                .requested
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        state.requested = false;
+        !state.stopped
+    }
+}
+
+pub(super) struct SettingsPanelView {
+    panel: SettingsPanel,
+    stack: Vec<Level>,
+    runtime: SettingsRuntime,
+    runtime_queries: Vec<String>,
+    sources: Vec<SourceState>,
+    selected_source: usize,
+    /// The source the body is actually showing. It lags `selected_source`
+    /// while the rail is moving, so scrolling past a plugin never materialises
+    /// its page.
+    materialized_source: usize,
+    source_settle_generation: u64,
+    source_menu: bool,
+    rail_transition: TransitionTracker,
+    deck_transition: TransitionTracker,
+    deck_motion: Option<DeckMotion>,
+    closing: bool,
+    back_target: Option<usize>,
+    card_marks: Vec<Option<f32>>,
+    render_level: std::cell::Cell<usize>,
+    height_cap: f32,
+    height_revision: u64,
+    height_cache: HeightCache,
+    save_error: Option<String>,
+    filter: String,
+    filter_open: bool,
+    wheel_generation: u64,
+    runtime_poll_generation: u64,
+    slider_dispatch_generation: std::collections::HashMap<(usize, String), u64>,
+    slider_drag: Option<(usize, String)>,
+    slider_pending: std::collections::HashSet<(usize, String)>,
+    slider_holds: std::collections::HashMap<(usize, String), SliderHold>,
+    frame_paced_samples: Option<SampledQueryResults>,
+    applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
+    /// Per-source query freshness, so a row backed by a wedged daemon can say
+    /// so instead of silently rendering its contract default. Keyed by source
+    /// because query names repeat across plugins.
+    query_states: std::collections::HashMap<(usize, String), RowQueryState>,
+    frame_pump_armed: bool,
+    motion_tick: Option<std::time::Instant>,
+    sample_signal: Option<std::sync::Arc<SampleSignal>>,
+    sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    poll_visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    dismisser: SurfaceDismisser,
+    palette: SettingsPanelPalette,
+    kit: crate::kit::Kit,
+    streams: Vec<super::stream::StreamClient>,
+    focus_handle: FocusHandle,
+    nav_guard: PhantomNavGuard,
+    custom_views: Vec<Option<CustomPanelView>>,
+    body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    display_layout_stage: Rc<Cell<(f32, f32)>>,
+    display_layout_press: Option<(String, Point<Pixels>)>,
+    attention: std::collections::HashSet<String>,
+    attention_error_logged: bool,
+}
+
+pub(super) struct SettingsPanelState {
+    pub(super) rows: Vec<Row>,
+    pub(super) sections: Vec<RowSection>,
+    pub(super) sources: Vec<SourceState>,
+    pub(super) height_cap: f32,
+}
+
+enum ActiveControl {
+    Edit(String),
+    Wheel(WheelControl),
+}
+
+struct Level {
+    rows: Vec<Row>,
+    sections: Vec<RowSection>,
+    selected: usize,
+    active_section: Option<usize>,
+    selected_section: usize,
+    body_scroll: crate::scroll_list::SelectionScroll,
+    active_control: Option<ActiveControl>,
+    row_bounds: Vec<Rc<Cell<Option<Bounds<Pixels>>>>>,
+    header: LevelHeader,
+    origin_row: Option<usize>,
+    object_array: Option<ObjectArrayState>,
+    display_layout: Option<DisplayLayoutState>,
+    list_card: bool,
+    live_card: bool,
+    choose: Option<choose_card::ChooseState>,
+    entries: Option<structured_list_editor::EntriesCard>,
+    form: Option<super::entry_form::EntryForm>,
+    list_item: Option<ListItemCard>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LevelHeader {
+    Root,
+    Card(SettingsDestination),
+}
+
+struct ListItemCard {
+    origin_row: usize,
+    item_id: String,
+}
+
+struct WheelControl {
+    generation: u64,
+    row: usize,
+    value: String,
+    popup: WindowHandle<ColorWheelPopup>,
+}
+
+impl SettingsPanelView {
+    pub(super) fn new(
+        panel: SettingsPanel,
+        state: SettingsPanelState,
+        dismisser: SurfaceDismisser,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
+        notify: CustomPanelNotifier,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let row_bounds = (0..state.rows.len())
+            .map(|_| Rc::new(Cell::new(None)))
+            .collect();
+        let focused_source = panel.focused_index();
+        let has_many_sources = state.sources.len() > 1;
+        let runtime_queries =
+            runtime_query_names(state.rows.iter().filter(|row| row.source == focused_source));
+        cx.on_release(|view, cx| view.close_wheel_popup(cx))
+            .detach();
+        let root = Level {
+            rows: state.rows,
+            sections: state.sections,
+            selected: 0,
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds,
+            header: LevelHeader::Root,
+            origin_row: None,
+            object_array: None,
+            display_layout: None,
+            list_card: false,
+            live_card: false,
+            choose: None,
+            entries: None,
+            form: None,
+            list_item: None,
+        };
+        let mut view = Self {
+            panel,
+            runtime: state
+                .sources
+                .get(focused_source)
+                .map(|source| source.runtime.clone())
+                .unwrap_or_else(SettingsRuntime::empty),
+            runtime_queries,
+            streams: state
+                .sources
+                .iter()
+                .map(|source| {
+                    super::stream::StreamClient::new(
+                        source
+                            .daemon_port
+                            .map(|port| format!("ws://127.0.0.1:{port}")),
+                    )
+                })
+                .collect(),
+            sources: state.sources,
+            selected_source: focused_source,
+            materialized_source: focused_source,
+            source_settle_generation: 0,
+            source_menu: has_many_sources,
+            rail_transition: TransitionTracker::default(),
+            deck_transition: TransitionTracker::default(),
+            closing: false,
+            back_target: None,
+            card_marks: Vec::new(),
+            render_level: std::cell::Cell::new(usize::MAX),
+            deck_motion: None,
+            height_cap: state.height_cap,
+            height_revision: 0,
+            height_cache: HeightCache::default(),
+            save_error: None,
+            filter: String::new(),
+            filter_open: false,
+            stack: vec![root],
+            wheel_generation: 0,
+            runtime_poll_generation: 0,
+            slider_dispatch_generation: std::collections::HashMap::new(),
+            slider_drag: None,
+            slider_pending: std::collections::HashSet::new(),
+            slider_holds: std::collections::HashMap::new(),
+            frame_paced_samples: None,
+            applied_query_payloads: std::collections::HashMap::new(),
+            query_states: std::collections::HashMap::new(),
+            frame_pump_armed: false,
+            motion_tick: None,
+            sample_signal: None,
+            sampler_stop: None,
+            poll_visible: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dismisser: dismisser.clone(),
+            palette: settings_panel_runtime(),
+            kit: crate::kit::kit(),
+            focus_handle: cx.focus_handle(),
+            nav_guard: PhantomNavGuard::new(),
+            custom_views: Vec::new(),
+            body_bounds: Rc::new(Cell::new(None)),
+            display_layout_stage: Rc::new(Cell::new((0.0, 0.0))),
+            display_layout_press: None,
+            attention: std::collections::HashSet::new(),
+            attention_error_logged: false,
+        };
+        let parent = cx.weak_entity();
+        let parent_for_change = parent.clone();
+        let on_change: CustomPanelInvalidator = Rc::new(move |app| {
+            let parent = parent_for_change.clone();
+            app.defer(move |app| {
+                let _ = parent.update(app, |_, cx| cx.notify());
+            });
+        });
+        view.custom_views = view
+            .panel
+            .sources
+            .iter()
+            .map(|source| {
+                custom_factories
+                    .iter()
+                    .find(|(plugin_id, _)| plugin_id == &source.plugin_id)
+                    .map(|(_, factory)| {
+                        let parent = parent.clone();
+                        let on_back: CustomPanelCallback = Rc::new(move |window, app| {
+                            let _ = parent.update(app, |view, cx| view.custom_back(window, cx));
+                        });
+                        factory(
+                            CustomPanelContext {
+                                dismisser: dismisser.clone(),
+                                on_back,
+                                notify: Rc::clone(&notify),
+                                on_change: Rc::clone(&on_change),
+                            },
+                            cx,
+                        )
+                    })
+            })
+            .collect();
+        let focused_source = view.panel.focused_index();
+        let fallback_section = (0..view.level().sections.len())
+            .find(|index| !view.section_visible_rows(*index).is_empty());
+        let selected_section = (0..view.level().sections.len())
+            .find(|index| {
+                let section = &view.level().sections[*index];
+                section.source == focused_source && !view.section_visible_rows(*index).is_empty()
+            })
+            .or(fallback_section)
+            .unwrap_or(0);
+        view.level_mut().selected_section = selected_section;
+        let first_visible = view.current_visible_rows().into_iter().next().unwrap_or(0);
+        view.level_mut().selected = first_visible;
+        if view.panel_names_a_source() {
+            view.set_source_menu(false);
+            view.open_selected_section();
+        }
+        view.resume_runtime_poll(cx);
+        view
+    }
+
+    fn level(&self) -> &Level {
+        let index = self.render_level.get().min(self.stack.len() - 1);
+        &self.stack[index]
+    }
+
+    fn level_mut(&mut self) -> &mut Level {
+        self.stack.last_mut().expect("stack never empty")
+    }
+
+    fn root(&self) -> &Level {
+        self.stack.first().expect("stack never empty")
+    }
+
+    fn root_mut(&mut self) -> &mut Level {
+        self.stack.first_mut().expect("stack never empty")
+    }
+
+    fn source_for(&self, row: usize) -> Option<&SourceState> {
+        let source = self.level().rows.get(row)?.source;
+        self.sources.get(source)
+    }
+
+    fn root_source_for(&self, row: usize) -> Option<&SourceState> {
+        let source = self.root().rows.get(row)?.source;
+        self.sources.get(source)
+    }
+
+    fn stream_for(&self, row: usize) -> Option<&super::stream::StreamClient> {
+        let source = self.level().rows.get(row)?.source;
+        self.streams.get(source)
+    }
+
+    fn current_visible_rows(&self) -> Vec<usize> {
+        filtered_visible_rows(
+            &self.level().rows,
+            &self.level().sections,
+            self.sources.len(),
+            self.filter_needle().as_deref(),
+            self.materialized_source,
+        )
+    }
+
+    fn filtering(&self) -> bool {
+        self.filter_needle().is_some()
+    }
+
+    fn filter_needle(&self) -> Option<String> {
+        let needle = self.filter.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        Some(needle)
+    }
+
+    fn section_filtered_rows(&self, index: usize) -> Vec<usize> {
+        let visible = self.section_visible_rows(index);
+        let Some(needle) = self.filter_needle() else {
+            return visible;
+        };
+        visible
+            .into_iter()
+            .filter(|row| row_matches(&self.level().rows[*row], &needle))
+            .collect()
+    }
+
+    fn set_panel_filter(&mut self, next: String) {
+        self.filter = next;
+        let visible = self.current_visible_rows();
+        let selected = self.level().selected;
+        self.level_mut().selected = match self.filtering() {
+            true => visible.first().copied().unwrap_or(selected),
+            false => clamp_selected(&visible, selected),
+        };
+        self.resync_scroll();
+    }
+
+    fn open_filter(&mut self, seed: Option<String>) {
+        self.filter_open = true;
+        if self.rail_has_key_focus() {
+            self.set_source_menu(false);
+        }
+        if let Some(seed) = seed {
+            self.set_panel_filter(seed);
+        }
+        self.resync_scroll();
+    }
+
+    fn handle_panel_filter_key(&mut self, key: &str, key_char: Option<&str>) -> bool {
+        match key {
+            "escape" => {
+                self.filter_open = false;
+                self.set_panel_filter(String::new());
+                if self.sources.len() > 1 {
+                    self.set_source_menu(true);
+                }
+                true
+            }
+            "enter" | "tab" => {
+                self.filter_open = false;
+                self.resync_scroll();
+                true
+            }
+            "backspace" => {
+                let mut next = self.filter.clone();
+                next.pop();
+                self.set_panel_filter(next);
+                true
+            }
+            "up" | "down" => false,
+            _ => match key_char.filter(|text| !text.chars().any(char::is_control)) {
+                Some(text) => {
+                    let next = format!("{}{text}", self.filter);
+                    self.set_panel_filter(next);
+                    true
+                }
+                None => false,
+            },
+        }
+    }
+
+    fn fit_lists(&mut self) {
+        for (index, visible_items) in list_fit_updates(
+            &self.root().rows,
+            &self.root().sections,
+            self.materialized_source,
+            self.height_cap,
+        ) {
+            if let RowControl::List { list, .. } = &mut self.root_mut().rows[index].control {
+                list.max_visible = visible_items;
+            }
+        }
+    }
+
+    fn window_height(&mut self) -> f32 {
+        let revision = self.height_revision;
+        self.height_cache.value(revision, || {
+            let rows = &self.stack[0].rows;
+            let sections = &self.stack[0].sections;
+            let source_count = self.sources.len();
+            let height_cap = self.height_cap;
+            (0..source_count.max(1))
+                .map(|source| source_window_height_for(rows, sections, source, height_cap))
+                .fold(0.0f32, f32::max)
+        })
+    }
+
+    fn rail_is_open(&self) -> bool {
+        rail_open(self.sources.len(), self.filtering())
+    }
+
+    fn focus_level(&self) -> PanelFocus {
+        focus_level(self.source_menu, self.sources.len())
+    }
+
+    /// Where keyboard focus belongs, decided from panel state alone: the custom body while a core
+    /// tool page is open, otherwise the panel itself (rail or contract body).
+    fn focus_target(&self) -> FocusHandle {
+        if self.body_has_focus() && self.current_source_is_custom() {
+            if let Some(custom) = self.custom_view() {
+                return custom.focus_handle.clone();
+            }
+        }
+        self.focus_handle.clone()
+    }
+
+    /// The only place settings scope moves gpui focus. Runs after every transition and on every
+    /// render: when focus is inside the panel but not on the target, move it there.
+    fn reconcile_focus(&self, window: &mut Window, cx: &App) {
+        let target = self.focus_target();
+        if !target.is_focused(window) && self.focus_handle.contains_focused(window, cx) {
+            window.focus(&target);
+        }
+    }
+
+    fn can_ascend(&self) -> bool {
+        !matches!(self.focus_level(), PanelFocus::Sources) && self.sources.len() > 1
+    }
+
+    fn ascend(&mut self) -> bool {
+        if !self.can_ascend() {
+            return false;
+        }
+        self.set_source_menu(true);
+        true
+    }
+
+    fn pop_card(&mut self, cx: &mut Context<Self>) {
+        if self.closing {
+            self.closing = false;
+            self.finish_pop(cx);
+        }
+        if self.stack.len() < 2 {
+            return;
+        }
+        if self.custom_view().is_some() {
+            self.finish_pop(cx);
+            return;
+        }
+        self.closing = true;
+        self.deck_transition
+            .state_changed(true, std::time::Instant::now());
+        self.deck_motion = Some(DeckMotion::Pop);
+        deck::after_transition(cx, |this, cx| {
+            if !this.closing {
+                return;
+            }
+            this.closing = false;
+            this.finish_pop(cx);
+        });
+        cx.notify();
+    }
+
+    fn finish_pop(&mut self, cx: &mut Context<Self>) {
+        if self.stack.len() > 1 && self.level().live_card {
+            self.sync_live_card_to_root();
+        }
+        if pop_level(&mut self.stack).is_some() {
+            self.card_marks.pop();
+            #[cfg(debug_assertions)]
+            qol_runtime::probe!(
+                "SETTINGS_NAV",
+                "phase=card-pop depth={}",
+                self.stack.len() - 1
+            );
+            let visible = self.current_visible_rows();
+            let selected = self.level().selected;
+            self.level_mut().selected = clamp_selected(&visible, selected);
+            self.sync_scroll();
+            cx.notify();
+        }
+        if let Some(target) = self.back_target {
+            if target < self.stack.len() - 1 {
+                if !self.raise_top_form_question() {
+                    self.pop_card(cx);
+                }
+            } else {
+                self.back_target = None;
+            }
+        }
+    }
+
+    fn back_to(&mut self, level: usize, _window: &mut Window, cx: &mut Context<Self>) {
+        if level >= self.stack.len() - 1 {
+            return;
+        }
+        self.back_target = Some(level);
+        if self.raise_top_form_question() {
+            cx.notify();
+            return;
+        }
+        self.pop_card(cx);
+    }
+
+    fn rail_has_key_focus(&self) -> bool {
+        !matches!(self.focus_level(), PanelFocus::Body)
+    }
+
+    fn section_visible_rows(&self, index: usize) -> Vec<usize> {
+        let Some(section) = self.level().sections.get(index) else {
+            return Vec::new();
+        };
+        section
+            .rows
+            .iter()
+            .copied()
+            .filter(|row| super::rows::row_is_visible(&self.level().rows, *row))
+            .collect()
+    }
+
+    fn open_selected_section(&mut self) {
+        if self.level().sections.is_empty() {
+            return;
+        }
+        let target = self
+            .level()
+            .selected_section
+            .min(self.level().sections.len() - 1);
+        let Some(first) = self.section_visible_rows(target).into_iter().next() else {
+            return;
+        };
+        self.level_mut().active_section = Some(target);
+        self.level_mut().selected = first;
+        self.sync_scroll();
+        self.level_mut().active_control = None;
+    }
+
+    pub(super) fn retarget_focus(
+        &mut self,
+        plugin_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(source_index) = self
+            .sources
+            .iter()
+            .position(|source| source.plugin_id == plugin_id)
+        else {
+            return false;
+        };
+        self.forget_last_visit();
+        self.select_source(source_index, cx);
+        self.materialize_source(cx);
+        if self.current_source_is_custom() {
+            self.set_source_menu(false);
+            self.reconcile_focus(window, cx);
+            cx.notify();
+            return true;
+        }
+        let Some(section_index) = (0..self.level().sections.len()).find(|index| {
+            let section = &self.level().sections[*index];
+            section.source == source_index && !self.section_visible_rows(*index).is_empty()
+        }) else {
+            return false;
+        };
+        self.level_mut().selected_section = section_index;
+        if focus_enters_the_body(plugin_id) {
+            self.set_source_menu(false);
+            self.open_selected_section();
+        } else {
+            self.set_source_menu(self.sources.len() > 1);
+        }
+        self.sync_scroll();
+        self.reconcile_focus(window, cx);
+        cx.notify();
+        true
+    }
+
+    fn panel_names_a_source(&self) -> bool {
+        let Some(focus) = self.panel.focus.as_deref() else {
+            return false;
+        };
+        focus_enters_the_body(focus) && self.sources.iter().any(|source| source.plugin_id == focus)
+    }
+
+    fn current_source_is_custom(&self) -> bool {
+        self.panel
+            .sources
+            .get(self.materialized_source)
+            .is_some_and(|source| source.custom)
+    }
+
+    fn custom_view(&self) -> Option<&CustomPanelView> {
+        self.custom_views
+            .get(self.materialized_source)
+            .and_then(Option::as_ref)
+    }
+
+    fn custom_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.current_source_is_custom() {
+            return;
+        }
+        self.pause_runtime_poll();
+        self.set_source_menu(true);
+        self.reconcile_focus(window, cx);
+        cx.notify();
+    }
+
+    fn forget_last_visit(&mut self) {
+        self.stack.truncate(1);
+        self.card_marks.clear();
+        self.filter.clear();
+        self.filter_open = false;
+        self.level_mut().active_control = None;
+    }
+
+    fn rail_source_level(&self) -> bool {
+        matches!(self.focus_level(), PanelFocus::Sources)
+    }
+
+    fn step_selected_source(&mut self, direction: isize, cx: &mut Context<Self>) {
+        let last = self.sources.len().saturating_sub(1);
+        let next = if direction < 0 {
+            self.selected_source.saturating_sub(1)
+        } else {
+            (self.selected_source + 1).min(last)
+        };
+        if next != self.selected_source {
+            self.select_source(next, cx);
+        }
+    }
+
+    /// Moves the rail highlight and the page together, instantly: a page
+    /// build is microseconds, so every keystroke lands on the next frame.
+    /// Only the landed source's queries wait for the rail to settle.
+    fn select_source(&mut self, next: usize, cx: &mut Context<Self>) {
+        if next == self.selected_source {
+            return;
+        }
+        #[cfg(debug_assertions)]
+        let switch_started = std::time::Instant::now();
+        self.selected_source = next;
+        self.materialize_source(cx);
+        self.resume_poll_when_settled(cx);
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_NAV",
+            "plugin={} phase=source-switch elapsed_us={}",
+            self.sources
+                .get(next)
+                .map_or("unknown", |source| source.plugin_id.as_str()),
+            switch_started.elapsed().as_micros()
+        );
+    }
+
+    /// Builds the selected source's page: rows, selection, scroll, and the
+    /// query list. Pauses the previous source's poller; the caller decides
+    /// when the new source's queries start.
+    fn materialize_source(&mut self, cx: &mut Context<Self>) {
+        let next = self.selected_source;
+        if next == self.materialized_source {
+            return;
+        }
+        #[cfg(debug_assertions)]
+        let started = std::time::Instant::now();
+        self.materialized_source = next;
+        self.height_revision += 1;
+        self.runtime = self
+            .sources
+            .get(next)
+            .map(|source| source.runtime.clone())
+            .unwrap_or_else(SettingsRuntime::empty);
+        self.runtime_queries =
+            runtime_query_names(self.level().rows.iter().filter(|row| row.source == next));
+        self.level_mut().active_control = None;
+        let selected_section = (0..self.level().sections.len())
+            .find(|index| {
+                self.level().sections[*index].source == next
+                    && !self.section_visible_rows(*index).is_empty()
+            })
+            .unwrap_or(0);
+        self.level_mut().selected_section = selected_section;
+        let first_visible = self.current_visible_rows().into_iter().next().unwrap_or(0);
+        self.level_mut().selected = first_visible;
+        self.level().body_scroll.rewind();
+        self.pause_runtime_poll();
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_NAV",
+            "plugin={} phase=materialize queries={} elapsed_us={}",
+            self.sources
+                .get(next)
+                .map_or("unknown", |source| source.plugin_id.as_str()),
+            self.runtime_queries.len(),
+            started.elapsed().as_micros()
+        );
+        cx.notify();
+    }
+
+    /// Starts the landed source's queries once the rail stops moving.
+    fn resume_poll_when_settled(&mut self, cx: &mut Context<Self>) {
+        self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
+        let generation = self.source_settle_generation;
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(QUERY_SETTLE_DEBOUNCE)
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if this.source_settle_generation == generation {
+                        this.resume_runtime_poll(cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn descend_source_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.materialize_source(cx);
+        self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
+        self.resume_runtime_poll(cx);
+        self.set_source_menu(false);
+        self.open_selected_section();
+        self.reconcile_focus(window, cx);
+    }
+
+    fn set_source_menu(&mut self, open: bool) {
+        let changed = self.source_menu != open;
+        self.source_menu = open;
+        self.rail_transition
+            .state_changed(changed, std::time::Instant::now());
+    }
+
+    fn on_rail_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match key {
+            "up" => self.step_selected_source(-1, cx),
+            "down" => self.step_selected_source(1, cx),
+            "enter" | "return" => self.descend_source_menu(window, cx),
+            "escape" => {
+                self.pause_runtime_poll();
+                self.dismisser.dismiss(cx);
+                return;
+            }
+            _ => return,
+        }
+        cx.notify();
+    }
+
+    pub(super) fn resume_runtime_poll(&mut self, cx: &mut Context<Self>) {
+        let initial_delay = self
+            .level()
+            .rows
+            .iter()
+            .any(|row| {
+                matches!(&row.control, RowControl::Action { pending: true, .. })
+                    || matches!(
+                        &row.control,
+                        RowControl::List { items, .. }
+                            if items.iter().any(|item| item.pending)
+                    )
+            })
+            .then_some(self.runtime.poll_interval);
+        self.start_runtime_poll(initial_delay, cx);
+    }
+
+    fn start_runtime_poll(
+        &mut self,
+        initial_delay: Option<std::time::Duration>,
+        cx: &mut Context<Self>,
+    ) {
+        let attention = self.panel.attention.clone();
+        if self.runtime_queries.is_empty() && attention.is_none() {
+            return;
+        }
+        self.pause_runtime_poll();
+        let generation = self.runtime_poll_generation;
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.sampler_stop = Some(stop.clone());
+        let visible = self.poll_visible.clone();
+        if let Some(feed) = attention {
+            self.start_attention_poll(feed, generation, stop.clone(), visible.clone(), cx);
+        }
+        if self.runtime_queries.is_empty() {
+            return;
+        }
+        let source = self.materialized_source;
+        let since = std::time::Instant::now();
+        for query in &self.runtime_queries {
+            self.query_states
+                .entry((source, query.clone()))
+                .or_insert(RowQueryState::Loading { since });
+        }
+        self.notify_after_loading_grace(cx);
+        let runtime = self.runtime.clone();
+        let queries = self.runtime_queries.clone();
+        let apply_tick = queries
+            .iter()
+            .map(|query| runtime.query_interval(query))
+            .min()
+            .unwrap_or(runtime.poll_interval);
+        let samples = SampledQueryResults::default();
+        self.frame_paced_samples =
+            (apply_tick <= FRAME_PACED_QUERY_INTERVAL).then(|| samples.clone());
+        let frame_paced = self.frame_paced_samples.is_some();
+        if frame_paced {
+            let signal = std::sync::Arc::new(SampleSignal::default());
+            self.sample_signal = Some(signal.clone());
+            let runtime = runtime.clone();
+            let queries = queries.clone();
+            let samples = samples.clone();
+            std::thread::spawn(move || {
+                Self::sample_queries_on_demand(runtime, queries, signal, samples)
+            });
+        }
+        let (wake_tx, mut wake_rx) = futures::channel::mpsc::unbounded::<()>();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                if let Some(initial_delay) = initial_delay {
+                    async_cx.background_executor().timer(initial_delay).await;
+                }
+                if stop.load(std::sync::atomic::Ordering::Relaxed) || frame_paced {
+                    return;
+                }
+                async_cx
+                    .background_spawn(Self::sample_queries_at_contract_cadence(
+                        runtime,
+                        queries,
+                        stop.clone(),
+                        visible,
+                        samples.clone(),
+                        async_cx.background_executor().clone(),
+                        wake_tx,
+                    ))
+                    .detach();
+                while wake_rx.next().await.is_some() {
+                    let batch = std::mem::take(&mut *samples.lock().unwrap());
+                    let applied = this
+                        .update(&mut async_cx, |this, cx| {
+                            if this.runtime_poll_generation != generation {
+                                return false;
+                            }
+                            if !batch.is_empty() {
+                                for (query, result) in batch {
+                                    this.apply_query(&query, result, cx);
+                                }
+                                cx.notify();
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !applied {
+                        break;
+                    }
+                }
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        })
+        .detach();
+    }
+
+    fn start_attention_poll(
+        &mut self,
+        feed: AttentionFeed,
+        generation: u64,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        cx: &mut Context<Self>,
+    ) {
+        let interval = feed.runtime.poll_interval;
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                loop {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    if !visible.load(std::sync::atomic::Ordering::Relaxed) {
+                        async_cx
+                            .background_executor()
+                            .timer(FRAME_PACED_QUERY_INTERVAL)
+                            .await;
+                        continue;
+                    }
+                    let runtime = feed.runtime.clone();
+                    let query = feed.query.clone();
+                    let result = async_cx
+                        .background_spawn(async move { runtime.query(&query) })
+                        .await;
+                    let applied = this
+                        .update(&mut async_cx, |this, cx| {
+                            if this.runtime_poll_generation != generation {
+                                return false;
+                            }
+                            if this.apply_attention(result) {
+                                cx.notify();
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !applied {
+                        break;
+                    }
+                    async_cx.background_executor().timer(interval).await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn apply_attention(&mut self, result: Result<serde_json::Value, String>) -> bool {
+        match result {
+            Ok(value) => {
+                self.attention_error_logged = false;
+                let attention = super::attention_plugin_ids(&value);
+                if attention == self.attention {
+                    return false;
+                }
+                self.attention = attention;
+                true
+            }
+            Err(error) => {
+                if !self.attention_error_logged {
+                    self.attention_error_logged = true;
+                    eprintln!("[settings] attention feed unavailable: {error}");
+                }
+                false
+            }
+        }
+    }
+
+    /// A query that never answers produces no sample and therefore no redraw,
+    /// so nothing would ever reveal that the row is waiting. One timer past the
+    /// grace period gives the indicator a chance to appear.
+    fn notify_after_loading_grace(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(QUERY_LOADING_GRACE)
+                    .await;
+                let _ = this.update(&mut async_cx, |_, cx| cx.notify());
+            }
+        })
+        .detach();
+    }
+
+    fn pump_frame_paced_samples(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.frame_paced_samples.is_none() {
+            self.frame_pump_armed = false;
+            return;
+        }
+        self.frame_pump_armed = true;
+        let entity = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| {
+            let _ = entity.update(cx, |this, cx| {
+                let changed = this.apply_frame_paced_samples(cx);
+                if this.step_gamepad_motion() || changed {
+                    cx.notify();
+                }
+                this.pump_frame_paced_samples(window, cx);
+            });
+        });
+    }
+
+    fn step_gamepad_motion(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let dt = self
+            .motion_tick
+            .map(|tick| now.duration_since(tick).as_secs_f32())
+            .unwrap_or_default();
+        self.motion_tick = Some(now);
+        let mut animating = false;
+        if self.stack.len() > 1 {
+            for row in &mut self.root_mut().rows {
+                if let RowControl::Gamepad { monitor, .. } = &mut row.control {
+                    animating |= monitor.step_motion(dt);
+                }
+            }
+        }
+        for row in &mut self.level_mut().rows {
+            if let RowControl::Gamepad { monitor, .. } = &mut row.control {
+                animating |= monitor.step_motion(dt);
+            }
+        }
+        animating
+    }
+
+    fn apply_frame_paced_samples(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(samples) = self.frame_paced_samples.clone() else {
+            return false;
+        };
+        let batch = std::mem::take(&mut *samples.lock().unwrap_or_else(PoisonError::into_inner));
+        if let Some(signal) = &self.sample_signal {
+            signal.request();
+        }
+        let mut changed = false;
+        for (query, result) in batch {
+            if self.applied_query_payloads.get(&query) == Some(&result) {
+                continue;
+            }
+            self.applied_query_payloads
+                .insert(query.clone(), result.clone());
+            self.apply_query(&query, result, cx);
+            changed = true;
+        }
+        changed
+    }
+
+    fn apply_query(
+        &mut self,
+        query: &str,
+        result: Result<serde_json::Value, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.query_states.insert(
+            (self.materialized_source, query.to_string()),
+            match &result {
+                Ok(_) => RowQueryState::Ready,
+                Err(message) => RowQueryState::Unavailable(message.clone()),
+            },
+        );
+        retire_number_holds(&self.stack[0].rows, &mut self.slider_holds, query, &result);
+        let drag = self.slider_drag.clone();
+        let pending = self.slider_pending.clone();
+        let holds = self.slider_holds.clone();
+        let now = std::time::Instant::now();
+        apply_runtime_query(&mut self.root_mut().rows, query, result, &|index, id| {
+            slider_protected(drag.as_ref(), &pending, &holds, index, id, now)
+        });
+        self.height_revision += 1;
+        self.sync_list_card(query, cx);
+        self.sync_live_card(query);
+        self.sync_display_layout_card(query);
+    }
+
+    fn sync_live_card(&mut self, query: &str) {
+        if self.stack.len() <= 1 || !self.level().live_card {
+            return;
+        }
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
+        let Some(parent) = self.root().rows.get(origin_row) else {
+            return;
+        };
+        let row_query = match &parent.control {
+            RowControl::Gamepad { query, .. } | RowControl::QrCode { query, .. } => query,
+            _ => return,
+        };
+        if row_query != query {
+            return;
+        }
+        let (root, front) = self.stack.split_at_mut(1);
+        live_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+        self.height_revision += 1;
+    }
+
+    fn sync_live_card_to_root(&mut self) {
+        let (root, front) = self.stack.split_at_mut(1);
+        live_card_sync_back(&mut root[0].rows, front.last_mut().expect("front level"));
+        self.height_revision += 1;
+    }
+
+    pub(super) fn pause_runtime_poll(&mut self) {
+        self.runtime_poll_generation = self.runtime_poll_generation.wrapping_add(1);
+        if let Some(stop) = self.sampler_stop.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(signal) = self.sample_signal.take() {
+            signal.stop();
+        }
+        self.frame_paced_samples = None;
+    }
+
+    fn sample_queries_on_demand(
+        runtime: SettingsRuntime,
+        queries: Vec<String>,
+        signal: std::sync::Arc<SampleSignal>,
+        latest: SampledQueryResults,
+    ) {
+        let intervals = queries
+            .iter()
+            .map(|query| runtime.query_interval(query))
+            .collect::<Vec<_>>();
+        let mut due = vec![None::<std::time::Instant>; queries.len()];
+        while signal.wait_for_request() {
+            let started = std::time::Instant::now();
+            let mut fresh = Vec::new();
+            for index in due_query_indices(&due, started) {
+                let query = &queries[index];
+                fresh.push((query.clone(), runtime.query(query)));
+                due[index] = Some(started + intervals[index]);
+            }
+            let mut latest = latest.lock().unwrap_or_else(PoisonError::into_inner);
+            for (query, result) in fresh {
+                latest.retain(|(name, _)| name != &query);
+                latest.push((query, result));
+            }
+        }
+    }
+
+    async fn sample_queries_at_contract_cadence(
+        runtime: SettingsRuntime,
+        queries: Vec<String>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        latest: SampledQueryResults,
+        executor: BackgroundExecutor,
+        wake: futures::channel::mpsc::UnboundedSender<()>,
+    ) {
+        let intervals = queries
+            .iter()
+            .map(|query| runtime.query_interval(query))
+            .collect::<Vec<_>>();
+        let mut due = vec![std::time::Instant::now(); queries.len()];
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            if !visible.load(std::sync::atomic::Ordering::Relaxed) {
+                executor.timer(FRAME_PACED_QUERY_INTERVAL).await;
+                continue;
+            }
+            let started = std::time::Instant::now();
+            let mut fresh = Vec::new();
+            for (index, query) in queries.iter().enumerate() {
+                if due[index] <= started {
+                    fresh.push((query.clone(), runtime.query(query)));
+                    due[index] = started + intervals[index];
+                }
+            }
+            let sampled = !fresh.is_empty();
+            {
+                let mut latest = latest.lock().unwrap();
+                for (query, result) in fresh {
+                    latest.retain(|(name, _)| name != &query);
+                    latest.push((query, result));
+                }
+            }
+            if sampled {
+                let _ = wake.unbounded_send(());
+            }
+            let next_due = due.iter().min().copied().unwrap_or(started);
+            let wait = next_due.saturating_duration_since(std::time::Instant::now());
+            if !wait.is_zero() {
+                executor.timer(wait).await;
+            }
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let walking = self.back_target.take();
+        if self.closing {
+            self.closing = false;
+            self.finish_pop(cx);
+        }
+        let key = event.keystroke.key.as_str();
+        let key_char = event.keystroke.key_char.as_deref();
+        if self.current_source_is_custom() && self.body_has_focus() {
+            return;
+        }
+        if !self.filter_open && self.stack.len() > 1 && !self.rail_has_key_focus() {
+            if self.level().form.is_some() && self.on_form_card_key(event, walking, cx) {
+                cx.notify();
+                return;
+            }
+            if self.level().entries.is_some() && self.on_entries_card_key(event, cx) {
+                cx.notify();
+                return;
+            }
+        }
+        if !event.keystroke.modifiers.modified() && !self.filter_open {
+            let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(_)));
+            if !editing && self.level().active_control.is_none() {
+                if key == "/" || key_char == Some("/") {
+                    self.open_filter(None);
+                    cx.notify();
+                    return;
+                }
+                if let Some(text) = bare_filter_seed(key, key_char) {
+                    self.open_filter(Some(text));
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        if self.rail_has_key_focus() {
+            self.on_rail_key(key, window, cx);
+            return;
+        }
+        if let Some(ActiveControl::Wheel(wheel)) = &self.level().active_control {
+            let popup = wheel.popup;
+            let _ = popup.update(cx, |popup, popup_window, popup_cx| {
+                popup.handle_key(key, event.keystroke.modifiers.shift, popup_window, popup_cx);
+            });
+            return;
+        }
+        if !self.filter_open
+            && self.stack.len() > 1
+            && self.level().choose.is_some()
+            && self.on_choose_card_key(event, cx)
+        {
+            return;
+        }
+        if !self.filter_open
+            && self.stack.len() > 1
+            && self.level().display_layout.is_some()
+            && self.on_display_layout_card_key(key, event.keystroke.modifiers.shift, cx)
+        {
+            return;
+        }
+        if !self.filter_open
+            && self.stack.len() > 1
+            && self.level().list_card
+            && self.on_list_card_key(key, key_char, cx)
+        {
+            return;
+        }
+        if !self.filter_open
+            && self.stack.len() > 1
+            && self.level().live_card
+            && self.on_live_card_key(key, key_char, cx)
+        {
+            return;
+        }
+        let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(_)));
+        if self.filter_open && self.handle_panel_filter_key(key, key_char) {
+            cx.notify();
+            return;
+        }
+        if editing {
+            if let Some(direction) = horizontal_step_direction(key) {
+                if self.nav_guard.swallow(NavAxis::Horizontal, direction) {
+                    return;
+                }
+                if self.step_number_edit(direction) {
+                    cx.notify();
+                    return;
+                }
+            }
+            if matches!(key, "up" | "down") {
+                self.commit_edit(cx);
+            }
+        }
+        let Some(intent) = intent(key, key_char, editing) else {
+            return;
+        };
+        match intent {
+            Intent::Up => {
+                if self.nav_guard.swallow(NavAxis::Vertical, -1.0) {
+                    return;
+                }
+                let visible = self.current_visible_rows();
+                let selected = self.level().selected;
+                self.level_mut().selected = adjacent_visible_row(&visible, selected, -1);
+                self.sync_scroll();
+            }
+            Intent::Down => {
+                if self.nav_guard.swallow(NavAxis::Vertical, 1.0) {
+                    return;
+                }
+                let visible = self.current_visible_rows();
+                let selected = self.level().selected;
+                self.level_mut().selected = adjacent_visible_row(&visible, selected, 1);
+                self.sync_scroll();
+            }
+            Intent::Activate => self.activate(window, cx),
+            Intent::Tab => return,
+            Intent::CommitEdit => self.commit_edit(cx),
+            Intent::Backspace => {
+                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+                    edit.pop();
+                    self.stream_edit();
+                }
+            }
+            Intent::Insert(ch) => {
+                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+                    edit.push_str(&ch);
+                    self.stream_edit();
+                }
+            }
+            Intent::CancelEdit => {
+                if row_streams(&self.level().rows, self.level().selected) {
+                    if let Some(stream) = self.stream_for(self.level().selected) {
+                        stream.close();
+                    }
+                }
+                self.level_mut().active_control = None;
+            }
+            Intent::Close => {
+                match escape_step(self.stack.len() - 1, self.filter_open, self.can_ascend()) {
+                    EscapeStep::CloseFilter => {
+                        self.handle_panel_filter_key("escape", None);
+                    }
+                    EscapeStep::PopCard => self.pop_card(cx),
+                    EscapeStep::AscendRail => {
+                        if self.ascend() {
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    EscapeStep::Dismiss => {
+                        self.pause_runtime_poll();
+                        self.dismisser.dismiss(cx);
+                        return;
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_color_wheel(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.level().rows.get(index) else {
+            return;
+        };
+        let RowControl::Color(value) = &row.control else {
+            return;
+        };
+        let Some(anchor) = self
+            .level()
+            .row_bounds
+            .get(index)
+            .and_then(|bounds| bounds.get())
+        else {
+            return;
+        };
+        let value = value.clone();
+        self.close_wheel_popup(cx);
+        self.level_mut().selected = index;
+        if row_streams(&self.level().rows, index) && !stream_gated(&self.level().rows) {
+            if let Some(stream) = self.stream_for(index) {
+                stream.open();
+            }
+        }
+        self.sync_scroll();
+        self.wheel_generation = self.wheel_generation.wrapping_add(1);
+        let generation = self.wheel_generation;
+        let wheel = ColorWheel::open(&value);
+        let preview = wheel.hex();
+        let preview_parent = cx.weak_entity();
+        let commit_parent = preview_parent.clone();
+        let Some(popup) = ColorWheelPopup::open(
+            wheel,
+            self.wheel_style(),
+            anchor,
+            window,
+            self.focus_handle.clone(),
+            WheelCallbacks::new(
+                move |value, cx| {
+                    let _ = preview_parent.update(cx, |parent, cx| {
+                        parent.preview_wheel(generation, value, cx);
+                    });
+                },
+                move |value, cx| {
+                    let _ = commit_parent.update(cx, |parent, cx| {
+                        parent.commit_wheel(generation, value, cx);
+                    });
+                },
+            ),
+            cx,
+        ) else {
+            return;
+        };
+        self.level_mut().active_control = Some(ActiveControl::Wheel(WheelControl {
+            generation,
+            row: index,
+            value: preview,
+            popup,
+        }));
+        cx.notify();
+    }
+
+    fn preview_wheel(&mut self, generation: u64, value: String, cx: &mut Context<Self>) {
+        let row = {
+            let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.as_mut() else {
+                return;
+            };
+            if wheel.generation != generation {
+                return;
+            }
+            wheel.row
+        };
+        if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
+            if let Some(frame) = super::stream::color_frame(&value) {
+                if let Some(stream) = self.streams.get(self.level().rows[row].source) {
+                    stream.send(frame);
+                }
+            }
+        }
+        let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.as_mut() else {
+            return;
+        };
+        wheel.value = value;
+        cx.notify();
+    }
+
+    fn commit_wheel(&mut self, generation: u64, value: String, cx: &mut Context<Self>) {
+        let Some(ActiveControl::Wheel(wheel)) = self.level().active_control.as_ref() else {
+            return;
+        };
+        if wheel.generation != generation {
+            return;
+        }
+        let row_index = wheel.row;
+        self.level_mut().active_control = None;
+        let streams = row_streams(&self.level().rows, row_index);
+        let action = row_action(&self.level().rows, row_index);
+        let Some(row) = self.level_mut().rows.get_mut(row_index) else {
+            return;
+        };
+        let RowControl::Color(row_value) = &mut row.control else {
+            return;
+        };
+        *row_value = value;
+        if streams {
+            if let Some(stream) = self.stream_for(row_index) {
+                stream.close();
+            }
+        }
+        self.persist();
+        if let Some(action) = action {
+            self.dispatch_row_action(row_index, &action, serde_json::Value::Null, cx);
+        }
+        cx.notify();
+    }
+
+    fn close_wheel_popup(&mut self, cx: &mut App) {
+        if !matches!(self.level().active_control, Some(ActiveControl::Wheel(_))) {
+            return;
+        }
+        let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.take() else {
+            return;
+        };
+        if row_streams(&self.level().rows, wheel.row) {
+            if let Some(stream) = self.stream_for(wheel.row) {
+                stream.close();
+            }
+        }
+        let _ = wheel
+            .popup
+            .update(cx, |_, window, _| window.remove_window());
+    }
+
+    fn on_live_card_key(
+        &mut self,
+        key: &str,
+        _key_char: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match key {
+            "escape" => {
+                self.pop_card(cx);
+                true
+            }
+            "enter" | "return" | "space" => {
+                if matches!(
+                    self.level()
+                        .rows
+                        .get(self.level().selected)
+                        .map(|row| &row.control),
+                    Some(RowControl::Gamepad { .. })
+                ) {
+                    self.select_next_gamepad();
+                }
+                cx.notify();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn toggle(&mut self) {
+        let selected = self.level().selected;
+        let Some(row) = self.level_mut().rows.get_mut(selected) else {
+            return;
+        };
+        if let RowControl::Toggle(value) = &mut row.control {
+            *value = !*value;
+            self.persist();
+        }
+    }
+
+    fn click_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        qol_runtime::probe!(
+            "SETTINGS_INPUT",
+            "phase=click index={} depth={}",
+            index,
+            self.stack.len() - 1
+        );
+        self.level_mut().selected = index;
+        self.activate(window, cx);
+        cx.notify();
+    }
+
+    fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.current_visible_rows().contains(&self.level().selected) {
+            return;
+        }
+        if self.level().entries.is_some() || self.level().form.is_some() {
+            return;
+        }
+        if self.level().list_item.is_some() {
+            self.run_item_card_action(cx);
+            return;
+        }
+        let selected = self.level().selected;
+        let Some(row) = self.level().rows.get(selected) else {
+            return;
+        };
+        match &row.control {
+            RowControl::Toggle(_) => self.toggle(),
+            RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
+                self.open_choose_card(selected);
+            }
+            RowControl::Color(_) => self.open_color_wheel(selected, window, cx),
+            RowControl::Action { .. } => self.dispatch_action(cx),
+            RowControl::Status { .. } => {}
+            RowControl::List { items, .. } if !items.is_empty() => {
+                self.open_list_card(selected, cx);
+                cx.notify();
+            }
+            RowControl::List { .. } => {}
+            RowControl::ObjectArray(_) => {
+                self.open_object_array_card(selected, cx);
+                cx.notify();
+            }
+            RowControl::DisplayLayout(_) => {
+                self.open_display_layout_card(selected, cx);
+                cx.notify();
+            }
+            RowControl::Gamepad { .. } | RowControl::QrCode { .. } => {
+                self.open_live_card(selected, cx);
+                cx.notify();
+            }
+            RowControl::Unsupported { .. } => {}
+            RowControl::Number { .. } | RowControl::Text(_) => self.begin_edit(),
+            RowControl::TextList(_) => {
+                self.open_text_list_card(selected, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn select_next_gamepad(&mut self) {
+        if self.level().live_card {
+            if let Some(origin_row) = self.level().origin_row {
+                if let Some(RowControl::Gamepad { monitor, .. }) = self
+                    .root_mut()
+                    .rows
+                    .get_mut(origin_row)
+                    .map(|row| &mut row.control)
+                {
+                    monitor.select_next();
+                }
+            }
+        }
+        let selected = self.level().selected;
+        let Some(RowControl::Gamepad { monitor, .. }) = self
+            .level_mut()
+            .rows
+            .get_mut(selected)
+            .map(|row| &mut row.control)
+        else {
+            return;
+        };
+        monitor.select_next();
+    }
+
+    fn dispatch_action(&mut self, cx: &mut Context<Self>) {
+        let row_index = self.level().selected;
+        let Some(runtime) = self
+            .source_for(row_index)
+            .map(|source| source.runtime.clone())
+        else {
+            return;
+        };
+        let Some(RowControl::Action {
+            action,
+            active_action,
+            active_query,
+            active_value_from,
+            active,
+            pending,
+            error,
+            ..
+        }) = self
+            .level_mut()
+            .rows
+            .get_mut(row_index)
+            .map(|row| &mut row.control)
+        else {
+            return;
+        };
+        if *pending {
+            return;
+        }
+        let action = if *active {
+            active_action.as_ref().unwrap_or(action)
+        } else {
+            action
+        }
+        .clone();
+        *pending = true;
+        *error = None;
+        let refresh_query = active_query.clone();
+        let refresh_value_from = active_value_from.clone();
+        #[cfg(debug_assertions)]
+        let plugin_id = self.panel.primary_plugin_id().to_string();
+        #[cfg(debug_assertions)]
+        let dispatched_action = action.clone();
+        let rearm_poll_generation = refresh_query.is_some().then(|| {
+            self.pause_runtime_poll();
+            self.runtime_poll_generation
+        });
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx
+                    .background_spawn(async move {
+                        let result = runtime.run_action(&action, serde_json::Value::Null);
+                        let refreshed = if result.is_ok() {
+                            refresh_query.map(|query| {
+                                let payload =
+                                    action_refresh_payload(&result, refresh_value_from.as_deref());
+                                let result =
+                                    payload.map(Ok).unwrap_or_else(|| runtime.query(&query));
+                                (query, result)
+                            })
+                        } else {
+                            None
+                        };
+                        (result, refreshed)
+                    })
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    let (result, refreshed) = result;
+                    if let Some(RowControl::Action { pending, error, .. }) = this
+                        .level_mut()
+                        .rows
+                        .get_mut(row_index)
+                        .map(|row| &mut row.control)
+                    {
+                        *pending = false;
+                        *error = result.err();
+                    }
+                    if let Some((query, result)) = refreshed {
+                        this.apply_query(&query, result, cx);
+                    }
+                    #[cfg(debug_assertions)]
+                    if let Some(RowControl::Action { active, error, .. }) =
+                        this.level().rows.get(row_index).map(|row| &row.control)
+                    {
+                        qol_runtime::probe!(
+                            "SETTINGS_ACTION_STATE",
+                            "plugin={} action={} active={} outcome={}",
+                            plugin_id,
+                            dispatched_action,
+                            active,
+                            if error.is_some() { "error" } else { "applied" }
+                        );
+                    }
+                    if rearm_poll_generation == Some(this.runtime_poll_generation) {
+                        this.start_runtime_poll(Some(this.runtime.poll_interval), cx);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn begin_edit(&mut self) {
+        let Some(row) = self.level().rows.get(self.level().selected) else {
+            return;
+        };
+        let edit = match &row.control {
+            RowControl::Text(value) => value.clone(),
+            RowControl::Number { value, .. } => format_number(*value),
+            RowControl::Toggle(_)
+            | RowControl::TextList(_)
+            | RowControl::Select { .. }
+            | RowControl::MultiSelect { .. }
+            | RowControl::Color(_)
+            | RowControl::Action { .. }
+            | RowControl::Status { .. }
+            | RowControl::List { .. }
+            | RowControl::ObjectArray(_)
+            | RowControl::DisplayLayout(_)
+            | RowControl::Gamepad { .. }
+            | RowControl::QrCode { .. }
+            | RowControl::Unsupported { .. } => return,
+        };
+        self.level_mut().active_control = Some(ActiveControl::Edit(edit));
+        if row_streams(&self.level().rows, self.level().selected)
+            && !stream_gated(&self.level().rows)
+        {
+            if let Some(stream) = self.stream_for(self.level().selected) {
+                stream.open();
+            }
+        }
+    }
+
+    fn step_number_edit(&mut self, direction: f64) -> bool {
+        let Some(RowControl::Number {
+            value,
+            min,
+            max,
+            step,
+            ..
+        }) = self
+            .level()
+            .rows
+            .get(self.level().selected)
+            .map(|row| &row.control)
+        else {
+            return false;
+        };
+        let (value, min, max, step) = (*value, *min, *max, *step);
+        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() else {
+            return false;
+        };
+        *edit = stepped_number(edit, value, min, max, step.unwrap_or(1.0), direction);
+        self.stream_edit();
+        true
+    }
+
+    fn commit_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.take() else {
+            return;
+        };
+        let streams = row_streams(&self.level().rows, self.level().selected);
+        let action = row_action(&self.level().rows, self.level().selected);
+        let selected = self.level().selected;
+        let row_id = self.level().rows.get(selected).map(|row| row.id.clone());
+        let Some(row) = self.level_mut().rows.get_mut(selected) else {
+            return;
+        };
+        let mut live_number = None;
+        match &mut row.control {
+            RowControl::Text(value) => *value = edit,
+            RowControl::Number {
+                value,
+                min,
+                max,
+                step,
+                live,
+            } => {
+                let Some(parsed) = parsed_number(&edit, *min, *max, *step) else {
+                    return;
+                };
+                *value = parsed;
+                if live.is_some() {
+                    live_number = Some(parsed);
+                }
+                if streams {
+                    if let Some(stream) = self.stream_for(self.level().selected) {
+                        stream.close();
+                    }
+                }
+            }
+            RowControl::Toggle(_)
+            | RowControl::TextList(_)
+            | RowControl::Select { .. }
+            | RowControl::MultiSelect { .. }
+            | RowControl::Color(_)
+            | RowControl::Action { .. }
+            | RowControl::Status { .. }
+            | RowControl::List { .. }
+            | RowControl::ObjectArray(_)
+            | RowControl::DisplayLayout(_)
+            | RowControl::Gamepad { .. }
+            | RowControl::QrCode { .. }
+            | RowControl::Unsupported { .. } => return,
+        }
+        if let Some(number) = live_number {
+            if let (Some(action), Some(id)) = (action, row_id) {
+                self.dispatch_live_number(selected, &id, &action, number, cx);
+            }
+            cx.notify();
+            return;
+        }
+        self.persist();
+        if let Some(action) = action {
+            self.dispatch_row_action(selected, &action, serde_json::Value::Null, cx);
+        }
+        cx.notify();
+    }
+
+    fn push_card(&mut self, destination: SettingsDestination, mut child: Level) {
+        child.header = LevelHeader::Card(destination);
+        let mark = self
+            .level()
+            .row_bounds
+            .get(self.level().selected)
+            .and_then(|bounds| bounds.get())
+            .zip(self.body_bounds.get())
+            .map(|(row, body)| {
+                (row.origin.y + row.size.height / 2.0 - body.origin.y).to_f64() as f32
+            });
+        self.card_marks.push(mark);
+        self.deck_transition
+            .state_changed(true, std::time::Instant::now());
+        self.deck_motion = Some(DeckMotion::Push);
+        push_level(&mut self.stack, child);
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_NAV",
+            "phase=card-push depth={}",
+            self.stack.len() - 1
+        );
+    }
+
+    fn card_destination(
+        &mut self,
+        label: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<SettingsDestination> {
+        match SettingsDestination::new(label) {
+            Ok(destination) => Some(destination),
+            Err(error) => {
+                self.save_error = Some(format!("{error}"));
+                cx.notify();
+                None
+            }
+        }
+    }
+
+    fn open_live_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
+        let Some(row) = self.level().rows.get(row_index) else {
+            return;
+        };
+        let control = match &row.control {
+            RowControl::Gamepad { query, monitor } => RowControl::Gamepad {
+                query: query.clone(),
+                monitor: monitor.clone(),
+            },
+            RowControl::QrCode {
+                query,
+                value_from,
+                url,
+                modules,
+                error,
+            } => RowControl::QrCode {
+                query: query.clone(),
+                value_from: value_from.clone(),
+                url: url.clone(),
+                modules: modules.clone(),
+                error: error.clone(),
+            },
+            _ => return,
+        };
+        let label = row.label.clone();
+        let row_id = row.id.clone();
+        let config_key = row.config_key.clone();
+        let source = row.source;
+        let description = row.description.clone();
+        let card_description = self
+            .sources
+            .get(source)
+            .and_then(|state| state.copy.get(&row_id))
+            .and_then(|copy| copy.card_description.clone());
+        let Some(destination) = self.card_destination(&label, cx) else {
+            return;
+        };
+        let mut child = live_card_level(
+            &label,
+            description,
+            &config_key,
+            source,
+            control,
+            row_index,
+            destination.clone(),
+        );
+        child.sections[0].description = card_description;
+        self.push_card(destination, child);
+        self.sync_scroll();
+    }
+
+    fn stream_edit(&mut self) {
+        let Some(ActiveControl::Edit(edit)) = self.level().active_control.as_ref() else {
+            return;
+        };
+        let Some(RowControl::Number { min, max, step, .. }) = self
+            .level()
+            .rows
+            .get(self.level().selected)
+            .map(|row| &row.control)
+        else {
+            return;
+        };
+        let Some(value) = parsed_number(edit, *min, *max, *step) else {
+            return;
+        };
+        let selected = self.level().selected;
+        self.stream_level(selected, value);
+    }
+
+    fn stream_level(&self, row: usize, value: f64) {
+        if !row_streams(&self.level().rows, row) || stream_gated(&self.level().rows) {
+            return;
+        }
+        let level = value.clamp(0.0, 255.0) as u8;
+        let hex = self.stream_hex();
+        if let Some(stream) = self.stream_for(row) {
+            if let Some(frame) = super::stream::brightness_frame(level, &hex) {
+                stream.send(frame);
+            }
+        }
+    }
+
+    fn stream_hex(&self) -> String {
+        let Some(source) = self.source_for(self.level().selected) else {
+            return format!("{:06x}", self.palette.live_color_fallback);
+        };
+        source
+            .values
+            .get("live_color_hex")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{:06x}", self.palette.live_color_fallback))
+    }
+
+    fn dispatch_live_number(
+        &mut self,
+        row: usize,
+        id: &str,
+        action: &str,
+        value: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (row, id.to_string());
+        self.slider_pending.remove(&key);
+        let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
+            self.slider_holds.remove(&key);
+            return;
+        };
+        let generation = self.slider_dispatch_generation.get(&key).copied();
+        self.slider_holds.insert(
+            key.clone(),
+            SliderHold {
+                value,
+                dispatched: Some(value),
+                until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
+            },
+        );
+        let action = action.to_string();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx
+                    .background_spawn(
+                        async move { runtime.run_action(&action, number_input(value)) },
+                    )
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if let Err(error) = result {
+                        if this.slider_dispatch_generation.get(&key).copied() == generation {
+                            this.slider_holds.remove(&key);
+                        }
+                        this.save_error = Some(error);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn begin_number_slider_drag(&mut self, row: usize) {
+        if matches!(self.level().active_control, Some(ActiveControl::Edit(_))) {
+            let editing = self.level().selected;
+            if let Some(stream) = self.stream_for(editing) {
+                stream.close();
+            }
+            self.level_mut().active_control = None;
+        }
+        if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
+            if let Some(stream) = self.stream_for(row) {
+                stream.open();
+            }
+        }
+    }
+
+    fn set_number_slider(&mut self, row: usize, fraction: f32, cx: &mut Context<Self>) {
+        let Some(RowControl::Number {
+            value,
+            min: Some(min),
+            max: Some(max),
+            step,
+            live,
+        }) = self
+            .level_mut()
+            .rows
+            .get_mut(row)
+            .map(|row| &mut row.control)
+        else {
+            return;
+        };
+        *value = slider_value_from_fraction(*min, *max, step.unwrap_or(1.0), fraction);
+        let live = live.is_some();
+        let dragged = *value;
+        self.level_mut().selected = row;
+        self.stream_level(row, dragged);
+        if live {
+            if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
+                    match live_number_dispatch_plan(&this.level().rows, row) {
+                        LiveNumberDispatch::Fire { action, value } => {
+                            this.dispatch_live_number(row, &id, &action, value, cx);
+                        }
+                        LiveNumberDispatch::Release => {
+                            release_slider_dispatch(
+                                &mut this.slider_pending,
+                                &mut this.slider_holds,
+                                &(row, id),
+                            );
+                        }
+                    }
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn schedule_slider_dispatch<D>(
+        &mut self,
+        row: usize,
+        id: String,
+        cx: &mut Context<Self>,
+        dispatch: D,
+    ) where
+        D: FnOnce(&mut SettingsPanelView, usize, String, &mut Context<SettingsPanelView>) + 'static,
+    {
+        let key = (row, id);
+        let generation = schedule_slider_generation(&mut self.slider_dispatch_generation, &key);
+        self.slider_pending.insert(key.clone());
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx
+                    .background_executor()
+                    .timer(SLIDER_DISPATCH_DEBOUNCE)
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if !slider_generation_current(
+                        &this.slider_dispatch_generation,
+                        &key,
+                        generation,
+                    ) {
+                        return;
+                    }
+                    dispatch(this, row, key.1.clone(), cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn finish_number_slider(&mut self, row: usize, cx: &mut Context<Self>) {
+        if let Some(stream) = self.stream_for(row) {
+            stream.close();
+        }
+        match number_finish_plan(&self.level().rows, row) {
+            NumberFinishPlan::Live => {}
+            NumberFinishPlan::Persist { action } => {
+                self.persist();
+                if let Some(action) = action {
+                    self.dispatch_row_action(row, &action, serde_json::Value::Null, cx);
+                }
+            }
+        }
+    }
+
+    fn dispatch_row_action(
+        &self,
+        row: usize,
+        action: &str,
+        input: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
+            return;
+        };
+        let action = action.to_string();
+        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let async_cx = cx.clone();
+            async move {
+                let _ = async_cx
+                    .background_spawn(async move { runtime.run_action(&action, input) })
+                    .await;
+            }
+        })
+        .detach();
+    }
+
+    fn persist(&mut self) {
+        self.height_revision += 1;
+        let Some(source_index) = self
+            .root()
+            .rows
+            .get(self.root().selected)
+            .map(|row| row.source)
+        else {
+            return;
+        };
+        let Some(source) = self.sources.get(source_index) else {
+            return;
+        };
+        let previous_theme = (
+            source.values.get("native_theme").cloned(),
+            source.values.get("accent").cloned(),
+        );
+        let rows = self
+            .root()
+            .rows
+            .iter()
+            .filter(|row| row.source == source_index);
+        let merged = merged_config(&source.values, rows);
+        let Some(source) = self.sources.get_mut(source_index) else {
+            return;
+        };
+        source.values = merged;
+        self.save_error = save_values(
+            &panel_base(&source.plugin_id),
+            source.path.as_deref(),
+            &source.values,
+        )
+        .err();
+        if source.plugin_id == qol_conventions::CORE_PANEL_ID
+            && (source.values.get("native_theme") != previous_theme.0.as_ref()
+                || source.values.get("accent") != previous_theme.1.as_ref())
+        {
+            let (native, accent) = theme_override_values(&source.values);
+            qol_theme::set_runtime_theme_override(native, accent);
+        }
+    }
+
+    fn sync_scroll(&mut self) {
+        let selected = self.level().selected;
+        let child = self.body_child_index(selected);
+        let margin = match self.filter_open {
+            true => crate::scrollbar::OVERFLOW_FADE_HEIGHT.max(FILTER_OVERLAY_HEIGHT),
+            false => crate::scrollbar::OVERFLOW_FADE_HEIGHT,
+        };
+        let lead = self.body_lead_index(selected);
+        self.level().body_scroll.follow(child, lead, px(margin));
+    }
+
+    fn resync_scroll(&mut self) {
+        self.level().body_scroll.refollow();
+        self.sync_scroll();
+    }
+
+    fn group_header_shows(&self, title: &str, detail: Option<&str>, labels: &[&str]) -> bool {
+        if !header_is_redundant(title, labels) {
+            return true;
+        }
+        detail.is_some() && matches!(self.level().header, LevelHeader::Card(_))
+    }
+
+    fn body_sections(&self) -> (Vec<Vec<usize>>, Vec<bool>) {
+        let groups = self.body_groups();
+        let headers = groups
+            .iter()
+            .map(|(title, detail, rows)| {
+                let labels = rows
+                    .iter()
+                    .map(|index| self.level().rows[*index].label.as_str())
+                    .collect::<Vec<_>>();
+                self.group_header_shows(title, detail.as_deref(), &labels)
+            })
+            .collect::<Vec<_>>();
+        let sections = groups
+            .into_iter()
+            .map(|(_, _, rows)| rows)
+            .collect::<Vec<_>>();
+        (sections, headers)
+    }
+
+    fn body_child_index(&self, row: usize) -> Option<usize> {
+        if self.level().choose.is_some() {
+            return self.choose_child_index();
+        }
+        if self.level().display_layout.is_some() {
+            return self
+                .current_visible_rows()
+                .iter()
+                .position(|index| *index == row);
+        }
+        let (sections, headers) = self.body_sections();
+        body_child_offset(&sections, &headers, row)
+    }
+
+    fn body_lead_index(&self, row: usize) -> Option<usize> {
+        if self.level().choose.is_some() {
+            return (self.choose_child_index() == Some(1)).then_some(0);
+        }
+        if self.level().display_layout.is_some() {
+            return None;
+        }
+        let (sections, headers) = self.body_sections();
+        body_header_child_offset(&sections, &headers, row)
+    }
+
+    fn display_value(&self, index: usize) -> String {
+        if index == self.level().selected {
+            match &self.level().active_control {
+                Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
+                Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
+                None => {}
+            }
+        }
+        match &self.level().rows[index].control {
+            RowControl::Toggle(value) => binary_state_label(*value).into(),
+            RowControl::Select { options, index, .. } => options
+                .get(*index)
+                .map(|option| option.label.clone())
+                .unwrap_or_default(),
+            RowControl::MultiSelect {
+                options, selected, ..
+            } => choose_card::multi_select_word(options, selected),
+            RowControl::Number { value, .. } => format_number(*value),
+            RowControl::Text(value) => {
+                text_or_placeholder(value, self.level().rows[index].placeholder.as_deref())
+            }
+            RowControl::TextList(values) => text_or_placeholder(
+                &values.join(", "),
+                self.level().rows[index].placeholder.as_deref(),
+            ),
+            RowControl::Color(value) => color_display(value),
+            RowControl::Action {
+                active_action,
+                active_query,
+                state_labels,
+                active,
+                pending,
+                error,
+                ..
+            } => action_value_label(
+                *active,
+                *pending,
+                error.is_some(),
+                active_query.is_some(),
+                active_action.is_some(),
+                state_labels,
+            ),
+            RowControl::Status { label, error, .. } => {
+                if error.is_some() {
+                    "unavailable".into()
+                } else {
+                    label
+                        .clone()
+                        .or_else(|| self.level().rows[index].placeholder.clone())
+                        .unwrap_or_else(|| "\u{2013}".into())
+                }
+            }
+            RowControl::List {
+                actions,
+                items,
+                filter,
+                error,
+                ..
+            } => {
+                if error.is_some() {
+                    "unavailable".into()
+                } else if filter.trim().is_empty() {
+                    format!("{} found", items.len())
+                } else {
+                    let visible = filtered_list_items(actions, items, filter).len();
+                    format!("{visible}/{}", items.len())
+                }
+            }
+            RowControl::ObjectArray(state) => item_count_label(state.entries.len()),
+            RowControl::DisplayLayout(state) => {
+                format!("{} connected", state.displays().len())
+            }
+            RowControl::Gamepad { monitor, .. } => monitor
+                .selected()
+                .map(|controller| controller.name.clone())
+                .unwrap_or_else(|| "Waiting".into()),
+            RowControl::QrCode { url, .. } => url.clone().unwrap_or_default(),
+            RowControl::Unsupported { reason, .. } => reason.clone(),
+        }
+    }
+
+    fn value_tone(&self, index: usize) -> SettingsValueTone {
+        if index == self.level().selected
+            && matches!(self.level().active_control, Some(ActiveControl::Edit(_)))
+        {
+            return SettingsValueTone::Normal;
+        }
+        match &self.level().rows[index].control {
+            RowControl::Toggle(value) => binary_state_tone(*value),
+            RowControl::Select { .. }
+            | RowControl::MultiSelect { .. }
+            | RowControl::Number { .. }
+            | RowControl::Color(_) => SettingsValueTone::Normal,
+            RowControl::Text(value) if value.is_empty() => SettingsValueTone::Muted,
+            RowControl::TextList(values) if values.is_empty() => SettingsValueTone::Muted,
+            RowControl::ObjectArray(state) if state.entries.is_empty() => SettingsValueTone::Muted,
+            RowControl::Text(_) | RowControl::TextList(_) | RowControl::ObjectArray(_) => {
+                SettingsValueTone::Normal
+            }
+            RowControl::Action { error: Some(_), .. }
+            | RowControl::Status { error: Some(_), .. }
+            | RowControl::List { error: Some(_), .. } => SettingsValueTone::Danger,
+            RowControl::Action { state_labels, .. } if !state_labels.is_empty() => {
+                SettingsValueTone::Normal
+            }
+            RowControl::Action {
+                active_query: None, ..
+            } => SettingsValueTone::Success,
+            RowControl::Action { active, .. } => binary_state_tone(*active),
+            RowControl::Status { .. } => SettingsValueTone::Normal,
+            RowControl::List { .. } | RowControl::Gamepad { .. } => SettingsValueTone::Normal,
+            RowControl::DisplayLayout(_) => SettingsValueTone::Normal,
+            RowControl::QrCode { .. } => SettingsValueTone::Normal,
+            RowControl::Unsupported { .. } => SettingsValueTone::Muted,
+        }
+    }
+
+    fn wheel_style(&self) -> WheelStyle {
+        WheelStyle {
+            bg: self.palette.surface_raised,
+            border: self.palette.row_border_selected,
+            thumb_border: self.palette.section_text,
+        }
+    }
+
+    fn body_has_focus(&self) -> bool {
+        matches!(self.focus_level(), PanelFocus::Body)
+    }
+
+    fn mark_selected<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
+        if !selected || !self.body_has_focus() {
+            return row;
+        }
+        self.paint_body_selection(row)
+    }
+
+    fn paint_selection<E: Styled>(&self, row: E) -> E {
+        super::components::paint_rail_selection(row, self.palette, self.rail_source_level())
+    }
+
+    fn paint_body_selection<E: Styled + ParentElement>(&self, row: E) -> E {
+        paint_settings_selection(row, self.palette)
+    }
+
+    /// The freshness of a row's value: unavailable wins over loading, and a row
+    /// with no runtime query is always idle.
+    fn row_query_state(&self, index: usize) -> RowQueryState {
+        let row = &self.level().rows[index];
+        rollup_query_state(
+            row_query_names(row)
+                .into_iter()
+                .map(|query| self.query_states.get(&(row.source, query.to_string()))),
+            QUERY_LOADING_GRACE,
+            std::time::Instant::now(),
+        )
+    }
+
+    /// Replaces a query-backed value with a spinner or an unavailable marker
+    /// while its plugin has not answered. Status rows keep their own tone and
+    /// error text once unavailable, but draw the same loading spinner.
+    fn render_query_state_cell(&self, index: usize, row: RowGround) -> Option<Div> {
+        let cell = || {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(qol_theme::SPACE_INSET))
+                .flex_none()
+                .w(px(value_cell_width(&self.level().rows[index].control)))
+                .justify_end()
+        };
+        match self.row_query_state(index) {
+            RowQueryState::Loading { .. } => Some(cell().child(settings_query_spinner(
+                ("settings-query-spinner", index),
+                row,
+                self.palette,
+            ))),
+            RowQueryState::Unavailable(_)
+                if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
+            {
+                Some(
+                    cell().child(
+                        div()
+                            .text_size(px(qol_theme::TEXT_CAPTION))
+                            .text_color(rgb(match row {
+                                RowGround::Pane => self.palette.grounds.pane.faint,
+                                RowGround::Band => self.palette.grounds.band.soft,
+                            }))
+                            .child("unavailable"),
+                    ),
+                )
+            }
+            RowQueryState::Idle | RowQueryState::Ready | RowQueryState::Unavailable(_) => None,
+        }
+    }
+
+    fn render_value_cell(&self, index: usize, row: RowGround, cx: &mut Context<Self>) -> Div {
+        if let Some(cell) = self.render_query_state_cell(index, row) {
+            return cell;
+        }
+        match &self.level().rows[index].control {
+            RowControl::Toggle(active) => return self.render_toggle_value(*active, row),
+            RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
+                return self.render_select_value(index, row);
+            }
+            RowControl::Number {
+                value,
+                min,
+                max,
+                step,
+                ..
+            } => {
+                let number = NumberSpec {
+                    value: *value,
+                    min: *min,
+                    max: *max,
+                    step: *step,
+                };
+                return self.render_number_value(index, row, number, cx);
+            }
+            RowControl::Action { active, .. }
+                if self.level().rows[index].variant.as_deref() == Some("toggle") =>
+            {
+                return self.render_toggle_value(*active, row);
+            }
+            RowControl::Action { .. } => return self.render_action_value(index, row),
+            RowControl::TextList(values) => {
+                return self
+                    .kit
+                    .count_chip(values.len(), plural(values.len(), "item"));
+            }
+            RowControl::Unsupported { reason, .. } => {
+                return div()
+                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text_color(rgb(match row {
+                        RowGround::Pane => self.palette.grounds.pane.faint,
+                        RowGround::Band => self.palette.grounds.band.soft,
+                    }))
+                    .child(format!("Unsupported: {reason}"));
+            }
+            RowControl::Text(_)
+            | RowControl::Color(_)
+            | RowControl::Status { .. }
+            | RowControl::List { .. }
+            | RowControl::ObjectArray(_)
+            | RowControl::DisplayLayout(_)
+            | RowControl::Gamepad { .. }
+            | RowControl::QrCode { .. } => {}
+        }
+        let mut cell = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_INSET));
+        if let RowControl::Status { tone, .. } = self.level().rows[index].control {
+            return cell.child(StatusIndicator::new(
+                ("settings-status", index),
+                self.display_value(index),
+                rgb(status_tone_color(self.palette, tone)),
+            ));
+        }
+        if self.action_is_busy(index) {
+            cell = cell.child(settings_action_spinner(
+                ("settings-action-spinner", index),
+                self.palette,
+            ));
+        }
+        if let Some(color) = self.swatch_color(index) {
+            cell = cell.child(
+                div()
+                    .w_3()
+                    .h_3()
+                    .rounded(px(qol_theme::RADIUS_TIGHT))
+                    .bg(rgb(color)),
+            );
+        }
+        if let Some(accent) = self.option_accent(index) {
+            cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
+        }
+        cell.flex_none()
+            .w(px(value_cell_width(&self.level().rows[index].control)))
+            .justify_end()
+            .child(
+                settings_value_text(
+                    self.display_value(index),
+                    self.value_tone(index),
+                    row,
+                    self.palette,
+                )
+                .flex_shrink()
+                .min_w_0()
+                .truncate(),
+            )
+    }
+
+    fn render_toggle_value(&self, active: bool, row: RowGround) -> Div {
+        div().child(SettingsToggle::new(active, row, self.palette))
+    }
+
+    fn render_select_value(&self, index: usize, row: RowGround) -> Div {
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
+        let art = match &self.level().rows[index].control {
+            RowControl::Select {
+                options,
+                index: chosen,
+                ..
+            } => ChoiceArt::Picture(choose_card::option_art(options, *chosen)),
+            RowControl::MultiSelect {
+                options, selected, ..
+            } => choose_card::multi_select_art(options, selected),
+            _ => return div(),
+        };
+        div().child(SettingsChoiceValue::new(
+            self.display_value(index),
+            art,
+            row,
+            context,
+            self.palette,
+        ))
+    }
+
+    fn render_number_value(
+        &self,
+        index: usize,
+        row: RowGround,
+        number: NumberSpec,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let NumberSpec {
+            value,
+            min,
+            max,
+            step,
+        } = number;
+        let mut track = None;
+        if let Some(style) = SliderStyle::from_variant(self.level().rows[index].variant.as_deref())
+        {
+            let edit = if index == self.level().selected {
+                match &self.level().active_control {
+                    Some(ActiveControl::Edit(edit)) => Some(edit.as_str()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let fraction = slider_fraction(number_preview(edit, value, min, max, step), min, max);
+            track = Some((fraction, style));
+        }
+        let id = self.level().rows[index].id.clone();
+        let interact = move |element: Div| {
+            element.child(slider_drag_track(
+                cx,
+                index,
+                id,
+                |panel: &mut SettingsPanelView,
+                 row: usize,
+                 fraction: f32,
+                 cx: &mut Context<SettingsPanelView>| {
+                    panel.begin_number_slider_drag(row);
+                    panel.set_number_slider(row, fraction, cx);
+                },
+                |panel: &mut SettingsPanelView,
+                 row: usize,
+                 fraction: f32,
+                 cx: &mut Context<SettingsPanelView>| {
+                    panel.set_number_slider(row, fraction, cx);
+                },
+                |panel: &mut SettingsPanelView, row: usize, cx: &mut Context<SettingsPanelView>| {
+                    panel.finish_number_slider(row, cx);
+                },
+            ))
+        };
+        number_field(
+            self.display_value(index),
+            number_unit(&self.level().rows[index].id),
+            track,
+            interact,
+            row,
+            self.palette,
+        )
+    }
+
+    fn render_action_value(&self, index: usize, row: RowGround) -> Div {
+        settings_action_affordance(
+            ("settings-action-spinner", index),
+            self.display_value(index),
+            self.level().rows[index].variant.as_deref(),
+            self.action_is_busy(index),
+            row,
+            self.palette,
+        )
+    }
+
+    fn action_is_busy(&self, index: usize) -> bool {
+        action_shows_spinner(&self.level().rows[index])
+    }
+
+    fn swatch_color(&self, index: usize) -> Option<u32> {
+        let RowControl::Color(value) = &self.level().rows[index].control else {
+            return None;
+        };
+        let text = if index == self.level().selected {
+            match &self.level().active_control {
+                Some(ActiveControl::Edit(edit)) => edit,
+                Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
+                None => value,
+            }
+        } else {
+            value
+        };
+        parsed_color(text)
+    }
+
+    fn option_accent(&self, index: usize) -> Option<u32> {
+        let RowControl::Select { options, index, .. } = &self.level().rows[index].control else {
+            return None;
+        };
+        options.get(*index)?.accent
+    }
+
+    fn row_bounds_canvas(&self, index: usize) -> AnyElement {
+        let row_bounds = Rc::clone(&self.level().row_bounds[index]);
+        canvas(
+            move |bounds, _, _| row_bounds.set(Some(bounds)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+        .into_any_element()
+    }
+
+    fn render_row(&self, index: usize, cx: &mut Context<Self>) -> Div {
+        let row = &self.level().rows[index];
+        let mut container = div().flex().flex_col().gap(px(qol_theme::SPACE_TIGHT));
+
+        if self.level().entries.is_some() {
+            return container.child(self.render_entries_row(index, cx));
+        }
+        if self.level().form.is_some() {
+            return container.child(self.render_form_row(index, cx));
+        }
+        if self.level().list_card {
+            return container.child(self.render_list_card_item(index, cx));
+        }
+        if matches!(row.control, RowControl::List { .. }) {
+            return container.child(self.render_list(index, cx));
+        }
+        if matches!(row.control, RowControl::ObjectArray(_)) {
+            return container.child(self.render_object_array(index, cx));
+        }
+        if matches!(row.control, RowControl::QrCode { .. }) && self.level().live_card {
+            return container.child(self.render_qr_code(index));
+        }
+        if matches!(row.control, RowControl::Gamepad { .. }) && self.level().live_card {
+            return container.child(self.render_gamepad(index, cx));
+        }
+        let label = match &row.control {
+            RowControl::Action {
+                active: true,
+                active_label: Some(label),
+                ..
+            } => label.clone(),
+            _ => row.label.clone(),
+        };
+        let selected = index == self.level().selected;
+        let ground = RowGround::of(selected, self.body_has_focus());
+        let label_group = settings_label_group(
+            label,
+            row.description.clone().map(SharedString::from),
+            ground,
+            self.palette,
+        );
+        let value_cell = self.render_value_cell(index, ground, cx);
+        let mut line = SettingsRow::setting(("settings-row", index), self.palette)
+            .selected(selected, self.body_has_focus())
+            .child(label_group)
+            .child(self.row_bounds_canvas(index));
+        line = line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            this.click_row(index, window, cx);
+        }));
+        if self.level().list_item.is_none() {
+            line = line.child(value_cell);
+        }
+        container = container.child(line);
+        let error = match &row.control {
+            RowControl::Action {
+                error: Some(error), ..
+            }
+            | RowControl::Status {
+                error: Some(error), ..
+            } => Some(error),
+            _ => None,
+        };
+        if let Some(error) = error {
+            container = container.child(
+                div()
+                    .px(px(qol_theme::SPACE_INSET))
+                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text_color(rgb(self.palette.state_off))
+                    .child(error.clone()),
+            );
+        }
+        container
+    }
+
+    fn render_gamepad(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let row = &self.level().rows[index];
+        let RowControl::Gamepad { monitor, .. } = &row.control else {
+            return div().id(("settings-gamepad-empty", index));
+        };
+        let selected = index == self.level().selected;
+        let palette = GamepadPalette {
+            surface: self.palette.window_bg,
+            raised: self.palette.surface_raised,
+            border: self.palette.panel_border,
+            text: self.palette.section_text,
+            text_muted: self.palette.label_text,
+            accent: self.palette.row_border_selected,
+            info: self.palette.status_info,
+            success: self.palette.status_success,
+            warning: self.palette.status_warning,
+            danger: self.palette.status_danger,
+        };
+        div()
+            .id(("settings-gamepad", index))
+            .h(px(super::PANEL_GAMEPAD_HEIGHT))
+            .rounded(px(qol_theme::RADIUS_CARD))
+            .border_1()
+            .border_color(if selected {
+                rgb(self.palette.row_border_selected)
+            } else {
+                rgba(self.palette.transparent_rgba)
+            })
+            .cursor(CursorStyle::PointingHand)
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                let already_selected = this.level().selected == index;
+                this.level_mut().selected = index;
+                if already_selected {
+                    this.select_next_gamepad();
+                }
+                cx.notify();
+            }))
+            .child(gamepad_panel(
+                monitor,
+                &row.label,
+                row.description.as_deref(),
+                palette,
+            ))
+    }
+
+    fn render_source_menu_item(
+        &self,
+        index: usize,
+        quiet: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let label = self.plugin_title(index);
+        let active = index == self.selected_source;
+        let mut item = div()
+            .id(("settings-source", index))
+            .when(quiet, |item| item.opacity(RAIL_SECTION_OPACITY))
+            .relative()
+            .flex()
+            .items_center()
+            .w(px(super::PANEL_RAIL_WIDTH))
+            .ml(px(-qol_theme::SPACE_INSET))
+            .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
+            .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
+            .child(
+                div()
+                    .truncate()
+                    .min_w_0()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .when(active, |label| label.font_weight(FontWeight::SEMIBOLD))
+                    .text_color(rgb(if active {
+                        self.palette.rail_active_text
+                    } else {
+                        self.palette.rail_text_muted
+                    }))
+                    .child(label),
+            )
+            .cursor(CursorStyle::PointingHand);
+        if active {
+            item = self.paint_selection(item);
+        }
+        item.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            if this.raise_top_form_question() {
+                cx.notify();
+                return;
+            }
+            this.forget_last_visit();
+            this.select_source(index, cx);
+            this.descend_source_menu(window, cx);
+            cx.notify();
+        }))
+    }
+
+    fn render_rail_plugin_caption(&self, quiet: bool) -> impl IntoElement {
+        let plugins = self
+            .panel
+            .sources
+            .iter()
+            .filter(|source| source.group == PanelSourceGroup::Plugin)
+            .count();
+        let detail = match plugins {
+            1 => "1 installed".to_string(),
+            count => format!("{count} installed"),
+        };
+        rail_caption(
+            "Plugins",
+            Some(SharedString::from(detail)),
+            self.rail_source_level() && !quiet,
+        )
+        .when(quiet, |caption| caption.opacity(RAIL_SECTION_OPACITY))
+        .id("settings-rail-plugin-caption")
+    }
+
+    fn rail_item_dot_spacer(&self, dot: Option<Div>) -> AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .w_full()
+            .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
+            .px(px(qol_theme::SPACE_CELL))
+            .children(dot)
+            .into_any_element()
+    }
+
+    fn rail_caption_dot_spacer(&self) -> AnyElement {
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .w_full()
+            .h(px(rail_caption_height()))
+            .px(px(qol_theme::SPACE_CELL))
+            .into_any_element()
+    }
+
+    fn render_rail_dot(&self) -> Div {
+        let halo = self.kit.washes.halo_attention.packed();
+        self.kit.status_dot(self.palette.status_warning, halo)
+    }
+
+    fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let row = &self.level().rows[index];
+        let RowControl::List {
+            active_label,
+            active: runtime_active,
+            filter,
+            ..
+        } = &row.control
+        else {
+            return div().id(("settings-list", index));
+        };
+        let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
+        let rest = ground.rest(self.palette);
+        let mut header_status = div().flex().items_center().gap(px(qol_theme::SPACE_INSET));
+        if *runtime_active {
+            header_status = header_status.child(
+                StatusIndicator::new(
+                    ("settings-list-activity", index),
+                    active_label.as_deref().unwrap_or("Live").to_string(),
+                    rgb(self.palette.state_on),
+                )
+                .pulse(),
+            );
+        }
+        header_status = header_status.child(settings_value_text(
+            self.display_value(index),
+            self.value_tone(index),
+            ground,
+            self.palette,
+        ));
+        let mut container = div()
+            .id(("settings-list", index))
+            .relative()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _: &MouseDownEvent, _, _| {
+                    qol_runtime::probe!("SETTINGS_INPUT", "phase=list-mouse-down index={}", index);
+                }),
+            )
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.click_row(index, window, cx);
+            }))
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap(px(qol_theme::SPACE_TIGHT))
+            .h(px(row_body_height(row, false)))
+            .justify_center()
+            .overflow_hidden()
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
+            .rounded(px(qol_theme::RADIUS_CARD));
+        if index == self.level().selected {
+            container = self.mark_selected(container, true);
+        }
+        container = container.child(
+            div()
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .h(px(list_header_height(row)))
+                .justify_between()
+                .gap(px(qol_theme::SPACE_CELL))
+                .text_size(px(qol_theme::TEXT_BODY))
+                .child(
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .flex_1()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(rest.ink))
+                                .child(if filter.trim().is_empty() {
+                                    row.label.clone()
+                                } else {
+                                    filter.clone()
+                                }),
+                        )
+                        .when_some(row.description.clone(), |group, description| {
+                            group.child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(qol_theme::TEXT_CAPTION))
+                                    .text_color(rgb(rest.soft))
+                                    .child(description),
+                            )
+                        }),
+                )
+                .child(header_status),
+        );
+        container.child(self.row_bounds_canvas(index))
+    }
+
+    fn render_qr_code(&self, index: usize) -> Div {
+        let row = &self.level().rows[index];
+        let highlighted = index == self.level().selected && self.body_has_focus();
+        let loading = matches!(self.row_query_state(index), RowQueryState::Loading { .. });
+        qr_code_display(
+            row,
+            index,
+            highlighted,
+            loading,
+            row_body_height(row, true),
+            list_header_height(row),
+            self.palette,
+        )
+    }
+
+    fn render_object_array(&self, index: usize, cx: &mut Context<Self>) -> Div {
+        let row = &self.level().rows[index];
+        let RowControl::ObjectArray(_) = &row.control else {
+            return div();
+        };
+        self.render_block_frame(index, row, self.display_value(index), cx)
+    }
+
+    fn render_block_frame(
+        &self,
+        index: usize,
+        row: &Row,
+        value: String,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
+        let rest = ground.rest(self.palette);
+        let mut container = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap(px(qol_theme::SPACE_TIGHT))
+            .h(px(row_body_height(row, false)))
+            .relative()
+            .justify_center()
+            .overflow_hidden()
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
+            .rounded(px(qol_theme::RADIUS_CARD));
+        if index == self.level().selected {
+            container = self.mark_selected(container, true);
+        }
+        container = container.child(
+            div()
+                .id(("settings-block-header", index))
+                .cursor(CursorStyle::PointingHand)
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    if !event.standard_click() {
+                        return;
+                    }
+                    this.level_mut().selected = index;
+                    this.activate(window, cx);
+                    cx.notify();
+                }))
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .h(px(list_header_height(row)))
+                .justify_between()
+                .gap(px(qol_theme::SPACE_CELL))
+                .text_size(px(qol_theme::TEXT_BODY))
+                .child(
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .flex_1()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(rest.ink))
+                                .child(row.label.clone()),
+                        )
+                        .when_some(row.description.clone(), |group, description| {
+                            group.child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(qol_theme::TEXT_CAPTION))
+                                    .text_color(rgb(rest.soft))
+                                    .child(description),
+                            )
+                        }),
+                )
+                .child(settings_value_text(
+                    value,
+                    self.value_tone(index),
+                    ground,
+                    self.palette,
+                )),
+        );
+        container.child(self.row_bounds_canvas(index))
+    }
+}
+
+fn theme_override_values(values: &serde_json::Value) -> (Option<&str>, Option<&str>) {
+    (
+        values
+            .get("native_theme")
+            .and_then(serde_json::Value::as_str),
+        values.get("accent").and_then(serde_json::Value::as_str),
+    )
+}
+
+// The surface and the host focus this handle on open, replace and reveal; it names whichever
+// body the panel has decided should hold focus.
+impl Focusable for SettingsPanelView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_target()
+    }
+}
+
+impl Render for SettingsPanelView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        let build_started = std::time::Instant::now();
+        self.palette = settings_panel_runtime();
+        self.kit = crate::kit::kit();
+        self.poll_visible.store(
+            window.is_window_active(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        if !self.frame_pump_armed {
+            self.pump_frame_paced_samples(window, cx);
+        }
+        self.fit_lists();
+        self.reconcile_focus(window, cx);
+        let (rail, rail_dots): (Vec<AnyElement>, Vec<AnyElement>) = if self.rail_is_open() {
+            let groups = self
+                .panel
+                .sources
+                .iter()
+                .map(|source| source.group)
+                .collect::<Vec<_>>();
+            let active_group = groups.get(self.selected_source).copied();
+            let quiet = |index: usize| match (active_group, groups.get(index)) {
+                (Some(active), Some(group)) => *group != active,
+                _ => false,
+            };
+            let mut rail = vec![rail_caption(
+                "Core",
+                self.panel.version.clone(),
+                self.rail_source_level() && !quiet(0),
+            )
+            .when(quiet(0), |caption| caption.opacity(RAIL_SECTION_OPACITY))
+            .id("settings-rail-core-caption")
+            .into_any_element()];
+            let mut rail_dots = vec![self.rail_caption_dot_spacer()];
+            let separators = rail_group_breaks(&groups);
+            for index in 0..self.sources.len() {
+                if separators.contains(&index) {
+                    rail.push(
+                        self.render_rail_plugin_caption(quiet(index))
+                            .into_any_element(),
+                    );
+                    rail_dots.push(self.rail_caption_dot_spacer());
+                }
+                rail.push(
+                    self.render_source_menu_item(index, quiet(index), cx)
+                        .into_any_element(),
+                );
+                let attention = self
+                    .attention
+                    .contains(self.sources[index].plugin_id.as_str());
+                let dot = attention.then(|| self.render_rail_dot());
+                rail_dots.push(self.rail_item_dot_spacer(dot));
+            }
+            (rail, rail_dots)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let items = self.body_items(cx);
+        let custom_view = self.custom_view().map(|custom| custom.view.clone());
+        let revealed = (self.closing && custom_view.is_none() && self.stack.len() > 1).then(|| {
+            self.render_level.set(self.stack.len() - 2);
+            let items = self.body_items(cx);
+            self.render_level.set(usize::MAX);
+            items
+        });
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_FRAME",
+            "phase=build rows={} rail={} elapsed_us={}",
+            items.len(),
+            rail.len(),
+            build_started.elapsed().as_micros()
+        );
+        div()
+            .id("settings-panel")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, event: &MouseDownEvent, _, _| {
+                    qol_runtime::probe!(
+                        "SETTINGS_INPUT",
+                        "phase=root-mouse-down pos={:?}",
+                        event.position
+                    );
+                }),
+            )
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .rounded_none()
+            .shadow(crate::kit::float_shadow(self.palette.section_text))
+            .bg(rgb(self.palette.window_bg))
+            .text_color(rgb(self.palette.section_text))
+            .child(self.render_band(cx))
+            .child(self.render_content(
+                cx,
+                window.viewport_size().width.to_f64() as f32,
+                rail,
+                rail_dots,
+                items,
+                revealed,
+                custom_view,
+            ))
+            .when_some(self.save_error.clone(), |root, message| {
+                root.child(self.render_failure_bar(message))
+            })
+            .child(self.render_hint_bar(cx))
+            .child(self.resize_canvas())
+    }
+}
+
+impl SettingsPanelView {
+    fn body_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if self.level().choose.is_some() {
+            return self.render_choose_card(cx);
+        }
+        let mut items: Vec<AnyElement> = Vec::new();
+        if self.level().display_layout.is_some() {
+            items.extend(self.render_display_layout_card(cx));
+        } else {
+            for (title, detail, rows) in self.body_groups() {
+                let labels: Vec<&str> = rows
+                    .iter()
+                    .map(|index| self.level().rows[*index].label.as_str())
+                    .collect();
+                if self.group_header_shows(&title, detail.as_deref(), &labels) {
+                    let here = self.body_has_focus() && rows.contains(&self.level().selected);
+                    items.push(
+                        self.render_group_header(&title, detail.as_deref(), here)
+                            .into_any_element(),
+                    );
+                }
+                for index in rows {
+                    items.push(self.render_row(index, cx).into_any_element());
+                }
+            }
+        }
+        items
+    }
+
+    fn render_card(
+        &self,
+        level_index: usize,
+        items: Vec<AnyElement>,
+        custom_view: Option<AnyView>,
+    ) -> Div {
+        let children = items.len();
+        let front = level_index + 1 == self.stack.len();
+        let has_custom_view = custom_view.is_some();
+        let body = if let Some(custom_view) = custom_view {
+            div()
+                .id(("settings-panel-body", level_index))
+                .size_full()
+                .flex()
+                .flex_col()
+                .gap(px(qol_theme::SPACE_TIGHT))
+                .child(custom_view)
+        } else {
+            settings_page()
+                .id(("settings-panel-body", level_index))
+                .track_scroll(self.stack[level_index].body_scroll.handle())
+                .overflow_y_scroll()
+                .when(front && self.filter_open, |body| {
+                    body.pt(px(FILTER_OVERLAY_HEIGHT))
+                })
+                .children(items)
+        };
+        let body_bounds = Rc::clone(&self.body_bounds);
+        let frame_bounds = canvas(
+            move |bounds, _, _| body_bounds.set(Some(bounds)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+        div().flex_1().min_w_0().h_full().flex().flex_col().child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h(px(0.))
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(body)
+                .when(front, |frame| frame.child(frame_bounds))
+                .when(front && !has_custom_view, |frame| {
+                    frame.child(crate::scrollbar::overflow_fade(
+                        self.stack[level_index].body_scroll.handle().clone(),
+                        children,
+                        crate::scrollbar::OverflowFadeStyle {
+                            surface_rgb: self.palette.window_bg,
+                            ink_rgba: crate::kit::alpha(self.palette.section_text, 0xc8),
+                            wash_rgba: crate::kit::alpha(self.palette.section_text, 0x1f),
+                        },
+                    ))
+                })
+                .when(front && !has_custom_view, |frame| {
+                    frame.child(crate::scrollbar::seam_track(
+                        self.stack[level_index].body_scroll.handle().clone(),
+                        crate::kit::alpha(self.palette.panel_border, 0x48),
+                        crate::kit::alpha(self.palette.section_text, 0x8c),
+                    ))
+                })
+                .when(self.filter_open && front && !has_custom_view, |frame| {
+                    frame.child(self.render_filter_overlay())
+                }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_content(
+        &self,
+        cx: &mut Context<Self>,
+        width: f32,
+        rail: Vec<AnyElement>,
+        rail_dots: Vec<AnyElement>,
+        items: Vec<AnyElement>,
+        revealed: Option<Vec<AnyElement>>,
+        custom_view: Option<AnyView>,
+    ) -> Div {
+        let mut depth = self.stack.len() - 1;
+        let mut card = self
+            .render_card(self.stack.len() - 1, items, custom_view)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    if this.rail_has_key_focus() {
+                        this.set_source_menu(false);
+                        this.reconcile_focus(window, cx);
+                        cx.notify();
+                    }
+                }),
+            );
+        let drawer = revealed.map(|items| {
+            let slide = deck::exit(self.deck_transition.step, depth, width);
+            let leaving = std::mem::replace(
+                &mut card,
+                self.render_card(self.stack.len() - 2, items, None),
+            );
+            depth -= 1;
+            (leaving, slide)
+        });
+        let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
+        let settled = self.deck_transition.snapped
+            || !transition_in_flight(self.deck_transition.started, std::time::Instant::now());
+        let slide = if drawer.is_some() || settled {
+            None
+        } else {
+            deck::slide(self.deck_transition.step, self.deck_motion, depth, width)
+        };
+        let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
+        if !self.rail_is_open() {
+            if depth == 0 && drawer.is_none() {
+                let card = match slide {
+                    Some(slide) => card
+                        .absolute()
+                        .right_0()
+                        .top_0()
+                        .bottom_0()
+                        .with_animation(
+                            ("settings-card-deck-slide", slide.step),
+                            deck_ease(),
+                            move |card, delta| {
+                                card.left(px(slide.from + (slide.to - slide.from) * delta))
+                            },
+                        )
+                        .into_any_element(),
+                    None => card.into_any_element(),
+                };
+                return base.child(card);
+            }
+            return base.child(self.render_deck(depth, card, slide, drawer, cx));
+        }
+        let entering = !self.rail_source_level();
+        let progress = move |delta: f32| if entering { delta } else { 1.0 - delta };
+        let step = self.rail_transition.step;
+        let snapped = self.rail_transition.snapped
+            || !transition_in_flight(self.rail_transition.started, std::time::Instant::now());
+        let ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_in_out);
+        let rail_column = div()
+            .id("settings-section-rail")
+            .flex_none()
+            .relative()
+            .flex()
+            .flex_col()
+            .h_full()
+            .w(px(super::PANEL_RAIL_WIDTH))
+            .p(px(qol_theme::SPACE_INSET))
+            .children(rail);
+        let rail_attention = div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .bottom_0()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .w(px(super::PANEL_RAIL_WIDTH))
+            .p(px(qol_theme::SPACE_INSET))
+            .children(rail_dots);
+        let scrim = div()
+            .absolute()
+            .inset_0()
+            .bg(crate::kit::rail_scrim(self.palette.window_bg));
+        let custom_breadcrumbs = if self.current_source_is_custom() {
+            self.custom_view()
+                .map(|custom| custom.breadcrumb_labels(cx).len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let rail_depth = depth + custom_breadcrumbs;
+        let rest = deck::rail_opacity(rail_depth);
+        let deck_slide = slide.or_else(|| drawer.as_ref().map(|(_, slide)| *slide));
+        let rail_column = if !snapped {
+            rail_column
+                .child(scrim.with_animation(
+                    ("settings-rail-scrim", step),
+                    ease(),
+                    move |scrim, delta| scrim.opacity(progress(delta)),
+                ))
+                .with_animation(("settings-rail-dim", step), ease(), move |rail, delta| {
+                    rail.opacity(1.0 - (1.0 - rest) * progress(delta))
+                })
+                .into_any_element()
+        } else if let Some(slide) = deck_slide {
+            let from = deck::rail_opacity(slide.from_depth);
+            let reached = progress(1.0);
+            rail_column
+                .child(scrim.opacity(reached))
+                .with_animation(
+                    ("settings-rail-depth", self.deck_transition.step),
+                    Animation::new(deck::TRANSITION).with_easing(ease_out_quint()),
+                    move |rail, delta| {
+                        let rest = from + (rest - from) * delta;
+                        rail.opacity(1.0 - (1.0 - rest) * reached)
+                    },
+                )
+                .into_any_element()
+        } else {
+            let reached = progress(1.0);
+            rail_column
+                .child(scrim.opacity(reached))
+                .opacity(1.0 - (1.0 - rest) * reached)
+                .into_any_element()
+        };
+        let card_layer = match depth {
+            0 if drawer.is_none() => {
+                let card = card
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .bg(rgb(self.palette.window_bg))
+                    .border_t(px(1.))
+                    .border_r(px(1.))
+                    .border_b(px(1.))
+                    .border_color(self.hairline())
+                    .shadow(crate::kit::float_shadow(self.palette.section_text))
+                    .occlude();
+                let accent = crate::kit::accent_left_edge(
+                    qol_theme::RADIUS_CARD,
+                    deck::CARD_ACCENT,
+                    self.palette.row_border_selected,
+                );
+                if snapped {
+                    let reached = progress(1.0);
+                    let base = super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached;
+                    let card = if custom_breadcrumbs > 0 {
+                        card
+                    } else {
+                        card.child(
+                            accent
+                                .rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                                .border_l(px(deck::CARD_ACCENT * reached)),
+                        )
+                    }
+                    .rounded_l(px(qol_theme::RADIUS_CARD * reached));
+                    match slide {
+                        Some(slide) => card
+                            .with_animation(
+                                ("settings-card-deck-slide", slide.step),
+                                deck_ease(),
+                                move |card, delta| {
+                                    card.left(px(base
+                                        + slide.from
+                                        + (slide.to - slide.from) * delta))
+                                },
+                            )
+                            .into_any_element(),
+                        None => card.left(px(base)).into_any_element(),
+                    }
+                } else {
+                    let card = if custom_breadcrumbs > 0 {
+                        card
+                    } else {
+                        card.child(accent.with_animation(
+                            ("settings-card-accent", step),
+                            ease(),
+                            move |edge, delta| {
+                                let reached = progress(delta);
+                                edge.rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                                    .border_l(px(deck::CARD_ACCENT * reached))
+                            },
+                        ))
+                    };
+                    card.with_animation(
+                        ("settings-card-slide", step),
+                        ease(),
+                        move |card, delta| {
+                            let reached = progress(delta);
+                            card.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                                .rounded_l(px(qol_theme::RADIUS_CARD * reached))
+                        },
+                    )
+                    .into_any_element()
+                }
+            }
+            _ => {
+                let deck = self
+                    .render_deck(depth, card, slide, drawer, cx)
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0();
+                if snapped {
+                    let reached = progress(1.0);
+                    deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                        .into_any_element()
+                } else {
+                    deck.with_animation(
+                        ("settings-card-slide", step),
+                        ease(),
+                        move |deck, delta| {
+                            let reached = progress(delta);
+                            deck.left(px(super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached))
+                        },
+                    )
+                    .into_any_element()
+                }
+            }
+        };
+        base.relative()
+            .child(rail_column)
+            .child(rail_attention)
+            .child(card_layer)
+    }
+
+    fn render_deck(
+        &self,
+        depth: usize,
+        card: Div,
+        slide: Option<DeckSlide>,
+        closing: Option<(Div, DeckSlide)>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let view = cx.weak_entity();
+        let on_sliver: deck::SliverClick = Rc::new(move |level, window, cx| {
+            let _ = view.update(cx, |this, cx| this.back_to(level, window, cx));
+        });
+        deck::render(
+            self.palette,
+            card,
+            deck::DeckFrame {
+                depth,
+                slide,
+                closing,
+                animation_id: "settings-card-deck-slide",
+                marks: self.card_marks.iter().take(depth).copied().collect(),
+                on_sliver: Some(on_sliver),
+            },
+        )
+    }
+
+    fn hairline(&self) -> Rgba {
+        rgba(self.kit.washes.hairline.packed())
+    }
+
+    fn render_band(&self, cx: &App) -> Div {
+        let trail = self.trail(cx);
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(qol_theme::SPACE_GUTTER))
+            .h(px(super::PANEL_BAND_HEIGHT))
+            .px(px(qol_theme::SPACE_GUTTER))
+            .border_b(px(1.))
+            .border_color(self.hairline())
+            .bg(rgb(self.palette.rail_bg))
+            .panel_drag_area()
+            .child(super::components::settings_crumb_trail(trail, self.palette))
+    }
+
+    fn render_filter_field(&self) -> Div {
+        let empty = self.filter.is_empty();
+        let text = if empty {
+            "Filter settings".to_string()
+        } else {
+            self.filter.clone()
+        };
+        let field = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_INSET))
+            .h(px(super::PANEL_FILTER_HEIGHT))
+            .px(px(qol_theme::SPACE_PAD))
+            .rounded(px(qol_theme::RADIUS_WELL))
+            .bg(rgba(self.kit.washes.fill_resting.packed()))
+            .border(px(1.))
+            .border_color(self.hairline())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text_color(rgb(if empty {
+                        self.palette.status_muted
+                    } else {
+                        self.palette.section_text
+                    }))
+                    .child(text),
+            );
+        if self.filter_open {
+            return field
+                .bg(rgb(self.palette.window_bg))
+                .border_color(rgb(self.palette.row_border_selected))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(1.5))
+                        .h(px(16.))
+                        .bg(rgb(self.palette.row_border_selected)),
+                );
+        }
+        field.child(self.kit.keycap("/"))
+    }
+
+    fn render_filter_overlay(&self) -> Div {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .px(px(qol_theme::SPACE_PAD))
+            .pt(px(qol_theme::SPACE_CELL))
+            .pb(px(qol_theme::SPACE_INSET))
+            .bg(rgb(self.palette.window_bg))
+            .child(self.render_filter_field())
+    }
+
+    fn body_groups(&self) -> Vec<(String, Option<String>, Vec<usize>)> {
+        if !self.filtering() {
+            return (0..self.level().sections.len())
+                .filter(|section| {
+                    self.level().sections[*section].source == self.materialized_source
+                })
+                .map(|section| {
+                    let visible = self.section_filtered_rows(section);
+                    (
+                        self.section_title(section),
+                        self.section_detail(section),
+                        visible,
+                    )
+                })
+                .filter(|(_, _, rows)| !rows.is_empty() || self.level().list_card)
+                .collect();
+        }
+        let mut groups = Vec::new();
+        for source in 0..self.sources.len() {
+            let mut rows = Vec::new();
+            for section in 0..self.level().sections.len() {
+                if self.level().sections[section].source == source {
+                    rows.extend(self.section_filtered_rows(section));
+                }
+            }
+            if rows.is_empty() {
+                continue;
+            }
+            groups.push((self.plugin_title(source), None, rows));
+        }
+        groups
+    }
+
+    fn section_detail(&self, section: usize) -> Option<String> {
+        self.level()
+            .sections
+            .get(section)
+            .and_then(|section| section.description.clone())
+            .filter(|detail| !detail.is_empty())
+    }
+
+    fn section_title(&self, section: usize) -> String {
+        self.level()
+            .sections
+            .get(section)
+            .map(|section| section.label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| self.panel.heading.clone())
+    }
+
+    fn trail(&self, cx: &App) -> Vec<String> {
+        let plugin = (self.sources.len() > 1 && !self.filtering())
+            .then(|| self.plugin_title(self.materialized_source));
+        let cards = if self.current_source_is_custom() {
+            if self.rail_source_level() {
+                Vec::new()
+            } else {
+                self.custom_view()
+                    .map(|custom| custom.breadcrumb_labels(cx))
+                    .unwrap_or_default()
+            }
+        } else {
+            self.stack
+                .iter()
+                .skip(1)
+                .filter_map(|level| match &level.header {
+                    LevelHeader::Card(destination) => Some(destination.label().to_string()),
+                    LevelHeader::Root => None,
+                })
+                .collect()
+        };
+        crumb_labels(&self.panel.heading, plugin, cards)
+    }
+
+    fn plugin_title(&self, source: usize) -> String {
+        self.panel
+            .sources
+            .get(source)
+            .map(|source| source.heading.clone())
+            .unwrap_or_else(|| {
+                self.sources
+                    .get(source)
+                    .map(|source| source.plugin_id.clone())
+                    .unwrap_or_default()
+            })
+    }
+
+    fn render_group_header(
+        &self,
+        title: &str,
+        detail: Option<&str>,
+        here: bool,
+    ) -> impl IntoElement {
+        let header = SettingsGroupHeader::new(
+            title.to_string(),
+            detail.map(|detail| SharedString::from(detail.to_string())),
+            self.palette,
+        )
+        .current(here);
+        match list_card::list_card_activity(self.level(), &self.root().rows) {
+            Some(label) => header.activity(label.to_string()),
+            None => header,
+        }
+    }
+
+    fn enter_hint(&self) -> Option<&'static str> {
+        if let Some(hint) = card_enter_hint(self.level()) {
+            return Some(hint);
+        }
+        let row = self.level().rows.get(self.level().selected)?;
+        match &row.control {
+            RowControl::Toggle(_) => Some("flip"),
+            RowControl::Action { .. } => Some("run"),
+            RowControl::Select { .. } | RowControl::MultiSelect { .. } => Some("choose"),
+            RowControl::Color(_) => Some("pick"),
+            RowControl::List { items, .. } if !items.is_empty() => Some("open"),
+            RowControl::ObjectArray(_) => Some("edit"),
+            RowControl::DisplayLayout(_) => Some("open"),
+            RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
+                Some("edit")
+            }
+            RowControl::Gamepad { .. } => Some("next"),
+            RowControl::List { .. }
+            | RowControl::Status { .. }
+            | RowControl::QrCode { .. }
+            | RowControl::Unsupported { .. } => None,
+        }
+    }
+
+    fn render_hint_bar(&self, cx: &App) -> impl IntoElement {
+        let bar = SettingsHintBar::new(self.palette);
+        if self.current_source_is_custom() && self.body_has_focus() {
+            if let Some(hints) = self.custom_view().and_then(|custom| custom.hints(cx)) {
+                let mut right = hints.right;
+                if right.is_empty() {
+                    right.push(SettingsHint::new("esc", "back"));
+                }
+                let mut bar = bar.left(hints.left).right(right);
+                if let Some(question) = hints.question {
+                    bar = bar.question(question);
+                }
+                return bar;
+            }
+            let mut left = vec![
+                SettingsHint::new("\u{2191}\u{2193}", "move"),
+                SettingsHint::new("\u{21b5}", "open"),
+                SettingsHint::new("A", "add"),
+                SettingsHint::new("\u{232b}", "delete"),
+            ];
+            if self.custom_tool_is_shortcuts() {
+                left.push(SettingsHint::new("R", "run"));
+            }
+            return bar.left(left).right(vec![SettingsHint::new("esc", "back")]);
+        }
+        if self.level().choose.is_some() && !self.filter_open {
+            return bar
+                .left(self.choose_hints())
+                .right(vec![SettingsHint::new("esc", "back")]);
+        }
+        if (self.level().entries.is_some() || self.level().form.is_some()) && !self.filter_open {
+            return self.card_hint_bar(bar);
+        }
+        let mut left = Vec::new();
+        if let Some(label) = self.enter_hint() {
+            left.push(SettingsHint::new("\u{21b5}", label));
+        }
+        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        let mut right = Vec::new();
+        if self.filtering() {
+            left.push(SettingsHint::new("esc", "back to plugins"));
+        } else if self.stack.len() == 1 {
+            left.push(SettingsHint::new("type", "search every plugin"));
+            right.push(SettingsHint::new("esc", "close"));
+        } else {
+            right.push(SettingsHint::new("esc", "back"));
+        }
+        bar.left(left).right(right)
+    }
+
+    fn custom_tool_is_shortcuts(&self) -> bool {
+        self.panel
+            .sources
+            .get(self.materialized_source)
+            .is_some_and(|source| source.plugin_id == "__core-shortcuts")
+    }
+
+    fn render_failure_bar(&self, message: String) -> impl IntoElement {
+        SettingsFeedback::new(message, self.palette.status_danger, true)
+    }
+
+    fn resize_canvas(&mut self) -> impl IntoElement {
+        let dismisser = self.dismisser.clone();
+        let target = self.window_height();
+        #[cfg(debug_assertions)]
+        let built = std::time::Instant::now();
+        #[cfg(debug_assertions)]
+        let body_bounds = Rc::clone(&self.body_bounds);
+        #[cfg(debug_assertions)]
+        let page_scroll = self
+            .stack
+            .last()
+            .map(|level| level.body_scroll.handle().clone());
+        canvas(
+            |_, _, _| (),
+            move |_bounds, _, window, cx| {
+                #[cfg(debug_assertions)]
+                qol_runtime::probe!(
+                    "SETTINGS_FRAME",
+                    "phase=painted elapsed_us={} viewport_h={:?} target_h={} body={:?} page={:?}",
+                    built.elapsed().as_micros(),
+                    window.viewport_size().height,
+                    target,
+                    body_bounds.get(),
+                    page_scroll.as_ref().map(ScrollHandle::bounds)
+                );
+                let current = window.viewport_size().height.to_f64() as f32;
+                if (target - current).abs() <= 1.0 {
+                    return;
+                }
+                let next = size(dismisser.window_size().width, px(target));
+                let handle = window.window_handle();
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |_, window, _| {
+                        dismisser.resize_window(next, window);
+                    });
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+}
+
+fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>, step: Option<f64>) -> Option<f64> {
+    let mut value = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
+    if let Some(min) = min {
+        value = value.max(min);
+    }
+    if let Some(max) = max {
+        value = value.min(max);
+    }
+    if let Some(step) = step {
+        value = align_to_step(value, min, max, step);
+    }
+    Some(value)
+}
+
+fn align_to_step(value: f64, min: Option<f64>, max: Option<f64>, step: f64) -> f64 {
+    let origin = min.unwrap_or(0.0);
+    let steps = (value - origin) / step;
+    let rounded = steps.round();
+    if (steps - rounded).abs() <= 1e-9 {
+        return value;
+    }
+    for n in [rounded, rounded - 1.0, rounded + 1.0] {
+        let candidate = origin + n * step;
+        if min.is_none_or(|min| candidate >= min) && max.is_none_or(|max| candidate <= max) {
+            return round_to_step_precision(candidate, step);
+        }
+    }
+    value
+}
+
+fn round_to_step_precision(value: f64, step: f64) -> f64 {
+    let decimals = format!("{step}")
+        .split('.')
+        .nth(1)
+        .map(|fraction| fraction.len() as i32)
+        .unwrap_or(0);
+    let factor = 10f64.powi(decimals);
+    (value * factor).round() / factor
+}
+
+fn stepped_number(
+    edit: &str,
+    fallback: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: f64,
+    direction: f64,
+) -> String {
+    let current = parsed_number(edit, min, max, Some(step)).unwrap_or(fallback);
+    let next = parsed_number(
+        &(current + direction * step).to_string(),
+        min,
+        max,
+        Some(step),
+    )
+    .unwrap_or(current);
+    format_number(next)
+}
+
+fn number_preview(
+    edit: Option<&str>,
+    fallback: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: Option<f64>,
+) -> f64 {
+    edit.and_then(|value| parsed_number(value, min, max, step))
+        .unwrap_or(fallback)
+}
+
+#[derive(Clone, Copy)]
+struct NumberSpec {
+    value: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: Option<f64>,
+}
+
+fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
+    (((x - area.left()).to_f64() / area.size.width.to_f64()).clamp(0.0, 1.0)) as f32
+}
+
+fn schedule_slider_generation(
+    generations: &mut std::collections::HashMap<(usize, String), u64>,
+    key: &(usize, String),
+) -> u64 {
+    let generation = generations.entry(key.clone()).or_insert(0);
+    *generation = generation.wrapping_add(1);
+    *generation
+}
+
+fn slider_generation_current(
+    generations: &std::collections::HashMap<(usize, String), u64>,
+    key: &(usize, String),
+    generation: u64,
+) -> bool {
+    generations.get(key).copied() == Some(generation)
+}
+
+fn release_slider_dispatch(
+    pending: &mut std::collections::HashSet<(usize, String)>,
+    holds: &mut std::collections::HashMap<(usize, String), SliderHold>,
+    key: &(usize, String),
+) -> bool {
+    let released = pending.remove(key);
+    holds.remove(key);
+    released
+}
+
+fn slider_protected(
+    drag: Option<&(usize, String)>,
+    pending: &std::collections::HashSet<(usize, String)>,
+    holds: &std::collections::HashMap<(usize, String), SliderHold>,
+    index: usize,
+    id: &str,
+    now: std::time::Instant,
+) -> bool {
+    if drag.is_some_and(|(drag_index, drag_id)| *drag_index == index && drag_id == id) {
+        return true;
+    }
+    if pending.contains(&(index, id.to_string())) {
+        return true;
+    }
+    holds
+        .get(&(index, id.to_string()))
+        .is_some_and(|hold| hold.until > now)
+}
+
+#[derive(Debug, PartialEq)]
+enum LiveNumberDispatch {
+    Fire { action: String, value: f64 },
+    Release,
+}
+
+fn live_number_dispatch_plan(rows: &[Row], row: usize) -> LiveNumberDispatch {
+    let Some(RowControl::Number { value, .. }) = rows.get(row).map(|row| &row.control) else {
+        return LiveNumberDispatch::Release;
+    };
+    match row_action(rows, row) {
+        Some(action) => LiveNumberDispatch::Fire {
+            action,
+            value: *value,
+        },
+        None => LiveNumberDispatch::Release,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum NumberFinishPlan {
+    Live,
+    Persist { action: Option<String> },
+}
+
+fn number_finish_plan(rows: &[Row], row: usize) -> NumberFinishPlan {
+    match rows.get(row).map(|row| &row.control) {
+        Some(RowControl::Number { live: Some(_), .. }) => NumberFinishPlan::Live,
+        Some(RowControl::Number { .. }) => NumberFinishPlan::Persist {
+            action: row_action(rows, row),
+        },
+        _ => NumberFinishPlan::Live,
+    }
+}
+
+fn slider_drag_track<O, M, R>(
+    cx: &mut Context<SettingsPanelView>,
+    row: usize,
+    id: String,
+    on_down: O,
+    move_to: M,
+    release: R,
+) -> Div
+where
+    O: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    M: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    R: Fn(&mut SettingsPanelView, usize, &mut Context<SettingsPanelView>) + 'static,
+{
+    let bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+    let bounds_for_down = bounds.clone();
+    let id_for_down = id.clone();
+    let view = cx.weak_entity();
+    div()
+        .absolute()
+        .inset_0()
+        .cursor(CursorStyle::PointingHand)
+        .child(
+            canvas(
+                move |area, _, _| bounds.set(Some(area)),
+                move |area, _, window, _| {
+                    watch_slider_drag(window, view, row, id, area, move_to, release);
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                let Some(area) = bounds_for_down.get() else {
+                    return;
+                };
+                this.slider_drag = Some((row, id_for_down.clone()));
+                on_down(this, row, track_fraction(event.position.x, area), cx);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+}
+
+fn watch_slider_drag<M, R>(
+    window: &mut Window,
+    view: WeakEntity<SettingsPanelView>,
+    row: usize,
+    id: String,
+    bounds: Bounds<Pixels>,
+    move_to: M,
+    release: R,
+) where
+    M: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    R: Fn(&mut SettingsPanelView, usize, &mut Context<SettingsPanelView>) + 'static,
+{
+    let move_view = view.clone();
+    let move_id = id.clone();
+    let release = Rc::new(release);
+    let release_for_move = release.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+        if phase != DispatchPhase::Capture {
+            return;
+        }
+        let _ = move_view.update(cx, |panel, cx| {
+            if panel.slider_drag.as_ref() != Some(&(row, move_id.clone())) {
+                return;
+            }
+            if event.dragging() {
+                move_to(panel, row, track_fraction(event.position.x, bounds), cx);
+            } else {
+                panel.slider_drag = None;
+                release_for_move(panel, row, cx);
+                cx.notify();
+            }
+        });
+    });
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+        if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
+            return;
+        }
+        let _ = view.update(cx, |panel, cx| {
+            if panel.slider_drag.as_ref() != Some(&(row, id.clone())) {
+                return;
+            }
+            panel.slider_drag = None;
+            release(panel, row, cx);
+            cx.notify();
+        });
+    });
+}
+
+fn number_input(value: f64) -> serde_json::Value {
+    serde_json::json!({ "value": super::rows::number_json(value) })
+}
+
+fn horizontal_step_direction(key: &str) -> Option<f64> {
+    match key {
+        "left" => Some(-1.0),
+        "right" => Some(1.0),
+        _ => None,
+    }
+}
+
+fn parsed_color(text: &str) -> Option<u32> {
+    let hex = text.trim();
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(hex, 16).ok()
+}
+
+fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{}", (value * 10_000.0).round() / 10_000.0)
+    }
+}
+
+fn color_display(value: &str) -> String {
+    if value.starts_with('#') {
+        value.to_string()
+    } else {
+        format!("#{value}")
+    }
+}
+
+fn text_or_placeholder(value: &str, placeholder: Option<&str>) -> String {
+    if !value.is_empty() {
+        return value.to_string();
+    }
+    placeholder.unwrap_or("Empty").to_string()
+}
+
+fn number_unit(field_id: &str) -> Option<&'static str> {
+    if field_id.ends_with("_percent") {
+        return Some("%");
+    }
+    if field_id.ends_with("_px") || field_id.ends_with("_pixels") {
+        return Some("px");
+    }
+    if field_id.ends_with("_ms") {
+        return Some("ms");
+    }
+    if field_id.ends_with("_seconds") {
+        return Some("s");
+    }
+    None
+}
+
+fn slider_fraction(value: f64, min: Option<f64>, max: Option<f64>) -> f32 {
+    let Some(min) = min else {
+        return 0.0;
+    };
+    let Some(max) = max else {
+        return 0.0;
+    };
+    if max <= min {
+        return 0.0;
+    }
+    ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+}
+
+fn binary_state_label(active: bool) -> &'static str {
+    if active {
+        "On"
+    } else {
+        "Off"
+    }
+}
+
+fn action_value_label(
+    active: bool,
+    pending: bool,
+    failed: bool,
+    has_runtime_state: bool,
+    has_active_action: bool,
+    state_labels: &std::collections::BTreeMap<String, String>,
+) -> String {
+    if pending {
+        return "Working".into();
+    }
+    if failed {
+        return "failed".into();
+    }
+    if !has_runtime_state {
+        return "Run".into();
+    }
+    if let Some(label) = state_labels.get(if active { "true" } else { "false" }) {
+        return label.clone();
+    }
+    if active && has_active_action {
+        return "Stop".into();
+    }
+    if active {
+        return "Active".into();
+    }
+    "Run".into()
+}
+
+fn binary_state_tone(active: bool) -> SettingsValueTone {
+    if active {
+        SettingsValueTone::Success
+    } else {
+        SettingsValueTone::Danger
+    }
+}
+
+fn status_tone_color(palette: SettingsPanelPalette, tone: StatusTone) -> u32 {
+    match tone {
+        StatusTone::Accent => palette.status_accent,
+        StatusTone::Success => palette.status_success,
+        StatusTone::Danger => palette.status_danger,
+        StatusTone::Warning => palette.status_warning,
+        StatusTone::Muted => palette.status_muted,
+    }
+}
+
+fn item_count_label(count: usize) -> String {
+    match count {
+        0 => "none".to_string(),
+        1 => "1 item".to_string(),
+        _ => format!("{count} items"),
+    }
+}
+
+fn action_refresh_payload(
+    result: &Result<Option<serde_json::Value>, String>,
+    active_value_from: Option<&str>,
+) -> Option<serde_json::Value> {
+    result
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .filter(|value| query_flag_value(value, active_value_from).is_some())
+        .cloned()
+}
+
+fn action_shows_spinner(row: &Row) -> bool {
+    match &row.control {
+        RowControl::Action {
+            pending: true,
+            error: None,
+            ..
+        } => true,
+        RowControl::Action {
+            active: true,
+            error: None,
+            ..
+        } => row.variant.as_deref() != Some("toggle"),
+        _ => false,
+    }
+}
+
+pub(super) fn row_height(row: &Row, show_section_headers: bool) -> f32 {
+    let header = if show_section_headers && row.section_label.is_some() {
+        super::PANEL_SECTION_HEADER_HEIGHT
+    } else {
+        0.0
+    };
+    row_body_height(row, false) + header
+}
+
+fn list_fit_updates(
+    rows: &[Row],
+    sections: &[RowSection],
+    selected_source: usize,
+    height_cap: f32,
+) -> Vec<(usize, usize)> {
+    let show_section_headers = false;
+    let budget = height_cap - super::chrome_height(&[]);
+    let mut updates = Vec::new();
+    for section in sections {
+        if section.source != selected_source {
+            continue;
+        }
+        let visible = section
+            .rows
+            .iter()
+            .copied()
+            .filter(|index| super::rows::row_is_visible(rows, *index))
+            .collect::<Vec<_>>();
+        let mut fixed = visible.len().saturating_sub(1) as f32 * super::PANEL_COLUMN_GAP;
+        let mut lists: Vec<usize> = Vec::new();
+        for index in &visible {
+            let row = &rows[*index];
+            let header = if show_section_headers && row.section_label.is_some() {
+                super::PANEL_SECTION_HEADER_HEIGHT
+            } else {
+                0.0
+            };
+            if matches!(row.control, RowControl::List { .. }) {
+                fixed += header + super::PANEL_LIST_PADDING_Y + list_header_height(row);
+                lists.push(*index);
+            } else {
+                fixed += row_height(row, show_section_headers);
+            }
+        }
+        if lists.is_empty() {
+            continue;
+        }
+        let per_list = ((budget - fixed) / lists.len() as f32).max(0.0);
+        let fit = (per_list / (super::PANEL_LIST_ITEM_HEIGHT + super::PANEL_LIST_GAP)) as usize;
+        let visible_items = fit.clamp(LIST_FIT_MIN_VISIBLE, super::rows::LIST_MAX_VISIBLE);
+        for index in lists {
+            if let RowControl::List { list, .. } = &rows[index].control {
+                if list.max_visible != visible_items {
+                    updates.push((index, visible_items));
+                }
+            }
+        }
+    }
+    updates
+}
+
+fn source_window_height_for(
+    rows: &[Row],
+    sections: &[RowSection],
+    source: usize,
+    height_cap: f32,
+) -> f32 {
+    let sections = sections
+        .iter()
+        .filter(|section| section.source == source)
+        .cloned()
+        .collect::<Vec<_>>();
+    super::panel_height(rows, &sections).clamp(
+        super::chrome_height(&sections) + super::PANEL_ROW_HEIGHT,
+        height_cap,
+    )
+}
+
+pub(super) fn row_body_height(row: &Row, expanded: bool) -> f32 {
+    if !expanded {
+        return super::PANEL_ROW_HEIGHT;
+    }
+    if matches!(row.control, RowControl::Gamepad { .. }) {
+        return super::PANEL_GAMEPAD_HEIGHT;
+    }
+    if matches!(row.control, RowControl::QrCode { .. }) {
+        return super::PANEL_LIST_PADDING_Y
+            + list_header_height(row)
+            + super::PANEL_QR_CODE_HEIGHT
+            + super::PANEL_QR_URL_HEIGHT
+            + 2.0 * super::PANEL_LIST_GAP;
+    }
+    super::PANEL_ROW_HEIGHT
+}
+
+fn body_child_offset(
+    sections: &[impl AsRef<[usize]>],
+    headers: &[bool],
+    row: usize,
+) -> Option<usize> {
+    let mut child = 0;
+    for (section_index, section) in sections.iter().enumerate() {
+        let visible = section.as_ref();
+        if visible.is_empty() {
+            continue;
+        }
+        if headers.get(section_index).copied().unwrap_or(true) {
+            child += 1;
+        }
+        match visible.iter().position(|index| *index == row) {
+            Some(position) => return Some(child + position),
+            None => child += visible.len(),
+        }
+    }
+    None
+}
+
+fn body_header_child_offset(
+    sections: &[impl AsRef<[usize]>],
+    headers: &[bool],
+    row: usize,
+) -> Option<usize> {
+    let mut child = 0;
+    for (section_index, section) in sections.iter().enumerate() {
+        let visible = section.as_ref();
+        if visible.is_empty() {
+            continue;
+        }
+        let header = headers.get(section_index).copied().unwrap_or(true);
+        let head = child;
+        if header {
+            child += 1;
+        }
+        match visible.iter().position(|index| *index == row) {
+            Some(0) if header => return Some(head),
+            Some(_) => return None,
+            None => child += visible.len(),
+        }
+    }
+    None
+}
+
+fn initial_card_selection(count: usize) -> usize {
+    if count == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+fn live_card_level(
+    label: &str,
+    description: Option<String>,
+    config_key: &str,
+    source: usize,
+    control: RowControl,
+    origin_row: usize,
+    destination: SettingsDestination,
+) -> Level {
+    let row = Row {
+        id: "live_card_body".into(),
+        section_id: None,
+        section_label: None,
+        label: label.to_string(),
+        description,
+        placeholder: None,
+        variant: None,
+        config_key: config_key.to_string(),
+        default: qol_config::contract::FieldDefault::String(String::new()),
+        stream: None,
+        action: None,
+        visibility: None,
+        source,
+        control,
+    };
+    let section = RowSection {
+        label: label.to_string(),
+        description: None,
+        rows: vec![0],
+        source,
+    };
+    Level {
+        rows: vec![row],
+        sections: vec![section],
+        selected: 0,
+        active_section: None,
+        selected_section: 0,
+        body_scroll: crate::scroll_list::SelectionScroll::new(),
+        active_control: None,
+        row_bounds: vec![Rc::new(Cell::new(None))],
+        header: LevelHeader::Card(destination),
+        origin_row: Some(origin_row),
+        object_array: None,
+        display_layout: None,
+        list_card: false,
+        live_card: true,
+        choose: None,
+        entries: None,
+        form: None,
+        list_item: None,
+    }
+}
+
+fn live_card_sync(root_rows: &mut [Row], level: &mut Level) {
+    let Some(origin_row) = level.origin_row else {
+        return;
+    };
+    let Some(parent) = root_rows.get(origin_row) else {
+        return;
+    };
+    let Some(row) = level.rows.first_mut() else {
+        return;
+    };
+    match (&parent.control, &mut row.control) {
+        (
+            RowControl::Gamepad { query, monitor },
+            RowControl::Gamepad {
+                query: row_query,
+                monitor: row_monitor,
+            },
+        ) => {
+            *row_query = query.clone();
+            *row_monitor = monitor.clone();
+        }
+        (
+            RowControl::QrCode {
+                query,
+                value_from,
+                url,
+                modules,
+                error,
+            },
+            RowControl::QrCode {
+                query: row_query,
+                value_from: row_value_from,
+                url: row_url,
+                modules: row_modules,
+                error: row_error,
+            },
+        ) => {
+            *row_query = query.clone();
+            *row_value_from = value_from.clone();
+            *row_url = url.clone();
+            *row_modules = modules.clone();
+            *row_error = error.clone();
+        }
+        _ => {}
+    }
+}
+
+fn live_card_sync_back(root_rows: &mut [Row], level: &Level) {
+    let Some(origin_row) = level.origin_row else {
+        return;
+    };
+    let Some(parent) = root_rows.get_mut(origin_row) else {
+        return;
+    };
+    let Some(row) = level.rows.first() else {
+        return;
+    };
+    if let (
+        RowControl::Gamepad {
+            monitor: root_monitor,
+            ..
+        },
+        RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        },
+    ) = (&mut parent.control, &row.control)
+    {
+        *root_monitor = card_monitor.clone();
+    }
+}
+
+fn card_enter_hint(level: &Level) -> Option<&'static str> {
+    if level.choose.is_some() {
+        return Some("choose");
+    }
+    if level.display_layout.is_some() {
+        return display_layout_card::enter_hint(level.selected);
+    }
+    if level.list_card {
+        return Some("open");
+    }
+    if level.list_item.is_some() {
+        return Some("run");
+    }
+    None
+}
+
+fn row_matches(row: &Row, needle: &str) -> bool {
+    row.label.to_lowercase().contains(needle)
+        || row
+            .description
+            .as_deref()
+            .is_some_and(|text| text.to_lowercase().contains(needle))
+}
+
+fn bare_filter_seed(key: &str, key_char: Option<&str>) -> Option<String> {
+    if matches!(
+        key,
+        "space"
+            | "enter"
+            | "return"
+            | "escape"
+            | "tab"
+            | "backspace"
+            | "up"
+            | "down"
+            | "left"
+            | "right"
+    ) {
+        return None;
+    }
+    key_char
+        .filter(|text| text.chars().count() == 1 && !text.chars().any(char::is_control))
+        .map(str::to_string)
+}
+
+pub(super) fn rail_open(sources: usize, filtering: bool) -> bool {
+    sources > 1 && !filtering
+}
+
+fn rail_group_breaks(groups: &[PanelSourceGroup]) -> Vec<usize> {
+    groups
+        .windows(2)
+        .enumerate()
+        .filter_map(|(index, pair)| (pair[0] != pair[1]).then_some(index + 1))
+        .collect()
+}
+
+fn filtered_visible_rows(
+    rows: &[Row],
+    sections: &[RowSection],
+    source_count: usize,
+    needle: Option<&str>,
+    selected_source: usize,
+) -> Vec<usize> {
+    let filtering = needle.is_some();
+    let mut out = Vec::new();
+    for source in 0..source_count {
+        if !filtering && source != selected_source {
+            continue;
+        }
+        for section in sections.iter().filter(|section| section.source == source) {
+            let visible = section
+                .rows
+                .iter()
+                .copied()
+                .filter(|index| super::rows::row_is_visible(rows, *index));
+            match needle {
+                Some(needle) => {
+                    out.extend(visible.filter(|index| row_matches(&rows[*index], needle)));
+                }
+                None => out.extend(visible),
+            }
+        }
+    }
+    out
+}
+
+fn clamp_selected(visible: &[usize], selected: usize) -> usize {
+    if visible.contains(&selected) {
+        selected
+    } else {
+        visible.first().copied().unwrap_or(selected)
+    }
+}
+
+fn push_level(stack: &mut Vec<Level>, child: Level) {
+    stack.push(child);
+}
+
+fn pop_level(stack: &mut Vec<Level>) -> Option<Level> {
+    if stack.len() == 1 {
+        return None;
+    }
+    stack.pop()
+}
+
+fn focus_enters_the_body(plugin_id: &str) -> bool {
+    plugin_id != qol_conventions::CORE_PANEL_ID
+}
+
+fn crumb_labels(heading: &str, plugin: Option<String>, parents: Vec<String>) -> Vec<String> {
+    let mut labels = vec![heading.to_string()];
+    labels.extend(plugin.filter(|title| title != heading));
+    labels.extend(parents);
+    labels
+}
+
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        noun.to_string()
+    } else {
+        format!("{noun}s")
+    }
+}
+
+fn header_is_redundant(title: &str, labels: &[&str]) -> bool {
+    if labels.len() != 1 {
+        return false;
+    }
+    title.trim().to_lowercase() == labels[0].trim().to_lowercase()
+}
+
+fn value_cell_width(control: &RowControl) -> f32 {
+    match control {
+        RowControl::Toggle(_) => 92.0,
+        RowControl::Number { .. } => 33.0,
+        RowControl::Color(_) => 76.0,
+        RowControl::Select { .. } | RowControl::MultiSelect { .. } => 96.0,
+        RowControl::Text(_) => 120.0,
+        RowControl::TextList(_) => 160.0,
+        RowControl::Action { .. } => 90.0,
+        RowControl::Status { .. } => 130.0,
+        RowControl::ObjectArray(_) => 60.0,
+        RowControl::DisplayLayout(_) => 120.0,
+        RowControl::List { .. } => 120.0,
+        RowControl::QrCode { .. } => 260.0,
+        RowControl::Unsupported { .. } => 200.0,
+        RowControl::Gamepad { .. } => 200.0,
+    }
+}
+
+fn list_header_height(row: &Row) -> f32 {
+    super::PANEL_LIST_HEADER_HEIGHT
+        + if row.description.is_some() {
+            super::PANEL_LIST_DESCRIPTION_HEIGHT
+        } else {
+            0.0
+        }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
+        apply_runtime_query, binary_state_label, clamp_selected, color_display, crumb_labels,
+        due_query_indices, escape_step, focus_level, format_number, header_is_redundant,
+        horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
+        live_card_sync_back, live_number_dispatch_plan, number_finish_plan, number_preview,
+        number_unit, parsed_color, parsed_number, pop_level, push_level, query_is_due,
+        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
+        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
+        stepped_number, text_or_placeholder, transition_in_flight, transition_policy, EscapeStep,
+        HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan,
+        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, TransitionAction,
+        TransitionTracker,
+    };
+    use crate::gamepad::GamepadMonitor;
+    use crate::phantom_nav::{NavAxis, PhantomNavGuard};
+    use crate::scroll_list::ScrollList;
+    use crate::settings_panel::object_array_row::{Entry, Item};
+    use crate::settings_panel::rows::{
+        retire_number_holds, rows_from_resolved, visible_row_indices, LiveQuery, SliderHold,
+    };
+    use crate::settings_panel::PanelSourceGroup;
+
+    #[test]
+    fn rail_separator_only_marks_the_core_to_plugin_boundary() {
+        assert_eq!(
+            rail_group_breaks(&[
+                PanelSourceGroup::Core,
+                PanelSourceGroup::Core,
+                PanelSourceGroup::Core,
+                PanelSourceGroup::Plugin,
+                PanelSourceGroup::Plugin,
+            ]),
+            vec![3]
+        );
+        assert!(rail_group_breaks(&[PanelSourceGroup::Core]).is_empty());
+    }
+
+    pub(super) fn rows(headers: &[bool]) -> Vec<Row> {
+        headers
+            .iter()
+            .map(|header| Row {
+                id: "field".into(),
+                section_id: header.then(|| "section".to_string()),
+                section_label: header.then(|| "Section".to_string()),
+                label: "Label".into(),
+                description: None,
+                placeholder: None,
+                variant: None,
+                config_key: "key".into(),
+                default: qol_config::contract::FieldDefault::String(String::new()),
+                stream: None,
+                action: None,
+                visibility: None,
+                source: 0,
+                control: RowControl::Toggle(false),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn long_descriptions_stay_inside_the_fixed_row_height() {
+        let icon = Row {
+            id: "icon".into(),
+            section_id: None,
+            section_label: None,
+            label: "Icon".into(),
+            description: Some("Where the app icon appears over each window preview.".into()),
+            placeholder: None,
+            variant: None,
+            config_key: "display.icon_position".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::Select {
+                options: vec![],
+                index: 0,
+                dynamic: None,
+                live: None,
+            },
+        };
+        let card = Row {
+            id: "card".into(),
+            section_id: None,
+            section_label: None,
+            label: "Card".into(),
+            description: Some(
+                "Scale multiplier for window cards and previews. 1.0 is the compact legacy size."
+                    .into(),
+            ),
+            placeholder: None,
+            variant: None,
+            config_key: "display.card_scale".into(),
+            default: qol_config::contract::FieldDefault::Number(1.5),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::Number {
+                value: 1.5,
+                min: None,
+                max: None,
+                step: None,
+                live: None,
+            },
+        };
+        let dynamic = Row {
+            id: "dynamic".into(),
+            section_id: None,
+            section_label: None,
+            label: "Dynamic".into(),
+            description: Some(
+                "Grow window cards to fill free space when few windows are open; shrink to fit when many are."
+                    .into(),
+            ),
+            placeholder: None,
+            variant: None,
+            config_key: "display.dynamic_card_scale".into(),
+            default: qol_config::contract::FieldDefault::Boolean(false),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::Toggle(false),
+        };
+        assert_eq!(
+            row_body_height(&icon, false),
+            super::super::PANEL_ROW_HEIGHT
+        );
+        assert_eq!(
+            row_body_height(&card, false),
+            super::super::PANEL_ROW_HEIGHT
+        );
+        assert_eq!(
+            row_body_height(&dynamic, false),
+            super::super::PANEL_ROW_HEIGHT
+        );
+    }
+
+    #[test]
+    fn color_display_normalizes_the_hash_prefix_like_the_web_save() {
+        let cases = [
+            ("ff0000", "#ff0000"),
+            ("#202322", "#202322"),
+            ("#FFFFFF", "#FFFFFF"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(color_display(value), expected, "value: {value}");
+        }
+    }
+
+    #[test]
+    fn format_number_matches_the_web_value_formatting() {
+        let cases = [
+            (1.7000000000000002, "1.7"),
+            (1.5, "1.5"),
+            (0.65, "0.65"),
+            (1.85, "1.85"),
+            (6.0, "6"),
+            (1.234567, "1.2346"),
+            (2.5, "2.5"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(format_number(value), expected, "value: {value}");
+        }
+    }
+
+    #[test]
+    fn the_panel_filter_reads_both_the_label_and_the_description() {
+        let mut row = list_row();
+        row.label = "Excluded Apps".into();
+        row.description = Some("Remapping is ignored in these apps.".into());
+
+        assert!(super::row_matches(&row, "excluded"));
+        assert!(super::row_matches(&row, "ignored"));
+        assert!(!super::row_matches(&row, "brightness"));
+    }
+
+    fn labeled_row(label: &str, source: usize) -> Row {
+        let mut row = rows(&[false]).remove(0);
+        row.label = label.into();
+        row.source = source;
+        row
+    }
+
+    pub(super) fn source_section(label: &str, source: usize, rows: Vec<usize>) -> RowSection {
+        RowSection {
+            label: label.into(),
+            description: None,
+            rows,
+            source,
+        }
+    }
+
+    #[test]
+    fn a_bare_letter_opens_the_filter_and_seeds_it() {
+        assert_eq!(super::bare_filter_seed("a", Some("a")), Some("a".into()));
+        assert_eq!(super::bare_filter_seed("7", Some("7")), Some("7".into()));
+        assert_eq!(super::bare_filter_seed("ä", Some("ä")), Some("ä".into()));
+        for (key, ch, label) in [
+            ("space", Some(" "), "space activates the row"),
+            ("enter", Some("\r"), "enter activates the row"),
+            ("return", Some("\r"), "return activates the row"),
+            ("escape", Some("\u{1b}"), "escape closes the panel"),
+            ("tab", Some("\t"), "tab moves focus"),
+            ("backspace", None, "backspace is not filter text"),
+            ("up", None, "arrows navigate"),
+            ("down", None, "arrows navigate"),
+            ("left", None, "arrows navigate"),
+            ("right", None, "arrows navigate"),
+        ] {
+            assert_eq!(super::bare_filter_seed(key, ch), None, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_needle_that_matches_nothing_shows_nothing_rather_than_the_whole_panel() {
+        let rows = vec![labeled_row("Reconnect", 0), labeled_row("Brightness", 1)];
+        let sections = vec![
+            source_section("Devices", 0, vec![0]),
+            source_section("Display", 1, vec![1]),
+        ];
+        assert!(
+            super::filtered_visible_rows(&rows, &sections, 2, Some("zzz"), 0).is_empty(),
+            "a needle with no hits must leave the body empty, not fall back to the unfiltered panel"
+        );
+        assert!(
+            !super::rail_open(2, true),
+            "the rail stays away while a query is on screen, hits or no hits"
+        );
+    }
+
+    #[test]
+    fn a_filter_needle_gathers_matching_rows_from_every_source() {
+        let rows = vec![
+            labeled_row("Reconnect", 0),
+            labeled_row("Reconnect interval", 1),
+            labeled_row("Brightness", 1),
+        ];
+        let sections = vec![
+            source_section("Devices", 0, vec![0]),
+            source_section("Display", 1, vec![1, 2]),
+        ];
+        assert_eq!(
+            super::filtered_visible_rows(&rows, &sections, 2, Some("reconnect"), 0),
+            vec![0, 1],
+            "a needle matching two sources must return rows from both"
+        );
+        assert_eq!(
+            super::filtered_visible_rows(&rows, &sections, 2, None, 0),
+            vec![0],
+            "without a needle only the selected source's rows are visible"
+        );
+    }
+
+    #[test]
+    fn filtering_suppresses_the_rail() {
+        assert!(!super::rail_open(2, true));
+        assert!(super::rail_open(2, false));
+        assert!(!super::rail_open(1, false));
+        assert!(!super::rail_open(1, true));
+    }
+
+    #[test]
+    fn escape_clears_the_filter_and_lands_back_on_the_selected_source() {
+        let rows = vec![
+            labeled_row("Reconnect", 0),
+            labeled_row("Reconnect interval", 1),
+        ];
+        let sections = vec![
+            source_section("Devices", 0, vec![0]),
+            source_section("Display", 1, vec![1]),
+        ];
+        let mut selected = 1;
+        let filtering = super::filtered_visible_rows(&rows, &sections, 2, Some("reconnect"), 0);
+        assert_eq!(filtering, vec![0, 1]);
+        selected = super::clamp_selected(&filtering, selected);
+        assert_eq!(selected, 1);
+        let cleared = super::filtered_visible_rows(&rows, &sections, 2, None, 0);
+        assert_eq!(cleared, vec![0]);
+        selected = super::clamp_selected(&cleared, selected);
+        assert_eq!(
+            selected, 0,
+            "the cursor must land on the selected source's row"
+        );
+        assert_eq!(rows[selected].source, 0);
+    }
+
+    #[test]
+    fn a_group_header_offsets_every_row_it_precedes_in_the_scroller() {
+        let sections = [vec![0usize, 1], Vec::new(), vec![2, 3, 4]];
+
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 0),
+            Some(1)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 1),
+            Some(2)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 2),
+            Some(4)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 4),
+            Some(6)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true, true], 5),
+            None
+        );
+    }
+
+    #[test]
+    fn the_first_row_of_a_group_scrolls_its_head_into_view() {
+        let sections = [vec![0usize, 1], Vec::new(), vec![2, 3, 4]];
+        let headers = [true, true, true];
+
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 0),
+            Some(0),
+            "the first row of the first group leads with that group's head"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 2),
+            Some(3),
+            "a later group leads with its own head"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 1),
+            None,
+            "a row inside a group has no head to reveal"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 4),
+            None
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &headers, 9),
+            None,
+            "a row that is not on the page leads with nothing"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &[false, true, false], 0),
+            None,
+            "a group drawn without a head has nothing to reveal"
+        );
+        assert_eq!(
+            super::body_header_child_offset(&sections, &[false, true, true], 2),
+            Some(2),
+            "a dropped head above shifts the head that is revealed"
+        );
+    }
+
+    #[test]
+    fn counts_name_their_noun_in_the_right_number() {
+        assert_eq!(super::plural(1, "setting"), "setting");
+        assert_eq!(super::plural(0, "setting"), "settings");
+        assert_eq!(super::plural(13, "item"), "items");
+    }
+
+    pub(super) fn list_row() -> Row {
+        Row {
+            id: "items".into(),
+            section_id: None,
+            section_label: None,
+            label: "Items".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
+            config_key: "items".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::List {
+                query: "items".into(),
+                filter: String::new(),
+                active_query: None,
+                active_value_from: None,
+                active_label: None,
+                active: false,
+                row_label: "{name}".into(),
+                row_subtitle: Some("{detail}".into()),
+                actions: Box::new(super::super::rows::ListActions {
+                    primary: None,
+                    additional: Vec::new(),
+                }),
+                slider: None,
+                items: Vec::new(),
+                list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),
+                error: None,
+            },
+        }
+    }
+
+    #[test]
+    fn descriptions_never_change_row_height() {
+        let mut plain = rows(&[false]).remove(0);
+        let plain_height = row_body_height(&plain, false);
+        plain.description = Some("Helpful context".into());
+
+        assert_eq!(plain_height, super::super::PANEL_ROW_HEIGHT);
+        assert_eq!(
+            row_body_height(&plain, false),
+            super::super::PANEL_ROW_HEIGHT
+        );
+
+        let mut list = list_row();
+        let plain_list_height = row_body_height(&list, false);
+        list.description = Some("Live devices".into());
+        assert_eq!(plain_list_height, super::super::PANEL_ROW_HEIGHT);
+        assert_eq!(
+            row_body_height(&list, false),
+            super::super::PANEL_ROW_HEIGHT
+        );
+    }
+
+    #[test]
+    fn every_control_rests_at_the_fixed_row_height() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.toggle]
+type = "boolean"
+default = true
+
+[field.number]
+type = "number"
+default = 1
+
+[field.text]
+type = "string"
+default = "d"
+
+[field.text_list]
+type = "string_array"
+default = []
+
+[field.multi_select]
+type = "string_array"
+options = ["a", "b"]
+default = ["a"]
+
+[field.select]
+type = "select"
+options = ["a", "b"]
+default = "a"
+
+[field.color]
+type = "color"
+default = "202322"
+
+[field.action]
+type = "action"
+action = "go"
+
+[field.status]
+type = "status"
+query = "status_query"
+value_from = "state"
+
+[field.list]
+type = "list"
+query = "list_query"
+row_label = "{name}"
+
+[field.object_array]
+type = "object_array"
+default = []
+
+[field.object_array.item.fields]
+app = "string"
+
+[field.gamepad]
+type = "gamepad"
+query = "controller_input"
+
+[field.qr]
+type = "qr_code"
+query = "connection_info"
+
+[field.arrangement]
+type = "display_layout"
+query = "layout"
+active_query = "modes"
+action = "arrange"
+active_action = "set_mode"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        assert_eq!(rows.len(), 14);
+        for row in &rows {
+            assert_eq!(
+                row_body_height(row, false),
+                super::super::PANEL_ROW_HEIGHT,
+                "{} must rest at the fixed row height",
+                row.id
+            );
+        }
+        assert!(
+            matches!(
+                rows.last().map(|row| &row.control),
+                Some(RowControl::DisplayLayout(_))
+            ),
+            "the display layout row carries the card state"
+        );
+        let broken = qol_config::contract::parse_spec_str(
+            "schema_version = 1\n\n[field.broken]\ntype = \"boolean\"\ndefault = true\n",
+        )
+        .unwrap();
+        let resolved = qol_config::normalized::resolve_config(
+            &broken,
+            &serde_json::json!({ "broken": "yes" }),
+        )
+        .unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        assert_eq!(
+            row_body_height(&rows[0], false),
+            super::super::PANEL_ROW_HEIGHT
+        );
+    }
+
+    #[test]
+    fn keyboard_navigation_skips_conditional_rows() {
+        const SPEC: &str = r#"
+schema_version = 1
+
+[field.enabled]
+type = "boolean"
+default = false
+
+[field.detail]
+type = "number"
+default = 4
+
+[field.detail.show_when]
+field = "enabled"
+equals = true
+
+[field.always]
+type = "string"
+default = "visible"
+"#;
+        let spec = qol_config::contract::parse_spec_str(SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        let visible = visible_row_indices(&rows);
+
+        assert_eq!(adjacent_visible_row(&visible, 0, 1), 2);
+        assert_eq!(adjacent_visible_row(&visible, 2, -1), 0);
+    }
+
+    #[test]
+    fn escape_is_the_only_key_that_goes_back() {
+        for key in ["left", "right", "up", "down"] {
+            assert_ne!(intent(key, None, false), Some(Intent::Close), "key: {key}");
+        }
+        assert_eq!(intent("escape", None, false), Some(Intent::Close));
+    }
+
+    #[test]
+    fn binary_runtime_and_config_states_share_on_off_labels() {
+        assert_eq!(binary_state_label(true), "On");
+        assert_eq!(binary_state_label(false), "Off");
+    }
+
+    #[test]
+    fn bluetooth_search_button_says_scan_and_answers_the_click() {
+        let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/bluetooth/qol-config.toml");
+        let spec = qol_config::contract::parse_spec(&contract).expect("bluetooth contract");
+        let resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
+            .expect("bluetooth config");
+        let rows = rows_from_resolved(&resolved, 0);
+        let row = rows
+            .iter()
+            .find(|row| row.id == "search")
+            .expect("search row");
+        let RowControl::Action {
+            active_action,
+            active_query,
+            state_labels,
+            ..
+        } = &row.control
+        else {
+            panic!("search is an action row");
+        };
+        let label = |active, pending| {
+            action_value_label(
+                active,
+                pending,
+                false,
+                active_query.is_some(),
+                active_action.is_some(),
+                state_labels,
+            )
+        };
+        assert_eq!(label(false, false), "Scan");
+        assert_eq!(
+            label(false, true),
+            "Working",
+            "the click shows before BlueZ answers"
+        );
+        assert_eq!(label(true, false), "Stop");
+    }
+
+    #[test]
+    fn action_values_distinguish_commands_from_semantic_runtime_state() {
+        let no_labels = std::collections::BTreeMap::new();
+        let cases = [
+            (false, false, false, false, false, "Run"),
+            (false, true, false, false, false, "Working"),
+            (false, false, true, false, false, "failed"),
+            (false, false, false, true, true, "Run"),
+            (true, false, false, true, true, "Stop"),
+            (true, false, false, true, false, "Active"),
+        ];
+        for (active, pending, failed, runtime, reversible, expected) in cases {
+            assert_eq!(
+                action_value_label(active, pending, failed, runtime, reversible, &no_labels),
+                expected
+            );
+        }
+
+        let labels = std::collections::BTreeMap::from([
+            ("false".into(), "Light".into()),
+            ("true".into(), "Dark".into()),
+        ]);
+        assert_eq!(
+            action_value_label(false, false, false, true, false, &labels),
+            "Light"
+        );
+        assert_eq!(
+            action_value_label(true, false, false, true, false, &labels),
+            "Dark"
+        );
+    }
+
+    #[test]
+    fn action_refresh_uses_only_payloads_that_answer_the_active_query() {
+        let cases = [
+            (
+                Ok(Some(serde_json::json!({"dark": true}))),
+                Some("dark"),
+                Some(serde_json::json!({"dark": true})),
+            ),
+            (
+                Ok(Some(serde_json::json!({"dark": false}))),
+                Some("dark"),
+                Some(serde_json::json!({"dark": false})),
+            ),
+            (
+                Ok(Some(serde_json::json!({"scheme": "dark"}))),
+                Some("dark"),
+                None,
+            ),
+            (
+                Ok(Some(serde_json::json!({"dark": "yes"}))),
+                Some("dark"),
+                None,
+            ),
+            (
+                Ok(Some(serde_json::json!(true))),
+                None,
+                Some(serde_json::json!(true)),
+            ),
+            (Ok(None), Some("dark"), None),
+            (Err("failed".into()), Some("dark"), None),
+        ];
+        for (result, path, expected) in cases {
+            assert_eq!(action_refresh_payload(&result, path), expected);
+        }
+    }
+
+    #[test]
+    fn every_navigation_level_reads_from_one_focus_rule() {
+        use super::PanelFocus::{Body, Sources};
+        let cases = [
+            (true, 4, Sources),
+            (true, 2, Sources),
+            (true, 1, Body),
+            (true, 0, Body),
+            (false, 4, Body),
+            (false, 1, Body),
+        ];
+        for (source_menu, sources, expected) in cases {
+            assert_eq!(
+                focus_level(source_menu, sources),
+                expected,
+                "source_menu={source_menu} sources={sources}"
+            );
+        }
+    }
+
+    #[test]
+    fn toggle_actions_show_state_without_a_permanent_spinner() {
+        let mut row = rows(&[false]).remove(0);
+        row.variant = Some("toggle".into());
+        row.control = RowControl::Action {
+            action: "enable_adapter".into(),
+            active_action: Some("disable_adapter".into()),
+            active_label: Some("Bluetooth".into()),
+            active_query: Some("adapter_status".into()),
+            active_value_from: Some("powered".into()),
+            state_labels: std::collections::BTreeMap::new(),
+            active: true,
+            pending: false,
+            error: None,
+        };
+        assert!(!action_shows_spinner(&row));
+
+        let RowControl::Action { pending, .. } = &mut row.control else {
+            unreachable!();
+        };
+        *pending = true;
+        assert!(action_shows_spinner(&row));
+    }
+
+    #[test]
+    fn parsed_number_parses_clamps_and_rejects() {
+        let cases = [
+            ("18", None, None, None, Some(18.0)),
+            (" 23.5 ", None, None, None, Some(23.5)),
+            ("-4", Some(0.0), Some(51.0), None, Some(0.0)),
+            ("99", Some(0.0), Some(51.0), None, Some(51.0)),
+            ("abc", None, None, None, None),
+            ("", None, None, None, None),
+            ("inf", None, None, None, None),
+        ];
+        for (edit, min, max, step, expected) in cases {
+            assert_eq!(
+                parsed_number(edit, min, max, step),
+                expected,
+                "edit: {edit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_numbers_align_to_the_contract_step() {
+        let cases = [
+            ("0.649", Some(0.1), Some(1.0), Some(0.01), Some(0.65)),
+            ("0.8", Some(0.1), Some(1.0), Some(0.05), Some(0.8)),
+            ("0.7", Some(0.1), Some(1.0), Some(0.05), Some(0.7)),
+            ("1250", Some(100.0), Some(4000.0), Some(100.0), Some(1300.0)),
+            ("1200", Some(100.0), Some(4000.0), Some(100.0), Some(1200.0)),
+            ("99", Some(0.0), Some(51.0), Some(2.0), Some(50.0)),
+            ("2.34", None, None, Some(1.0), Some(2.0)),
+            ("2.5", None, None, Some(1.0), Some(3.0)),
+            ("0.33", Some(0.0), Some(1.0), Some(0.1), Some(0.3)),
+            ("0.1", Some(0.1), Some(1.0), Some(0.01), Some(0.1)),
+        ];
+        for (edit, min, max, step, expected) in cases {
+            assert_eq!(
+                parsed_number(edit, min, max, step),
+                expected,
+                "edit: {edit:?} step: {step:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn activated_numbers_step_and_clamp_without_persisting_partial_text() {
+        let cases = [
+            ("4", 4.0, Some(0.0), Some(10.0), 2.0, 1.0, "6"),
+            ("4", 4.0, Some(0.0), Some(10.0), 2.0, -1.0, "2"),
+            ("10", 10.0, Some(0.0), Some(10.0), 2.0, 1.0, "10"),
+            ("invalid", 4.0, None, None, 0.5, 1.0, "4.5"),
+        ];
+        for (edit, fallback, min, max, step, direction, expected) in cases {
+            assert_eq!(
+                stepped_number(edit, fallback, min, max, step, direction),
+                expected,
+                "edit: {edit:?} direction: {direction}"
+            );
+        }
+    }
+
+    #[test]
+    fn activated_numbers_use_horizontal_arrows_for_nudging() {
+        let cases = [
+            ("left", Some(-1.0)),
+            ("right", Some(1.0)),
+            ("up", None),
+            ("down", None),
+            ("enter", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(horizontal_step_direction(key), expected, "key: {key}");
+        }
+    }
+
+    #[test]
+    fn active_number_edits_drive_the_slider_preview() {
+        let cases = [
+            (Some("6"), 4.0, Some(0.0), Some(10.0), None, 6.0),
+            (Some("20"), 4.0, Some(0.0), Some(10.0), None, 10.0),
+            (Some("invalid"), 4.0, Some(0.0), Some(10.0), None, 4.0),
+            (None, 4.0, Some(0.0), Some(10.0), None, 4.0),
+        ];
+        for (edit, fallback, min, max, step, expected) in cases {
+            assert_eq!(
+                number_preview(edit, fallback, min, max, step),
+                expected,
+                "edit: {edit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn slider_fraction_clamps_and_requires_a_valid_range() {
+        let cases = [
+            (50.0, Some(0.0), Some(100.0), 0.5),
+            (-1.0, Some(0.0), Some(100.0), 0.0),
+            (120.0, Some(0.0), Some(100.0), 1.0),
+            (4.0, None, Some(8.0), 0.0),
+            (4.0, Some(8.0), Some(8.0), 0.0),
+        ];
+        for (value, min, max, expected) in cases {
+            assert_eq!(
+                slider_fraction(value, min, max),
+                expected,
+                "value={value} min={min:?} max={max:?}"
+            );
+        }
+    }
+
+    fn number_row(action: Option<&str>, live: bool) -> Row {
+        let mut row = rows(&[false]).remove(0);
+        row.id = "brightness".into();
+        row.action = action.map(str::to_string);
+        row.control = RowControl::Number {
+            value: 42.0,
+            min: Some(1.0),
+            max: Some(100.0),
+            step: Some(1.0),
+            live: live.then(|| LiveQuery {
+                query: "brightness".into(),
+                value_from: None,
+            }),
+        };
+        row
+    }
+
+    #[test]
+    fn a_stopped_live_number_dispatch_releases_the_slider_hold() {
+        assert_eq!(
+            live_number_dispatch_plan(&[number_row(Some("set_brightness"), false)], 0),
+            LiveNumberDispatch::Fire {
+                action: "set_brightness".into(),
+                value: 42.0,
+            }
+        );
+        assert_eq!(
+            live_number_dispatch_plan(&[number_row(None, false)], 0),
+            LiveNumberDispatch::Release
+        );
+        assert_eq!(
+            live_number_dispatch_plan(&[number_row(Some("set_brightness"), false)], 9),
+            LiveNumberDispatch::Release
+        );
+        assert_eq!(
+            live_number_dispatch_plan(&rows(&[false]), 0),
+            LiveNumberDispatch::Release
+        );
+    }
+
+    #[test]
+    fn releasing_a_stopped_dispatch_clears_only_that_sliders_hold() {
+        let mut pending = std::collections::HashSet::new();
+        pending.insert((0usize, "brightness".to_string()));
+        pending.insert((1usize, "volume".to_string()));
+        let mut holds = std::collections::HashMap::new();
+        holds.insert(
+            (0usize, "brightness".to_string()),
+            SliderHold {
+                value: 42.0,
+                dispatched: Some(42.0),
+                until: std::time::Instant::now() + std::time::Duration::from_secs(10),
+            },
+        );
+        let key = (0usize, "brightness".to_string());
+        assert!(release_slider_dispatch(&mut pending, &mut holds, &key));
+        assert_eq!(
+            pending,
+            std::collections::HashSet::from([(1usize, "volume".to_string())])
+        );
+        assert!(holds.is_empty());
+        assert!(!release_slider_dispatch(&mut pending, &mut holds, &key));
+    }
+
+    #[test]
+    fn two_live_numbers_scheduled_inside_one_debounce_both_stay_current() {
+        let mut generations = std::collections::HashMap::new();
+        let volume = (0usize, "volume".to_string());
+        let brightness = (1usize, "brightness".to_string());
+        let volume_generation = schedule_slider_generation(&mut generations, &volume);
+        let brightness_generation = schedule_slider_generation(&mut generations, &brightness);
+        assert!(slider_generation_current(
+            &generations,
+            &volume,
+            volume_generation
+        ));
+        assert!(slider_generation_current(
+            &generations,
+            &brightness,
+            brightness_generation
+        ));
+        let volume_again = schedule_slider_generation(&mut generations, &volume);
+        assert!(slider_generation_current(
+            &generations,
+            &volume,
+            volume_again
+        ));
+        assert!(!slider_generation_current(
+            &generations,
+            &volume,
+            volume_generation
+        ));
+        assert!(slider_generation_current(
+            &generations,
+            &brightness,
+            brightness_generation
+        ));
+    }
+
+    #[test]
+    fn a_list_slider_schedule_never_cancels_a_number_slider_schedule() {
+        let mut generations = std::collections::HashMap::new();
+        let list = (0usize, "kbd".to_string());
+        let number = (1usize, "volume".to_string());
+        let list_generation = schedule_slider_generation(&mut generations, &list);
+        let number_generation = schedule_slider_generation(&mut generations, &number);
+        let list_again = schedule_slider_generation(&mut generations, &list);
+        assert!(slider_generation_current(&generations, &list, list_again));
+        assert!(!slider_generation_current(
+            &generations,
+            &list,
+            list_generation
+        ));
+        assert!(slider_generation_current(
+            &generations,
+            &number,
+            number_generation
+        ));
+        let number_again = schedule_slider_generation(&mut generations, &number);
+        assert!(slider_generation_current(
+            &generations,
+            &number,
+            number_again
+        ));
+        assert!(!slider_generation_current(
+            &generations,
+            &number,
+            number_generation
+        ));
+        assert!(slider_generation_current(&generations, &list, list_again));
+    }
+
+    fn live_number_row(value: f64) -> Row {
+        let mut row = number_row(Some("set_brightness"), true);
+        if let RowControl::Number {
+            value: current,
+            live,
+            ..
+        } = &mut row.control
+        {
+            *current = value;
+            *live = Some(LiveQuery {
+                query: "brightness".into(),
+                value_from: Some("brightness".into()),
+            });
+        }
+        row
+    }
+
+    fn live_number_value(rows: &[Row]) -> f64 {
+        match &rows[0].control {
+            RowControl::Number { value, .. } => *value,
+            other => panic!("expected number, got {other:?}"),
+        }
+    }
+
+    fn number_hold(
+        value: f64,
+        dispatched: Option<f64>,
+        until: std::time::Instant,
+    ) -> std::collections::HashMap<(usize, String), SliderHold> {
+        let mut holds = std::collections::HashMap::new();
+        holds.insert(
+            (0usize, "brightness".to_string()),
+            SliderHold {
+                value,
+                dispatched,
+                until,
+            },
+        );
+        holds
+    }
+
+    #[test]
+    fn a_stale_answer_after_the_dispatch_resolves_does_not_snap_the_number_back() {
+        let mut rows = vec![live_number_row(60.0)];
+        let now = std::time::Instant::now();
+        let mut holds = number_hold(60.0, Some(60.0), now + std::time::Duration::from_secs(10));
+        let stale = Ok(serde_json::json!({ "brightness": 45 }));
+        retire_number_holds(&rows, &mut holds, "brightness", &stale);
+        assert!(holds.contains_key(&(0usize, "brightness".to_string())));
+        let pending = std::collections::HashSet::new();
+        apply_runtime_query(&mut rows, "brightness", stale, &|index, id| {
+            slider_protected(None, &pending, &holds, index, id, now)
+        });
+        assert_eq!(live_number_value(&rows), 60.0);
+    }
+
+    #[test]
+    fn a_confirming_answer_drops_the_number_hold() {
+        let mut rows = vec![live_number_row(60.0)];
+        let now = std::time::Instant::now();
+        let mut holds = number_hold(60.0, Some(60.0), now + std::time::Duration::from_secs(10));
+        let answer = Ok(serde_json::json!({ "brightness": 60 }));
+        retire_number_holds(&rows, &mut holds, "brightness", &answer);
+        assert!(holds.is_empty());
+        let pending = std::collections::HashSet::new();
+        apply_runtime_query(&mut rows, "brightness", answer, &|index, id| {
+            slider_protected(None, &pending, &holds, index, id, now)
+        });
+        assert_eq!(live_number_value(&rows), 60.0);
+    }
+
+    #[test]
+    fn the_number_hold_expires_after_its_ttl() {
+        let mut rows = vec![live_number_row(60.0)];
+        let now = std::time::Instant::now();
+        let mut holds = number_hold(60.0, Some(60.0), now - std::time::Duration::from_secs(1));
+        let answer = Ok(serde_json::json!({ "brightness": 45 }));
+        retire_number_holds(&rows, &mut holds, "brightness", &answer);
+        assert!(holds.is_empty());
+        let pending = std::collections::HashSet::new();
+        apply_runtime_query(&mut rows, "brightness", answer, &|index, id| {
+            slider_protected(None, &pending, &holds, index, id, now)
+        });
+        assert_eq!(live_number_value(&rows), 45.0);
+    }
+
+    #[test]
+    fn a_released_non_live_slider_dispatches_its_declared_action() {
+        assert_eq!(
+            number_finish_plan(&[number_row(Some("set_brightness"), false)], 0),
+            NumberFinishPlan::Persist {
+                action: Some("set_brightness".into()),
+            }
+        );
+        assert_eq!(
+            number_finish_plan(&[number_row(None, false)], 0),
+            NumberFinishPlan::Persist { action: None }
+        );
+        assert_eq!(
+            number_finish_plan(&[number_row(Some("set_brightness"), true)], 0),
+            NumberFinishPlan::Live
+        );
+    }
+
+    #[test]
+    fn compact_values_reuse_contract_placeholders_and_field_units() {
+        let placeholder_cases = [
+            ("value", Some("hint"), "value"),
+            ("", Some("hint"), "hint"),
+            ("", None, "Empty"),
+        ];
+        for (value, placeholder, expected) in placeholder_cases {
+            assert_eq!(text_or_placeholder(value, placeholder), expected);
+        }
+
+        let unit_cases = [
+            ("width_percent", Some("%")),
+            ("padding_px", Some("px")),
+            ("preview_pixels", Some("px")),
+            ("onset_ms", Some("ms")),
+            ("retry_seconds", Some("s")),
+            ("count", None),
+        ];
+        for (field, expected) in unit_cases {
+            assert_eq!(number_unit(field), expected, "field: {field}");
+        }
+    }
+
+    #[test]
+    fn parsed_color_accepts_six_digit_hex_with_optional_hash() {
+        let cases = [
+            ("#202322", Some(0x202322)),
+            ("202322", Some(0x202322)),
+            (" #ffffff ", Some(0xffffff)),
+            ("AABBCC", Some(0xaabbcc)),
+            ("#fff", None),
+            ("#2023221", None),
+            ("20232g", None),
+            ("", None),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(parsed_color(text), expected, "text: {text:?}");
+        }
+    }
+
+    #[test]
+    fn down_then_up_within_phantom_window_moves_list_selection_once() {
+        let mut guard = PhantomNavGuard::new();
+        let mut list = ScrollList::new(5);
+
+        assert!(!guard.swallow(NavAxis::Vertical, 1.0));
+        list.move_down(7);
+        list.sync(7);
+        assert_eq!(list.selected, 1);
+
+        let swallowed = guard.swallow(NavAxis::Vertical, -1.0);
+        assert!(
+            swallowed,
+            "an up arriving within the phantom window must be swallowed"
+        );
+        if !swallowed {
+            list.move_up();
+        }
+        list.sync(7);
+        assert_eq!(
+            list.selected, 1,
+            "list selection holds against the phantom up"
+        );
+    }
+
+    #[test]
+    fn theme_override_values_reads_native_and_accent() {
+        let values = serde_json::json!({
+            "native_theme": "dark",
+            "accent": "teal",
+            "other": "field",
+        });
+        let (native, accent) = super::theme_override_values(&values);
+        assert_eq!(native, Some("dark"));
+        assert_eq!(accent, Some("teal"));
+    }
+
+    #[test]
+    fn theme_override_values_treats_missing_fields_as_none() {
+        let values = serde_json::json!({ "other": "field" });
+        let (native, accent) = super::theme_override_values(&values);
+        assert_eq!(native, None);
+        assert_eq!(accent, None);
+    }
+
+    #[test]
+    fn inactive_inputs_require_enter_before_control_keys_take_effect() {
+        let cases = [
+            ("up", None, false, Some(Intent::Up)),
+            ("down", None, false, Some(Intent::Down)),
+            ("tab", Some("\t"), false, Some(Intent::Tab)),
+            ("left", None, false, None),
+            ("right", None, false, None),
+            ("space", None, false, Some(Intent::Activate)),
+            ("5", Some("5"), false, None),
+            ("-", Some("-"), false, None),
+            (".", Some("."), false, None),
+            ("a", Some("a"), false, None),
+            ("enter", None, false, Some(Intent::Activate)),
+            ("return", None, false, Some(Intent::Activate)),
+            ("escape", None, false, Some(Intent::Close)),
+            ("enter", None, true, Some(Intent::CommitEdit)),
+            ("return", None, true, Some(Intent::CommitEdit)),
+            ("escape", None, true, Some(Intent::CancelEdit)),
+            ("backspace", None, true, Some(Intent::Backspace)),
+            ("a", Some("a"), true, Some(Intent::Insert("a".into()))),
+        ];
+        for (key, ch, editing, expected) in cases {
+            assert_eq!(
+                intent(key, ch, editing),
+                expected,
+                "key {key} editing {editing}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_enter_and_space_activate_a_row() {
+        assert_eq!(intent("space", None, false), Some(Intent::Activate));
+        assert_eq!(intent("enter", None, false), Some(Intent::Activate));
+        assert_eq!(intent("right", None, false), None);
+        assert_eq!(intent("left", None, false), None);
+        assert_eq!(intent("tab", Some("\t"), false), Some(Intent::Tab));
+        assert_eq!(
+            intent("tab", Some("\t"), true),
+            Some(Intent::Insert("\t".into()))
+        );
+        assert_eq!(
+            intent("space", Some(" "), true),
+            Some(Intent::Insert(" ".into()))
+        );
+    }
+
+    #[test]
+    fn header_is_redundant_matches_a_single_identical_row_label() {
+        assert!(header_is_redundant("Character Rules", &["Character Rules"]));
+    }
+
+    #[test]
+    fn header_is_redundant_ignores_case_and_padding() {
+        assert!(header_is_redundant(
+            " character RULES ",
+            &["Character Rules"]
+        ));
+        assert!(header_is_redundant(
+            "Character Rules",
+            &["  character rules  "]
+        ));
+    }
+
+    #[test]
+    fn header_is_redundant_is_false_for_a_differing_label() {
+        assert!(!header_is_redundant("Character Rules", &["Key Remapping"]));
+    }
+
+    #[test]
+    fn header_is_redundant_is_false_with_more_than_one_row() {
+        assert!(!header_is_redundant(
+            "Character Rules",
+            &["Character Rules", "Key Remapping"]
+        ));
+    }
+
+    #[test]
+    fn header_is_redundant_is_false_without_rows() {
+        assert!(!header_is_redundant("Character Rules", &[]));
+    }
+
+    pub(super) fn level(selected: usize) -> Level {
+        Level {
+            rows: Vec::new(),
+            sections: Vec::new(),
+            selected,
+            active_section: None,
+            selected_section: 0,
+            body_scroll: crate::scroll_list::SelectionScroll::new(),
+            active_control: None,
+            row_bounds: Vec::new(),
+            header: LevelHeader::Root,
+            origin_row: None,
+            object_array: None,
+            display_layout: None,
+            list_card: false,
+            live_card: false,
+            choose: None,
+            entries: None,
+            form: None,
+            list_item: None,
+        }
+    }
+
+    #[test]
+    fn pop_restores_the_parent_level_untouched() {
+        let mut parent = level(3);
+        parent.rows = rows(&[false, false]);
+        parent.sections = vec![source_section("Devices", 0, vec![0, 1])];
+        let parent_sections = parent.sections.clone();
+        let child = level(7);
+        let mut stack = vec![parent, child];
+        let popped = pop_level(&mut stack).unwrap();
+        assert_eq!(popped.selected, 7);
+        assert!(popped.sections.is_empty());
+        let root = stack.last().unwrap();
+        assert_eq!(root.selected, 3);
+        assert_eq!(root.rows.len(), 2);
+        assert_eq!(root.sections, parent_sections);
+        assert_eq!(stack.len(), 1);
+    }
+
+    #[test]
+    fn the_root_level_never_pops() {
+        let mut stack = vec![level(3)];
+        assert!(pop_level(&mut stack).is_none());
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].selected, 3);
+    }
+
+    #[test]
+    fn push_then_pop_is_identity() {
+        let mut stack = vec![level(3)];
+        push_level(&mut stack, level(9));
+        let popped = pop_level(&mut stack).unwrap();
+        assert_eq!(popped.selected, 9);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].selected, 3);
+    }
+
+    fn gamepad_row() -> Row {
+        Row {
+            id: "input".into(),
+            section_id: None,
+            section_label: None,
+            label: "Controller Input".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
+            config_key: "input".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+        }
+    }
+
+    fn qr_row() -> Row {
+        Row {
+            id: "pair".into(),
+            section_id: None,
+            section_label: None,
+            label: "Pair".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
+            config_key: "connection_info".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::QrCode {
+                query: "connection_info".into(),
+                value_from: Some("url".into()),
+                url: Some("https://example.com/pair".into()),
+                modules: vec![true, false, true, false],
+                error: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_live_card_level_names_the_row_and_carries_its_control() {
+        let level = live_card_level(
+            "Controller Input",
+            Some("The active controller".into()),
+            "input",
+            1,
+            RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+            3,
+            SettingsDestination::from_static("Controller Input"),
+        );
+        assert_eq!(
+            level.header,
+            LevelHeader::Card(SettingsDestination::from_static("Controller Input"))
+        );
+        assert_eq!(level.origin_row, Some(3));
+        assert!(level.live_card);
+        assert!(!level.list_card);
+        assert_eq!(level.selected, 0);
+        assert_eq!(level.sections.len(), 1);
+        assert_eq!(level.sections[0].rows, vec![0]);
+        assert_eq!(level.rows.len(), 1);
+        assert_eq!(level.rows[0].label, "Controller Input");
+        assert_eq!(
+            level.rows[0].description.as_deref(),
+            Some("The active controller")
+        );
+        let RowControl::Gamepad { query, .. } = &level.rows[0].control else {
+            panic!("expected gamepad control on the card");
+        };
+        assert_eq!(query, "controller_input");
+    }
+
+    #[test]
+    fn live_card_sync_mirrors_root_gamepad_state_into_the_card() {
+        let mut root = vec![gamepad_row()];
+        let RowControl::Gamepad { monitor, .. } = &mut root[0].control else {
+            panic!("expected gamepad monitor");
+        };
+        monitor.apply_query(Ok(serde_json::json!({
+            "available": true,
+            "items": [
+                {
+                    "name": "alpha",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+                {
+                    "name": "beta",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+            ],
+        })));
+        let mut card = live_card_level(
+            "Controller Input",
+            None,
+            "input",
+            0,
+            RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+            0,
+            SettingsDestination::from_static("Controller Input"),
+        );
+        live_card_sync(&mut root, &mut card);
+        let RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        } = &card.rows[0].control
+        else {
+            panic!("expected card gamepad monitor");
+        };
+        assert_eq!(
+            card_monitor
+                .selected()
+                .map(|controller| controller.name.as_str()),
+            Some("alpha")
+        );
+        let RowControl::Gamepad {
+            monitor: root_monitor,
+            ..
+        } = &mut root[0].control
+        else {
+            panic!("expected root gamepad monitor");
+        };
+        root_monitor.select_next();
+        live_card_sync(&mut root, &mut card);
+        let RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        } = &card.rows[0].control
+        else {
+            panic!("expected card gamepad monitor");
+        };
+        assert_eq!(
+            card_monitor
+                .selected()
+                .map(|controller| controller.name.as_str()),
+            Some("beta")
+        );
+    }
+
+    #[test]
+    fn live_card_sync_mirrors_root_qr_state_into_the_card() {
+        let mut root = vec![qr_row()];
+        let mut card = live_card_level(
+            "Pair",
+            None,
+            "connection_info",
+            0,
+            RowControl::QrCode {
+                query: "connection_info".into(),
+                value_from: None,
+                url: None,
+                modules: Vec::new(),
+                error: Some("stale".into()),
+            },
+            0,
+            SettingsDestination::from_static("Pair"),
+        );
+        live_card_sync(&mut root, &mut card);
+        let RowControl::QrCode {
+            value_from,
+            url,
+            modules,
+            error,
+            ..
+        } = &card.rows[0].control
+        else {
+            panic!("expected card qr code row");
+        };
+        assert_eq!(value_from.as_deref(), Some("url"));
+        assert_eq!(url.as_deref(), Some("https://example.com/pair"));
+        assert_eq!(modules, &vec![true, false, true, false]);
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn live_card_sync_back_returns_the_cycled_monitor_to_the_root() {
+        let mut root = vec![gamepad_row()];
+        let RowControl::Gamepad { monitor, .. } = &mut root[0].control else {
+            panic!("expected gamepad monitor");
+        };
+        monitor.apply_query(Ok(serde_json::json!({
+            "available": true,
+            "items": [
+                {
+                    "name": "alpha",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+                {
+                    "name": "beta",
+                    "state": {"mapping": "standard", "buttons": [], "axes": []}
+                },
+            ],
+        })));
+        let mut card = live_card_level(
+            "Controller Input",
+            None,
+            "input",
+            0,
+            RowControl::Gamepad {
+                query: "controller_input".into(),
+                monitor: GamepadMonitor::default(),
+            },
+            0,
+            SettingsDestination::from_static("Controller Input"),
+        );
+        live_card_sync(&mut root, &mut card);
+        let RowControl::Gamepad {
+            monitor: card_monitor,
+            ..
+        } = &mut card.rows[0].control
+        else {
+            panic!("expected card gamepad monitor");
+        };
+        card_monitor.select_next();
+        live_card_sync_back(&mut root, &card);
+        let RowControl::Gamepad {
+            monitor: root_monitor,
+            ..
+        } = &root[0].control
+        else {
+            panic!("expected root gamepad monitor");
+        };
+        assert_eq!(
+            root_monitor
+                .selected()
+                .map(|controller| controller.name.as_str()),
+            Some("beta")
+        );
+    }
+
+    #[test]
+    fn a_fresh_card_selects_the_first_item_or_the_add_row() {
+        assert_eq!(super::initial_card_selection(0), 0);
+        assert_eq!(super::initial_card_selection(3), 1);
+    }
+
+    #[test]
+    fn an_entry_summary_spells_out_the_well_display() {
+        let state = ObjectArrayState::from_entries(
+            None,
+            vec![
+                (
+                    "from_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "to_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "keys".to_string(),
+                    qol_config::object_array::ItemFieldKind::StringArray,
+                ),
+            ],
+            vec![Entry {
+                key: None,
+                fields: Item::from_iter([
+                    (
+                        "from_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["ctrl".into()]),
+                    ),
+                    (
+                        "to_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["cmd".into()]),
+                    ),
+                    (
+                        "keys".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["c".into()]),
+                    ),
+                ]),
+            }],
+        );
+        assert_eq!(state.summary(0), "ctrl + c \u{2192} cmd + c");
+    }
+
+    #[test]
+    fn an_entry_summary_compresses_shared_keys_like_the_well() {
+        let state = ObjectArrayState::from_entries(
+            None,
+            vec![
+                (
+                    "from_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "to_mods".to_string(),
+                    qol_config::object_array::ItemFieldKind::Mods,
+                ),
+                (
+                    "keys".to_string(),
+                    qol_config::object_array::ItemFieldKind::StringArray,
+                ),
+            ],
+            vec![Entry {
+                key: None,
+                fields: Item::from_iter([
+                    (
+                        "from_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["ctrl".into()]),
+                    ),
+                    (
+                        "to_mods".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec!["cmd".into()]),
+                    ),
+                    (
+                        "keys".to_string(),
+                        qol_config::contract::FieldDefault::StringArray(vec![
+                            "c".into(),
+                            "v".into(),
+                        ]),
+                    ),
+                ]),
+            }],
+        );
+        assert_eq!(state.summary(0), "ctrl + 2 keys \u{2192} cmd + 2 keys");
+    }
+
+    #[test]
+    fn escape_prefers_the_filter_over_everything() {
+        assert_eq!(escape_step(2, true, true), EscapeStep::CloseFilter);
+    }
+
+    #[test]
+    fn escape_pops_one_card_before_touching_the_rail() {
+        assert_eq!(escape_step(1, false, true), EscapeStep::PopCard);
+        assert_eq!(escape_step(2, false, false), EscapeStep::PopCard);
+    }
+
+    #[test]
+    fn escape_at_the_root_ascends_then_dismisses() {
+        assert_eq!(escape_step(0, false, true), EscapeStep::AscendRail);
+        assert_eq!(escape_step(0, false, false), EscapeStep::Dismiss);
+    }
+
+    #[test]
+    fn popping_reclamps_the_parent_cursor() {
+        let mut parent = level(9);
+        parent.rows = rows(&[false, false]);
+        parent.sections = vec![source_section("Devices", 0, vec![0, 1])];
+        let mut stack = vec![parent, level(7)];
+        pop_level(&mut stack).unwrap();
+        let root = stack.last().unwrap();
+        let visible = super::filtered_visible_rows(&root.rows, &root.sections, 1, None, 0);
+        let selected = clamp_selected(&visible, root.selected);
+        assert_eq!(selected, 0);
+        assert!(visible.contains(&selected));
+    }
+
+    #[test]
+    fn a_dropped_group_header_does_not_shift_the_scroll_target() {
+        let sections = vec![vec![0usize, 1], vec![2, 3]];
+        assert_eq!(
+            super::body_child_offset(&sections, &[false, true], 3),
+            Some(4)
+        );
+        assert_eq!(
+            super::body_child_offset(&sections, &[true, true], 3),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn the_trail_follows_from_the_window_down_to_the_open_card() {
+        assert_eq!(
+            crumb_labels(
+                "qol settings",
+                Some("Key remap".to_string()),
+                vec!["Excluded apps".to_string()]
+            ),
+            vec!["qol settings", "Key remap", "Excluded apps"]
+        );
+    }
+
+    #[test]
+    fn a_single_plugin_panel_does_not_repeat_its_own_name_in_the_trail() {
+        assert_eq!(
+            crumb_labels("Key remap", Some("Key remap".to_string()), Vec::new()),
+            vec!["Key remap"]
+        );
+    }
+
+    #[test]
+    fn transition_policy_decides_animate_snap_or_nothing() {
+        let cases = [
+            (false, false, None),
+            (true, false, None),
+            (false, true, Some(TransitionAction::Animate)),
+            (true, true, Some(TransitionAction::Snap)),
+        ];
+        for (in_flight, state_changed, expected) in cases {
+            assert_eq!(
+                transition_policy(in_flight, state_changed),
+                expected,
+                "in_flight: {in_flight} state_changed: {state_changed}"
+            );
+        }
+    }
+
+    #[test]
+    fn frame_paced_100ms_query_with_16ms_requests_keeps_its_interval() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        let interval = std::time::Duration::from_millis(100);
+        let mut due = vec![None];
+        let mut runs = 0;
+        let mut tick = 0u64;
+        while tick <= 1000 {
+            if !due_query_indices(&due, at(tick)).is_empty() {
+                runs += 1;
+                due[0] = Some(at(tick) + interval);
+            }
+            tick += 16;
+        }
+        assert!(
+            (9..=11).contains(&runs),
+            "a 100ms query asked every 16ms must run ~10x/sec, ran {runs}"
+        );
+    }
+
+    #[test]
+    fn frame_paced_queries_never_bypass_the_due_gate() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        let intervals = [
+            std::time::Duration::from_millis(8),
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(1000),
+        ];
+        let mut due = vec![None; 3];
+        let mut runs = [0usize; 3];
+        let mut tick = 0u64;
+        while tick <= 1000 {
+            for index in due_query_indices(&due, at(tick)) {
+                runs[index] += 1;
+                due[index] = Some(at(tick) + intervals[index]);
+            }
+            tick += 16;
+        }
+        assert!((57..=66).contains(&runs[0]), "8ms query ran {}x", runs[0]);
+        assert!((9..=11).contains(&runs[1]), "100ms query ran {}x", runs[1]);
+        assert_eq!(runs[2], 1, "1000ms query ran {}x", runs[2]);
+    }
+
+    #[test]
+    fn first_request_with_no_due_time_always_runs() {
+        let now = std::time::Instant::now();
+        assert!(query_is_due(None, now));
+        assert_eq!(due_query_indices(&[None], now), vec![0]);
+    }
+
+    #[test]
+    fn exactly_due_runs_and_one_millisecond_early_does_not() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        assert!(query_is_due(Some(at(100)), at(100)));
+        assert!(query_is_due(Some(at(100)), at(101)));
+        assert!(!query_is_due(Some(at(100)), at(99)));
+        assert_eq!(
+            due_query_indices(&[Some(at(100))], at(99)),
+            Vec::<usize>::new()
+        );
+        assert_eq!(due_query_indices(&[Some(at(100))], at(100)), vec![0]);
+    }
+
+    #[test]
+    fn transition_in_flight_window_uses_the_rail_duration() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        assert!(!transition_in_flight(None, at(0)));
+        assert!(transition_in_flight(Some(epoch), at(0)));
+        assert!(transition_in_flight(Some(epoch), at(179)));
+        assert!(!transition_in_flight(Some(epoch), at(180)));
+        assert!(!transition_in_flight(Some(epoch), at(181)));
+    }
+
+    #[test]
+    fn transition_tracker_bumps_once_per_burst_and_snaps_while_in_flight() {
+        let epoch = std::time::Instant::now();
+        let at = |ms: u64| epoch + std::time::Duration::from_millis(ms);
+        let mut tracker = TransitionTracker::default();
+
+        tracker.state_changed(true, at(0));
+        assert_eq!(tracker.step, 1, "first state change animates");
+        assert!(!tracker.snapped);
+        assert_eq!(tracker.started, Some(at(0)));
+
+        tracker.state_changed(true, at(60));
+        assert_eq!(
+            tracker.step, 1,
+            "in-flight change must not bump the counter"
+        );
+        assert!(tracker.snapped);
+        assert_eq!(tracker.started, Some(at(0)));
+
+        tracker.state_changed(true, at(120));
+        assert_eq!(tracker.step, 1, "in-flight change must not restart");
+        assert!(tracker.snapped);
+
+        tracker.state_changed(true, at(300));
+        assert_eq!(tracker.step, 2, "change after the window animates again");
+        assert!(!tracker.snapped);
+        assert_eq!(tracker.started, Some(at(300)));
+    }
+
+    #[test]
+    fn transition_tracker_ignores_unchanged_state() {
+        let mut tracker = TransitionTracker::default();
+        tracker.state_changed(false, std::time::Instant::now());
+        assert_eq!(tracker.step, 0);
+        assert!(!tracker.snapped);
+        assert_eq!(tracker.started, None);
+    }
+
+    #[test]
+    fn height_cache_recomputes_only_when_the_revision_changes() {
+        let mut cache = HeightCache::default();
+        let computes = std::cell::Cell::new(0);
+        let compute = || {
+            computes.set(computes.get() + 1);
+            128.0
+        };
+        assert_eq!(cache.value(0, compute), 128.0);
+        assert_eq!(cache.value(0, compute), 128.0);
+        assert_eq!(computes.get(), 1, "same revision serves the cached height");
+        assert_eq!(cache.value(1, compute), 128.0);
+        assert_eq!(computes.get(), 2, "new revision recomputes");
+        assert_eq!(cache.value(1, compute), 128.0);
+        assert_eq!(
+            computes.get(),
+            2,
+            "same revision stays cached after recompute"
+        );
+    }
+
+    #[test]
+    fn list_fit_updates_report_only_unfitted_lists() {
+        let mut rows = vec![list_row()];
+        let sections = vec![RowSection {
+            label: "Section".into(),
+            description: None,
+            rows: vec![0],
+            source: 0,
+        }];
+        assert_eq!(
+            list_fit_updates(&rows, &sections, 0, 720.0),
+            Vec::new(),
+            "a list already at the fit target is left untouched"
+        );
+        let RowControl::List { list, .. } = &mut rows[0].control else {
+            unreachable!();
+        };
+        list.max_visible = 3;
+        let updates = list_fit_updates(&rows, &sections, 0, 720.0);
+        assert_eq!(updates, vec![(0, super::super::rows::LIST_MAX_VISIBLE)]);
+        for (index, visible_items) in updates {
+            if let RowControl::List { list, .. } = &mut rows[index].control {
+                list.max_visible = visible_items;
+            }
+        }
+        assert_eq!(
+            list_fit_updates(&rows, &sections, 0, 720.0),
+            Vec::new(),
+            "applying the updates settles the list"
+        );
+    }
+
+    #[test]
+    fn source_window_height_for_clamps_to_the_height_cap() {
+        let rows = vec![list_row(), list_row()];
+        let sections = vec![RowSection {
+            label: "Section".into(),
+            description: None,
+            rows: vec![0, 1],
+            source: 0,
+        }];
+        let uncapped = source_window_height_for(&rows, &sections, 0, 720.0);
+        assert_eq!(
+            source_window_height_for(&rows, &sections, 0, uncapped - 40.0),
+            uncapped - 40.0,
+            "a cap below the natural height is applied"
+        );
+        assert!(uncapped <= 720.0);
+        let without_sections = source_window_height_for(&rows, &sections, 1, 720.0);
+        assert!(
+            without_sections > 0.0 && without_sections < uncapped,
+            "a source without sections still contributes its floor height"
+        );
+    }
+}
+
+#[cfg(test)]
+mod query_state_tests {
+    use super::{rollup_query_state, RowQueryState};
+    use std::time::{Duration, Instant};
+
+    const GRACE: Duration = Duration::from_millis(300);
+
+    fn rollup(states: &[Option<RowQueryState>], now: Instant) -> RowQueryState {
+        rollup_query_state(states.iter().map(Option::as_ref), GRACE, now)
+    }
+
+    /// A healthy plugin answers well inside the grace period, so its rows must
+    /// never flash a spinner on the way to their value.
+    #[test]
+    fn a_query_inside_its_grace_period_shows_no_indicator() {
+        let now = Instant::now();
+        let fresh = RowQueryState::Loading { since: now };
+        assert_eq!(rollup(&[Some(fresh)], now), RowQueryState::Idle);
+    }
+
+    /// Past the grace period the row has to admit it is waiting, otherwise a
+    /// wedged daemon is indistinguishable from a working one.
+    #[test]
+    fn a_query_past_its_grace_period_reports_loading() {
+        let now = Instant::now();
+        let stale = RowQueryState::Loading {
+            since: now - GRACE - Duration::from_millis(1),
+        };
+        assert!(matches!(
+            rollup(&[Some(stale)], now),
+            RowQueryState::Loading { .. }
+        ));
+    }
+
+    /// A row backed by several queries is only as good as its worst one.
+    #[test]
+    fn the_worst_query_decides_what_the_row_shows() {
+        let now = Instant::now();
+        let waiting = RowQueryState::Loading {
+            since: now - GRACE * 2,
+        };
+        let cases = [
+            (
+                vec![Some(RowQueryState::Ready), Some(waiting.clone())],
+                "loading",
+            ),
+            (
+                vec![
+                    Some(RowQueryState::Ready),
+                    Some(waiting.clone()),
+                    Some(RowQueryState::Unavailable("dead".into())),
+                ],
+                "unavailable",
+            ),
+            (vec![Some(RowQueryState::Ready), None], "ready"),
+            (vec![None, None], "idle"),
+        ];
+        for (states, expected) in cases {
+            let actual = match rollup(&states, now) {
+                RowQueryState::Idle => "idle",
+                RowQueryState::Loading { .. } => "loading",
+                RowQueryState::Ready => "ready",
+                RowQueryState::Unavailable(_) => "unavailable",
+            };
+            assert_eq!(actual, expected, "states: {states:?}");
+        }
+    }
+}
