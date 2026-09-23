@@ -1,0 +1,7 @@
+1. Inspect the source
+2. Run checks
+
+Do you want to proceed?
+  1. Yes
+❯ 2. No
+Esc to cancel

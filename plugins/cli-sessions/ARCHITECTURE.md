@@ -93,13 +93,17 @@ state (status + monotonic timers) and the current evidence, with one explicit
 precedence order:
 
 1. **Strong live work wins.** Descriptor `Working` (e.g. the Codex title) is
-   live regardless of the viewport. Screen `Working` (spinner in the recent
-   tail) is live while the screen is moving or a fresh transcript write landed
-   inside the settled stretch (`file_quiet_secs` shorter than the settle); a
-   settled spinner with no writes since settling is a stale leftover, not live
-   work. Descriptor `Ready` (the harness's own runtime state) wins over a
-   settled screen spinner, so a Codex "Ready" title never stays green on weak
-   freshness.
+   live regardless of the viewport, except when screen `NeedsInput` is strong
+   (rule 3): a settled, non-stale dialog then outranks it, and an alert
+   already given is retained while the dialog's screen stays settled and
+   `Live`, including after the transcript stops being fresh. The `Historical`
+   hold in rule 2 still precedes alerting. Screen `Working`
+   (spinner in the recent tail) is live while the screen is moving or a fresh
+   transcript write landed inside the settled stretch (`file_quiet_secs`
+   shorter than the settle); a settled spinner with no writes since settling
+   is a stale leftover, not live work. Descriptor `Ready` (the harness's own
+   runtime state) wins over a settled screen spinner, so a Codex "Ready"
+   title never stays green on weak freshness.
 2. **Historical viewport holds.** `viewport == Historical` (startup chrome)
    preserves the prior status and can never create attention. It is checked
    before any awaiting/blocked short-circuit, so a stale questionnaire in
@@ -126,8 +130,9 @@ precedence order:
    debounce). Weak file freshness never overrides authoritative runtime
    state: a descriptor `Ready` (the Codex title) completes on settle plus
    grace even while transcript writes stay fresh. First sightings never
-   complete. A prior `NeedsYou` state with no confirmed input settles to
-   `Unknown` after the same stable grace; it never becomes `YourTurn`.
+   complete. A prior `NeedsYou` state settles to `Unknown` after the same
+   stable grace once the settled live input screen is gone; the retained
+   alert keeps `NeedsYou` while it remains, and it never becomes `YourTurn`.
 6. **Generic shells stay busy-by-default.** A non-prompt generic pane is
    `Working` unless it is a declared service; at the prompt a command that ran
    past the grace window completes, a quick command returns to `Unknown`, and

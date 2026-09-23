@@ -1,0 +1,56 @@
+kmrh47@kmrh-pc-alpha:~$ dev
+kmrh47@kmrh-pc-alpha:/media/kmrh47/WD_SN850X/Git$ cd qol-mono
+qol-monorepo/           qol-monorepo.dirty.bak/ qol-monorepo-worktrees/ 
+kmrh47@kmrh-pc-alpha:/media/kmrh47/WD_SN850X/Git$ cd qol-monorepo
+kmrh47@kmrh-pc-alpha:/media/kmrh47/WD_SN850X/Git/qol-monorepo$ clauded
+Current version: 2.1.226
+Checking for updates to latest version...
+Claude Code is up to date (2.1.226)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

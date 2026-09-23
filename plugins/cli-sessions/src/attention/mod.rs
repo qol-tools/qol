@@ -103,12 +103,35 @@ pub fn reduce_with_policy(
         next_settled_since.is_some_and(|start| now.saturating_sub(start) >= GRACE_SECS);
     let screen_working = ev.screen_runtime == CliRuntimeState::Working
         && (next_settled_since.is_none() || (explicit && ev.viewport == CliViewportState::Live));
-    if ev.descriptor_runtime == CliRuntimeState::Working || screen_working {
+    let screen_needs_input = ev.screen_runtime == CliRuntimeState::NeedsInput
+        && !stale
+        && !(prev.status == Status::Working && (writing_during_settle || !settled))
+        && !(prev.status == Status::Working && ev.file_fresh.is_none() && !grace_elapsed);
+    let dialog_pending = ev.screen_runtime == CliRuntimeState::NeedsInput
+        && ev.viewport == CliViewportState::Live
+        && settled;
+    if prev.status == Status::NeedsYou && dialog_pending {
+        return Reduction {
+            attention: Attention {
+                status: Status::NeedsYou,
+                working_since: None,
+                settled_since: None,
+            },
+            phase: Phase::Hold,
+            transition: None,
+        };
+    }
+    if (ev.descriptor_runtime == CliRuntimeState::Working || screen_working) && !screen_needs_input
+    {
         return Reduction {
             attention: Attention {
                 status: Status::Working,
                 working_since: Some(working_since.unwrap_or(now)),
-                settled_since: None,
+                settled_since: if dialog_pending {
+                    next_settled_since
+                } else {
+                    None
+                },
             },
             phase: Phase::Busy,
             transition: transition(prev.status, Status::Working, Reason::LiveWork),
@@ -125,10 +148,6 @@ pub fn reduce_with_policy(
             transition: None,
         };
     }
-    let screen_needs_input = ev.screen_runtime == CliRuntimeState::NeedsInput
-        && !stale
-        && !(prev.status == Status::Working && (writing_during_settle || !settled))
-        && !(prev.status == Status::Working && ev.file_fresh.is_none() && !grace_elapsed);
     let needs_input = ev.descriptor_runtime == CliRuntimeState::NeedsInput || screen_needs_input;
     if needs_input {
         return Reduction {
@@ -296,13 +315,135 @@ mod tests {
         let cases = [
             evidence(RT::Working, RT::Unknown, VP::Historical, Some(true), true),
             evidence(RT::Unknown, RT::Working, VP::Historical, None, true),
-            evidence(RT::Working, RT::NeedsInput, VP::Live, None, false),
         ];
         for ev in cases {
             let out = reduce(&working(Status::Working, 10), &ev, 100);
             assert_eq!(out.attention.status, Status::Working, "ev: {ev:?}");
             assert_eq!(out.phase, Phase::Busy, "ev: {ev:?}");
         }
+    }
+
+    #[test]
+    fn a_settled_live_dialog_breaks_the_working_transcript_mask() {
+        let ev = Evidence {
+            descriptor_runtime: RT::Working,
+            screen_runtime: RT::NeedsInput,
+            viewport: VP::Live,
+            file_fresh: Some(true),
+            file_quiet_secs: Some(2),
+            screen_changed: false,
+            at_prompt: false,
+            is_generic: false,
+            is_service: false,
+        };
+        let prev = Attention {
+            status: Status::Working,
+            working_since: Some(10),
+            settled_since: None,
+        };
+        let out = reduce(&prev, &ev, 100);
+        assert_eq!(
+            out.attention.status,
+            Status::NeedsYou,
+            "a waiting permission dialog outranks a pending tool call"
+        );
+        assert_eq!(out.phase, Phase::Blocked);
+        assert_eq!(out.transition.unwrap().reason, Reason::StrongNeedsInput);
+        assert_eq!(out.attention.working_since, None);
+    }
+
+    #[test]
+    fn a_working_transcript_still_beats_unsettled_or_stale_dialog_evidence() {
+        let moving = evidence(RT::Working, RT::NeedsInput, VP::Live, Some(true), true);
+        let out = reduce(&working(Status::Working, 10), &moving, 100);
+        assert_eq!(
+            out.attention.status,
+            Status::Working,
+            "an unsettled screen is not a settled dialog yet"
+        );
+        assert_eq!(out.phase, Phase::Busy);
+
+        let stale = evidence(RT::Working, RT::NeedsInput, VP::Live, Some(false), false);
+        let out = reduce(&working(Status::Working, 10), &stale, 200);
+        assert_eq!(
+            out.attention.status,
+            Status::Working,
+            "a stale screen stays subordinate to the transcript"
+        );
+    }
+
+    #[test]
+    fn a_seeded_settled_dialog_flips_the_working_mask() {
+        let ev = evidence(RT::Working, RT::NeedsInput, VP::Live, None, false);
+        let out = reduce(&working(Status::Working, 10), &ev, 100);
+        assert_eq!(out.attention.status, Status::NeedsYou);
+        assert_eq!(out.phase, Phase::Blocked);
+        assert_eq!(out.transition.unwrap().reason, Reason::StrongNeedsInput);
+        assert_eq!(out.attention.working_since, None);
+    }
+
+    #[test]
+    fn a_working_descriptor_matures_the_dialog_settle_timer_after_grace() {
+        let ev = evidence(RT::Working, RT::NeedsInput, VP::Live, None, false);
+        let prev = Attention {
+            status: Status::Working,
+            working_since: Some(10),
+            settled_since: None,
+        };
+        let out = reduce(&prev, &ev, 100);
+        assert_eq!(out.attention.status, Status::Working);
+        assert_eq!(out.phase, Phase::Busy);
+        let out = reduce(&out.attention, &ev, 100 + GRACE_SECS);
+        assert_eq!(out.attention.status, Status::NeedsYou);
+        assert_eq!(out.phase, Phase::Blocked);
+        assert_eq!(out.transition.unwrap().reason, Reason::StrongNeedsInput);
+    }
+
+    #[test]
+    fn a_latched_dialog_survives_a_stale_transcript_while_the_screen_is_settled() {
+        let ev = evidence(RT::Working, RT::NeedsInput, VP::Live, Some(false), false);
+        let out = reduce(&att(Status::NeedsYou), &ev, 500);
+        assert_eq!(out.attention.status, Status::NeedsYou);
+        assert_eq!(out.phase, Phase::Hold);
+        assert!(out.transition.is_none());
+        assert!(out.attention.working_since.is_none());
+    }
+
+    #[test]
+    fn a_changed_screen_releases_a_latched_dialog() {
+        let ev = evidence(RT::Working, RT::NeedsInput, VP::Live, Some(false), true);
+        let out = reduce(&att(Status::NeedsYou), &ev, 500);
+        assert_eq!(out.attention.status, Status::Working);
+        assert_eq!(out.phase, Phase::Busy);
+    }
+
+    #[test]
+    fn a_non_working_session_flips_on_a_settled_live_dialog() {
+        let ev = evidence(RT::Working, RT::NeedsInput, VP::Live, None, false);
+        for prev in [att(Status::YourTurn), att(Status::Unknown)] {
+            let out = reduce(&prev, &ev, 100);
+            assert_eq!(out.attention.status, Status::NeedsYou);
+            assert_eq!(out.phase, Phase::Blocked);
+        }
+    }
+
+    #[test]
+    fn a_settled_dialog_poll_flips_immediately_on_a_fresh_transcript() {
+        let prev = Attention {
+            status: Status::Working,
+            working_since: Some(10),
+            settled_since: None,
+        };
+        let mut fresh = evidence(RT::Working, RT::NeedsInput, VP::Live, Some(true), false);
+        fresh.file_quiet_secs = Some(1);
+        let out = reduce(&prev, &fresh, 100);
+        assert_eq!(out.attention.status, Status::NeedsYou);
+
+        let mut moving = fresh;
+        moving.screen_changed = true;
+        let out = reduce(&prev, &moving, 100);
+        assert_eq!(out.attention.status, Status::Working);
+        assert_eq!(out.phase, Phase::Busy);
     }
 
     #[test]
