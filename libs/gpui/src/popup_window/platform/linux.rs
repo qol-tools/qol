@@ -531,6 +531,10 @@ fn show_window_by_title_with_focus(
     input_passthrough: bool,
 ) -> bool {
     #[cfg(debug_assertions)]
+    if show_force_failure() {
+        return false;
+    }
+    #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     #[cfg(not(debug_assertions))]
     let reason = "";
@@ -551,11 +555,22 @@ fn show_window_by_title_with_focus(
     let clear_ok = clear_window_opacity(&conn, wid);
     store_card(title, wid, None);
     let input_ok = set_input_passthrough(&conn, wid, input_passthrough);
-    let map_ok = conn
-        .map_window(wid)
-        .ok()
-        .and_then(|cookie| cookie.check().ok())
-        .is_some();
+    #[cfg(debug_assertions)]
+    let forced_map_failure = map_force_failure();
+    #[cfg(not(debug_assertions))]
+    let forced_map_failure = false;
+    if forced_map_failure {
+        let _ = conn
+            .unmap_window(wid)
+            .ok()
+            .and_then(|cookie| cookie.check().ok());
+    }
+    let map_ok = !forced_map_failure
+        && conn
+            .map_window(wid)
+            .ok()
+            .and_then(|cookie| cookie.check().ok())
+            .is_some();
     let state_ok = match presentation {
         WindowPresentation::Overlay => {
             add_window_state(&conn, root, wid);
@@ -594,7 +609,7 @@ fn show_window_by_title_with_focus(
     );
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
-        "reason={reason} phase=after title={title} wid={wid} presentation={presentation:?} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} state={state_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
+        "reason={reason} phase=after title={title} wid={wid} presentation={presentation:?} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} map_forced={forced_map_failure} state={state_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
         stack.frame,
         stack.client,
         stack.frame_ok,
@@ -604,7 +619,7 @@ fn show_window_by_title_with_focus(
         "title={title} wid={wid} cleared_opacity->{} presentation={presentation:?} state={state_ok} source=2 focus_requested={focus} timestamp={timestamp} requester_active=0 reason={reason}",
         u8::from(clear_ok),
     );
-    true
+    map_ok && flush_ok
 }
 
 fn show_window_state(conn: &impl Connection, root: u32, wid: u32, active: Option<u32>) -> String {
@@ -906,32 +921,49 @@ pub fn disable_window_shadow(_title: &str) -> bool {
 pub fn configure_popup_window(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
+        qol_runtime::probe!(
+            "DOCK_WIN",
+            "{}",
+            dock_probe_line(title, None, false, false, "connect", PATH_CONFIGURE_POPUP)
+        );
         return false;
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        qol_runtime::probe!(
+            "DOCK_WIN",
+            "{}",
+            dock_probe_line(title, None, false, false, "resolve", PATH_CONFIGURE_POPUP)
+        );
         return false;
     };
 
-    set_window_type_dock(&conn, wid);
+    let docked = apply_window_type_dock(&conn, wid, title, PATH_CONFIGURE_POPUP);
     set_qol_ghost(&conn, wid);
     set_window_manager_decorations(&conn, wid, false);
     set_window_manager_state(&conn, wid);
     let _ = conn.flush();
-    true
+    docked
 }
 
 pub fn set_window_type_dock_by_title(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
+        qol_runtime::probe!(
+            "DOCK_WIN",
+            "{}",
+            dock_probe_line(title, None, false, false, "connect", PATH_SET_DOCK_BY_TITLE)
+        );
         return false;
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        qol_runtime::probe!("DOCK_WIN", "title={title} wid=NONE");
+        qol_runtime::probe!(
+            "DOCK_WIN",
+            "{}",
+            dock_probe_line(title, None, false, false, "resolve", PATH_SET_DOCK_BY_TITLE)
+        );
         return false;
     };
-    let docked = set_window_type_dock(&conn, wid);
-    qol_runtime::probe!("DOCK_WIN", "title={title} wid={wid} docked={docked}");
-    docked
+    apply_window_type_dock(&conn, wid, title, PATH_SET_DOCK_BY_TITLE)
 }
 
 pub fn make_override_redirect(title: &str) -> bool {
@@ -1328,15 +1360,18 @@ impl CompositeLease {
         if !self.holders.iter().any(|holder| holder == owner) {
             self.holders.push(owner.to_string());
         }
+        debug_assert!(self.forced.is_empty() || !self.holders.is_empty());
     }
 
     fn release(&mut self, owner: &str) -> Vec<(u32, Option<u32>)> {
         self.holders.retain(|holder| holder != owner);
-        if self.holders.is_empty() {
+        let released = if self.holders.is_empty() {
             std::mem::take(&mut self.forced)
         } else {
             Vec::new()
-        }
+        };
+        debug_assert!(self.forced.is_empty() || !self.holders.is_empty());
+        released
     }
 }
 
@@ -1715,6 +1750,27 @@ fn set_window_manager_decorations(conn: &impl Connection, wid: u32, enabled: boo
     let _ = conn.change_property32(PropMode::REPLACE, wid, atom, atom, &hints);
 }
 
+const PATH_CONFIGURE_POPUP: &str = "configure_popup_window";
+const PATH_SET_DOCK_BY_TITLE: &str = "set_window_type_dock_by_title";
+#[cfg(debug_assertions)]
+const ENV_DOCK_FORCE_FAIL: &str = "QOL_DOCK_FORCE_FAIL";
+#[cfg(debug_assertions)]
+const ENV_SHOW_FORCE_FAIL: &str = "QOL_SHOW_FORCE_FAIL";
+#[cfg(debug_assertions)]
+const ENV_MAP_FORCE_FAIL: &str = "QOL_MAP_FORCE_FAIL";
+
+fn dock_probe_line(
+    title: &str,
+    wid: Option<u32>,
+    docked: bool,
+    forced: bool,
+    reason: &str,
+    path: &str,
+) -> String {
+    let wid = wid.map_or_else(|| "NONE".to_string(), |wid| wid.to_string());
+    format!("title={title} wid={wid} docked={docked} forced={forced} reason={reason} path={path}")
+}
+
 fn set_window_type_dock(conn: &impl Connection, wid: u32) -> bool {
     let Some(type_atom) = intern(conn, b"_NET_WM_WINDOW_TYPE") else {
         return false;
@@ -1732,6 +1788,36 @@ fn set_window_type_dock(conn: &impl Connection, wid: u32) -> bool {
     .ok()
     .and_then(|cookie| cookie.check().ok())
     .is_some()
+}
+
+fn apply_window_type_dock(conn: &impl Connection, wid: u32, title: &str, path: &str) -> bool {
+    let write_confirmed = set_window_type_dock(conn, wid);
+    #[cfg(debug_assertions)]
+    let forced = dock_force_failure();
+    #[cfg(not(debug_assertions))]
+    let forced = false;
+    let docked = write_confirmed && !forced;
+    qol_runtime::probe!(
+        "DOCK_WIN",
+        "{}",
+        dock_probe_line(title, Some(wid), docked, forced, "write", path)
+    );
+    docked
+}
+
+#[cfg(debug_assertions)]
+fn dock_force_failure() -> bool {
+    matches!(std::env::var(ENV_DOCK_FORCE_FAIL), Ok(value) if value == "1")
+}
+
+#[cfg(debug_assertions)]
+fn show_force_failure() -> bool {
+    matches!(std::env::var(ENV_SHOW_FORCE_FAIL), Ok(value) if value == "1")
+}
+
+#[cfg(debug_assertions)]
+fn map_force_failure() -> bool {
+    matches!(std::env::var(ENV_MAP_FORCE_FAIL), Ok(value) if value == "1")
 }
 
 fn set_qol_ghost(conn: &impl Connection, wid: u32) {
@@ -2034,8 +2120,9 @@ fn intern(conn: &impl Connection, name: &[u8]) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        composite_owner, focus_return_target, keepalive_wm_hints, normal_restore_needs_retry,
-        normalize_opacity, opacity_to_cardinal, pinned_window_kind, CompositeLease,
+        composite_owner, dock_probe_line, focus_return_target, keepalive_wm_hints,
+        normal_restore_needs_retry, normalize_opacity, opacity_to_cardinal, pinned_window_kind,
+        CompositeLease,
     };
     use gpui::WindowKind;
     use x11rb::properties::{WmHints, WmHintsState};
@@ -2145,6 +2232,59 @@ mod tests {
             vec![(7, Some(1)), (9, None)],
             "all forced windows restored together"
         );
+    }
+
+    #[test]
+    fn composite_lease_release_drains_forced_when_no_holder_remains() {
+        let mut lease = CompositeLease {
+            holders: Vec::new(),
+            forced: vec![(7, Some(1))],
+        };
+        assert_eq!(lease.release("stranger"), vec![(7, Some(1))]);
+        assert!(
+            lease.forced.is_empty(),
+            "recovery drain leaves no forced entry"
+        );
+    }
+
+    #[test]
+    fn dock_probe_line_keeps_one_shape_for_every_outcome() {
+        let cases = [
+            (
+                Some(42),
+                true,
+                false,
+                "write",
+                "title=t wid=42 docked=true forced=false reason=write path=p",
+            ),
+            (
+                None,
+                false,
+                false,
+                "resolve",
+                "title=t wid=NONE docked=false forced=false reason=resolve path=p",
+            ),
+            (
+                None,
+                false,
+                false,
+                "connect",
+                "title=t wid=NONE docked=false forced=false reason=connect path=p",
+            ),
+            (
+                Some(7),
+                false,
+                true,
+                "write",
+                "title=t wid=7 docked=false forced=true reason=write path=p",
+            ),
+        ];
+        for (wid, docked, forced, reason, expected) in cases {
+            assert_eq!(
+                dock_probe_line("t", wid, docked, forced, reason, "p"),
+                expected
+            );
+        }
     }
 
     #[test]
