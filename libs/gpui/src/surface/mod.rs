@@ -446,10 +446,10 @@ impl Surface {
         }
         if passive_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-toast");
-            let configured = crate::popup_window::configure_popup_window(&title);
+            let mut configured = crate::popup_window::configure_popup_window(&title);
             crate::popup_window::present_topmost(&title);
             if !configured {
-                crate::popup_window::configure_popup_window(&title);
+                configured = crate::popup_window::configure_popup_window(&title);
             }
             let shown = crate::popup_window::show_window_interactive_by_title(&title);
             visible.set(shown);

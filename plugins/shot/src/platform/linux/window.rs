@@ -47,6 +47,7 @@ pub fn pin_release_focus(title: &str) {
 pub fn configure_pin_window(title: String, origin: (f64, f64), source_preview: Option<String>) {
     let target = (origin.0 as i32, origin.1 as i32);
     let source_preview = std::sync::Arc::new(std::sync::Mutex::new(source_preview));
+    let rollback_source = source_preview.clone();
     configure_window_async(
         title,
         "SHOT_PIN",
@@ -69,25 +70,73 @@ pub fn configure_pin_window(title: String, origin: (f64, f64), source_preview: O
             if !qol_gpui::popup_window::show_window_by_title(title) {
                 return false;
             }
-            let source_preview = source_preview
-                .lock()
-                .ok()
-                .and_then(|mut source| source.take());
-            if let Some(source_preview) = source_preview {
-                qol_gpui::popup_window::hide_invisible(&source_preview);
-                qol_gpui::popup_window::restore_composite(&source_preview);
+            #[cfg(debug_assertions)]
+            let forced_focus_failure =
+                matches!(std::env::var("QOL_PIN_FOCUS_FORCE_FAIL"), Ok(value) if value == "1");
+            #[cfg(not(debug_assertions))]
+            let forced_focus_failure = false;
+            let focused =
+                !forced_focus_failure && qol_gpui::popup_window::focus_window_by_title(title);
+            qol_runtime::probe!("SHOT_PIN_TRANSITION", "target={title} focused={focused}");
+            let source_title = source_preview.lock().ok().and_then(|source| source.clone());
+            let transitioned = handoff_source_preview(&source_preview, focused, |source_preview| {
+                let hidden = qol_gpui::popup_window::hide_invisible(source_preview);
+                if hidden {
+                    qol_gpui::popup_window::restore_composite(source_preview);
+                }
                 qol_runtime::probe!(
                     "SHOT_PIN_TRANSITION",
-                    "source={} target={title} state=swapped",
-                    source_preview
+                    "source={source_preview} target={title} state=swapped hidden={hidden}"
                 );
+                hidden
+            });
+            if transitioned {
+                if let Some(source_title) = source_title {
+                    crate::ui::preview::complete_pin_transition(&source_title, true);
+                }
             }
-            let focused = qol_gpui::popup_window::focus_window_by_title(title);
-            qol_runtime::probe!("SHOT_PIN_TRANSITION", "target={title} focused={focused}");
-            focused
+            transitioned
         },
-        qol_gpui::popup_window::restore_composite,
+        move |title| {
+            let parked = qol_gpui::popup_window::park_window_by_title(title);
+            let source = rollback_source
+                .lock()
+                .ok()
+                .and_then(|source| source.clone());
+            let source_shown = source
+                .as_deref()
+                .is_some_and(qol_gpui::popup_window::show_window_by_title);
+            qol_gpui::popup_window::restore_composite(title);
+            qol_runtime::probe!(
+                "SHOT_PIN_TRANSITION",
+                "target={title} state=rollback parked={parked} source={} source_shown={source_shown}",
+                source.as_deref().unwrap_or("none")
+            );
+            if let Some(source) = source {
+                crate::ui::preview::complete_pin_transition(&source, false);
+            }
+        },
     );
+}
+
+fn handoff_source_preview(
+    source_preview: &std::sync::Mutex<Option<String>>,
+    focused: bool,
+    mut hide: impl FnMut(&str) -> bool,
+) -> bool {
+    if !focused {
+        return false;
+    }
+    let Ok(mut source) = source_preview.lock() else {
+        return false;
+    };
+    if let Some(source_preview) = source.as_deref() {
+        if !hide(source_preview) {
+            return false;
+        }
+        source.take();
+    }
+    true
 }
 
 pub fn prepare_pin_window(title: &str, origin: (f64, f64)) -> bool {
@@ -213,8 +262,39 @@ pub(super) fn configure_window_async(
 
 #[cfg(test)]
 mod tests {
-    use super::{exact_window_bounds, selector_bounds_match};
+    use super::{exact_window_bounds, handoff_source_preview, selector_bounds_match};
     use crate::Rect;
+    use std::sync::Mutex;
+
+    #[test]
+    fn failed_pin_focus_preserves_the_preview_until_handoff_succeeds() {
+        let source = Mutex::new(Some("source-preview".to_owned()));
+        let mut hidden = Vec::new();
+        assert!(!handoff_source_preview(&source, false, |title| {
+            hidden.push(title.to_owned());
+            true
+        }));
+        assert_eq!(source.lock().unwrap().as_deref(), Some("source-preview"));
+        assert!(hidden.is_empty());
+
+        assert!(!handoff_source_preview(&source, true, |title| {
+            hidden.push(title.to_owned());
+            false
+        }));
+        assert_eq!(source.lock().unwrap().as_deref(), Some("source-preview"));
+
+        assert!(handoff_source_preview(&source, true, |title| {
+            hidden.push(title.to_owned());
+            true
+        }));
+        assert_eq!(hidden, ["source-preview", "source-preview"]);
+        assert!(source.lock().unwrap().is_none());
+        assert!(handoff_source_preview(&source, true, |title| {
+            hidden.push(title.to_owned());
+            true
+        }));
+        assert_eq!(hidden, ["source-preview", "source-preview"]);
+    }
 
     #[test]
     fn selector_requires_the_exact_desktop_viewport() {

@@ -1,12 +1,16 @@
 use anyhow::Context as _;
 use anyhow::Result;
 use std::cell::{Cell, RefCell};
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+use futures::channel::oneshot;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
@@ -45,6 +49,30 @@ pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
 static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
 static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
+#[cfg(target_os = "linux")]
+static PIN_TRANSITIONS: LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(target_os = "linux")]
+fn register_pin_transition(title: &str) -> oneshot::Receiver<bool> {
+    let (sender, receiver) = oneshot::channel();
+    PIN_TRANSITIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(title.to_owned(), sender);
+    receiver
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn complete_pin_transition(title: &str, succeeded: bool) {
+    let sender = PIN_TRANSITIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(title);
+    if let Some(sender) = sender {
+        let _ = sender.send(succeeded);
+    }
+}
 
 pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
     &CURRENT_PALETTE
@@ -1183,6 +1211,9 @@ impl PreviewView {
             return;
         }
         self.action_pending = true;
+        #[cfg(target_os = "linux")]
+        let pin_transition =
+            (self.mode == DismissMode::Ghost).then(|| register_pin_transition(&self.title));
         let started_at = Instant::now();
         qol_runtime::probe!("SHOT_PIN_ACTION", "seq={}", self.seq);
         self.file_start.start();
@@ -1208,6 +1239,10 @@ impl PreviewView {
         let trace = format!("seq={} mode={pin_mode}", self.seq);
         if !crate::ui::pinned::open_at_cursor(content, dismiss, source_preview, &trace, window, cx)
         {
+            #[cfg(target_os = "linux")]
+            if pin_transition.is_some() {
+                complete_pin_transition(&self.title, false);
+            }
             self.action_pending = false;
             return;
         }
@@ -1219,10 +1254,48 @@ impl PreviewView {
                     }
                 }
                 window.remove_window();
+                self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
             }
-            DismissMode::Ghost => self.set_showing(false),
+            DismissMode::Ghost => {
+                self.set_showing(false);
+                #[cfg(target_os = "linux")]
+                {
+                    let receiver = pin_transition.expect("ghost pin registered its transition");
+                    let seq = self.seq;
+                    cx.spawn(async move |this, cx| {
+                        let succeeded = receiver.await.unwrap_or(false);
+                        let _ = cx.update(|cx| {
+                            if let Some(this) = this.upgrade() {
+                                this.update(cx, |view, cx| {
+                                    if view.seq != seq {
+                                        return;
+                                    }
+                                    if succeeded {
+                                        view.finish_completion(
+                                            crate::capture::completion::PreviewExit::Pinned,
+                                        );
+                                    } else {
+                                        view.action_pending = false;
+                                        view.set_showing(true);
+                                        view.blur_guard_until = Instant::now() + BLUR_GUARD;
+                                        cx.notify();
+                                    }
+                                    qol_runtime::probe!(
+                                        "SHOT_PIN_TRANSITION",
+                                        "source={} state=preview-{}",
+                                        view.title,
+                                        if succeeded { "finalized" } else { "restored" }
+                                    );
+                                });
+                            }
+                        });
+                    })
+                    .detach();
+                }
+                #[cfg(not(target_os = "linux"))]
+                self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
+            }
         }
-        self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
     }
 
     fn choose(&mut self, action: ShotAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -1552,6 +1625,8 @@ fn window_dims(thumb_w: f32, thumb_h: f32, action_count: usize) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    use super::{complete_pin_transition, register_pin_transition};
     use qol_gpui::window::target_monitor_key;
     use qol_runtime::MonitorBounds;
 
@@ -1561,6 +1636,20 @@ mod tests {
         MAX_THUMB_W, PARKED_REVEAL_GUARD,
     };
     use qol_gpui::kit::{action_row_width, ActionCircleSize};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pin_transition_completion_reaches_the_preview_once() {
+        let source = "pin-transition-test-preview";
+        let failed = register_pin_transition(source);
+        complete_pin_transition(source, false);
+        assert!(!futures::executor::block_on(failed).unwrap());
+        complete_pin_transition(source, true);
+
+        let succeeded = register_pin_transition(source);
+        complete_pin_transition(source, true);
+        assert!(futures::executor::block_on(succeeded).unwrap());
+    }
 
     #[test]
     fn focus_truth_recovers_when_any_owned_window_holds_focus() {

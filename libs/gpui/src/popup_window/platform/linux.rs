@@ -555,11 +555,22 @@ fn show_window_by_title_with_focus(
     let clear_ok = clear_window_opacity(&conn, wid);
     store_card(title, wid, None);
     let input_ok = set_input_passthrough(&conn, wid, input_passthrough);
-    let map_ok = conn
-        .map_window(wid)
-        .ok()
-        .and_then(|cookie| cookie.check().ok())
-        .is_some();
+    #[cfg(debug_assertions)]
+    let forced_map_failure = map_force_failure();
+    #[cfg(not(debug_assertions))]
+    let forced_map_failure = false;
+    if forced_map_failure {
+        let _ = conn
+            .unmap_window(wid)
+            .ok()
+            .and_then(|cookie| cookie.check().ok());
+    }
+    let map_ok = !forced_map_failure
+        && conn
+            .map_window(wid)
+            .ok()
+            .and_then(|cookie| cookie.check().ok())
+            .is_some();
     let state_ok = match presentation {
         WindowPresentation::Overlay => {
             add_window_state(&conn, root, wid);
@@ -598,7 +609,7 @@ fn show_window_by_title_with_focus(
     );
     qol_runtime::probe!(
         "SHOW_WIN_STATE",
-        "reason={reason} phase=after title={title} wid={wid} presentation={presentation:?} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} state={state_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
+        "reason={reason} phase=after title={title} wid={wid} presentation={presentation:?} frame={} clear_opacity={clear_ok} input_shape_ok={input_ok} map={map_ok} map_forced={forced_map_failure} state={state_ok} stack_client={} stack_frame={} focus_requested={focus} activate={activate_ok} focus={focus_ok} timestamp={timestamp} flush={flush_ok} {after}",
         stack.frame,
         stack.client,
         stack.frame_ok,
@@ -608,7 +619,7 @@ fn show_window_by_title_with_focus(
         "title={title} wid={wid} cleared_opacity->{} presentation={presentation:?} state={state_ok} source=2 focus_requested={focus} timestamp={timestamp} requester_active=0 reason={reason}",
         u8::from(clear_ok),
     );
-    true
+    map_ok && flush_ok
 }
 
 fn show_window_state(conn: &impl Connection, root: u32, wid: u32, active: Option<u32>) -> String {
@@ -1745,6 +1756,8 @@ const PATH_SET_DOCK_BY_TITLE: &str = "set_window_type_dock_by_title";
 const ENV_DOCK_FORCE_FAIL: &str = "QOL_DOCK_FORCE_FAIL";
 #[cfg(debug_assertions)]
 const ENV_SHOW_FORCE_FAIL: &str = "QOL_SHOW_FORCE_FAIL";
+#[cfg(debug_assertions)]
+const ENV_MAP_FORCE_FAIL: &str = "QOL_MAP_FORCE_FAIL";
 
 fn dock_probe_line(
     title: &str,
@@ -1800,6 +1813,11 @@ fn dock_force_failure() -> bool {
 #[cfg(debug_assertions)]
 fn show_force_failure() -> bool {
     matches!(std::env::var(ENV_SHOW_FORCE_FAIL), Ok(value) if value == "1")
+}
+
+#[cfg(debug_assertions)]
+fn map_force_failure() -> bool {
+    matches!(std::env::var(ENV_MAP_FORCE_FAIL), Ok(value) if value == "1")
 }
 
 fn set_qol_ghost(conn: &impl Connection, wid: u32) {
