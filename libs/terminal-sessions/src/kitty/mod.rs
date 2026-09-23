@@ -172,7 +172,11 @@ impl KittyBackend {
         })
     }
 
-    fn read_screen_command(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+    fn read_screen_command(
+        &self,
+        target: &SessionBinding,
+        extent: &str,
+    ) -> Result<String, TerminalError> {
         let (endpoint, window_id) = self.route_target(target)?;
         self.run_at(
             &endpoint,
@@ -183,7 +187,7 @@ impl KittyBackend {
                 "--match",
                 &matcher(window_id),
                 "--extent",
-                "screen",
+                extent,
             ]),
             None,
         )
@@ -218,7 +222,7 @@ impl TerminalBackend for KittyBackend {
         target: &SessionBinding,
     ) -> Result<String, TerminalError> {
         snapshot.validate_screen_target(target)?;
-        self.read_screen_command(target)
+        self.read_screen_command(target, "screen")
     }
 
     fn current_session_id(&self) -> Option<SessionId> {
@@ -247,11 +251,15 @@ impl ScreenReader for KittyBackend {
             crate::SessionCapabilities::SCREEN_READING,
             "screen reading",
         )?;
-        self.read_screen_command(target)
+        self.read_screen_command(target, "screen")
     }
 
     fn read_screen_relaxed(&self, target: &SessionBinding) -> Result<String, TerminalError> {
-        self.read_screen_command(target)
+        self.read_screen_command(target, "screen")
+    }
+
+    fn read_screen_unscrolled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.read_screen_command(target, "all")
     }
 }
 
@@ -995,6 +1003,25 @@ mod tests {
         assert_eq!(
             calls[0].1,
             ["@", "get-text", "--match", "id:42", "--extent", "screen"]
+        );
+    }
+
+    #[test]
+    fn unscrolled_reads_use_kitty_history_extent_for_the_same_window() {
+        let runner = FakeRunner::with_outputs(vec![success("history\nscreen".to_owned())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        assert_eq!(
+            backend.read_screen_unscrolled(&target).unwrap(),
+            "history\nscreen"
+        );
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
+            ["@", "get-text", "--match", "id:42", "--extent", "all"]
         );
     }
 

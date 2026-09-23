@@ -68,14 +68,24 @@ pub(super) fn claude_dialog(text: &str) -> bool {
         return false;
     }
     let region = &lines[start..end];
-    let mut numbers = Vec::new();
-    let mut numbered = 0usize;
-    let mut selected = 0usize;
-    for (number, is_selected) in region.iter().filter_map(|line| claude_option(line)) {
-        numbers.push(number);
-        numbered += 1;
-        selected += usize::from(is_selected);
-    }
+    let options: Vec<(usize, bool)> = region
+        .iter()
+        .filter_map(|line| claude_option(line))
+        .collect();
+    let options = if rule_less {
+        let Some(selected) = options.iter().rposition(|(_, selected)| *selected) else {
+            return false;
+        };
+        let Some(start) = options[..=selected]
+            .iter()
+            .rposition(|(number, _)| *number == 1)
+        else {
+            return false;
+        };
+        &options[start..]
+    } else {
+        &options[..]
+    };
     let window_end = end.saturating_add(CLAUDE_DIALOG_WINDOW).min(lines.len());
     let affordance = lines[start..window_end].iter().any(|line| {
         let lower = line.to_lowercase();
@@ -87,11 +97,13 @@ pub(super) fn claude_dialog(text: &str) -> bool {
         let lower = line.to_lowercase();
         lower.contains("do you want to proceed?") || lower.contains("would you like to proceed?")
     });
-    let one_based_contiguous = numbers
+    let one_based_contiguous = options
         .iter()
         .enumerate()
-        .all(|(index, number)| *number == index + 1);
-    let dialog = selected >= 1 && numbered >= 2 && (affordance || question);
+        .all(|(index, (number, _))| *number == index + 1);
+    let dialog = options.iter().any(|(_, selected)| *selected)
+        && options.len() >= 2
+        && (affordance || question);
     if rule_less {
         dialog && one_based_contiguous
     } else {
@@ -704,6 +716,15 @@ mod tests {
     fn claude_dialog_reads_a_ruleless_run_of_one_based_options() {
         let options = [" \u{276F} 1.", "   2.", "   3.", " Esc to cancel"].join("\n");
         assert!(claude_dialog(&options));
+    }
+
+    #[test]
+    fn claude_dialog_ignores_numbered_context_before_the_selected_option_block() {
+        let permission =
+            include_str!("../../tests/fixtures/claude_synthetic/numbered_context_permission.txt");
+        assert!(claude_dialog(permission));
+        let without_selection = permission.replace('\u{276F}', " ");
+        assert!(!claude_dialog(&without_selection));
     }
 
     #[test]

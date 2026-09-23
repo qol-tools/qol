@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use qol_terminal_sessions::cli::{
-    CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription, CliToolId,
+    CliRuntimeState, CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription,
+    CliToolId, CliViewportState,
 };
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
@@ -350,32 +351,53 @@ fn cached_screen(
     #[cfg(not(debug_assertions))]
     let elapsed_ms = 0_u128;
     if let Some(text) = fresh {
-        let analysis = ScreenAnalysis::refresh(
+        let mut analysis = ScreenAnalysis::refresh(
             entry.analysis.as_ref(),
             text,
             pane,
             &cli_session.tool,
             cli_interpreter,
         );
-        #[cfg(debug_assertions)]
         let reused = entry
             .analysis
             .as_ref()
             .is_some_and(|previous| Arc::ptr_eq(previous, &analysis));
+        let mut cacheable = true;
+        if !reused
+            && analysis.evidence.runtime == CliRuntimeState::NeedsInput
+            && analysis.evidence.viewport == CliViewportState::Live
+        {
+            let current = pane
+                .binding()
+                .ok()
+                .and_then(|binding| host.visual_screen_is_current(&binding, &analysis.text));
+            if current != Some(true) {
+                Arc::get_mut(&mut analysis)
+                    .expect("a new screen analysis has one owner")
+                    .evidence
+                    .viewport = CliViewportState::Historical;
+                cacheable = current.is_some();
+            }
+        }
+        #[cfg(debug_assertions)]
+        let analysis_reused = reused;
         #[cfg(not(debug_assertions))]
-        let reused = false;
-        entry.analysis = Some(analysis);
+        let analysis_reused = false;
+        entry.analysis = cacheable.then(|| analysis.clone());
+        if !cacheable {
+            entry.dirty.store(true, Ordering::Release);
+        }
         entry.last_read = now;
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=screen id={id} source=read reason={reason} elapsed_ms={elapsed_ms} analysis_reused={reused} subscription={}",
+            "phase=screen id={id} source=read reason={reason} elapsed_ms={elapsed_ms} analysis_reused={analysis_reused} subscription={}",
             if entry.subscription.is_some() {
                 "active"
             } else {
                 "unsupported"
             }
         );
-        return entry.analysis.clone();
+        return Some(analysis);
     }
     entry.dirty.store(true, Ordering::Release);
     qol_runtime::probe!(
