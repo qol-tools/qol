@@ -43,6 +43,7 @@ pub enum HealAction {
 pub enum HealFailure {
     WriteAutostartFailed { binary: PathBuf, error: String },
     ClearSelectionFailed { error: String },
+    ResolveBootTargetFailed { error: String },
 }
 
 #[derive(Clone, Debug)]
@@ -146,24 +147,35 @@ pub fn resolve(
     config_dir: &Path,
     lister: &dyn WorktreeLister,
     probe: &dyn BinaryProbe,
-) -> (BootTarget, Vec<DriftEvent>) {
-    let canonical = env.canonical_binary().unwrap_or_default();
+) -> anyhow::Result<(BootTarget, Vec<DriftEvent>)> {
+    resolve_for_marker(env, read_marker(config_dir), lister, probe)
+}
+
+fn resolve_for_marker(
+    env: &dyn crate::installer::BootEnvironment,
+    marker: Option<String>,
+    lister: &dyn WorktreeLister,
+    probe: &dyn BinaryProbe,
+) -> anyhow::Result<(BootTarget, Vec<DriftEvent>)> {
+    let canonical = env.canonical_binary()?;
+    anyhow::ensure!(
+        !canonical.as_os_str().is_empty(),
+        "canonical boot binary is empty"
+    );
     let autostart = env.read_autostart_target().ok().flatten();
     let mut events = Vec::new();
-
-    let marker = read_marker(config_dir);
 
     if !env.honors_dev_selection() {
         if let Some(branch) = marker.clone() {
             events.push(DriftEvent::IgnoredDevMarker { branch });
         }
         push_autostart_drift_if_any(&autostart, &canonical, &mut events);
-        return (BootTarget::Fallback { binary: canonical }, events);
+        return Ok((BootTarget::Fallback { binary: canonical }, events));
     }
 
     let Some(branch) = marker else {
         push_autostart_drift_if_any(&autostart, &canonical, &mut events);
-        return (BootTarget::Fallback { binary: canonical }, events);
+        return Ok((BootTarget::Fallback { binary: canonical }, events));
     };
 
     let worktrees = lister.list();
@@ -172,7 +184,7 @@ pub fn resolve(
             branch: branch.clone(),
         });
         push_autostart_drift_if_any(&autostart, &canonical, &mut events);
-        return (BootTarget::Fallback { binary: canonical }, events);
+        return Ok((BootTarget::Fallback { binary: canonical }, events));
     };
 
     let expected_binary = worktree_dir
@@ -185,17 +197,17 @@ pub fn resolve(
             expected: expected_binary,
         });
         push_autostart_drift_if_any(&autostart, &canonical, &mut events);
-        return (BootTarget::Fallback { binary: canonical }, events);
+        return Ok((BootTarget::Fallback { binary: canonical }, events));
     }
 
     push_autostart_drift_if_any(&autostart, &expected_binary, &mut events);
-    (
+    Ok((
         BootTarget::Worktree {
             branch,
             binary: expected_binary,
         },
         events,
-    )
+    ))
 }
 
 fn read_marker(config_dir: &Path) -> Option<String> {
@@ -248,6 +260,7 @@ pub fn set_selected_worktree(
     } else {
         None
     };
+    let (target, _events) = resolve_for_marker(env, new_marker.clone(), lister, probe)?;
     let prior_matches_new = prior_marker.as_deref() == new_marker.as_deref();
     let cleared_selection = prior_marker.is_some() && new_marker.is_none();
     if !prior_matches_new {
@@ -255,7 +268,6 @@ pub fn set_selected_worktree(
             .map_err(anyhow::Error::msg)?;
     }
 
-    let (target, _events) = resolve(env, config_dir, lister, probe);
     let current = env.read_autostart_target().ok().flatten();
     let mut wrote_autostart = false;
     let desired = target.binary();
@@ -301,7 +313,18 @@ pub fn heal_drift_on_startup(
     lister: &dyn WorktreeLister,
     probe: &dyn BinaryProbe,
 ) -> HealReport {
-    let (_target, events) = resolve(env, config_dir, lister, probe);
+    let (_target, events) = match resolve(env, config_dir, lister, probe) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            return HealReport {
+                events: Vec::new(),
+                actions: Vec::new(),
+                failures: vec![HealFailure::ResolveBootTargetFailed {
+                    error: error.to_string(),
+                }],
+            }
+        }
+    };
     let mut report = HealReport {
         events: events.clone(),
         actions: Vec::new(),
@@ -449,7 +472,7 @@ mod resolve_dev_tests {
         let tmp = TempDir::new().unwrap();
         let canonical = PathBuf::from("/main/qol-tray");
         let env = dev_env(canonical.clone(), Some(canonical.clone()));
-        let (target, events) = resolve(&env, tmp.path(), &lister(&[]), &probe(&[]));
+        let (target, events) = resolve(&env, tmp.path(), &lister(&[]), &probe(&[])).unwrap();
         assert_eq!(target, BootTarget::Fallback { binary: canonical });
         assert!(events.is_empty());
     }
@@ -469,7 +492,8 @@ mod resolve_dev_tests {
             tmp.path(),
             &lister(&[("feat-x", wt)]),
             &probe(&[&binary_path]),
-        );
+        )
+        .unwrap();
         assert_eq!(
             target,
             BootTarget::Worktree {
@@ -495,7 +519,8 @@ mod resolve_dev_tests {
             tmp.path(),
             &lister(&[("feat-x", wt)]),
             &probe(&[&binary_path]),
-        );
+        )
+        .unwrap();
         assert!(matches!(target, BootTarget::Worktree { .. }));
         assert_eq!(events.len(), 1);
         assert!(matches!(
@@ -510,7 +535,7 @@ mod resolve_dev_tests {
         write_marker(tmp.path(), "ghost");
         let canonical = PathBuf::from("/main/qol-tray");
         let env = dev_env(canonical.clone(), Some(canonical.clone()));
-        let (target, events) = resolve(&env, tmp.path(), &lister(&[]), &probe(&[]));
+        let (target, events) = resolve(&env, tmp.path(), &lister(&[]), &probe(&[])).unwrap();
         assert_eq!(target, BootTarget::Fallback { binary: canonical });
         assert!(matches!(
             events[0],
@@ -525,7 +550,7 @@ mod resolve_dev_tests {
         let canonical = PathBuf::from("/main/qol-tray");
         let env = dev_env(canonical.clone(), Some(canonical.clone()));
         let (target, events) =
-            resolve(&env, tmp.path(), &lister(&[("feat-x", "/wt")]), &probe(&[]));
+            resolve(&env, tmp.path(), &lister(&[("feat-x", "/wt")]), &probe(&[])).unwrap();
         assert_eq!(target, BootTarget::Fallback { binary: canonical });
         assert!(matches!(
             events[0],
@@ -566,7 +591,7 @@ mod resolve_prod_tests {
         let tmp = TempDir::new().unwrap();
         let canonical = PathBuf::from("/install/qol-tray");
         let env = prod_env(canonical.clone(), Some(canonical.clone()));
-        let (target, events) = resolve(&env, tmp.path(), &empty_lister(), &empty_probe());
+        let (target, events) = resolve(&env, tmp.path(), &empty_lister(), &empty_probe()).unwrap();
         assert_eq!(target, BootTarget::Fallback { binary: canonical });
         assert!(events.is_empty());
     }
@@ -578,7 +603,7 @@ mod resolve_prod_tests {
         std::fs::write(tmp.path().join("dev/active-worktree.txt"), "feat-x").unwrap();
         let canonical = PathBuf::from("/install/qol-tray");
         let env = prod_env(canonical.clone(), Some(canonical.clone()));
-        let (_target, events) = resolve(&env, tmp.path(), &empty_lister(), &empty_probe());
+        let (_target, events) = resolve(&env, tmp.path(), &empty_lister(), &empty_probe()).unwrap();
         assert_eq!(
             events,
             vec![DriftEvent::IgnoredDevMarker {
@@ -594,7 +619,7 @@ mod resolve_prod_tests {
         std::fs::write(tmp.path().join("dev/active-worktree.txt"), "feat-x").unwrap();
         let canonical = PathBuf::from("/install/qol-tray");
         let env = prod_env(canonical.clone(), Some(PathBuf::from("/elsewhere")));
-        let (_target, events) = resolve(&env, tmp.path(), &empty_lister(), &empty_probe());
+        let (_target, events) = resolve(&env, tmp.path(), &empty_lister(), &empty_probe()).unwrap();
         assert!(events
             .iter()
             .any(|e| matches!(e, DriftEvent::IgnoredDevMarker { .. })));
@@ -892,7 +917,31 @@ mod property_tests {
 mod heal_tests {
     use super::*;
     use crate::installer::boot_environment::InMemoryBootEnvironment;
+    use crate::installer::BootEnvironment;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    struct MissingIdentityEnvironment {
+        autostart: Mutex<Option<PathBuf>>,
+    }
+
+    impl BootEnvironment for MissingIdentityEnvironment {
+        fn canonical_binary(&self) -> anyhow::Result<PathBuf> {
+            anyhow::bail!("running build identity is unavailable")
+        }
+
+        fn read_autostart_target(&self) -> anyhow::Result<Option<PathBuf>> {
+            Ok(self.autostart.lock().unwrap().clone())
+        }
+
+        fn write_autostart_target(&self, _binary: &Path) -> anyhow::Result<()> {
+            panic!("failed boot resolution must not write autostart")
+        }
+
+        fn honors_dev_selection(&self) -> bool {
+            true
+        }
+    }
 
     fn empty_lister() -> InMemoryWorktreeLister {
         InMemoryWorktreeLister {
@@ -909,6 +958,51 @@ mod heal_tests {
     fn write_marker(dir: &Path, value: &str) {
         std::fs::create_dir_all(dir.join("dev")).unwrap();
         std::fs::write(dir.join("dev/active-worktree.txt"), value).unwrap();
+    }
+
+    #[test]
+    fn missing_build_identity_does_not_replace_autostart() {
+        let tmp = TempDir::new().unwrap();
+        write_marker(tmp.path(), "plugin-only-branch");
+        let installed = PathBuf::from("/home/user/.local/bin/qol-tray");
+        let env = MissingIdentityEnvironment {
+            autostart: Mutex::new(Some(installed.clone())),
+        };
+
+        let report = heal_drift_on_startup(&env, tmp.path(), &empty_lister(), &empty_probe());
+
+        assert!(report.actions.is_empty());
+        assert!(matches!(
+            report.failures.as_slice(),
+            [HealFailure::ResolveBootTargetFailed { error }]
+                if error == "running build identity is unavailable"
+        ));
+        assert_eq!(env.read_autostart_target().unwrap(), Some(installed));
+        assert_eq!(
+            read_marker(tmp.path()).as_deref(),
+            Some("plugin-only-branch")
+        );
+    }
+
+    #[test]
+    fn failed_boot_resolution_does_not_persist_a_new_selection() {
+        let tmp = TempDir::new().unwrap();
+        let installed = PathBuf::from("/home/user/.local/bin/qol-tray");
+        let env = MissingIdentityEnvironment {
+            autostart: Mutex::new(Some(installed.clone())),
+        };
+
+        let result = set_selected_worktree(
+            &env,
+            tmp.path(),
+            Some("plugin-only-branch"),
+            &empty_lister(),
+            &empty_probe(),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(env.read_autostart_target().unwrap(), Some(installed));
+        assert!(read_marker(tmp.path()).is_none());
     }
 
     #[test]

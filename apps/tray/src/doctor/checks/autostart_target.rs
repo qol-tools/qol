@@ -35,7 +35,10 @@ fn check_dev(autostart_path: std::path::PathBuf) -> CheckReport {
     let lister = crate::dev::boot_contract::GitWorktreeLister;
     let probe = crate::dev::boot_contract::FsBinaryProbe;
     let (target, _events) =
-        crate::dev::boot_contract::resolve(env.as_ref(), &config_dir, &lister, &probe);
+        match crate::dev::boot_contract::resolve(env.as_ref(), &config_dir, &lister, &probe) {
+            Ok(resolved) => resolved,
+            Err(error) => return CheckReport::error(error.to_string(), ID),
+        };
     let actual = env.read_autostart_target().ok().flatten();
     let expected = file_io::canonical_or_original(target.binary());
     match actual {

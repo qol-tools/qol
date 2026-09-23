@@ -33,6 +33,10 @@ fn autostart_path_impl() -> Result<PathBuf> {
 }
 
 fn write_desktop_to(path: &Path, binary: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !binary.as_os_str().is_empty(),
+        "Autostart binary path is empty"
+    );
     let exec_line = format!("Exec={}", format_desktop_exec_command(binary, &[]));
     let mut rendered = DESKTOP_TEMPLATE
         .lines()
@@ -97,6 +101,17 @@ mod tests {
         let desktop = tmp.path().join("qol-tray.desktop");
         let binary = PathBuf::from("/home/x/work tree/qol-tools/qol-tray/target/debug/qol-tray");
         assert_eq!(write_then_read(&desktop, &binary), Some(binary));
+    }
+
+    #[test]
+    fn empty_binary_does_not_replace_a_valid_autostart_entry() {
+        let tmp = TempDir::new().unwrap();
+        let desktop = tmp.path().join("qol-tray.desktop");
+        let original = "[Desktop Entry]\nType=Application\nExec=\"/bin/true\"\n";
+        std::fs::write(&desktop, original).unwrap();
+
+        assert!(write_desktop_to(&desktop, Path::new("")).is_err());
+        assert_eq!(std::fs::read_to_string(&desktop).unwrap(), original);
     }
 
     #[test]
