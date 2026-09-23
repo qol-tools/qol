@@ -2,7 +2,6 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_gpui::hint_bar::{estimated_chip_width, fit_hints, BarItem, HintDescriptor};
 use qol_gpui::text::shaped_width;
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{
@@ -12,7 +11,9 @@ use qol_gpui::theme::{
 use qol_gpui::trail::{Trail, TrailItem};
 
 use super::layout::{FLOW_ROW_HEIGHT, HEADER_HEIGHT, WINDOW_WIDTH};
+use super::menu::MenuKind;
 use super::state::TrailFocus;
+use super::LauncherView;
 use crate::discovery::search::{ResultSource, Scored, SearchMode};
 use crate::flow::{host_of, lead_of, sources_of, FlowEntry, FlowRow, FlowVerdict};
 
@@ -26,33 +27,25 @@ fn current_palette() -> LauncherPalette {
     launcher_runtime()
 }
 
-pub fn palette() -> LauncherPalette {
-    current_palette()
+pub struct SearchBarStatus {
+    pub mode: Option<SearchMode>,
+    pub help_open: bool,
+    pub pending: bool,
 }
 
 pub fn search_bar(
     field: &TextField,
     launch_error: Option<&str>,
-    selected: usize,
-    result_count: usize,
-    pending: bool,
+    status: SearchBarStatus,
     placeholder: &str,
     window: &mut gpui::Window,
+    cx: &mut Context<LauncherView>,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
-    let counter = if result_count == 0 {
-        format!("0 / {result_count}")
-    } else {
-        format!("{} / {result_count}", selected.min(result_count - 1) + 1)
-    };
     let chevron_font = window.text_style().font().bold();
     let mono_font = font(qol_gpui::theme::font_mono());
     let mono_advance = shaped_width(window, "0", mono_font.clone(), TEXT_BODY);
-    let trailing = if pending {
-        px(TEXT_BODY).into()
-    } else {
-        shaped_width(window, &counter, mono_font, TEXT_NANO)
-    };
+    let trailing = if status.mode.is_some() { 126.0 } else { 72.0 };
     let chevron_width = shaped_width(window, "\u{203A}", chevron_font, TEXT_BODY);
     let visible = text_edit::visible_char_count(
         WINDOW_WIDTH
@@ -73,11 +66,7 @@ pub fn search_bar(
         .gap(px(10.0))
         .bg(rgb(current_palette().bg))
         .border_b(px(1.0))
-        .border_color(rgba(if result_count == 0 {
-            0
-        } else {
-            kit.washes.hairline.packed()
-        }))
+        .border_color(rgba(kit.washes.hairline.packed()))
         .child(
             div()
                 .flex_none()
@@ -134,24 +123,75 @@ pub fn search_bar(
                     )
                 }),
         )
-        .child(if pending {
-            qol_gpui::Spinner::new("flow-pending", rgb(kit.palette.accent_ink))
-                .size(px(TEXT_BODY))
-                .into_any_element()
-        } else {
-            div()
-                .flex_none()
-                .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(TEXT_NANO))
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                .child(counter)
-                .into_any_element()
+        .when_some(status.mode, |bar, mode| {
+            bar.child(
+                kit.chip(mode.label(), kit.palette.accent_ink)
+                    .id("launcher-search-mode")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.set_search_mode(this.state.mode.next(), cx);
+                    })),
+            )
         })
+        .when(status.pending, |bar| {
+            bar.child(
+                qol_gpui::Spinner::new("flow-pending", rgb(kit.palette.accent_ink))
+                    .size(px(TEXT_BODY)),
+            )
+        })
+        .child(
+            div()
+                .id("launcher-help-trigger")
+                .flex_none()
+                .h(px(qol_gpui::theme::HEIGHT_INLINE))
+                .px(px(qol_gpui::theme::SPACE_SNUG))
+                .flex()
+                .items_center()
+                .gap(px(qol_gpui::theme::SPACE_TIGHT))
+                .rounded(px(RADIUS_TIGHT))
+                .border(px(1.0))
+                .border_color(rgba(if status.help_open {
+                    kit.washes.accent_border.packed()
+                } else {
+                    kit.washes.hairline_strong.packed()
+                }))
+                .bg(rgba(kit.washes.fill_resting.packed()))
+                .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+                .cursor_pointer()
+                .text_color(rgb(kit.palette.text_secondary))
+                .text_size(px(TEXT_MICRO))
+                .child("?")
+                .child(
+                    div()
+                        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                        .text_color(rgb(kit.palette.text_muted))
+                        .text_size(px(qol_gpui::theme::TEXT_IDENTITY))
+                        .child("Alt+H"),
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_menu(MenuKind::Help, cx);
+                })),
+        )
 }
 
 const CARET_WIDTH: f32 = 2.0;
 
-pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) -> Div {
+pub fn match_percent(score: i32, best: i32, worst: i32) -> u8 {
+    let span = i64::from(worst) - i64::from(best);
+    if span <= 0 {
+        return 100;
+    }
+    let distance = i64::from(worst) - i64::from(score);
+    ((distance * 100 + span / 2) / span).clamp(0, 100) as u8
+}
+
+pub fn result_row(
+    scored: &Scored,
+    name: &str,
+    selected: bool,
+    match_score: u8,
+    row_height: f32,
+) -> Div {
     let kit = qol_gpui::kit::kit();
     let positions = &scored.m.positions;
     let highlights = if selected && !positions.is_empty() {
@@ -161,7 +201,7 @@ pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) 
     };
     let styled_name =
         StyledText::new(SharedString::from(name.to_owned())).with_highlights(highlights);
-    let row = div()
+    let mut row = div()
         .flex_none()
         .h(px(row_height))
         .mx(px(8.0))
@@ -184,15 +224,43 @@ pub fn result_row(scored: &Scored, name: &str, selected: bool, row_height: f32) 
                 }))
                 .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                 .child(styled_name),
-        )
-        .child(
+        );
+    if selected {
+        let mut score = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(qol_gpui::theme::SPACE_SNUG))
+            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+            .text_color(rgb(kit.palette.text_secondary))
+            .text_size(px(TEXT_NANO))
+            .child("match")
+            .child(
+                div()
+                    .text_color(rgb(kit.palette.text_primary))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(match_score.to_string()),
+            );
+        if scored.manual_boost > 0 {
+            score = score.child(
+                div()
+                    .text_color(rgb(kit.palette.text_primary))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("+{}", scored.manual_boost)),
+            );
+        }
+        row = row.child(score);
+    }
+    if !selected && matches!(scored.source, ResultSource::Flow) {
+        row = row.child(
             div()
                 .flex_none()
                 .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                 .text_color(rgb(kit.palette.text_secondary))
-                .text_size(px(qol_gpui::theme::TEXT_MICRO))
-                .child(kind_label(scored.source)),
+                .text_size(px(TEXT_NANO))
+                .child("flow"),
         );
+    }
     kit.row_selected(row, selected)
 }
 
@@ -504,14 +572,6 @@ pub fn hint_bar_detail() -> Div {
         .child(div().flex_1())
 }
 
-fn kind_label(source: ResultSource) -> &'static str {
-    match source {
-        ResultSource::App => "app",
-        ResultSource::File => "dir",
-        ResultSource::Flow => "flow",
-    }
-}
-
 fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, HighlightStyle)> {
     let byte_map: Vec<(usize, usize)> = name
         .char_indices()
@@ -534,105 +594,14 @@ fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, Highli
         .collect()
 }
 
-struct LauncherHint {
-    keystrokes: &'static [&'static str],
-    label: &'static str,
-    priority: u8,
-    pinned: bool,
-}
-
-enum LauncherHintSlot {
-    Hint(LauncherHint),
-    ModeChip,
-    Spacer,
-}
-
-const LAUNCHER_HINTS: &[LauncherHintSlot] = &[
-    LauncherHintSlot::Hint(LauncherHint {
-        keystrokes: &["enter"],
-        label: "open",
-        priority: 2,
-        pinned: false,
-    }),
-    LauncherHintSlot::Hint(LauncherHint {
-        keystrokes: &["up", "down"],
-        label: "move",
-        priority: 2,
-        pinned: false,
-    }),
-    LauncherHintSlot::Hint(LauncherHint {
-        keystrokes: &["tab"],
-        label: "mode",
-        priority: 1,
-        pinned: false,
-    }),
-    LauncherHintSlot::ModeChip,
-    LauncherHintSlot::Hint(LauncherHint {
-        keystrokes: &[],
-        label: "search",
-        priority: 0,
-        pinned: false,
-    }),
-    LauncherHintSlot::Spacer,
-    LauncherHintSlot::Hint(LauncherHint {
-        keystrokes: &["esc", "escape"],
-        label: "dismiss",
-        priority: 0,
-        pinned: true,
-    }),
-];
-
-fn keycap(keystrokes: &[&'static str]) -> &'static str {
-    match keystrokes {
-        [] => "type",
-        ["enter"] => "\u{23CE}",
-        ["up", "down"] => "\u{2191}\u{2193}",
-        ["tab"] => "\u{21E5}",
-        [key, ..] => key,
-    }
-}
-
-fn hint_descriptor(hint: &LauncherHint) -> HintDescriptor {
-    let key = keycap(hint.keystrokes);
-    if hint.pinned {
-        HintDescriptor::pinned(key, hint.label)
-    } else {
-        HintDescriptor::new(key, hint.label, hint.priority)
-    }
-}
-
-pub fn hint_bar(mode: SearchMode) -> Div {
-    let kit = qol_gpui::kit::kit();
-    let items: Vec<BarItem> = LAUNCHER_HINTS
-        .iter()
-        .map(|slot| match slot {
-            LauncherHintSlot::Hint(hint) => BarItem::Hint(hint_descriptor(hint)),
-            LauncherHintSlot::ModeChip => BarItem::FixedWidth(estimated_chip_width(mode.label())),
-            LauncherHintSlot::Spacer => BarItem::Spacer,
-        })
-        .collect();
-    let mut bar = kit.hint_bar();
-    for item in fit_hints(WINDOW_WIDTH, &items) {
-        bar = match item {
-            BarItem::Hint(spec) => bar.child(kit.hint(spec.key, spec.label)),
-            BarItem::FixedWidth(_) => bar.child(kit.chip(mode.label(), kit.palette.accent)),
-            BarItem::Spacer => bar.child(div().flex_1()),
-        };
-    }
-    bar
-}
-
 pub fn bg_color() -> gpui::Rgba {
     rgb(current_palette().bg)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_lead, LauncherHintSlot, LAUNCHER_HINTS};
+    use super::{answer_lead, match_percent};
     use crate::flow::FlowRow;
-    use crate::ui::input::InputEffect;
-    use crate::ui::state::LauncherState;
-    use gpui::Modifiers;
 
     fn flow_row(kind: &str) -> FlowRow {
         FlowRow {
@@ -653,20 +622,12 @@ mod tests {
     }
 
     #[test]
-    fn advertised_hint_keystrokes_reach_the_handler() {
-        for slot in LAUNCHER_HINTS {
-            let LauncherHintSlot::Hint(hint) = slot else {
-                continue;
-            };
-            for &keystroke in hint.keystrokes {
-                let mut state = LauncherState::new();
-                assert_ne!(
-                    state.apply_key(keystroke, &Modifiers::none(), 1),
-                    InputEffect::Ignore,
-                    "hint {:?} advertises {keystroke:?}",
-                    hint.label
-                );
-            }
-        }
+    fn selected_score_uses_total_order_and_handles_ties() {
+        assert_eq!(match_percent(-100, -100, 100), 100);
+        assert_eq!(match_percent(0, -100, 100), 50);
+        assert_eq!(match_percent(100, -100, 100), 0);
+        assert_eq!(match_percent(42, 42, 42), 100);
+        assert_eq!(match_percent(i32::MIN, i32::MIN, i32::MAX), 100);
+        assert_eq!(match_percent(i32::MAX, i32::MIN, i32::MAX), 0);
     }
 }

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{px, size, AppContext as _, AsyncApp, ClipboardItem, Context, KeyDownEvent, WeakEntity};
@@ -6,6 +7,7 @@ use super::input::InputEffect;
 use super::layout::{full_window_height, window_height_for_detail, WINDOW_WIDTH};
 use super::trace;
 use super::LauncherView;
+use crate::discovery::search::ResultItem;
 
 const FLOW_DEBOUNCE: Duration = Duration::from_millis(200);
 const DETAIL_SCROLL_STEP: f32 = 54.0;
@@ -23,6 +25,9 @@ impl LauncherView {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
+        if self.handle_menu_key(event, window, cx) {
+            return;
+        }
         let key = event.keystroke.key.as_str();
         let secondary = event.keystroke.modifiers.secondary();
 
@@ -75,20 +80,10 @@ impl LauncherView {
                 } else {
                     -25
                 };
-                if let Some(selected) = self.store.adjust_selected_boost(
-                    self.state.scroll_list.selected,
-                    delta,
-                    self.state.query.text(),
-                    self.state.mode,
-                    self.state.fuzziness,
-                ) {
-                    self.state.boost_adjusting = true;
-                    self.state.scroll_list.selected = selected;
-                    self.state.sync_result_window(self.store.result_count());
-                    cx.notify();
-                }
+                self.adjust_selected_boost(delta, cx);
             }
             InputEffect::Launch => self.launch_selected(window, cx),
+            InputEffect::OpenFolder => self.open_selected_folder(window, cx),
             InputEffect::Dismiss => self.hide_to_ghost("key", window),
             InputEffect::FlowExit => {
                 self.state.exit_flow();
@@ -166,7 +161,7 @@ impl LauncherView {
         }
     }
 
-    fn dispatch_query_change(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn dispatch_query_change(&mut self, cx: &mut Context<Self>) {
         self.state.clear_launch_error();
         self.state.reset_results_position();
         if self.state.flow.is_some() {
@@ -177,7 +172,22 @@ impl LauncherView {
         }
     }
 
-    fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+    pub(super) fn adjust_selected_boost(&mut self, delta: i32, cx: &mut Context<Self>) {
+        if let Some(selected) = self.store.adjust_selected_boost(
+            self.state.scroll_list.selected,
+            delta,
+            self.state.query.text(),
+            self.state.mode,
+            self.state.fuzziness,
+        ) {
+            self.state.boost_adjusting = true;
+            self.state.scroll_list.selected = selected;
+            self.state.sync_result_window(self.store.result_count());
+            cx.notify();
+        }
+    }
+
+    pub(super) fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         let started = std::time::Instant::now();
         #[cfg(not(debug_assertions))]
@@ -228,6 +238,45 @@ impl LauncherView {
             self.store.record_launch(&name);
         }
         self.hide_to_ghost("launch", window);
+    }
+
+    pub(super) fn open_selected_folder(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.store.ensure_filtered(
+            self.state.query.text(),
+            self.state.mode,
+            self.state.fuzziness,
+        );
+        let path = self
+            .store
+            .get(self.state.scroll_list.selected)
+            .and_then(|scored| self.store.item(scored))
+            .and_then(reveal_target);
+        let Some((path, source)) = path else {
+            return;
+        };
+        if !path.exists() {
+            trace::open_folder(source, "missing", "");
+            self.state
+                .set_launch_error("Selected item no longer exists".to_owned());
+            cx.notify();
+            return;
+        }
+        match qol_apps::desktop_integration::reveal_in_file_manager(&path) {
+            Ok(()) => {
+                trace::open_folder(source, "ok", "");
+                self.hide_to_ghost("open_folder", window);
+            }
+            Err(error) => {
+                trace::open_folder(source, "error", &error.to_string());
+                self.state
+                    .set_launch_error(format!("Could not open containing folder: {error}"));
+                cx.notify();
+            }
+        }
     }
 
     fn schedule_flow_query(&mut self, cx: &mut Context<Self>) {
@@ -442,5 +491,45 @@ impl LauncherView {
         window.resize(size(px(WINDOW_WIDTH), px(full_window_height())));
         trace::flow(self, "detail_close");
         cx.notify();
+    }
+}
+
+fn reveal_target(item: ResultItem<'_>) -> Option<(PathBuf, &'static str)> {
+    match item {
+        ResultItem::App(entry) => Some((entry.path.clone(), "app")),
+        ResultItem::File(entry) => Some((entry.path.clone(), "file")),
+        ResultItem::Flow(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reveal_target;
+    use crate::discovery::search::ResultItem;
+    use crate::discovery::FileEntry;
+    use qol_apps::AppEntry;
+    use std::path::PathBuf;
+
+    #[test]
+    fn folder_action_reveals_both_app_entries_and_files() {
+        let app_path = PathBuf::from("/usr/share/applications/sound.desktop");
+        let file_path = PathBuf::from("/home/qol/Documents/sound.txt");
+        let app = AppEntry {
+            name: "Sound".to_owned(),
+            exec: Vec::new(),
+            path: app_path.clone(),
+        };
+        let file = FileEntry {
+            name: "sound.txt".to_owned(),
+            path: file_path.clone(),
+        };
+        assert_eq!(
+            reveal_target(ResultItem::App(&app)),
+            Some((app_path, "app"))
+        );
+        assert_eq!(
+            reveal_target(ResultItem::File(&file)),
+            Some((file_path, "file"))
+        );
     }
 }

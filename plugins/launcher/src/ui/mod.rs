@@ -3,6 +3,7 @@ mod controller;
 mod input;
 pub(crate) mod keepalive;
 mod layout;
+mod menu;
 mod platform;
 mod render;
 pub mod run;
@@ -19,6 +20,7 @@ use gpui::*;
 use crate::discovery::entry_store::EntryStore;
 use crate::discovery::{PreloadedEntries, SharedEntries};
 
+use menu::MenuKind;
 use state::LauncherState;
 
 pub use input::key_to_input_char;
@@ -36,6 +38,9 @@ pub(crate) struct LauncherView {
     pub(super) focus_handle: FocusHandle,
     dismiss_sub: Option<(Subscription, Subscription, Option<Task<()>>)>,
     pub(super) detail_scroll: ScrollHandle,
+    pub(super) menu_scroll: ScrollHandle,
+    menu_kind: Option<MenuKind>,
+    pub(super) menu_selected: usize,
     trail_decay_task_running: bool,
     entry_watch_running: bool,
     pub(super) dismiss_requested: bool,
@@ -71,6 +76,9 @@ impl LauncherView {
             focus_handle: cx.focus_handle(),
             dismiss_sub: None,
             detail_scroll: ScrollHandle::new(),
+            menu_scroll: ScrollHandle::new(),
+            menu_kind: None,
+            menu_selected: 0,
             trail_decay_task_running: false,
             entry_watch_running: false,
             dismiss_requested: false,
@@ -92,6 +100,7 @@ impl LauncherView {
         self.showing_flag
             .store(showing, std::sync::atomic::Ordering::Relaxed);
         if !showing {
+            self.menu_kind = None;
             self.stop_click_away_monitor();
         }
     }
@@ -129,6 +138,9 @@ impl LauncherView {
             );
         }
         self.state = LauncherState::new();
+        self.menu_kind = None;
+        self.menu_selected = 0;
+        self.menu_scroll = ScrollHandle::new();
         self.trail_decay_task_running = false;
         self.dismiss_requested = false;
         self.dismiss_requested_from = "requested";

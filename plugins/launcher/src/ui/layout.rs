@@ -19,7 +19,13 @@ pub fn window_height_for(visible_rows: usize, row_height: f32) -> f32 {
 }
 
 pub fn window_height_for_rows(visible_rows: usize) -> f32 {
-    window_height_for(visible_rows, ROW_HEIGHT)
+    if visible_rows == 0 {
+        return HEADER_HEIGHT;
+    }
+    HEADER_HEIGHT
+        + 2.0 * LIST_PAD_Y
+        + visible_rows as f32 * ROW_HEIGHT
+        + (visible_rows as f32 - 1.0) * ROW_GAP
 }
 
 pub fn full_window_height() -> f32 {

@@ -10,6 +10,7 @@ pub enum InputEffect {
     Navigate,
     QueryChanged,
     Launch,
+    OpenFolder,
     Dismiss,
     BoostUp,
     BoostDown,
@@ -97,6 +98,7 @@ impl LauncherState {
                 self.move_down(result_count);
                 InputEffect::Navigate
             }
+            "enter" if shift && !secondary && !alt => InputEffect::OpenFolder,
             "enter" => InputEffect::Launch,
             "backspace" => {
                 if self.query.backspace(span) {
@@ -318,6 +320,19 @@ mod tests {
             state.apply_key(&key, &mods(false, false, false, false), 0);
         }
         state
+    }
+
+    #[test]
+    fn shift_enter_requests_containing_folder() {
+        let mut state = LauncherState::new();
+        assert_eq!(
+            state.apply_key("enter", &mods(false, false, true, false), 1),
+            InputEffect::OpenFolder
+        );
+        assert_eq!(
+            state.apply_key("enter", &Modifiers::none(), 1),
+            InputEffect::Launch
+        );
     }
 
     #[test]

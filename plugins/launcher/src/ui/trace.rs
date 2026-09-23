@@ -68,6 +68,26 @@ pub(super) fn show(path: &'static str, title: &str, placement: &WindowPlacement)
     let _ = (path, title, placement);
 }
 
+pub(super) fn menu(kind: &'static str, action: &'static str) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!("LAUNCHER_MENU", "kind={kind} action={action}");
+
+    #[cfg(not(debug_assertions))]
+    let _ = (kind, action);
+}
+
+pub(super) fn open_folder(source: &'static str, phase: &'static str, error: &str) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "LAUNCHER_OPEN_FOLDER",
+        "source={source} phase={phase} error={}",
+        qol_runtime::probe::token(error)
+    );
+
+    #[cfg(not(debug_assertions))]
+    let _ = (source, phase, error);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn input(
     view: &LauncherView,
@@ -296,6 +316,7 @@ fn effect_label(effect: InputEffect) -> &'static str {
         InputEffect::Navigate => "navigate",
         InputEffect::QueryChanged => "query",
         InputEffect::Launch => "launch",
+        InputEffect::OpenFolder => "open_folder",
         InputEffect::Dismiss => "dismiss",
         InputEffect::BoostUp => "boost_up",
         InputEffect::BoostDown => "boost_down",

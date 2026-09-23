@@ -159,7 +159,7 @@ impl Render for LauncherView {
                     session.rows.get(self.state.scroll_list.selected).is_some()
                 });
         let flow_verdict = self.state.flow_verdict();
-        let target_height = if detail_ready {
+        let content_height = if detail_ready {
             window_height_for_detail()
         } else if flow_active {
             if result_count > 0 {
@@ -184,7 +184,14 @@ impl Render for LauncherView {
         } else {
             window_height_for_rows(visible)
         };
-        let results_height = target_height - HEADER_HEIGHT - qol_gpui::theme::HEIGHT_HINT_BAR;
+        let target_height = content_height.max(HEADER_HEIGHT + self.menu_height() + 8.0);
+        let results_height = content_height
+            - HEADER_HEIGHT
+            - if flow_active {
+                qol_gpui::theme::HEIGHT_HINT_BAR
+            } else {
+                0.0
+            };
 
         #[cfg(debug_assertions)]
         let t1 = std::time::Instant::now();
@@ -247,15 +254,16 @@ impl Render for LauncherView {
             .flow
             .as_ref()
             .is_some_and(|session| session.pending);
+        let menu = self.menu_kind.map(|_| self.menu_overlay(cx));
         div()
             .font_family(qol_gpui::theme::font_ui())
             .id("launcher")
             .track_focus(&self.focus_handle)
             .w(px(WINDOW_WIDTH))
             .h(px(target_height))
+            .relative()
             .overflow_hidden()
             .rounded(px(qol_gpui::theme::RADIUS_WINDOW))
-            .shadow(qol_gpui::kit::float_shadow(view::palette().text_selected))
             .flex()
             .flex_col()
             .bg(view::bg_color())
@@ -263,24 +271,19 @@ impl Render for LauncherView {
                 if !this.is_showing {
                     return;
                 }
-                match event.keystroke.key.as_str() {
-                    "escape" | "esc" if this.state.flow.is_some() => {
-                        this.handle_key(event, window, cx);
-                    }
-                    "escape" | "esc" => {
-                        this.hide_to_ghost("key", window);
-                    }
-                    _ => this.handle_key(event, window, cx),
-                }
+                this.handle_key(event, window, cx);
             }))
             .child(view::search_bar(
                 &self.state.query,
                 self.state.launch_error.as_deref(),
-                self.state.scroll_list.selected,
-                result_count,
-                flow_pending,
-                flow_prompt.as_deref().unwrap_or("Type to search\u{2026}"),
+                view::SearchBarStatus {
+                    mode: (!flow_active).then_some(self.state.mode),
+                    help_open: self.menu_kind == Some(super::menu::MenuKind::Help),
+                    pending: flow_pending,
+                },
+                flow_prompt.as_deref().unwrap_or("Alt+Enter for options"),
                 window,
+                cx,
             ))
             .when(result_count > 0, |root| {
                 if flow_active {
@@ -385,14 +388,14 @@ impl Render for LauncherView {
                     )
                 },
             )
-            .child(if detail_ready {
-                view::hint_bar_detail()
-            } else {
-                match flow_entry.as_ref() {
-                    Some(entry) => view::hint_bar_flow(entry),
-                    None => view::hint_bar(self.state.mode),
-                }
+            .when(flow_active, |root| {
+                root.child(if detail_ready {
+                    view::hint_bar_detail()
+                } else {
+                    view::hint_bar_flow(flow_entry.as_ref().expect("active flow has an entry"))
+                })
             })
+            .when_some(menu, |root, menu| root.child(menu))
     }
 }
 
@@ -434,6 +437,9 @@ impl LauncherView {
     fn build_visible_rows(&self, scroll_offset: usize, visible: usize) -> Vec<Div> {
         let mut rows = Vec::with_capacity(visible);
         let selected = self.state.scroll_list.selected;
+        let scores = self.store.results();
+        let best = scores.first().map_or(0, |result| result.m.score);
+        let worst = scores.last().map_or(best, |result| result.m.score);
         for (i, scored) in self
             .store
             .results()
@@ -446,6 +452,7 @@ impl LauncherView {
                 scored,
                 self.store.name(scored),
                 i == selected,
+                view::match_percent(scored.m.score, best, worst),
                 ROW_HEIGHT,
             ));
         }
