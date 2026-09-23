@@ -210,7 +210,29 @@ impl EntryStore {
             && next.query.starts_with(&previous.query)
     }
 
-    pub fn adjust_boost(&mut self, name: &str, delta: i32) {
+    pub fn adjust_selected_boost(
+        &mut self,
+        selected: usize,
+        delta: i32,
+        query: &str,
+        mode: SearchMode,
+        fuzziness: Fuzziness,
+    ) -> Option<usize> {
+        let scored = self.get(selected)?;
+        if !matches!(scored.source, search::ResultSource::App) {
+            return None;
+        }
+        let app_index = scored.index;
+        let name = self.app_entries.get(app_index)?.name.clone();
+        self.adjust_boost(&name, delta);
+        self.invalidate_cache();
+        self.ensure_filtered(query, mode, fuzziness);
+        self.cache.iter().position(|result| {
+            matches!(result.source, search::ResultSource::App) && result.index == app_index
+        })
+    }
+
+    fn adjust_boost(&mut self, name: &str, delta: i32) {
         let key = name.to_lowercase();
         let current = self.boosts.get(&key).copied().unwrap_or(0);
         let new_val = (current + delta).max(0);
@@ -299,4 +321,60 @@ fn save_boosts(frecency_path: &Path, boosts: &HashMap<String, i32>) {
         return;
     };
     let _ = std::fs::write(&boosts_path, content);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn repeated_boosts_follow_the_same_app_through_reordering() {
+        let temp = TempDir::new().unwrap();
+        let mut store = EntryStore {
+            app_entries: Arc::new(
+                ["Qol Rank Alpha", "Qol Rank Alpine"]
+                    .into_iter()
+                    .map(|name| discovery::AppEntry {
+                        name: name.to_string(),
+                        exec: vec!["/usr/bin/true".to_string()],
+                        path: PathBuf::from(format!("/{name}.desktop")),
+                    })
+                    .collect(),
+            ),
+            file_entries: Arc::new(Vec::new()),
+            flow_entries: Arc::new(Vec::new()),
+            cache: Vec::new(),
+            cache_key: None,
+            filter_history: Vec::new(),
+            frecency: FrequencyData::default(),
+            frecency_path: temp.path().join("frequency.json"),
+            boosts: HashMap::new(),
+        };
+        store.ensure_filtered("rank", SearchMode::Apps, Fuzziness::Balanced);
+        assert_eq!(store.name(&store.results()[0]), "Qol Rank Alpha");
+        let mut selected = 1;
+
+        for expected_boost in [25, 50] {
+            selected = store
+                .adjust_selected_boost(selected, 25, "rank", SearchMode::Apps, Fuzziness::Balanced)
+                .unwrap();
+            assert_eq!(store.name(store.get(selected).unwrap()), "Qol Rank Alpine");
+            assert_eq!(store.get(selected).unwrap().manual_boost, expected_boost);
+            assert_eq!(
+                load_boosts(&store.frecency_path)["qol rank alpine"],
+                expected_boost
+            );
+            assert!(!store.boosts.contains_key("qol rank alpha"));
+        }
+
+        for expected_boost in [25, 0] {
+            selected = store
+                .adjust_selected_boost(selected, -25, "rank", SearchMode::Apps, Fuzziness::Balanced)
+                .unwrap();
+            assert_eq!(store.name(store.get(selected).unwrap()), "Qol Rank Alpine");
+            assert_eq!(store.get(selected).unwrap().manual_boost, expected_boost);
+        }
+        assert!(load_boosts(&store.frecency_path).is_empty());
+    }
 }

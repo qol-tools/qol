@@ -1,6 +1,8 @@
 use super::state::{EdgeHit, LauncherState, NavDirection};
 use gpui::Modifiers;
-use qol_gpui::text_edit::{self, Span};
+use qol_gpui::text_edit;
+#[cfg(test)]
+use qol_gpui::text_edit::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEffect {
@@ -36,7 +38,7 @@ impl LauncherState {
         let shift = modifiers.shift;
         let alt = modifiers.alt;
         let span = text_edit::span(modifiers);
-        let boost = (secondary || alt) && span == Span::Char;
+        let boost = (secondary || alt) && !shift;
         #[cfg(debug_assertions)]
         if matches!(key, "left" | "right") {
             eprintln!(
@@ -155,7 +157,7 @@ impl LauncherState {
         let shift = modifiers.shift;
         let alt = modifiers.alt;
         let span = text_edit::span(modifiers);
-        let boost = (secondary || alt) && span == Span::Char;
+        let boost = (secondary || alt) && !shift;
         match key {
             "escape" | "esc" => InputEffect::FlowExit,
             "enter" => InputEffect::FlowDetail,
@@ -386,52 +388,66 @@ mod tests {
     }
 
     #[test]
-    fn word_arrows_jump_words_and_shift_selects() {
+    fn shifted_word_arrows_select_words() {
         let mut state = typed("qol memory");
-        assert_eq!(state.apply_key("left", &word(), 0), InputEffect::Navigate);
-        assert_eq!(state.query.cursor(), 4);
-        state.apply_key("left", &word(), 0);
-        assert_eq!(state.query.cursor(), 0);
-        state.apply_key("right", &word(), 0);
-        assert_eq!(state.query.cursor(), 3);
         let select_word = Modifiers {
             shift: true,
             ..word()
         };
+        assert_eq!(
+            state.apply_key("left", &select_word, 0),
+            InputEffect::Navigate
+        );
+        assert_eq!(state.query.cursor(), 4);
+        assert_eq!(state.query.selected_range(), Some((4, 10)));
+        state.apply_key("left", &select_word, 0);
+        assert_eq!(state.query.cursor(), 0);
         state.apply_key("right", &select_word, 0);
-        assert_eq!(state.query.cursor(), 10);
+        assert_eq!(state.query.cursor(), 3);
         assert_eq!(state.query.selected_range(), Some((3, 10)));
     }
 
     #[test]
-    fn word_arrows_jump_words_in_flow_mode() {
+    fn shifted_word_arrows_select_words_in_flow_mode() {
         let mut state = LauncherState::new();
         state.enter_flow(flow_entry("qol memory"));
         for key in ["a", "b", "space", "c"] {
             state.apply_key(key, &mods(false, false, false, false), 3);
         }
-        assert_eq!(state.apply_key("left", &word(), 3), InputEffect::Navigate);
+        let select_word = Modifiers {
+            shift: true,
+            ..word()
+        };
+        assert_eq!(
+            state.apply_key("left", &select_word, 3),
+            InputEffect::Navigate
+        );
         assert_eq!(state.query.cursor(), 3);
-        state.apply_key("left", &word(), 3);
+        state.apply_key("left", &select_word, 3);
         assert_eq!(state.query.cursor(), 0);
+        assert_eq!(state.query.selected_range(), Some((0, 4)));
     }
 
-    fn boost_modifiers() -> Vec<Modifiers> {
+    fn boost_modifiers() -> [Modifiers; 2] {
         [Modifiers::secondary_key(), Modifiers::alt()]
-            .into_iter()
-            .filter(|modifiers| text_edit::span(modifiers) == Span::Char)
-            .collect()
     }
 
     #[test]
-    fn arrows_boost_under_modifiers_the_text_field_does_not_claim() {
+    fn arrows_boost_with_secondary_or_alt_without_moving_the_caret() {
         for modifiers in boost_modifiers() {
-            let mut state = LauncherState::new();
+            let mut state = typed("rank");
             assert_eq!(
                 state.apply_key("right", &modifiers, 0),
                 InputEffect::BoostUp,
                 "{modifiers:?}"
             );
+            assert_eq!(state.query.cursor(), 4, "{modifiers:?}");
+            assert_eq!(
+                state.apply_key("left", &modifiers, 0),
+                InputEffect::BoostDown,
+                "{modifiers:?}"
+            );
+            assert_eq!(state.query.cursor(), 4, "{modifiers:?}");
         }
     }
 

@@ -75,15 +75,18 @@ impl LauncherView {
                 } else {
                     -25
                 };
-                self.state.boost_adjusting = true;
-                self.adjust_selected_boost(delta);
-                self.store.invalidate_cache();
-                self.store.ensure_filtered(
+                if let Some(selected) = self.store.adjust_selected_boost(
+                    self.state.scroll_list.selected,
+                    delta,
                     self.state.query.text(),
                     self.state.mode,
                     self.state.fuzziness,
-                );
-                cx.notify();
+                ) {
+                    self.state.boost_adjusting = true;
+                    self.state.scroll_list.selected = selected;
+                    self.state.sync_result_window(self.store.result_count());
+                    cx.notify();
+                }
             }
             InputEffect::Launch => self.launch_selected(window, cx),
             InputEffect::Dismiss => self.hide_to_ghost("key", window),
@@ -172,17 +175,6 @@ impl LauncherView {
         } else {
             self.schedule_query_render(cx);
         }
-    }
-
-    fn adjust_selected_boost(&mut self, delta: i32) {
-        let Some(scored) = self.store.get(self.state.scroll_list.selected) else {
-            return;
-        };
-        if !matches!(scored.source, crate::discovery::search::ResultSource::App) {
-            return;
-        }
-        let name = self.store.name(scored).to_string();
-        self.store.adjust_boost(&name, delta);
     }
 
     fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
