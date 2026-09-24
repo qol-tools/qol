@@ -1,3 +1,4 @@
+mod chat;
 mod environment;
 pub use self::environment::{session_file_containing_marker, session_file_for_external_id};
 mod metadata;
@@ -8,9 +9,9 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool, CliViewportState,
+    ChatTurn, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
+    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -93,6 +94,11 @@ impl CliSessionStrategy for PiStrategy {
 
     fn transcript_paths(&self, session: &SessionFacts) -> Vec<std::path::PathBuf> {
         self.metadata.subscription_paths(session)
+    }
+
+    fn chat_transcript(&self, session: &SessionFacts) -> Option<Vec<ChatTurn>> {
+        let paths = self.metadata.subscription_paths(session);
+        chat::chat_transcript(&chat::newest_path(&paths)?)
     }
 
     fn marked_report(&self, paths: &[std::path::PathBuf], marker: &str) -> Option<String> {

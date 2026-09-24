@@ -6,7 +6,8 @@ use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
 use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionInterpreter, CliViewportState,
+    ChatRole, ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
+    CliSessionInterpreter, CliViewportState,
 };
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
@@ -523,6 +524,70 @@ fn the_startup_placeholder_title_falls_back_to_the_spawn_key() {
         strategy.describe(&facts).display_name.as_deref(),
         Some("titlecheck-claude")
     );
+}
+
+#[test]
+fn chat_transcript_keeps_human_turns_and_drops_tool_and_harness_noise() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"type":"user","message":{"role":"user","content":"fix the queue"}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Looking at the queue now."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The queue holds one item."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"internal"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The lock went stale."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"subagent noise"}]}}"#,
+            "\n",
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"meta noise"}}"#,
+            "\n",
+            r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary of earlier work."}}"#,
+            "\n",
+            "{\"type\":\"assistant\"",
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let expected = vec![
+        ChatTurn {
+            role: ChatRole::User,
+            text: "fix the queue".to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::Assistant,
+            text: "Looking at the queue now.\n\nThe queue holds one item.\n\nThe lock went stale."
+                .to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::User,
+            text: "[compacted summary]\nSummary of earlier work.".to_owned(),
+        },
+    ];
+    assert_eq!(
+        super::metadata::chat_transcript(&transcript),
+        Some(expected.clone())
+    );
+
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript,
+        },
+    }));
+    assert_eq!(strategy.chat_transcript(&session()), Some(expected));
 }
 
 fn session() -> SessionFacts {

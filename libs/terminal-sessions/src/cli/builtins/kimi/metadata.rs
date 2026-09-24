@@ -5,9 +5,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use qol_agent_homes::{Harness, Registry};
 
+use crate::cli::chat::{read_chat, text_blocks, ChatRole, ChatTurn};
 use crate::cli::CliActivityEvidence;
 use crate::{SessionBinding, SessionFacts};
 
@@ -235,4 +237,70 @@ struct StateRecord {
     title: Option<String>,
     #[serde(default, rename = "lastPrompt")]
     last_prompt: Option<String>,
+}
+
+pub(super) fn chat_path(state_path: &Path) -> Option<PathBuf> {
+    Some(
+        state_path
+            .parent()?
+            .join("agents")
+            .join("main")
+            .join("wire.jsonl"),
+    )
+}
+
+pub(super) fn chat_transcript(path: &Path) -> Option<Vec<ChatTurn>> {
+    read_chat(path, append_chat_turn)
+}
+
+fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
+    match value.get("type").and_then(Value::as_str) {
+        Some("context.append_message") => {
+            let Some(message) = value.get("message") else {
+                return;
+            };
+            if message.get("role").and_then(Value::as_str) != Some("user")
+                || message
+                    .get("origin")
+                    .and_then(|origin| origin.get("kind"))
+                    .and_then(Value::as_str)
+                    != Some("user")
+            {
+                return;
+            }
+            turns.push(ChatTurn {
+                role: ChatRole::User,
+                text: text_blocks(message.get("content").unwrap_or(&Value::Null)),
+            });
+        }
+        Some("context.append_loop_event") => {
+            let Some(event) = value.get("event") else {
+                return;
+            };
+            if event.get("type").and_then(Value::as_str) != Some("content.part") {
+                return;
+            }
+            let Some(part) = event.get("part") else {
+                return;
+            };
+            if part.get("type").and_then(Value::as_str) != Some("text") {
+                return;
+            }
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                turns.push(ChatTurn {
+                    role: ChatRole::Assistant,
+                    text: text.to_owned(),
+                });
+            }
+        }
+        Some("context.apply_compaction") => {
+            if let Some(summary) = value.get("summary").and_then(Value::as_str) {
+                turns.push(ChatTurn {
+                    role: ChatRole::User,
+                    text: format!("[compacted summary]\n{summary}"),
+                });
+            }
+        }
+        _ => {}
+    }
 }

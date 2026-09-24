@@ -418,6 +418,15 @@ impl McpSessionServer {
         let effort = optional_string(&arguments, "effort", "session_fork")?;
         let title = optional_string(&arguments, "title", "session_fork")?;
         let surface = optional_string(&arguments, "surface", "session_fork")?;
+        let copy_chat = arguments
+            .get("copy_chat")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_fork `copy_chat` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(true);
         if arguments.get("task").is_some() {
             return Err("session_fork takes no `task`: a fork owns its brief end to end and never reports a round. Put the problem in `brief`.".to_owned());
         }
@@ -426,6 +435,15 @@ impl McpSessionServer {
         }
         let parent = Some(super::bridge::driver_token(self.terminals.as_ref()))
             .filter(|token| !token.is_empty());
+        let chat = if copy_chat {
+            super::fork::resolve_chat_source(
+                self.terminals.as_ref(),
+                &self.interpreter,
+                parent.as_deref(),
+            )
+        } else {
+            None
+        };
         let request = assignment_request(&arguments, "session_fork")?;
         let dispatch = super::agent_policy::AgentDispatch::new(
             self.policy.load().map_err(|error| error.to_string())?,
@@ -446,6 +464,7 @@ impl McpSessionServer {
             title.as_deref(),
             brief,
             parent.as_deref(),
+            chat.as_ref(),
             self.spawn_cap.as_ref(),
             &dispatch,
         )
@@ -4123,10 +4142,130 @@ mod tests {
             "the refusal must name the fork: {message}"
         );
 
+        assert!(
+            outcome.get("chat").is_none(),
+            "a fork without a parent copies no chat: {outcome}"
+        );
         let records = server.forks.list().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].key, "chase-lockfile");
         assert_eq!(records[0].session, outcome["session"].as_str().unwrap());
+        assert!(records[0].chat.is_none());
+    }
+
+    #[test]
+    fn e2e_a_fork_can_opt_out_of_the_chat_copy() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        backend.set_current(FakeBackend::session());
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        let response = tool_call(
+            &server,
+            "session_fork",
+            json!({
+                "tool": "claude",
+                "cwd": cwd,
+                "key": "fork-no-chat",
+                "model": "opus",
+                "brief": "a problem worth its own tree",
+                "copy_chat": false,
+            }),
+        );
+        assert_eq!(
+            response["result"]["isError"], false,
+            "fork failed: {response}"
+        );
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert!(
+            outcome.get("chat").is_none(),
+            "copy_chat false must not record a chat: {outcome}"
+        );
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        let prompt = launch.args.last().unwrap();
+        assert!(
+            !prompt.contains("The chat you were forked from"),
+            "the opt-out must keep the chat out of the prompt: {prompt}"
+        );
+        let chat_files = std::fs::read_dir(root.path().join("forks"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".chat.md"))
+            .count();
+        assert_eq!(chat_files, 0, "copy_chat false writes no chat file");
+        assert!(server
+            .forks
+            .list()
+            .unwrap()
+            .iter()
+            .all(|record| record.chat.is_none()));
+    }
+
+    #[test]
+    fn e2e_a_fork_with_a_resolved_chat_writes_it_beside_the_brief_and_points_at_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let chat = super::super::fork::ForkChat {
+            source: token(),
+            tool: "claude".to_owned(),
+            turns: vec![
+                qol_terminal_sessions::cli::ChatTurn {
+                    role: qol_terminal_sessions::cli::ChatRole::User,
+                    text: "what broke?".to_owned(),
+                },
+                qol_terminal_sessions::cli::ChatTurn {
+                    role: qol_terminal_sessions::cli::ChatRole::Assistant,
+                    text: "the lockfile went stale".to_owned(),
+                },
+            ],
+        };
+
+        let outcome = super::super::fork::fork(
+            server.terminals.as_ref(),
+            &server.interpreter,
+            &server.ledger,
+            &server.locks,
+            &server.forks,
+            Some("claude"),
+            &cwd,
+            "chase-with-chat",
+            None,
+            Some("opus"),
+            None,
+            None,
+            "the lockfile goes stale",
+            Some(token().as_str()),
+            Some(&chat),
+            None,
+            &super::super::agent_policy::AgentDispatch::unconfigured(),
+        )
+        .unwrap();
+
+        let chat_path = outcome.chat.as_deref().unwrap();
+        assert!(chat_path.ends_with(".chat.md"), "{chat_path}");
+        assert_eq!(
+            std::fs::read_to_string(chat_path).unwrap(),
+            "# Chat copied from v1:fake:7:123 (claude)\n\n## User\n\nwhat broke?\n\n## Assistant\n\nthe lockfile went stale"
+        );
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        let prompt = launch.args.last().unwrap();
+        assert!(prompt.contains(chat_path), "{prompt}");
+        assert!(
+            prompt.contains("The chat you were forked from is copied to"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("The brief is authoritative"), "{prompt}");
     }
 
     #[test]

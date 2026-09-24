@@ -6485,6 +6485,7 @@ mod tests {
             "chase the stale lockfile",
             None,
             None,
+            None,
             &dispatch,
         )
         .unwrap();
@@ -6507,6 +6508,7 @@ mod tests {
             None,
             None,
             "chase the stale lockfile",
+            None,
             None,
             None,
             &dispatch,

@@ -6,7 +6,8 @@ use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
 use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionInterpreter, CliViewportState,
+    ChatRole, ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
+    CliSessionInterpreter, CliViewportState,
 };
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
@@ -590,6 +591,63 @@ fn a_resolved_rollout_hit_stays_cached_without_another_scan() {
         "a hit keeps its full cache window even when the answer changes underneath"
     );
     assert_eq!(environment.scans(), 1);
+}
+
+#[test]
+fn chat_transcript_keeps_messages_and_drops_tool_and_reasoning_entries() {
+    let root = TempDir::new().unwrap();
+    let rollout = root.path().join("rollout.jsonl");
+    let index = root.path().join("session_index.jsonl");
+    std::fs::write(&index, "").unwrap();
+    std::fs::write(
+        &rollout,
+        concat!(
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the queue"}]}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n<shell>zsh</shell>"}]}}"#,
+            "\n",
+            r##"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /work/project"}]}}"##,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"sandbox instructions"}]}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looking at the queue now."}]}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The queue holds one item."}]}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"reasoning","summary":[],"content":[]}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"ok"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The lock went stale."}]}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"ignored"}}"#,
+            "\n",
+            "{\"type\":\"response_item\"",
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let expected = vec![
+        ChatTurn {
+            role: ChatRole::User,
+            text: "fix the queue".to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::Assistant,
+            text: "Looking at the queue now.\n\nThe queue holds one item.\n\nThe lock went stale."
+                .to_owned(),
+        },
+    ];
+    assert_eq!(
+        super::metadata::chat_transcript(&rollout),
+        Some(expected.clone())
+    );
+
+    let strategy = CodexStrategy::with_environment(Arc::new(FakeEnvironment { rollout, index }));
+    assert_eq!(strategy.chat_transcript(&session()), Some(expected));
 }
 
 fn session() -> SessionFacts {

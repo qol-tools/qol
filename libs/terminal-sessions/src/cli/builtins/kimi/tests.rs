@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
 use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
+    ChatRole, ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
     CliSessionInterpreter, CliViewportState,
 };
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
@@ -279,6 +279,69 @@ fn subscribe_falls_back_to_the_session_group_when_no_state_file_exists_yet() {
         .recv_timeout(std::time::Duration::from_secs(3))
         .expect("a new session directory under the group wakes the subscription");
     drop(subscription);
+}
+
+#[test]
+fn chat_transcript_reads_the_session_wire_and_drops_injected_messages() {
+    let root = TempDir::new().unwrap();
+    let session_dir = root.path().join("session_abc");
+    let agents = session_dir.join("agents").join("main");
+    std::fs::create_dir_all(&agents).unwrap();
+    let state = session_dir.join("state.json");
+    std::fs::write(&state, r#"{"title":"Lane"}"#).unwrap();
+    let wire = agents.join("wire.jsonl");
+    std::fs::write(
+        &wire,
+        concat!(
+            r#"{"type":"turn.prompt","input":[{"type":"text","text":"fix the queue"}],"origin":{"kind":"user"}}"#,
+            "\n",
+            r#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"fix the queue"}],"origin":{"kind":"user"}}}"#,
+            "\n",
+            r#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>auto</system-reminder>"}],"origin":{"kind":"injection"}}}"#,
+            "\n",
+            r#"{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"think","think":"internal"}}}"#,
+            "\n",
+            r#"{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Looking at it."}}}"#,
+            "\n",
+            r#"{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"The queue holds one item."}}}"#,
+            "\n",
+            r#"{"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"c1","name":"Bash","args":{}}}"#,
+            "\n",
+            r#"{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"c1","result":{"output":"ok"}}}"#,
+            "\n",
+            r#"{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"The lock went stale."}}}"#,
+            "\n",
+            r#"{"type":"context.apply_compaction","summary":"Earlier work."}"#,
+            "\n",
+            r#"{"type":"context.append_message","message":{"role":"assistant","content":[{"type":"text","text":"assistant message shape"}]}}"#,
+            "\n",
+            "{\"type\":\"context.append_loop_event\"",
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let expected = vec![
+        ChatTurn {
+            role: ChatRole::User,
+            text: "fix the queue".to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::Assistant,
+            text: "Looking at it.\n\nThe queue holds one item.\n\nThe lock went stale.".to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::User,
+            text: "[compacted summary]\nEarlier work.".to_owned(),
+        },
+    ];
+    assert_eq!(
+        super::metadata::chat_transcript(&wire),
+        Some(expected.clone())
+    );
+
+    let strategy = strategy(state, "session_abc-123");
+    assert_eq!(strategy.chat_transcript(&session()), Some(expected));
 }
 
 fn strategy(state_path: PathBuf, session_id: &str) -> KimiStrategy {

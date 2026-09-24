@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use chrono::{Datelike, Local};
 use serde_json::Value;
 
+use crate::cli::chat::{read_chat, ChatRole, ChatTurn};
 use crate::cli::{model::normalize_display_name, tail, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
@@ -308,6 +309,53 @@ fn rollout_has_work(path: &Path) -> bool {
         .take(2)
         .count()
         > 1
+}
+
+pub(super) fn chat_transcript(path: &Path) -> Option<Vec<ChatTurn>> {
+    read_chat(path, append_chat_turn)
+}
+
+fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
+    if value.get("type").and_then(Value::as_str) != Some("response_item") {
+        return;
+    }
+    let Some(payload) = value.get("payload") else {
+        return;
+    };
+    if payload.get("type").and_then(Value::as_str) != Some("message") {
+        return;
+    }
+    let role = match payload.get("role").and_then(Value::as_str) {
+        Some("user") => ChatRole::User,
+        Some("assistant") => ChatRole::Assistant,
+        _ => return,
+    };
+    let text = chat_block_text(payload.get("content").unwrap_or(&Value::Null));
+    if role == ChatRole::User && is_harness_user_text(&text) {
+        return;
+    }
+    turns.push(ChatTurn { role, text });
+}
+
+fn is_harness_user_text(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("<environment_context")
+        || text.starts_with("<user_instructions")
+        || text.starts_with("# AGENTS.md")
+}
+
+fn chat_block_text(content: &Value) -> String {
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|block| {
+            let kind = block.get("type").and_then(Value::as_str);
+            matches!(kind, Some("input_text" | "output_text"))
+        })
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[cfg(test)]

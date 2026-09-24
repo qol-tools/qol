@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use qol_agent_homes::{Harness, Registry};
 
+use crate::cli::chat::{read_chat, text_blocks, ChatRole, ChatTurn};
 use crate::cli::{tail, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
@@ -334,6 +335,62 @@ fn custom_title(line: &[u8]) -> Option<String> {
         .map(str::trim)
         .filter(|title| !title.is_empty())
         .map(str::to_owned)
+}
+
+pub(super) fn chat_transcript(path: &Path) -> Option<Vec<ChatTurn>> {
+    read_chat(path, append_chat_turn)
+}
+
+fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
+    if value.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        || value.get("isMeta").and_then(Value::as_bool) == Some(true)
+        || value.get("promptSource").and_then(Value::as_str) == Some("system")
+    {
+        return;
+    }
+    let role = match value.get("type").and_then(Value::as_str) {
+        Some("user") => ChatRole::User,
+        Some("assistant") => ChatRole::Assistant,
+        _ => return,
+    };
+    let Some(content) = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+    else {
+        return;
+    };
+    let compact_summary = role == ChatRole::User
+        && value.get("isCompactSummary").and_then(Value::as_bool) == Some(true);
+    let text = match content {
+        Value::String(text) if role == ChatRole::User => {
+            if is_harness_prompt(text) {
+                return;
+            }
+            if compact_summary {
+                format!("[compacted summary]\n{text}")
+            } else {
+                text.clone()
+            }
+        }
+        content => text_blocks(content),
+    };
+    turns.push(ChatTurn { role, text });
+}
+
+fn is_harness_prompt(text: &str) -> bool {
+    let text = text.trim_start();
+    [
+        "<command-name",
+        "<command-message",
+        "<local-command-stdout",
+        "<local-command-caveat",
+        "<system-reminder",
+        "<task-notification",
+        "<bash-input",
+        "<bash-stdout",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
 }
 
 #[cfg(test)]

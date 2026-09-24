@@ -1718,7 +1718,7 @@ fn session_gone(terminals: &TerminalSessionService, binding: &SessionBinding) ->
         .unwrap_or(false)
 }
 
-fn resolve_target(
+pub(super) fn resolve_target(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
 ) -> Result<SessionFacts> {

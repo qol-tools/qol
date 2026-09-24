@@ -215,7 +215,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_fork",
             label: "Fork a detached architect",
-            description: "Launch a detached architect that owns a problem end to end and never reports back. Use it when a second problem surfaces mid-session and chasing it yourself would cost you the thread you are already holding: fork it away and carry on. The fork is the root of a new tree, not a lane - no round is opened on it, no completion marker is embedded in its launch, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. A fork carries its own model and, where the tool supports one, its own effort level, so a problem that needs a stronger tier than the forking session gets one. A claude fork starts with --dangerously-skip-permissions. The fork is recorded and listable; nothing else links it back. Pass agent_profile, task_role and requires to bind the detached architect to a user-owned agent profile; the profile supplies the default model when the fork passes none, an explicit model that conflicts with the profile is refused, and the resolved assignment is recorded with the fork.",
+            description: "Launch a detached architect that owns a problem end to end and never reports back. Use it when a second problem surfaces mid-session and chasing it yourself would cost you the thread you are already holding: fork it away and carry on. The fork is the root of a new tree, not a lane - no round is opened on it, no completion marker is embedded in its launch, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. The forking session's chat is copied beside the brief and its path is added to the launch prompt, so the fork reads the context it missed. Pass copy_chat: false to skip that copy. A fork carries its own model and, where the tool supports one, its own effort level, so a problem that needs a stronger tier than the forking session gets one. A claude fork starts with --dangerously-skip-permissions. The fork is recorded and listable; nothing else links it back. Pass agent_profile, task_role and requires to bind the detached architect to a user-owned agent profile; the profile supplies the default model when the fork passes none, an explicit model that conflicts with the profile is refused, and the resolved assignment is recorded with the fork.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -252,6 +252,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "tab or os-window; defaults to the spawn_surface config, then tab",
                         "enum": ["tab", "os-window"],
+                    },
+                    "copy_chat": {
+                        "type": "boolean",
+                        "description": "Copy the parent session's chat transcript beside the brief and point the fork at it; true by default, and false launches without a copy. Best effort: no parent, an unresolvable session, or no transcript simply launches without one",
                     },
                     "agent_profile": {
                         "type": "string",

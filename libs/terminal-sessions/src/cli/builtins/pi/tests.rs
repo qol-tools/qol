@@ -6,7 +6,8 @@ use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
 use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionInterpreter, CliViewportState,
+    ChatRole, ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
+    CliSessionInterpreter, CliViewportState,
 };
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
@@ -743,6 +744,74 @@ fn an_ambiguous_candidate_set_withholds_a_veto_instead_of_denying() {
         single.transcript_completion(&session(), marker),
         Some(false),
         "one unambiguous candidate that lacks the marker still denies it"
+    );
+}
+
+#[test]
+fn chat_transcript_keeps_conversation_and_drops_tool_results_skill_dumps_and_thinking() {
+    let root = TempDir::new().unwrap();
+    let file = root
+        .path()
+        .join("2026-08-03T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72b.jsonl");
+    std::fs::write(
+        &file,
+        concat!(
+            r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"fix the queue"}]}}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"<skill name=\"qol-debug\">\n# debug\n</skill>"}]}}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"internal"}]}}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Looking at it."}]}}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"The queue holds one item."}]}}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"toolResult","content":[{"type":"text","text":"tool output"}]}}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{}}]}}"#,
+            "\n",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"The lock went stale."}]}}"#,
+            "\n",
+            r#"{"type":"compaction","summary":"Earlier work."}"#,
+            "\n",
+            "{\"type\":\"message\"",
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let expected = vec![
+        ChatTurn {
+            role: ChatRole::User,
+            text: "fix the queue".to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::Assistant,
+            text: "Looking at it.\n\nThe queue holds one item.\n\nThe lock went stale.".to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::User,
+            text: "[compacted summary]\nEarlier work.".to_owned(),
+        },
+    ];
+    assert_eq!(super::chat::chat_transcript(&file), Some(expected.clone()));
+
+    let strategy = PiStrategy::with_environment(Arc::new(FakeEnvironment {
+        session_file: file.clone(),
+    }));
+    assert_eq!(strategy.chat_transcript(&session()), Some(expected));
+
+    let sibling = root
+        .path()
+        .join("2026-08-04T09-15-27-264Z_019fc6e8-18a0-7983-9fd6-0200f1e9a72c.jsonl");
+    std::fs::write(
+        &sibling,
+        r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"newer"}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        super::chat::newest_path(&[file, sibling.clone()]),
+        Some(sibling)
     );
 }
 

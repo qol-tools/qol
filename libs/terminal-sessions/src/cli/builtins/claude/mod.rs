@@ -7,7 +7,7 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
+    ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
     CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
     CliSessionSubscriptionError, CliTool, CliViewportState,
 };
@@ -69,6 +69,11 @@ impl CliSessionStrategy for ClaudeStrategy {
                 activity: metadata.activity,
             },
         }
+    }
+
+    fn chat_transcript(&self, session: &SessionFacts) -> Option<Vec<ChatTurn>> {
+        let path = self.metadata.subscription_path(session)?;
+        metadata::chat_transcript(&path)
     }
 
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {

@@ -7,9 +7,9 @@ use crate::SessionFacts;
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
-    CliToolId,
+    ChatTurn, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
+    CliSessionSubscriptionError, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,6 +100,10 @@ impl CliSessionInterpreter {
 
     pub fn transcript_paths(&self, session: &SessionFacts) -> Vec<std::path::PathBuf> {
         self.strategy_for(session).transcript_paths(session)
+    }
+
+    pub fn chat_transcript(&self, session: &SessionFacts) -> Option<Vec<ChatTurn>> {
+        self.strategy_for(session).chat_transcript(session)
     }
 
     pub fn marked_report(&self, paths: &[std::path::PathBuf], marker: &str) -> Option<String> {
@@ -229,7 +233,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::cli::{
-        generic_tool, CliActivityEvidence, CliRuntimeState, CliScreenEvidence,
+        generic_tool, ChatRole, ChatTurn, CliActivityEvidence, CliRuntimeState, CliScreenEvidence,
         CliSessionDescriptor, CliSessionEvidence, CliSessionInterpreter, CliSessionStrategy,
         CliTool, CliToolColor, CliToolId, CliViewportState,
     };
@@ -239,6 +243,7 @@ mod tests {
         tool: CliTool,
         process: &'static str,
         priority: i32,
+        chat: Option<Vec<ChatTurn>>,
     }
 
     impl CliSessionStrategy for NamedStrategy {
@@ -267,6 +272,35 @@ mod tests {
                 evidence: CliSessionEvidence::default(),
             }
         }
+
+        fn chat_transcript(&self, _session: &SessionFacts) -> Option<Vec<ChatTurn>> {
+            self.chat.clone()
+        }
+    }
+
+    #[test]
+    fn chat_transcript_routes_to_the_matching_strategy_and_the_fallback_has_no_chat() {
+        let strategies = [
+            chatting_strategy("chatty", "Chatty", "chatty"),
+            strategy("quiet", "Quiet", "quiet", 1),
+        ];
+        let interpreter = CliSessionInterpreter::from_strategies(strategies).unwrap();
+
+        assert_eq!(
+            interpreter.chat_transcript(&session(&["chatty"])),
+            Some(vec![
+                ChatTurn {
+                    role: ChatRole::User,
+                    text: "hi".to_owned(),
+                },
+                ChatTurn {
+                    role: ChatRole::Assistant,
+                    text: "hello".to_owned(),
+                },
+            ])
+        );
+        assert_eq!(interpreter.chat_transcript(&session(&["quiet"])), None);
+        assert_eq!(interpreter.chat_transcript(&session(&["bash"])), None);
     }
 
     #[test]
@@ -511,6 +545,33 @@ mod tests {
             ),
             process,
             priority,
+            chat: None,
+        })
+    }
+
+    fn chatting_strategy(
+        id: &str,
+        label: &str,
+        process: &'static str,
+    ) -> Arc<dyn CliSessionStrategy> {
+        Arc::new(NamedStrategy {
+            tool: CliTool::new(
+                CliToolId::new(id).unwrap(),
+                label,
+                CliToolColor::new(0x80, 0x80, 0x80),
+            ),
+            process,
+            priority: 0,
+            chat: Some(vec![
+                ChatTurn {
+                    role: ChatRole::User,
+                    text: "hi".to_owned(),
+                },
+                ChatTurn {
+                    role: ChatRole::Assistant,
+                    text: "hello".to_owned(),
+                },
+            ]),
         })
     }
 

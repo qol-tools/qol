@@ -323,6 +323,7 @@ const EXECUTE_FORK: &str = r#"    async execute(_toolCallId, params, signal, _on
       if (params.effort != null) args.push("--effort", params.effort);
       if (params.title != null) args.push("--title", params.title);
       if (params.surface != null) args.push("--surface", params.surface);
+      if (params.copy_chat === false) args.push("--no-chat");
       if (params.agent_profile != null) args.push("--agent-profile", params.agent_profile);
       if (params.task_role != null) args.push("--task-role", params.task_role);
       if (Array.isArray(params.requires)) args.push("--requires", params.requires.join(","));
@@ -845,6 +846,11 @@ mod tests {
             EXECUTE_FORK.contains("if (params.tool != null) args.push(\"--tool\", params.tool);")
         );
         assert!(!EXECUTE_FORK.contains("params.tool ?? \"claude\""));
+    }
+
+    #[test]
+    fn pi_fork_template_passes_the_chat_opt_out() {
+        assert!(EXECUTE_FORK.contains("if (params.copy_chat === false) args.push(\"--no-chat\");"));
     }
 
     #[test]

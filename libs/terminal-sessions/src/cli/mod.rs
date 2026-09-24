@@ -1,5 +1,6 @@
 mod activity;
 mod builtins;
+mod chat;
 mod evidence;
 mod interpreter;
 mod model;
@@ -17,6 +18,7 @@ pub use builtins::{
     CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, GENERIC_TOOL_ID, KIMI_TOOL_ACCENT, KIMI_TOOL_ID,
     PI_TOOL_ACCENT, PI_TOOL_ID,
 };
+pub use chat::{ChatRole, ChatTurn};
 pub use evidence::{
     CliActivityEvidence, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
     CliSessionEvidence, CliViewportState,
@@ -57,6 +59,10 @@ pub trait CliSessionStrategy: Send + Sync {
 
     fn transcript_paths(&self, _session: &SessionFacts) -> Vec<std::path::PathBuf> {
         Vec::new()
+    }
+
+    fn chat_transcript(&self, _session: &SessionFacts) -> Option<Vec<ChatTurn>> {
+        None
     }
 
     fn marked_report(&self, _paths: &[std::path::PathBuf], _marker: &str) -> Option<String> {

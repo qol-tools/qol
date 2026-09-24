@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_terminal_sessions::cli::{CliSessionInterpreter, CliToolId};
-use qol_terminal_sessions::TerminalSessionService;
+use qol_terminal_sessions::cli::{ChatRole, ChatTurn, CliSessionInterpreter, CliToolId};
+use qol_terminal_sessions::{SessionBinding, TerminalSessionService};
 use serde::{Deserialize, Serialize};
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
@@ -34,6 +34,8 @@ pub(super) struct ForkRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) chat: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) agent_assignment: Option<AgentAssignment>,
 }
 
@@ -52,11 +54,19 @@ pub(super) struct ForkOutcome {
     pub(super) detached: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) chat: Option<String>,
     pub(super) elapsed_ms: u128,
     pub(super) instruction: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agent_assignment: Option<AgentAssignment>,
     pub(super) agent_status: AgentStatus,
+}
+
+pub(super) struct ForkChat {
+    pub(super) source: String,
+    pub(super) tool: String,
+    pub(super) turns: Vec<ChatTurn>,
 }
 
 pub(super) struct ForkStore {
@@ -84,6 +94,17 @@ impl ForkStore {
         fs::create_dir_all(&self.dir).context("failed to create the fork directory")?;
         let path = self.brief_path(key, created_at);
         fs::write(&path, brief).context("failed to write the fork brief")?;
+        Ok(path)
+    }
+
+    pub(super) fn chat_path(&self, key: &str, created_at: u64) -> PathBuf {
+        self.dir.join(format!("{}-{created_at}.chat.md", slug(key)))
+    }
+
+    pub(super) fn write_chat(&self, key: &str, created_at: u64, chat: &str) -> Result<PathBuf> {
+        fs::create_dir_all(&self.dir).context("failed to create the fork directory")?;
+        let path = self.chat_path(key, created_at);
+        fs::write(&path, chat).context("failed to write the fork chat")?;
         Ok(path)
     }
 
@@ -193,17 +214,60 @@ pub(super) fn permission_args(tool: &CliToolId) -> Vec<String> {
     }
 }
 
-pub(super) fn fork_prompt(brief_path: &Path, parent: Option<&str>) -> String {
+pub(super) fn fork_prompt(
+    brief_path: &Path,
+    parent: Option<&str>,
+    chat_path: Option<&Path>,
+) -> String {
     let lineage = match parent {
         Some(parent) => format!(
             "The session that forked you is `{parent}`. It has already moved on to other work and is not waiting for you."
         ),
         None => "The session that forked you has already moved on to other work and is not waiting for you.".to_owned(),
     };
+    let chat = match chat_path {
+        Some(path) => format!(
+            "\n\nThe chat you were forked from is copied to {}. The brief is authoritative; read the chat only for context the brief lacks.",
+            path.display()
+        ),
+        None => String::new(),
+    };
     format!(
-        "[qol session fork]\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.\n\n{lineage} Do not try to report back to it and do not bridge to it. Spawn your own lanes if you need them.",
+        "[qol session fork]\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} Do not try to report back to it and do not bridge to it. Spawn your own lanes if you need them.",
         brief_path.display()
     )
+}
+
+pub(super) fn render_chat(source: &str, tool: &str, turns: &[ChatTurn]) -> String {
+    let mut rendered = format!("# Chat copied from {source} ({tool})");
+    for turn in turns {
+        let role = match turn.role {
+            ChatRole::User => "User",
+            ChatRole::Assistant => "Assistant",
+        };
+        rendered.push_str("\n\n## ");
+        rendered.push_str(role);
+        rendered.push_str("\n\n");
+        rendered.push_str(&turn.text);
+    }
+    rendered
+}
+
+pub(super) fn resolve_chat_source(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    parent: Option<&str>,
+) -> Option<ForkChat> {
+    let parent = parent?;
+    let binding = parent.parse::<SessionBinding>().ok()?;
+    let facts = super::bridge::resolve_target(terminals, &binding).ok()?;
+    let tool = interpreter.describe(&facts).tool.id.to_string();
+    let turns = interpreter.chat_transcript(&facts)?;
+    Some(ForkChat {
+        source: parent.to_owned(),
+        tool,
+        turns,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -222,6 +286,7 @@ pub(super) fn fork(
     title: Option<&str>,
     brief: &str,
     parent: Option<&str>,
+    chat: Option<&ForkChat>,
     cap: Option<&SpawnCapConfig>,
     dispatch: &AgentDispatch,
 ) -> Result<ForkOutcome> {
@@ -242,7 +307,14 @@ pub(super) fn fork(
     };
     let created_at = now_seconds();
     let brief_path = forks.write_brief(key, created_at, brief)?;
-    let prompt = fork_prompt(&brief_path, parent);
+    let chat_path = match chat {
+        Some(chat) if !chat.turns.is_empty() => {
+            let rendered = render_chat(&chat.source, &chat.tool, &chat.turns);
+            Some(forks.write_chat(key, created_at, &rendered)?)
+        }
+        _ => None,
+    };
+    let prompt = fork_prompt(&brief_path, parent, chat_path.as_deref());
     let mut record = ForkRecord {
         key: key.to_owned(),
         tool: tool.clone(),
@@ -255,6 +327,7 @@ pub(super) fn fork(
         brief: brief_path.display().to_string(),
         created_at,
         parent: parent.map(str::to_owned),
+        chat: chat_path.as_ref().map(|path| path.display().to_string()),
         agent_assignment: admission.assignment.clone(),
     };
     forks.record(&record)?;
@@ -301,6 +374,7 @@ pub(super) fn fork(
         brief: record.brief.clone(),
         detached: true,
         parent: record.parent.clone(),
+        chat: record.chat.clone(),
         elapsed_ms: launched.elapsed_ms,
         instruction: "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.".to_owned(),
         agent_assignment: record.agent_assignment.clone(),
@@ -323,9 +397,15 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         (None, None) => bail!("a fork needs --brief TEXT or --brief-file PATH"),
     };
     let terminals = super::service()?;
+    let interpreter = CliSessionInterpreter::system();
+    let chat = if parsed.no_chat {
+        None
+    } else {
+        resolve_chat_source(&terminals, &interpreter, parsed.parent.as_deref())
+    };
     let outcome = fork(
         &terminals,
-        &CliSessionInterpreter::system(),
+        &interpreter,
         &SpawnLedger::system()?,
         &SpawnLocks::system()?,
         &ForkStore::system()?,
@@ -338,6 +418,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         parsed.title.as_deref(),
         &brief,
         parsed.parent.as_deref(),
+        chat.as_ref(),
         resolve_spawn_cap(config_spawn_cap()?).as_ref(),
         &dispatch,
     )?;
@@ -352,7 +433,7 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
         return Ok(());
     }
     for record in records {
-        println!(
+        let mut row = format!(
             "{}\t{}\t{}\t{}\t{}",
             record.key,
             record.tool,
@@ -360,6 +441,11 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
             record.session,
             record.brief
         );
+        if let Some(chat) = &record.chat {
+            row.push('\t');
+            row.push_str(chat);
+        }
+        println!("{row}");
     }
     Ok(())
 }
@@ -377,6 +463,7 @@ pub(super) struct ForkArgs {
     pub(super) brief: Option<String>,
     pub(super) brief_file: Option<String>,
     pub(super) parent: Option<String>,
+    pub(super) no_chat: bool,
     pub(super) agent_profile: Option<String>,
     pub(super) task_role: Option<super::agent_policy::AgentRole>,
     pub(super) requires: Option<Vec<super::agent_policy::AgentRequirement>>,
@@ -393,7 +480,7 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\nA claude fork starts with --dangerously-skip-permissions.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
@@ -420,6 +507,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
                 parsed.brief_file = Some(flag_value(args, &mut index, "--brief-file")?)
             }
             "--parent" => parsed.parent = Some(flag_value(args, &mut index, "--parent")?),
+            "--no-chat" => parsed.no_chat = true,
             "--agent-profile" => {
                 parsed.agent_profile = Some(flag_value(args, &mut index, "--agent-profile")?)
             }
@@ -546,7 +634,11 @@ mod tests {
 
     #[test]
     fn the_fork_prompt_points_at_the_brief_and_forbids_reporting_back() {
-        let prompt = fork_prompt(Path::new("/data/forks/chase-1.md"), Some("v1:kitty:7:100"));
+        let prompt = fork_prompt(
+            Path::new("/data/forks/chase-1.md"),
+            Some("v1:kitty:7:100"),
+            None,
+        );
         assert!(prompt.contains("/data/forks/chase-1.md"));
         assert!(prompt.contains("detached architect"));
         assert!(prompt.contains("no completion marker"));
@@ -554,6 +646,43 @@ mod tests {
         assert!(
             !prompt.contains("Completion fragments"),
             "a fork never carries a completion marker: {prompt}"
+        );
+        assert!(
+            !prompt.contains("The chat you were forked from"),
+            "without a chat copy the prompt must not name one: {prompt}"
+        );
+    }
+
+    #[test]
+    fn the_fork_prompt_names_the_chat_copy_when_one_exists() {
+        let prompt = fork_prompt(
+            Path::new("/data/forks/chase-1.md"),
+            Some("v1:kitty:7:100"),
+            Some(Path::new("/data/forks/chase-1.chat.md")),
+        );
+        assert!(prompt.contains(
+            "Your brief is written to /data/forks/chase-1.md. Read it first, then work the problem."
+        ));
+        assert!(prompt.contains(
+            "The chat you were forked from is copied to /data/forks/chase-1.chat.md. The brief is authoritative; read the chat only for context the brief lacks."
+        ));
+    }
+
+    #[test]
+    fn the_chat_renderer_writes_a_heading_and_one_section_per_turn() {
+        let turns = vec![
+            ChatTurn {
+                role: ChatRole::User,
+                text: "what broke?".to_owned(),
+            },
+            ChatTurn {
+                role: ChatRole::Assistant,
+                text: "the lockfile went stale".to_owned(),
+            },
+        ];
+        assert_eq!(
+            render_chat("v1:kitty:7:100", "claude", &turns),
+            "# Chat copied from v1:kitty:7:100 (claude)\n\n## User\n\nwhat broke?\n\n## Assistant\n\nthe lockfile went stale"
         );
     }
 
@@ -595,6 +724,7 @@ mod tests {
                     brief: brief.display().to_string(),
                     created_at,
                     parent: None,
+                    chat: None,
                     agent_assignment: None,
                 })
                 .unwrap();
@@ -612,6 +742,27 @@ mod tests {
             "newer"
         );
         assert!(store.find_session("v1:kitty:absent:1").unwrap().is_none());
+    }
+
+    #[test]
+    fn fork_args_read_the_no_chat_opt_out() {
+        let parsed = parse_args(&args(&[
+            "--cwd",
+            "/work",
+            "--key",
+            "chase-chat",
+            "--brief",
+            "chase it",
+            "--parent",
+            "v1:kitty:7:100",
+            "--no-chat",
+        ]))
+        .unwrap();
+        assert!(parsed.no_chat);
+        assert_eq!(parsed.parent.as_deref(), Some("v1:kitty:7:100"));
+
+        let default = parse_args(&args(&["--cwd", "/work", "--key", "k", "--brief", "b"]));
+        assert!(!default.unwrap().no_chat, "default must copy");
     }
 
     #[test]
