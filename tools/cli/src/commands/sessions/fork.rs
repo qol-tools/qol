@@ -186,6 +186,13 @@ pub(super) fn effort_args(tool: &CliToolId, effort: Option<&str>) -> Result<Vec<
     }
 }
 
+pub(super) fn permission_args(tool: &CliToolId) -> Vec<String> {
+    match tool.as_str() {
+        "claude" => vec!["--dangerously-skip-permissions".to_owned()],
+        _ => Vec::new(),
+    }
+}
+
 pub(super) fn fork_prompt(brief_path: &Path, parent: Option<&str>) -> String {
     let lineage = match parent {
         Some(parent) => format!(
@@ -225,7 +232,8 @@ pub(super) fn fork(
     };
     let tool_id =
         CliToolId::new(tool.clone()).map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
-    let extra = effort_args(&tool_id, effort)?;
+    let mut extra = permission_args(&tool_id);
+    extra.extend(effort_args(&tool_id, effort)?);
     let admission = dispatch.admit_launch(&tool, model)?;
     let Some(model) = admission.model.as_deref() else {
         bail!(
@@ -385,7 +393,7 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort is passed to tools that take one (claude: low, medium, high, xhigh, max).\nA claude fork starts with --dangerously-skip-permissions.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
@@ -507,6 +515,15 @@ mod tests {
             let error = parse_args(&missing).unwrap_err().to_string();
             assert!(error.contains(expected), "{error}");
         }
+    }
+
+    #[test]
+    fn claude_forks_skip_permission_prompts_and_other_tools_get_no_flag() {
+        assert_eq!(
+            permission_args(&CliToolId::new("claude").unwrap()),
+            vec!["--dangerously-skip-permissions".to_owned()]
+        );
+        assert!(permission_args(&CliToolId::new("pi").unwrap()).is_empty());
     }
 
     #[test]

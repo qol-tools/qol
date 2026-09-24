@@ -4081,6 +4081,13 @@ mod tests {
             "the fork launches at its own effort: {:?}",
             launch.args
         );
+        assert!(
+            launch
+                .args
+                .contains(&"--dangerously-skip-permissions".to_owned()),
+            "a claude fork skips permission prompts: {:?}",
+            launch.args
+        );
         let prompt = launch.args.last().unwrap();
         assert!(prompt.contains("detached architect"), "{prompt}");
         assert!(
