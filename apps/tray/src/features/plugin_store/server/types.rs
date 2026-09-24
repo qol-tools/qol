@@ -46,13 +46,25 @@ pub(super) struct PluginUpdateJob {
 }
 
 impl PluginUpdateJob {
-    pub(super) fn blocks_start(&self, from_queue: bool) -> bool {
-        match self.state {
-            PluginUpdateState::Queued => !from_queue,
-            PluginUpdateState::Updating => true,
-            PluginUpdateState::Failed => false,
-        }
+    pub(super) fn blocks_start(&self) -> bool {
+        self.state != PluginUpdateState::Failed
     }
+}
+
+fn take_queued_job(jobs: &mut HashMap<String, PluginUpdateJob>, id: &str) -> bool {
+    match jobs.get_mut(id) {
+        Some(job) if job.state == PluginUpdateState::Queued => {
+            job.state = PluginUpdateState::Updating;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn remove_queued_jobs(jobs: &mut HashMap<String, PluginUpdateJob>) -> usize {
+    let before = jobs.len();
+    jobs.retain(|_, job| job.state != PluginUpdateState::Queued);
+    before - jobs.len()
 }
 
 #[derive(Clone)]
@@ -175,12 +187,24 @@ impl AppState {
         }
     }
 
-    pub(super) fn begin_plugin_update(&self, id: &str) -> Result<(), String> {
-        self.start_plugin_update(id, false)
+    pub(super) fn begin_queued_plugin_update(&self, id: &str) -> bool {
+        match self.plugin_updates.lock() {
+            Ok(mut jobs) => take_queued_job(&mut jobs, id),
+            Err(error) => {
+                log::error!("Plugin update job map is poisoned: {}", error);
+                false
+            }
+        }
     }
 
-    pub(super) fn begin_queued_plugin_update(&self, id: &str) -> Result<(), String> {
-        self.start_plugin_update(id, true)
+    pub(super) fn stop_queued_plugin_updates(&self) -> usize {
+        match self.plugin_updates.lock() {
+            Ok(mut jobs) => remove_queued_jobs(&mut jobs),
+            Err(error) => {
+                log::error!("Plugin update job map is poisoned: {}", error);
+                0
+            }
+        }
     }
 
     pub(super) fn any_plugin_update_active(&self) -> bool {
@@ -192,12 +216,12 @@ impl AppState {
         })
     }
 
-    fn start_plugin_update(&self, id: &str, from_queue: bool) -> Result<(), String> {
+    pub(super) fn begin_plugin_update(&self, id: &str) -> Result<(), String> {
         let mut jobs = self.plugin_updates.lock().map_err(|error| {
             log::error!("Plugin update job map is poisoned: {}", error);
             "The update state is unavailable".to_string()
         })?;
-        let already_running = jobs.get(id).is_some_and(|job| job.blocks_start(from_queue));
+        let already_running = jobs.get(id).is_some_and(|job| job.blocks_start());
         if already_running {
             return Err(crate::updates::UPDATE_ALREADY_RUNNING.to_string());
         }
@@ -417,7 +441,11 @@ pub(super) struct RuntimeGpuiPayload {
 mod tests {
     #[cfg(feature = "dev")]
     use super::RecompileSelfRequest;
-    use super::{ExecuteActionResult, PluginUpdateJob, PluginUpdateState};
+    use super::{
+        remove_queued_jobs, take_queued_job, ExecuteActionResult, PluginUpdateJob,
+        PluginUpdateState,
+    };
+    use std::collections::HashMap;
 
     fn job(state: PluginUpdateState) -> PluginUpdateJob {
         PluginUpdateJob {
@@ -428,11 +456,38 @@ mod tests {
 
     #[test]
     fn plugin_update_jobs_block_duplicate_starts() {
-        assert!(!job(PluginUpdateState::Failed).blocks_start(false));
-        assert!(!job(PluginUpdateState::Queued).blocks_start(true));
-        assert!(job(PluginUpdateState::Queued).blocks_start(false));
-        assert!(job(PluginUpdateState::Updating).blocks_start(false));
-        assert!(job(PluginUpdateState::Updating).blocks_start(true));
+        assert!(!job(PluginUpdateState::Failed).blocks_start());
+        assert!(job(PluginUpdateState::Queued).blocks_start());
+        assert!(job(PluginUpdateState::Updating).blocks_start());
+    }
+
+    #[test]
+    fn stopping_drops_queued_jobs_and_leaves_the_running_one() {
+        let mut jobs = HashMap::from([
+            ("ln".to_string(), job(PluginUpdateState::Queued)),
+            ("cli".to_string(), job(PluginUpdateState::Updating)),
+            ("bt".to_string(), job(PluginUpdateState::Failed)),
+        ]);
+
+        assert_eq!(remove_queued_jobs(&mut jobs), 1);
+
+        assert!(!jobs.contains_key("ln"));
+        assert_eq!(jobs["cli"].state, PluginUpdateState::Updating);
+        assert_eq!(jobs["bt"].state, PluginUpdateState::Failed);
+    }
+
+    #[test]
+    fn only_a_still_queued_job_is_taken() {
+        let mut jobs = HashMap::from([
+            ("ln".to_string(), job(PluginUpdateState::Queued)),
+            ("cli".to_string(), job(PluginUpdateState::Updating)),
+        ]);
+
+        assert!(take_queued_job(&mut jobs, "ln"));
+        assert_eq!(jobs["ln"].state, PluginUpdateState::Updating);
+        assert!(!take_queued_job(&mut jobs, "cli"));
+        assert!(!take_queued_job(&mut jobs, "stopped"));
+        assert!(!jobs.contains_key("stopped"));
     }
 
     #[test]

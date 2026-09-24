@@ -60,6 +60,7 @@ pub(super) enum RowAction {
     Check,
     Update(String),
     UpdateAll,
+    StopUpdates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -252,14 +253,19 @@ pub(super) fn host_row(host: &UpdateTarget) -> TargetRow {
 
 pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
     if job_running(snapshot) {
-        let host_updating = snapshot.host.state == TargetState::Updating;
+        let host_updating = matches!(
+            snapshot.host.state,
+            TargetState::Queued | TargetState::Updating
+        );
         let description = if host_updating {
             "qol-tray restarts when the download is done".to_string()
-        } else if snapshot.host.state == TargetState::Queued {
-            "qol-tray goes last, then restarts.".to_string()
         } else {
             pending_names(snapshot, &[TargetState::Queued, TargetState::Updating])
         };
+        let plugins_queued = snapshot
+            .plugins
+            .iter()
+            .any(|plugin| plugin.state == TargetState::Queued);
         return Summary {
             dot: None,
             busy: true,
@@ -270,8 +276,8 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             }
             .to_string(),
             description,
-            action: None,
-            action_label: None,
+            action: plugins_queued.then_some(RowAction::StopUpdates),
+            action_label: plugins_queued.then_some("Stop"),
         };
     }
     let failed = pending_names(snapshot, &[TargetState::Failed]);
@@ -623,8 +629,11 @@ mod tests {
         running.running = true;
         let busy = summary(&running);
         assert!(busy.busy);
-        assert_eq!(busy.label, "Updating plugins");
-        assert_eq!(busy.description, "qol-tray goes last, then restarts.");
+        assert_eq!(busy.label, "Updating qol-tray");
+        assert_eq!(
+            busy.description,
+            "qol-tray restarts when the download is done"
+        );
         assert_eq!(busy.action, None);
 
         let mut host_running = snapshot(
@@ -650,6 +659,16 @@ mod tests {
         assert!(busy.busy);
         assert_eq!(busy.label, "Updating plugins");
         assert_eq!(busy.description, "CLI Sessions and Launcher");
+        assert_eq!(busy.action, Some(RowAction::StopUpdates));
+        assert_eq!(busy.action_label, Some("Stop"));
+
+        let last_plugin_running = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![target("cli", "CLI Sessions", TargetState::Updating)],
+        );
+        let finishing = summary(&last_plugin_running);
+        assert_eq!(finishing.description, "CLI Sessions");
+        assert_eq!(finishing.action, None);
     }
 
     #[test]

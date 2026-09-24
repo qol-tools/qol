@@ -168,6 +168,7 @@ pub(super) async fn post_core_action(
         }
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
+        "stop_updates" => stop_updates_action(&state),
         _ => action_error(StatusCode::NOT_FOUND, "Unknown action"),
     }
 }
@@ -259,6 +260,13 @@ fn start_update_all_action(state: &AppState) -> Response {
     action_ok("Update started")
 }
 
+fn stop_updates_action(state: &AppState) -> Response {
+    if state.stop_queued_plugin_updates() == 0 {
+        return action_error(StatusCode::CONFLICT, "Nothing to stop");
+    }
+    action_ok("Stopping after the current update")
+}
+
 async fn run_update_all(state: AppState, plan: Vec<UpdateTarget>) {
     for target in plan {
         let UpdateTarget::Plugin(id) = target else {
@@ -271,9 +279,7 @@ async fn run_update_all(state: AppState, plan: Vec<UpdateTarget>) {
             }
             return;
         };
-        if let Err(message) = state.begin_queued_plugin_update(&id) {
-            log::warn!("Update all skipped {}: {}", id, message);
-            state.fail_plugin_update(&id, message);
+        if !state.begin_queued_plugin_update(&id) {
             continue;
         }
         let result = plugin_services::run_plugin_update(&state, &id).await;

@@ -265,6 +265,7 @@ impl UpdatesView {
         let (name, body) = match action {
             RowAction::Check => ("check_updates", None),
             RowAction::UpdateAll => ("update_all", None),
+            RowAction::StopUpdates => ("stop_updates", None),
             RowAction::Update(id) => ("update", Some(serde_json::json!({ "id": id }).to_string())),
         };
         self.pending = true;
