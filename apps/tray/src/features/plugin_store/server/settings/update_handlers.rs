@@ -260,37 +260,26 @@ fn start_update_all_action(state: &AppState) -> Response {
 }
 
 async fn run_update_all(state: AppState, plan: Vec<UpdateTarget>) {
-    let host_queued = plan.contains(&UpdateTarget::Host);
-    let mut plugin_failed = false;
     for target in plan {
         let UpdateTarget::Plugin(id) = target else {
-            continue;
+            if let Err(message) = super::super::meta_handlers::start_self_update(&state, true) {
+                log::warn!(
+                    "Update all could not start the qol-tray update: {}",
+                    message
+                );
+                crate::updates::clear_host_update_queued();
+            }
+            return;
         };
         if let Err(message) = state.begin_queued_plugin_update(&id) {
             log::warn!("Update all skipped {}: {}", id, message);
             state.fail_plugin_update(&id, message);
-            plugin_failed = true;
             continue;
         }
         let result = plugin_services::run_plugin_update(&state, &id).await;
         if !result.success {
             log::warn!("Update all could not update {}: {}", id, result.message);
-            plugin_failed = true;
         }
-    }
-    if !host_queued {
-        return;
-    }
-    if plugin_failed {
-        crate::updates::clear_host_update_queued();
-        return;
-    }
-    if let Err(message) = super::super::meta_handlers::start_self_update(&state, true) {
-        log::warn!(
-            "Update all could not start the qol-tray update: {}",
-            message
-        );
-        crate::updates::clear_host_update_queued();
     }
 }
 
@@ -517,6 +506,9 @@ fn update_all_refusal(running: bool, plan: &[UpdateTarget]) -> Option<&'static s
 }
 
 fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<UpdateTarget> {
+    if host_available {
+        return vec![UpdateTarget::Host];
+    }
     let mut candidates: Vec<&PluginView> = plugins
         .iter()
         .filter(|plugin| {
@@ -533,14 +525,10 @@ fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<UpdateTa
             .cmp(&right.name.to_lowercase())
             .then_with(|| left.id.cmp(&right.id))
     });
-    let mut plan: Vec<UpdateTarget> = candidates
+    candidates
         .into_iter()
         .map(|plugin| UpdateTarget::Plugin(plugin.id.clone()))
-        .collect();
-    if host_available {
-        plan.push(UpdateTarget::Host);
-    }
-    plan
+        .collect()
 }
 
 fn action_ok(message: &str) -> Response {
@@ -934,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn update_all_plan_orders_plugins_by_name_then_the_host_last() {
+    fn update_all_plan_orders_plugins_by_name_and_updates_the_host_alone_first() {
         let mut failed = plugin("qol-alt-tab", "Alt Tab", "1.0.0", None);
         failed.job = job(PluginUpdateState::Failed, Some("No connection to GitHub"));
         let launcher = plugin("qol-launcher", "Launcher", "1.0.0", Some("1.1.0"));
@@ -944,15 +932,7 @@ mod tests {
         linked.dev_linked = true;
         let plugins = vec![zed, gamma, linked, failed, launcher];
 
-        assert_eq!(
-            update_all_plan(&plugins, true),
-            vec![
-                UpdateTarget::Plugin("qol-alt-tab".to_string()),
-                UpdateTarget::Plugin("qol-launcher".to_string()),
-                UpdateTarget::Plugin("plugin-zed".to_string()),
-                UpdateTarget::Host,
-            ]
-        );
+        assert_eq!(update_all_plan(&plugins, true), vec![UpdateTarget::Host]);
         assert_eq!(
             update_all_plan(&plugins, false),
             vec![

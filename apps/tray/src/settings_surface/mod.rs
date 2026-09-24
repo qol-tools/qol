@@ -111,6 +111,10 @@ fn finish_request(
     Ok(true)
 }
 
+pub fn open_updates() -> anyhow::Result<bool> {
+    request_core_tool(CoreTool::Updates)
+}
+
 pub fn stop() {
     platform::stop();
 }

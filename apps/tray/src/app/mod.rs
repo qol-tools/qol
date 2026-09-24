@@ -830,6 +830,9 @@ fn confirm_host_update() {
         None,
         None,
     );
+    if let Err(error) = qol_tray::settings_surface::open_updates() {
+        log::warn!("Failed to reopen the Updates page after the update: {error:#}");
+    }
 }
 
 async fn check_for_updates() -> bool {
