@@ -1491,19 +1491,13 @@ impl SettingsPanelView {
                 if self.nav_guard.swallow(NavAxis::Vertical, -1.0) {
                     return;
                 }
-                let visible = self.current_visible_rows();
-                let selected = self.level().selected;
-                self.level_mut().selected = adjacent_visible_row(&visible, selected, -1);
-                self.sync_scroll();
+                self.step_selection(-1);
             }
             Intent::Down => {
                 if self.nav_guard.swallow(NavAxis::Vertical, 1.0) {
                     return;
                 }
-                let visible = self.current_visible_rows();
-                let selected = self.level().selected;
-                self.level_mut().selected = adjacent_visible_row(&visible, selected, 1);
-                self.sync_scroll();
+                self.step_selection(1);
             }
             Intent::Activate => self.activate(window, cx),
             Intent::Tab => return,
@@ -2386,6 +2380,22 @@ impl SettingsPanelView {
         };
         let lead = self.body_lead_index(selected);
         self.level().body_scroll.follow(child, lead, px(margin));
+    }
+
+    /// Moves to the next visible row, or scrolls the body when the selection is
+    /// already at that end, so a tall last row is readable without a mouse.
+    fn step_selection(&mut self, direction: isize) {
+        let visible = self.current_visible_rows();
+        let selected = self.level().selected;
+        let next = adjacent_visible_row(&visible, selected, direction);
+        if next == selected {
+            self.level()
+                .body_scroll
+                .nudge(direction, px(super::PANEL_ROW_HEIGHT * 3.0));
+            return;
+        }
+        self.level_mut().selected = next;
+        self.sync_scroll();
     }
 
     fn resync_scroll(&mut self) {

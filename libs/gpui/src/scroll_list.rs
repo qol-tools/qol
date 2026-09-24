@@ -51,6 +51,22 @@ pub fn follow_offset_y_with_lead(
     revealed
 }
 
+/// The offset one keyboard step past the selection's edge lands on, clamped to
+/// the content so a step at either end stays put.
+pub fn nudge_offset_y(
+    current: gpui::Pixels,
+    max: gpui::Pixels,
+    direction: isize,
+    step: gpui::Pixels,
+) -> gpui::Pixels {
+    let next = if direction < 0 {
+        current + step
+    } else {
+        current - step
+    };
+    next.clamp(-max, gpui::px(0.))
+}
+
 impl SelectionScroll {
     pub fn new() -> Self {
         Self::default()
@@ -82,6 +98,20 @@ impl SelectionScroll {
             }
             _ => self.handle.scroll_to_item(index),
         }
+    }
+
+    /// Scrolls the viewport one step without moving the selection, for a key
+    /// pressed on the last or first row while content still hides past it.
+    /// Returns whether the viewport moved.
+    pub fn nudge(&self, direction: isize, step: gpui::Pixels) -> bool {
+        let mut offset = self.handle.offset();
+        let next = nudge_offset_y(offset.y, self.handle.max_offset().height, direction, step);
+        if next == offset.y {
+            return false;
+        }
+        offset.y = next;
+        self.handle.set_offset(offset);
+        true
     }
 
     pub fn refollow(&self) {
@@ -224,6 +254,25 @@ pub fn wheel_rows(delta: &gpui::ScrollDelta, row_height: f32) -> isize {
 mod tests {
     use super::*;
     use gpui::px;
+
+    #[test]
+    fn a_nudge_steps_the_offset_and_stops_at_either_end() {
+        let cases = [
+            ("down from the top", px(0.), 1, px(-60.)),
+            ("down near the end clamps", px(-180.), 1, px(-200.)),
+            ("down at the end stays", px(-200.), 1, px(-200.)),
+            ("up from the end", px(-200.), -1, px(-140.)),
+            ("up near the top clamps", px(-20.), -1, px(0.)),
+            ("up at the top stays", px(0.), -1, px(0.)),
+        ];
+        for (label, current, direction, expected) in cases {
+            assert_eq!(
+                nudge_offset_y(current, px(200.), direction, px(60.)),
+                expected,
+                "case: {label}"
+            );
+        }
+    }
 
     #[test]
     fn clamp_keeps_selected_inside_the_window() {
