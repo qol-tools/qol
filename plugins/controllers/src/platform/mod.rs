@@ -10,21 +10,15 @@ mod windows;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::platform_support;
 #[cfg(target_os = "linux")]
-pub use linux::{
-    disconnect_bluetooth, hidraw_holders, link_evidence, read_devices, stop_process, InputMonitor,
-};
+pub use linux::{disconnect_bluetooth, link_evidence, read_devices, InputMonitor};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::platform_support;
 #[cfg(target_os = "macos")]
-pub use macos::{
-    disconnect_bluetooth, hidraw_holders, link_evidence, read_devices, stop_process, InputMonitor,
-};
+pub use macos::{disconnect_bluetooth, link_evidence, read_devices, InputMonitor};
 #[cfg(target_os = "windows")]
 pub(crate) use windows::platform_support;
 #[cfg(target_os = "windows")]
-pub use windows::{
-    disconnect_bluetooth, hidraw_holders, link_evidence, read_devices, stop_process, InputMonitor,
-};
+pub use windows::{disconnect_bluetooth, link_evidence, read_devices, InputMonitor};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlatformSupport {

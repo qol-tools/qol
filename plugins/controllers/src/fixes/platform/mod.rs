@@ -1,5 +1,6 @@
 use super::state::SystemPaths;
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 mod fallback;
 const _: fallback::Platform = fallback::Platform;
@@ -24,6 +25,8 @@ trait FixPlatform {
     fn live_quirk_path(driver: &str) -> Option<String>;
     fn authorization_available() -> bool;
     fn apply(conf: &str, writes: &[(String, String)]) -> Result<()>;
+    fn hidraw_guard_path() -> Option<PathBuf>;
+    fn install_hidraw_guard(path: &Path, content: &str) -> Result<()>;
 }
 
 pub(super) fn system_paths() -> SystemPaths {
@@ -40,4 +43,12 @@ pub(crate) fn authorization_available() -> bool {
 
 pub(super) fn apply(conf: &str, writes: &[(String, String)]) -> Result<()> {
     imp::apply(conf, writes)
+}
+
+pub(super) fn hidraw_guard_path() -> Option<PathBuf> {
+    imp::hidraw_guard_path()
+}
+
+pub(super) fn install_hidraw_guard(path: &Path, content: &str) -> Result<()> {
+    imp::install_hidraw_guard(path, content)
 }

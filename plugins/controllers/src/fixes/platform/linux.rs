@@ -1,7 +1,7 @@
 use super::super::state::SystemPaths;
 use super::FixPlatform;
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(super) struct Platform;
 
@@ -34,6 +34,20 @@ done"#;
             args.push(path.clone());
             args.push(value.clone());
         }
+        qol_host_fixes::elevation::run_privileged("qol-controllers", script, &args)
+    }
+
+    fn hidraw_guard_path() -> Option<PathBuf> {
+        Some(PathBuf::from(
+            "/etc/udev/rules.d/72-qol-controllers-hidraw.rules",
+        ))
+    }
+
+    fn install_hidraw_guard(path: &Path, content: &str) -> Result<()> {
+        let script = r#"set -e
+printf '%s' "$1" > "$2"
+udevadm control --reload"#;
+        let args = [content.to_string(), path.display().to_string()];
         qol_host_fixes::elevation::run_privileged("qol-controllers", script, &args)
     }
 }

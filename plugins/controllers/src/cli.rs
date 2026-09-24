@@ -18,7 +18,6 @@ fn app() -> HeadlessApp {
         .command(apply_command())
         .command(status_command())
         .command(reclaim_command())
-        .command(reclaim_stop_holders_command())
         .command(settings_command())
         .doctor_checks(doctor_checks())
 }
@@ -41,9 +40,11 @@ fn apply_command() -> Command {
 
 fn reclaim_command() -> Command {
     Command::new("reclaim")
-        .about("Reconnect a controller whose driver stopped responding.")
+        .about("Fix a controller whose driver stopped responding.")
         .usage(format!("{PLUGIN_ID} reclaim"))
-        .detail("Resets the Bluetooth link of a stuck controller on the adapter that holds it.")
+        .detail("Installs a udev rule that keeps apps such as Steam off the raw HID node of controllers the nintendo driver owns.")
+        .detail("Then resets the Bluetooth link of each stuck controller on the adapter that holds it.")
+        .detail("Runs one pkexec authorization prompt the first time.")
         .detail("Press Home on the controller afterwards; it is never connected automatically.")
         .output("No stdout on success.")
         .exit_behavior(
@@ -51,22 +52,6 @@ fn reclaim_command() -> Command {
         )
         .run_plain_text(|_| {
             app::execute_action_once("reclaim_controller")?;
-            Ok(PlainTextOutput::empty())
-        })
-}
-
-fn reclaim_stop_holders_command() -> Command {
-    Command::new("reclaim_stop_holders")
-        .about("Quit the process holding a stuck controller's raw HID device, then reconnect it.")
-        .usage(format!("{PLUGIN_ID} reclaim_stop_holders"))
-        .detail("Stops every process holding the raw HID node, then resets the Bluetooth link.")
-        .detail("Press Home on the controller afterwards; it is never connected automatically.")
-        .output("No stdout on success.")
-        .exit_behavior(
-            "Exits non-zero when the holder does not release the device or the disconnect fails.",
-        )
-        .run_plain_text(|_| {
-            app::execute_action_once("stop_holder_and_reclaim")?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -209,15 +194,8 @@ fn link_check() -> Result<DoctorCheckResult> {
         .map(|row| format!("{}: {}", row.name, row.verdict))
         .collect::<Vec<_>>()
         .join("\n");
-    let fix = if affected
-        .iter()
-        .any(|row| row.link_state == LinkState::Contended)
-    {
-        format!("quit the holder or run: {PLUGIN_ID} reclaim_stop_holders")
-    } else {
-        format!("run: {PLUGIN_ID} reclaim")
-    };
-    Ok(DoctorCheckResult::warn("controller_link", summary).with_fix(fix))
+    Ok(DoctorCheckResult::warn("controller_link", summary)
+        .with_fix(format!("run: {PLUGIN_ID} reclaim")))
 }
 
 fn summary_lines(rows: &[app::ControllerRow]) -> String {

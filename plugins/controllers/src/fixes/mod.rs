@@ -1,6 +1,7 @@
 use std::fmt;
 
 pub mod apply;
+pub mod hidraw_guard;
 mod platform;
 pub mod state;
 

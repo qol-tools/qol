@@ -776,7 +776,7 @@ fn kernel_log() -> String {
         .unwrap_or_default()
 }
 
-pub fn hidraw_holders(device: &DetectedDevice) -> Vec<Holder> {
+fn hidraw_holders(device: &DetectedDevice) -> Vec<Holder> {
     let Some(sysfs_path) = device.sysfs_path.as_deref() else {
         return Vec::new();
     };
@@ -899,18 +899,6 @@ pub fn disconnect_bluetooth(device: &DetectedDevice) -> Result<String> {
         bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
     }
     Ok(adapter)
-}
-
-pub fn stop_process(pid: u32) -> Result<()> {
-    let output = Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .output()
-        .context("failed to run kill")?;
-    if !output.status.success() {
-        bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

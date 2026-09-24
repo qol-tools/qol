@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -8,8 +9,8 @@ use qol_plugin_daemon::notification::send_notification;
 use crate::detection::clash::{
     classify, holders_label, LinkEvidence, LinkState, TIMEOUT_THRESHOLD,
 };
-use crate::fixes::apply;
 use crate::fixes::state::{compute, FixState, SystemPaths};
+use crate::fixes::{apply, hidraw_guard};
 use crate::fixes::{match_device, match_devices, DetectedDevice};
 use crate::platform;
 
@@ -19,8 +20,6 @@ const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
 };
 
 const SNAPSHOT_COHERENCE_WINDOW: Duration = Duration::from_secs(1);
-const HOLDER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const HOLDER_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 static NEXT_SNAPSHOT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
@@ -77,6 +76,33 @@ impl SnapshotCache {
 struct DaemonRuntime {
     snapshots: SnapshotCache,
     input: platform::InputMonitor,
+    reclaim: ReclaimJob,
+}
+
+// The fix waits on a pkexec prompt, so it runs off the listener thread and the
+// panel keeps polling the snapshot, which reports "fixing" until it finishes.
+#[derive(Default)]
+struct ReclaimJob {
+    running: Arc<AtomicBool>,
+}
+
+impl ReclaimJob {
+    fn running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
+
+    fn start(&self) {
+        if self.running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let running = Arc::clone(&self.running);
+        std::thread::spawn(move || {
+            if let Err(error) = reclaim_once() {
+                send_notification("Controller fix failed", &format!("{error:#}"));
+            }
+            running.store(false, Ordering::Release);
+        });
+    }
 }
 
 pub fn snapshot() -> ControllerSnapshot {
@@ -141,20 +167,17 @@ fn apply_link_verdict(verdict: String, link: Option<&LinkEvidence>, state: LinkS
     };
     match state {
         LinkState::Contended => format!(
-            "Not responding: {} holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+            "Not responding: {} is grabbing it from the driver. Fix stops that and reconnects it.",
             holders_label(&link.holders)
         ),
         LinkState::Stalled if link.driver_timeouts >= TIMEOUT_THRESHOLD => format!(
-            "Not responding: the driver timed out {} times in the last minute. Reconnect it.",
+            "Not responding: the driver timed out {} times in the last minute. Fix reconnects it.",
             link.driver_timeouts
         ),
         LinkState::Stalled => {
-            "Not responding: both sticks read stuck at their limits. Reconnect it.".to_string()
+            "Not responding: both sticks read stuck at their limits. Fix reconnects it.".to_string()
         }
-        LinkState::Shared => format!(
-            "{verdict}; shared with {}",
-            holders_label(&link.holders)
-        ),
+        LinkState::Shared => format!("{verdict}; shared with {}", holders_label(&link.holders)),
         LinkState::Ok => verdict,
     }
 }
@@ -200,7 +223,6 @@ fn is_supported_action(action: &str) -> bool {
             | "list_controllers"
             | "controller_input"
             | "reclaim_controller"
-            | "stop_holder_and_reclaim"
     )
 }
 
@@ -220,11 +242,17 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
             Ok(()) => ReadResult::Handled,
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
-        "reclaim_controller" => complete_reclaim(runtime, false),
-        "stop_holder_and_reclaim" => complete_reclaim(runtime, true),
+        "reclaim_controller" => {
+            runtime.reclaim.start();
+            ReadResult::Handled
+        }
         "status" | "controllers_snapshot" | "controllers_status" | "list_controllers" => {
             let snapshot = runtime.snapshots.current();
-            ReadResult::HandledWithData(snapshot_payload(&snapshot))
+            let mut payload = snapshot_payload(&snapshot);
+            if runtime.reclaim.running() {
+                payload["state"] = "fixing".into();
+            }
+            ReadResult::HandledWithData(payload)
         }
         "controller_input" => {
             ReadResult::HandledWithData(native_input_payload(runtime.input.snapshot()))
@@ -233,66 +261,39 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
     }
 }
 
-fn complete_reclaim(runtime: &mut DaemonRuntime, stop_holders: bool) -> ReadResult<()> {
-    match reclaim(stop_holders) {
-        Ok(message) => {
-            runtime.snapshots.invalidate();
-            send_notification("Controllers", &message);
-            ReadResult::Handled
-        }
-        Err(error) => ReadResult::Error(format!("{error:#}")),
-    }
+fn reclaim_once() -> Result<()> {
+    let message = reclaim()?;
+    send_notification("Controllers", &message);
+    Ok(())
 }
 
-fn reclaim(stop_holders: bool) -> Result<String> {
+fn reclaim() -> Result<String> {
     let devices = platform::read_devices();
     let links = platform::link_evidence(&devices);
+    let stuck = devices
+        .iter()
+        .zip(links)
+        .filter(|(device, link)| {
+            device.transport() == "Bluetooth"
+                && link
+                    .as_ref()
+                    .is_some_and(|evidence| state_needs_reclaim(classify(evidence)))
+        })
+        .map(|(device, _)| device)
+        .collect::<Vec<_>>();
+    if stuck.is_empty() {
+        bail!("every controller is responding");
+    }
+    hidraw_guard::ensure()?;
     let mut messages = Vec::new();
-    for (device, link) in devices.iter().zip(links) {
-        if device.transport() != "Bluetooth" {
-            continue;
-        }
-        let Some(evidence) = link else {
-            continue;
-        };
-        if !state_needs_reclaim(classify(&evidence)) {
-            continue;
-        }
-        if stop_holders && !evidence.holders.is_empty() {
-            for holder in &evidence.holders {
-                platform::stop_process(holder.pid)?;
-            }
-            if !wait_for_holders_to_release(device) {
-                bail!(
-                    "{} still holds {}",
-                    holders_label(&evidence.holders),
-                    device.name
-                );
-            }
-        }
+    for device in stuck {
         let adapter = platform::disconnect_bluetooth(device)?;
         messages.push(format!(
             "Disconnected {} on {}. Press Home on the controller to reconnect.",
             device.name, adapter
         ));
     }
-    if messages.is_empty() {
-        bail!("no controller needs reconnecting");
-    }
     Ok(messages.join(" "))
-}
-
-fn wait_for_holders_to_release(device: &DetectedDevice) -> bool {
-    let deadline = Instant::now() + HOLDER_RELEASE_TIMEOUT;
-    loop {
-        if platform::hidraw_holders(device).is_empty() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(HOLDER_RELEASE_POLL_INTERVAL);
-    }
 }
 
 fn state_needs_reclaim(state: LinkState) -> bool {
@@ -309,10 +310,6 @@ fn is_bluetooth(row: &ControllerRow) -> bool {
 
 fn reclaimable(row: &ControllerRow) -> bool {
     is_not_responding(row) && is_bluetooth(row)
-}
-
-fn holder_stoppable(row: &ControllerRow) -> bool {
-    row.link_state == LinkState::Contended && is_bluetooth(row)
 }
 
 fn aggregate_state(rows: &[ControllerRow]) -> &'static str {
@@ -356,7 +353,6 @@ pub fn snapshot_payload(snapshot: &ControllerSnapshot) -> serde_json::Value {
                     .map(|link| holders_label(&link.holders))
                     .unwrap_or_default(),
                 "reclaimable": reclaimable(row),
-                "holder_stoppable": holder_stoppable(row),
             })
         })
         .collect::<Vec<_>>();
@@ -481,6 +477,9 @@ pub fn execute_action_once(action: &str) -> Result<()> {
     if !is_supported_action(action) {
         bail!("unknown action: {action}");
     }
+    if action == "reclaim_controller" {
+        return reclaim_once();
+    }
     let mut runtime = DaemonRuntime::default();
     match handle_action(&mut runtime, action) {
         ReadResult::Handled => Ok(()),
@@ -555,11 +554,32 @@ mod tests {
             ("list_controllers", true),
             ("controller_input", true),
             ("reclaim_controller", true),
-            ("stop_holder_and_reclaim", true),
             ("bogus", false),
         ];
         for (action, known) in cases {
             assert_eq!(is_supported_action(action), known, "action: {action}");
+        }
+    }
+
+    #[test]
+    fn snapshot_reports_fixing_while_a_reclaim_runs() {
+        let cases = [("idle", false, "none"), ("reclaim running", true, "fixing")];
+        for (label, running, expected) in cases {
+            let mut runtime = DaemonRuntime::default();
+            runtime.snapshots.cached = Some((
+                Instant::now(),
+                ControllerSnapshot {
+                    id: 1,
+                    rows: Vec::new(),
+                },
+            ));
+            runtime.reclaim.running.store(running, Ordering::Release);
+            let ReadResult::HandledWithData(payload) =
+                handle_action(&mut runtime, "controllers_snapshot")
+            else {
+                panic!("case: {label}: snapshot query must answer with data");
+            };
+            assert_eq!(payload["state"], expected, "case: {label}");
         }
     }
 
@@ -644,7 +664,6 @@ mod tests {
                     "link": "ok",
                     "holders": "",
                     "reclaimable": false,
-                    "holder_stoppable": false,
                 }],
             })
         );
@@ -791,7 +810,6 @@ mod tests {
                 "Input available; no kernel rumble interface",
                 "",
                 false,
-                false,
             ),
             (
                 "shared",
@@ -804,7 +822,6 @@ mod tests {
                 "Input available; no kernel rumble interface; shared with steam (pid 4242)",
                 "steam (pid 4242)",
                 false,
-                false,
             ),
             (
                 "contended",
@@ -815,9 +832,8 @@ mod tests {
                     holders: vec![steam.clone()],
                 },
                 LinkState::Contended,
-                "Not responding: steam (pid 4242) holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+                "Not responding: steam (pid 4242) is grabbing it from the driver. Fix stops that and reconnects it.",
                 "steam (pid 4242)",
-                true,
                 true,
             ),
             (
@@ -829,10 +845,9 @@ mod tests {
                     holders: vec![],
                 },
                 LinkState::Stalled,
-                "Not responding: the driver timed out 5 times in the last minute. Reconnect it.",
+                "Not responding: the driver timed out 5 times in the last minute. Fix reconnects it.",
                 "",
                 true,
-                false,
             ),
             (
                 "stalled with pinned sticks only",
@@ -842,10 +857,9 @@ mod tests {
                     ..Default::default()
                 },
                 LinkState::Stalled,
-                "Not responding: both sticks read stuck at their limits. Reconnect it.",
+                "Not responding: both sticks read stuck at their limits. Fix reconnects it.",
                 "",
                 true,
-                false,
             ),
             (
                 "steam with pinned sticks and no timeouts",
@@ -856,9 +870,8 @@ mod tests {
                     ..Default::default()
                 },
                 LinkState::Contended,
-                "Not responding: steam (pid 4242) holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+                "Not responding: steam (pid 4242) is grabbing it from the driver. Fix stops that and reconnects it.",
                 "steam (pid 4242)",
-                true,
                 true,
             ),
             (
@@ -870,13 +883,12 @@ mod tests {
                     ..Default::default()
                 },
                 LinkState::Contended,
-                "Not responding: steam (pid 4242) holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+                "Not responding: steam (pid 4242) is grabbing it from the driver. Fix stops that and reconnects it.",
                 "steam (pid 4242)",
-                false,
                 false,
             ),
         ];
-        for (label, bus, link, state, verdict, holders, reclaimable, holder_stoppable) in cases {
+        for (label, bus, link, state, verdict, holders, reclaimable) in cases {
             let pad = DetectedDevice {
                 bus,
                 ..device(Some("hid-generic"), false, false)
@@ -902,7 +914,6 @@ mod tests {
             assert_eq!(item["link"], state.name(), "case: {label}");
             assert_eq!(item["holders"], holders, "case: {label}");
             assert_eq!(item["reclaimable"], reclaimable, "case: {label}");
-            assert_eq!(item["holder_stoppable"], holder_stoppable, "case: {label}");
         }
     }
 

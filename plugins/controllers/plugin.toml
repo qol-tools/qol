@@ -15,12 +15,8 @@ label = "Apply Relevant Controller Fixes"
 args = ["apply_fixes"]
 
 [action.reclaim_controller]
-label = "Reconnect Stuck Controller"
+label = "Fix Stuck Controller"
 args = ["reclaim"]
-
-[action.stop_holder_and_reclaim]
-label = "Quit Holder and Reconnect Controller"
-args = ["reclaim_stop_holders"]
 
 [action.settings]
 label = "Settings"
