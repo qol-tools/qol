@@ -1,6 +1,6 @@
 [package]
 name = "qol-ide-checkout"
-version = "1.41.1"
+version = "1.42.0"
 edition = "2021"
 
 [dependencies]
