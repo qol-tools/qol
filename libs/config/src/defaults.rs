@@ -5,16 +5,20 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{Map, Value};
 
 pub fn defaults_json_from_contract(contract: &str) -> Result<Value, Vec<ValidationError>> {
-    let spec = parse_contract(contract)?;
-    defaults_json_from_spec(&spec)
+    let spec = embedded_contract(contract)?;
+    collect_defaults(&spec)
 }
 
 pub fn defaults_json_from_spec(spec: &ConfigSpec) -> Result<Value, Vec<ValidationError>> {
-    let mut errors = validate_spec_collect(spec);
+    let errors = validate_spec_collect(spec);
     if !errors.is_empty() {
         return Err(errors);
     }
+    collect_defaults(spec)
+}
 
+fn collect_defaults(spec: &ConfigSpec) -> Result<Value, Vec<ValidationError>> {
+    let mut errors = Vec::new();
     let mut root = Map::new();
     for (id, field) in &spec.fields {
         if !field.has_stored_value() {
@@ -43,20 +47,35 @@ pub fn defaults_json_from_spec(spec: &ConfigSpec) -> Result<Value, Vec<Validatio
 pub fn typed_defaults_from_contract<T: DeserializeOwned>(
     contract: &str,
 ) -> Result<T, Vec<ValidationError>> {
-    let spec = parse_contract(contract)?;
-    typed_defaults_from_spec(&spec)
+    let spec = embedded_contract(contract)?;
+    deserialize_defaults(collect_defaults(&spec)?)
 }
 
 pub fn typed_defaults_from_spec<T: DeserializeOwned>(
     spec: &ConfigSpec,
 ) -> Result<T, Vec<ValidationError>> {
-    let defaults = defaults_json_from_spec(spec)?;
+    deserialize_defaults(defaults_json_from_spec(spec)?)
+}
+
+fn deserialize_defaults<T: DeserializeOwned>(defaults: Value) -> Result<T, Vec<ValidationError>> {
     serde_json::from_value(defaults).map_err(|error| {
         vec![ValidationError::new(
             "defaults",
             format!("failed to deserialize defaults: {error}"),
         )]
     })
+}
+
+fn embedded_contract(contract: &str) -> Result<ConfigSpec, Vec<ValidationError>> {
+    let spec = parse_contract(contract)?;
+    #[cfg(debug_assertions)]
+    {
+        let errors = validate_spec_collect(&spec);
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+    }
+    Ok(spec)
 }
 
 pub fn validate_contract_defaults_match_type<T>(contract: &str) -> Result<(), Vec<ValidationError>>
