@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -34,6 +35,7 @@ GLOBAL_FILES_AFFECT_ALL = {
     "rust-toolchain.toml",
 }
 GLOBAL_PREFIXES_AFFECT_ALL = (".cargo/",)
+PROBE_REF_PREFIX = "refs/qol/release-probe/"
 VERSION_BUMP_SUBJECT = "chore(plugins): bump plugin versions"
 VERSION_BUMP_BOT_NAME = "github-actions[bot]"
 VERSION_BUMP_BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
@@ -103,6 +105,7 @@ class ReleasePlan:
     tag: str
     bump: str
     commit_count: int
+    probe: bool = False
 
 
 @dataclass(frozen=True)
@@ -800,6 +803,59 @@ def discover_release_units(
     return units
 
 
+def commit_touches_package(
+    root: Path,
+    commit: Commit,
+    package_name: str,
+    packages: dict[str, Package],
+    changed_paths_cache: dict[str, list[str]],
+) -> bool:
+    paths = changed_paths_cache.setdefault(
+        commit.sha, changed_paths_for_commit(root, commit.sha)
+    )
+    return any(owning_package(path, packages) == package_name for path in paths)
+
+
+def commit_rebuilds_unit(
+    root: Path,
+    commit: Commit,
+    unit: ReleaseUnit,
+    packages: dict[str, Package],
+    changed_paths_cache: dict[str, list[str]],
+    root_manifest_cache: dict[str, RootImpact],
+) -> bool:
+    if unit.plugin_manifest is None:
+        return True
+    if commit_touches_package(root, commit, unit.package_name, packages, changed_paths_cache):
+        return True
+    for path in changed_paths_cache[commit.sha]:
+        if path in GLOBAL_FILES_AFFECT_ALL or path.startswith(GLOBAL_PREFIXES_AFFECT_ALL):
+            return True
+        if path == ROOT_MANIFEST and root_manifest_cache.setdefault(
+            commit.sha, root_manifest_impact(root, commit.sha)
+        ).affects_all:
+            return True
+    return False
+
+
+def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, descendant],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def probe_marker(root: Path, unit_id: str, tag: str) -> str | None:
+    marker = git_output(["rev-parse", "-q", "--verify", f"{PROBE_REF_PREFIX}{unit_id}^{{commit}}"], root)
+    if marker is None:
+        return None
+    if not is_ancestor(root, tag, marker) or not is_ancestor(root, marker, "HEAD"):
+        return None
+    return marker
+
+
 def relevant_commits(
     root: Path,
     commits: list[Commit],
@@ -868,6 +924,7 @@ def check_manifest_parity(root: Path, selected: str | None) -> None:
 
 
 def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
+    gate_binaries = selected is None
     packages = load_packages(root)
     units = discover_release_units(root, packages, selected)
     assert_manifest_parity(units)
@@ -906,6 +963,20 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
         if not release_commits:
             continue
 
+        probe = False
+        if gate_binaries and unit.plugin_manifest is not None and unit.cargo_version == base_version:
+            marker = probe_marker(root, unit.id, tag)
+            pending = release_commits
+            if marker is not None:
+                unproven = set(run_git(["rev-list", f"{marker}..HEAD"], root).split())
+                pending = [commit for commit in release_commits if commit.sha in unproven]
+            if not pending:
+                continue
+            probe = not any(
+                commit_touches_package(root, commit, unit.package_name, packages, changed_paths_cache)
+                for commit in pending
+            )
+
         bump = detect_bump(release_commits)
         next_version = next_available_version(
             increment_semver(base_version, bump),
@@ -923,10 +994,49 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
                 tag=f"{prefix}{next_version}",
                 bump=bump,
                 commit_count=len(release_commits),
+                probe=probe,
             )
         )
 
     return plans
+
+
+def probe_matrix(root: Path, plans: list[ReleasePlan]) -> list[dict[str, str]]:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import plugin_matrix
+
+    entries: list[dict[str, str]] = []
+    for plan in plans:
+        if not plan.probe:
+            continue
+        outputs = plugin_matrix.release_outputs(root, plan.unit.id, plan.old_version)
+        for target in json.loads(outputs["matrix"])["include"]:
+            entries.append(
+                {
+                    "unit": plan.unit.id,
+                    "package": outputs["package"],
+                    "bin_name": outputs["bin_name"],
+                    "previous_tag": f"{plan.unit.id}-v{plan.old_version}",
+                    **target,
+                }
+            )
+    return entries
+
+
+def unchanged_units(matrix: list[dict[str, str]], reports_dir: Path) -> set[str]:
+    identical: set[tuple[str, str]] = set()
+    for path in sorted(reports_dir.rglob("*.json")):
+        report = json.loads(path.read_text())
+        if report.get("identical") is True:
+            identical.add((report["unit"], report["target"]))
+    targets: dict[str, set[str]] = {}
+    for entry in matrix:
+        targets.setdefault(entry["unit"], set()).add(entry["target"])
+    return {
+        unit
+        for unit, unit_targets in targets.items()
+        if all((unit, target) in identical for target in unit_targets)
+    }
 
 
 def apply_plans(root: Path, plans: list[ReleasePlan]) -> bool:
@@ -958,6 +1068,10 @@ def main() -> int:
     parser.add_argument("--tag-file")
     parser.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     parser.add_argument("--check-manifests", action="store_true")
+    parser.add_argument(
+        "--probe-reports",
+        help="directory of release_probe.py reports; drops plugins whose binary is unchanged",
+    )
     args = parser.parse_args()
 
     root = Path.cwd().resolve()
@@ -967,6 +1081,12 @@ def main() -> int:
         return 0
 
     plans = compute_plans(root, args.plugin_id)
+    matrix = probe_matrix(root, plans)
+    unchanged: set[str] = set()
+    if args.probe_reports:
+        unchanged = unchanged_units(matrix, Path(args.probe_reports))
+        plans = [plan for plan in plans if plan.unit.id not in unchanged]
+        matrix = []
     manifest_changed = apply_plans(root, plans) if args.apply else False
 
     if args.tag_file:
@@ -983,14 +1103,20 @@ def main() -> int:
             "manifest_changed": "true" if manifest_changed else "false",
             "tags": " ".join(plan.tag for plan in plans),
             "summary": summary,
+            "probe_matrix": json.dumps({"include": matrix}, separators=(",", ":")),
+            "has_probes": "true" if matrix else "false",
+            "unchanged_units": " ".join(sorted(unchanged)),
         },
     )
 
+    for unit in sorted(unchanged):
+        print(f"{unit}: binary unchanged since its last release, skipped")
     if plans:
         for plan in plans:
+            check = ", released only if its binary changed" if plan.probe and matrix else ""
             print(
                 f"{plan.unit.id}: {plan.old_version} -> {plan.new_version} "
-                f"({plan.bump}, {plan.commit_count} commits, {plan.tag})"
+                f"({plan.bump}, {plan.commit_count} commits, {plan.tag}{check})"
             )
     else:
         print("No releases required")

@@ -21,22 +21,33 @@ def commit_exists(sha: str) -> bool:
     return probe.returncode == 0
 
 
-def released_units(rev_range: str) -> tuple[list[str], int]:
+def released_units(rev_range: str) -> tuple[list[str], list[str], int]:
     packages = plugin_version.load_packages(ROOT)
     units = plugin_version.discover_release_units(ROOT, packages, None)
     commits = plugin_version.load_commits(ROOT, rev_range)
-    caches = ({}, {}, {}, {})
-    released = [
-        unit.id
-        for unit in units
-        if any(
-            plugin_version.is_releasable_commit(commit)
+    changed_paths, closures, root_manifests, lockfiles = {}, {}, {}, {}
+    released: list[str] = []
+    probed: list[str] = []
+    for unit in units:
+        release_commits = [
+            commit
             for commit in plugin_version.relevant_commits(
-                ROOT, commits, unit, packages, *caches
+                ROOT, commits, unit, packages, changed_paths, closures, root_manifests, lockfiles
             )
-        )
-    ]
-    return released, len(units)
+            if plugin_version.is_releasable_commit(commit)
+        ]
+        if not release_commits:
+            continue
+        if any(
+            plugin_version.commit_rebuilds_unit(
+                ROOT, commit, unit, packages, changed_paths, root_manifests
+            )
+            for commit in release_commits
+        ):
+            released.append(unit.id)
+        else:
+            probed.append(unit.id)
+    return released, probed, len(units)
 
 
 def main() -> int:
@@ -49,7 +60,13 @@ def main() -> int:
             continue
         if not commit_exists(remote_sha):
             continue
-        released, total = released_units(f"{remote_sha}..{local_sha}")
+        released, probed, total = released_units(f"{remote_sha}..{local_sha}")
+        if probed:
+            print(
+                f"pre-push: {len(probed)} units release only if their binary changed: "
+                f"{', '.join(probed)}",
+                file=sys.stderr,
+            )
         if not released:
             continue
         print(

@@ -37,6 +37,22 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in required:
             self.assertIn(contract, workflow)
 
+    def test_shared_crate_releases_wait_for_binary_probes(self):
+        workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+
+        self.assertIn("needs: [probe_plan, probe]", workflow)
+        self.assertIn("needs.probe.result == 'skipped'", workflow)
+        self.assertLess(workflow.index("release_probe.py"), workflow.index("--probe-reports"))
+        for contract in [
+            "cache-key: plugin-release-${{ matrix.target }}",
+            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}",
+            "--kind plugin",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, release)
+                self.assertIn(contract, workflow)
+
     def test_release_workflows_verify_exact_candidate(self):
         for name in ["release.yml", "qol-tray-release.yml"]:
             with self.subTest(workflow=name):

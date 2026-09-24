@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Prepare exact release candidate
+  probe_plan:
+    name: Plan binary probes
     if: >-
       ${{
         (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
@@ -29,6 +29,111 @@ jobs:
          github.event.workflow_run.event == 'push' &&
          github.event.workflow_run.head_branch == 'main' &&
          github.event.workflow_run.conclusion == 'success')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    outputs:
+      probe_matrix: ${{ steps.plan.outputs.probe_matrix }}
+      has_probes: ${{ steps.plan.outputs.has_probes }}
+    steps:
+      - name: Checkout successful source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Fetch tags and probe markers
+        run: git fetch --tags --force origin '+refs/qol/release-probe/*:refs/qol/release-probe/*'
+
+      - name: Find plugins changed only through shared crates
+        id: plan
+        shell: bash
+        env:
+          PLUGIN_ID: ${{ inputs.plugin_id }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "${PLUGIN_ID}" ]]; then
+            args+=(--plugin-id "${PLUGIN_ID}")
+          fi
+          python .github/scripts/plugin_version.py "${args[@]}"
+
+  probe:
+    name: Probe ${{ matrix.unit }} (${{ matrix.target }})
+    needs: probe_plan
+    if: needs.probe_plan.outputs.has_probes == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    # Same invocation as release.yml's build, so an unchanged plugin builds
+    # the same bytes as its last release.
+    env:
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.probe_plan.outputs.probe_matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: plugin-release-${{ matrix.target }}
+          targets: ${{ matrix.target }}
+
+      - name: Build plugin at the source commit
+        run: >
+          python .github/scripts/release_candidate.py build
+          --kind plugin
+          --package "${{ matrix.package }}"
+          --target "${{ matrix.target }}"
+          --report "${{ runner.temp }}/release-build-report.json"
+
+      - name: Compare with the last release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          python .github/scripts/release_probe.py
+          --binary "target/${{ matrix.target }}/release/${{ matrix.bin_name }}${{ matrix.ext }}"
+          --repo "${{ github.repository }}"
+          --unit "${{ matrix.unit }}"
+          --target "${{ matrix.target }}"
+          --previous-tag "${{ matrix.previous_tag }}"
+          --asset "${{ matrix.artifact_name }}${{ matrix.ext }}"
+          --report "${{ runner.temp }}/release-probe-report.json"
+
+      - name: Upload probe report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-probe-${{ matrix.unit }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/release-probe-report.json
+          if-no-files-found: error
+
+  prepare:
+    name: Prepare exact release candidate
+    needs: [probe_plan, probe]
+    if: >-
+      ${{
+        always() &&
+        needs.probe_plan.result == 'success' &&
+        (needs.probe.result == 'success' || needs.probe.result == 'skipped')
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -58,8 +163,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Fetch tags
-        run: git fetch --tags --force
+      - name: Fetch tags and probe markers
+        run: git fetch --tags --force origin '+refs/qol/release-probe/*:refs/qol/release-probe/*'
+
+      - name: Download probe reports
+        if: needs.probe_plan.outputs.has_probes == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-probe-*
+          path: ${{ runner.temp }}/release-probes
 
       - name: Verify successful source CI
         env:
@@ -87,10 +199,25 @@ jobs:
           if [[ -n "${PLUGIN_ID}" ]]; then
             args+=(--plugin-id "${PLUGIN_ID}")
           fi
+          mkdir -p "${RUNNER_TEMP}/release-probes"
           python .github/scripts/plugin_version.py \
             --apply \
+            --probe-reports "${RUNNER_TEMP}/release-probes" \
             --tag-file "${RUNNER_TEMP}/release-tags.txt" \
             "${args[@]}"
+
+      - name: Record plugins whose binary is unchanged
+        if: steps.version.outputs.unchanged_units != ''
+        shell: bash
+        env:
+          UNCHANGED_UNITS: ${{ steps.version.outputs.unchanged_units }}
+        run: |
+          set -euo pipefail
+          refs=()
+          for unit in ${UNCHANGED_UNITS}; do
+            refs+=("+${SOURCE_SHA}:refs/qol/release-probe/${unit}")
+          done
+          git push origin "${refs[@]}"
 
       - name: Summarize release plan
         shell: bash

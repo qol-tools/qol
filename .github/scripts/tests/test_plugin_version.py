@@ -524,5 +524,109 @@ class ReservedPluginIdsTests(unittest.TestCase):
         self.assertEqual(pv.AUTO_EXCLUDED_PLUGIN_IDS, {"qol-template"})
 
 
+class BinaryGateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        git(self.root, "init", "--quiet")
+        git(self.root, "config", "user.name", "Fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        (self.root / "Cargo.toml").write_text(
+            '[workspace]\nresolver = "2"\nmembers = ["libs/*", "plugins/*"]\n'
+        )
+        shared = self.root / "libs" / "shared"
+        shared.mkdir(parents=True)
+        (shared / "Cargo.toml").write_text('[package]\nname = "shared"\nversion = "0.1.0"\n')
+        for name in ("alpha", "beta"):
+            crate = write_plugin(self.root / "plugins", name, f"qol-{name}", "0.1.0", f"qol-{name}")
+            with (crate / "Cargo.toml").open("a") as manifest:
+                manifest.write('\n[dependencies]\nshared = { path = "../../libs/shared" }\n')
+        self.commit("feat: baseline")
+        git(self.root, "tag", "qol-alpha-v0.1.0")
+        git(self.root, "tag", "qol-beta-v0.1.0")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def commit(self, subject: str, path: str | None = None) -> str:
+        if path is not None:
+            target = self.root / path
+            target.write_text(target.read_text() + "\n# edit\n" if target.exists() else "edit\n")
+        git(self.root, "add", ".")
+        git(self.root, "commit", "--quiet", "-m", subject)
+        return git(self.root, "rev-parse", "HEAD")
+
+    def plans(self, selected: str | None = None) -> dict[str, "pv.ReleasePlan"]:
+        return {plan.unit.id: plan for plan in pv.compute_plans(self.root, selected)}
+
+    def test_shared_crate_change_is_probed(self):
+        self.commit("fix: shared", "libs/shared/lib.rs")
+        plans = self.plans()
+        self.assertTrue(plans["qol-alpha"].probe)
+        self.assertTrue(plans["qol-beta"].probe)
+
+    def test_own_change_releases_without_a_probe(self):
+        self.commit("fix: shared", "libs/shared/lib.rs")
+        self.commit("fix: alpha", "plugins/alpha/main.rs")
+        plans = self.plans()
+        self.assertFalse(plans["qol-alpha"].probe)
+        self.assertTrue(plans["qol-beta"].probe)
+
+    def test_selected_release_is_never_probed(self):
+        self.commit("fix: shared", "libs/shared/lib.rs")
+        self.assertFalse(self.plans("qol-alpha")["qol-alpha"].probe)
+
+    def test_marker_skips_commits_already_proven_unchanged(self):
+        proven = self.commit("fix: shared", "libs/shared/lib.rs")
+        git(self.root, "update-ref", f"{pv.PROBE_REF_PREFIX}qol-beta", proven)
+        plans = self.plans()
+        self.assertNotIn("qol-beta", plans)
+        self.assertIn("qol-alpha", plans)
+
+    def test_newer_shared_commit_after_marker_is_probed_again(self):
+        proven = self.commit("fix: shared", "libs/shared/lib.rs")
+        git(self.root, "update-ref", f"{pv.PROBE_REF_PREFIX}qol-beta", proven)
+        self.commit("fix: shared again", "libs/shared/lib.rs")
+        plan = self.plans()["qol-beta"]
+        self.assertTrue(plan.probe)
+        self.assertEqual(plan.commit_count, 2)
+
+    def test_marker_off_the_current_history_is_ignored(self):
+        shared = self.commit("fix: shared", "libs/shared/lib.rs")
+        rewound = self.commit("fix: shared again", "libs/shared/lib.rs")
+        git(self.root, "update-ref", f"{pv.PROBE_REF_PREFIX}qol-beta", rewound)
+        git(self.root, "reset", "--quiet", "--hard", shared)
+        self.assertTrue(self.plans()["qol-beta"].probe)
+
+    def test_unchanged_units_need_every_target_identical(self):
+        self.commit("fix: shared", "libs/shared/lib.rs")
+        matrix = pv.probe_matrix(self.root, list(self.plans().values()))
+        self.assertEqual(
+            sorted((entry["unit"], entry["previous_tag"]) for entry in matrix),
+            [("qol-alpha", "qol-alpha-v0.1.0"), ("qol-beta", "qol-beta-v0.1.0")],
+        )
+        reports = self.root / "reports"
+        reports.mkdir()
+        target = matrix[0]["target"]
+        (reports / "alpha.json").write_text(
+            f'{{"unit": "qol-alpha", "target": "{target}", "identical": true}}'
+        )
+        (reports / "beta.json").write_text(
+            f'{{"unit": "qol-beta", "target": "{target}", "identical": false}}'
+        )
+        self.assertEqual(pv.unchanged_units(matrix, reports), {"qol-alpha"})
+        self.assertEqual(pv.unchanged_units(matrix, self.root / "missing"), set())
+
+    def test_global_build_config_rebuilds_every_plugin(self):
+        sha = self.commit("fix: toolchain", "rust-toolchain.toml")
+        unit = self.plans()["qol-alpha"].unit
+        packages = pv.load_packages(self.root)
+        changed: dict[str, list[str]] = {}
+        commit = pv.Commit(sha=sha, subject="fix: toolchain", body="")
+        self.assertTrue(pv.commit_rebuilds_unit(self.root, commit, unit, packages, changed, {}))
+        shared = self.commit("fix: shared", "libs/shared/lib.rs")
+        commit = pv.Commit(sha=shared, subject="fix: shared", body="")
+        self.assertFalse(pv.commit_rebuilds_unit(self.root, commit, unit, packages, changed, {}))
+
 if __name__ == "__main__":
     unittest.main()
