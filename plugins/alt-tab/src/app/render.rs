@@ -25,12 +25,11 @@ static RENDER_COUNT: AtomicU32 = AtomicU32::new(0);
 #[cfg(debug_assertions)]
 static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
-pub(crate) const DESELECTED_CARD_OPACITY: f32 = 0.55;
-
 struct RenderSnap {
     selected_index: Option<usize>,
     visible: bool,
     transparent_bg: bool,
+    unselected_card_opacity: f32,
     show_debug_overlay: bool,
     show_hotkey_hints: bool,
     icon_position: PreviewIconPosition,
@@ -132,6 +131,7 @@ impl Render for AltTabApp {
             selected_index: d.selected_index,
             visible,
             transparent_bg: d.transparent_background,
+            unselected_card_opacity: d.unselected_card_opacity,
             show_debug_overlay: d.show_debug_overlay,
             show_hotkey_hints: d.show_hotkey_hints,
             icon_position: d.icon_position,
@@ -389,7 +389,7 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> D
                 .p(px(stepped.card_padding))
                 .when(snap.visible, |el| el.cursor_pointer())
                 .map(|el| card_bg(el, is_selected, snap))
-                .when(!is_selected, |el| el.opacity(DESELECTED_CARD_OPACITY))
+                .when(!is_selected, |el| el.opacity(snap.unselected_card_opacity))
                 .child(render_preview(win, context, &stepped))
                 .child(render_label(
                     i,
@@ -405,16 +405,11 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> D
 
 fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div> {
     let system = &snap.system;
-    let kit = qol_gpui::kit::kit();
     if selected {
-        let card = el
-            .border_2()
-            .border_color(rgb(snap.palette.card_selected_border))
-            .shadow(kit.focus_ring());
         return if snap.transparent_bg {
-            card.bg(rgba(snap.palette.card_selected_rgba))
+            el.bg(rgba(snap.palette.card_selected_rgba))
         } else {
-            card.bg(rgb(snap.palette.card_selected_bg))
+            el.bg(rgb(snap.palette.card_selected_bg))
         };
     }
     let base = el.border_1().border_color(rgb(system.border_subtle));
@@ -507,9 +502,12 @@ fn render_label(
     let label_slot_px = metrics.label_strip_height;
     let label_padding_px = (metrics.scale * 3.0).clamp(3.0, 7.0);
     let label_width_px = (metrics.preview_width - label_padding_px * 2.0).max(1.0);
-    let _ = selected;
     let font_weight = FontWeight::NORMAL;
-    let primary_color = rgb(palette.label_text);
+    let primary_color = rgb(if selected {
+        palette.label_selected_text
+    } else {
+        palette.label_text
+    });
 
     let base = div()
         .w(px(metrics.preview_width))
@@ -521,8 +519,13 @@ fn render_label(
         .justify_start()
         .px(px(label_padding_px * 2.0))
         .overflow_hidden()
-        .border_t_1()
-        .border_color(rgb(snap.system.border_subtle));
+        .map(|el| {
+            if selected {
+                el.bg(rgb(palette.label_band_bg))
+            } else {
+                el.border_t_1().border_color(rgb(snap.system.border_subtle))
+            }
+        });
 
     if label.is_empty() {
         return base;

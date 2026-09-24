@@ -1507,7 +1507,7 @@ impl SettingsPanelPalette {
         let washes = WashPalette::for_mode(mode, system);
         let (rail_bg, rail_text, rail_text_muted) =
             (system.surface_rail, system.text_rail, system.text_rail);
-        let fill_current = mix_const(system.accent_fill_base, system.accent, RAIL_FILL_MIX);
+        let fill_current = band_fill(system);
         let band = mixed_ground(fill_current, system.text_primary);
         Self {
             window_bg: system.surface_elevated,
@@ -1698,6 +1698,10 @@ impl LauncherPalette {
     }
 }
 
+pub const fn band_fill(system: SystemPalette) -> u32 {
+    mix_const(system.accent_fill_base, system.accent, RAIL_FILL_MIX)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PickerSurfacePalette {
     pub panel_bg: u32,
@@ -1717,6 +1721,7 @@ pub struct PickerSurfacePalette {
     pub grid_empty_text: u32,
     pub label_text: u32,
     pub label_selected_text: u32,
+    pub label_band_bg: u32,
     pub placeholder_text: u32,
     pub placeholder_bg: u32,
     pub placeholder_border: u32,
@@ -1755,6 +1760,7 @@ impl PickerSurfacePalette {
             grid_empty_text: system.text_muted,
             label_text: system.text_secondary,
             label_selected_text: system.text_primary,
+            label_band_bg: band_fill(system),
             placeholder_text: system.text_faint,
             placeholder_bg: system.surface_elevated,
             placeholder_border: system.border_subtle,

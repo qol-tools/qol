@@ -203,6 +203,17 @@ min = 0.0
 max = 1.0
 step = 0.05
 
+[field.display_unselected_card_opacity]
+type = "number"
+config_key = "display.unselected_card_opacity"
+label = "Other Windows Opacity"
+description = "How solid the windows you have not picked look. 1 is fully solid."
+section = "layout"
+default = 0.85
+min = 0.2
+max = 1.0
+step = 0.05
+
 [section.labels]
 label = "Labels"
 description = "What text each window row should show."

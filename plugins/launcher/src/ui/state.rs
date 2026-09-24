@@ -10,7 +10,6 @@ const NAV_DECAY_STEP_SLOW: Duration = Duration::from_millis(90);
 const NAV_MOTION_BASE: u8 = 3;
 const NAV_MOTION_MAX: u8 = 5;
 const NAV_TRAIL_FADE_OFFSET: u8 = 2;
-const FOCUS_GRAVITY_IDLE: Duration = Duration::from_millis(140);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EdgeHit {
@@ -349,23 +348,6 @@ impl LauncherState {
             trail_len,
             trail_direction,
         }
-    }
-
-    pub fn should_focus_gravity(&self) -> bool {
-        self.last_nav_at
-            .map(|last| Instant::now().duration_since(last) >= FOCUS_GRAVITY_IDLE)
-            .unwrap_or(false)
-    }
-
-    pub fn focus_gravity_target(&self, result_count: usize, visible: usize) -> usize {
-        if result_count == 0 || visible == 0 {
-            return 0;
-        }
-        let max_offset = result_count.saturating_sub(visible);
-        self.scroll_list
-            .selected
-            .saturating_sub(visible / 2)
-            .min(max_offset)
     }
 }
 

@@ -65,18 +65,18 @@ fn option_actions(source: Option<ResultSource>, boost: i32) -> Vec<OptionAction>
 }
 
 const HELP_SEARCH_LEFT_ROWS: HelpRows = &[
-    ("Search", ""),
-    ("Move through results", "↑ / ↓"),
-    ("Switch Apps / Files", "Tab / Shift+Tab"),
-    ("Narrow matches", "Ctrl+↑"),
-    ("Broaden matches", "Ctrl+↓"),
-    ("Selected result", ""),
     ("Open", "Enter"),
-    ("Apps and files", ""),
-    ("Open containing folder", "Shift+Enter"),
-    ("Ranking · Apps", ""),
-    ("Raise rank", "Ctrl+→ / Alt+→"),
-    ("Lower rank", "Ctrl+← / Alt+←"),
+    ("Open folder", "Shift+Enter"),
+    ("Apps or files", "Tab"),
+    ("Options", "Alt+Enter"),
+    ("Close", "Esc"),
+];
+
+const HELP_SEARCH_RIGHT_ROWS: HelpRows = &[
+    ("Raise rank", "Ctrl+→"),
+    ("Lower rank", "Ctrl+←"),
+    ("Narrow", "Ctrl+↑"),
+    ("Broaden", "Ctrl+↓"),
 ];
 
 const HELP_QUERY_ROWS: HelpRows = &[
@@ -87,13 +87,6 @@ const HELP_QUERY_ROWS: HelpRows = &[
     ("Delete text", "Backspace / Del"),
     ("Select all", "Ctrl+A"),
     ("Copy / cut / paste", "Ctrl+C/X/V"),
-];
-
-const HELP_SEARCH_WINDOW_ROWS: HelpRows = &[
-    ("Window", ""),
-    ("Options", "Alt+Enter"),
-    ("Help", "Alt+H"),
-    ("Dismiss", "Esc"),
 ];
 
 const HELP_FLOW_LEFT_ROWS: HelpRows = &[
@@ -178,11 +171,7 @@ impl LauncherView {
         if self.state.flow.is_some() {
             return (HELP_FLOW_LEFT_ROWS, HELP_QUERY_ROWS, HELP_FLOW_WINDOW_ROWS);
         }
-        (
-            HELP_SEARCH_LEFT_ROWS,
-            HELP_QUERY_ROWS,
-            HELP_SEARCH_WINDOW_ROWS,
-        )
+        (HELP_SEARCH_LEFT_ROWS, HELP_SEARCH_RIGHT_ROWS, &[])
     }
 
     pub(super) fn handle_menu_key(
@@ -268,31 +257,38 @@ impl LauncherView {
     pub(super) fn menu_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
         let kind = self.menu_kind.expect("menu overlay requires an open menu");
-        let width = if kind == MenuKind::Help {
-            WINDOW_WIDTH - 16.0
-        } else {
-            280.0
-        };
-        let mut panel = div()
+        let panel = div()
             .id("launcher-menu")
             .absolute()
-            .top(px(HEADER_HEIGHT + 4.0))
-            .right(px(8.0))
-            .w(px(width))
             .h(px(self.menu_height()))
             .p(px(qol_gpui::theme::SPACE_TIGHT))
-            .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
-            .border(px(1.0))
-            .border_color(rgba(kit.washes.hairline_strong.packed()))
-            .bg(rgb(kit.palette.surface_raised))
-            .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary))
             .track_scroll(&self.menu_scroll)
             .overflow_y_scroll()
             .flex()
             .flex_col();
+        let mut panel = if kind == MenuKind::Help {
+            panel
+                .top(px(HEADER_HEIGHT))
+                .left_0()
+                .w(px(WINDOW_WIDTH))
+                .px(px(qol_gpui::theme::SPACE_PAD))
+                .border_b(px(1.0))
+                .border_color(rgba(kit.washes.hairline.packed()))
+                .bg(super::view::bg_color())
+        } else {
+            panel
+                .top(px(HEADER_HEIGHT + 4.0))
+                .right(px(8.0))
+                .w(px(280.0))
+                .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
+                .border(px(1.0))
+                .border_color(rgba(kit.washes.hairline_strong.packed()))
+                .bg(rgb(kit.palette.surface_raised))
+                .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary))
+        };
         if kind == MenuKind::Help {
             let (left, right, right_extra) = self.help_rows();
-            panel = panel.child(menu_title("Help", "Alt+H"));
+            panel = panel.child(menu_title("Keys", "Alt+H"));
             panel = panel.child(
                 div()
                     .flex()
@@ -404,7 +400,7 @@ fn display_shortcut_for(shortcut: &str, macos: bool) -> String {
     shortcut.to_owned()
 }
 
-fn display_shortcut(shortcut: &str) -> String {
+pub(super) fn display_shortcut(shortcut: &str) -> String {
     display_shortcut_for(shortcut, cfg!(target_os = "macos"))
 }
 
@@ -453,7 +449,7 @@ mod tests {
     use super::{
         display_shortcut_for, help_height, option_actions, OptionAction, HELP_DETAIL_LEFT_ROWS,
         HELP_FLOW_LEFT_ROWS, HELP_FLOW_WINDOW_ROWS, HELP_QUERY_ROWS, HELP_SEARCH_LEFT_ROWS,
-        HELP_SEARCH_WINDOW_ROWS,
+        HELP_SEARCH_RIGHT_ROWS,
     };
     use crate::discovery::search::ResultSource;
     use crate::ui::input::InputEffect;
@@ -502,25 +498,18 @@ mod tests {
         };
         for (label, key, modifiers, effect) in [
             ("Open", "enter", Modifiers::none(), InputEffect::Launch),
-            (
-                "Open containing folder",
-                "enter",
-                shift,
-                InputEffect::OpenFolder,
-            ),
+            ("Open folder", "enter", shift, InputEffect::OpenFolder),
             ("Raise rank", "right", secondary, InputEffect::BoostUp),
             ("Raise rank", "right", alt, InputEffect::BoostUp),
             ("Lower rank", "left", secondary, InputEffect::BoostDown),
             ("Lower rank", "left", alt, InputEffect::BoostDown),
-            ("Narrow matches", "up", secondary, InputEffect::QueryChanged),
-            (
-                "Broaden matches",
-                "down",
-                secondary,
-                InputEffect::QueryChanged,
-            ),
+            ("Narrow", "up", secondary, InputEffect::QueryChanged),
+            ("Broaden", "down", secondary, InputEffect::QueryChanged),
         ] {
-            assert!(HELP_SEARCH_LEFT_ROWS.iter().any(|(name, _)| *name == label));
+            assert!(HELP_SEARCH_LEFT_ROWS
+                .iter()
+                .chain(HELP_SEARCH_RIGHT_ROWS)
+                .any(|(name, _)| *name == label));
             assert_eq!(
                 LauncherState::new().apply_key(key, &modifiers, 1),
                 effect,
@@ -545,11 +534,7 @@ mod tests {
     #[test]
     fn help_overlay_fits_the_retained_window() {
         for (left, right, right_extra) in [
-            (
-                HELP_SEARCH_LEFT_ROWS,
-                HELP_QUERY_ROWS,
-                HELP_SEARCH_WINDOW_ROWS,
-            ),
+            (HELP_SEARCH_LEFT_ROWS, HELP_SEARCH_RIGHT_ROWS, &[][..]),
             (HELP_FLOW_LEFT_ROWS, HELP_QUERY_ROWS, HELP_FLOW_WINDOW_ROWS),
             (HELP_DETAIL_LEFT_ROWS, &[][..], HELP_FLOW_WINDOW_ROWS),
         ] {

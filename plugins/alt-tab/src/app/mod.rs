@@ -530,7 +530,11 @@ impl AltTabApp {
             return;
         }
 
-        crate::preview_plane::show_async(PreviewPlanePayload::new(show_id, items));
+        crate::preview_plane::show_async(PreviewPlanePayload::new(
+            show_id,
+            state.unselected_card_opacity,
+            items,
+        ));
     }
 
     pub(crate) fn start_alt_poll(

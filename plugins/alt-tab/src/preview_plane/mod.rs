@@ -10,16 +10,22 @@ pub(crate) struct PreviewPlanePayload {
     pub(crate) ttl_ms: u64,
     pub(crate) backdrop: bool,
     pub(crate) chrome: bool,
+    pub(crate) unselected_opacity: f32,
     pub(crate) items: Vec<PreviewPlaneItem>,
 }
 
 impl PreviewPlanePayload {
-    pub(crate) fn new(show_id: impl Into<String>, items: Vec<PreviewPlaneItem>) -> Self {
+    pub(crate) fn new(
+        show_id: impl Into<String>,
+        unselected_opacity: f32,
+        items: Vec<PreviewPlaneItem>,
+    ) -> Self {
         Self {
             show_id: show_id.into(),
             ttl_ms: DEFAULT_TTL_MS,
             backdrop: false,
             chrome: false,
+            unselected_opacity,
             items,
         }
     }

@@ -114,6 +114,9 @@ class PreviewPlane {
         const chrome = payload.chrome !== false;
         const backdrop = payload.backdrop === true;
         const ttlMs = Number.isFinite(payload.ttl_ms) ? payload.ttl_ms : DEFAULT_TTL_MS;
+        const unselectedOpacity = Number.isFinite(payload.unselected_opacity)
+            ? Math.round(255 * Math.min(1, Math.max(0, payload.unselected_opacity)))
+            : DESELECTED_CLONE_OPACITY;
 
         this._group = new St.Widget({
             name: "qol-alt-tab-preview-plane",
@@ -127,7 +130,7 @@ class PreviewPlane {
 
         const results = [];
         for (let i = 0; i < items.length; i++) {
-            results.push(this._addItem(items[i], chrome));
+            results.push(this._addItem(items[i], chrome, unselectedOpacity));
         }
 
         if (ttlMs > 0) {
@@ -157,7 +160,7 @@ class PreviewPlane {
         };
     }
 
-    _addItem(item, chrome) {
+    _addItem(item, chrome, unselectedOpacity) {
         const wid = Number(item.wid);
         const rect = item.rect || item.preview_rect;
         if (!Number.isFinite(wid) || !rect) {
@@ -184,7 +187,7 @@ class PreviewPlane {
         container.set_size(w, h);
         container.set_clip(0, 0, w, h);
         if (!selected) {
-            container.set_opacity(DESELECTED_CLONE_OPACITY);
+            container.set_opacity(unselectedOpacity);
         }
         this._group.add_actor(container);
 

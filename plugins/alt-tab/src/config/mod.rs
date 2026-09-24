@@ -17,6 +17,7 @@ pub struct DisplayConfig {
     pub card_background_color: String,
     pub card_background_brightness: f32,
     pub card_background_opacity: f32,
+    pub unselected_card_opacity: f32,
     pub icon_position: PreviewIconPosition,
     pub show_minimized: bool,
     pub show_debug_overlay: bool,
@@ -36,6 +37,7 @@ impl Default for DisplayConfig {
             card_background_color: DEFAULT_CARD_BACKGROUND_COLOR.to_string(),
             card_background_brightness: 1.0,
             card_background_opacity: 0.85,
+            unselected_card_opacity: 0.85,
             icon_position: PreviewIconPosition::default(),
             show_minimized: true,
             show_debug_overlay: false,
@@ -191,6 +193,7 @@ mod tests {
         qol_config::validate_contract_defaults_match_type::<AltTabConfig>(CONFIG_CONTRACT).unwrap();
 
         let defaults = contract_defaults();
+        assert_eq!(defaults.display.unselected_card_opacity, 0.85);
         assert_eq!(defaults.display.ghost_opacity, Some(0.0));
         assert_eq!(
             defaults.display.ghost_debug_color.as_deref(),

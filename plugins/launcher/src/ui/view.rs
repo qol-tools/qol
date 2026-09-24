@@ -45,7 +45,7 @@ pub fn search_bar(
     let chevron_font = window.text_style().font().bold();
     let mono_font = font(qol_gpui::theme::font_mono());
     let mono_advance = shaped_width(window, "0", mono_font.clone(), TEXT_BODY);
-    let trailing = if status.mode.is_some() { 126.0 } else { 72.0 };
+    let trailing = if status.mode.is_some() { 94.0 } else { 40.0 };
     let chevron_width = shaped_width(window, "\u{203A}", chevron_font, TEXT_BODY);
     let visible = text_edit::visible_char_count(
         WINDOW_WIDTH
@@ -160,14 +160,7 @@ pub fn search_bar(
                 .cursor_pointer()
                 .text_color(rgb(kit.palette.text_secondary))
                 .text_size(px(TEXT_MICRO))
-                .child("?")
-                .child(
-                    div()
-                        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                        .text_color(rgb(kit.palette.text_muted))
-                        .text_size(px(qol_gpui::theme::TEXT_IDENTITY))
-                        .child("Alt+H"),
-                )
+                .child("\u{2026}")
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.toggle_menu(MenuKind::Help, cx);
                 })),
@@ -175,6 +168,31 @@ pub fn search_bar(
 }
 
 const CARET_WIDTH: f32 = 2.0;
+
+pub fn search_placeholder(mode: SearchMode) -> &'static str {
+    match mode.next() {
+        SearchMode::Files => "search \u{b7} tab files \u{b7} alt+h keys",
+        SearchMode::Apps => "search \u{b7} tab apps \u{b7} alt+h keys",
+    }
+}
+
+pub fn row_action(source: ResultSource, held: &Modifiers) -> (&'static str, &'static str) {
+    let secondary = held.secondary();
+    if held.shift
+        && !secondary
+        && !held.alt
+        && matches!(source, ResultSource::App | ResultSource::File)
+    {
+        return ("Shift+\u{21b5}", "open folder");
+    }
+    if held.alt && !held.shift {
+        return ("Alt+\u{21b5}", "options");
+    }
+    if secondary && !held.shift && matches!(source, ResultSource::App) {
+        return ("Ctrl+\u{2192}", "raise rank");
+    }
+    ("\u{21b5}", "open")
+}
 
 pub fn match_percent(score: i32, best: i32, worst: i32) -> u8 {
     let span = i64::from(worst) - i64::from(best);
@@ -191,11 +209,13 @@ pub fn result_row(
     selected: bool,
     match_score: u8,
     row_height: f32,
+    held: &Modifiers,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
+    let band = qol_gpui::theme::settings_panel_runtime().grounds.band;
     let positions = &scored.m.positions;
     let highlights = if selected && !positions.is_empty() {
-        char_highlights(name, positions)
+        char_highlights(name, positions, band.ink)
     } else {
         vec![]
     };
@@ -204,13 +224,17 @@ pub fn result_row(
     let mut row = div()
         .flex_none()
         .h(px(row_height))
-        .mx(px(8.0))
-        .px(px(qol_gpui::theme::SPACE_PAD))
+        .px(px(qol_gpui::theme::SPACE_PAD + qol_gpui::theme::SPACE_INSET))
         .flex()
         .items_center()
         .gap(px(12.0))
-        .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
-        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+        .map(|row| {
+            if selected {
+                row.bg(rgb(band.bg))
+            } else {
+                row.hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
+            }
+        })
         .child(kit.letter_tile(name))
         .child(
             div()
@@ -218,7 +242,7 @@ pub fn result_row(
                 .min_w(px(0.0))
                 .truncate()
                 .text_color(rgb(if selected {
-                    current_palette().text
+                    band.ink
                 } else {
                     current_palette().text_muted
                 }))
@@ -226,25 +250,41 @@ pub fn result_row(
                 .child(styled_name),
         );
     if selected {
+        let (shortcut, word) = row_action(scored.source, held);
+        row = row.child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(qol_gpui::theme::SPACE_SNUG))
+                .text_color(rgb(band.soft))
+                .text_size(px(TEXT_NANO))
+                .child(
+                    kit.keycap(super::menu::display_shortcut(shortcut))
+                        .border_color(rgba(band.edge.packed()))
+                        .text_color(rgb(band.soft)),
+                )
+                .child(word),
+        );
         let mut score = div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(qol_gpui::theme::SPACE_SNUG))
             .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-            .text_color(rgb(kit.palette.text_secondary))
+            .text_color(rgb(band.soft))
             .text_size(px(TEXT_NANO))
             .child("match")
             .child(
                 div()
-                    .text_color(rgb(kit.palette.text_primary))
+                    .text_color(rgb(band.ink))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(match_score.to_string()),
             );
         if scored.manual_boost > 0 {
             score = score.child(
                 div()
-                    .text_color(rgb(kit.palette.text_primary))
+                    .text_color(rgb(band.ink))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(format!("+{}", scored.manual_boost)),
             );
@@ -261,7 +301,7 @@ pub fn result_row(
                 .child("flow"),
         );
     }
-    kit.row_selected(row, selected)
+    row
 }
 
 pub fn trail_body(
@@ -572,7 +612,11 @@ pub fn hint_bar_detail() -> Div {
         .child(div().flex_1())
 }
 
-fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, HighlightStyle)> {
+fn char_highlights(
+    name: &str,
+    positions: &[usize],
+    ink: u32,
+) -> Vec<(Range<usize>, HighlightStyle)> {
     let byte_map: Vec<(usize, usize)> = name
         .char_indices()
         .map(|(byte_pos, ch)| (byte_pos, ch.len_utf8()))
@@ -585,8 +629,13 @@ fn char_highlights(name: &str, positions: &[usize]) -> Vec<(Range<usize>, Highli
             Some((
                 byte_pos..byte_pos + byte_len,
                 HighlightStyle {
-                    color: Some(rgb(current_palette().highlight).into()),
+                    color: Some(rgb(ink).into()),
                     font_weight: Some(FontWeight::BOLD),
+                    underline: Some(UnderlineStyle {
+                        thickness: px(1.5),
+                        color: Some(rgb(ink).into()),
+                        wavy: false,
+                    }),
                     ..Default::default()
                 },
             ))
@@ -600,8 +649,66 @@ pub fn bg_color() -> gpui::Rgba {
 
 #[cfg(test)]
 mod tests {
-    use super::{answer_lead, match_percent};
+    use super::{answer_lead, match_percent, row_action, search_placeholder};
+    use crate::discovery::search::{ResultSource, SearchMode};
     use crate::flow::FlowRow;
+    use crate::ui::input::InputEffect;
+    use crate::ui::state::LauncherState;
+    use gpui::Modifiers;
+
+    #[test]
+    fn empty_line_names_the_mode_tab_switches_to() {
+        assert_eq!(
+            search_placeholder(SearchMode::Apps),
+            "search \u{b7} tab files \u{b7} alt+h keys"
+        );
+        assert_eq!(
+            search_placeholder(SearchMode::Files),
+            "search \u{b7} tab apps \u{b7} alt+h keys"
+        );
+    }
+
+    #[test]
+    fn chosen_row_names_what_the_held_keys_do() {
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::none()
+        };
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::none()
+        };
+        let secondary = Modifiers::secondary_key();
+        assert_eq!(
+            row_action(ResultSource::App, &Modifiers::none()),
+            ("\u{21b5}", "open")
+        );
+        assert_eq!(
+            row_action(ResultSource::File, &shift),
+            ("Shift+\u{21b5}", "open folder")
+        );
+        assert_eq!(row_action(ResultSource::Flow, &shift), ("\u{21b5}", "open"));
+        assert_eq!(
+            row_action(ResultSource::File, &alt),
+            ("Alt+\u{21b5}", "options")
+        );
+        assert_eq!(
+            row_action(ResultSource::App, &secondary),
+            ("Ctrl+\u{2192}", "raise rank")
+        );
+        assert_eq!(
+            row_action(ResultSource::File, &secondary),
+            ("\u{21b5}", "open")
+        );
+        assert_eq!(
+            LauncherState::new().apply_key("enter", &shift, 1),
+            InputEffect::OpenFolder
+        );
+        assert_eq!(
+            LauncherState::new().apply_key("right", &secondary, 1),
+            InputEffect::BoostUp
+        );
+    }
 
     fn flow_row(kind: &str) -> FlowRow {
         FlowRow {

@@ -41,6 +41,7 @@ pub(crate) struct LauncherView {
     pub(super) menu_scroll: ScrollHandle,
     menu_kind: Option<MenuKind>,
     pub(super) menu_selected: usize,
+    pub(super) held: Modifiers,
     trail_decay_task_running: bool,
     entry_watch_running: bool,
     pub(super) dismiss_requested: bool,
@@ -79,6 +80,7 @@ impl LauncherView {
             menu_scroll: ScrollHandle::new(),
             menu_kind: None,
             menu_selected: 0,
+            held: Modifiers::default(),
             trail_decay_task_running: false,
             entry_watch_running: false,
             dismiss_requested: false,
@@ -101,6 +103,7 @@ impl LauncherView {
             .store(showing, std::sync::atomic::Ordering::Relaxed);
         if !showing {
             self.menu_kind = None;
+            self.held = Modifiers::default();
             self.stop_click_away_monitor();
         }
     }

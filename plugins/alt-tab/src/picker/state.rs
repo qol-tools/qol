@@ -13,6 +13,7 @@ pub(crate) struct PickerState {
     pub(crate) transparent_background: bool,
     pub(crate) card_bg_color: Option<u32>,
     pub(crate) card_bg_opacity: f32,
+    pub(crate) unselected_card_opacity: f32,
     pub(crate) icon_position: PreviewIconPosition,
     pub(crate) show_debug_overlay: bool,
     pub(crate) show_hotkey_hints: bool,
@@ -46,6 +47,7 @@ impl PickerState {
             transparent_background: init.transparent_bg,
             card_bg_color: init.card_color,
             card_bg_opacity: init.card_opacity,
+            unselected_card_opacity: init.unselected_card_opacity.clamp(0.2, 1.0),
             icon_position: init.icon_position,
             show_debug_overlay: init.show_debug_overlay,
             show_hotkey_hints: init.show_hotkey_hints,
@@ -183,6 +185,7 @@ impl PickerState {
         self.transparent_background = config.display.transparent_background;
         self.card_bg_color = card_color;
         self.card_bg_opacity = card_opacity;
+        self.unselected_card_opacity = config.display.unselected_card_opacity.clamp(0.2, 1.0);
         self.icon_position = config.display.icon_position;
         self.show_debug_overlay = config.display.show_debug_overlay;
         self.show_hotkey_hints = config.display.show_hotkey_hints;
@@ -436,6 +439,7 @@ mod cycle_direction_tests {
             transparent_bg: false,
             card_color: None,
             card_opacity: 1.0,
+            unselected_card_opacity: 0.85,
             icon_position: crate::config::PreviewIconPosition::default(),
             show_debug_overlay: false,
             show_hotkey_hints: false,
@@ -598,6 +602,7 @@ mod set_windows_tests {
             transparent_bg: false,
             card_color: None,
             card_opacity: 1.0,
+            unselected_card_opacity: 0.85,
             icon_position: crate::config::PreviewIconPosition::default(),
             show_debug_overlay: false,
             show_hotkey_hints: false,

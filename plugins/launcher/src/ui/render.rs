@@ -107,7 +107,6 @@ impl Render for LauncherView {
                 .w(px(WINDOW_WIDTH))
                 .h(px(window_height_for_rows(0)))
                 .overflow_hidden()
-                .rounded(px(qol_gpui::theme::RADIUS_WINDOW))
                 .bg(view::bg_color());
         }
 
@@ -143,7 +142,6 @@ impl Render for LauncherView {
         let visible = visible_range.len();
         let scroll_offset = visible_range.start;
         let nav_cues = self.state.nav_cues();
-        self.apply_focus_gravity_if_idle(result_count, visible, nav_cues.decayed_momentum, cx);
         #[cfg(debug_assertions)]
         let hidden_above = visible_range.start;
         #[cfg(debug_assertions)]
@@ -184,7 +182,15 @@ impl Render for LauncherView {
         } else {
             window_height_for_rows(visible)
         };
-        let target_height = content_height.max(HEADER_HEIGHT + self.menu_height() + 8.0);
+        let target_height = match self.menu_kind {
+            Some(super::menu::MenuKind::Help) => {
+                content_height.max(HEADER_HEIGHT + self.menu_height())
+            }
+            Some(super::menu::MenuKind::Options) => {
+                content_height.max(HEADER_HEIGHT + self.menu_height() + 8.0)
+            }
+            None => content_height,
+        };
         let results_height = content_height
             - HEADER_HEIGHT
             - if flow_active {
@@ -263,10 +269,15 @@ impl Render for LauncherView {
             .h(px(target_height))
             .relative()
             .overflow_hidden()
-            .rounded(px(qol_gpui::theme::RADIUS_WINDOW))
             .flex()
             .flex_col()
             .bg(view::bg_color())
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                if this.held != event.modifiers {
+                    this.held = event.modifiers;
+                    cx.notify();
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.is_showing {
                     return;
@@ -281,7 +292,9 @@ impl Render for LauncherView {
                     help_open: self.menu_kind == Some(super::menu::MenuKind::Help),
                     pending: flow_pending,
                 },
-                flow_prompt.as_deref().unwrap_or("Alt+Enter for options"),
+                flow_prompt
+                    .as_deref()
+                    .unwrap_or(view::search_placeholder(self.state.mode)),
                 window,
                 cx,
             ))
@@ -400,40 +413,6 @@ impl Render for LauncherView {
 }
 
 impl LauncherView {
-    fn apply_focus_gravity_if_idle(
-        &mut self,
-        result_count: usize,
-        visible: usize,
-        decayed_momentum: u8,
-        cx: &mut Context<Self>,
-    ) {
-        if decayed_momentum != 0 {
-            return;
-        }
-        if !self.state.should_focus_gravity() {
-            return;
-        }
-
-        let target = self.state.focus_gravity_target(result_count, visible);
-        let Some(next_offset) = Self::step_toward(self.state.scroll_list.scroll_offset, target)
-        else {
-            return;
-        };
-
-        self.state.scroll_list.scroll_offset = next_offset;
-        cx.notify();
-    }
-
-    fn step_toward(current: usize, target: usize) -> Option<usize> {
-        if current < target {
-            return Some(current + 1);
-        }
-        if current > target {
-            return Some(current - 1);
-        }
-        None
-    }
-
     fn build_visible_rows(&self, scroll_offset: usize, visible: usize) -> Vec<Div> {
         let mut rows = Vec::with_capacity(visible);
         let selected = self.state.scroll_list.selected;
@@ -454,6 +433,7 @@ impl LauncherView {
                 i == selected,
                 view::match_percent(scored.m.score, best, worst),
                 ROW_HEIGHT,
+                &self.held,
             ));
         }
         rows
