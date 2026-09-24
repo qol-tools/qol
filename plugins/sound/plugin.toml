@@ -3,7 +3,7 @@ id = "qol-sound"
 uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
 name = "Sound"
 description = "Choose where sound plays and how loud"
-version = "0.2.0"
+version = "0.2.1"
 author = "KMRH47"
 platforms = ["linux"]
 
