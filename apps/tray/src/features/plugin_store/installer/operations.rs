@@ -282,7 +282,11 @@ fn installed_plugin_with_uid(plugins_dir: &Path, uid: &str, staged_id: &str) -> 
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if name == staged_id || name.starts_with('.') || name.ends_with(".backup") {
+        if name == staged_id
+            || qol_migrations::renamed_plugin_id(&name) == Some(staged_id)
+            || name.starts_with('.')
+            || name.ends_with(".backup")
+        {
             continue;
         }
         let path = entry.path();
@@ -436,6 +440,22 @@ mod tests {
         let staged = plugins_dir.join(".qol-lights.updating");
         write_manifest(&plugins_dir.join("qol-lights"), "qol-lights", "u-lights");
         write_manifest(&staged, "qol-lights", "u-lights");
+
+        validate_staged_contract(&staged, &plugins_dir).unwrap();
+    }
+
+    #[test]
+    fn staged_uid_left_behind_under_its_pre_rename_id_is_allowed() {
+        let temp = TempDir::new().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        let staged = plugins_dir.join(".qol-alt-tab.updating");
+        write_manifest(&plugins_dir.join("qol-alt-tab"), "qol-alt-tab", "u-alt-tab");
+        write_manifest(
+            &plugins_dir.join("plugin-alt-tab"),
+            "plugin-alt-tab",
+            "u-alt-tab",
+        );
+        write_manifest(&staged, "qol-alt-tab", "u-alt-tab");
 
         validate_staged_contract(&staged, &plugins_dir).unwrap();
     }
