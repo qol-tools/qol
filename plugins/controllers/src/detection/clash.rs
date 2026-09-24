@@ -97,8 +97,8 @@ pub fn sticks_pinned(axes: &[AxisReading]) -> Option<bool> {
 }
 
 pub fn classify(evidence: &LinkEvidence) -> LinkState {
-    let stalled = evidence.driver_timeouts >= TIMEOUT_THRESHOLD
-        || (evidence.sticks_pinned == Some(true) && evidence.driver_timeouts > 0);
+    let stalled =
+        evidence.driver_timeouts >= TIMEOUT_THRESHOLD || evidence.sticks_pinned == Some(true);
     if stalled && !evidence.holders.is_empty() {
         LinkState::Contended
     } else if stalled {
@@ -267,14 +267,14 @@ usb 1-6: new device
                 LinkState::Ok,
             ),
             (
-                "one timeout with pinned sticks",
-                evidence(1, Some(true), vec![]),
+                "pinned sticks without timeouts",
+                evidence(0, Some(true), vec![]),
                 LinkState::Stalled,
             ),
             (
-                "pinned sticks with a holder stay shared",
+                "pinned sticks with steam and no timeouts",
                 evidence(0, Some(true), vec![steam.clone()]),
-                LinkState::Shared,
+                LinkState::Contended,
             ),
             (
                 "unknown sticks with five timeouts",

@@ -5,7 +5,9 @@ use anyhow::{bail, Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_plugin_daemon::notification::send_notification;
 
-use crate::detection::clash::{classify, holders_label, LinkEvidence, LinkState};
+use crate::detection::clash::{
+    classify, holders_label, LinkEvidence, LinkState, TIMEOUT_THRESHOLD,
+};
 use crate::fixes::apply;
 use crate::fixes::state::{compute, FixState, SystemPaths};
 use crate::fixes::{match_device, match_devices, DetectedDevice};
@@ -142,10 +144,13 @@ fn apply_link_verdict(verdict: String, link: Option<&LinkEvidence>, state: LinkS
             "Not responding: {} holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
             holders_label(&link.holders)
         ),
-        LinkState::Stalled => format!(
+        LinkState::Stalled if link.driver_timeouts >= TIMEOUT_THRESHOLD => format!(
             "Not responding: the driver timed out {} times in the last minute. Reconnect it.",
             link.driver_timeouts
         ),
+        LinkState::Stalled => {
+            "Not responding: both sticks read stuck at their limits. Reconnect it.".to_string()
+        }
         LinkState::Shared => format!(
             "{verdict}; shared with {}",
             holders_label(&link.holders)
@@ -828,6 +833,33 @@ mod tests {
                 "",
                 true,
                 false,
+            ),
+            (
+                "stalled with pinned sticks only",
+                0x0005,
+                LinkEvidence {
+                    sticks_pinned: Some(true),
+                    ..Default::default()
+                },
+                LinkState::Stalled,
+                "Not responding: both sticks read stuck at their limits. Reconnect it.",
+                "",
+                true,
+                false,
+            ),
+            (
+                "steam with pinned sticks and no timeouts",
+                0x0005,
+                LinkEvidence {
+                    sticks_pinned: Some(true),
+                    holders: vec![steam.clone()],
+                    ..Default::default()
+                },
+                LinkState::Contended,
+                "Not responding: steam (pid 4242) holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+                "steam (pid 4242)",
+                true,
+                true,
             ),
             (
                 "usb contention is not reclaimable",
