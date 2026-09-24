@@ -333,11 +333,11 @@ fn live_query_from(
         "displays" => displays_payload(&*control, &preferred, &mut cache, night_kelvin),
         "status" => status_payload(&*control, &mut cache),
         "night_mode" => night_payload,
-        "layout" => layout_payload(&*control),
+        "layout" => layout_payload_with_brightness(&*control, &preferred, &mut cache, night_kelvin),
         "modes" => modes_payload(&*control),
         _ => unreachable!("live_query only handles declared queries"),
     };
-    if matches!(name, "displays" | "status") {
+    if matches!(name, "displays" | "status" | "layout") {
         if let Ok(runtime) = live.lock() {
             runtime.session.merge_brightness_cache(&cache);
         }
@@ -350,6 +350,46 @@ fn layout_payload(control: &dyn MonitorControl) -> serde_json::Value {
         Ok(snapshots) => serde_json::json!(layout_rows(&snapshots)),
         Err(_) => serde_json::json!([]),
     }
+}
+
+fn layout_payload_with_brightness(
+    control: &dyn MonitorControl,
+    preferred: &BTreeMap<String, u8>,
+    cache: &mut BTreeMap<String, BrightnessState>,
+    night_kelvin: Option<u16>,
+) -> serde_json::Value {
+    let mut rows = layout_payload(control);
+    let brightness = displays_payload(control, preferred, cache, night_kelvin);
+    let by_id: BTreeMap<String, serde_json::Value> = brightness
+        .as_array()
+        .map(|displays| {
+            displays
+                .iter()
+                .filter_map(|display| {
+                    let id = display.get("id")?.as_str()?.to_string();
+                    let value = display
+                        .get("brightness")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    Some((id, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(rows) = rows.as_array_mut() {
+        for row in rows.iter_mut() {
+            let value = row
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| by_id.get(id))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if let Some(object) = row.as_object_mut() {
+                object.insert("brightness".to_string(), value);
+            }
+        }
+    }
+    rows
 }
 
 fn modes_payload(control: &dyn MonitorControl) -> serde_json::Value {
@@ -6721,6 +6761,36 @@ mod tests {
         assert!(
             !cache.contains_key("id-gone"),
             "a display that left the topology must leave the cache"
+        );
+    }
+
+    #[test]
+    fn layout_payload_carries_brightness_from_the_displays_cache() {
+        let control = FakeControl::new(
+            vec![handle("id-1", "card0-DP-1")],
+            42,
+            BrightnessSource::Ddc,
+        )
+        .with_snapshot(display_snapshot(
+            "id-1",
+            "card0-DP-1",
+            0.0,
+            0.0,
+            true,
+            Some(display_mode(1, 1920, 1080, 60)),
+        ));
+        let mut cache = BTreeMap::new();
+        let first = layout_payload_with_brightness(&control, &BTreeMap::new(), &mut cache, None);
+        assert_eq!(first[0]["id"], "id-1");
+        assert_eq!(first[0]["brightness"], 42);
+        assert_eq!(first[0]["width"], 1920);
+        let reads = control.gets.load(Ordering::SeqCst);
+        let second = layout_payload_with_brightness(&control, &BTreeMap::new(), &mut cache, None);
+        assert_eq!(second[0]["brightness"], 42);
+        assert_eq!(
+            control.gets.load(Ordering::SeqCst),
+            reads,
+            "a warm brightness cache must serve the layout query without a hardware read"
         );
     }
 

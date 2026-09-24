@@ -55,6 +55,26 @@ pub fn display_layout_stage(palette: SettingsPanelPalette, height: f32) -> gpui:
         .bg(rgb(palette.surface_raised))
 }
 
+pub fn display_layout_ghost(
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    palette: SettingsPanelPalette,
+) -> gpui::Div {
+    div()
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .w(px(width))
+        .h(px(height))
+        .rounded(px(qol_theme::RADIUS_TIGHT))
+        .border(px(2.0))
+        .border_color(rgb(palette.row_border_selected))
+        .bg(rgb(palette.row_bg_selected))
+        .opacity(0.45)
+}
+
 pub fn display_layout_tile(
     index: usize,
     tile: &DisplayLayoutTile,

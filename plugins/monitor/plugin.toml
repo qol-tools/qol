@@ -1,7 +1,7 @@
 [plugin]
 id = "qol-monitor"
 uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
-name = "Monitor"
+name = "Display"
 description = "Display brightness, gamma, and mode control"
 version = "0.16.0"
 author = "KMRH47"
@@ -76,7 +76,7 @@ command = "qol-monitor"
 socket = "/tmp/qol-plugin-monitor.sock"
 
 [menu]
-label = "Monitor"
+label = "Display"
 items = []
 
 [[dependencies.binaries]]

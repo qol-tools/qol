@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use qol_config::contract::RowSliderSpec;
 use serde_json::{json, Value};
 
 pub const SNAP_THRESHOLD_PX: f32 = 8.0;
@@ -50,6 +51,7 @@ pub struct Display {
     pub height: i32,
     pub refresh_hz: u32,
     pub primary: bool,
+    pub brightness: Option<u8>,
 }
 
 impl Display {
@@ -63,6 +65,10 @@ impl Display {
             height: uint(row, "height")?,
             refresh_hz: row.get("refresh_hz").and_then(Value::as_u64).unwrap_or(0) as u32,
             primary: flag(row, "primary"),
+            brightness: row
+                .get("brightness")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok()),
         })
     }
 
@@ -232,6 +238,14 @@ fn edge_targets(rect: &Rect) -> [i32; 3] {
     [rect.x, rect.right(), rect.x.saturating_add(rect.width / 2)]
 }
 
+fn vertical_edge_targets(rect: &Rect) -> [i32; 3] {
+    [
+        rect.y,
+        rect.bottom(),
+        rect.y.saturating_add(rect.height / 2),
+    ]
+}
+
 fn snap_axis(origin: i32, size: i32, targets: impl Iterator<Item = i32>, threshold: i32) -> i32 {
     let moving = [
         origin,
@@ -267,11 +281,29 @@ pub fn snap_rect(moving: Rect, others: &[Rect], threshold: i32) -> Rect {
         y: snap_axis(
             moving.y,
             moving.height,
-            others.iter().flat_map(edge_targets),
+            others.iter().flat_map(vertical_edge_targets),
             threshold,
         ),
         width: moving.width,
         height: moving.height,
+    }
+}
+
+fn swap_pair(origin: (i32, i32), moving: Rect, other: &Display) -> ((i32, i32), (i32, i32)) {
+    if (origin.0 - other.x).abs() >= (origin.1 - other.y).abs() {
+        let x = origin.0.min(other.x);
+        if origin.0 < other.x {
+            ((x.saturating_add(other.width), other.y), (x, origin.1))
+        } else {
+            ((x, other.y), (x.saturating_add(moving.width), origin.1))
+        }
+    } else {
+        let y = origin.1.min(other.y);
+        if origin.1 < other.y {
+            ((other.x, y.saturating_add(other.height)), (origin.0, y))
+        } else {
+            ((other.x, y), (origin.0, y.saturating_add(moving.height)))
+        }
     }
 }
 
@@ -366,12 +398,13 @@ impl DisplayLayoutIntent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DisplayLayoutBindings {
     pub query: String,
     pub active_query: Option<String>,
     pub action: String,
     pub active_action: Option<String>,
+    pub slider: Option<RowSliderSpec>,
 }
 
 impl DisplayLayoutBindings {
@@ -380,12 +413,14 @@ impl DisplayLayoutBindings {
         active_query: Option<String>,
         action: impl Into<String>,
         active_action: Option<String>,
+        slider: Option<RowSliderSpec>,
     ) -> Self {
         Self {
             query: query.into(),
             active_query,
             action: action.into(),
             active_action,
+            slider,
         }
     }
 }
@@ -402,9 +437,11 @@ pub struct StagedEdit {
     pub x: i32,
     pub y: i32,
     pub origin: (i32, i32),
+    pub pointer: (i32, i32),
     pub kind: EditKind,
     pub active: bool,
     pub moved: bool,
+    pub swapped: Option<(String, i32, i32)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -552,7 +589,7 @@ impl DisplayLayoutState {
         let keep_edit = self
             .edit
             .as_ref()
-            .is_some_and(|edit| !edit.active && self.displays.iter().any(|d| d.id == edit.id));
+            .is_some_and(|edit| self.displays.iter().any(|d| d.id == edit.id));
         if !keep_edit {
             self.edit = None;
         }
@@ -613,6 +650,12 @@ impl DisplayLayoutState {
         true
     }
 
+    pub fn set_brightness(&mut self, id: &str, value: u8) {
+        if let Some(display) = self.displays.iter_mut().find(|display| display.id == id) {
+            display.brightness = Some(value);
+        }
+    }
+
     pub fn cycle(&mut self, step: i32) -> bool {
         if self.displays.is_empty() {
             return false;
@@ -643,9 +686,11 @@ impl DisplayLayoutState {
             x,
             y,
             origin: (x, y),
+            pointer: (x, y),
             kind: EditKind::Drag,
             active: true,
             moved: false,
+            swapped: None,
         });
         true
     }
@@ -662,26 +707,51 @@ impl DisplayLayoutState {
             return false;
         };
         let id = edit.id.clone();
+        let origin = edit.origin;
         let (width, height) = self.effective_size(&id);
+        let pointer = (
+            origin.0.saturating_add(fit.layout_delta_x(dx)),
+            origin.1.saturating_add(fit.layout_delta_y(dy)),
+        );
         let candidate = Rect {
-            x: edit.origin.0.saturating_add(fit.layout_delta_x(dx)),
-            y: edit.origin.1.saturating_add(fit.layout_delta_y(dy)),
+            x: pointer.0,
+            y: pointer.1,
             width,
             height,
         };
+        if let Some(edit) = self.edit.as_mut() {
+            edit.pointer = pointer;
+            edit.swapped = None;
+        }
         let others = self.other_rects(&id);
         let snapped = snap_rect(candidate, &others, snap_threshold(fit.scale));
+        let landing = Rect {
+            x: snapped.x.clamp(SCREEN_MIN, SCREEN_MAX),
+            y: snapped.y.clamp(SCREEN_MIN, SCREEN_MAX),
+            width,
+            height,
+        };
+        let swap = self.swap_landing(&id, origin, landing);
         let Some(edit) = self.edit.as_mut() else {
             return false;
         };
-        edit.x = snapped.x.clamp(SCREEN_MIN, SCREEN_MAX);
-        edit.y = snapped.y.clamp(SCREEN_MIN, SCREEN_MAX);
+        match swap {
+            Some((placed, (other_id, other_x, other_y))) => {
+                edit.x = placed.x;
+                edit.y = placed.y;
+                edit.swapped = Some((other_id, other_x, other_y));
+            }
+            None => {
+                edit.x = landing.x;
+                edit.y = landing.y;
+            }
+        }
         edit.moved = edit.moved || (edit.x, edit.y) != edit.origin;
         true
     }
 
     pub fn end_drag(&mut self) -> bool {
-        let Some(edit) = self.edit.as_mut() else {
+        let Some(edit) = self.edit.as_ref() else {
             return false;
         };
         if edit.kind != EditKind::Drag {
@@ -691,8 +761,34 @@ impl DisplayLayoutState {
             self.edit = None;
             return false;
         }
+        let Some(edit) = self.edit.as_mut() else {
+            return false;
+        };
         edit.active = false;
         true
+    }
+
+    pub fn drag_preview(&self) -> Option<(String, Rect, Rect)> {
+        let edit = self
+            .edit
+            .as_ref()
+            .filter(|edit| edit.kind == EditKind::Drag && edit.active && edit.moved)?;
+        let (width, height) = self.effective_size(&edit.id);
+        Some((
+            edit.id.clone(),
+            Rect {
+                x: edit.pointer.0,
+                y: edit.pointer.1,
+                width,
+                height,
+            },
+            Rect {
+                x: edit.x,
+                y: edit.y,
+                width,
+                height,
+            },
+        ))
     }
 
     pub fn nudge(&mut self, dx: i32, dy: i32) -> bool {
@@ -706,9 +802,11 @@ impl DisplayLayoutState {
                 x: display.x,
                 y: display.y,
                 origin: (display.x, display.y),
+                pointer: (display.x, display.y),
                 kind: EditKind::Nudge,
                 active: false,
                 moved: false,
+                swapped: None,
             },
         };
         edit.x = edit.x.saturating_add(dx).clamp(SCREEN_MIN, SCREEN_MAX);
@@ -804,6 +902,15 @@ impl DisplayLayoutState {
                 display.x = edit.x;
                 display.y = edit.y;
             }
+            if let Some((_, x, y)) = self
+                .edit
+                .as_ref()
+                .and_then(|edit| edit.swapped.as_ref())
+                .filter(|(id, _, _)| id == &display.id)
+            {
+                display.x = *x;
+                display.y = *y;
+            }
             if let Some(staged) = self.staged_modes.get(&display.id) {
                 display.width = i32::try_from(staged.width).unwrap_or(display.width);
                 display.height = i32::try_from(staged.height).unwrap_or(display.height);
@@ -888,6 +995,14 @@ impl DisplayLayoutState {
         if let Some(edit) = self.edit.as_ref().filter(|edit| edit.id == id) {
             return (edit.x, edit.y);
         }
+        if let Some((_, x, y)) = self
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.swapped.as_ref())
+            .filter(|(other_id, _, _)| other_id == id)
+        {
+            return (*x, *y);
+        }
         match self.displays.iter().find(|display| display.id == id) {
             Some(display) => (display.x, display.y),
             None => (0, 0),
@@ -924,6 +1039,41 @@ impl DisplayLayoutState {
             .filter(|display| display.id != id)
             .map(|display| self.effective_rect(&display.id))
             .collect()
+    }
+
+    fn swap_landing(
+        &self,
+        id: &str,
+        origin: (i32, i32),
+        moving: Rect,
+    ) -> Option<(Rect, (String, i32, i32))> {
+        let other = self
+            .displays
+            .iter()
+            .filter(|display| display.id != id)
+            .find(|display| moving.overlaps(&self.effective_rect(&display.id)))
+            .cloned()?;
+        let (new_moving, new_other) = swap_pair(origin, moving, &other);
+        let placed_moving = Rect {
+            x: new_moving.0,
+            y: new_moving.1,
+            ..moving
+        };
+        let placed_other = Rect {
+            x: new_other.0,
+            y: new_other.1,
+            ..self.effective_rect(&other.id)
+        };
+        let clear = !placed_moving.overlaps(&placed_other)
+            && self
+                .displays
+                .iter()
+                .filter(|display| display.id != id && display.id != other.id)
+                .all(|display| {
+                    let rect = self.effective_rect(&display.id);
+                    !placed_moving.overlaps(&rect) && !placed_other.overlaps(&rect)
+                });
+        clear.then_some((placed_moving, (other.id, new_other.0, new_other.1)))
     }
 
     fn resolve_staged_overlaps(&mut self, id: &str) {
@@ -986,9 +1136,11 @@ impl DisplayLayoutState {
             x,
             y,
             origin: (origin_x, origin_y),
+            pointer: (x, y),
             kind: EditKind::Nudge,
             active: false,
             moved: (x, y) != (origin_x, origin_y),
+            swapped: None,
         });
     }
 }
@@ -1042,7 +1194,20 @@ mod tests {
             height,
             refresh_hz: 60,
             primary,
+            brightness: None,
         }
+    }
+
+    fn brightness_slider() -> RowSliderSpec {
+        serde_json::from_value(json!({
+            "value_from": "brightness",
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "action": "set_brightness",
+            "input": { "id": "{id}", "value": "{value}" },
+        }))
+        .expect("brightness slider spec")
     }
 
     fn bindings() -> DisplayLayoutBindings {
@@ -1051,6 +1216,17 @@ mod tests {
             Some("modes".to_string()),
             "arrange",
             Some("set_mode".to_string()),
+            None,
+        )
+    }
+
+    fn bindings_with_slider() -> DisplayLayoutBindings {
+        DisplayLayoutBindings::new(
+            "layout",
+            Some("modes".to_string()),
+            "arrange",
+            Some("set_mode".to_string()),
+            Some(brightness_slider()),
         )
     }
 
@@ -1084,6 +1260,50 @@ mod tests {
             }
         ]));
         layout
+    }
+
+    #[test]
+    fn layout_rows_carry_brightness_and_set_brightness_updates_it() {
+        let mut layout = DisplayLayoutState::new(bindings_with_slider());
+        layout.load_layout(&json!([
+            {
+                "id": "alpha",
+                "connector": "card0-DP-1",
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "refresh_hz": 60,
+                "primary": true,
+                "brightness": 40,
+            },
+            {
+                "id": "beta",
+                "connector": "card0-DP-2",
+                "x": 1920,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "refresh_hz": 60,
+                "primary": false,
+                "brightness": null,
+            }
+        ]));
+        assert_eq!(layout.displays()[0].brightness, Some(40));
+        assert_eq!(layout.displays()[1].brightness, None);
+        assert_eq!(
+            layout
+                .bindings()
+                .slider
+                .as_ref()
+                .map(|slider| slider.action.as_str()),
+            Some("set_brightness")
+        );
+        layout.set_brightness("beta", 70);
+        assert_eq!(layout.displays()[1].brightness, Some(70));
+        layout.set_brightness("ghost", 10);
+        assert_eq!(layout.displays()[0].brightness, Some(40));
+        assert_eq!(layout.displays()[1].brightness, Some(70));
     }
 
     #[derive(serde::Deserialize)]
@@ -1253,6 +1473,68 @@ mod tests {
     }
 
     #[test]
+    fn dropping_the_right_display_over_the_left_swaps_their_positions() {
+        let mut layout = two_displays();
+        assert!(layout.begin_drag("beta"));
+        assert!(layout.drag_delta(-500.0, 0.0));
+        assert!(layout.end_drag());
+        assert_eq!(layout.effective_position("beta"), (0, 0));
+        assert_eq!(layout.effective_position("alpha"), (1920, 0));
+        assert!(layout.issues().is_empty());
+        let placements = layout.arrange_intent().expect("arrangement");
+        assert_eq!(
+            placements,
+            DisplayLayoutIntent::Arrange {
+                placements: vec![
+                    Placement {
+                        id: "alpha".into(),
+                        x: 1920,
+                        y: 0
+                    },
+                    Placement {
+                        id: "beta".into(),
+                        x: 0,
+                        y: 0
+                    },
+                ],
+                primary: "alpha".into(),
+            }
+        );
+        layout.finish_commit();
+        assert_eq!(layout.effective_position("beta"), (0, 0));
+        assert_eq!(layout.effective_position("alpha"), (1920, 0));
+    }
+
+    #[test]
+    fn dropping_the_left_display_over_the_right_swaps_their_positions() {
+        let mut layout = two_displays();
+        assert!(layout.begin_drag("alpha"));
+        assert!(layout.drag_delta(500.0, 0.0));
+        assert!(layout.end_drag());
+        assert_eq!(layout.effective_position("beta"), (0, 0));
+        assert_eq!(layout.effective_position("alpha"), (1920, 0));
+        assert!(layout.issues().is_empty());
+    }
+
+    #[test]
+    fn dropping_a_middle_display_over_its_neighbour_preserves_the_third() {
+        let mut layout = state();
+        layout.set_viewport(720.0, 368.0, 16.0);
+        layout.load_layout(&json!([
+            { "id": "alpha", "x": 0, "y": 0, "width": 1920, "height": 1080, "primary": true },
+            { "id": "beta", "x": 1920, "y": 0, "width": 1920, "height": 1080 },
+            { "id": "gamma", "x": 3840, "y": 0, "width": 1920, "height": 1080 }
+        ]));
+        assert!(layout.begin_drag("beta"));
+        assert!(layout.drag_delta(250.0, 0.0));
+        assert!(layout.end_drag());
+        assert_eq!(layout.effective_position("alpha"), (0, 0));
+        assert_eq!(layout.effective_position("gamma"), (1920, 0));
+        assert_eq!(layout.effective_position("beta"), (3840, 0));
+        assert!(layout.issues().is_empty());
+    }
+
+    #[test]
     fn a_drag_within_ten_screen_pixels_snaps_to_exact_contact_at_a_small_scale() {
         let mut layout = two_displays();
         let fit = layout.fit().expect("fit");
@@ -1277,6 +1559,73 @@ mod tests {
         assert!(!layout.end_drag());
         assert!(layout.edit().is_none());
         assert_eq!(layout.effective_position("beta"), (3840, 0));
+    }
+
+    #[test]
+    fn a_drag_inside_the_snap_threshold_previews_the_raw_pointer_and_the_snapped_landing() {
+        let mut layout = two_displays();
+        let fit = layout.fit().expect("fit");
+        let drag = 1120.0 * fit.scale;
+        let pointer_y = fit.layout_delta_y(drag);
+        assert_eq!(pointer_y, 1120);
+        assert!(pointer_y - 1080 <= snap_threshold(fit.scale));
+        assert!(layout.begin_drag("beta"));
+        assert!(layout.drag_delta(0.0, drag));
+        let (id, pointer, landing) = layout.drag_preview().expect("drag preview");
+        assert_eq!(id, "beta");
+        assert_eq!(
+            pointer,
+            Rect {
+                x: 3840,
+                y: pointer_y,
+                width: 1920,
+                height: 1080,
+            }
+        );
+        assert_eq!(
+            landing,
+            Rect {
+                x: 3840,
+                y: 1080,
+                width: 1920,
+                height: 1080,
+            }
+        );
+        assert_ne!(pointer, landing);
+    }
+
+    #[test]
+    fn a_drag_over_a_neighbour_previews_the_swap_landing_before_the_drop() {
+        let mut layout = two_displays();
+        assert!(layout.begin_drag("beta"));
+        assert!(layout.drag_delta(-500.0, 0.0));
+        let (id, pointer, landing) = layout.drag_preview().expect("drag preview");
+        assert_eq!(id, "beta");
+        assert_eq!(
+            landing,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            }
+        );
+        assert_ne!(pointer, landing);
+        assert_eq!(layout.effective_position("alpha"), (1920, 0));
+        assert!(layout.end_drag());
+        assert_eq!(layout.effective_position("beta"), (landing.x, landing.y));
+        assert!(layout.drag_preview().is_none());
+    }
+
+    #[test]
+    fn a_drag_preview_needs_an_active_moved_drag() {
+        let mut layout = two_displays();
+        assert!(layout.begin_drag("beta"));
+        assert!(layout.drag_preview().is_none());
+        assert!(layout.drag_delta(120.0, 0.0));
+        assert!(layout.drag_preview().is_some());
+        assert!(layout.end_drag());
+        assert!(layout.drag_preview().is_none());
     }
 
     #[test]
@@ -1997,10 +2346,12 @@ mod tests {
     }
 
     #[test]
-    fn layout_polls_revert_drag_edits_and_keep_pending_nudges() {
+    fn layout_polls_keep_an_in_flight_drag_and_pending_nudges() {
         let mut layout = two_displays();
         assert!(layout.begin_drag("beta"));
         assert!(layout.drag_delta(120.0, 0.0));
+        let dragged = layout.drag_preview();
+        assert!(dragged.is_some());
         layout.load_layout(&json!([
             {
                 "id": "alpha",
@@ -2021,8 +2372,10 @@ mod tests {
                 "primary": false,
             }
         ]));
-        assert!(layout.edit().is_none());
-        assert_eq!(layout.effective_position("beta"), (3840, 0));
+        assert_eq!(layout.drag_preview(), dragged);
+        assert!(layout.drag_delta(240.0, 0.0));
+        assert!(layout.end_drag());
+        layout.abort_commit();
 
         assert!(layout.select("beta"));
         assert!(layout.nudge(0, 12));

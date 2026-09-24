@@ -435,65 +435,36 @@ impl SettingsPanelView {
         row: RowGround,
         cx: &mut Context<Self>,
     ) -> Div {
-        let fill = slider_fraction(value, Some(slider.spec.min), Some(slider.spec.max)) * 72.0;
+        let fraction = slider_fraction(value, Some(slider.spec.min), Some(slider.spec.max));
         let percent = slider_percent_label(slider.spec.min, slider.spec.max, value);
-        let ground = row.rest(self.palette);
         let item_id = item.id.clone();
         let down_item = item_id.clone();
         let move_item = item_id.clone();
-        div()
-            .flex()
-            .flex_none()
-            .flex_row()
-            .items_center()
-            .gap(px(qol_theme::SPACE_INSET))
-            .cursor(CursorStyle::PointingHand)
-            .child(
-                div()
-                    .relative()
-                    .w(px(72.))
-                    .h(px(4.))
-                    .rounded_full()
-                    .overflow_hidden()
-                    .bg(rgba(ground.well.packed()))
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .top_0()
-                            .h_full()
-                            .w(px(fill))
-                            .rounded_full()
-                            .bg(rgb(ground.mark)),
-                    )
-                    .child(slider_drag_track(
-                        cx,
-                        row_index,
-                        item_id,
-                        move |panel: &mut SettingsPanelView,
-                              row: usize,
-                              fraction: f32,
-                              cx: &mut Context<SettingsPanelView>| {
-                            panel.set_list_slider_value(row, &down_item, fraction, cx);
-                        },
-                        move |panel: &mut SettingsPanelView,
-                              row: usize,
-                              fraction: f32,
-                              cx: &mut Context<SettingsPanelView>| {
-                            panel.set_list_slider_value(row, &move_item, fraction, cx);
-                            cx.notify();
-                        },
-                        |_: &mut SettingsPanelView,
-                         _: usize,
-                         _: &mut Context<SettingsPanelView>| {},
-                    )),
-            )
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.label_text))
-                    .child(percent),
-            )
+        slider_track(
+            cx,
+            row_index,
+            item_id,
+            SliderTrackStyle {
+                fraction,
+                percent,
+                ground: row,
+                palette: self.palette,
+            },
+            move |panel: &mut SettingsPanelView,
+                  row: usize,
+                  fraction: f32,
+                  cx: &mut Context<SettingsPanelView>| {
+                panel.set_list_slider_value(row, &down_item, fraction, cx);
+            },
+            move |panel: &mut SettingsPanelView,
+                  row: usize,
+                  fraction: f32,
+                  cx: &mut Context<SettingsPanelView>| {
+                panel.set_list_slider_value(row, &move_item, fraction, cx);
+                cx.notify();
+            },
+            |_: &mut SettingsPanelView, _: usize, _: &mut Context<SettingsPanelView>| {},
+        )
     }
 
     pub(super) fn render_list_card_item(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -598,7 +569,13 @@ fn list_card_word_color(item: &ListItem, palette: SettingsPanelPalette) -> u32 {
     }
 }
 
-fn stepped_slider_value(current: f64, direction: f64, min: f64, max: f64, step: f64) -> f64 {
+pub(super) fn stepped_slider_value(
+    current: f64,
+    direction: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+) -> f64 {
     let next = round_to_step_precision(current + direction * step, step);
     next.clamp(min, max)
 }
@@ -608,7 +585,7 @@ pub(super) fn slider_value_from_fraction(min: f64, max: f64, step: f64, fraction
     align_to_step(value, Some(min), Some(max), step)
 }
 
-fn slider_percent_label(min: f64, max: f64, value: f64) -> String {
+pub(super) fn slider_percent_label(min: f64, max: f64, value: f64) -> String {
     let fraction = if max > min {
         (value - min) / (max - min)
     } else {
@@ -634,6 +611,67 @@ fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
             until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
         },
     );
+}
+
+pub(super) struct SliderTrackStyle {
+    pub fraction: f32,
+    pub percent: String,
+    pub ground: RowGround,
+    pub palette: SettingsPanelPalette,
+}
+
+pub(super) fn slider_track<O, M, R>(
+    cx: &mut Context<SettingsPanelView>,
+    row: usize,
+    id: String,
+    style: SliderTrackStyle,
+    on_down: O,
+    move_to: M,
+    release: R,
+) -> Div
+where
+    O: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    M: Fn(&mut SettingsPanelView, usize, f32, &mut Context<SettingsPanelView>) + 'static,
+    R: Fn(&mut SettingsPanelView, usize, &mut Context<SettingsPanelView>) + 'static,
+{
+    let fraction = style.fraction;
+    let percent = style.percent;
+    let palette = style.palette;
+    let ground = style.ground.rest(palette);
+    let fill = fraction * 72.0;
+    div()
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap(px(qol_theme::SPACE_INSET))
+        .cursor(CursorStyle::PointingHand)
+        .child(
+            div()
+                .relative()
+                .w(px(72.))
+                .h(px(4.))
+                .rounded_full()
+                .overflow_hidden()
+                .bg(rgba(ground.well.packed()))
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .h_full()
+                        .w(px(fill))
+                        .rounded_full()
+                        .bg(rgb(ground.mark)),
+                )
+                .child(slider_drag_track(cx, row, id, on_down, move_to, release)),
+        )
+        .child(
+            div()
+                .text_size(px(qol_theme::TEXT_CAPTION))
+                .text_color(rgb(palette.label_text))
+                .child(percent),
+        )
 }
 
 fn list_card_slider_value(

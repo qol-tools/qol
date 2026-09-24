@@ -493,10 +493,10 @@ fn validate_row_slider(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationE
     let Some(slider) = field.row_slider.as_ref() else {
         return;
     };
-    if field.kind != FieldKind::List {
+    if field.kind != FieldKind::List && field.kind != FieldKind::DisplayLayout {
         errors.push(ValidationError::new(
             format!("field.{id}.row_slider"),
-            "row_slider is only supported for list fields",
+            "row_slider is only supported for list and display_layout fields",
         ));
         return;
     }
@@ -742,7 +742,7 @@ mod tests {
     use crate::contract::parse_spec_str;
 
     #[test]
-    fn row_slider_requires_list_kind_and_a_valid_range() {
+    fn row_slider_requires_list_or_display_layout_kind_and_a_valid_range() {
         let valid = validate_contract(
             r#"
 schema_version = 1
@@ -808,6 +808,24 @@ action = "set_volume"
         );
         assert_has_error(&bad_step, "field.volumes.row_slider.step", "step");
 
+        let display_layout = validate_contract(
+            r#"
+schema_version = 1
+
+[field.arrangement]
+type = "display_layout"
+query = "layout"
+
+[field.arrangement.row_slider]
+value_from = "brightness"
+min = 0
+max = 100
+step = 5
+action = "set_brightness"
+"#,
+        );
+        assert!(display_layout.is_empty(), "{display_layout:?}");
+
         let non_list = validate_contract(
             r#"
 schema_version = 1
@@ -824,7 +842,7 @@ action = "set_volume"
         assert_has_error(
             &non_list,
             "field.volume.row_slider",
-            "only supported for list fields",
+            "only supported for list and display_layout fields",
         );
     }
 

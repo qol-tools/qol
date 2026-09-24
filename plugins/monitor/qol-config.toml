@@ -1,10 +1,10 @@
 schema_version = 1
-title = "Monitor"
+title = "Display"
 description = "Display brightness, gamma, and mode control."
 
-[section.displays]
-label = "Displays"
-description = "Live brightness state for every connected display, read from the monitor daemon."
+[section.display]
+label = "Display"
+description = "Brightness and layout for connected displays."
 
 [section.night]
 label = "Night mode"
@@ -17,30 +17,11 @@ description = "Per-display preferred brightness and control policy, applied at d
 [field.status]
 type = "status"
 label = "Status"
-section = "displays"
+section = "display"
 query = "status"
 value_from = "state"
 label_map = { ok = "Brightness ready", no_displays = "No displays detected", unavailable = "Brightness unavailable" }
 tone_map = { ok = "success", no_displays = "warning", unavailable = "danger" }
-
-[field.displays]
-type = "list"
-label = "Displays"
-section = "displays"
-query = "displays"
-row_label = "{connector}"
-row_subtitle = "{detail}"
-empty_message = "No displays connected."
-card_description = "Live brightness for every display."
-row_slider = { value_from = "brightness", min = 0, max = 100, step = 5, action = "set_brightness", input = { id = "{id}", value = "{value}" } }
-
-[field.apply_preferred]
-type = "action"
-label = "Apply Preferred Now"
-section = "displays"
-action = "apply"
-variant = "primary"
-description = "Set every connected display to its preferred brightness immediately."
 
 [field.night_status]
 type = "status"
@@ -155,17 +136,14 @@ section = "preferences"
 default = true
 description = "Changing a display's brightness sets every connected display to the same percentage. Brightness hotkeys step them together."
 
-[section.arrangement]
-label = "Arrangement"
-description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."
-
 [field.arrangement]
 type = "display_layout"
-label = "Arrangement"
-section = "arrangement"
+label = "Displays"
+section = "display"
 query = "layout"
 active_query = "modes"
 action = "arrange"
 active_action = "set_mode"
-description = "Place connected displays, choose their resolution and refresh rate, and set the primary output."
-card_description = "Where each display sits."
+description = "Arrange displays and set each one's brightness, resolution and role."
+card_description = "Arrange and tune each display."
+row_slider = { value_from = "brightness", min = 0, max = 100, step = 5, action = "set_brightness", input = { id = "{id}", value = "{value}" } }

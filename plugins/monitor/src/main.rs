@@ -103,6 +103,32 @@ mod tests {
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
         let config =
             qol_config::contract::parse_spec("qol-config.toml").expect("qol-config.toml invalid");
+        assert_eq!(manifest.plugin.name, "Display");
+        assert_eq!(manifest.menu.label, "Display");
+        assert_eq!(config.title.as_deref(), Some("Display"));
+        assert_eq!(
+            config.sections.keys().next().map(String::as_str),
+            Some("display")
+        );
+        assert!(config.section("displays").is_none());
+        assert!(config.field("apply_preferred").is_none());
+        let display_fields: Vec<&str> = config
+            .fields
+            .iter()
+            .filter(|(_, field)| field.section.as_deref() == Some("display"))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(
+            display_fields,
+            ["status", "arrangement"],
+            "the Display section holds a status row and one combined Displays card"
+        );
+        for folded in ["displays", "resolution", "primary_display"] {
+            assert!(
+                config.field(folded).is_none(),
+                "{folded} must be folded into the single Displays card"
+            );
+        }
         let runtime = qol_config::contract::parse_runtime_spec("qol-runtime.toml")
             .expect("qol-runtime.toml invalid");
         qol_config::contract::validate_contracts(&config, Some(&runtime))
@@ -110,11 +136,34 @@ mod tests {
         let arrangement = config
             .field("arrangement")
             .expect("the arrangement field must exist");
-        assert_eq!(arrangement.label.as_deref(), Some("Arrangement"));
+        assert_eq!(
+            config
+                .section("display")
+                .and_then(|section| section.label.as_deref()),
+            Some("Display")
+        );
+        assert_eq!(arrangement.label.as_deref(), Some("Displays"));
+        assert_eq!(arrangement.section.as_deref(), Some("display"));
+        assert_eq!(arrangement.variant, None);
+        assert_eq!(
+            arrangement.description.as_deref(),
+            Some("Arrange displays and set each one's brightness, resolution and role.")
+        );
+        assert_eq!(
+            arrangement.card_description.as_deref(),
+            Some("Arrange and tune each display.")
+        );
         assert_eq!(arrangement.query.as_deref(), Some("layout"));
         assert_eq!(arrangement.active_query.as_deref(), Some("modes"));
         assert_eq!(arrangement.action.as_deref(), Some("arrange"));
         assert_eq!(arrangement.active_action.as_deref(), Some("set_mode"));
+        let slider = arrangement
+            .row_slider
+            .as_ref()
+            .expect("the Displays card carries the brightness slider");
+        assert_eq!(slider.value_from, "brightness");
+        assert_eq!(slider.action, "set_brightness");
+        assert_eq!((slider.min, slider.max, slider.step), (0.0, 100.0, 5.0));
         for query in ["layout", "modes"] {
             assert!(
                 runtime.queries.contains_key(query),

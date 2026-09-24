@@ -1036,6 +1036,7 @@ mod tests {
             Some("modes".to_string()),
             "arrange",
             Some("set_mode".to_string()),
+            None,
         ));
         let layout = vec![row(RowControl::DisplayLayout(Box::new(layout_state)))];
 

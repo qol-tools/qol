@@ -2,17 +2,23 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::*;
+use qol_config::contract::resolve_slider_action;
 
 use super::super::components::{
-    display_layout_stage, display_layout_tile, settings_action_spinner, settings_description,
-    settings_label, settings_label_group, settings_message, ChoiceArt, DisplayLayoutTile,
-    RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, TileArt,
+    display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_spinner,
+    settings_description, settings_label, settings_label_group, settings_message, ChoiceArt,
+    DisplayLayoutTile, RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, TileArt,
 };
-use super::super::display_layout::{mode_label, nudge_step, DisplayLayoutState};
+use super::super::display_layout::{mode_label, nudge_step, Display, DisplayLayoutState, Rect};
+use super::super::form_nav::adjacent_visible_row;
 use super::super::rows::{Row, RowControl, RowSection};
 use super::super::SettingsDestination;
 use super::choose_card::{label_parts, ChooseOrigin, ChooseState, ChooseTile};
-use super::{Level, LevelHeader, SettingsPanelView};
+use super::list_card::{
+    slider_percent_label, slider_track, slider_value_from_fraction, stepped_slider_value,
+    SliderTrackStyle,
+};
+use super::{slider_fraction, Level, LevelHeader, SettingsPanelView};
 use crate::pictures::PictureContext;
 
 const DISPLAY_LAYOUT_STAGE_PAD: f32 = qol_theme::SPACE_INSET;
@@ -67,11 +73,19 @@ impl SettingsPanelView {
             }
             DisplayLayoutCardAction::MoveSelection(step) => {
                 let selected = self.level().selected;
-                self.level_mut().selected = display_layout_card_step(selected, step);
+                let rows = &self.level().sections[0].rows;
+                let next = adjacent_visible_row(rows, selected, step as isize);
+                self.level_mut().selected = next;
                 self.sync_scroll();
                 cx.notify();
                 true
             }
+            DisplayLayoutCardAction::StepBrightness(direction) => {
+                self.step_display_layout_brightness(direction, cx);
+                cx.notify();
+                true
+            }
+            DisplayLayoutCardAction::Consume => true,
             DisplayLayoutCardAction::Apply => {
                 self.apply_display_layout(cx);
                 true
@@ -105,11 +119,12 @@ impl SettingsPanelView {
             .first()
             .map(|section| section.source)
             .unwrap_or(0);
-        let Some(destination) = self.card_destination(RESOLUTION_LABEL, cx) else {
+        let label = RESOLUTION_LABEL;
+        let Some(destination) = self.card_destination(label, cx) else {
             return;
         };
         let section = RowSection {
-            label: RESOLUTION_LABEL.to_string(),
+            label: label.to_string(),
             description: Some(RESOLUTION_CARD_DESCRIPTION.to_string()),
             rows: Vec::new(),
             source,
@@ -158,6 +173,111 @@ impl SettingsPanelView {
             state.cycle(step);
             state.set_primary();
         }
+    }
+
+    fn set_display_layout_brightness(
+        &mut self,
+        display_id: &str,
+        fraction: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
+        let Some(slider) = self
+            .level()
+            .display_layout
+            .as_ref()
+            .and_then(|state| state.bindings().slider.clone())
+        else {
+            return;
+        };
+        let value = slider_value_from_fraction(slider.min, slider.max, slider.step, fraction);
+        let value = value.round().clamp(0.0, 255.0) as u8;
+        if let Some(state) = self.level_mut().display_layout.as_mut() {
+            state.set_brightness(display_id, value);
+        }
+        self.schedule_slider_dispatch(
+            origin_row,
+            display_id.to_string(),
+            cx,
+            |this, row, id, cx| {
+                this.dispatch_display_layout_brightness(row, &id, cx);
+            },
+        );
+        cx.notify();
+    }
+
+    fn step_display_layout_brightness(&mut self, direction: i32, cx: &mut Context<Self>) {
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
+        let Some((id, current, slider)) = self.level().display_layout.as_ref().and_then(|state| {
+            let slider = state.bindings().slider.clone()?;
+            let display = state.selected()?;
+            Some((display.id.clone(), display.brightness?, slider))
+        }) else {
+            return;
+        };
+        let next = stepped_slider_value(
+            f64::from(current),
+            f64::from(direction),
+            slider.min,
+            slider.max,
+            slider.step,
+        );
+        let next = next.round().clamp(0.0, 255.0) as u8;
+        if let Some(state) = self.level_mut().display_layout.as_mut() {
+            state.set_brightness(&id, next);
+        }
+        self.schedule_slider_dispatch(origin_row, id, cx, |this, row, id, cx| {
+            this.dispatch_display_layout_brightness(row, &id, cx);
+        });
+    }
+
+    fn dispatch_display_layout_brightness(
+        &mut self,
+        row: usize,
+        display_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(runtime) = self
+            .root_source_for(row)
+            .map(|source| source.runtime.clone())
+        else {
+            return;
+        };
+        self.slider_pending.remove(&(row, display_id.to_string()));
+        let Some(state) = self.level().display_layout.as_ref() else {
+            return;
+        };
+        let Some(slider) = state.bindings().slider.clone() else {
+            return;
+        };
+        let Some(value) = state
+            .displays()
+            .iter()
+            .find(|display| display.id == display_id)
+            .and_then(|display| display.brightness)
+        else {
+            return;
+        };
+        let resolved = resolve_slider_action(
+            &slider,
+            &serde_json::json!({ "id": display_id }),
+            f64::from(value),
+        );
+        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let async_cx = cx.clone();
+            async move {
+                let _ = async_cx
+                    .background_spawn(async move {
+                        runtime.run_action(&resolved.action, resolved.input)
+                    })
+                    .await;
+            }
+        })
+        .detach();
     }
 
     fn stage_display_layout_nudge(&mut self, dx: i32, dy: i32) {
@@ -209,7 +329,7 @@ impl SettingsPanelView {
         let Some(state) = self.level().display_layout.as_ref() else {
             return;
         };
-        if state.pending() || !state.is_committable() {
+        if state.pending() || !state.has_staged_edits() || !state.is_committable() {
             return;
         }
         let steps = display_layout_dispatch_steps(state);
@@ -276,6 +396,30 @@ impl SettingsPanelView {
         (fallback_width, super::super::PANEL_DISPLAY_LAYOUT_HEIGHT)
     }
 
+    fn drag_display_layout_to(&mut self, position: Point<Pixels>) -> bool {
+        let Some((_, origin)) = self.display_layout_press.as_ref() else {
+            return false;
+        };
+        let dx = (position.x - origin.x).to_f64() as f32;
+        let dy = (position.y - origin.y).to_f64() as f32;
+        let (width, height) = self.display_layout_viewport();
+        let Some(state) = self.level_mut().display_layout.as_mut() else {
+            return false;
+        };
+        state.set_viewport(width, height, DISPLAY_LAYOUT_STAGE_PAD);
+        state.drag_delta(dx, dy)
+    }
+
+    fn finish_display_layout_drag(&mut self) -> bool {
+        if self.display_layout_press.take().is_none() {
+            return false;
+        }
+        self.level_mut()
+            .display_layout
+            .as_mut()
+            .is_some_and(DisplayLayoutState::end_drag)
+    }
+
     pub(super) fn sync_display_layout_card(&mut self, query: &str) {
         if self.stack.len() <= 1 {
             return;
@@ -336,6 +480,7 @@ impl SettingsPanelView {
         let fit = staged.fit();
         let stage_viewport = Rc::clone(&self.display_layout_stage);
         let stage_entity = cx.weak_entity();
+        let drag_entity = stage_entity.clone();
         let stage_bounds = canvas(
             move |bounds, window, _cx| {
                 let next = (
@@ -351,7 +496,9 @@ impl SettingsPanelView {
                     let _ = entity.update(cx, |_, cx| cx.notify());
                 });
             },
-            |_, _, _, _| {},
+            move |_, _, window, _| {
+                watch_display_layout_drag(window, drag_entity.clone());
+            },
         )
         .absolute()
         .inset_0();
@@ -359,9 +506,10 @@ impl SettingsPanelView {
             .child(stage_bounds);
         match fit {
             Some(fit) => {
-                for (index, display) in staged.displays().iter().enumerate() {
-                    let rect = staged.rect_of(display);
-                    let id = display.id.clone();
+                let preview = staged.drag_preview();
+                let dragged = preview.as_ref().map(|(id, _, _)| id.as_str());
+                let tile_at = |index: usize, display: &Display, rect: Rect, conflicted: bool| {
+                    let press_id = display.id.clone();
                     let tile = DisplayLayoutTile {
                         connector: display.connector.clone(),
                         resolution: display.resolution(),
@@ -371,13 +519,9 @@ impl SettingsPanelView {
                         height: fit.to_client_height(rect.height),
                         selected: selected_id.as_deref() == Some(display.id.as_str()),
                         primary: staged.is_primary(display),
-                        conflicted: staged.conflicts(&display.id),
+                        conflicted,
                     };
-                    let press_id = id.clone();
-                    let move_id = id.clone();
-                    let up_id = id.clone();
-                    let out_id = id;
-                    let tile = display_layout_tile(index, &tile, palette)
+                    display_layout_tile(index, &tile, palette)
                         .cursor(CursorStyle::PointingHand)
                         .on_mouse_down(
                             MouseButton::Left,
@@ -395,58 +539,34 @@ impl SettingsPanelView {
                                 cx.notify();
                             }),
                         )
-                        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                            if !event.dragging() {
-                                return;
-                            }
-                            let Some((drag_id, origin)) = this.display_layout_press.clone() else {
-                                return;
-                            };
-                            if drag_id != move_id {
-                                return;
-                            }
-                            let dx = (event.position.x - origin.x).to_f64() as f32;
-                            let dy = (event.position.y - origin.y).to_f64() as f32;
-                            let (width, height) = this.display_layout_viewport();
-                            if let Some(state) = this.level_mut().display_layout.as_mut() {
-                                state.set_viewport(width, height, DISPLAY_LAYOUT_STAGE_PAD);
-                                state.drag_delta(dx, dy);
-                            }
-                            cx.notify();
-                        }))
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-                                if this
-                                    .display_layout_press
-                                    .as_ref()
-                                    .is_some_and(|(drag_id, _)| drag_id == &up_id)
-                                {
-                                    if let Some(state) = this.level_mut().display_layout.as_mut() {
-                                        state.end_drag();
-                                    }
-                                    this.display_layout_press = None;
-                                    cx.notify();
-                                }
-                            }),
-                        )
-                        .on_mouse_up_out(
-                            MouseButton::Left,
-                            cx.listener(move |this, _: &MouseUpEvent, _, cx| {
-                                if this
-                                    .display_layout_press
-                                    .as_ref()
-                                    .is_some_and(|(drag_id, _)| drag_id == &out_id)
-                                {
-                                    if let Some(state) = this.level_mut().display_layout.as_mut() {
-                                        state.end_drag();
-                                    }
-                                    this.display_layout_press = None;
-                                    cx.notify();
-                                }
-                            }),
-                        );
+                };
+                for (index, display) in staged.displays().iter().enumerate() {
+                    if dragged == Some(display.id.as_str()) {
+                        continue;
+                    }
+                    let rect = staged.rect_of(display);
+                    let conflicted = staged.conflicts(&display.id);
+                    let tile = tile_at(index, display, rect, conflicted);
                     stage = stage.child(tile);
+                }
+                if let Some((dragged_id, pointer, landing)) = preview {
+                    if let Some((dragged_index, display)) = staged
+                        .displays()
+                        .iter()
+                        .enumerate()
+                        .find(|(_, display)| display.id == dragged_id)
+                    {
+                        let ghost = display_layout_ghost(
+                            fit.to_client_x(landing.x),
+                            fit.to_client_y(landing.y),
+                            fit.to_client_width(landing.width),
+                            fit.to_client_height(landing.height),
+                            palette,
+                        );
+                        stage = stage.child(ghost);
+                        let tile = tile_at(dragged_index, display, pointer, false);
+                        stage = stage.child(tile);
+                    }
                 }
             }
             None => {
@@ -587,7 +707,7 @@ impl SettingsPanelView {
                 display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_APPLY_ROW),
                 self.body_has_focus(),
             )
-            .dimmed(!staged.is_committable())
+            .dimmed(!staged.has_staged_edits() || !staged.is_committable())
             .child(
                 div()
                     .text_size(px(qol_theme::TEXT_BODY))
@@ -642,8 +762,84 @@ impl SettingsPanelView {
                 true,
             ));
         }
+        let slider = staged.bindings().slider.clone();
+        let brightness_ground = RowGround::of(
+            display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_BRIGHTNESS_ROW),
+            self.body_has_focus(),
+        );
+        let brightness_body = match slider.as_ref() {
+            Some(spec) => {
+                let selected_display = staged.selected();
+                let brightness = selected_display.and_then(|display| display.brightness);
+                let value_element = match brightness {
+                    Some(value) => {
+                        let value = f64::from(value);
+                        let fraction = slider_fraction(value, Some(spec.min), Some(spec.max));
+                        let percent = slider_percent_label(spec.min, spec.max, value);
+                        let display_id = selected_display
+                            .map(|display| display.id.clone())
+                            .unwrap_or_default();
+                        let track_id = display_id.clone();
+                        let down_id = display_id.clone();
+                        let move_id = display_id;
+                        let track_row = self
+                            .level()
+                            .origin_row
+                            .unwrap_or(DISPLAY_LAYOUT_BRIGHTNESS_ROW);
+                        slider_track(
+                            cx,
+                            track_row,
+                            track_id,
+                            SliderTrackStyle {
+                                fraction,
+                                percent,
+                                ground: brightness_ground,
+                                palette,
+                            },
+                            move |panel: &mut SettingsPanelView,
+                                  _row: usize,
+                                  fraction: f32,
+                                  cx: &mut Context<SettingsPanelView>| {
+                                panel.set_display_layout_brightness(&down_id, fraction, cx);
+                            },
+                            move |panel: &mut SettingsPanelView,
+                                  _row: usize,
+                                  fraction: f32,
+                                  cx: &mut Context<SettingsPanelView>| {
+                                panel.set_display_layout_brightness(&move_id, fraction, cx);
+                                cx.notify();
+                            },
+                            |_: &mut SettingsPanelView,
+                             _: usize,
+                             _: &mut Context<SettingsPanelView>| {},
+                        )
+                        .into_any_element()
+                    }
+                    None => settings_description("unavailable", brightness_ground, palette)
+                        .into_any_element(),
+                };
+                SettingsRow::rule(("settings-display-layout-brightness", 0usize), palette)
+                    .selected(
+                        display_layout_row_selected(
+                            self.level().selected,
+                            DISPLAY_LAYOUT_BRIGHTNESS_ROW,
+                        ),
+                        self.body_has_focus(),
+                    )
+                    .child(settings_label_group(
+                        "Brightness",
+                        None,
+                        brightness_ground,
+                        palette,
+                    ))
+                    .child(value_element)
+                    .into_any_element()
+            }
+            None => div().into_any_element(),
+        };
         let rows = [
             (DISPLAY_LAYOUT_STAGE_ROW, stage_row.into_any_element()),
+            (DISPLAY_LAYOUT_BRIGHTNESS_ROW, brightness_body),
             (
                 DISPLAY_LAYOUT_RESOLUTION_ROW,
                 mode_control.into_any_element(),
@@ -660,11 +856,45 @@ impl SettingsPanelView {
     }
 }
 
+fn watch_display_layout_drag(window: &mut Window, view: WeakEntity<SettingsPanelView>) {
+    let move_view = view.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+        if phase != DispatchPhase::Capture {
+            return;
+        }
+        let _ = move_view.update(cx, |panel, cx| {
+            if panel.display_layout_press.is_none() {
+                return;
+            }
+            if event.dragging() {
+                if panel.drag_display_layout_to(event.position) {
+                    cx.notify();
+                }
+            } else {
+                panel.finish_display_layout_drag();
+                cx.notify();
+            }
+        });
+    });
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+        if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
+            return;
+        }
+        let _ = view.update(cx, |panel, cx| {
+            if panel.display_layout_press.is_some() {
+                panel.finish_display_layout_drag();
+                cx.notify();
+            }
+        });
+    });
+}
+
 const DISPLAY_LAYOUT_STAGE_ROW: usize = 0;
-const DISPLAY_LAYOUT_RESOLUTION_ROW: usize = 1;
-const DISPLAY_LAYOUT_PRIMARY_ROW: usize = 2;
-const DISPLAY_LAYOUT_APPLY_ROW: usize = 3;
-const DISPLAY_LAYOUT_CANCEL_ROW: usize = 4;
+const DISPLAY_LAYOUT_BRIGHTNESS_ROW: usize = 1;
+const DISPLAY_LAYOUT_RESOLUTION_ROW: usize = 2;
+const DISPLAY_LAYOUT_PRIMARY_ROW: usize = 3;
+const DISPLAY_LAYOUT_APPLY_ROW: usize = 4;
+const DISPLAY_LAYOUT_CANCEL_ROW: usize = 5;
 const RESOLUTION_LABEL: &str = "Resolution and refresh";
 const RESOLUTION_CARD_DESCRIPTION: &str = "Size and refresh for this display.";
 
@@ -693,11 +923,18 @@ fn display_layout_row_selected(selected: usize, index: usize) -> bool {
     selected == index
 }
 
-fn display_layout_card_step(selected: usize, step: i32) -> usize {
-    (selected as i32 + step).clamp(
-        DISPLAY_LAYOUT_STAGE_ROW as i32,
-        DISPLAY_LAYOUT_CANCEL_ROW as i32,
-    ) as usize
+fn display_layout_card_row_indices(has_slider: bool) -> Vec<usize> {
+    let mut rows = vec![DISPLAY_LAYOUT_STAGE_ROW];
+    if has_slider {
+        rows.push(DISPLAY_LAYOUT_BRIGHTNESS_ROW);
+    }
+    rows.extend([
+        DISPLAY_LAYOUT_RESOLUTION_ROW,
+        DISPLAY_LAYOUT_PRIMARY_ROW,
+        DISPLAY_LAYOUT_APPLY_ROW,
+        DISPLAY_LAYOUT_CANCEL_ROW,
+    ]);
+    rows
 }
 
 fn display_layout_card_row(id: &str, label: &str, source: usize) -> Row {
@@ -727,17 +964,41 @@ fn display_layout_card_level(
     destination: SettingsDestination,
     description: Option<String>,
 ) -> Level {
-    let rows = vec![
-        display_layout_card_row("display_layout_stage", label, source),
-        display_layout_card_row("display_layout_mode", RESOLUTION_LABEL, source),
-        display_layout_card_row("display_layout_primary", "Primary display", source),
-        display_layout_card_row("display_layout_apply", "Apply", source),
-        display_layout_card_row("display_layout_cancel", "Cancel", source),
-    ];
+    let has_slider = state.bindings().slider.is_some();
+    let mut rows = vec![display_layout_card_row(
+        "display_layout_stage",
+        label,
+        source,
+    )];
+    rows.push(display_layout_card_row(
+        "display_layout_brightness",
+        "Brightness",
+        source,
+    ));
+    rows.push(display_layout_card_row(
+        "display_layout_mode",
+        RESOLUTION_LABEL,
+        source,
+    ));
+    rows.push(display_layout_card_row(
+        "display_layout_primary",
+        "Primary display",
+        source,
+    ));
+    rows.push(display_layout_card_row(
+        "display_layout_apply",
+        "Apply",
+        source,
+    ));
+    rows.push(display_layout_card_row(
+        "display_layout_cancel",
+        "Cancel",
+        source,
+    ));
     let section = RowSection {
         label: label.to_string(),
         description,
-        rows: (0..rows.len()).collect(),
+        rows: display_layout_card_row_indices(has_slider),
         source,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
@@ -827,6 +1088,8 @@ enum DisplayLayoutCardAction {
     ChoosePrimary,
     CyclePrimary(i32),
     MoveSelection(i32),
+    StepBrightness(i32),
+    Consume,
     Apply,
     Pop,
     LeaveEditing,
@@ -859,12 +1122,16 @@ fn display_layout_card_action(
         "down" => DisplayLayoutCardAction::MoveSelection(1),
         "enter" | "return" | "space" => match selected {
             DISPLAY_LAYOUT_STAGE_ROW => DisplayLayoutCardAction::ToggleEditing,
+            DISPLAY_LAYOUT_BRIGHTNESS_ROW => DisplayLayoutCardAction::Consume,
             DISPLAY_LAYOUT_RESOLUTION_ROW => DisplayLayoutCardAction::OpenModePicker,
             DISPLAY_LAYOUT_PRIMARY_ROW => DisplayLayoutCardAction::ChoosePrimary,
             DISPLAY_LAYOUT_APPLY_ROW => DisplayLayoutCardAction::Apply,
             DISPLAY_LAYOUT_CANCEL_ROW => DisplayLayoutCardAction::Pop,
             _ => DisplayLayoutCardAction::FallThrough,
         },
+        "left" | "right" if selected == DISPLAY_LAYOUT_BRIGHTNESS_ROW => {
+            DisplayLayoutCardAction::StepBrightness(if key == "left" { -1 } else { 1 })
+        }
         "left" | "right" if selected == DISPLAY_LAYOUT_PRIMARY_ROW => {
             DisplayLayoutCardAction::CyclePrimary(if key == "left" { -1 } else { 1 })
         }
@@ -874,14 +1141,14 @@ fn display_layout_card_action(
 }
 
 pub(super) fn enter_hint(selected: usize) -> Option<&'static str> {
-    Some(match selected {
-        DISPLAY_LAYOUT_STAGE_ROW => "edit",
-        DISPLAY_LAYOUT_RESOLUTION_ROW => "choose",
-        DISPLAY_LAYOUT_PRIMARY_ROW => "choose",
-        DISPLAY_LAYOUT_APPLY_ROW => "apply",
-        DISPLAY_LAYOUT_CANCEL_ROW => "back",
-        _ => "choose",
-    })
+    match selected {
+        DISPLAY_LAYOUT_STAGE_ROW => Some("edit"),
+        DISPLAY_LAYOUT_RESOLUTION_ROW => Some("choose"),
+        DISPLAY_LAYOUT_PRIMARY_ROW => Some("choose"),
+        DISPLAY_LAYOUT_APPLY_ROW => Some("apply"),
+        DISPLAY_LAYOUT_CANCEL_ROW => Some("back"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -893,12 +1160,25 @@ mod tests {
     use super::super::tests::{level, rows, source_section};
     use crate::settings_panel::components::TileArt;
 
+    fn brightness_slider() -> qol_config::contract::RowSliderSpec {
+        serde_json::from_value(serde_json::json!({
+            "value_from": "brightness",
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "action": "set_brightness",
+            "input": { "id": "{id}", "value": "{value}" },
+        }))
+        .expect("brightness slider spec")
+    }
+
     fn display_layout_state() -> DisplayLayoutState {
         let mut state = DisplayLayoutState::new(DisplayLayoutBindings::new(
             "layout",
             Some("modes".to_string()),
             "arrange",
             Some("set_mode".to_string()),
+            Some(brightness_slider()),
         ));
         state.set_viewport(
             624.0,
@@ -915,6 +1195,7 @@ mod tests {
                 "height": 2160,
                 "refresh_hz": 60,
                 "primary": true,
+                "brightness": 80,
             },
             {
                 "id": "beta",
@@ -925,8 +1206,35 @@ mod tests {
                 "height": 1080,
                 "refresh_hz": 60,
                 "primary": false,
+                "brightness": 40,
             }
         ]));
+        state
+    }
+
+    fn display_layout_state_without_slider() -> DisplayLayoutState {
+        let mut state = DisplayLayoutState::new(DisplayLayoutBindings::new(
+            "layout",
+            Some("modes".to_string()),
+            "arrange",
+            Some("set_mode".to_string()),
+            None,
+        ));
+        state.set_viewport(
+            624.0,
+            super::super::super::PANEL_DISPLAY_LAYOUT_HEIGHT,
+            super::DISPLAY_LAYOUT_STAGE_PAD,
+        );
+        state.load_layout(&serde_json::json!([{
+            "id": "alpha",
+            "connector": "card0-DP-1",
+            "x": 0,
+            "y": 0,
+            "width": 3840,
+            "height": 2160,
+            "refresh_hz": 60,
+            "primary": true,
+        }]));
         state
     }
 
@@ -956,25 +1264,74 @@ mod tests {
     }
 
     #[test]
-    fn a_display_layout_card_level_exposes_five_rows_and_starts_on_the_stage() {
+    fn the_slider_binding_decides_whether_the_brightness_row_exists() {
+        let with_slider = super::display_layout_card_level(
+            "Displays",
+            0,
+            display_layout_state(),
+            0,
+            SettingsDestination::from_static("Displays"),
+            None,
+        );
+        assert_eq!(with_slider.sections[0].rows.len(), 6);
+        assert_eq!(with_slider.sections[0].rows, vec![0, 1, 2, 3, 4, 5]);
+        let mut selected = super::DISPLAY_LAYOUT_STAGE_ROW;
+        let mut walked = vec![selected];
+        for _ in 0..5 {
+            selected = adjacent_visible_row(&with_slider.sections[0].rows, selected, 1);
+            walked.push(selected);
+        }
+        assert_eq!(
+            walked,
+            vec![0, 1, 2, 3, 4, 5],
+            "navigation walks every row in order"
+        );
+
+        let without_slider = super::display_layout_card_level(
+            "Displays",
+            0,
+            display_layout_state_without_slider(),
+            0,
+            SettingsDestination::from_static("Displays"),
+            None,
+        );
+        assert_eq!(without_slider.sections[0].rows.len(), 5);
+        assert_eq!(
+            without_slider.sections[0].rows,
+            vec![0, 2, 3, 4, 5],
+            "the brightness row is skipped without a slider binding"
+        );
+        assert_eq!(
+            adjacent_visible_row(
+                &without_slider.sections[0].rows,
+                super::DISPLAY_LAYOUT_STAGE_ROW,
+                1
+            ),
+            super::DISPLAY_LAYOUT_RESOLUTION_ROW
+        );
+    }
+
+    #[test]
+    fn a_display_layout_card_level_exposes_six_rows_and_starts_on_the_stage() {
         let mut state = display_layout_state();
         state.load_modes(&display_layout_mode_rows());
         let card = super::display_layout_card_level(
-            "Arrangement",
+            "Displays",
             2,
             state,
             4,
-            SettingsDestination::from_static("Arrangement"),
+            SettingsDestination::from_static("Displays"),
             None,
         );
         assert_eq!(card.origin_row, Some(4));
         assert_eq!(card.selected, super::DISPLAY_LAYOUT_STAGE_ROW);
-        assert_eq!(card.rows.len(), 5);
+        assert_eq!(card.rows.len(), 6);
         let labels: Vec<&str> = card.rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(
             labels,
             [
-                "Arrangement",
+                "Displays",
+                "Brightness",
                 "Resolution and refresh",
                 "Primary display",
                 "Apply",
@@ -986,6 +1343,7 @@ mod tests {
             ids,
             [
                 "display_layout_stage",
+                "display_layout_brightness",
                 "display_layout_mode",
                 "display_layout_primary",
                 "display_layout_apply",
@@ -997,8 +1355,8 @@ mod tests {
             assert!(matches!(&row.control, RowControl::Text(value) if value.is_empty()));
         }
         assert_eq!(card.sections.len(), 1);
-        assert_eq!(card.sections[0].rows, vec![0, 1, 2, 3, 4]);
-        assert_eq!(card.row_bounds.len(), 5);
+        assert_eq!(card.sections[0].rows, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(card.row_bounds.len(), 6);
         let state = card.display_layout.as_ref().expect("card state");
         assert_eq!(state.displays().len(), 2);
         assert_eq!(state.modes_for("beta").len(), 1);
@@ -1033,10 +1391,10 @@ mod tests {
             SettingsDestination::from_static("Arrangement"),
             None,
         );
-        let visible: Vec<usize> = (0..card.rows.len()).collect();
+        let visible = card.sections[0].rows.clone();
         assert_eq!(
             adjacent_visible_row(&visible, card.selected, 1),
-            super::DISPLAY_LAYOUT_RESOLUTION_ROW
+            super::DISPLAY_LAYOUT_BRIGHTNESS_ROW
         );
         assert_eq!(
             adjacent_visible_row(&visible, card.selected, -1),
@@ -1091,17 +1449,19 @@ mod tests {
     }
 
     #[test]
-    fn the_display_layout_card_walks_the_five_rows_without_wrapping() {
+    fn the_display_layout_card_walks_the_six_rows_without_wrapping() {
         let mut card = super::display_layout_card_level(
-            "Arrangement",
+            "Displays",
             0,
             display_layout_state(),
             0,
-            SettingsDestination::from_static("Arrangement"),
+            SettingsDestination::from_static("Displays"),
             None,
         );
         let down = super::DisplayLayoutCardAction::MoveSelection(1);
+        let rows = card.sections[0].rows.clone();
         for expected in [
+            super::DISPLAY_LAYOUT_BRIGHTNESS_ROW,
             super::DISPLAY_LAYOUT_RESOLUTION_ROW,
             super::DISPLAY_LAYOUT_PRIMARY_ROW,
             super::DISPLAY_LAYOUT_APPLY_ROW,
@@ -1111,7 +1471,7 @@ mod tests {
                 super::display_layout_card_action(card.selected, false, "down", false),
                 down
             );
-            card.selected = super::display_layout_card_step(card.selected, 1);
+            card.selected = adjacent_visible_row(&rows, card.selected, 1);
             assert_eq!(card.selected, expected);
             let painted: Vec<usize> = (0..card.rows.len())
                 .filter(|index| super::display_layout_row_selected(card.selected, *index))
@@ -1123,7 +1483,7 @@ mod tests {
             down
         );
         assert_eq!(
-            super::display_layout_card_step(card.selected, 1),
+            adjacent_visible_row(&rows, card.selected, 1),
             super::DISPLAY_LAYOUT_CANCEL_ROW,
             "down at the cancel row stays"
         );
@@ -1132,7 +1492,7 @@ mod tests {
             super::DisplayLayoutCardAction::MoveSelection(-1)
         );
         assert_eq!(
-            super::display_layout_card_step(super::DISPLAY_LAYOUT_STAGE_ROW, -1),
+            adjacent_visible_row(&rows, super::DISPLAY_LAYOUT_STAGE_ROW, -1),
             super::DISPLAY_LAYOUT_STAGE_ROW,
             "up at the stage row stays"
         );
@@ -1144,6 +1504,10 @@ mod tests {
             (
                 super::DISPLAY_LAYOUT_STAGE_ROW,
                 super::DisplayLayoutCardAction::ToggleEditing,
+            ),
+            (
+                super::DISPLAY_LAYOUT_BRIGHTNESS_ROW,
+                super::DisplayLayoutCardAction::Consume,
             ),
             (
                 super::DISPLAY_LAYOUT_RESOLUTION_ROW,
@@ -1179,6 +1543,24 @@ mod tests {
                 false,
             ),
             super::DisplayLayoutCardAction::ToggleEditing
+        );
+        assert_eq!(
+            super::display_layout_card_action(
+                super::DISPLAY_LAYOUT_BRIGHTNESS_ROW,
+                false,
+                "left",
+                false,
+            ),
+            super::DisplayLayoutCardAction::StepBrightness(-1)
+        );
+        assert_eq!(
+            super::display_layout_card_action(
+                super::DISPLAY_LAYOUT_BRIGHTNESS_ROW,
+                false,
+                "right",
+                false,
+            ),
+            super::DisplayLayoutCardAction::StepBrightness(1)
         );
         assert_eq!(
             super::display_layout_card_action(
@@ -1250,25 +1632,26 @@ mod tests {
     #[test]
     fn the_card_enter_hint_follows_the_selected_row() {
         let cases = [
-            (super::DISPLAY_LAYOUT_STAGE_ROW, "edit"),
-            (super::DISPLAY_LAYOUT_RESOLUTION_ROW, "choose"),
-            (super::DISPLAY_LAYOUT_PRIMARY_ROW, "choose"),
-            (super::DISPLAY_LAYOUT_APPLY_ROW, "apply"),
-            (super::DISPLAY_LAYOUT_CANCEL_ROW, "back"),
+            (super::DISPLAY_LAYOUT_STAGE_ROW, Some("edit")),
+            (super::DISPLAY_LAYOUT_BRIGHTNESS_ROW, None),
+            (super::DISPLAY_LAYOUT_RESOLUTION_ROW, Some("choose")),
+            (super::DISPLAY_LAYOUT_PRIMARY_ROW, Some("choose")),
+            (super::DISPLAY_LAYOUT_APPLY_ROW, Some("apply")),
+            (super::DISPLAY_LAYOUT_CANCEL_ROW, Some("back")),
         ];
         for (selected, expected) in cases {
             let mut card = super::display_layout_card_level(
-                "Arrangement",
+                "Displays",
                 0,
                 display_layout_state(),
                 0,
-                SettingsDestination::from_static("Arrangement"),
+                SettingsDestination::from_static("Displays"),
                 None,
             );
             card.selected = selected;
             assert_eq!(
                 super::super::card_enter_hint(&card),
-                Some(expected),
+                expected,
                 "row: {selected}"
             );
         }
@@ -1424,6 +1807,7 @@ mod tests {
                 "height": 1080,
                 "refresh_hz": 60,
                 "primary": false,
+                "brightness": 55,
             }
         ]));
         super::display_layout_card_sync(&mut root, &mut card);
@@ -1435,6 +1819,7 @@ mod tests {
             .expect("beta");
         assert_eq!(beta.x, 2000, "fresh geometry lands");
         assert_eq!(state.rect_of(beta).y, 21, "the staged edit survives");
+        assert_eq!(beta.brightness, Some(55), "brightness follows the poll");
     }
 
     #[test]

@@ -531,6 +531,7 @@ fn control_for(field: &ResolvedField) -> RowControl {
                     field.active_query.clone(),
                     field.action.clone().unwrap_or_default(),
                     field.active_action.clone(),
+                    field.row_slider.clone(),
                 ),
             ))),
             None => RowControl::Unsupported {

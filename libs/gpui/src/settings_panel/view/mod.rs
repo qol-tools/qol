@@ -2498,9 +2498,7 @@ impl SettingsPanelView {
                 }
             }
             RowControl::ObjectArray(state) => item_count_label(state.entries.len()),
-            RowControl::DisplayLayout(state) => {
-                format!("{} connected", state.displays().len())
-            }
+            RowControl::DisplayLayout(state) => format!("{} connected", state.displays().len()),
             RowControl::Gamepad { monitor, .. } => monitor
                 .selected()
                 .map(|controller| controller.name.clone())
@@ -3973,6 +3971,9 @@ impl SettingsPanelView {
     }
 
     fn enter_hint(&self) -> Option<&'static str> {
+        if self.level().display_layout.is_some() {
+            return display_layout_card::enter_hint(self.level().selected);
+        }
         if let Some(hint) = card_enter_hint(self.level()) {
             return Some(hint);
         }
