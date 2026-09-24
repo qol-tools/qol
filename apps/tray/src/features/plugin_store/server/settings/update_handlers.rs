@@ -9,13 +9,14 @@ use std::time::SystemTime;
 
 use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
-use super::super::types::{AppState, PluginUpdateJob, PluginUpdateState, MAX_CONFIG_SIZE};
+use super::super::types::{AppState, MAX_CONFIG_SIZE};
 use super::http_json;
+use crate::updates::jobs::{self, JobState, UpdateJob};
 use crate::version::is_newer_version;
 
 pub(super) const UPDATES_QUERY: &str = "updates";
 pub(super) const ATTENTION_QUERY: &str = "attention";
-pub(super) const HOST_PLUGIN_ID: &str = "qol-tray";
+pub(super) const HOST_PLUGIN_ID: &str = jobs::HOST_ID;
 const ATTENTION_AFTER_SECS: u64 = 24 * 60 * 60;
 
 type HttpResult<T> = Result<T, Box<Response>>;
@@ -48,10 +49,7 @@ struct HostView {
     latest: Option<String>,
     update_available: bool,
     dev_build: bool,
-    queued: bool,
-    running: bool,
-    progress: Option<u8>,
-    error: Option<String>,
+    job: Option<UpdateJob>,
     updated_from: Option<String>,
 }
 
@@ -61,7 +59,7 @@ struct PluginView {
     current: String,
     latest: Option<String>,
     dev_linked: bool,
-    job: Option<PluginUpdateJob>,
+    job: Option<UpdateJob>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -168,7 +166,7 @@ pub(super) async fn post_core_action(
         }
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
-        "stop_updates" => stop_updates_action(&state),
+        "stop_updates" => stop_updates_action(),
         _ => action_error(StatusCode::NOT_FOUND, "Unknown action"),
     }
 }
@@ -194,7 +192,7 @@ fn start_host_update(state: &AppState) -> Response {
     let available = crate::updates::host_update_available();
     if let Some(message) = host_update_refusal(
         crate::updates::checks_enabled(),
-        crate::updates::host_update_status().running,
+        jobs::get(jobs::HOST_ID).is_some_and(|job| job.state == JobState::Updating),
         available,
     ) {
         return action_error(StatusCode::CONFLICT, message);
@@ -219,7 +217,7 @@ fn start_plugin_update(state: &AppState, id: String) -> Response {
     {
         return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}"));
     }
-    if let Err(message) = state.begin_plugin_update(&id) {
+    if let Err(message) = jobs::start(&id) {
         return action_error(StatusCode::CONFLICT, message);
     }
     let worker_state = state.clone();
@@ -241,17 +239,20 @@ fn start_update_all_action(state: &AppState) -> Response {
     };
     let host_available = crate::updates::host_update_available();
     let plan = update_all_plan(&plugins, host_available);
-    let running = crate::updates::host_update_status().running || state.any_plugin_update_active();
+    let running = jobs::any_active();
     if let Some(message) = update_all_refusal(running, &plan) {
         return action_error(StatusCode::CONFLICT, message);
     }
+    if plan.contains(&UpdateTarget::Host) {
+        return match super::super::meta_handlers::start_self_update(state, true) {
+            Ok(()) => action_ok("Update started"),
+            Err(message) => action_error(StatusCode::CONFLICT, message),
+        };
+    }
     for target in &plan {
         if let UpdateTarget::Plugin(id) = target {
-            state.mark_plugin_queued(id);
+            jobs::queue(id);
         }
-    }
-    if plan.contains(&UpdateTarget::Host) {
-        crate::updates::mark_host_update_queued();
     }
     let worker_state = state.clone();
     tokio::spawn(async move {
@@ -260,8 +261,8 @@ fn start_update_all_action(state: &AppState) -> Response {
     action_ok("Update started")
 }
 
-fn stop_updates_action(state: &AppState) -> Response {
-    if state.stop_queued_plugin_updates() == 0 {
+fn stop_updates_action() -> Response {
+    if jobs::stop_queued() == 0 {
         return action_error(StatusCode::CONFLICT, "Nothing to stop");
     }
     action_ok("Stopping after the current update")
@@ -270,16 +271,9 @@ fn stop_updates_action(state: &AppState) -> Response {
 async fn run_update_all(state: AppState, plan: Vec<UpdateTarget>) {
     for target in plan {
         let UpdateTarget::Plugin(id) = target else {
-            if let Err(message) = super::super::meta_handlers::start_self_update(&state, true) {
-                log::warn!(
-                    "Update all could not start the qol-tray update: {}",
-                    message
-                );
-                crate::updates::clear_host_update_queued();
-            }
-            return;
+            continue;
         };
-        if !state.begin_queued_plugin_update(&id) {
+        if !jobs::take_queued(&id) {
             continue;
         }
         let result = plugin_services::run_plugin_update(&state, &id).await;
@@ -291,7 +285,6 @@ async fn run_update_all(state: AppState, plan: Vec<UpdateTarget>) {
 
 fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
     let health = crate::updates::check_health();
-    let host = crate::updates::host_update_status();
     let checks_enabled = crate::updates::checks_enabled();
     let plugins = plugin_views(state).map_err(|status| Box::new(status.into_response()))?;
     Ok(UpdatesView {
@@ -306,10 +299,7 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
             latest: crate::updates::latest_version(),
             update_available: crate::updates::host_update_available(),
             dev_build: !checks_enabled,
-            queued: host.queued,
-            running: host.running,
-            progress: host.progress,
-            error: host.error,
+            job: jobs::get(jobs::HOST_ID),
             updated_from: crate::updates::updated_from(),
         },
         plugins,
@@ -318,7 +308,7 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
 
 fn plugin_views(state: &AppState) -> Result<Vec<PluginView>, StatusCode> {
     let installed = plugin_services::list_installed(state)?;
-    let jobs = state.plugin_update_jobs();
+    let jobs = jobs::snapshot();
     Ok(installed
         .plugins
         .into_iter()
@@ -347,7 +337,11 @@ fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload 
         last_checked_secs: secs_since(now, view.last_attempt),
         last_success_secs: secs_since(now, view.last_success),
         check_error: view.check_error.clone(),
-        running: view.host.running
+        running: view
+            .host
+            .job
+            .as_ref()
+            .is_some_and(|job| job.state == JobState::Updating)
             || view.plugins.iter().any(|plugin| {
                 matches!(
                     plugin_row_state(plugin),
@@ -368,12 +362,12 @@ fn host_payload(view: &UpdatesView) -> HostPayload {
         latest: view.host.latest.clone(),
         state,
         progress: if state == RowState::Updating {
-            view.host.progress
+            view.host.job.as_ref().and_then(|job| job.progress)
         } else {
             None
         },
         error: if state == RowState::Failed {
-            view.host.error.clone()
+            view.host.job.as_ref().and_then(|job| job.reason.clone())
         } else {
             None
         },
@@ -402,14 +396,8 @@ fn host_row_state(view: &UpdatesView) -> RowState {
     if view.host.dev_build {
         return RowState::DevBuild;
     }
-    if view.host.running {
-        return RowState::Updating;
-    }
-    if view.host.queued {
-        return RowState::Queued;
-    }
-    if view.host.error.is_some() {
-        return RowState::Failed;
+    if let Some(job) = &view.host.job {
+        return job_row_state(job);
     }
     if view.host.update_available {
         RowState::Available
@@ -420,11 +408,7 @@ fn host_row_state(view: &UpdatesView) -> RowState {
 
 fn plugin_row_state(plugin: &PluginView) -> RowState {
     if let Some(job) = &plugin.job {
-        match job.state {
-            PluginUpdateState::Queued => return RowState::Queued,
-            PluginUpdateState::Updating => return RowState::Updating,
-            PluginUpdateState::Failed => return RowState::Failed,
-        }
+        return job_row_state(job);
     }
     if plugin.dev_linked {
         return RowState::DevLinked;
@@ -433,6 +417,14 @@ fn plugin_row_state(plugin: &PluginView) -> RowState {
         RowState::Available
     } else {
         RowState::UpToDate
+    }
+}
+
+fn job_row_state(job: &UpdateJob) -> RowState {
+    match job.state {
+        JobState::Queued => RowState::Queued,
+        JobState::Updating => RowState::Updating,
+        JobState::Failed => RowState::Failed,
     }
 }
 
@@ -521,7 +513,7 @@ fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<UpdateTa
             plugin
                 .job
                 .as_ref()
-                .is_some_and(|job| job.state == PluginUpdateState::Failed)
+                .is_some_and(|job| job.state == JobState::Failed)
                 || is_available(&plugin.current, plugin.latest.as_deref())
         })
         .collect();
@@ -572,9 +564,10 @@ mod tests {
         }
     }
 
-    fn job(state: PluginUpdateState, reason: Option<&str>) -> Option<PluginUpdateJob> {
-        Some(PluginUpdateJob {
+    fn job(state: JobState, reason: Option<&str>) -> Option<UpdateJob> {
+        Some(UpdateJob {
             state,
+            progress: None,
             reason: reason.map(str::to_string),
         })
     }
@@ -585,10 +578,7 @@ mod tests {
             latest: latest.map(str::to_string),
             update_available: is_available(current, latest),
             dev_build: false,
-            queued: false,
-            running: false,
-            progress: None,
-            error: None,
+            job: None,
             updated_from: None,
         }
     }
@@ -657,7 +647,7 @@ mod tests {
 
         state.checks_enabled = true;
         state.host.dev_build = false;
-        state.host.error = Some("The update could not be installed".to_string());
+        state.host.job = job(JobState::Failed, Some("The update could not be installed"));
         let payload = build_updates_payload(&state, SystemTime::UNIX_EPOCH);
         assert_eq!(payload.host.state, RowState::Failed);
         assert_eq!(
@@ -665,9 +655,8 @@ mod tests {
             Some("The update could not be installed")
         );
 
-        state.host.error = None;
-        state.host.running = true;
-        state.host.progress = Some(42);
+        state.host.job = job(JobState::Updating, None);
+        state.host.job.as_mut().unwrap().progress = Some(42);
         let payload = build_updates_payload(&state, SystemTime::UNIX_EPOCH);
         assert_eq!(payload.host.state, RowState::Updating);
         assert_eq!(payload.host.progress, Some(42));
@@ -682,13 +671,10 @@ mod tests {
         state.host.update_available = false;
         assert_eq!(host_row_state(&state), RowState::UpToDate);
 
-        state.host.error = Some("No connection to GitHub".to_string());
+        state.host.job = job(JobState::Failed, Some("No connection to GitHub"));
         assert_eq!(host_row_state(&state), RowState::Failed);
 
-        state.host.queued = true;
-        assert_eq!(host_row_state(&state), RowState::Queued);
-
-        state.host.running = true;
+        state.host.job = job(JobState::Updating, None);
         assert_eq!(host_row_state(&state), RowState::Updating);
 
         state.host.dev_build = true;
@@ -706,20 +692,20 @@ mod tests {
         released.dev_linked = true;
         assert_eq!(plugin_row_state(&released), RowState::DevLinked);
 
-        released.job = job(PluginUpdateState::Queued, None);
+        released.job = job(JobState::Queued, None);
         assert_eq!(plugin_row_state(&released), RowState::Queued);
-        released.job = job(PluginUpdateState::Updating, None);
+        released.job = job(JobState::Updating, None);
         assert_eq!(plugin_row_state(&released), RowState::Updating);
-        released.job = job(PluginUpdateState::Failed, Some("No connection to GitHub"));
+        released.job = job(JobState::Failed, Some("No connection to GitHub"));
         assert_eq!(plugin_row_state(&released), RowState::Failed);
     }
 
     #[test]
     fn payload_sorts_plugins_by_name_case_insensitively_and_marks_running() {
         let mut alpha = plugin("plugin-alpha", "Alpha", "1.0.0", None);
-        alpha.job = job(PluginUpdateState::Queued, None);
+        alpha.job = job(JobState::Queued, None);
         let mut beta = plugin("plugin-beta", "beta", "1.0.0", None);
-        beta.job = job(PluginUpdateState::Failed, Some("No connection to GitHub"));
+        beta.job = job(JobState::Failed, Some("No connection to GitHub"));
         let zed = plugin("plugin-zed", "Zed", "1.0.0", None);
         let state = view(host("3.66.1", None), vec![zed, beta, alpha]);
         let payload = build_updates_payload(&state, SystemTime::UNIX_EPOCH);
@@ -847,7 +833,7 @@ mod tests {
                 host("3.66.1", host_available.then_some("3.67.0")),
                 if *plugin_failed {
                     let mut failed = plugin("plugin-a", "A", "1.0.0", None);
-                    failed.job = job(PluginUpdateState::Failed, Some("No connection to GitHub"));
+                    failed.job = job(JobState::Failed, Some("No connection to GitHub"));
                     vec![failed]
                 } else {
                     Vec::new()
@@ -930,7 +916,7 @@ mod tests {
     #[test]
     fn update_all_plan_orders_plugins_by_name_and_updates_the_host_alone_first() {
         let mut failed = plugin("qol-alt-tab", "Alt Tab", "1.0.0", None);
-        failed.job = job(PluginUpdateState::Failed, Some("No connection to GitHub"));
+        failed.job = job(JobState::Failed, Some("No connection to GitHub"));
         let launcher = plugin("qol-launcher", "Launcher", "1.0.0", Some("1.1.0"));
         let gamma = plugin("plugin-gamma", "Gamma", "1.0.0", Some("1.0.0"));
         let zed = plugin("plugin-zed", "Zed", "1.0.0", Some("2.0.0"));

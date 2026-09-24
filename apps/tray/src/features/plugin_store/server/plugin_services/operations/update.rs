@@ -5,7 +5,7 @@ use super::super::super::types::{AppState, UninstallResult};
 use super::{failed_uninstall_result, source_for, success_uninstall_result};
 
 pub(super) async fn update_plugin(state: &AppState, id: &str) -> UninstallResult {
-    match state.begin_plugin_update(id) {
+    match crate::updates::jobs::start(id) {
         Ok(()) => run_plugin_update(state, id).await,
         Err(message) => failed_uninstall_result(message),
     }
@@ -16,19 +16,19 @@ pub(super) async fn run_plugin_update(state: &AppState, id: &str) -> UninstallRe
     let source = match source_for(id) {
         Ok(source) => source,
         Err((_, message)) => {
-            state.fail_plugin_update(id, message.clone());
+            crate::updates::jobs::fail(id, message.clone());
             return failed_uninstall_result(message);
         }
     };
     let installer = PluginInstaller::new(state.plugins_dir.clone());
     if let Err(error) = installer.update(&source, id).await {
         log::error!("Failed to update plugin {}: {}", id, error);
-        state.fail_plugin_update(id, crate::updates::plain_update_failure(&error));
+        crate::updates::jobs::fail(id, crate::updates::plain_update_failure(&error));
         return failed_uninstall_result(format!("Update failed: {:#}", error));
     }
     update_cached_version(state, id);
     reload_plugin_and_notify(state, id);
-    state.clear_plugin_update(id);
+    crate::updates::jobs::finish(id);
     log::info!("Plugin {} updated successfully", id);
     success_uninstall_result("Updated successfully")
 }

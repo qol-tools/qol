@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime};
 
+pub(crate) mod jobs;
 pub(crate) mod platform;
 pub mod version;
 
 static LATEST_VERSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static UPDATE_STATE: OnceLock<Mutex<UpdateState>> = OnceLock::new();
-static HOST_UPDATE_STATE: OnceLock<Mutex<HostUpdateState>> = OnceLock::new();
 static TRAY_START: OnceLock<SystemTime> = OnceLock::new();
 static UPDATED_FROM: OnceLock<String> = OnceLock::new();
 
@@ -33,13 +33,6 @@ struct UpdateState {
     update_found: bool,
 }
 
-struct HostUpdateState {
-    queued: bool,
-    running: bool,
-    progress: Option<u8>,
-    error: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -57,14 +50,6 @@ pub struct CheckHealth {
     pub last_attempt: Option<SystemTime>,
     pub last_success: Option<SystemTime>,
     pub last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostUpdateStatus {
-    pub queued: bool,
-    pub running: bool,
-    pub progress: Option<u8>,
-    pub error: Option<String>,
 }
 
 pub fn current_version() -> &'static str {
@@ -129,23 +114,6 @@ pub fn check_health() -> CheckHealth {
             last_attempt: None,
             last_success: None,
             last_error: None,
-        },
-    }
-}
-
-pub fn host_update_status() -> HostUpdateStatus {
-    match lock_host_update_state() {
-        Some(state) => HostUpdateStatus {
-            queued: state.queued,
-            running: state.running,
-            progress: state.progress,
-            error: state.error.clone(),
-        },
-        None => HostUpdateStatus {
-            queued: false,
-            running: false,
-            progress: None,
-            error: None,
         },
     }
 }
@@ -368,50 +336,18 @@ fn github_status_in(text: &str) -> Option<u16> {
 pub(crate) struct HostUpdateLease(());
 
 pub(crate) fn claim_host_update() -> Result<HostUpdateLease, String> {
-    let Some(mut state) = lock_host_update_state() else {
-        return Err("The update state is unavailable".to_string());
-    };
-    if state.running {
-        return Err(UPDATE_ALREADY_RUNNING.to_string());
-    }
-    state.running = true;
-    state.queued = false;
-    state.progress = None;
-    state.error = None;
+    jobs::start(jobs::HOST_ID)?;
     Ok(HostUpdateLease(()))
 }
 
 impl Drop for HostUpdateLease {
     fn drop(&mut self) {
-        if let Some(mut state) = lock_host_update_state() {
-            state.running = false;
-            state.progress = None;
-        }
-    }
-}
-
-pub(crate) fn mark_host_update_queued() {
-    if let Some(mut state) = lock_host_update_state() {
-        state.queued = true;
-    }
-}
-
-pub(crate) fn clear_host_update_queued() {
-    if let Some(mut state) = lock_host_update_state() {
-        state.queued = false;
+        jobs::release(jobs::HOST_ID);
     }
 }
 
 fn record_update_progress(percent: u8) {
-    if let Some(mut state) = lock_host_update_state() {
-        state.progress = Some(percent);
-    }
-}
-
-fn record_update_error(message: String) {
-    if let Some(mut state) = lock_host_update_state() {
-        state.error = Some(message);
-    }
+    jobs::set_progress(jobs::HOST_ID, percent);
 }
 
 fn lock_latest_version() -> Option<MutexGuard<'static, Option<String>>> {
@@ -440,16 +376,6 @@ fn lock_update_state() -> Option<MutexGuard<'static, UpdateState>> {
     }
 }
 
-fn lock_host_update_state() -> Option<MutexGuard<'static, HostUpdateState>> {
-    match host_update_state().lock() {
-        Ok(guard) => Some(guard),
-        Err(error) => {
-            log::error!("Host update state lock is poisoned: {}", error);
-            None
-        }
-    }
-}
-
 fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -469,17 +395,6 @@ fn update_state() -> &'static Mutex<UpdateState> {
             checking: false,
             etag: None,
             update_found: false,
-        })
-    })
-}
-
-fn host_update_state() -> &'static Mutex<HostUpdateState> {
-    HOST_UPDATE_STATE.get_or_init(|| {
-        Mutex::new(HostUpdateState {
-            queued: false,
-            running: false,
-            progress: None,
-            error: None,
         })
     })
 }
@@ -507,7 +422,7 @@ pub(crate) async fn run_host_update(
     let result = platform::download_and_install(events).await;
     if let Err(error) = &result {
         log::error!("Self-update failed: {error:#}");
-        record_update_error(plain_update_failure(error));
+        jobs::fail(jobs::HOST_ID, plain_update_failure(error));
     }
     drop(lease);
     result
