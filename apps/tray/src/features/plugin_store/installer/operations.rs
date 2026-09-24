@@ -23,7 +23,7 @@ pub(super) async fn install(
     } else {
         ensure_not_installed(&plan.target_dir, plugin_id)?;
     }
-    let result = install_plugin(plugins_dir, &plan).await;
+    let result = install_plugin(&plan).await;
     finish_with_cleanup(&plan.clone_dir, &plan.extracted_dir, result).await
 }
 
@@ -84,7 +84,7 @@ pub(super) async fn update(
     let install_source = resolve_install_source(source, plugin_id, install_source).await?;
     let plan = UpdatePlan::new(plugins_dir, source, plugin_id, install_source);
     ensure_installed(&plan.plugin_dir, plugin_id)?;
-    let result = update_plugin(plugins_dir, &plan).await;
+    let result = update_plugin(&plan).await;
     finish_with_cleanup(&plan.clone_dir, &plan.extracted_dir, result).await
 }
 
@@ -167,7 +167,7 @@ fn extracted_plugin_path(clone_dir: &Path) -> PathBuf {
     parent.join(name)
 }
 
-async fn install_plugin(plugins_dir: &Path, plan: &InstallPlan<'_>) -> Result<()> {
+async fn install_plugin(plan: &InstallPlan<'_>) -> Result<()> {
     clone_source_repo(
         plan.source,
         &plan.clone_dir,
@@ -183,13 +183,13 @@ async fn install_plugin(plugins_dir: &Path, plan: &InstallPlan<'_>) -> Result<()
         &plan.install_source,
     )
     .await?;
-    validate_staged_contract(&plan.extracted_dir, plugins_dir)?;
+    validate_staged_contract(&plan.extracted_dir, &load_installed_registry()?)?;
     finalize_install(&plan.extracted_dir, &plan.target_dir).await?;
     log::info!("Plugin {} installed successfully", plan.plugin_id);
     Ok(())
 }
 
-async fn update_plugin(plugins_dir: &Path, plan: &UpdatePlan<'_>) -> Result<()> {
+async fn update_plugin(plan: &UpdatePlan<'_>) -> Result<()> {
     log::info!(
         "Updating plugin {} from source {} ({})",
         plan.plugin_id,
@@ -211,7 +211,7 @@ async fn update_plugin(plugins_dir: &Path, plan: &UpdatePlan<'_>) -> Result<()> 
         &plan.install_source,
     )
     .await?;
-    validate_staged_contract(&plan.extracted_dir, plugins_dir)?;
+    validate_staged_contract(&plan.extracted_dir, &load_installed_registry()?)?;
     swap_plugin_dirs(&plan.plugin_dir, &plan.extracted_dir, &plan.backup_dir).await?;
     log::info!("Plugin {} updated successfully", plan.plugin_id);
     Ok(())
@@ -254,7 +254,15 @@ async fn finish_with_cleanup(
     result
 }
 
-fn validate_staged_contract(staging_dir: &Path, plugins_dir: &Path) -> Result<()> {
+fn load_installed_registry() -> Result<crate::plugins::registry::Registry> {
+    let config_dir = crate::paths::shared_config_dir()?;
+    crate::plugins::registry::load_registry(&config_dir).map_err(anyhow::Error::msg)
+}
+
+fn validate_staged_contract(
+    staging_dir: &Path,
+    registry: &crate::plugins::registry::Registry,
+) -> Result<()> {
     let manifest = crate::plugins::manifest::PluginManifest::load_and_validate(
         staging_dir.join("plugin.toml"),
     )?;
@@ -265,7 +273,7 @@ fn validate_staged_contract(staging_dir: &Path, plugins_dir: &Path) -> Result<()
         .clone()
         .unwrap_or_else(|| crate::plugins::PluginUid::new(staged_id.as_str()));
     if let Some(installed_id) =
-        installed_plugin_with_uid(plugins_dir, staged_uid.as_str(), staged_id.as_str())
+        installed_plugin_with_uid(registry, staged_uid.as_str(), staged_id.as_str())
     {
         anyhow::bail!(
             "Cannot install plugin {}: uid {} is already installed as plugin {}",
@@ -277,39 +285,25 @@ fn validate_staged_contract(staging_dir: &Path, plugins_dir: &Path) -> Result<()
     Ok(())
 }
 
-fn installed_plugin_with_uid(plugins_dir: &Path, uid: &str, staged_id: &str) -> Option<String> {
-    for entry in std::fs::read_dir(plugins_dir).ok()?.filter_map(|e| e.ok()) {
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        if name == staged_id
-            || qol_migrations::renamed_plugin_id(&name) == Some(staged_id)
-            || name.starts_with('.')
-            || name.ends_with(".backup")
-        {
-            continue;
-        }
-        let path = entry.path();
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !metadata.is_dir() {
-            continue;
-        }
-        let Ok(manifest) = crate::plugins::manifest::PluginManifest::read_from_dir(&path) else {
-            continue;
-        };
-        let installed_uid = manifest
-            .plugin
-            .uid
-            .as_ref()
-            .map(|u| u.as_str())
-            .unwrap_or(name.as_str());
-        if installed_uid == uid {
-            return Some(name);
-        }
-    }
-    None
+fn installed_plugin_with_uid<'a>(
+    registry: &'a crate::plugins::registry::Registry,
+    uid: &str,
+    staged_id: &str,
+) -> Option<&'a str> {
+    registry
+        .entries
+        .iter()
+        .filter(|entry| entry.id != staged_id)
+        .find(|entry| {
+            let Ok(manifest) =
+                crate::plugins::manifest::PluginManifest::read_from_dir(&entry.active.path)
+            else {
+                return false;
+            };
+            let installed_uid = manifest.plugin.uid.as_ref().map(|u| u.as_str());
+            installed_uid.unwrap_or(entry.id.as_str()) == uid
+        })
+        .map(|entry| entry.id.as_str())
 }
 
 async fn finalize_install(staging_dir: &Path, target_dir: &Path) -> Result<()> {
@@ -413,15 +407,33 @@ mod tests {
         std::fs::write(dir.join("plugin.toml"), manifest).unwrap();
     }
 
+    fn registry_of(entries: &[(&str, &Path)]) -> crate::plugins::registry::Registry {
+        crate::plugins::registry::Registry {
+            entries: entries
+                .iter()
+                .map(|(id, path)| crate::plugins::registry::Entry {
+                    id: id.to_string(),
+                    active: crate::plugins::registry::Slot {
+                        path: path.to_path_buf(),
+                        source: crate::plugins::registry::SlotSource::ReleaseAsset,
+                    },
+                    fallback: None,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn staged_uid_installed_under_a_different_id_is_refused() {
         let temp = TempDir::new().unwrap();
-        let plugins_dir = temp.path().join("plugins");
-        let staged = plugins_dir.join(".qol-lights.installing");
-        write_manifest(&plugins_dir.join("qol-lights"), "qol-lights", "u-lights");
+        let installed = temp.path().join("qol-lights");
+        let staged = temp.path().join(".qol-lights.installing");
+        write_manifest(&installed, "qol-lights", "u-lights");
         write_manifest(&staged, "plugin-lights", "u-lights");
+        let registry = registry_of(&[("qol-lights", &installed)]);
 
-        let err = validate_staged_contract(&staged, &plugins_dir).unwrap_err();
+        let err = validate_staged_contract(&staged, &registry).unwrap_err();
         let msg = format!("{}", err);
         assert!(
             msg.contains("plugin-lights"),
@@ -436,38 +448,41 @@ mod tests {
     #[test]
     fn staged_uid_matching_installed_id_is_allowed() {
         let temp = TempDir::new().unwrap();
-        let plugins_dir = temp.path().join("plugins");
-        let staged = plugins_dir.join(".qol-lights.updating");
-        write_manifest(&plugins_dir.join("qol-lights"), "qol-lights", "u-lights");
+        let installed = temp.path().join("qol-lights");
+        let staged = temp.path().join(".qol-lights.updating");
+        write_manifest(&installed, "qol-lights", "u-lights");
         write_manifest(&staged, "qol-lights", "u-lights");
+        let registry = registry_of(&[("qol-lights", &installed)]);
 
-        validate_staged_contract(&staged, &plugins_dir).unwrap();
+        validate_staged_contract(&staged, &registry).unwrap();
     }
 
     #[test]
-    fn staged_uid_left_behind_under_its_pre_rename_id_is_allowed() {
+    fn staged_uid_in_a_folder_the_registry_does_not_list_is_allowed() {
         let temp = TempDir::new().unwrap();
-        let plugins_dir = temp.path().join("plugins");
-        let staged = plugins_dir.join(".qol-alt-tab.updating");
-        write_manifest(&plugins_dir.join("qol-alt-tab"), "qol-alt-tab", "u-alt-tab");
+        let installed = temp.path().join("qol-alt-tab");
+        let staged = temp.path().join(".qol-alt-tab.updating");
+        write_manifest(&installed, "qol-alt-tab", "u-alt-tab");
         write_manifest(
-            &plugins_dir.join("plugin-alt-tab"),
+            &temp.path().join("plugin-alt-tab"),
             "plugin-alt-tab",
             "u-alt-tab",
         );
         write_manifest(&staged, "qol-alt-tab", "u-alt-tab");
+        let registry = registry_of(&[("qol-alt-tab", &installed)]);
 
-        validate_staged_contract(&staged, &plugins_dir).unwrap();
+        validate_staged_contract(&staged, &registry).unwrap();
     }
 
     #[test]
     fn staged_uid_not_installed_is_allowed() {
         let temp = TempDir::new().unwrap();
-        let plugins_dir = temp.path().join("plugins");
-        let staged = plugins_dir.join(".qol-lights.installing.123");
-        write_manifest(&plugins_dir.join("qol-lights"), "qol-lights", "u-lights");
+        let installed = temp.path().join("qol-lights");
+        let staged = temp.path().join(".qol-lights.installing.123");
+        write_manifest(&installed, "qol-lights", "u-lights");
         write_manifest(&staged, "qol-other", "u-other");
+        let registry = registry_of(&[("qol-lights", &installed)]);
 
-        validate_staged_contract(&staged, &plugins_dir).unwrap();
+        validate_staged_contract(&staged, &registry).unwrap();
     }
 }
