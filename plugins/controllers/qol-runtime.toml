@@ -3,6 +3,12 @@ schema_version = 1
 [action.apply_fixes]
 description = "Apply fixes only when they match a controller's active driver"
 
+[action.reclaim_controller]
+description = "Reset the Bluetooth link of a controller whose driver stopped responding"
+
+[action.stop_holder_and_reclaim]
+description = "Stop the process holding a stuck controller's raw HID device, then reset its Bluetooth link"
+
 [query.controllers_snapshot]
 description = "One coherent controller inventory and health snapshot"
 poll_interval_ms = 3000

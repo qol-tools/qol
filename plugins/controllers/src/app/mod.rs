@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_plugin_daemon::notification::send_notification;
 
+use crate::detection::clash::{classify, holders_label, LinkEvidence, LinkState};
 use crate::fixes::apply;
 use crate::fixes::state::{compute, FixState, SystemPaths};
 use crate::fixes::{match_device, match_devices, DetectedDevice};
@@ -16,6 +17,8 @@ const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
 };
 
 const SNAPSHOT_COHERENCE_WINDOW: Duration = Duration::from_secs(1);
+const HOLDER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const HOLDER_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 static NEXT_SNAPSHOT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
@@ -29,6 +32,8 @@ pub struct ControllerRow {
     pub virtual_device: bool,
     pub has_force_feedback: bool,
     pub fix_state: Option<FixState>,
+    pub link: Option<LinkEvidence>,
+    pub link_state: LinkState,
 }
 
 #[derive(Clone)]
@@ -75,23 +80,34 @@ struct DaemonRuntime {
 pub fn snapshot() -> ControllerSnapshot {
     let paths = SystemPaths::real();
     let devices = platform::read_devices();
+    let links = platform::link_evidence(&devices);
     ControllerSnapshot {
         id: NEXT_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed),
-        rows: build_rows(&paths, &devices),
+        rows: build_rows(&paths, &devices, &links),
     }
 }
 
-fn build_rows(paths: &SystemPaths, devices: &[DetectedDevice]) -> Vec<ControllerRow> {
+fn build_rows(
+    paths: &SystemPaths,
+    devices: &[DetectedDevice],
+    links: &[Option<LinkEvidence>],
+) -> Vec<ControllerRow> {
     devices
         .iter()
-        .filter(|device| device.is_gamepad)
-        .map(|device| build_row(paths, device))
+        .enumerate()
+        .filter(|(_, device)| device.is_gamepad)
+        .map(|(index, device)| build_row(paths, device, links.get(index).cloned().flatten()))
         .collect()
 }
 
-fn build_row(paths: &SystemPaths, device: &DetectedDevice) -> ControllerRow {
+fn build_row(
+    paths: &SystemPaths,
+    device: &DetectedDevice,
+    link: Option<LinkEvidence>,
+) -> ControllerRow {
+    let link_state = link.as_ref().map(classify).unwrap_or(LinkState::Ok);
     let Some(target) = match_device(device) else {
-        return capability_row(device);
+        return capability_row(device, link, link_state);
     };
     let state = compute(paths, &target);
     let (verdict, fixable) = match state {
@@ -107,15 +123,42 @@ fn build_row(paths: &SystemPaths, device: &DetectedDevice) -> ControllerRow {
         transport: device.transport(),
         driver: device.driver_label().to_string(),
         version: device.version_label(),
-        verdict,
+        verdict: apply_link_verdict(verdict, link.as_ref(), link_state),
         fixable,
         virtual_device: device.is_virtual(),
         has_force_feedback: device.has_force_feedback,
         fix_state: Some(state),
+        link,
+        link_state,
     }
 }
 
-fn capability_row(device: &DetectedDevice) -> ControllerRow {
+fn apply_link_verdict(verdict: String, link: Option<&LinkEvidence>, state: LinkState) -> String {
+    let Some(link) = link else {
+        return verdict;
+    };
+    match state {
+        LinkState::Contended => format!(
+            "Not responding: {} holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+            holders_label(&link.holders)
+        ),
+        LinkState::Stalled => format!(
+            "Not responding: the driver timed out {} times in the last minute. Reconnect it.",
+            link.driver_timeouts
+        ),
+        LinkState::Shared => format!(
+            "{verdict}; shared with {}",
+            holders_label(&link.holders)
+        ),
+        LinkState::Ok => verdict,
+    }
+}
+
+fn capability_row(
+    device: &DetectedDevice,
+    link: Option<LinkEvidence>,
+    link_state: LinkState,
+) -> ControllerRow {
     let verdict = if device.has_force_feedback {
         "Input and rumble available"
     } else {
@@ -126,11 +169,13 @@ fn capability_row(device: &DetectedDevice) -> ControllerRow {
         transport: device.transport(),
         driver: device.driver_label().to_string(),
         version: device.version_label(),
-        verdict: verdict.to_string(),
+        verdict: apply_link_verdict(verdict.to_string(), link.as_ref(), link_state),
         fixable: false,
         virtual_device: device.is_virtual(),
         has_force_feedback: device.has_force_feedback,
         fix_state: None,
+        link,
+        link_state,
     }
 }
 
@@ -149,6 +194,8 @@ fn is_supported_action(action: &str) -> bool {
             | "controllers_status"
             | "list_controllers"
             | "controller_input"
+            | "reclaim_controller"
+            | "stop_holder_and_reclaim"
     )
 }
 
@@ -168,6 +215,8 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
             Ok(()) => ReadResult::Handled,
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
+        "reclaim_controller" => complete_reclaim(runtime, false),
+        "stop_holder_and_reclaim" => complete_reclaim(runtime, true),
         "status" | "controllers_snapshot" | "controllers_status" | "list_controllers" => {
             let snapshot = runtime.snapshots.current();
             ReadResult::HandledWithData(snapshot_payload(&snapshot))
@@ -179,9 +228,94 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
     }
 }
 
+fn complete_reclaim(runtime: &mut DaemonRuntime, stop_holders: bool) -> ReadResult<()> {
+    match reclaim(stop_holders) {
+        Ok(message) => {
+            runtime.snapshots.invalidate();
+            send_notification("Controllers", &message);
+            ReadResult::Handled
+        }
+        Err(error) => ReadResult::Error(format!("{error:#}")),
+    }
+}
+
+fn reclaim(stop_holders: bool) -> Result<String> {
+    let devices = platform::read_devices();
+    let links = platform::link_evidence(&devices);
+    let mut messages = Vec::new();
+    for (device, link) in devices.iter().zip(links) {
+        if device.transport() != "Bluetooth" {
+            continue;
+        }
+        let Some(evidence) = link else {
+            continue;
+        };
+        if !state_needs_reclaim(classify(&evidence)) {
+            continue;
+        }
+        if stop_holders && !evidence.holders.is_empty() {
+            for holder in &evidence.holders {
+                platform::stop_process(holder.pid)?;
+            }
+            if !wait_for_holders_to_release(device) {
+                bail!(
+                    "{} still holds {}",
+                    holders_label(&evidence.holders),
+                    device.name
+                );
+            }
+        }
+        let adapter = platform::disconnect_bluetooth(device)?;
+        messages.push(format!(
+            "Disconnected {} on {}. Press Home on the controller to reconnect.",
+            device.name, adapter
+        ));
+    }
+    if messages.is_empty() {
+        bail!("no controller needs reconnecting");
+    }
+    Ok(messages.join(" "))
+}
+
+fn wait_for_holders_to_release(device: &DetectedDevice) -> bool {
+    let deadline = Instant::now() + HOLDER_RELEASE_TIMEOUT;
+    loop {
+        if platform::hidraw_holders(device).is_empty() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(HOLDER_RELEASE_POLL_INTERVAL);
+    }
+}
+
+fn state_needs_reclaim(state: LinkState) -> bool {
+    matches!(state, LinkState::Contended | LinkState::Stalled)
+}
+
+fn is_not_responding(row: &ControllerRow) -> bool {
+    state_needs_reclaim(row.link_state)
+}
+
+fn is_bluetooth(row: &ControllerRow) -> bool {
+    row.transport == "Bluetooth"
+}
+
+fn reclaimable(row: &ControllerRow) -> bool {
+    is_not_responding(row) && is_bluetooth(row)
+}
+
+fn holder_stoppable(row: &ControllerRow) -> bool {
+    row.link_state == LinkState::Contended && is_bluetooth(row)
+}
+
 fn aggregate_state(rows: &[ControllerRow]) -> &'static str {
     if rows.is_empty() {
         return "none";
+    }
+    if rows.iter().any(is_not_responding) {
+        return "not_responding";
     }
     if rows.iter().any(|row| row.fixable) {
         return "optional_fix";
@@ -193,7 +327,7 @@ pub fn snapshot_payload(snapshot: &ControllerSnapshot) -> serde_json::Value {
     let message = snapshot
         .rows
         .iter()
-        .filter(|row| row.fixable)
+        .filter(|row| row.fixable || is_not_responding(row))
         .map(|row| format!("{}: {}", row.name, row.verdict))
         .collect::<Vec<_>>()
         .join("; ");
@@ -210,6 +344,14 @@ pub fn snapshot_payload(snapshot: &ControllerSnapshot) -> serde_json::Value {
                 "fixable": row.fixable,
                 "virtual": row.virtual_device,
                 "force_feedback": row.has_force_feedback,
+                "link": row.link_state.name(),
+                "holders": row
+                    .link
+                    .as_ref()
+                    .map(|link| holders_label(&link.holders))
+                    .unwrap_or_default(),
+                "reclaimable": reclaimable(row),
+                "holder_stoppable": holder_stoppable(row),
             })
         })
         .collect::<Vec<_>>();
@@ -349,6 +491,7 @@ pub fn execute_action_once(action: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detection::clash;
 
     fn row(name: &str, fixable: bool, fix_state: Option<FixState>) -> ControllerRow {
         ControllerRow {
@@ -361,6 +504,22 @@ mod tests {
             virtual_device: false,
             has_force_feedback: false,
             fix_state,
+            link: None,
+            link_state: LinkState::Ok,
+        }
+    }
+
+    fn linked_row(
+        name: &str,
+        transport: &'static str,
+        link: LinkEvidence,
+        link_state: LinkState,
+    ) -> ControllerRow {
+        ControllerRow {
+            transport,
+            link: Some(link),
+            link_state,
+            ..row(name, false, None)
         }
     }
 
@@ -390,6 +549,8 @@ mod tests {
             ("controllers_status", true),
             ("list_controllers", true),
             ("controller_input", true),
+            ("reclaim_controller", true),
+            ("stop_holder_and_reclaim", true),
             ("bogus", false),
         ];
         for (action, known) in cases {
@@ -419,7 +580,7 @@ mod tests {
 
     #[test]
     fn aggregate_state_reports_only_active_optional_fixes() {
-        let cases: [(&str, Vec<ControllerRow>, &str); 3] = [
+        let cases: [(&str, Vec<ControllerRow>, &str); 4] = [
             ("empty is none", vec![], "none"),
             (
                 "detected controllers are healthy",
@@ -430,6 +591,23 @@ mod tests {
                 "active optional fix needs attention",
                 vec![row("pad", true, Some(FixState::Pending))],
                 "optional_fix",
+            ),
+            (
+                "a contended controller needs attention first",
+                vec![linked_row(
+                    "pad",
+                    "Bluetooth",
+                    LinkEvidence {
+                        driver_timeouts: clash::TIMEOUT_THRESHOLD,
+                        holders: vec![clash::Holder {
+                            pid: 4242,
+                            name: "steam".into(),
+                        }],
+                        ..Default::default()
+                    },
+                    LinkState::Contended,
+                )],
+                "not_responding",
             ),
         ];
         for (label, rows, expected) in cases {
@@ -458,6 +636,10 @@ mod tests {
                     "fixable": false,
                     "virtual": false,
                     "force_feedback": false,
+                    "link": "ok",
+                    "holders": "",
+                    "reclaimable": false,
+                    "holder_stoppable": false,
                 }],
             })
         );
@@ -560,7 +742,7 @@ mod tests {
         let native = device(Some("hid-generic"), false, false);
         let xpadneo = device(Some("xpadneo"), false, true);
         let virtual_pad = device(None, true, true);
-        let rows = build_rows(&paths, &[native, xpadneo, virtual_pad]);
+        let rows = build_rows(&paths, &[native, xpadneo, virtual_pad], &[]);
 
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].driver, "hid-generic");
@@ -581,7 +763,115 @@ mod tests {
             is_gamepad: false,
             ..device(Some("hid-generic"), false, false)
         };
-        assert!(build_rows(&paths, &[non_gamepad]).is_empty());
+        assert!(build_rows(&paths, &[non_gamepad], &[]).is_empty());
+    }
+
+    #[test]
+    fn link_state_overrides_verdict_and_gates_row_actions() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let paths = SystemPaths {
+            modprobe_dir: Some(root.path().join("modprobe.d")),
+            sys_module_dir: Some(root.path().join("module")),
+        };
+        let steam = clash::Holder {
+            pid: 4242,
+            name: "steam".into(),
+        };
+        let cases = [
+            (
+                "ok",
+                0x0005,
+                LinkEvidence::default(),
+                LinkState::Ok,
+                "Input available; no kernel rumble interface",
+                "",
+                false,
+                false,
+            ),
+            (
+                "shared",
+                0x0005,
+                LinkEvidence {
+                    holders: vec![steam.clone()],
+                    ..Default::default()
+                },
+                LinkState::Shared,
+                "Input available; no kernel rumble interface; shared with steam (pid 4242)",
+                "steam (pid 4242)",
+                false,
+                false,
+            ),
+            (
+                "contended",
+                0x0005,
+                LinkEvidence {
+                    driver_timeouts: clash::TIMEOUT_THRESHOLD,
+                    sticks_pinned: Some(true),
+                    holders: vec![steam.clone()],
+                },
+                LinkState::Contended,
+                "Not responding: steam (pid 4242) holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+                "steam (pid 4242)",
+                true,
+                true,
+            ),
+            (
+                "stalled",
+                0x0005,
+                LinkEvidence {
+                    driver_timeouts: clash::TIMEOUT_THRESHOLD,
+                    sticks_pinned: Some(false),
+                    holders: vec![],
+                },
+                LinkState::Stalled,
+                "Not responding: the driver timed out 5 times in the last minute. Reconnect it.",
+                "",
+                true,
+                false,
+            ),
+            (
+                "usb contention is not reclaimable",
+                0x0003,
+                LinkEvidence {
+                    driver_timeouts: clash::TIMEOUT_THRESHOLD,
+                    holders: vec![steam.clone()],
+                    ..Default::default()
+                },
+                LinkState::Contended,
+                "Not responding: steam (pid 4242) holds the raw device. Quit it or turn off Steam Input for Switch controllers, then reconnect.",
+                "steam (pid 4242)",
+                false,
+                false,
+            ),
+        ];
+        for (label, bus, link, state, verdict, holders, reclaimable, holder_stoppable) in cases {
+            let pad = DetectedDevice {
+                bus,
+                ..device(Some("hid-generic"), false, false)
+            };
+            let rows = build_rows(&paths, &[pad], &[Some(link)]);
+            assert_eq!(rows[0].link_state, state, "case: {label}");
+            assert_eq!(rows[0].verdict, verdict, "case: {label}");
+            let not_responding = matches!(state, LinkState::Contended | LinkState::Stalled);
+            let expected_message = if not_responding {
+                format!("GuliKit Controller XW: {verdict}")
+            } else {
+                String::new()
+            };
+            let payload = snapshot_payload(&ControllerSnapshot { id: 1, rows });
+            let expected_state = if not_responding {
+                "not_responding"
+            } else {
+                "ok"
+            };
+            assert_eq!(payload["state"], expected_state, "case: {label}");
+            assert_eq!(payload["message"], expected_message, "case: {label}");
+            let item = &payload["items"][0];
+            assert_eq!(item["link"], state.name(), "case: {label}");
+            assert_eq!(item["holders"], holders, "case: {label}");
+            assert_eq!(item["reclaimable"], reclaimable, "case: {label}");
+            assert_eq!(item["holder_stoppable"], holder_stoppable, "case: {label}");
+        }
     }
 
     #[test]

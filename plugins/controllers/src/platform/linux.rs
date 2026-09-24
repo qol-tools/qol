@@ -4,9 +4,11 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use anyhow::{bail, Context, Result};
 use evdev::{AbsInfo, AbsoluteAxisCode, Device, KeyCode};
 
 use crate::detection;
+use crate::detection::clash::{self, Holder, LinkEvidence};
 use crate::fixes::{DetectedDevice, Mac};
 use crate::platform::{
     NativeAdapter, NativeButtonInput, NativeConnection, NativeControllerInput, NativeGamepadAxis,
@@ -16,6 +18,8 @@ use crate::platform::{
 const INPUT_DEVICES_PATH: &str = "/proc/bus/input/devices";
 const SYSFS_ROOT: &str = "/sys";
 const INPUT_DEVICE_ROOT: &str = "/dev/input";
+const HID_RAW_DEVICE_ROOT: &str = "/dev";
+const KERNEL_LOG_WINDOW: &str = "-60s";
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SIGNAL_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const SIGNAL_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -481,9 +485,13 @@ fn is_bluetooth_adapter_name(name: &str) -> bool {
     })
 }
 
-fn bluez_device_connected(adapter: &str, address: Mac) -> bool {
+fn bluez_device_path(adapter: &str, address: Mac) -> String {
     let address = address.to_string().to_ascii_uppercase().replace(':', "_");
-    let object_path = format!("/org/bluez/{adapter}/dev_{address}");
+    format!("/org/bluez/{adapter}/dev_{address}")
+}
+
+fn bluez_device_connected(adapter: &str, address: Mac) -> bool {
+    let object_path = bluez_device_path(adapter, address);
     let output = Command::new("busctl")
         .args([
             "--system",
@@ -510,12 +518,7 @@ fn bluetooth_rssi(target: &BluetoothTarget) -> Option<NativeSignal> {
 
 fn bluez_advertised_rssi(target: &BluetoothTarget) -> Option<i16> {
     let adapter = target.adapter.as_deref()?;
-    let address = target
-        .address
-        .to_string()
-        .to_ascii_uppercase()
-        .replace(':', "_");
-    let object_path = format!("/org/bluez/{adapter}/dev_{address}");
+    let object_path = bluez_device_path(adapter, target.address);
     let output = Command::new("busctl")
         .args([
             "--system",
@@ -709,10 +712,253 @@ fn driver_name(sysfs_root: &Path, sysfs_path: &str) -> Option<String> {
     link.file_name()?.to_str().map(str::to_string)
 }
 
+pub fn link_evidence(devices: &[DetectedDevice]) -> Vec<Option<LinkEvidence>> {
+    let candidates = devices.iter().map(link_candidate).collect::<Vec<_>>();
+    if candidates.iter().all(Option::is_none) {
+        return vec![None; devices.len()];
+    }
+    let log = kernel_log();
+    devices
+        .iter()
+        .zip(candidates)
+        .map(|(device, candidate)| {
+            let hid_id = candidate?;
+            Some(LinkEvidence {
+                driver_timeouts: clash::count_input_timeouts(&log, hid_id),
+                sticks_pinned: stick_pinning(device),
+                holders: hidraw_holders(device),
+            })
+        })
+        .collect()
+}
+
+fn link_candidate(device: &DetectedDevice) -> Option<&str> {
+    if !device.is_gamepad || device.is_virtual() {
+        return None;
+    }
+    clash::hid_id(device.sysfs_path.as_deref()?)
+}
+
+fn stick_pinning(device: &DetectedDevice) -> Option<bool> {
+    let handler = device.event_handler.as_deref()?;
+    let input = Device::open(Path::new(INPUT_DEVICE_ROOT).join(handler)).ok()?;
+    let axes = input.get_absinfo().ok()?.collect::<HashMap<_, _>>();
+    let readings = [
+        AbsoluteAxisCode::ABS_X,
+        AbsoluteAxisCode::ABS_Y,
+        AbsoluteAxisCode::ABS_RX,
+        AbsoluteAxisCode::ABS_RY,
+    ]
+    .into_iter()
+    .filter_map(|code| {
+        let info = axes.get(&code)?;
+        Some(clash::AxisReading {
+            value: info.value(),
+            minimum: info.minimum(),
+            maximum: info.maximum(),
+        })
+    })
+    .collect::<Vec<_>>();
+    clash::sticks_pinned(&readings)
+}
+
+fn kernel_log() -> String {
+    Command::new("journalctl")
+        .arg("-k")
+        .arg("-b")
+        .arg(format!("--since={KERNEL_LOG_WINDOW}"))
+        .arg("-o")
+        .arg("cat")
+        .arg("--no-pager")
+        .arg("-q")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+pub fn hidraw_holders(device: &DetectedDevice) -> Vec<Holder> {
+    let Some(sysfs_path) = device.sysfs_path.as_deref() else {
+        return Vec::new();
+    };
+    let Some(hid_id) = clash::hid_id(sysfs_path) else {
+        return Vec::new();
+    };
+    hidraw_holders_in(
+        Path::new("/proc"),
+        Path::new(SYSFS_ROOT),
+        sysfs_path,
+        hid_id,
+    )
+}
+
+fn hidraw_holders_in(
+    proc_root: &Path,
+    sysfs_root: &Path,
+    sysfs_path: &str,
+    hid_id: &str,
+) -> Vec<Holder> {
+    let nodes = hidraw_nodes(sysfs_root, sysfs_path, hid_id);
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    let targets = nodes
+        .iter()
+        .map(|node| format!("{HID_RAW_DEVICE_ROOT}/{node}"))
+        .collect::<HashSet<_>>();
+    let mut holders = HashMap::new();
+    let self_pid = std::process::id();
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        return Vec::new();
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == self_pid {
+            continue;
+        }
+        if !process_holds_raw_device(&entry.path(), &targets) {
+            continue;
+        }
+        let name = read_trimmed(entry.path().join("comm")).unwrap_or_default();
+        holders.insert(pid, Holder { pid, name });
+    }
+    let mut holders = holders.into_values().collect::<Vec<_>>();
+    holders.sort_by_key(|holder| holder.pid);
+    holders
+}
+
+fn process_holds_raw_device(process_root: &Path, targets: &HashSet<String>) -> bool {
+    let Ok(entries) = std::fs::read_dir(process_root.join("fd")) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        std::fs::read_link(entry.path())
+            .ok()
+            .is_some_and(|link| targets.contains(link.to_string_lossy().as_ref()))
+    })
+}
+
+fn hidraw_nodes(sysfs_root: &Path, sysfs_path: &str, hid_id: &str) -> Vec<String> {
+    let Some(hid_dir) = hid_directory(sysfs_path, hid_id) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(sysfs_root.join(hid_dir).join("hidraw")) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect()
+}
+
+fn hid_directory<'a>(sysfs_path: &'a str, hid_id: &str) -> Option<&'a str> {
+    let start = sysfs_path.find(hid_id)?;
+    let end = start + hid_id.len();
+    let rest = sysfs_path.get(end..)?;
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return None;
+    }
+    sysfs_path.get(..end)?.strip_prefix('/')
+}
+
+pub fn disconnect_bluetooth(device: &DetectedDevice) -> Result<String> {
+    if device.bus != 0x0005 {
+        bail!("{} is not a Bluetooth controller", device.name);
+    }
+    let Some(target) = bluetooth_target(device) else {
+        bail!("{} has no usable Bluetooth address", device.name);
+    };
+    let adapter = target
+        .adapter
+        .or_else(|| connected_bluez_adapter(target.address, Path::new(SYSFS_ROOT)))
+        .with_context(|| {
+            format!(
+                "could not prove which Bluetooth adapter holds {}",
+                device.name
+            )
+        })?;
+    let object_path = bluez_device_path(&adapter, target.address);
+    let output = Command::new("busctl")
+        .args([
+            "--system",
+            "--timeout=5s",
+            "call",
+            "org.bluez",
+            &object_path,
+            "org.bluez.Device1",
+            "Disconnect",
+        ])
+        .output()
+        .context("failed to run busctl")?;
+    if !output.status.success() {
+        bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(adapter)
+}
+
+pub fn stop_process(pid: u32) -> Result<()> {
+    let output = Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .output()
+        .context("failed to run kill")?;
+    if !output.status.success() {
+        bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    fn holder_process(proc_root: &Path, pid: &str, node: &str, comm: &str) {
+        let fd = proc_root.join(pid).join("fd");
+        std::fs::create_dir_all(&fd).expect("fd dir");
+        symlink(format!("/dev/{node}"), fd.join("3")).expect("fd symlink");
+        std::fs::write(proc_root.join(pid).join("comm"), format!("{comm}\n")).expect("comm");
+    }
+
+    #[test]
+    fn bluez_device_path_formats_adapter_and_mac() {
+        assert_eq!(
+            bluez_device_path("hci1", Mac::parse("00:11:22:33:44:55").expect("mac")),
+            "/org/bluez/hci1/dev_00_11_22_33_44_55"
+        );
+    }
+
+    #[test]
+    fn hidraw_holders_reports_only_processes_holding_the_hid_device() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let sysfs = root.path().join("sys");
+        let proc = root.path().join("proc");
+        let sysfs_path =
+            "/devices/pci0000:00/bluetooth/hci0/hci0:256/0005:057E:2009.000F/input/input52";
+        let hidraw =
+            sysfs.join("devices/pci0000:00/bluetooth/hci0/hci0:256/0005:057E:2009.000F/hidraw");
+        std::fs::create_dir_all(&hidraw).expect("hidraw dir");
+        std::fs::write(hidraw.join("hidraw13"), "").expect("hidraw node");
+
+        holder_process(&proc, "4242", "hidraw13", "steam");
+        holder_process(&proc, "77", "hidraw2", "other");
+        std::fs::create_dir_all(proc.join("88")).expect("missing fd dir");
+        std::fs::write(proc.join("88/comm"), "lonely\n").expect("comm");
+        holder_process(&proc, "notapid", "hidraw13", "ignored");
+
+        assert_eq!(
+            hidraw_holders_in(&proc, &sysfs, sysfs_path, "0005:057E:2009.000F"),
+            vec![Holder {
+                pid: 4242,
+                name: "steam".into(),
+            }]
+        );
+    }
 
     #[test]
     fn driver_name_reads_the_bound_sysfs_driver() {

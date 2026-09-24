@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
 
+use crate::detection::clash::LinkState;
 use crate::platform::PlatformSupport;
 use crate::{app, PLUGIN_ID};
 
@@ -16,6 +17,8 @@ fn app() -> HeadlessApp {
         .default_command(["status"])
         .command(apply_command())
         .command(status_command())
+        .command(reclaim_command())
+        .command(reclaim_stop_holders_command())
         .command(settings_command())
         .doctor_checks(doctor_checks())
 }
@@ -32,6 +35,38 @@ fn apply_command() -> Command {
         .exit_behavior("Exits non-zero if no driver-specific fix applies or pkexec fails.")
         .run_plain_text(|_| {
             app::execute_action_once("apply_fixes")?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
+fn reclaim_command() -> Command {
+    Command::new("reclaim")
+        .about("Reconnect a controller whose driver stopped responding.")
+        .usage(format!("{PLUGIN_ID} reclaim"))
+        .detail("Resets the Bluetooth link of a stuck controller on the adapter that holds it.")
+        .detail("Press Home on the controller afterwards; it is never connected automatically.")
+        .output("No stdout on success.")
+        .exit_behavior(
+            "Exits non-zero when no controller needs reconnecting or the disconnect fails.",
+        )
+        .run_plain_text(|_| {
+            app::execute_action_once("reclaim_controller")?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
+fn reclaim_stop_holders_command() -> Command {
+    Command::new("reclaim_stop_holders")
+        .about("Quit the process holding a stuck controller's raw HID device, then reconnect it.")
+        .usage(format!("{PLUGIN_ID} reclaim_stop_holders"))
+        .detail("Stops every process holding the raw HID node, then resets the Bluetooth link.")
+        .detail("Press Home on the controller afterwards; it is never connected automatically.")
+        .output("No stdout on success.")
+        .exit_behavior(
+            "Exits non-zero when the holder does not release the device or the disconnect fails.",
+        )
+        .run_plain_text(|_| {
+            app::execute_action_once("stop_holder_and_reclaim")?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -83,6 +118,11 @@ fn doctor_checks() -> Vec<DoctorCheck> {
             "controller_fixes",
             "Verify connected known controllers have their fixes applied.",
             fixes_check,
+        ),
+        DoctorCheck::new(
+            "controller_link",
+            "Verify connected controllers are responding and not contended for their raw HID device.",
+            link_check,
         ),
     ]
 }
@@ -149,6 +189,37 @@ fn fixes_check() -> Result<DoctorCheckResult> {
     Ok(DoctorCheckResult::ok("controller_fixes", summary))
 }
 
+fn link_check() -> Result<DoctorCheckResult> {
+    let snapshot = app::snapshot();
+    let affected = snapshot
+        .rows
+        .iter()
+        .filter(|row| matches!(row.link_state, LinkState::Contended | LinkState::Stalled))
+        .collect::<Vec<_>>();
+    if affected.is_empty() {
+        let message = if snapshot.rows.is_empty() {
+            "no controllers detected"
+        } else {
+            "all controllers responding"
+        };
+        return Ok(DoctorCheckResult::ok("controller_link", message));
+    }
+    let summary = affected
+        .iter()
+        .map(|row| format!("{}: {}", row.name, row.verdict))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let fix = if affected
+        .iter()
+        .any(|row| row.link_state == LinkState::Contended)
+    {
+        format!("quit the holder or run: {PLUGIN_ID} reclaim_stop_holders")
+    } else {
+        format!("run: {PLUGIN_ID} reclaim")
+    };
+    Ok(DoctorCheckResult::warn("controller_link", summary).with_fix(fix))
+}
+
 fn summary_lines(rows: &[app::ControllerRow]) -> String {
     rows.iter()
         .map(|row| {
@@ -174,7 +245,12 @@ mod tests {
                 .iter()
                 .map(DoctorCheck::id)
                 .collect::<Vec<_>>(),
-            ["platform_supported", "pkexec_available", "controller_fixes"]
+            [
+                "platform_supported",
+                "pkexec_available",
+                "controller_fixes",
+                "controller_link"
+            ]
         );
     }
 

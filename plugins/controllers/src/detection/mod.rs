@@ -1,3 +1,5 @@
+pub mod clash;
+
 use crate::fixes::DetectedDevice;
 
 const BTN_JOYSTICK: usize = 0x120;

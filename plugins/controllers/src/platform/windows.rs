@@ -1,3 +1,6 @@
+use anyhow::{bail, Result};
+
+use crate::detection::clash::{Holder, LinkEvidence};
 use crate::fixes::DetectedDevice;
 use crate::platform::{NativeInputSnapshot, PlatformSupport};
 
@@ -23,4 +26,20 @@ impl InputMonitor {
 
 pub fn read_devices() -> Vec<DetectedDevice> {
     Vec::new()
+}
+
+pub fn link_evidence(devices: &[DetectedDevice]) -> Vec<Option<LinkEvidence>> {
+    vec![None; devices.len()]
+}
+
+pub fn hidraw_holders(_device: &DetectedDevice) -> Vec<Holder> {
+    Vec::new()
+}
+
+pub fn disconnect_bluetooth(_device: &DetectedDevice) -> Result<String> {
+    bail!("reconnecting a controller is only supported on Linux")
+}
+
+pub fn stop_process(_pid: u32) -> Result<()> {
+    bail!("stopping the holder process is only supported on Linux")
 }

@@ -16,8 +16,8 @@ label = "Status"
 section = "controllers"
 query = "controllers_snapshot"
 value_from = "state"
-label_map = { none = "No Controllers Detected", ok = "Controllers ready", optional_fix = "Optional fix available" }
-tone_map = { ok = "success", optional_fix = "warning" }
+label_map = { none = "No Controllers Detected", ok = "Controllers ready", optional_fix = "Optional fix available", not_responding = "Controller not responding" }
+tone_map = { ok = "success", optional_fix = "warning", not_responding = "danger" }
 
 [field.detected_pads]
 type = "list"
@@ -29,10 +29,22 @@ row_subtitle = "{transport} · {driver} · {verdict}"
 empty_message = "No controllers detected."
 card_description = "Pads this computer can see."
 
-[field.detected_pads.row_action]
+[[field.detected_pads.row_actions]]
 action = "apply_fixes"
 label = "Fix"
 when = "fixable"
+
+[[field.detected_pads.row_actions]]
+action = "stop_holder_and_reclaim"
+label = "Quit holder and reconnect"
+description = "Quits the process holding the controller, then resets the Bluetooth link. Press Home on the controller afterwards."
+when = "holder_stoppable"
+
+[[field.detected_pads.row_actions]]
+action = "reclaim_controller"
+label = "Reconnect"
+description = "Resets the Bluetooth link. Press Home on the controller afterwards."
+when = "reclaimable"
 
 [field.input_test]
 type = "gamepad"
