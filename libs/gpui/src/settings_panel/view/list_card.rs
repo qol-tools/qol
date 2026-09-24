@@ -117,6 +117,7 @@ impl SettingsPanelView {
             actions,
             items,
             filter,
+            item_card,
             ..
         }) = self.root().rows.get(origin_row).map(|row| &row.control)
         else {
@@ -125,7 +126,9 @@ impl SettingsPanelView {
         let Some(item) = selected_list_item(actions, items, filter, slot) else {
             return;
         };
-        if item.pending || primary_list_item_action(actions, item).is_none() {
+        if item.pending
+            || (item_card.is_none() && primary_list_item_action(actions, item).is_none())
+        {
             return;
         }
         let item_id = item.id.clone();
@@ -164,7 +167,7 @@ impl SettingsPanelView {
                 &label,
                 description,
                 destination.clone(),
-                parent,
+                &self.root().rows,
                 item,
             ) else {
                 return;
@@ -800,13 +803,14 @@ fn list_card_level(
     }
 }
 
-fn item_card_rows(
-    actions: &ListActions,
-    item: &ListItem,
-    config_key: &str,
-    source: usize,
-) -> Vec<Row> {
-    list_item_actions(actions, item)
+fn item_card_rows(root_rows: &[Row], list_row: &Row, item: &ListItem) -> Vec<Row> {
+    let RowControl::List {
+        actions, item_card, ..
+    } = &list_row.control
+    else {
+        return Vec::new();
+    };
+    let mut rows = list_item_actions(actions, item)
         .into_iter()
         .map(|action| Row {
             id: action.action.clone(),
@@ -816,15 +820,79 @@ fn item_card_rows(
             description: action.description,
             placeholder: None,
             variant: None,
-            config_key: config_key.to_string(),
+            config_key: list_row.config_key.clone(),
             default: qol_config::contract::FieldDefault::String(String::new()),
             stream: None,
             action: None,
             visibility: None,
-            source,
+            source: list_row.source,
             control: RowControl::Text(String::new()),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    rows.extend(
+        item_card
+            .as_deref()
+            .and_then(|field| item_card_input_row(root_rows, field, &item.label)),
+    );
+    rows
+}
+
+/// The list's gamepad field, narrowed to the one pad this card is about.
+fn item_card_input_row(root_rows: &[Row], field: &str, item_label: &str) -> Option<Row> {
+    let row = root_rows.iter().find(|row| row.id == field)?;
+    let RowControl::Gamepad { query, monitor } = &row.control else {
+        return None;
+    };
+    Some(Row {
+        id: row.id.clone(),
+        section_id: None,
+        section_label: None,
+        label: row.label.clone(),
+        description: row.description.clone(),
+        placeholder: None,
+        variant: None,
+        config_key: row.config_key.clone(),
+        default: row.default.clone(),
+        stream: None,
+        action: None,
+        visibility: None,
+        source: row.source,
+        control: RowControl::Gamepad {
+            query: query.clone(),
+            monitor: monitor.scoped_to(item_label),
+        },
+    })
+}
+
+pub(super) fn item_card_input_sync(root_rows: &[Row], level: &mut Level, query: &str) -> bool {
+    let Some(card) = level.list_item.as_ref() else {
+        return false;
+    };
+    let Some(RowControl::List { items, .. }) =
+        root_rows.get(card.origin_row).map(|row| &row.control)
+    else {
+        return false;
+    };
+    let Some(item) = items.iter().find(|item| item.id == card.item_id) else {
+        return false;
+    };
+    let mut changed = false;
+    for row in &mut level.rows {
+        let RowControl::Gamepad {
+            query: row_query, ..
+        } = &row.control
+        else {
+            continue;
+        };
+        if row_query != query {
+            continue;
+        }
+        if let Some(fresh) = item_card_input_row(root_rows, &row.id, &item.label) {
+            row.control = fresh.control;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn list_item_card_level(
@@ -833,13 +901,11 @@ fn list_item_card_level(
     label: &str,
     description: Option<String>,
     destination: SettingsDestination,
-    row: &Row,
+    root_rows: &[Row],
     item: &ListItem,
 ) -> Option<Level> {
-    let RowControl::List { actions, .. } = &row.control else {
-        return None;
-    };
-    let rows = item_card_rows(actions, item, &row.config_key, row.source);
+    let row = root_rows.get(origin_row)?;
+    let rows = item_card_rows(root_rows, row, item);
     let section = RowSection {
         label: label.to_string(),
         description,
@@ -908,13 +974,13 @@ fn item_card_sync(root_rows: &[Row], level: &mut Level) -> bool {
     let Some(row) = root_rows.get(origin_row) else {
         return true;
     };
-    let RowControl::List { actions, items, .. } = &row.control else {
+    let RowControl::List { items, .. } = &row.control else {
         return true;
     };
     let Some(item) = items.iter().find(|item| item.id == item_id) else {
         return true;
     };
-    let rows = item_card_rows(actions, item, &row.config_key, row.source);
+    let rows = item_card_rows(root_rows, row, item);
     if rows.is_empty() {
         return true;
     }
@@ -997,8 +1063,9 @@ mod tests {
     use super::super::tests::{level, list_row};
     use super::super::Level;
     use super::{
-        item_card_sync, list_card_slider_value, list_item_art, list_item_card_level,
-        slider_percent_label, slider_value_from_fraction, step_list_slider, stepped_slider_value,
+        item_card_input_sync, item_card_sync, list_card_slider_value, list_item_art,
+        list_item_card_level, slider_percent_label, slider_value_from_fraction, step_list_slider,
+        stepped_slider_value,
     };
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::settings_panel::components::ChoiceArt;
@@ -1208,11 +1275,134 @@ mod tests {
             "Alpha",
             None,
             SettingsDestination::from_static("Alpha"),
-            &root.rows[0],
+            &root.rows,
             item,
         )
         .expect("item card level");
         (root.rows, child)
+    }
+
+    fn pad_input(names: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "available": true,
+            "source": "linux-evdev",
+            "items": names.iter().map(|name| serde_json::json!({
+                "name": name,
+                "vendor": 1406,
+                "product": 8201,
+                "connection": {"transport": "bluetooth", "signal": null, "adapter": null},
+                "state": {"mapping": "standard", "buttons": [], "axes": []},
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    fn input_row(names: &[&str]) -> Row {
+        let mut monitor = crate::gamepad::GamepadMonitor::default();
+        monitor.apply_query(Ok(pad_input(names)));
+        Row {
+            id: "input_test".into(),
+            section_id: None,
+            section_label: None,
+            label: "Controller Input".into(),
+            description: None,
+            placeholder: None,
+            variant: None,
+            config_key: "input_test".into(),
+            default: qol_config::contract::FieldDefault::String(String::new()),
+            stream: None,
+            action: None,
+            visibility: None,
+            source: 0,
+            control: RowControl::Gamepad {
+                query: "pad_input".into(),
+                monitor,
+            },
+        }
+    }
+
+    fn pad_card(item_card: Option<&str>, item_label: &str, pads: &[&str]) -> (Vec<Row>, Level) {
+        let mut row = listed_row(vec![list_item("a", item_label)]);
+        let RowControl::List {
+            item_card: stored, ..
+        } = &mut row.control
+        else {
+            unreachable!();
+        };
+        *stored = item_card.map(str::to_string);
+        let root_rows = vec![row, input_row(pads)];
+        let RowControl::List { items, .. } = &root_rows[0].control else {
+            unreachable!();
+        };
+        let child = list_item_card_level(
+            0,
+            "a",
+            item_label,
+            None,
+            SettingsDestination::from_static("Pad"),
+            &root_rows,
+            &items[0],
+        )
+        .expect("item card level");
+        (root_rows, child)
+    }
+
+    fn card_pads(level: &Level) -> Option<Vec<String>> {
+        level.rows.iter().find_map(|row| match &row.control {
+            RowControl::Gamepad { monitor, .. } => Some(
+                monitor
+                    .controllers
+                    .iter()
+                    .map(|controller| controller.name.clone())
+                    .collect(),
+            ),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn an_item_card_shows_only_its_own_pads_input() {
+        let cases = [
+            (
+                "the card's pad among others",
+                Some("input_test"),
+                "Pro Controller",
+                vec!["Xbox Controller", "Pro Controller"],
+                Some(vec!["Pro Controller".to_string()]),
+            ),
+            (
+                "the card's pad is silent",
+                Some("input_test"),
+                "Pro Controller",
+                vec!["Xbox Controller"],
+                Some(Vec::new()),
+            ),
+            (
+                "the list declares no card input",
+                None,
+                "Pro Controller",
+                vec!["Pro Controller"],
+                None,
+            ),
+        ];
+        for (label, item_card, item_label, pads, expected) in cases {
+            let (_, card) = pad_card(item_card, item_label, &pads);
+            assert_eq!(card_pads(&card), expected, "case: {label}");
+        }
+    }
+
+    #[test]
+    fn an_item_card_follows_live_input_for_its_query_only() {
+        let (mut root_rows, mut card) = pad_card(Some("input_test"), "Pro Controller", &[]);
+        assert_eq!(card_pads(&card), Some(Vec::new()));
+        let RowControl::Gamepad { monitor, .. } = &mut root_rows[1].control else {
+            unreachable!();
+        };
+        monitor.apply_query(Ok(pad_input(&["Pro Controller"])));
+
+        assert!(!item_card_input_sync(&root_rows, &mut card, "pads"));
+        assert_eq!(card_pads(&card), Some(Vec::new()));
+        assert!(item_card_input_sync(&root_rows, &mut card, "pad_input"));
+        assert_eq!(card_pads(&card), Some(vec!["Pro Controller".to_string()]));
     }
 
     #[test]
@@ -1282,6 +1472,13 @@ mod tests {
         assert_eq!(super::super::card_enter_hint(&list), Some("open"));
         let (_, item) = item_card_fixture();
         assert_eq!(super::super::card_enter_hint(&item), Some("run"));
+        let (_, mut pad) = pad_card(Some("input_test"), "Pro Controller", &[]);
+        pad.selected = pad.rows.len() - 1;
+        assert_eq!(
+            super::super::card_enter_hint(&pad),
+            None,
+            "the card's input test has nothing to run"
+        );
     }
 
     #[test]

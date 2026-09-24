@@ -108,6 +108,8 @@ pub struct FieldSpec {
     #[serde(default)]
     pub row_slider: Option<RowSliderSpec>,
     #[serde(default)]
+    pub item_card_field: Option<String>,
+    #[serde(default)]
     pub search: Option<bool>,
     #[serde(default)]
     pub empty_message: Option<String>,

@@ -209,6 +209,23 @@ impl GamepadMonitor {
         self.controllers.get(self.selected)
     }
 
+    /// A copy that shows only the controllers named `name`, so a card about one
+    /// pad never renders another pad's input.
+    pub fn scoped_to(&self, name: &str) -> Self {
+        let mut scoped = self.clone();
+        scoped
+            .controllers
+            .retain(|controller| controller.name == name);
+        scoped.selected = scoped
+            .selected
+            .min(scoped.controllers.len().saturating_sub(1));
+        if scoped.status == MonitorStatus::Ready && scoped.controllers.is_empty() {
+            scoped.status = MonitorStatus::Waiting;
+            scoped.message = "Press any button on this controller.".into();
+        }
+        scoped
+    }
+
     pub fn select_next(&mut self) {
         if self.controllers.len() < 2 {
             return;

@@ -80,6 +80,8 @@ pub struct ResolvedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_slider: Option<RowSliderSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_card_field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_message: Option<String>,
@@ -189,6 +191,7 @@ pub fn resolve_config(
             row_action: field.row_action.clone(),
             row_actions: field.row_actions.clone(),
             row_slider: field.row_slider.clone(),
+            item_card_field: field.item_card_field.clone(),
             search: field.search,
             empty_message: field.empty_message.clone(),
             value_from: field.value_from.clone(),

@@ -1258,6 +1258,7 @@ impl SettingsPanelView {
         });
         self.height_revision += 1;
         self.sync_list_card(query, cx);
+        self.sync_item_card_input(query);
         self.sync_live_card(query);
         self.sync_display_layout_card(query);
     }
@@ -1282,6 +1283,20 @@ impl SettingsPanelView {
         let (root, front) = self.stack.split_at_mut(1);
         live_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
         self.height_revision += 1;
+    }
+
+    fn sync_item_card_input(&mut self, query: &str) {
+        if self.stack.len() <= 1 {
+            return;
+        }
+        let (root, front) = self.stack.split_at_mut(1);
+        if list_card::item_card_input_sync(
+            &root[0].rows,
+            front.last_mut().expect("front level"),
+            query,
+        ) {
+            self.height_revision += 1;
+        }
     }
 
     fn sync_live_card_to_root(&mut self) {
@@ -2883,7 +2898,9 @@ impl SettingsPanelView {
         if matches!(row.control, RowControl::QrCode { .. }) && self.level().live_card {
             return container.child(self.render_qr_code(index));
         }
-        if matches!(row.control, RowControl::Gamepad { .. }) && self.level().live_card {
+        if matches!(row.control, RowControl::Gamepad { .. })
+            && (self.level().live_card || self.level().list_item.is_some())
+        {
             return container.child(self.render_gamepad(index, cx));
         }
         let label = match &row.control {
@@ -3977,6 +3994,9 @@ impl SettingsPanelView {
         if let Some(hint) = card_enter_hint(self.level()) {
             return Some(hint);
         }
+        if self.level().list_item.is_some() {
+            return None;
+        }
         let row = self.level().rows.get(self.level().selected)?;
         match &row.control {
             RowControl::Toggle(_) => Some("flip"),
@@ -4807,7 +4827,11 @@ fn card_enter_hint(level: &Level) -> Option<&'static str> {
         return Some("open");
     }
     if level.list_item.is_some() {
-        return Some("run");
+        let on_input = matches!(
+            level.rows.get(level.selected).map(|row| &row.control),
+            Some(RowControl::Gamepad { .. })
+        );
+        return (!on_input).then_some("run");
     }
     None
 }
@@ -5350,6 +5374,7 @@ mod tests {
                     primary: None,
                     additional: Vec::new(),
                 }),
+                item_card: None,
                 slider: None,
                 items: Vec::new(),
                 list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),

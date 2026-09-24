@@ -6,10 +6,6 @@ description = "Connected game controllers, active drivers, and available capabil
 label = "Controllers"
 description = "Which pads this computer can see and whether they need a fix."
 
-[section.input_test]
-label = "Input Test"
-description = "Live input from the controller you are testing."
-
 [field.fixes_status]
 type = "status"
 label = "Status"
@@ -28,6 +24,7 @@ row_label = "{name}"
 row_subtitle = "{transport} · {driver} · {verdict}"
 empty_message = "No controllers detected."
 card_description = "Pads this computer can see."
+item_card_field = "input_test"
 
 [[field.detected_pads.row_actions]]
 action = "apply_fixes"
@@ -44,6 +41,6 @@ when = "reclaimable"
 type = "gamepad"
 label = "Controller Input"
 description = "Press a controller button, then move every stick, trigger, D-pad direction, and face button."
-section = "input_test"
+section = "controllers"
 query = "controller_input"
 card_description = "Live input from the pad under test."

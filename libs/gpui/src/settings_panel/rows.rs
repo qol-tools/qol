@@ -149,6 +149,7 @@ pub(super) enum RowControl {
         row_label: String,
         row_subtitle: Option<String>,
         actions: Box<ListActions>,
+        item_card: Option<String>,
         slider: Option<Box<ListSlider>>,
         items: Vec<ListItem>,
         list: ScrollList,
@@ -233,10 +234,11 @@ pub(super) fn sections_from_resolved(
     source: usize,
 ) -> Vec<RowSection> {
     let mut sections = Vec::new();
+    let nested = item_card_row_ids(rows);
     let root_rows = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.section_id.is_none())
+        .filter(|(_, row)| row.section_id.is_none() && !nested.contains(row.id.as_str()))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     if !root_rows.is_empty() {
@@ -251,7 +253,10 @@ pub(super) fn sections_from_resolved(
         let section_rows = rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.section_id.as_deref() == Some(section.id.as_str()))
+            .filter(|(_, row)| {
+                row.section_id.as_deref() == Some(section.id.as_str())
+                    && !nested.contains(row.id.as_str())
+            })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         if section_rows.is_empty() {
@@ -265,6 +270,17 @@ pub(super) fn sections_from_resolved(
         })
     }));
     sections
+}
+
+/// Rows a list shows inside each item's card instead of on the page. They stay
+/// in the root so their queries keep polling and the card can copy them.
+fn item_card_row_ids(rows: &[Row]) -> std::collections::BTreeSet<&str> {
+    rows.iter()
+        .filter_map(|row| match &row.control {
+            RowControl::List { item_card, .. } => item_card.as_deref(),
+            _ => None,
+        })
+        .collect()
 }
 
 fn resolved_field_values(
@@ -499,6 +515,7 @@ fn control_for(field: &ResolvedField) -> RowControl {
                     primary: field.row_action.clone(),
                     additional: field.row_actions.clone(),
                 }),
+                item_card: field.item_card_field.clone(),
                 slider: field.row_slider.clone().map(|spec| {
                     Box::new(ListSlider {
                         spec,
@@ -1643,6 +1660,50 @@ switchable = "boolean"
                 .collect::<Vec<_>>(),
             vec!["Windows".to_string()],
             "a section holding only this field must not disappear"
+        );
+    }
+
+    #[test]
+    fn a_list_item_card_field_leaves_the_page_but_keeps_its_row() {
+        const SPEC: &str = r#"
+schema_version = 1
+
+[section.pads]
+label = "Pads"
+
+[section.input]
+label = "Input"
+
+[field.pads]
+type = "list"
+section = "pads"
+query = "pads"
+item_card_field = "input_test"
+
+[field.input_test]
+type = "gamepad"
+section = "input"
+query = "pad_input"
+"#;
+        let spec = qol_config::contract::parse_spec_str(SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        let sections = sections_from_resolved(&resolved, &rows, 0);
+
+        assert!(rows.iter().any(|row| row.id == "input_test"));
+        assert_eq!(
+            sections
+                .iter()
+                .map(|section| section.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Pads"],
+            "a section left with only card rows disappears"
+        );
+        assert_eq!(
+            runtime_query_names(&rows),
+            vec!["pad_input".to_string(), "pads".to_string()],
+            "the card's input keeps polling from the root"
         );
     }
 

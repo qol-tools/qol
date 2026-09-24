@@ -15,6 +15,7 @@ pub fn validate_contracts(
         validate_display_layout_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
         validate_row_action_ref(id, field, runtime, &mut errors);
+        validate_item_card_field_ref(id, field, config, &mut errors);
     }
     if errors.is_empty() {
         Ok(())
@@ -354,6 +355,33 @@ fn validate_row_action_ref(
                 format!("references undeclared action: {}", slider.action),
             ));
         }
+    }
+}
+
+fn validate_item_card_field_ref(
+    id: &str,
+    field: &FieldSpec,
+    config: &ConfigSpec,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(target) = field.item_card_field.as_deref() else {
+        return;
+    };
+    let path = format!("field.{id}.item_card_field");
+    if field.kind != FieldKind::List {
+        errors.push(ValidationError::new(path, "is only valid for list fields"));
+        return;
+    }
+    match config.fields.get(target).map(|target| target.kind) {
+        Some(FieldKind::Gamepad) => {}
+        Some(_) => errors.push(ValidationError::new(
+            path,
+            format!("`{target}` must be a gamepad field"),
+        )),
+        None => errors.push(ValidationError::new(
+            path,
+            format!("names undeclared field `{target}`"),
+        )),
     }
 }
 
@@ -948,6 +976,73 @@ description = "Pair"
             error.path == "field.devices.row_actions.action"
                 && error.message.contains("connect_device")
         }));
+    }
+
+    #[test]
+    fn item_card_field_must_name_a_gamepad_on_a_list() {
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.pads]
+description = "Pads"
+poll_interval_ms = 1000
+
+[query.pad_input]
+description = "Input"
+poll_interval_ms = 8
+"#,
+        )
+        .expect("parse runtime");
+        let cases = [
+            ("list names a gamepad", "list", "input", "gamepad", None),
+            (
+                "list names a status",
+                "list",
+                "input",
+                "status",
+                Some("`input` must be a gamepad field"),
+            ),
+            (
+                "list names nothing declared",
+                "list",
+                "missing",
+                "gamepad",
+                Some("names undeclared field `missing`"),
+            ),
+            (
+                "status carries the key",
+                "status",
+                "input",
+                "gamepad",
+                Some("is only valid for list fields"),
+            ),
+        ];
+        for (label, owner_kind, target, target_kind, expected) in cases {
+            let config = parse_spec_str(&format!(
+                r#"
+schema_version = 1
+
+[field.pads]
+type = "{owner_kind}"
+query = "pads"
+item_card_field = "{target}"
+
+[field.input]
+type = "{target_kind}"
+query = "pad_input"
+"#
+            ))
+            .expect("parse config");
+            let errors = validate_contracts(&config, Some(&runtime))
+                .err()
+                .unwrap_or_default();
+            let found = errors
+                .iter()
+                .find(|error| error.path == "field.pads.item_card_field")
+                .map(|error| error.message.as_str());
+            assert_eq!(found, expected, "case: {label}");
+        }
     }
 
     #[test]
