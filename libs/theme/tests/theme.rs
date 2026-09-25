@@ -1957,7 +1957,7 @@ fn rem_spacing_helper_calls(compact: &str) -> Vec<String> {
 const REM_SPACING_HELPER_DEBT: [(&str, usize); 3] = [
     ("libs/gpui/src/status_indicator.rs", 1),
     ("libs/gpui/src/toast.rs", 4),
-    ("plugins/alt-tab/src/app/render.rs", 4),
+    ("plugins/alt-tab/src/app/render.rs", 2),
 ];
 
 #[test]

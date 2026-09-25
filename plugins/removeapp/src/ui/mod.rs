@@ -958,22 +958,13 @@ fn app_row(
 
 fn section_header(title: &str) -> impl IntoElement {
     let palette = current_palette();
-    div()
-        .h(px(36.0))
+    qol_gpui::kit::kit()
+        .heading(format!("remove {}", title.to_lowercase()), None)
         .w_full()
-        .flex()
-        .items_center()
-        .px(px(12.0))
         .bg(rgb(palette.chrome_bg))
         .border_b_1()
         .border_color(rgb(palette.border))
         .panel_drag_area()
-        .child(
-            div()
-                .text_color(rgb(palette.text_primary))
-                .text(TextStyle::Heading)
-                .child(format!("Remove {title}")),
-        )
 }
 
 fn footer(hints: &[(Key, &str)], counter: Option<String>) -> impl IntoElement {

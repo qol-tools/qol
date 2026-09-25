@@ -103,9 +103,12 @@ fn header(
                             }
                         }))
                 })
-                .text_color(rgb(palette.text_heading))
-                .text(TextStyle::Heading)
-                .child("sessions"),
+                .child(kit.heading_title(
+                    TextStyle::Heading,
+                    "sessions",
+                    Some("every agent lane on this machine.".into()),
+                    true,
+                )),
         )
         .child(
             div()

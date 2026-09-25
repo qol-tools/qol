@@ -101,23 +101,51 @@ impl Kit {
         ]
     }
 
-    pub fn header(&self, title: impl Into<SharedString>) -> Div {
+    pub fn heading(&self, title: impl Into<SharedString>, colophon: Option<SharedString>) -> Div {
         div()
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(qol_theme::SPACE_INSET))
+            .gap(px(qol_theme::SPACE_CELL))
             .h(px(HEADER_HEIGHT))
             .px(px(GUTTER))
+            .child(self.heading_title(TextStyle::Heading, title, colophon, true))
+    }
+
+    pub fn heading_title(
+        &self,
+        style: TextStyle,
+        title: impl Into<SharedString>,
+        colophon: Option<SharedString>,
+        live: bool,
+    ) -> Div {
+        let pane = self.grounds.pane;
+        let (title_ink, colophon_ink) = if live {
+            (pane.ink, self.palette.accent_ink)
+        } else {
+            (pane.faint, pane.faint)
+        };
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(qol_theme::SPACE_STACK))
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .text(TextStyle::Heading)
-                    .text_color(rgb(self.palette.text_primary))
+                    .text(style)
+                    .text_color(rgb(title_ink))
                     .child(title.into()),
             )
+            .when_some(colophon, |block, colophon| {
+                block.child(
+                    div()
+                        .text(TextStyle::Colophon)
+                        .text_color(rgb(colophon_ink))
+                        .child(colophon),
+                )
+            })
     }
 
     pub fn section(&self, label: impl Into<SharedString>) -> Div {

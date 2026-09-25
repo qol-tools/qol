@@ -1,6 +1,6 @@
-use crate::text::TextStyled;
+use crate::kit::kit;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, App, IntoElement, RenderOnce, SharedString, Window};
+use gpui::{div, px, App, IntoElement, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
 use super::{
@@ -55,22 +55,18 @@ impl SettingsGroupHeader {
 
 impl RenderOnce for SettingsGroupHeader {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let name = if self.current {
-            self.palette.section_text
-        } else {
-            self.palette.status_muted
-        };
-        let detail_ink = if self.current {
-            self.palette.status_accent
-        } else {
-            self.palette.status_muted
-        };
-        let block = div()
+        let title = kit().heading_title(
+            TextStyle::Heading,
+            SharedString::from(self.title.to_lowercase()),
+            self.detail
+                .map(|detail| SharedString::from(detail.to_lowercase())),
+            self.current,
+        );
+        div()
             .flex_none()
             .flex()
             .flex_col()
             .w_full()
-            .gap(px(qol_theme::SPACE_STACK))
             .pt(px(qol_theme::SPACE_PAD))
             .pb(px(qol_theme::SPACE_SNUG))
             .child(
@@ -79,14 +75,7 @@ impl RenderOnce for SettingsGroupHeader {
                     .items_center()
                     .justify_between()
                     .gap(px(qol_theme::SPACE_CELL))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .text(TextStyle::Heading)
-                            .text_color(rgb(name))
-                            .child(SharedString::from(self.title.to_lowercase())),
-                    )
+                    .child(title)
                     .when_some(self.activity, |row, label| {
                         row.child(
                             div()
@@ -106,17 +95,7 @@ impl RenderOnce for SettingsGroupHeader {
                                 )),
                         )
                     }),
-            );
-        let block = match self.detail {
-            None => block,
-            Some(detail) => block.child(
-                div()
-                    .w_full()
-                    .text(TextStyle::Colophon)
-                    .text_color(rgb(detail_ink))
-                    .child(SharedString::from(detail.to_lowercase())),
-            ),
-        };
-        block.child(masthead_rule().w_full().mt(px(qol_theme::SPACE_SNUG)))
+            )
+            .child(masthead_rule().w_full().mt(px(qol_theme::SPACE_SNUG)))
     }
 }

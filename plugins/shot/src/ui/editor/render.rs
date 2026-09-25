@@ -185,7 +185,7 @@ impl Render for EditorView {
             .border_color(rgb(palette.thumb_border))
             .bg(rgb(palette.window_bg))
             .child(
-                kit.header("Edit screenshot")
+                kit.heading("edit screenshot", None)
                     .panel_drag_area()
                     .child(self.render_width_control(cx)),
             )

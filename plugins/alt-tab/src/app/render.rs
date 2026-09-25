@@ -192,7 +192,7 @@ impl Render for AltTabApp {
                     .on_click(|_, _, cx| cx.stop_propagation())
             })
             .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
-                s.child(header_bar("Alt Tab  ·  Live Window Grid", &snap))
+                s.child(header_bar(&snap))
             })
             .child(grid)
             .when(snap.show_hotkey_hints, |s| s.child(hint_bar(panel_w)));
@@ -290,24 +290,12 @@ fn hint_bar(available_width: f32) -> Div {
     bar
 }
 
-fn header_bar(left: &str, snap: &RenderSnap) -> Div {
-    let system = &snap.system;
+fn header_bar(snap: &RenderSnap) -> Div {
     let kit = qol_gpui::kit::kit();
-    div()
-        .px_4()
-        .py_2()
+    kit.heading("alt tab", Some("live window grid".into()))
         .border_b_1()
-        .border_color(rgb(system.border_subtle))
+        .border_color(rgb(snap.system.border_subtle))
         .bg(rgb(snap.palette.header_bg))
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(
-            div()
-                .text_color(rgb(snap.palette.header_left_text))
-                .text(TextStyle::ListName)
-                .child(left.to_string()),
-        )
         .child(
             div()
                 .flex()

@@ -1,4 +1,4 @@
-use crate::text::{cased, TextStyled};
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, ElementId, Rgba, SharedString};
 use qol_theme::TextStyle;
@@ -363,27 +363,13 @@ pub fn rail_caption(
         .justify_center()
         .w_full()
         .h(px(rail_caption_height()))
-        .gap(px(qol_theme::SPACE_STACK))
         .px(px(qol_theme::SPACE_CELL))
-        .child(
-            div()
-                .text(TextStyle::Masthead)
-                .text_color(rgb(kit.palette.text_primary))
-                .child(SharedString::from(label.to_lowercase())),
-        );
-    let block = match detail {
-        None => block,
-        Some(detail) => block.child(
-            div()
-                .text(TextStyle::Label)
-                .text_color(rgb(if focused {
-                    kit.palette.accent_ink
-                } else {
-                    kit.palette.text_muted
-                }))
-                .child(cased(TextStyle::Label, &detail)),
-        ),
-    };
+        .child(kit.heading_title(
+            TextStyle::Masthead,
+            SharedString::from(label.to_lowercase()),
+            detail.map(|detail| SharedString::from(detail.to_lowercase())),
+            focused,
+        ));
     block.child(
         masthead_rule()
             .absolute()
