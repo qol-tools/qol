@@ -808,14 +808,12 @@ impl Render for RemoveAppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = current_palette();
         self.list.sync(self.matches.len());
-        div()
+        qol_gpui::kit::kit()
+            .window()
             .id("qol-removeapp")
             .track_focus(&self.focus_handle)
-            .size_full()
             .flex()
             .flex_col()
-            .overflow_hidden()
-            .bg(rgb(palette.panel_bg))
             .text_color(rgb(palette.text_primary))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_key(ev, cx)))
             .child(self.render_body(window))

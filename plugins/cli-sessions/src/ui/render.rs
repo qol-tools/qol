@@ -24,10 +24,6 @@ fn current_palette() -> CliSessionsPalette {
     cli_sessions_runtime()
 }
 
-fn panel_shadow(palette: &CliSessionsPalette) -> Vec<gpui::BoxShadow> {
-    qol_gpui::kit::float_shadow(palette.text_primary)
-}
-
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -395,7 +391,6 @@ impl SessionsView {
         body_visible: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = current_palette();
         let order: Vec<SessionId> = rows.iter().map(|s| s.id.clone()).collect();
         let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
@@ -411,17 +406,13 @@ impl SessionsView {
             .map(|(i, s)| session_row(s, highlight == Some(i), i, cx))
             .collect();
 
-        div()
+        qol_gpui::kit::kit()
+            .window()
             .id("cli-sessions")
             .track_focus(&self.focus_handle)
             .tab_stop(true)
-            .size_full()
             .flex()
             .flex_col()
-            .rounded_none()
-            .overflow_hidden()
-            .bg(rgb(palette.panel_bg))
-            .shadow(panel_shadow(&palette))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 if this.is_collapsed() && ev.keystroke.key != "tab" {
                     match strip_key_action(&ev.keystroke.key, &ev.keystroke.modifiers) {

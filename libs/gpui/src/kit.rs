@@ -109,6 +109,18 @@ impl Kit {
         ]
     }
 
+    pub fn window(&self) -> Div {
+        div()
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .rounded_none()
+            .bg(rgb(self.grounds.pane.bg))
+            .border(px(LINE))
+            .border_color(rgba(self.grounds.pane.edge.packed()))
+            .shadow(float_shadow(self.palette.text_primary))
+    }
+
     pub fn heading(&self, title: impl Into<SharedString>, colophon: Option<SharedString>) -> Div {
         div()
             .flex_none()

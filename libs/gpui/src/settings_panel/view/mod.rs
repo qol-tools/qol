@@ -3378,7 +3378,8 @@ impl Render for SettingsPanelView {
             rail.len(),
             build_started.elapsed().as_micros()
         );
-        div()
+        self.kit
+            .window()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
@@ -3392,14 +3393,8 @@ impl Render for SettingsPanelView {
                     );
                 }),
             )
-            .size_full()
-            .relative()
-            .overflow_hidden()
             .flex()
             .flex_col()
-            .rounded_none()
-            .shadow(crate::kit::float_shadow(self.palette.section_text))
-            .bg(rgb(self.palette.window_bg))
             .text_color(rgb(self.palette.section_text))
             .child(self.render_band(cx))
             .child(self.render_content(

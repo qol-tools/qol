@@ -264,17 +264,14 @@ impl Render for LauncherView {
             .as_ref()
             .is_some_and(|session| session.pending);
         let menu = self.menu_kind.map(|_| self.menu_overlay(cx));
-        div()
+        kit.window()
             .text(TextStyle::Value)
             .id("launcher")
             .track_focus(&self.focus_handle)
             .w(px(WINDOW_WIDTH))
             .h(px(target_height))
-            .relative()
-            .overflow_hidden()
             .flex()
             .flex_col()
-            .bg(view::bg_color())
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 if this.held != event.modifiers {
                     this.held = event.modifiers;

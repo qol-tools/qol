@@ -172,18 +172,12 @@ impl EditorView {
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
-        let palette = current_palette();
-        div()
+        kit.window()
             .id("shot-editor")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .size_full()
             .flex()
             .flex_col()
-            .rounded_none()
-            .border_1()
-            .border_color(rgb(palette.thumb_border))
-            .bg(rgb(palette.window_bg))
             .child(
                 kit.heading("edit screenshot", None)
                     .panel_drag_area()

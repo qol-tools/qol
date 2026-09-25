@@ -2193,7 +2193,7 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 26] = [
         ".text_color(",
         1,
     ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 9),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 8),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
     (
         "libs/gpui/src/settings_panel/view/mod.rs",
@@ -2201,7 +2201,7 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 26] = [
         4,
     ),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".rounded(", 5),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".shadow(", 2),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".shadow(", 1),
     (
         "libs/gpui/src/settings_panel/view/mod.rs",
         ".text_color(",
@@ -3343,6 +3343,40 @@ fn every_heading_notice_and_empty_list_is_a_kit_part() {
     assert!(
         problems.is_empty(),
         "Headings, notices and empty lists are kit parts.\n{}",
+        problems.join("\n")
+    );
+}
+
+const FRAMED_WINDOWS: [&str; 8] = [
+    "libs/gpui/src/settings_panel/view/mod.rs",
+    "libs/gpui/src/toast.rs",
+    "plugins/cli-sessions/src/ui/render.rs",
+    "plugins/launcher/src/ui/render.rs",
+    "plugins/removeapp/src/ui/mod.rs",
+    "plugins/shot/src/ui/editor/render.rs",
+    "plugins/shot/src/ui/pinned.rs",
+    "plugins/shot/src/ui/preview.rs",
+];
+
+#[test]
+fn every_window_frame_is_kit_window() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for file in FRAMED_WINDOWS {
+        let contents = fs::read_to_string(workspace.join(file)).expect("read window source");
+        if !contents.contains(".window()") {
+            problems.push(format!("{file} draws its own window frame"));
+        }
+    }
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        if contents.contains("fn surface_shadow") || contents.contains("fn panel_shadow") {
+            problems.push(format!("{relative} keeps its own window shadow"));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A window is kit.window(): square, the float shadow and the edge hairline.\n{}",
         problems.join("\n")
     );
 }

@@ -19,8 +19,7 @@ use crate::ui::controls::{
     control_count, control_for_keystroke, controls, copy_actions, ControlSurface, SurfaceControl,
 };
 use crate::ui::preview::{
-    current_palette, live_topology, surface_shadow, MonitorTopology, WarmWindowKey, WarmWindowPool,
-    PREVIEW_APP_ID,
+    current_palette, live_topology, MonitorTopology, WarmWindowKey, WarmWindowPool, PREVIEW_APP_ID,
 };
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
@@ -1310,15 +1309,12 @@ impl Render for PinnedView {
             self.hovered,
             window.is_window_hovered(),
         );
-        let mut root = div()
+        let mut root = kit()
+            .window()
             .text(TextStyle::Value)
             .id("shot-pin")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .size_full()
-            .relative()
-            .bg(rgb(palette.window_bg))
-            .shadow(surface_shadow())
             .on_hover(cx.listener(Self::on_hover))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .on_mouse_down(

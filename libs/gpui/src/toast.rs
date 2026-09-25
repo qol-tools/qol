@@ -946,19 +946,12 @@ impl Render for SlabToastView {
             contents.push(summary_row(hidden_count, palette, self.host.clone()).into_any_element());
         }
 
-        slab_root(palette).children(contents)
+        slab_root().children(contents)
     }
 }
 
-fn slab_root(palette: ToastPalette) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .size_full()
-        .overflow_hidden()
-        .rounded_none()
-        .shadow(crate::kit::float_shadow(palette.text_primary))
-        .bg(rgb(palette.window_bg))
+fn slab_root() -> Div {
+    crate::kit::kit().window().flex().flex_col()
 }
 
 fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> Div {

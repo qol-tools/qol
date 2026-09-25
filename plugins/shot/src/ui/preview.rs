@@ -79,10 +79,6 @@ pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
     &CURRENT_PALETTE
 }
 
-pub(super) fn surface_shadow() -> Vec<BoxShadow> {
-    qol_gpui::kit::float_shadow(runtime_theme().system.text_primary)
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MonitorTopology {
     monitors: Vec<MonitorKey>,
@@ -1496,18 +1492,13 @@ impl Render for PreviewView {
         self.schedule_reveal_after_present(window, cx);
         let palette = current_palette();
 
-        let mut root = div()
+        let mut root = qol_gpui::kit::kit()
+            .window()
             .text(TextStyle::Value)
             .id("shot-preview")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_move))
-            .size_full()
-            .relative()
-            .bg(rgb(palette.window_bg))
-            .border_1()
-            .border_color(rgb(palette.thumb_border))
-            .shadow(surface_shadow());
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_move));
 
         if !self.ready {
             return root;
