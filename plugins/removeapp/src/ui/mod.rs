@@ -17,7 +17,6 @@ use qol_gpui::scroll_list::ScrollList;
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
-use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
 
 pub const WINDOW_TITLE: &str = env!("QOL_PLUGIN_ID");
 pub const WINDOW_WIDTH: f32 = 460.0;
@@ -41,14 +40,10 @@ fn continue_or_quit_hint() -> gpui::Div {
         .flex()
         .items_center()
         .gap(px(qol_gpui::theme::SPACE_GUTTER))
-        .text_color(rgb(current_palette().text_muted))
+        .text_color(rgb(qol_gpui::kit::kit().grounds.pane.faint))
         .text(TextStyle::Hint)
         .child(kit.hint(Key::ENTER, "continue"))
         .child(kit.hint(Key::ESC, "quit"))
-}
-
-fn current_palette() -> RemoveAppPalette {
-    remove_app_runtime()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -479,7 +474,6 @@ impl RemoveAppView {
 
     fn remove_bar(&self) -> Option<AnyElement> {
         let kit = qol_gpui::kit::kit();
-        let palette = current_palette();
         let app = self.matches.get(self.list.selected)?;
         if core::is_protected(app) {
             return None;
@@ -491,7 +485,7 @@ impl RemoveAppView {
             None => qol_gpui::Busy::new(
                 "qol-removeapp-size",
                 "measuring size",
-                rgb(palette.text_secondary),
+                rgb(kit.grounds.pane.faint),
             )
             .into_any_element(),
         };
@@ -510,7 +504,6 @@ impl RemoveAppView {
 
     fn search_box(&self, window: &mut Window) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
-        let palette = current_palette();
         let empty = self.query.is_empty();
         let mono = font(qol_gpui::theme::font_mono());
         let advance =
@@ -550,18 +543,22 @@ impl RemoveAppView {
                             .overflow_hidden()
                             .text(TextStyle::Code)
                             .text_color(rgb(if empty {
-                                palette.text_muted
+                                kit.grounds.pane.faint
                             } else {
-                                palette.text_primary
+                                kit.grounds.pane.ink
                             }))
                             .child(
                                 TextFieldElement::new(&self.query, visible, advance)
                                     .selection(
-                                        rgba(palette.selection_bg_rgba).into(),
-                                        Some(rgb(palette.text_primary).into()),
+                                        rgba(qol_gpui::theme::translucent(
+                                            kit.palette.accent,
+                                            qol_gpui::theme::Alpha::Wash,
+                                        ))
+                                        .into(),
+                                        Some(rgb(kit.grounds.pane.ink).into()),
                                     )
                                     .caret(CaretStyle {
-                                        color: rgb(palette.accent).into(),
+                                        color: rgb(kit.palette.accent).into(),
                                         width: 2.0,
                                         height: 16.0,
                                         top: 1.0,
@@ -569,7 +566,7 @@ impl RemoveAppView {
                                     })
                                     .placeholder(
                                         "Search installed apps",
-                                        rgb(palette.text_muted).into(),
+                                        rgb(kit.grounds.pane.faint).into(),
                                     )
                                     .render(),
                             ),
@@ -579,11 +576,10 @@ impl RemoveAppView {
     }
 
     fn render_confirming(&self) -> AnyElement {
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         let Some(plan) = &self.plan else {
             return div().into_any_element();
         };
-        let kit = qol_gpui::kit::kit();
         let item_count = plan.items.len();
         let items: Vec<_> = plan
             .items
@@ -600,14 +596,14 @@ impl RemoveAppView {
                             .flex_1()
                             .min_w(px(0.0))
                             .text(TextStyle::Code)
-                            .text_color(rgb(palette.text_secondary))
+                            .text_color(rgb(kit.grounds.pane.faint))
                             .child(l.path.display().to_string()),
                     )
                     .child(
                         div()
                             .flex_none()
                             .text(TextStyle::Code)
-                            .text_color(rgb(palette.text_muted))
+                            .text_color(rgb(kit.grounds.pane.faint))
                             .child(qol_gpui::format_bytes(l.size_bytes)),
                     )
             })
@@ -622,10 +618,10 @@ impl RemoveAppView {
         let (disp_label, disp_color) = match (managed, self.disposal) {
             (Some(package), _) => (
                 format!("Uninstall with {}", package.manager().label()),
-                palette.accent,
+                kit.palette.accent,
             ),
-            (None, Disposal::Trash) => ("Move to Trash".to_string(), palette.success),
-            (None, Disposal::Delete) => ("PERMANENTLY DELETE".to_string(), palette.danger),
+            (None, Disposal::Trash) => ("Move to Trash".to_string(), kit.palette.success),
+            (None, Disposal::Delete) => ("PERMANENTLY DELETE".to_string(), kit.palette.danger),
         };
         let mut hints: Vec<(Key, &str)> = Vec::new();
         if let Some(g) = &self.guards {
@@ -685,7 +681,7 @@ impl RemoveAppView {
                     .px(px(12.0))
                     .py(px(8.0))
                     .border_t_1()
-                    .border_color(rgb(palette.border))
+                    .border_color(rgba(kit.grounds.pane.edge.packed()))
                     .child(
                         div()
                             .text_color(rgb(disp_color))
@@ -694,7 +690,7 @@ impl RemoveAppView {
                     )
                     .child(
                         div()
-                            .text_color(rgb(palette.text_primary))
+                            .text_color(rgb(kit.grounds.pane.ink))
                             .text(TextStyle::Detail)
                             .child(format!(
                                 "{} items \u{00b7} {}",
@@ -708,9 +704,9 @@ impl RemoveAppView {
     }
 
     fn guard_banner(&self) -> Option<AnyElement> {
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         let Some(g) = self.guards.as_ref() else {
-            return Some(banner_container(vec![banner_busy(palette.text_muted)]));
+            return Some(banner_container(vec![banner_busy(kit.grounds.pane.faint)]));
         };
         let mut lines: Vec<AnyElement> = Vec::new();
         if g.running {
@@ -719,12 +715,12 @@ impl RemoveAppView {
             } else {
                 "is running - press Q to quit first"
             };
-            lines.push(banner_line(palette.warning, text).into_any_element());
+            lines.push(banner_line(kit.palette.warning, text).into_any_element());
         }
         match &g.package {
             PackageStatus::Managed(package) => lines.push(
                 banner_line(
-                    palette.accent,
+                    kit.palette.accent,
                     &if g.running {
                         format!(
                             "{}-managed - quit it before uninstalling",
@@ -742,7 +738,7 @@ impl RemoveAppView {
             ),
             PackageStatus::Unavailable(reason) => lines.push(
                 banner_line(
-                    palette.text_muted,
+                    kit.grounds.pane.faint,
                     &format!("couldn't confirm package ownership - {reason}"),
                 )
                 .into_any_element(),
@@ -806,7 +802,7 @@ impl Focusable for RemoveAppView {
 
 impl Render for RemoveAppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         self.list.sync(self.matches.len());
         qol_gpui::kit::kit()
             .window()
@@ -814,7 +810,7 @@ impl Render for RemoveAppView {
             .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
-            .text_color(rgb(palette.text_primary))
+            .text_color(rgb(kit.grounds.pane.ink))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_key(ev, cx)))
             .child(self.render_body(window))
     }
@@ -855,7 +851,6 @@ fn app_row(
     protected: bool,
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
-    let palette = current_palette();
     let ground = kit.highlight_ground(selected);
     let row = div()
         .flex_none()
@@ -871,9 +866,9 @@ fn app_row(
                 .min_w(px(0.0))
                 .text(TextStyle::ListName)
                 .text_color(if protected {
-                    rgb(palette.text_muted)
+                    rgb(kit.grounds.pane.faint)
                 } else {
-                    rgb(palette.text_primary)
+                    rgb(kit.grounds.pane.ink)
                 })
                 .child(app.name.clone()),
         )
@@ -882,7 +877,7 @@ fn app_row(
                 div()
                     .flex_none()
                     .text(TextStyle::Label)
-                    .text_color(rgb(palette.danger))
+                    .text_color(rgb(kit.palette.danger))
                     .child(cased(TextStyle::Label, "protected")),
             )
         })
@@ -899,19 +894,18 @@ fn app_row(
 }
 
 fn section_header(title: &str) -> impl IntoElement {
-    let palette = current_palette();
+    let kit = qol_gpui::kit::kit();
     qol_gpui::kit::kit()
         .heading(format!("remove {}", title.to_lowercase()), None)
         .w_full()
-        .bg(rgb(palette.chrome_bg))
+        .bg(rgb(kit.grounds.rail.bg))
         .border_b_1()
-        .border_color(rgb(palette.border))
+        .border_color(rgba(kit.grounds.pane.edge.packed()))
         .panel_drag_area()
 }
 
 fn footer(hints: &[(Key, &str)], counter: Option<String>) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
-    let palette = current_palette();
     let mut bar = kit.hint_bar();
     for (key, label) in hints {
         bar = bar.child(kit.hint(*key, label.to_string()));
@@ -922,14 +916,14 @@ fn footer(hints: &[(Key, &str)], counter: Option<String>) -> impl IntoElement {
                 div()
                     .flex_none()
                     .text(TextStyle::Code)
-                    .text_color(rgb(palette.text_muted))
+                    .text_color(rgb(kit.grounds.pane.faint))
                     .child(counter),
             )
         })
 }
 
 fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
-    let palette = current_palette();
+    let kit = qol_gpui::kit::kit();
     div()
         .flex()
         .flex_col()
@@ -937,9 +931,9 @@ fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
         .px(px(12.0))
         .py(px(6.0))
         .gap(px(3.0))
-        .bg(rgba(palette.warning_banner_rgba))
+        .bg(rgb(kit.grounds.attention.bg))
         .border_b_1()
-        .border_color(rgb(palette.border))
+        .border_color(rgba(kit.grounds.pane.edge.packed()))
         .children(lines)
         .into_any_element()
 }

@@ -1039,7 +1039,6 @@ pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
 pub struct ComponentPalettes {
     pub cli_sessions: CliSessionsPalette,
     pub launcher: LauncherPalette,
-    pub remove_app: RemoveAppPalette,
     pub shot_selector: ShotSelectorPalette,
     pub shot_preview: ShotPreviewPalette,
     pub toast: ToastPalette,
@@ -1053,7 +1052,6 @@ impl ComponentPalettes {
         Self {
             cli_sessions: CliSessionsPalette::from_system(system),
             launcher: LauncherPalette::from_system(system),
-            remove_app: RemoveAppPalette::from_system(system),
             shot_selector: ShotSelectorPalette::from_theme(reference, system),
             shot_preview: ShotPreviewPalette::from_system(system),
             toast: ToastPalette::from_system(system),
@@ -1129,49 +1127,6 @@ impl CliSessionsPalette {
             bridged_badge_rgba: with_alpha(system.info, 0x33),
             bridged_hover_rgba: with_alpha(system.info, 0x55),
             transparent_rgba: 0x00000000,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RemoveAppPalette {
-    pub panel_bg: u32,
-    pub chrome_bg: u32,
-    pub border: u32,
-    pub border_strong: u32,
-    pub text_primary: u32,
-    pub text_heading: u32,
-    pub text_secondary: u32,
-    pub text_muted: u32,
-    pub accent: u32,
-    pub success: u32,
-    pub danger: u32,
-    pub warning: u32,
-    pub selection_bg_rgba: u32,
-    pub transparent_rgba: u32,
-    pub keycap_bg_rgba: u32,
-    pub warning_banner_rgba: u32,
-}
-
-impl RemoveAppPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            panel_bg: system.surface_elevated,
-            chrome_bg: system.surface_canvas,
-            border: mix_rgb(system.surface_elevated, system.border_subtle, 0.5),
-            border_strong: system.border_subtle,
-            text_primary: system.text_primary,
-            text_heading: system.text_secondary,
-            text_secondary: system.text_muted,
-            text_muted: system.text_faint,
-            accent: system.accent,
-            success: system.success,
-            danger: system.danger,
-            warning: system.warning,
-            selection_bg_rgba: with_alpha(system.accent, 0x14),
-            transparent_rgba: 0x00000000,
-            keycap_bg_rgba: with_alpha(system.text_primary, 0x14),
-            warning_banner_rgba: with_alpha(system.warning, 0x1a),
         }
     }
 }
@@ -1791,10 +1746,6 @@ pub fn launcher_runtime() -> LauncherPalette {
 
 pub fn cli_sessions_runtime() -> CliSessionsPalette {
     runtime_theme().components.cli_sessions
-}
-
-pub fn remove_app_runtime() -> RemoveAppPalette {
-    runtime_theme().components.remove_app
 }
 
 pub fn shot_selector_runtime() -> ShotSelectorPalette {

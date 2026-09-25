@@ -39,7 +39,6 @@ fn runtime_dark_theme_uses_valid_injected_accent_key() {
     assert_eq!(theme.system.accent, expected);
     assert_eq!(theme.components.launcher.highlight, expected);
     assert_eq!(theme.components.cli_sessions.selection_border, expected);
-    assert_eq!(theme.components.remove_app.accent, expected);
 }
 
 #[test]
@@ -135,39 +134,6 @@ fn cli_sessions_palette_derives_from_system_roles() {
         with_alpha(DARK_SYSTEM.info, 0x14)
     );
     assert_eq!(palette.transparent_rgba, 0x00000000);
-}
-
-#[test]
-fn remove_app_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.remove_app;
-    assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
-    assert_eq!(
-        palette.border,
-        mix_rgb(DARK_SYSTEM.surface_elevated, DARK_SYSTEM.border_subtle, 0.5)
-    );
-    assert_eq!(palette.border_strong, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text_heading, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.text_muted, DARK_SYSTEM.text_faint);
-    assert_eq!(palette.accent, DARK_SYSTEM.accent);
-    assert_eq!(palette.success, DARK_SYSTEM.success);
-    assert_eq!(palette.danger, DARK_SYSTEM.danger);
-    assert_eq!(palette.warning, DARK_SYSTEM.warning);
-    assert_eq!(
-        palette.selection_bg_rgba,
-        with_alpha(DARK_SYSTEM.accent, 0x14)
-    );
-    assert_eq!(palette.transparent_rgba, 0x00000000);
-    assert_eq!(
-        palette.keycap_bg_rgba,
-        with_alpha(DARK_SYSTEM.text_primary, 0x14)
-    );
-    assert_eq!(
-        palette.warning_banner_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x1a)
-    );
 }
 
 #[test]
