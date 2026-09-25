@@ -79,6 +79,7 @@ pub struct LauncherState {
     pub nav_decay_step: Duration,
     pub last_nav_at: Option<Instant>,
     pub boost_adjusting: bool,
+    pub list_focused: bool,
     pub launch_error: Option<String>,
     pub flow: Option<FlowSession>,
 }
@@ -103,6 +104,7 @@ impl LauncherState {
             nav_decay_step: NAV_DECAY_STEP_SLOW,
             last_nav_at: None,
             boost_adjusting: false,
+            list_focused: false,
             launch_error: None,
             flow: None,
         }
@@ -238,6 +240,7 @@ impl LauncherState {
             );
         }
         self.scroll_list.reset();
+        self.list_focused = false;
         self.previous_selected = None;
         self.edge_hit = None;
         self.nav_direction = None;

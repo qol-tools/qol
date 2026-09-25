@@ -31,6 +31,7 @@ pub struct SearchBarStatus {
     pub mode: Option<SearchMode>,
     pub help_open: bool,
     pub pending: bool,
+    pub list_focused: bool,
 }
 
 pub fn search_bar(
@@ -92,25 +93,30 @@ pub fn search_bar(
                         .text_color(rgb(current_palette().text))
                         .flex()
                         .items_center()
-                        .child(
-                            TextFieldElement::new(field, visible, mono_advance)
+                        .child({
+                            let element = TextFieldElement::new(field, visible, mono_advance)
                                 .selection(
                                     rgb(current_palette().bg_selected).into(),
                                     Some(rgb(current_palette().text).into()),
-                                )
-                                .caret(CaretStyle {
+                                );
+                            let element = if status.list_focused {
+                                element
+                            } else {
+                                element.caret(CaretStyle {
                                     color: rgb(current_palette().highlight).into(),
                                     width: CARET_WIDTH,
                                     height: 16.0,
                                     top: 1.0,
                                     radius: 1.0,
                                 })
+                            };
+                            element
                                 .placeholder(
                                     placeholder.to_owned(),
                                     rgb(current_palette().text_muted).into(),
                                 )
-                                .render(),
-                        ),
+                                .render()
+                        }),
                 )
                 .when_some(launch_error, |field, error| {
                     field.child(
@@ -176,7 +182,11 @@ pub fn search_placeholder(mode: SearchMode) -> &'static str {
     }
 }
 
-pub fn row_action(source: ResultSource, held: &Modifiers) -> (&'static str, &'static str) {
+pub fn row_action(
+    source: ResultSource,
+    held: &Modifiers,
+    list_focused: bool,
+) -> (&'static str, &'static str) {
     let secondary = held.secondary();
     if held.shift
         && !secondary
@@ -188,7 +198,7 @@ pub fn row_action(source: ResultSource, held: &Modifiers) -> (&'static str, &'st
     if held.alt && !held.shift {
         return ("Alt+\u{21b5}", "options");
     }
-    if secondary && !held.shift && matches!(source, ResultSource::App) {
+    if list_focused && secondary && !held.shift && matches!(source, ResultSource::App) {
         return ("Ctrl+\u{2192}", "raise rank");
     }
     ("\u{21b5}", "open")
@@ -210,6 +220,7 @@ pub fn result_row(
     match_score: u8,
     row_height: f32,
     held: &Modifiers,
+    list_focused: bool,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
     let band = qol_gpui::theme::settings_panel_runtime().grounds.band;
@@ -250,7 +261,7 @@ pub fn result_row(
                 .child(styled_name),
         );
     if selected {
-        let (shortcut, word) = row_action(scored.source, held);
+        let (shortcut, word) = row_action(scored.source, held, list_focused);
         row = row.child(
             div()
                 .flex_none()
@@ -680,32 +691,42 @@ mod tests {
         };
         let secondary = Modifiers::secondary_key();
         assert_eq!(
-            row_action(ResultSource::App, &Modifiers::none()),
+            row_action(ResultSource::App, &Modifiers::none(), true),
             ("\u{21b5}", "open")
         );
         assert_eq!(
-            row_action(ResultSource::File, &shift),
+            row_action(ResultSource::File, &shift, true),
             ("Shift+\u{21b5}", "open folder")
         );
-        assert_eq!(row_action(ResultSource::Flow, &shift), ("\u{21b5}", "open"));
         assert_eq!(
-            row_action(ResultSource::File, &alt),
+            row_action(ResultSource::Flow, &shift, true),
+            ("\u{21b5}", "open")
+        );
+        assert_eq!(
+            row_action(ResultSource::File, &alt, true),
             ("Alt+\u{21b5}", "options")
         );
         assert_eq!(
-            row_action(ResultSource::App, &secondary),
+            row_action(ResultSource::App, &secondary, true),
             ("Ctrl+\u{2192}", "raise rank")
         );
         assert_eq!(
-            row_action(ResultSource::File, &secondary),
+            row_action(ResultSource::App, &secondary, false),
+            ("\u{21b5}", "open"),
+            "the search box keeps Ctrl+arrows for words"
+        );
+        assert_eq!(
+            row_action(ResultSource::File, &secondary, true),
             ("\u{21b5}", "open")
         );
         assert_eq!(
             LauncherState::new().apply_key("enter", &shift, 1),
             InputEffect::OpenFolder
         );
+        let mut in_list = LauncherState::new();
+        in_list.list_focused = true;
         assert_eq!(
-            LauncherState::new().apply_key("right", &secondary, 1),
+            in_list.apply_key("right", &secondary, 1),
             InputEffect::BoostUp
         );
     }

@@ -291,6 +291,7 @@ impl Render for LauncherView {
                     mode: (!flow_active).then_some(self.state.mode),
                     help_open: self.menu_kind == Some(super::menu::MenuKind::Help),
                     pending: flow_pending,
+                    list_focused: self.state.list_focused,
                 },
                 flow_prompt
                     .as_deref()
@@ -434,6 +435,7 @@ impl LauncherView {
                 view::match_percent(scored.m.score, best, worst),
                 ROW_HEIGHT,
                 &self.held,
+                self.state.list_focused,
             ));
         }
         rows

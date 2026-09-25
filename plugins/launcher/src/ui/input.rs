@@ -39,7 +39,7 @@ impl LauncherState {
         let shift = modifiers.shift;
         let alt = modifiers.alt;
         let span = text_edit::span(modifiers);
-        let boost = (secondary || alt) && !shift;
+        let boost = (secondary || alt) && !shift && self.list_focused;
         #[cfg(debug_assertions)]
         if matches!(key, "left" | "right") {
             eprintln!(
@@ -69,24 +69,32 @@ impl LauncherState {
             "left" if boost => InputEffect::BoostDown,
             "right" if boost => InputEffect::BoostUp,
             "left" => {
+                self.list_focused = false;
                 self.query.move_left(shift, span);
                 InputEffect::Navigate
             }
             "right" => {
+                self.list_focused = false;
                 self.query.move_right(shift, span);
                 InputEffect::Navigate
             }
             "home" => {
+                self.list_focused = false;
                 self.query.move_home(shift);
                 InputEffect::Navigate
             }
             "end" => {
+                self.list_focused = false;
                 self.query.move_end(shift);
                 InputEffect::Navigate
             }
             "up" if !secondary => {
                 if self.is_phantom_reversal(NavDirection::Up) {
                     return InputEffect::Ignore;
+                }
+                if self.list_focused && self.scroll_list.selected == 0 {
+                    self.list_focused = false;
+                    return InputEffect::Navigate;
                 }
                 self.move_up();
                 InputEffect::Navigate
@@ -95,6 +103,7 @@ impl LauncherState {
                 if self.is_phantom_reversal(NavDirection::Down) {
                     return InputEffect::Ignore;
                 }
+                self.list_focused |= result_count > 0;
                 self.move_down(result_count);
                 InputEffect::Navigate
             }
@@ -117,6 +126,7 @@ impl LauncherState {
                 }
             }
             "a" if secondary => {
+                self.list_focused = false;
                 self.query.select_all();
                 InputEffect::Navigate
             }
@@ -159,7 +169,6 @@ impl LauncherState {
         let shift = modifiers.shift;
         let alt = modifiers.alt;
         let span = text_edit::span(modifiers);
-        let boost = (secondary || alt) && !shift;
         match key {
             "escape" | "esc" => InputEffect::FlowExit,
             "enter" => InputEffect::FlowDetail,
@@ -171,11 +180,11 @@ impl LauncherState {
                 self.move_down(result_count);
                 InputEffect::Navigate
             }
-            "left" if !boost => {
+            "left" => {
                 self.query.move_left(shift, span);
                 InputEffect::Navigate
             }
-            "right" if !boost => {
+            "right" => {
                 self.query.move_right(shift, span);
                 InputEffect::Navigate
             }
@@ -451,6 +460,7 @@ mod tests {
     fn arrows_boost_with_secondary_or_alt_without_moving_the_caret() {
         for modifiers in boost_modifiers() {
             let mut state = typed("rank");
+            state.list_focused = true;
             assert_eq!(
                 state.apply_key("right", &modifiers, 0),
                 InputEffect::BoostUp,
@@ -464,6 +474,67 @@ mod tests {
             );
             assert_eq!(state.query.cursor(), 4, "{modifiers:?}");
         }
+    }
+
+    #[test]
+    fn word_arrows_jump_words_while_the_search_box_has_focus() {
+        let mut state = typed("qol memory");
+        assert_eq!(state.apply_key("left", &word(), 3), InputEffect::Navigate);
+        assert_eq!(state.query.cursor(), 4);
+        assert_eq!(state.apply_key("right", &word(), 3), InputEffect::Navigate);
+        assert_eq!(state.query.cursor(), 10);
+    }
+
+    #[test]
+    fn down_moves_focus_into_the_list_and_up_from_the_top_returns_it() {
+        let secondary = Modifiers::secondary_key();
+        let plain = Modifiers::none();
+        let mut state = typed("rank");
+        assert!(!state.list_focused);
+
+        state.apply_key("down", &plain, 3);
+        assert!(state.list_focused);
+        assert_eq!(state.scroll_list.selected, 1);
+        assert_eq!(
+            state.apply_key("right", &secondary, 3),
+            InputEffect::BoostUp
+        );
+
+        state.last_nav_at = None;
+        state.apply_key("up", &plain, 3);
+        assert!(state.list_focused, "row 1 to row 0 stays in the list");
+        assert_eq!(state.scroll_list.selected, 0);
+
+        state.last_nav_at = None;
+        assert_eq!(state.apply_key("up", &plain, 3), InputEffect::Navigate);
+        assert!(
+            !state.list_focused,
+            "up from the top row goes to the search box"
+        );
+        assert_eq!(state.scroll_list.selected, 0);
+        assert_ne!(
+            state.apply_key("right", &secondary, 3),
+            InputEffect::BoostUp
+        );
+    }
+
+    #[test]
+    fn caret_keys_and_new_results_hand_focus_back_to_the_search_box() {
+        let mut state = typed("rank");
+        state.list_focused = true;
+        state.apply_key("left", &Modifiers::none(), 3);
+        assert!(!state.list_focused);
+
+        state.list_focused = true;
+        state.reset_results_position();
+        assert!(!state.list_focused);
+    }
+
+    #[test]
+    fn down_with_no_results_keeps_focus_in_the_search_box() {
+        let mut state = typed("zzz");
+        state.apply_key("down", &Modifiers::none(), 0);
+        assert!(!state.list_focused);
     }
 
     #[test]
@@ -704,8 +775,8 @@ mod tests {
         for modifiers in boost_modifiers() {
             assert_eq!(
                 state.apply_key("right", &modifiers, 3),
-                InputEffect::Ignore,
-                "{modifiers:?}"
+                InputEffect::Navigate,
+                "{modifiers:?} moves the caret, flows have no ranking"
             );
         }
         assert_eq!(state.mode, SearchMode::Apps);

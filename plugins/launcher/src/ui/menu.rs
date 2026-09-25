@@ -73,8 +73,8 @@ const HELP_SEARCH_LEFT_ROWS: HelpRows = &[
 ];
 
 const HELP_SEARCH_RIGHT_ROWS: HelpRows = &[
-    ("Raise rank", "Ctrl+→"),
-    ("Lower rank", "Ctrl+←"),
+    ("Raise rank in list", "Ctrl+→"),
+    ("Lower rank in list", "Ctrl+←"),
     ("Narrow", "Ctrl+↑"),
     ("Broaden", "Ctrl+↓"),
 ];
@@ -499,10 +499,20 @@ mod tests {
         for (label, key, modifiers, effect) in [
             ("Open", "enter", Modifiers::none(), InputEffect::Launch),
             ("Open folder", "enter", shift, InputEffect::OpenFolder),
-            ("Raise rank", "right", secondary, InputEffect::BoostUp),
-            ("Raise rank", "right", alt, InputEffect::BoostUp),
-            ("Lower rank", "left", secondary, InputEffect::BoostDown),
-            ("Lower rank", "left", alt, InputEffect::BoostDown),
+            (
+                "Raise rank in list",
+                "right",
+                secondary,
+                InputEffect::BoostUp,
+            ),
+            ("Raise rank in list", "right", alt, InputEffect::BoostUp),
+            (
+                "Lower rank in list",
+                "left",
+                secondary,
+                InputEffect::BoostDown,
+            ),
+            ("Lower rank in list", "left", alt, InputEffect::BoostDown),
             ("Narrow", "up", secondary, InputEffect::QueryChanged),
             ("Broaden", "down", secondary, InputEffect::QueryChanged),
         ] {
@@ -510,11 +520,9 @@ mod tests {
                 .iter()
                 .chain(HELP_SEARCH_RIGHT_ROWS)
                 .any(|(name, _)| *name == label));
-            assert_eq!(
-                LauncherState::new().apply_key(key, &modifiers, 1),
-                effect,
-                "{label}"
-            );
+            let mut state = LauncherState::new();
+            state.list_focused = true;
+            assert_eq!(state.apply_key(key, &modifiers, 1), effect, "{label}");
         }
     }
 
