@@ -6063,7 +6063,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.82.1"
+version = "0.82.2"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
