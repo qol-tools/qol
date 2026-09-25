@@ -59,7 +59,7 @@ pub fn search_bar(
         .flex()
         .items_center()
         .px(px(qol_gpui::theme::SPACE_PAD))
-        .gap(px(10.0))
+        .gap(px(qol_gpui::theme::SPACE_INSET))
         .bg(rgb(qol_gpui::kit::kit().grounds.pane.bg))
         .border_b(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
@@ -383,7 +383,7 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
         .border(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .bg(rgb(kit.palette.surface_raised))
-        .py(px(10.0))
+        .py(px(qol_gpui::theme::SPACE_INSET))
         .px(px(12.0))
         .flex()
         .flex_col()
@@ -454,7 +454,7 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
 
 fn host_tag(kit: &qol_gpui::kit::Kit, host: &str) -> Div {
     div()
-        .px(px(5.0))
+        .px(px(qol_gpui::theme::SPACE_SNUG))
         .rounded(px(RADIUS_TIGHT))
         .border(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline_strong.packed()))
@@ -475,7 +475,7 @@ fn vague_fence(kit: &qol_gpui::kit::Kit, checking: bool) -> Div {
         .h(px(FLOW_ROW_HEIGHT))
         .flex()
         .items_center()
-        .gap(px(10.0))
+        .gap(px(qol_gpui::theme::SPACE_INSET))
         .px(px(qol_gpui::theme::SPACE_PAD))
         .child(
             div()
@@ -503,12 +503,12 @@ pub fn detail_body(
 ) -> Div {
     let text = row.copy.clone().unwrap_or_else(|| row.title.clone());
     let detail = crate::flow::detail_of(&row.raw);
-    let mut fields = div().flex().flex_col().gap(px(5.0));
+    let mut fields = div().flex().flex_col().gap(px(qol_gpui::theme::SPACE_SNUG));
     for (label, value) in &detail {
         fields = fields.child(
             div()
                 .flex()
-                .gap(px(10.0))
+                .gap(px(qol_gpui::theme::SPACE_INSET))
                 .child(
                     div()
                         .w(px(92.0))
@@ -540,9 +540,9 @@ pub fn detail_body(
                 .size_full()
                 .flex()
                 .flex_col()
-                .p(px(14.0))
+                .p(px(qol_gpui::theme::SPACE_CELL))
                 .pt(px(16.0))
-                .gap(px(14.0))
+                .gap(px(qol_gpui::theme::SPACE_CELL))
                 .child(
                     div()
                         .text_color(rgb(kit.palette.text_primary))

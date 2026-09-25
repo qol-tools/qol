@@ -396,6 +396,161 @@ pub fn settings_label_group(
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 
+pub fn settings_card<E: Styled>(card: E, selected: bool, kit: Kit) -> E {
+    let card = card.rounded(px(qol_theme::RADIUS_CARD));
+    if selected {
+        card.shadow(kit.focus_ring(kit.grounds.pane))
+    } else {
+        card
+    }
+}
+
+pub fn floating_card<E: Styled>(card: E, kit: Kit) -> E {
+    card.shadow(crate::kit::float_shadow(kit.grounds.pane.ink))
+}
+
+pub fn rail_scrim_layer(kit: Kit) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(crate::kit::rail_scrim(kit.grounds.pane.bg))
+}
+
+pub fn settings_band_bar(height: f32, kit: Kit) -> gpui::Div {
+    div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(px(qol_theme::SPACE_GUTTER))
+        .h(px(height))
+        .px(px(qol_theme::SPACE_GUTTER))
+        .border_b(px(qol_theme::LINE))
+        .border_color(rgba(kit.washes.hairline.packed()))
+        .bg(rgb(kit.grounds.rail.bg))
+}
+
+pub fn settings_filter_field(filter: &str, height: f32, open: bool, kit: Kit) -> gpui::Div {
+    let pane = kit.grounds.pane;
+    let empty = filter.is_empty();
+    let text = if empty {
+        "Filter settings".to_string()
+    } else {
+        filter.to_string()
+    };
+    let field = div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(qol_theme::SPACE_INSET))
+        .h(px(height))
+        .px(px(qol_theme::SPACE_PAD))
+        .rounded(px(qol_theme::RADIUS_WELL))
+        .bg(rgba(kit.washes.fill_resting.packed()))
+        .border(px(qol_theme::LINE))
+        .border_color(rgba(kit.washes.hairline.packed()))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text(TextStyle::Code)
+                .text_color(rgb(if empty { pane.faint } else { pane.ink }))
+                .child(text),
+        );
+    if open {
+        return field.bg(rgb(pane.bg)).border_color(rgb(pane.mark)).child(
+            div()
+                .flex_none()
+                .w(px(qol_theme::FOCUS_RING_EDGE))
+                .h(px(qol_theme::SPACE_PAD))
+                .bg(rgb(pane.mark)),
+        );
+    }
+    field.child(kit.chip(crate::kit::Chip::Key(crate::key::Key::symbol('/')), pane))
+}
+
+pub fn settings_filter_overlay(kit: Kit) -> gpui::Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .px(px(qol_theme::SPACE_PAD))
+        .pt(px(qol_theme::SPACE_CELL))
+        .pb(px(qol_theme::SPACE_INSET))
+        .bg(rgb(kit.grounds.pane.bg))
+}
+
+pub fn settings_slider_track(fill: f32, ground: Ground) -> gpui::Div {
+    div()
+        .relative()
+        .w(px(72.))
+        .h(px(qol_theme::SPACE_TIGHT))
+        .rounded_full()
+        .overflow_hidden()
+        .bg(rgba(ground.well.packed()))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .h_full()
+                .w(px(fill))
+                .rounded_full()
+                .bg(rgb(ground.mark)),
+        )
+}
+
+pub fn settings_slider_percent(text: impl Into<SharedString>, kit: Kit) -> gpui::Div {
+    div()
+        .text(TextStyle::Code)
+        .text_color(rgb(kit.grounds.pane.soft))
+        .child(text.into())
+}
+
+pub fn settings_arrow(ink: u32) -> gpui::Div {
+    div()
+        .flex_none()
+        .text(TextStyle::Detail)
+        .text_color(rgb(ink))
+        .child("\u{2192}")
+}
+
+pub fn settings_swatch(color: u32) -> gpui::Div {
+    div()
+        .flex_none()
+        .size(px(qol_theme::SPACE_CELL))
+        .rounded(px(qol_theme::RADIUS_TIGHT))
+        .bg(rgb(color))
+}
+
+pub fn settings_accent_dot(accent: u32) -> gpui::Div {
+    div()
+        .flex_none()
+        .size(px(qol_theme::SPACE_INSET))
+        .rounded_full()
+        .bg(rgb(accent))
+}
+
+pub fn settings_error_line(text: impl Into<SharedString>, kit: Kit) -> gpui::Div {
+    div()
+        .px(px(qol_theme::SPACE_INSET))
+        .text(TextStyle::Detail)
+        .text_color(rgb(kit.palette.danger))
+        .child(text.into())
+}
+
+pub fn rail_item_label(label: impl Into<SharedString>, active: bool, kit: Kit) -> gpui::Div {
+    let rail = kit.grounds.rail;
+    div()
+        .min_w_0()
+        .text(TextStyle::Name)
+        .text_color(rgb(if active { rail.ink } else { rail.soft }))
+        .child(label.into())
+}
+
 pub fn settings_message(text: impl Into<SharedString>, danger: bool, kit: Kit) -> gpui::Div {
     if danger {
         settings_message_frame(kit.palette.danger).child(kit.notice(

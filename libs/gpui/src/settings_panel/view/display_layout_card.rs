@@ -1,6 +1,4 @@
 use crate::kit::Chip;
-use crate::text::TextStyled;
-use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -10,8 +8,9 @@ use qol_config::contract::resolve_slider_action;
 
 use super::super::components::{
     display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_spinner,
-    settings_description, settings_label, settings_label_group, settings_message, ChoiceArt,
-    DisplayLayoutTile, RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, TileArt,
+    settings_description, settings_label, settings_label_group, settings_message,
+    settings_value_text, ChoiceArt, DisplayLayoutTile, RowGround, SettingsChoiceValue,
+    SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
 };
 use super::super::display_layout::{mode_label, nudge_step, Display, DisplayLayoutState, Rect};
 use super::super::form_nav::adjacent_visible_row;
@@ -778,12 +777,12 @@ impl SettingsPanelView {
                 self.body_has_focus(),
             )
             .dimmed(!staged.has_staged_edits() || !staged.is_committable())
-            .child(
-                div()
-                    .text(TextStyle::Name)
-                    .text_color(rgb(self.kit.palette.success))
-                    .child("Apply"),
-            )
+            .child(settings_value_text(
+                "Apply",
+                SettingsValueTone::Success,
+                RowGround::Pane,
+                self.kit,
+            ))
             .child(self.kit.chip(Chip::Key(Key::ENTER), self.kit.grounds.pane))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {

@@ -968,7 +968,7 @@ fn slab_header(row_count: usize, kit: Kit, host: SlabPresenter) -> Div {
                     rgb(qol_theme::lift(kit.grounds.pane.bg, kit.grounds.pane.ink)),
                 )
                 .h_full()
-                .px(px(10.0))
+                .px(px(qol_theme::SPACE_INSET))
                 .flex()
                 .items_center()
                 .cursor_pointer()
@@ -1084,7 +1084,7 @@ fn text_column(row: &SlabSnapshotRow, kit: Kit) -> Div {
         .flex()
         .flex_col()
         .justify_center()
-        .gap(px(3.0))
+        .gap(px(qol_theme::SPACE_STACK))
         .px(px(TEXT_PAD))
         .child(
             div()

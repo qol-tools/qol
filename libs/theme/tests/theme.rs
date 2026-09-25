@@ -1674,10 +1674,11 @@ fn in_settings_scope(relative: &str) -> bool {
         .any(|prefix| relative.starts_with(prefix))
 }
 
-const RECIPE_OWNERS: [&str; 3] = [
+const RECIPE_OWNERS: [&str; 4] = [
     "libs/gpui/src/kit.rs",
     "libs/gpui/src/deck.rs",
     "libs/gpui/src/hint_bar.rs",
+    "libs/gpui/src/gamepad/",
 ];
 
 fn is_component_recipe_owner(relative: &str) -> bool {
@@ -1733,10 +1734,7 @@ fn rem_spacing_helper_calls(compact: &str) -> Vec<String> {
     found
 }
 
-const REM_SPACING_HELPER_DEBT: [(&str, usize); 2] = [
-    ("libs/gpui/src/status_indicator.rs", 1),
-    ("plugins/alt-tab/src/app/render.rs", 2),
-];
+const REM_SPACING_HELPER_DEBT: [(&str, usize); 0] = [];
 
 #[test]
 fn gpui_surfaces_do_not_use_rem_spacing_helpers() {
@@ -1793,17 +1791,7 @@ Files outside settings scope keep their exact count in REM_SPACING_HELPER_DEBT u
     );
 }
 
-const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 9] = [
-    ("libs/gpui/src/toast.rs", 10.0),
-    ("libs/gpui/src/toast.rs", 3.0),
-    ("plugins/alt-tab/src/app/render.rs", 26.0),
-    ("plugins/alt-tab/src/app/render.rs", 18.0),
-    ("plugins/launcher/src/ui/view.rs", 10.0),
-    ("plugins/launcher/src/ui/view.rs", 5.0),
-    ("plugins/launcher/src/ui/view.rs", 14.0),
-    ("plugins/removeapp/src/ui/mod.rs", 10.0),
-    ("plugins/removeapp/src/ui/mod.rs", 3.0),
-];
+const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 0] = [];
 
 #[test]
 fn gpui_spacing_literals_stay_on_the_space_ladder() {
@@ -1928,70 +1916,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 26] = [
-    ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".border_color(",
-        8,
-    ),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".font_weight(",
-        2,
-    ),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".text_color(",
-        2,
-    ),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".text_size(",
-        2,
-    ),
-    ("libs/gpui/src/gamepad/diagram/mod.rs", ".bg(", 2),
-    ("libs/gpui/src/gamepad/diagram/mod.rs", ".rounded(", 2),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".bg(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".border_color(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".font_weight(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".rounded(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".text_color(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
-    ("libs/gpui/src/gamepad/view.rs", ".bg(", 7),
-    ("libs/gpui/src/gamepad/view.rs", ".border_color(", 5),
-    ("libs/gpui/src/gamepad/view.rs", ".text_color(", 11),
-    (
-        "libs/gpui/src/settings_panel/view/display_layout_card.rs",
-        ".text_color(",
-        1,
-    ),
-    ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 2),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".text_color(",
-        1,
-    ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 8),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
-    (
-        "libs/gpui/src/settings_panel/view/mod.rs",
-        ".border_color(",
-        4,
-    ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".rounded(", 5),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".shadow(", 1),
-    (
-        "libs/gpui/src/settings_panel/view/mod.rs",
-        ".text_color(",
-        9,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".text_color(",
-        1,
-    ),
-];
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 0] = [];
 
 #[test]
 fn settings_surfaces_compose_shared_components() {
@@ -2001,7 +1926,9 @@ fn settings_surfaces_compose_shared_components() {
 
     for (relative, path) in surface_sources(&workspace) {
         if !in_settings_scope(&relative)
-            || RECIPE_OWNERS.contains(&relative.as_str())
+            || RECIPE_OWNERS
+                .iter()
+                .any(|owner| relative.starts_with(owner))
             || is_component_recipe_owner(&relative)
         {
             continue;

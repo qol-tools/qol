@@ -1,7 +1,5 @@
 use crate::key::Key;
 use crate::kit::Chip as KitChip;
-use crate::text::TextStyled;
-use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -11,9 +9,9 @@ use qol_config::contract::NestedListSpec;
 use qol_config::object_array::pretty_label;
 
 use super::super::components::{
-    settings_label_group, settings_mono_label, settings_value_group, settings_value_text, HintTone,
-    RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip, SettingsRow, SettingsTextField,
-    SettingsToggle, SettingsValueTone,
+    settings_arrow, settings_label_group, settings_mono_label, settings_value_group,
+    settings_value_text, HintTone, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip,
+    SettingsRow, SettingsTextField, SettingsToggle, SettingsValueTone,
 };
 use super::super::entry_form::{count_label, EntryForm, FormOutput, FormQuestion, FormValue};
 use super::super::object_array_row::{
@@ -822,11 +820,7 @@ impl SettingsPanelView {
             .overflow_hidden();
         for part in parts {
             strip = strip.child(match part {
-                ChipRowPart::Arrow => div()
-                    .flex_none()
-                    .text(TextStyle::Detail)
-                    .text_color(rgb(arrow))
-                    .child("\u{2192}"),
+                ChipRowPart::Arrow => settings_arrow(arrow),
                 ChipRowPart::Chip(chip) => match chip.tone {
                     ChipTone::Modifier | ChipTone::Key => {
                         self.kit.chip(KitChip::KeyText(chip.label.into()), ground)

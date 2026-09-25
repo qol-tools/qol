@@ -5,9 +5,7 @@ mod structured_list_editor;
 
 use crate::key::Key;
 use crate::kit::Chip;
-use crate::text::TextStyled;
 use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
-use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -16,9 +14,14 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::components::{
+    floating_card, rail_scrim_layer, settings_band_bar, settings_card, settings_filter_field,
+    settings_filter_overlay,
+};
+use super::components::{
     number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
-    rail_caption_height, settings_action_affordance, settings_action_spinner, settings_label_group,
-    settings_page, settings_query_spinner, settings_value_text, ChoiceArt, RowGround,
+    rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
+    settings_action_spinner, settings_error_line, settings_label_group, settings_page,
+    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, RowGround,
     SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
     SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
@@ -2658,13 +2661,12 @@ impl SettingsPanelView {
                 );
             }
             RowControl::Unsupported { reason, .. } => {
-                return div()
-                    .text(TextStyle::Detail)
-                    .text_color(rgb(match row {
-                        RowGround::Pane => self.kit.grounds.pane.faint,
-                        RowGround::Band => self.kit.grounds.band.soft,
-                    }))
-                    .child(format!("Unsupported: {reason}"));
+                return settings_value_text(
+                    format!("Unsupported: {reason}"),
+                    SettingsValueTone::Muted,
+                    row,
+                    self.kit,
+                );
             }
             RowControl::Text(_)
             | RowControl::Color(_)
@@ -2699,16 +2701,10 @@ impl SettingsPanelView {
             ));
         }
         if let Some(color) = self.swatch_color(index) {
-            cell = cell.child(
-                div()
-                    .w_3()
-                    .h_3()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .bg(rgb(color)),
-            );
+            cell = cell.child(settings_swatch(color));
         }
         if let Some(accent) = self.option_accent(index) {
-            cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
+            cell = cell.child(settings_accent_dot(accent));
         }
         cell.flex_none()
             .min_w(px(value_cell_width(&self.level().rows[index].control)))
@@ -2941,13 +2937,7 @@ impl SettingsPanelView {
             _ => None,
         };
         if let Some(error) = error {
-            container = container.child(
-                div()
-                    .px(px(qol_theme::SPACE_INSET))
-                    .text(TextStyle::Detail)
-                    .text_color(rgb(self.kit.palette.danger))
-                    .child(error.clone()),
-            );
+            container = container.child(settings_error_line(error.clone(), self.kit));
         }
         container
     }
@@ -2961,13 +2951,7 @@ impl SettingsPanelView {
         div()
             .id(("settings-gamepad", index))
             .h(px(super::PANEL_GAMEPAD_HEIGHT))
-            .rounded(px(qol_theme::RADIUS_CARD))
-            .border_1()
-            .border_color(if selected {
-                rgb(self.kit.grounds.pane.mark)
-            } else {
-                rgba(0)
-            })
+            .map(|card| settings_card(card, selected, self.kit))
             .cursor(CursorStyle::PointingHand)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
@@ -3006,17 +2990,7 @@ impl SettingsPanelView {
             .ml(px(-qol_theme::SPACE_INSET))
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
             .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
-            .child(
-                div()
-                    .min_w_0()
-                    .text(TextStyle::Name)
-                    .text_color(rgb(if active {
-                        self.kit.grounds.rail.ink
-                    } else {
-                        self.kit.grounds.rail.soft
-                    }))
-                    .child(label),
-            )
+            .child(rail_item_label(label, active, self.kit))
             .cursor(CursorStyle::PointingHand);
         if active {
             item = self.paint_selection(item);
@@ -3100,7 +3074,6 @@ impl SettingsPanelView {
             return div().id(("settings-list", index));
         };
         let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
-        let rest = ground.rest(self.kit);
         let mut header_status = div().flex().items_center().gap(px(qol_theme::SPACE_INSET));
         if *runtime_active {
             header_status = header_status.child(
@@ -3142,7 +3115,7 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
-            .rounded(px(qol_theme::RADIUS_CARD));
+            .map(|card| settings_card(card, false, self.kit));
         if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
@@ -3155,28 +3128,16 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap(px(qol_theme::SPACE_CELL))
-                .child(
-                    div()
-                        .flex()
-                        .min_w_0()
-                        .flex_1()
-                        .flex_col()
-                        .child(div().text(TextStyle::Name).text_color(rgb(rest.ink)).child(
-                            if filter.trim().is_empty() {
-                                row.label.clone()
-                            } else {
-                                filter.clone()
-                            },
-                        ))
-                        .when_some(row.description.clone(), |group, description| {
-                            group.child(
-                                div()
-                                    .text(TextStyle::Detail)
-                                    .text_color(rgb(rest.soft))
-                                    .child(description),
-                            )
-                        }),
-                )
+                .child(settings_label_group(
+                    if filter.trim().is_empty() {
+                        row.label.clone()
+                    } else {
+                        filter.clone()
+                    },
+                    row.description.clone().map(Into::into),
+                    ground,
+                    self.kit,
+                ))
                 .child(header_status),
         );
         container.child(self.row_bounds_canvas(index))
@@ -3213,7 +3174,6 @@ impl SettingsPanelView {
         cx: &mut Context<Self>,
     ) -> Div {
         let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
-        let rest = ground.rest(self.kit);
         let mut container = div()
             .flex()
             .flex_col()
@@ -3225,7 +3185,7 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
-            .rounded(px(qol_theme::RADIUS_CARD));
+            .map(|card| settings_card(card, false, self.kit));
         if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
@@ -3248,27 +3208,12 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap(px(qol_theme::SPACE_CELL))
-                .child(
-                    div()
-                        .flex()
-                        .min_w_0()
-                        .flex_1()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text(TextStyle::Name)
-                                .text_color(rgb(rest.ink))
-                                .child(row.label.clone()),
-                        )
-                        .when_some(row.description.clone(), |group, description| {
-                            group.child(
-                                div()
-                                    .text(TextStyle::Detail)
-                                    .text_color(rgb(rest.soft))
-                                    .child(description),
-                            )
-                        }),
-                )
+                .child(settings_label_group(
+                    row.label.clone(),
+                    row.description.clone().map(Into::into),
+                    ground,
+                    self.kit,
+                ))
                 .child(settings_value_text(
                     value,
                     self.value_tone(index),
@@ -3388,7 +3333,6 @@ impl Render for SettingsPanelView {
             )
             .flex()
             .flex_col()
-            .text_color(rgb(self.kit.grounds.pane.ink))
             .child(self.render_band(cx))
             .child(self.render_content(
                 cx,
@@ -3586,10 +3530,7 @@ impl SettingsPanelView {
             .w(px(super::PANEL_RAIL_WIDTH))
             .p(px(qol_theme::SPACE_INSET))
             .children(rail_dots);
-        let scrim = div()
-            .absolute()
-            .inset_0()
-            .bg(crate::kit::rail_scrim(self.kit.grounds.pane.bg));
+        let scrim = rail_scrim_layer(self.kit);
         let custom_breadcrumbs = if self.current_source_is_custom() {
             self.custom_view()
                 .map(|custom| custom.breadcrumb_labels(cx).len())
@@ -3639,7 +3580,7 @@ impl SettingsPanelView {
                     self.kit,
                     self.hairline(),
                 )
-                .shadow(crate::kit::float_shadow(self.kit.grounds.pane.ink));
+                .map(|card| floating_card(card, self.kit));
                 if snapped {
                     let reached = progress(1.0);
                     let base = super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached;
@@ -3733,82 +3674,22 @@ impl SettingsPanelView {
 
     fn render_band(&self, cx: &App) -> Div {
         let trail = self.trail(cx);
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(qol_theme::SPACE_GUTTER))
-            .h(px(super::PANEL_BAND_HEIGHT))
-            .px(px(qol_theme::SPACE_GUTTER))
-            .border_b(px(qol_theme::LINE))
-            .border_color(self.hairline())
-            .bg(rgb(self.kit.grounds.rail.bg))
+        settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit)
             .panel_drag_area()
             .child(super::components::settings_crumb_trail(trail, self.kit))
     }
 
     fn render_filter_field(&self) -> Div {
-        let empty = self.filter.is_empty();
-        let text = if empty {
-            "Filter settings".to_string()
-        } else {
-            self.filter.clone()
-        };
-        let field = div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(qol_theme::SPACE_INSET))
-            .h(px(super::PANEL_FILTER_HEIGHT))
-            .px(px(qol_theme::SPACE_PAD))
-            .rounded(px(qol_theme::RADIUS_WELL))
-            .bg(rgba(self.kit.washes.fill_resting.packed()))
-            .border(px(qol_theme::LINE))
-            .border_color(self.hairline())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text(TextStyle::Code)
-                    .text_color(rgb(if empty {
-                        self.kit.grounds.pane.faint
-                    } else {
-                        self.kit.grounds.pane.ink
-                    }))
-                    .child(text),
-            );
-        if self.filter_open {
-            return field
-                .bg(rgb(self.kit.grounds.pane.bg))
-                .border_color(rgb(self.kit.grounds.pane.mark))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(1.5))
-                        .h(px(16.))
-                        .bg(rgb(self.kit.grounds.pane.mark)),
-                );
-        }
-        field.child(
-            self.kit
-                .chip(Chip::Key(Key::symbol('/')), self.kit.grounds.pane),
+        settings_filter_field(
+            &self.filter,
+            super::PANEL_FILTER_HEIGHT,
+            self.filter_open,
+            self.kit,
         )
     }
 
     fn render_filter_overlay(&self) -> Div {
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .px(px(qol_theme::SPACE_PAD))
-            .pt(px(qol_theme::SPACE_CELL))
-            .pb(px(qol_theme::SPACE_INSET))
-            .bg(rgb(self.kit.grounds.pane.bg))
-            .child(self.render_filter_field())
+        settings_filter_overlay(self.kit).child(self.render_filter_field())
     }
 
     fn body_groups(&self) -> Vec<(String, Option<String>, Vec<usize>)> {

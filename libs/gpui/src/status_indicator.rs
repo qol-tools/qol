@@ -70,7 +70,7 @@ impl RenderOnce for StatusIndicator {
         div()
             .flex()
             .items_center()
-            .gap_1()
+            .gap(px(qol_theme::SPACE_TIGHT))
             .text(TextStyle::Detail)
             .text_color(self.color)
             .child(dot)

@@ -1,5 +1,3 @@
-use crate::text::TextStyled;
-use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -7,7 +5,8 @@ use gpui::*;
 use qol_config::contract::{is_picture_spec, resolve_slider_action, ResolvedRowAction};
 
 use super::super::components::{
-    settings_action_spinner, settings_label, ChoiceArt, RowGround, SettingsChoiceValue, SettingsRow,
+    settings_action_spinner, settings_label, settings_slider_percent, settings_slider_track,
+    ChoiceArt, RowGround, SettingsChoiceValue, SettingsRow,
 };
 use super::super::rows::{
     begin_list_item_action, filtered_list_items, list_item_actions, list_slider_value,
@@ -652,31 +651,10 @@ where
         .gap(px(qol_theme::SPACE_INSET))
         .cursor(CursorStyle::PointingHand)
         .child(
-            div()
-                .relative()
-                .w(px(72.))
-                .h(px(4.))
-                .rounded_full()
-                .overflow_hidden()
-                .bg(rgba(ground.well.packed()))
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .h_full()
-                        .w(px(fill))
-                        .rounded_full()
-                        .bg(rgb(ground.mark)),
-                )
+            settings_slider_track(fill, ground)
                 .child(slider_drag_track(cx, row, id, on_down, move_to, release)),
         )
-        .child(
-            div()
-                .text(TextStyle::Code)
-                .text_color(rgb(kit.grounds.pane.soft))
-                .child(percent),
-        )
+        .child(settings_slider_percent(percent, kit))
 }
 
 fn list_card_slider_value(

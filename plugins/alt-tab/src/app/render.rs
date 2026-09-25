@@ -281,7 +281,10 @@ fn hint_bar(available_width: f32) -> Div {
         BarItem::Hint(HintDescriptor::new(Key::TAB.alt().shift(), "previous", 2)),
         BarItem::Hint(HintDescriptor::new(Key::letter('w'), "close window", 1)),
     ];
-    let mut bar = kit.hint_bar().justify_center().gap(px(26.0));
+    let mut bar = kit
+        .hint_bar()
+        .justify_center()
+        .gap(px(qol_gpui::theme::SPACE_GUTTER));
     for item in fit_hints(available_width, &items) {
         if let BarItem::Hint(hint) = item {
             bar = bar.child(kit.hint(hint.key, hint.label));
@@ -336,9 +339,9 @@ fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
                 .h_full()
                 .track_scroll(context.grid_scroll)
                 .overflow_y_scroll()
-                .px_5()
-                .py(px(18.0))
-                .gap_4()
+                .px(px(qol_gpui::theme::SPACE_GUTTER))
+                .py(px(qol_gpui::theme::SPACE_PAD))
+                .gap(px(qol_gpui::theme::SPACE_PAD))
                 .when(windows.is_empty(), |s| {
                     s.items_center().justify_center().child(qol_gpui::Busy::new(
                         "alt-tab-scanning",
