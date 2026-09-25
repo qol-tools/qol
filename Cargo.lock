@@ -6063,7 +6063,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.82.0"
+version = "0.82.1"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6618,7 +6618,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6920,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.75.0"
+version = "3.75.1"
 dependencies = [
  "anyhow",
  "axum",
