@@ -428,8 +428,6 @@ fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div
     })
 }
 
-const FRESH_FRAME_FADE: std::time::Duration = std::time::Duration::from_millis(180);
-
 fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &CardMetrics) -> Div {
     let snap = context.snap;
     let palette = &snap.palette;
@@ -658,7 +656,7 @@ fn fade_in(
                 .bg(rgb(palette.placeholder_bg))
                 .with_animation(
                     ("fresh-frame", generation),
-                    Animation::new(FRESH_FRAME_FADE).with_easing(ease_out_quint()),
+                    qol_gpui::motion::animation(qol_gpui::theme::Motion::SETTLE),
                     |overlay, delta| overlay.opacity(1.0 - delta),
                 ),
         )

@@ -1,9 +1,6 @@
-use std::time::Duration;
-
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, Animation, AnimationExt as _, AnyElement, App, Div, ElementId, Hsla, RenderOnce,
-    Window,
+    div, px, rgb, AnimationExt as _, AnyElement, App, Div, ElementId, Hsla, RenderOnce, Window,
 };
 use qol_theme::SystemPalette;
 
@@ -155,10 +152,8 @@ impl RenderOnce for Trail {
             .child(inner().with_animations(
                 animation_id,
                 vec![
-                    Animation::new(Duration::from_millis(motion::TRAVEL_MS))
-                        .with_easing(motion::ease_travel),
-                    Animation::new(Duration::from_millis(motion::DRAIN_MS))
-                        .with_easing(motion::ease_drain),
+                    crate::motion::animation(qol_theme::Motion::TRAVEL),
+                    crate::motion::animation(qol_theme::Motion::QUICK),
                 ],
                 move |inner, ix, delta| {
                     let phase = if ix == 0 {

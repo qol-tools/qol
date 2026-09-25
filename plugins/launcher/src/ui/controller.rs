@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::time::Duration;
 
 use gpui::{px, size, AppContext as _, AsyncApp, ClipboardItem, Context, KeyDownEvent, WeakEntity};
 
@@ -9,7 +8,6 @@ use super::trace;
 use super::LauncherView;
 use crate::discovery::search::ResultItem;
 
-const FLOW_DEBOUNCE: Duration = Duration::from_millis(200);
 const DETAIL_SCROLL_STEP: f32 = 54.0;
 
 enum ClipboardShortcut {
@@ -298,7 +296,10 @@ impl LauncherView {
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
-                async_cx.background_executor().timer(FLOW_DEBOUNCE).await;
+                async_cx
+                    .background_executor()
+                    .timer(qol_gpui::theme::SETTLE_INPUT)
+                    .await;
                 this.update(&mut async_cx, |view, cx| {
                     let current = view.state.flow.as_ref().is_some_and(|session| {
                         session.matches_request(epoch, generation) && !session.in_flight

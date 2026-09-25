@@ -2,7 +2,6 @@ use gpui::*;
 
 use crate::theme::SettingsPanelPalette;
 
-pub const TRANSITION: std::time::Duration = std::time::Duration::from_millis(180);
 pub const CARD_ACCENT: f32 = qol_theme::SPACE_MARK;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,7 +64,10 @@ pub fn after_transition<V: 'static>(
     cx.spawn(move |view: WeakEntity<V>, cx: &mut AsyncApp| {
         let mut async_cx = cx.clone();
         async move {
-            async_cx.background_executor().timer(TRANSITION).await;
+            async_cx
+                .background_executor()
+                .timer(qol_theme::Motion::SETTLE.duration)
+                .await;
             let _ = view.update(&mut async_cx, finish);
         }
     })
@@ -165,7 +167,7 @@ pub fn drawer(palette: SettingsPanelPalette, card: Div, slide: Slide) -> AnyElem
     ))
     .with_animation(
         ("settings-card-drawer", slide.step),
-        Animation::new(TRANSITION).with_easing(ease_out_quint()),
+        crate::motion::animation(qol_theme::Motion::SETTLE),
         move |card, delta| card.left(px(slide.from + (slide.to - slide.from) * delta)),
     )
     .into_any_element()
@@ -190,7 +192,7 @@ fn animate_sliver<E: Styled + IntoElement + 'static>(
             SharedString::from(format!("{animation_id}-sliver-{index}")),
             shrink.step,
         ),
-        Animation::new(TRANSITION).with_easing(ease_out_quint()),
+        crate::motion::animation(qol_theme::Motion::SETTLE),
         move |stub, delta| {
             stub.left(px(step_between(start.left, target.left, delta)))
                 .w(px(step_between(start.width, target.width, delta)))
@@ -225,7 +227,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
                         SharedString::from(format!("{animation_id}-front-edge")),
                         pop.step,
                     ),
-                    Animation::new(TRANSITION).with_easing(ease_out_quint()),
+                    crate::motion::animation(qol_theme::Motion::SETTLE),
                     move |edge, delta| edge.border_color(blend(start, accent, delta)),
                 )
                 .into_any_element()
@@ -249,7 +251,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
         Some(slide) => front
             .with_animation(
                 (animation_id, slide.step),
-                Animation::new(TRANSITION).with_easing(ease_out_quint()),
+                crate::motion::animation(qol_theme::Motion::SETTLE),
                 move |card, delta| card.left(px(slide.from + (slide.to - slide.from) * delta)),
             )
             .into_any_element(),
@@ -288,7 +290,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
                                         )),
                                         shrink.step,
                                     ),
-                                    Animation::new(TRANSITION).with_easing(ease_out_quint()),
+                                    crate::motion::animation(qol_theme::Motion::SETTLE),
                                     move |edge, delta| {
                                         edge.border_color(blend(edge_start, edge_end, delta))
                                     },
@@ -327,7 +329,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
                                             )),
                                             shrink.step,
                                         ),
-                                        Animation::new(TRANSITION).with_easing(ease_out_quint()),
+                                        crate::motion::animation(qol_theme::Motion::SETTLE),
                                         move |mark, delta| {
                                             mark.bg(blend(mark_start, mark_end, delta))
                                         },

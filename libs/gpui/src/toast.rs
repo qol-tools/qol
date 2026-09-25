@@ -123,9 +123,9 @@ pub enum ToastTone {
 impl ToastTone {
     fn default_timeout(self) -> Option<Duration> {
         match self {
-            Self::Neutral | Self::Info | Self::Success => Some(Duration::from_secs(4)),
-            Self::Warning => Some(Duration::from_secs(8)),
-            Self::Danger => None,
+            Self::Neutral | Self::Info | Self::Success => Some(qol_theme::STAY_BRIEF),
+            Self::Warning => Some(qol_theme::STAY_LONG),
+            Self::Danger => qol_theme::STAY_UNTIL_CLOSED,
         }
     }
 

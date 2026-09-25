@@ -2,17 +2,19 @@ use qol_color::{mix_rgb, rgba_from_rgb, with_alpha};
 use qol_theme::{
     contrast_ratio, css, css_rgba_milli, dark_accent_preset, dark_theme,
     dark_theme_with_accent_key, desktop_theme_preview, preset_accent_key, resolve_surface_override,
-    runtime_dark_theme, theme_for_native_key, web_theme_preview, PickerSurfacePalette,
-    SettingsPanelPalette, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM,
-    DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
-    HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
-    LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SPACE_GUTTER, SPACE_LADDER, TEXT_SCALE,
-    THEME_COLOR_SENTINEL,
+    runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Motion,
+    PickerSurfacePalette, SettingsPanelPalette, ThemeMode, WashPalette, DARK_ACCENT_PRESETS,
+    DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR,
+    HEIGHT_INLINE, HEIGHT_LADDER, HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS,
+    LIGHT_REFERENCE, LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER,
+    SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE,
+    THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
 };
 use std::{
     fs,
     path::Path,
     sync::{Mutex, OnceLock},
+    time::Duration,
 };
 
 #[test]
@@ -2227,9 +2229,9 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
     (
         "libs/gpui/src/settings_panel/view/mod.rs",
         ".text_color(",
-        10,
+        9,
     ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".text_size(", 9),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".text_size(", 8),
     (
         "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
         ".border_color(",
@@ -2596,4 +2598,70 @@ fn web_theme_previews_match_the_locked_pictures() {
     assert_eq!(midnight.muted, 0x555974);
 
     assert!(web_theme_preview("nope").is_none());
+}
+
+const MOTION_OWNER: &str = "libs/gpui/src/motion.rs";
+
+const HAND_MOTION: [&str; 4] = [
+    "Animation::new(",
+    ".with_easing(",
+    "ease_out_quint",
+    "ease_in_out",
+];
+
+fn writes_hand_motion(line: &str, pattern: &str) -> bool {
+    line.match_indices(pattern).any(|(at, _)| {
+        !line[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|before| before.is_alphanumeric() || before == '_')
+    })
+}
+
+#[test]
+fn every_animation_takes_a_theme_motion() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if relative == MOTION_OWNER {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            for pattern in HAND_MOTION {
+                if writes_hand_motion(line, pattern) {
+                    problems.push(format!("{relative}:{} writes {pattern}", index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Every animation is qol_gpui::motion::animation(Motion::*), so its time and curve come from the theme.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn motion_curves_start_at_rest_and_arrive_exactly() {
+    for motion in Motion::ALL {
+        assert_eq!(motion.progress(Duration::ZERO), 0.0, "{motion:?}");
+        assert_eq!(motion.progress(motion.duration), 1.0, "{motion:?}");
+        assert_eq!(motion.progress(motion.duration * 3), 1.0, "{motion:?}");
+    }
+    assert_eq!(Curve::Travel.at(0.5), 0.5);
+    assert!(Curve::Settle.at(0.5) > 0.96);
+}
+
+#[test]
+fn stays_and_waits_hold_their_approved_values() {
+    assert_eq!(
+        Motion::ALL.map(|motion| motion.duration.as_millis()),
+        [140, 180, 260, 1000]
+    );
+    assert_eq!(STAY_BRIEF, Duration::from_secs(4));
+    assert_eq!(STAY_LONG, Duration::from_secs(8));
+    assert_eq!(STAY_UNTIL_CLOSED, None);
+    assert_eq!(WAIT_BEFORE_BUSY, Duration::from_millis(300));
+    assert_eq!(SETTLE_INPUT, Duration::from_millis(140));
 }

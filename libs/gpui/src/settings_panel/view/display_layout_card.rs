@@ -603,17 +603,14 @@ impl SettingsPanelView {
                                 "settings-display-layout-swap-{index}-{}",
                                 self.display_layout_motion.step
                             );
-                            stage.child(
-                                tile.with_animation(
-                                    ElementId::Name(id.into()),
-                                    Animation::new(crate::deck::TRANSITION)
-                                        .with_easing(ease_out_quint()),
-                                    move |tile, delta| {
-                                        tile.left(px(start.0 + (end.0 - start.0) * delta))
-                                            .top(px(start.1 + (end.1 - start.1) * delta))
-                                    },
-                                ),
-                            )
+                            stage.child(tile.with_animation(
+                                ElementId::Name(id.into()),
+                                crate::motion::animation(qol_theme::Motion::SETTLE),
+                                move |tile, delta| {
+                                    tile.left(px(start.0 + (end.0 - start.0) * delta))
+                                        .top(px(start.1 + (end.1 - start.1) * delta))
+                                },
+                            ))
                         }
                         None => stage.child(tile),
                     };

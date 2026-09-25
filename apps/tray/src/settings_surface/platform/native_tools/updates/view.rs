@@ -28,8 +28,6 @@ use super::model::{
 const MAX_VISIBLE: usize = 10;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_STALE_AFTER: Duration = Duration::from_secs(5);
-const FINISHED_SHOWN: Duration = Duration::from_secs(4);
-const FINISHED_FADE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Selection {
@@ -186,7 +184,9 @@ impl UpdatesView {
 
     fn forget_faded(&mut self) {
         self.visited.retain(|_, since| {
-            since.is_none_or(|since| since.elapsed() < FINISHED_SHOWN + FINISHED_FADE)
+            since.is_none_or(|since| {
+                since.elapsed() < qol_theme::STAY_BRIEF + qol_theme::Motion::FADE.duration
+            })
         });
     }
 
@@ -683,8 +683,7 @@ impl Render for UpdatesView {
 }
 
 fn fade_opacity(elapsed: Duration) -> f32 {
-    let faded = elapsed.saturating_sub(FINISHED_SHOWN);
-    1.0 - (faded.as_secs_f32() / FINISHED_FADE.as_secs_f32()).min(1.0)
+    1.0 - qol_theme::Motion::FADE.progress(elapsed.saturating_sub(qol_theme::STAY_BRIEF))
 }
 
 fn finished(state: TargetState) -> bool {
@@ -772,7 +771,13 @@ mod tests {
 
     #[test]
     fn finished_row_holds_then_fades_out() {
-        let cases = [(0, 1.0), (4000, 1.0), (4500, 0.5), (5000, 0.0), (9000, 0.0)];
+        let cases = [
+            (0, 1.0),
+            (4000, 1.0),
+            (4500, 0.03125),
+            (5000, 0.0),
+            (9000, 0.0),
+        ];
         for (millis, expected) in cases {
             let opacity = fade_opacity(Duration::from_millis(millis));
             assert!(

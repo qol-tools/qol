@@ -16,6 +16,7 @@ pub mod image_registry;
 pub mod keepalive;
 pub mod kit;
 pub mod monitor;
+pub mod motion;
 pub mod phantom_nav;
 pub mod pictures;
 pub mod placement;

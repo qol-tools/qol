@@ -46,10 +46,6 @@ type SampledQueryResults =
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
-/// How long the rail selection must hold still before its source starts polling.
-const QUERY_SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
-/// How long a runtime query may take before its row admits it is waiting.
-const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,7 +62,6 @@ fn focus_level(source_menu: bool, sources: usize) -> PanelFocus {
     }
 }
 
-const RAIL_TRANSITION: std::time::Duration = std::time::Duration::from_millis(180);
 const RAIL_SECTION_OPACITY: f32 = 0.55;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -110,7 +105,7 @@ fn transition_policy(in_flight: bool, state_changed: bool) -> Option<TransitionA
 }
 
 fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    started.is_some_and(|started| now.duration_since(started) < RAIL_TRANSITION)
+    started.is_some_and(|started| now.duration_since(started) < qol_theme::Motion::SETTLE.duration)
 }
 
 /// Collapses the states of every query a row depends on into the one the row
@@ -932,7 +927,7 @@ impl SettingsPanelView {
             async move {
                 async_cx
                     .background_executor()
-                    .timer(QUERY_SETTLE_DEBOUNCE)
+                    .timer(qol_theme::SETTLE_INPUT)
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if this.source_settle_generation == generation {
@@ -1167,7 +1162,7 @@ impl SettingsPanelView {
             async move {
                 async_cx
                     .background_executor()
-                    .timer(QUERY_LOADING_GRACE)
+                    .timer(qol_theme::WAIT_BEFORE_BUSY)
                     .await;
                 let _ = this.update(&mut async_cx, |_, cx| cx.notify());
             }
@@ -2606,7 +2601,7 @@ impl SettingsPanelView {
             row_query_names(row)
                 .into_iter()
                 .map(|query| self.query_states.get(&(row.source, query.to_string()))),
-            QUERY_LOADING_GRACE,
+            qol_theme::WAIT_BEFORE_BUSY,
             std::time::Instant::now(),
         )
     }
@@ -3592,7 +3587,7 @@ impl SettingsPanelView {
         } else {
             deck::slide(self.deck_transition.step, self.deck_motion, depth, width)
         };
-        let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
+        let deck_ease = || crate::motion::animation(qol_theme::Motion::SETTLE);
         if !self.rail_is_open() {
             if depth == 0 && drawer.is_none() {
                 let card = match slide {
@@ -3620,7 +3615,7 @@ impl SettingsPanelView {
         let step = self.rail_transition.step;
         let snapped = self.rail_transition.snapped
             || !transition_in_flight(self.rail_transition.started, std::time::Instant::now());
-        let ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_in_out);
+        let ease = || crate::motion::animation(qol_theme::Motion::SETTLE);
         let rail_column = div()
             .id("settings-section-rail")
             .flex_none()
@@ -3674,7 +3669,7 @@ impl SettingsPanelView {
                 .child(scrim.opacity(reached))
                 .with_animation(
                     ("settings-rail-depth", self.deck_transition.step),
-                    Animation::new(deck::TRANSITION).with_easing(ease_out_quint()),
+                    crate::motion::animation(qol_theme::Motion::SETTLE),
                     move |rail, delta| {
                         let rest = from + (rest - from) * delta;
                         rail.opacity(1.0 - (1.0 - rest) * reached)

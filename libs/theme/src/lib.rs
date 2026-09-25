@@ -1,4 +1,9 @@
 pub mod css;
+pub mod motion;
+
+pub use motion::{
+    Curve, Motion, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, WAIT_BEFORE_BUSY,
+};
 
 use qol_color::{
     clamp_unit, mix_rgb, parse_hex_color, rgb24, rgba_from_rgb, scale_rgb, with_alpha,

@@ -30,7 +30,6 @@ const EDGE: f32 = qol_gpui::theme::SPACE_INSET;
 const SCROLL_STEP: f32 = 1.1;
 const PIXELS_PER_NOTCH: f32 = 60.0;
 const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
-const SCROLL_COMMIT: std::time::Duration = std::time::Duration::from_millis(200);
 const PIN_CACHE_CAPACITY: usize = 2;
 const PIN_CACHE_SIZE: (f32, f32) = (360.0, 240.0);
 const PIN_CACHE_SIZE_KEY: (i32, i32) = (PIN_CACHE_SIZE.0 as i32, PIN_CACHE_SIZE.1 as i32);
@@ -1152,7 +1151,7 @@ impl PinnedView {
             session,
         });
         self.scroll_resize = Some(ScrollResize {
-            commit_at: Instant::now() + SCROLL_COMMIT,
+            commit_at: Instant::now() + qol_gpui::theme::SETTLE_INPUT,
         });
         true
     }
@@ -1164,7 +1163,7 @@ impl PinnedView {
         let Some(scroll) = self.scroll_resize.as_mut() else {
             return;
         };
-        scroll.commit_at = Instant::now() + SCROLL_COMMIT;
+        scroll.commit_at = Instant::now() + qol_gpui::theme::SETTLE_INPUT;
         let factor = clamp_scale_factor(SCROLL_STEP.powi(steps), current.w, current.h);
         if (factor - 1.0).abs() < f32::EPSILON {
             return;
