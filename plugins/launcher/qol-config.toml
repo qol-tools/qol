@@ -7,15 +7,26 @@ label = "Launcher"
 description = "Universal search with action modifiers."
 actions = ["open"]
 
+[field.extra_file_scan_roots]
+type = "string_array"
+config_key = "extra_file_scan_roots"
+label = "Extra file scan roots"
+description = "Additional folders whose files should appear in launcher search."
+section = "launcher"
+card_description = "Folders the launcher also searches."
+item_label = "folder"
+default = []
+placeholder = "/path/to/files"
+
 [section.appearance]
-label = "Appearance"
-description = "Debug visualisation for the hidden launcher ghost window."
+label = "Debug"
+description = "Only for tracking down launcher problems."
 actions = ["open"]
 
 [field.display_ghost_opacity]
 type = "number"
 config_key = "display.ghost_opacity"
-label = "Ghost Opacity (debug)"
+label = "Ghost opacity"
 description = "Opacity of the hidden launcher window in debug builds. 0 = invisible."
 section = "appearance"
 default = 0.0
@@ -26,19 +37,8 @@ step = 0.05
 [field.display_ghost_debug_color]
 type = "color"
 config_key = "display.ghost_debug_color"
-label = "Ghost Color (debug)"
+label = "Ghost color"
 description = "Background hex color of the hidden launcher window in debug builds."
 section = "appearance"
 placeholder = "00ff00"
 default = "00ff00"
-
-[field.extra_file_scan_roots]
-type = "string_array"
-config_key = "extra_file_scan_roots"
-label = "Extra File Scan Roots"
-description = "Additional folders whose files should appear in launcher search."
-section = "launcher"
-card_description = "Folders the launcher also searches."
-item_label = "folder"
-default = []
-placeholder = "/path/to/files"

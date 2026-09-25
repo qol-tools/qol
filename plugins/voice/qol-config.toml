@@ -1,5 +1,5 @@
 schema_version = 1
-title = "QoL Voice"
+title = "Voice"
 description = "Enable speech recognition and route completed turns to a live terminal."
 
 [section.activation]
@@ -9,7 +9,7 @@ description = "Whether qol listens on this computer at all."
 [field.voice_enabled]
 type = "boolean"
 config_key = "activation.enabled"
-label = "Enable QoL Voice"
+label = "Enable Voice"
 description = "Listen globally and route completed speech while this device is running."
 section = "activation"
 default = false
@@ -25,12 +25,12 @@ label = "Status"
 section = "session"
 query = "session_status"
 value_from = "state"
-label_map = { idle = "Not Listening", listening = "Listening", stopping = "Stopping", failed = "Failed" }
+label_map = { idle = "Not listening", listening = "Listening", stopping = "Stopping", failed = "Failed" }
 tone_map = { listening = "success", stopping = "warning", failed = "error" }
 
 [field.live_transcript]
 type = "list"
-label = "Live Transcript"
+label = "Live transcript"
 section = "session"
 query = "session_transcripts"
 row_label = "{text}"
@@ -39,7 +39,7 @@ empty_message = "Speak while Voice is listening to see your transcript."
 card_description = "What the session hears right now."
 
 [section.audio]
-label = "Audio Input"
+label = "Audio input"
 description = "Which microphone the session listens to."
 
 [field.input_device]
@@ -54,13 +54,13 @@ lookup_label = "microphones"
 card_description = "The microphone Voice listens to."
 
 [field.input_device.option_labels]
-default = "System Default"
+default = "System default"
 
 [field.input_device.option_pictures]
 default = "mic-default"
 
 [section.routing]
-label = "Terminal Routing"
+label = "Terminal routing"
 description = "Where finished speech is typed."
 
 [field.terminal_target]
@@ -99,13 +99,13 @@ insert = "insert-only"
 submit = "insert-submit"
 
 [section.recognition]
-label = "Speech Recognition"
+label = "Speech recognition"
 description = "Which engine turns speech into text."
 
 [field.stt_enabled]
 type = "boolean"
 config_key = "recognition.enabled"
-label = "Enable Transcription"
+label = "Enable transcription"
 section = "recognition"
 default = true
 
@@ -146,7 +146,7 @@ card_description = "The model files Voice loads."
 [field.stt_model_kind]
 type = "select"
 config_key = "recognition.model_kind"
-label = "Model Family"
+label = "Model family"
 description = "Automatic reads the family from the model directory."
 section = "recognition"
 default = "auto"
@@ -164,7 +164,7 @@ options = [
 
 [field.stt_model_kind.option_labels]
 auto = "Automatic"
-transducer = "Zipformer Transducer"
+transducer = "Zipformer transducer"
 nemo-transducer = "NeMo Transducer (Parakeet)"
 whisper = "Whisper"
 sense-voice = "SenseVoice"
@@ -185,7 +185,7 @@ moonshine = "letters:MS"
 [field.websocket_endpoint]
 type = "string"
 config_key = "recognition.websocket_endpoint"
-label = "WebSocket Endpoint"
+label = "WebSocket endpoint"
 description = "Required when the WebSocket compatibility provider is selected."
 section = "recognition"
 default = ""
@@ -193,20 +193,20 @@ default = ""
 [field.websocket_engine]
 type = "string"
 config_key = "recognition.websocket_engine"
-label = "Server Engine"
+label = "Server engine"
 description = "Engine identifier understood by the selected WebSocket server."
 section = "recognition"
 default = ""
 
 [section.segmentation]
-label = "Utterance Segmentation"
+label = "Utterance segmentation"
 description = "When qol decides you have started and stopped talking."
 
 [field.threshold]
 type = "number"
 variant = "slider"
 config_key = "segmentation.threshold_permille"
-label = "Activation Threshold"
+label = "Activation threshold"
 section = "segmentation"
 default = 10
 min = 1
@@ -216,7 +216,7 @@ step = 1
 [field.onset]
 type = "number"
 config_key = "segmentation.onset_ms"
-label = "Onset Duration"
+label = "Onset duration"
 description = "Continuous voice activity required before opening a turn."
 section = "segmentation"
 default = 100
@@ -227,7 +227,7 @@ step = 10
 [field.silence]
 type = "number"
 config_key = "segmentation.silence_ms"
-label = "Silence Duration"
+label = "Silence duration"
 description = "Silence required before finalizing a turn."
 section = "segmentation"
 default = 700
@@ -249,7 +249,7 @@ step = 50
 [field.max_utterance]
 type = "number"
 config_key = "segmentation.max_utterance_ms"
-label = "Maximum Utterance"
+label = "Maximum utterance"
 description = "Long speech is segmented at this duration."
 section = "segmentation"
 default = 30000

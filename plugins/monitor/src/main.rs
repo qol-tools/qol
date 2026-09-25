@@ -120,8 +120,13 @@ mod tests {
             .collect();
         assert_eq!(
             display_fields,
-            ["status", "arrangement", "sync_brightness_levels"],
-            "the Display section holds a status row, one combined Displays card and the brightness sync toggle"
+            [
+                "status",
+                "arrangement",
+                "sync_brightness_levels",
+                "notify_on_change"
+            ],
+            "the Display section holds a status row, one combined Displays card and the brightness toggles"
         );
         for folded in ["displays", "resolution", "primary_display"] {
             assert!(

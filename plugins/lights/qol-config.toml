@@ -21,15 +21,15 @@ tone_map = { ok = "success", offline = "danger", no_target = "danger" }
 
 [field.reconnect]
 type = "action"
-label = "Scan for Coordinator"
+label = "Scan for coordinator"
 section = "connection"
 action = "reload"
-variant = "ghost"
+variant = "primary"
 description = "Use after connecting a Zigbee coordinator to this PC."
 
 [field.pair_device]
 type = "action"
-label = "Pair Device"
+label = "Pair device"
 section = "connection"
 action = "pair"
 variant = "primary"

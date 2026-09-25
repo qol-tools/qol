@@ -1,7 +1,7 @@
 [plugin]
 id = "qol-voice"
 uid = "1236ab1d-880a-49c7-b50a-4ff0970117b4"
-name = "QoL Voice"
+name = "Voice"
 description = "Transcribe speech and route completed turns to live terminal sessions"
 version = "0.32.0"
 author = "KMRH47"
@@ -44,7 +44,7 @@ gpui = true
 doctor = true
 
 [menu]
-label = "QoL Voice"
+label = "Voice"
 items = []
 
 [[dependencies.binaries]]

@@ -1,5 +1,5 @@
 schema_version = 1
-title = "QoL Shot"
+title = "Shot"
 description = "Audio and video capture defaults for screen recordings."
 
 [section.audio]
@@ -10,7 +10,7 @@ actions = ["record"]
 [field.audio_enabled]
 type = "boolean"
 config_key = "audio.enabled"
-label = "Enable Audio"
+label = "Enable audio"
 description = "macOS captures the default microphone only; explicit input choices are Linux-only."
 section = "audio"
 default = true
@@ -18,7 +18,7 @@ default = true
 [field.audio_inputs]
 type = "string_array"
 config_key = "audio.inputs"
-label = "Audio Inputs"
+label = "Audio inputs"
 description = "Linux-only PulseAudio inputs."
 section = "audio"
 placeholder = "mic"
@@ -28,7 +28,7 @@ options = ["mic", "system"]
 
 [field.audio_inputs.option_labels]
 mic = "Microphone"
-system = "System Audio"
+system = "System audio"
 
 [field.audio_inputs.option_pictures]
 mic = "mic-default"
@@ -37,7 +37,7 @@ system = "speaker-default"
 [field.audio_mic_device]
 type = "select"
 config_key = "audio.mic_device"
-label = "Mic Device"
+label = "Mic device"
 description = "Linux-only PulseAudio capture source."
 section = "audio"
 default = "default"
@@ -46,7 +46,7 @@ lookup_label = "microphones"
 card_description = "The microphone recordings use."
 
 [field.audio_mic_device.option_labels]
-default = "System Default"
+default = "System default"
 
 [field.audio_mic_device.option_pictures]
 default = "mic-default"
@@ -54,7 +54,7 @@ default = "mic-default"
 [field.audio_system_device]
 type = "select"
 config_key = "audio.system_device"
-label = "System Device"
+label = "System device"
 description = "Linux-only PulseAudio output whose monitor is recorded."
 section = "audio"
 default = "default"
@@ -63,7 +63,7 @@ lookup_label = "outputs"
 card_description = "The output that recordings capture."
 
 [field.audio_system_device.option_labels]
-default = "System Default"
+default = "System default"
 
 [field.audio_system_device.option_pictures]
 default = "speaker-default"
@@ -141,7 +141,7 @@ actions = ["screenshot", "record"]
 [field.capture_include_window_frame]
 type = "boolean"
 config_key = "capture.include_window_frame"
-label = "Include Window Frame"
+label = "Include window frame"
 description = "Linux-only. Include the title bar and borders when capturing a detected window. Disable to capture the client area only."
 section = "capture"
 default = true
@@ -149,7 +149,7 @@ default = true
 [field.capture_pin_border]
 type = "boolean"
 config_key = "capture.pin_border"
-label = "Pinned Preview Border"
+label = "Pinned preview border"
 description = "Draw a thin border around pinned screenshot previews to keep them distinct from the screen behind them."
 section = "capture"
 default = true
@@ -157,7 +157,7 @@ default = true
 [field.capture_open_folder_after_save]
 type = "boolean"
 config_key = "capture.open_folder_after_save"
-label = "Open Folder After Saving"
+label = "Open folder after saving"
 description = "Open the containing folder after you finish a saved capture preview. Completion notifications remain clickable when disabled."
 section = "capture"
 default = false
@@ -170,7 +170,7 @@ actions = ["preview"]
 [field.shortcuts_copy_command]
 type = "select"
 config_key = "shortcuts.copy_command"
-label = "Default Copy Action"
+label = "Default copy action"
 description = "Choose whether Copy Image or Copy Path appears first and starts selected in screenshot thumbnails."
 section = "shortcuts"
 default = "copy_image"
@@ -178,8 +178,8 @@ card_description = "Which copy button comes first."
 options = ["copy_image", "copy_path"]
 
 [field.shortcuts_copy_command.option_labels]
-copy_image = "Copy Image"
-copy_path = "Copy Path"
+copy_image = "Copy image"
+copy_path = "Copy path"
 
 [field.shortcuts_copy_command.option_pictures]
 copy_image = "copy-image"

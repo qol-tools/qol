@@ -41,9 +41,9 @@ fn current_config() -> CoreConfigResponse {
 
 pub(super) fn do_not_disturb_status() -> String {
     match qol_plugin_daemon::notification::platform::os_do_not_disturb() {
-        Some(true) => "Do not disturb: on".to_string(),
-        Some(false) => "Do not disturb: off".to_string(),
-        None => "Do not disturb: unknown".to_string(),
+        Some(true) => "On".to_string(),
+        Some(false) => "Off".to_string(),
+        None => "Unknown".to_string(),
     }
 }
 

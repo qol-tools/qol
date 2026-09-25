@@ -3,8 +3,8 @@ title = "OS Themes"
 description = "Desktop theming and cursor effects."
 
 [section.shake_to_grow]
-label = "Shake to Grow"
-description = "Shake the cursor fast back and forth to enlarge it, macOS style. Inside the detection window the cursor path must be Shake Strictness times longer than the area it covers and at least Min Shake Size wide, so the slowest shake that counts is strictness divided by twice the window in seconds (about 4.2 shakes per second with the defaults). Slow or brief wiggles never grow the cursor. The cursor shrinks back after the calm duration."
+label = "Shake to grow"
+description = "Shake the cursor fast back and forth to enlarge it, macOS style."
 actions = ["run"]
 
 [field.enabled]
@@ -15,8 +15,8 @@ default = true
 
 [field.pause_in_games]
 type = "boolean"
-label = "Pause in Games"
-description = "Disable Shake to Grow while a Steam, Lutris, or GameMode game window is focused."
+label = "Pause in games"
+description = "Disable shake to grow while a Steam, Lutris, or GameMode game window is focused."
 section = "shake_to_grow"
 default = true
 
@@ -26,8 +26,8 @@ equals = true
 
 [field.pause_in_fullscreen]
 type = "boolean"
-label = "Pause in Fullscreen"
-description = "Disable Shake to Grow while the focused window is fullscreen."
+label = "Pause in fullscreen"
+description = "Disable shake to grow while the focused window is fullscreen."
 section = "shake_to_grow"
 default = true
 
@@ -37,7 +37,7 @@ equals = true
 
 [field.shake_strictness]
 type = "number"
-label = "Shake Strictness"
+label = "Shake strictness"
 description = "Path length divided by covered area needed inside the window. Higher means faster shaking."
 section = "shake_to_grow"
 default = 5.0
@@ -50,7 +50,7 @@ equals = true
 
 [field.regrow_strictness]
 type = "number"
-label = "Regrow Strictness"
+label = "Regrow strictness"
 section = "shake_to_grow"
 default = 2.5
 min = 1
@@ -62,7 +62,7 @@ equals = true
 
 [field.regrow_min_extent_px]
 type = "number"
-label = "Regrow Min Size"
+label = "Regrow min size"
 section = "shake_to_grow"
 default = 60
 min = 10
@@ -74,7 +74,7 @@ equals = true
 
 [field.shake_min_extent_px]
 type = "number"
-label = "Min Shake Size"
+label = "Min shake size"
 section = "shake_to_grow"
 default = 150
 min = 20
@@ -86,7 +86,7 @@ equals = true
 
 [field.shake_window_ms]
 type = "number"
-label = "Detection Window"
+label = "Detection window"
 description = "How long a shake has to be sustained. A shorter window demands a faster shake."
 section = "shake_to_grow"
 default = 600
@@ -99,7 +99,7 @@ equals = true
 
 [field.scale_factor]
 type = "number"
-label = "Scale Factor"
+label = "Scale factor"
 section = "shake_to_grow"
 default = 4
 min = 1
@@ -111,7 +111,7 @@ equals = true
 
 [field.calm_duration_ms]
 type = "number"
-label = "Calm Duration"
+label = "Calm duration"
 section = "shake_to_grow"
 default = 100
 min = 50
@@ -123,7 +123,7 @@ equals = true
 
 [field.grow_ms]
 type = "number"
-label = "Grow Duration (ms)"
+label = "Grow duration"
 description = "Time for the cursor to reach full size."
 section = "shake_to_grow"
 default = 120
@@ -136,7 +136,7 @@ equals = true
 
 [field.shrink_ms]
 type = "number"
-label = "Shrink Duration (ms)"
+label = "Shrink duration"
 section = "shake_to_grow"
 default = 100
 min = 20
@@ -147,14 +147,14 @@ field = "enabled"
 equals = true
 
 [section.theme]
-label = "Light/Dark Theme"
+label = "Light/dark theme"
 description = "Switch the desktop between the light and dark variant of the current theme."
 actions = ["toggle_theme"]
 
 [field.toggle_theme]
 type = "action"
-label = "Switch to Dark"
-active_label = "Switch to Light"
+label = "Switch to dark"
+active_label = "Switch to light"
 section = "theme"
 action = "toggle_theme"
 active_action = "toggle_theme"

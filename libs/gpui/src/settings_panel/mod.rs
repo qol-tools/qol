@@ -85,6 +85,7 @@ pub struct SettingsPanel {
     pub focus: Option<String>,
     pub attention: Option<AttentionFeed>,
     pub version: Option<SharedString>,
+    pub installed_plugins: Option<usize>,
 }
 
 impl SettingsPanel {
@@ -106,6 +107,7 @@ impl SettingsPanel {
             focus: None,
             attention: None,
             version: None,
+            installed_plugins: None,
         }
     }
 
@@ -1266,6 +1268,7 @@ mod tests {
             focus: None,
             attention: None,
             version: None,
+            installed_plugins: None,
         };
 
         let prepared = super::prepare_panel(

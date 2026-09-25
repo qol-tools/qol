@@ -5,7 +5,7 @@ use crate::settings_panel::rows::{Row, RowControl};
 use crate::settings_panel::{PANEL_QR_CODE_HEIGHT, PANEL_QR_URL_HEIGHT};
 use crate::theme::SettingsPanelPalette;
 
-use super::{paint_settings_selection, settings_query_spinner, RowGround};
+use super::{one_line, paint_settings_selection, settings_query_spinner, RowGround};
 
 pub(in crate::settings_panel) fn qr_code_display(
     row: &Row,
@@ -148,7 +148,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                 } else {
                     rgb(ground.soft)
                 })
-                .child(status),
+                .child(one_line(div().min_w_0()).child(status)),
         );
     }
     container

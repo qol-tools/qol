@@ -16,5 +16,5 @@ default = true
 [field.display_name]
 type = "string"
 config_key = "general.display_name"
-label = "Display Name"
+label = "Display name"
 default = "My Plugin"

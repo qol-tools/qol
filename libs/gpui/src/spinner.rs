@@ -12,6 +12,7 @@ pub struct Spinner {
     id: ElementId,
     color: Hsla,
     size: Pixels,
+    trailing: bool,
 }
 
 impl Spinner {
@@ -20,11 +21,17 @@ impl Spinner {
             id: id.into(),
             color: color.into(),
             size: DEFAULT_SIZE,
+            trailing: false,
         }
     }
 
     pub fn size(mut self, size: Pixels) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn trailing(mut self) -> Self {
+        self.trailing = true;
         self
     }
 }
@@ -35,7 +42,13 @@ impl RenderOnce for Spinner {
         let glyph = div()
             .flex()
             .items_center()
-            .justify_center()
+            .map(|glyph| {
+                if self.trailing {
+                    glyph.justify_end()
+                } else {
+                    glyph.justify_center()
+                }
+            })
             .w(self.size)
             .h(self.size)
             .text_size(self.size)

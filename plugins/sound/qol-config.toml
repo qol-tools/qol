@@ -34,7 +34,7 @@ lookup_label = "outputs"
 card_description = "Where sound plays."
 
 [field.output_device.option_labels]
-default = "System Default"
+default = "System default"
 
 [field.output_device.option_pictures]
 default = "speaker-default"

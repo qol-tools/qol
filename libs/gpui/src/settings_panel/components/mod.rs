@@ -119,6 +119,7 @@ fn masthead_rule() -> gpui::Div {
 
 pub fn paint_settings_selection<E: Styled>(row: E, palette: SettingsPanelPalette) -> E {
     row.relative()
+        .w_auto()
         .mx(px(-qol_theme::SPACE_PAD))
         .px(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
         .rounded_none()
@@ -136,6 +137,7 @@ pub fn paint_rail_selection<E: Styled>(row: E, palette: SettingsPanelPalette, fo
 fn paint_settings_attention<E: Styled + ParentElement>(row: E, palette: SettingsPanelPalette) -> E {
     let shared = kit();
     row.relative()
+        .w_auto()
         .ml(px(-qol_theme::SPACE_PAD))
         .pl(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
         .rounded_none()
@@ -153,9 +155,12 @@ fn paint_settings_attention<E: Styled + ParentElement>(row: E, palette: Settings
         )
 }
 
+pub fn one_line<E: Styled>(element: E) -> E {
+    element.line_clamp(1).text_ellipsis()
+}
+
 pub fn settings_label(text: impl Into<SharedString>, palette: SettingsPanelPalette) -> gpui::Div {
-    div()
-        .truncate()
+    one_line(div())
         .text_size(px(qol_theme::TEXT_BODY))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(palette.section_text))
@@ -173,8 +178,7 @@ pub fn settings_description(
         RowGround::Band => (ground.soft, row.hover(palette).map(|hover| hover.soft)),
     };
     ground_text(
-        div()
-            .truncate()
+        one_line(div())
             .text_size(px(qol_theme::TEXT_MICRO))
             .child(text.into()),
         rgb(rest),
@@ -463,7 +467,7 @@ pub fn settings_query_spinner(
         RowGround::Pane => palette.grounds.pane.faint,
         RowGround::Band => palette.grounds.band.soft,
     };
-    Spinner::new(id, rgb(color))
+    Spinner::new(id, rgb(color)).trailing()
 }
 
 pub fn settings_tile_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Spinner {
