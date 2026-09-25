@@ -1,12 +1,9 @@
 use std::f32::consts::TAU;
-use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
     div, px, AnyElement, App, ElementId, FontWeight, Hsla, RenderOnce, SharedString, Window,
 };
-
-const PULSE_DURATION: Duration = Duration::from_millis(1200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusTone {
@@ -62,10 +59,9 @@ impl RenderOnce for StatusIndicator {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let dot = div()
             .flex_none()
-            .w(px(10.))
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .text_color(self.color)
-            .child("●");
+            .size(px(crate::kit::STATUS_DOT_SIZE))
+            .rounded_full()
+            .bg(self.color);
         let dot: AnyElement = if self.pulsing {
             pulse_dot(dot, self.id)
         } else {
@@ -88,33 +84,10 @@ pub(crate) fn pulse_dot(dot: gpui::Div, id: ElementId) -> AnyElement {
         id,
         true,
         dot.opacity(pulse_opacity(crate::activity_animation::progress_of(
-            PULSE_DURATION,
+            qol_theme::MOTION_LOOP,
         ))),
     )
     .into_any_element()
-}
-
-pub(crate) fn radiating_dot(dot: gpui::Div, id: ElementId, tone: u32) -> AnyElement {
-    let size = crate::kit::LAMP_SIZE;
-    let progress = crate::activity_animation::progress();
-    let spread = qol_theme::SPACE_INSET * progress;
-    let ring = div()
-        .id(id)
-        .absolute()
-        .rounded_full()
-        .border_1()
-        .border_color(gpui::rgb(tone))
-        .size(px(size + spread))
-        .left(px(-spread / 2.0))
-        .top(px(-spread / 2.0))
-        .opacity(0.5 * (1.0 - progress));
-    div()
-        .relative()
-        .flex_none()
-        .size(px(size))
-        .child(dot)
-        .child(ring)
-        .into_any_element()
 }
 
 fn pulse_opacity(progress: f32) -> f32 {

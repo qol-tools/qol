@@ -2,7 +2,8 @@ pub mod css;
 pub mod motion;
 
 pub use motion::{
-    Curve, Motion, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, WAIT_BEFORE_BUSY,
+    Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED,
+    WAIT_BEFORE_BUSY,
 };
 
 use qol_color::{

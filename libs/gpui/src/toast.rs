@@ -237,7 +237,7 @@ impl Toast {
         self
     }
 
-    /// Pairs the toast title with the shared braille spinner while work runs.
+    /// Pairs the toast title with the shared Busy ring while work runs.
     pub fn busy(mut self) -> Self {
         self.busy = true;
         self
@@ -1103,10 +1103,7 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
                 .items_center()
                 .gap(px(qol_theme::SPACE_TIGHT))
                 .children(row.toast.busy.then(|| {
-                    crate::spinner::Spinner::new(
-                        ("toast-busy", row.id.0),
-                        rgb(palette.text_secondary),
-                    )
+                    crate::busy::Busy::ring(("toast-busy", row.id.0), rgb(palette.text_secondary))
                 }))
                 .child(
                     div()

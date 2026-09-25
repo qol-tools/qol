@@ -1,5 +1,6 @@
 pub mod activity_animation;
 pub mod artifact;
+pub mod busy;
 pub mod canvas;
 pub mod color_wheel;
 pub mod command_loop;
@@ -27,7 +28,6 @@ pub mod runtime_config;
 pub mod scroll_list;
 pub mod scrollbar;
 pub mod settings_panel;
-pub mod spinner;
 pub mod status_indicator;
 pub mod surface;
 pub mod text;
@@ -38,8 +38,8 @@ pub mod vertical_label;
 pub mod window;
 pub mod window_options;
 
+pub use busy::Busy;
 pub use format::format_bytes;
-pub use spinner::{Busy, Spinner};
 pub use status_indicator::StatusIndicator;
 pub use trail::Trail;
 

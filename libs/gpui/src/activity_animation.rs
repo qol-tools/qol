@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 use gpui::{AnyElement, App, Context, ElementId, IntoElement, RenderOnce, Task, Window};
 
 pub const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
-const CYCLE: Duration = Duration::from_millis(1200);
 
 #[derive(IntoElement)]
 pub struct ActivityAnimation {
@@ -62,10 +61,6 @@ impl RenderOnce for ActivityAnimation {
     }
 }
 
-pub(crate) fn progress() -> f32 {
-    progress_of(CYCLE)
-}
-
 pub(crate) fn progress_of(cycle: Duration) -> f32 {
     static START: OnceLock<Instant> = OnceLock::new();
     cycle_progress(START.get_or_init(Instant::now).elapsed(), cycle)
@@ -83,7 +78,9 @@ mod tests {
     fn activity_phase_wraps_without_depending_on_frame_count() {
         for (millis, expected) in [(0, 0.0), (300, 0.25), (600, 0.5), (1200, 0.0), (1500, 0.25)] {
             assert!(
-                (cycle_progress(Duration::from_millis(millis), CYCLE) - expected).abs() < 0.001
+                (cycle_progress(Duration::from_millis(millis), qol_theme::MOTION_LOOP) - expected)
+                    .abs()
+                    < 0.001
             );
         }
     }

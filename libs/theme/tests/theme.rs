@@ -2450,7 +2450,7 @@ fn gpui_surfaces_draw_progress_with_the_spinner() {
 
     assert!(
         flagged.is_empty(),
-        "Progress is drawn by qol_gpui::Spinner (Busy pairs it with a caption); text never animates, \
+        "Progress is drawn by qol_gpui::Busy, a ring of eight dots with an optional caption; text never animates, \
          so a running phrase does not end in an ellipsis.\n{}",
         flagged.join("\n")
     );
@@ -2468,7 +2468,7 @@ fn settings_surfaces_build_spinners_through_components() {
         let contents = fs::read_to_string(&path).expect("read gpui source");
         for (index, line) in contents.lines().enumerate() {
             let compact = compact_line(line);
-            if compact.contains("Spinner::new(") || compact.contains("Busy::new(") {
+            if compact.contains("Busy::ring(") || compact.contains("Busy::new(") {
                 calls.push(format!("{relative}:{}", index + 1));
             }
         }
@@ -2478,7 +2478,7 @@ fn settings_surfaces_build_spinners_through_components() {
         calls
             .iter()
             .all(|call| call.starts_with("libs/gpui/src/settings_panel/components/mod.rs:")),
-        "Settings surfaces build spinners through the components recipes, so Spinner::new and \
+        "Settings surfaces build spinners through the components recipes, so Busy::ring and \
          Busy::new live only in settings_panel/components/mod.rs:\n{}",
         calls.join("\n")
     );

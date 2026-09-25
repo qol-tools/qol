@@ -54,7 +54,7 @@ fn status_dot_el(
     id: impl Into<gpui::ElementId>,
 ) -> AnyElement {
     let (tone, halo) = (status.definition().colors)(&current_palette());
-    kit.animated_status_dot(id, tone, halo, status.is_active())
+    kit.live_dot(id, tone, halo, status.is_active())
 }
 
 fn live_count(rows: &[SessionState]) -> usize {

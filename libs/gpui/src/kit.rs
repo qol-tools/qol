@@ -13,7 +13,7 @@ pub const DISABLED_OPACITY: f32 = 0.4;
 pub const HEADER_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
 pub const SECTION_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
 pub const GUTTER: f32 = qol_theme::SPACE_GUTTER;
-pub const LAMP_SIZE: f32 = 10.0;
+pub const STATUS_DOT_SIZE: f32 = 7.0;
 pub const ROW_METADATA_WIDTH: f32 = 48.0;
 pub const ROW_BORDER_WIDTH: f32 = 1.0;
 
@@ -266,8 +266,7 @@ impl Kit {
     pub fn status_dot(&self, tone: u32, halo: u32) -> Div {
         div()
             .flex_none()
-            .w(px(7.0))
-            .h(px(7.0))
+            .size(px(STATUS_DOT_SIZE))
             .rounded_full()
             .bg(rgb(tone))
             .shadow(vec![BoxShadow {
@@ -278,16 +277,16 @@ impl Kit {
             }])
     }
 
-    pub fn animated_status_dot(
+    pub fn live_dot(
         &self,
         id: impl Into<gpui::ElementId>,
         tone: u32,
         halo: u32,
-        pulsing: bool,
+        live: bool,
     ) -> gpui::AnyElement {
-        let dot = self.status_dot(tone, halo).size(px(LAMP_SIZE));
-        if pulsing {
-            crate::status_indicator::radiating_dot(dot, id.into(), tone)
+        let dot = self.status_dot(tone, halo);
+        if live {
+            crate::status_indicator::pulse_dot(dot, id.into())
         } else {
             dot.into_any_element()
         }

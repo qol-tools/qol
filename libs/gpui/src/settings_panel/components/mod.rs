@@ -1,8 +1,8 @@
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, ElementId, FontWeight, Rgba, SharedString};
 
+use crate::busy::Busy;
 use crate::kit::{alpha, kit};
-use crate::spinner::{Busy, Spinner};
 use crate::theme::{SettingsGround, SettingsPanelPalette};
 
 mod choice_value;
@@ -457,26 +457,26 @@ fn settings_message_frame(color: u32) -> gpui::Div {
         .text_color(rgb(color))
 }
 
-/// Spinner recipe for a query-backed value that has not answered yet.
+/// Busy recipe for a query-backed value that has not answered yet.
 pub fn settings_query_spinner(
     id: impl Into<ElementId>,
     row: RowGround,
     palette: SettingsPanelPalette,
-) -> Spinner {
+) -> Busy {
     let color = match row {
         RowGround::Pane => palette.grounds.pane.faint,
         RowGround::Band => palette.grounds.band.soft,
     };
-    Spinner::new(id, rgb(color)).trailing()
+    Busy::ring(id, rgb(color))
 }
 
-pub fn settings_tile_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Spinner {
-    Spinner::new(id, rgb(palette.grounds.pane.faint)).size(px(TILE_SPINNER_SIZE))
+pub fn settings_tile_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Busy {
+    Busy::ring(id, rgb(palette.grounds.pane.faint)).size(px(TILE_SPINNER_SIZE))
 }
 
-/// Spinner recipe for a pending action inside a settings surface.
-pub fn settings_action_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Spinner {
-    Spinner::new(id, rgb(palette.state_on))
+/// Busy recipe for a pending action inside a settings surface.
+pub fn settings_action_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Busy {
+    Busy::ring(id, rgb(palette.state_on))
 }
 
 /// Busy recipe sharing the settings_message frame for in-progress work.

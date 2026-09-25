@@ -141,7 +141,7 @@ pub fn search_bar(
         })
         .when(status.pending, |bar| {
             bar.child(
-                qol_gpui::Spinner::new("flow-pending", rgb(kit.palette.accent_ink))
+                qol_gpui::Busy::ring("flow-pending", rgb(kit.palette.accent_ink))
                     .size(px(TEXT_BODY)),
             )
         })
