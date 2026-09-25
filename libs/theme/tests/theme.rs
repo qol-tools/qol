@@ -38,7 +38,6 @@ fn runtime_dark_theme_uses_valid_injected_accent_key() {
 
     assert_eq!(theme.system.accent, expected);
     assert_eq!(theme.components.launcher.highlight, expected);
-    assert_eq!(theme.components.cli_sessions.selection_border, expected);
 }
 
 #[test]
@@ -69,71 +68,6 @@ fn launcher_palette_derives_from_system_roles() {
     assert_eq!(palette.momentum_down.len(), 5);
     assert_eq!(palette.compass_up.len(), 3);
     assert_eq!(palette.compass_down.len(), 3);
-}
-
-#[test]
-fn cli_sessions_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.cli_sessions;
-    assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
-    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
-    assert_eq!(
-        palette.divider,
-        mix_rgb(DARK_SYSTEM.surface_elevated, DARK_SYSTEM.border_subtle, 0.5)
-    );
-    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text_heading, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.text_muted, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.text_faint, DARK_SYSTEM.text_faint);
-    assert_eq!(
-        palette.keycap_bg_rgba,
-        with_alpha(DARK_SYSTEM.text_primary, 0x14)
-    );
-    assert_eq!(palette.selection_border, DARK_SYSTEM.accent);
-    assert_eq!(palette.needs_you, DARK_SYSTEM.danger);
-    assert_eq!(palette.your_turn, DARK_SYSTEM.warning);
-    assert_eq!(palette.working, DARK_SYSTEM.success);
-    assert_eq!(palette.service, DARK_SYSTEM.info);
-    assert_eq!(palette.bridged, DARK_SYSTEM.info);
-    assert_eq!(
-        palette.bridged_tint_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x1e)
-    );
-    assert_eq!(
-        palette.bridged_badge_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x33)
-    );
-    assert_eq!(
-        palette.bridged_hover_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x55)
-    );
-    assert_eq!(palette.unknown, DARK_SYSTEM.text_faint);
-    assert_eq!(
-        palette.needs_you_tint_rgba,
-        with_alpha(DARK_SYSTEM.danger, 0x22)
-    );
-    assert_eq!(
-        palette.your_turn_tint_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x22)
-    );
-    assert_eq!(
-        palette.your_turn_badge_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x33)
-    );
-    assert_eq!(
-        palette.your_turn_hover_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x55)
-    );
-    assert_eq!(
-        palette.working_tint_rgba,
-        with_alpha(DARK_SYSTEM.success, 0x1e)
-    );
-    assert_eq!(
-        palette.service_tint_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x14)
-    );
-    assert_eq!(palette.transparent_rgba, 0x00000000);
 }
 
 #[test]

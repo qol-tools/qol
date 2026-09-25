@@ -1037,7 +1037,6 @@ pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentPalettes {
-    pub cli_sessions: CliSessionsPalette,
     pub launcher: LauncherPalette,
     pub shot_selector: ShotSelectorPalette,
     pub shot_preview: ShotPreviewPalette,
@@ -1050,7 +1049,6 @@ pub struct ComponentPalettes {
 impl ComponentPalettes {
     pub fn new(mode: ThemeMode, reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            cli_sessions: CliSessionsPalette::from_system(system),
             launcher: LauncherPalette::from_system(system),
             shot_selector: ShotSelectorPalette::from_theme(reference, system),
             shot_preview: ShotPreviewPalette::from_system(system),
@@ -1058,75 +1056,6 @@ impl ComponentPalettes {
             settings_panel: SettingsPanelPalette::from_theme(mode, system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
             picker_surface: PickerSurfacePalette::themed(system, None, 1.0),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CliSessionsPalette {
-    pub panel_bg: u32,
-    pub band_bg: u32,
-    pub chrome_bg: u32,
-    pub border: u32,
-    pub divider: u32,
-    pub text_primary: u32,
-    pub text_heading: u32,
-    pub text_secondary: u32,
-    pub text_muted: u32,
-    pub text_faint: u32,
-    pub keycap_bg_rgba: u32,
-    pub selection_border: u32,
-    pub selection_bg: u32,
-    pub needs_you: u32,
-    pub your_turn: u32,
-    pub working: u32,
-    pub service: u32,
-    pub bridged: u32,
-    pub unknown: u32,
-    pub needs_you_tint_rgba: u32,
-    pub your_turn_tint_rgba: u32,
-    pub your_turn_badge_rgba: u32,
-    pub your_turn_hover_rgba: u32,
-    pub working_tint_rgba: u32,
-    pub service_tint_rgba: u32,
-    pub bridged_tint_rgba: u32,
-    pub bridged_badge_rgba: u32,
-    pub bridged_hover_rgba: u32,
-    pub transparent_rgba: u32,
-}
-
-impl CliSessionsPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            panel_bg: system.surface_elevated,
-            band_bg: system.surface_rail,
-            chrome_bg: system.surface_canvas,
-            border: system.border_subtle,
-            divider: mix_rgb(system.surface_elevated, system.border_subtle, 0.5),
-            text_primary: system.text_primary,
-            text_heading: system.text_secondary,
-            text_secondary: system.text_muted,
-            text_muted: system.text_muted,
-            text_faint: system.text_faint,
-            keycap_bg_rgba: with_alpha(system.text_primary, 0x14),
-            selection_border: system.accent,
-            selection_bg: system.accent_fill,
-            needs_you: system.danger,
-            your_turn: system.warning,
-            working: system.success,
-            service: system.info,
-            bridged: system.info,
-            unknown: system.text_faint,
-            needs_you_tint_rgba: with_alpha(system.danger, 0x22),
-            your_turn_tint_rgba: with_alpha(system.warning, 0x22),
-            your_turn_badge_rgba: with_alpha(system.warning, 0x33),
-            your_turn_hover_rgba: with_alpha(system.warning, 0x55),
-            working_tint_rgba: with_alpha(system.success, 0x1e),
-            service_tint_rgba: with_alpha(system.info, 0x14),
-            bridged_tint_rgba: with_alpha(system.info, 0x1e),
-            bridged_badge_rgba: with_alpha(system.info, 0x33),
-            bridged_hover_rgba: with_alpha(system.info, 0x55),
-            transparent_rgba: 0x00000000,
         }
     }
 }
@@ -1742,10 +1671,6 @@ impl PickerSurfacePalette {
 
 pub fn launcher_runtime() -> LauncherPalette {
     runtime_theme().components.launcher
-}
-
-pub fn cli_sessions_runtime() -> CliSessionsPalette {
-    runtime_theme().components.cli_sessions
 }
 
 pub fn shot_selector_runtime() -> ShotSelectorPalette {

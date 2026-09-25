@@ -7,7 +7,6 @@ use qol_gpui::kit::Chip;
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::TextStyle;
-use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 use qol_gpui::Key;
 use qol_terminal_sessions::SessionId;
 
@@ -19,10 +18,6 @@ use crate::ui::SessionsView;
 const CLOSE_KEY_REASON: &str = "close-key";
 const ESCAPE_REASON: &str = "escape";
 const STRIP_ESCAPE_REASON: &str = "strip-escape";
-
-fn current_palette() -> CliSessionsPalette {
-    cli_sessions_runtime()
-}
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -53,7 +48,7 @@ fn status_dot_el(
     status: Status,
     id: impl Into<gpui::ElementId>,
 ) -> AnyElement {
-    let (tone, halo) = (status.definition().colors)(&current_palette());
+    let (tone, halo) = (status.definition().colors)(kit);
     kit.live_dot(id, tone, halo, status.is_active())
 }
 
@@ -67,7 +62,6 @@ fn header(
     cx: &mut Context<SessionsView>,
 ) -> impl IntoElement {
     let collapsed = view.is_collapsed();
-    let palette = current_palette();
     let kit = qol_gpui::kit::kit();
     div()
         .flex_none()
@@ -77,7 +71,7 @@ fn header(
         .items_center()
         .justify_between()
         .px(px(qol_gpui::theme::SPACE_PAD))
-        .bg(rgb(palette.band_bg))
+        .bg(rgb(kit.grounds.rail.bg))
         .border_b(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .child(
@@ -200,7 +194,7 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
     let kit = qol_gpui::kit::kit();
     if s.status == Status::YourTurn {
         let id = s.id.clone();
-        let (tone, _) = (s.status.definition().colors)(&current_palette());
+        let (tone, _) = (s.status.definition().colors)(&kit);
         return div()
             .flex()
             .min_w_0()
@@ -222,7 +216,7 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
                     ))
                     .id(SharedString::from(format!("ack-{}", s.id)))
                     .cursor(CursorStyle::PointingHand),
-                    rgba(current_palette().your_turn_hover_rgba),
+                    rgb(kit.grounds.pane.lift),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.acknowledge(&id);

@@ -1,12 +1,16 @@
 use qol_cli_sessions::registry::summary_for;
 use qol_cli_sessions::status::Status;
-use qol_gpui::theme::{CliSessionsPalette, DARK_SYSTEM, LIGHT_SYSTEM};
+use qol_gpui::kit::Kit;
+use qol_gpui::theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
 use qol_terminal_sessions::cli::claude_tool;
 
 #[test]
 fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes() {
-    for system in [DARK_SYSTEM, LIGHT_SYSTEM] {
-        let palette = CliSessionsPalette::from_system(system);
+    for (mode, system) in [
+        (ThemeMode::Dark, DARK_SYSTEM),
+        (ThemeMode::Light, LIGHT_SYSTEM),
+    ] {
+        let kit = Kit::new(mode, system);
         let expected = [
             (Status::NeedsYou, "needs you", system.danger, true, false),
             (Status::YourTurn, "your turn", system.warning, true, false),
@@ -26,11 +30,11 @@ fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes(
             ),
             (Status::Working, "working", system.success, false, false),
             (Status::Service, "live", system.info, false, false),
-            (Status::Unknown, "idle", system.text_faint, false, true),
+            (Status::Unknown, "idle", system.text_muted, false, true),
             (
                 Status::Acknowledged,
                 "acknowledged",
-                system.text_faint,
+                system.text_muted,
                 false,
                 true,
             ),
@@ -44,7 +48,7 @@ fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes(
             assert_eq!(summary_for(status, &claude_tool()), label);
             assert_eq!(status.is_attention(), attention);
             assert_eq!(definition.idle, idle);
-            let (foreground, halo) = (definition.colors)(&palette);
+            let (foreground, halo) = (definition.colors)(&kit);
             assert_eq!(foreground, color);
             if !idle {
                 assert_eq!(halo >> 8, foreground);
