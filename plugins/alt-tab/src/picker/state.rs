@@ -3,6 +3,7 @@ use crate::config::{AltTabConfig, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::picker::create::PickerInit;
 use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
+use futures::channel::oneshot;
 use gpui::{App, Window};
 use qol_gpui::image_registry::{extend_with, replace_map, retain_or_release, REGISTRY};
 
@@ -24,8 +25,28 @@ pub(crate) struct PickerState {
     pub(crate) layout_budget: Option<(f32, f32)>,
     pub(crate) live_previews: PreviewMap,
     pub(crate) live_frames: LiveFrameMap,
+    pub(crate) fresh: FreshFrame,
     pub(crate) icon_cache: IconMap,
     pub(crate) dismissed: Dismissed,
+}
+
+#[derive(Default)]
+pub(crate) struct FreshFrame {
+    pub(crate) awaiting: Option<u32>,
+    pub(crate) landed: Option<u32>,
+    pub(crate) generation: usize,
+    settle: Option<oneshot::Sender<()>>,
+    settled: Option<oneshot::Receiver<()>>,
+}
+
+impl FreshFrame {
+    pub(crate) fn covers(&self, wid: u32) -> bool {
+        self.awaiting == Some(wid) || self.landed == Some(wid)
+    }
+
+    pub(crate) fn take_settled(&mut self) -> Option<oneshot::Receiver<()>> {
+        self.settled.take()
+    }
 }
 
 // A background refresh can land before a closed window or quit app leaves the
@@ -81,6 +102,7 @@ impl PickerState {
             layout_budget: init.layout_budget,
             live_previews: init.previews,
             live_frames: LiveFrameMap::new(),
+            fresh: FreshFrame::default(),
             icon_cache: init.icons,
             dismissed: Dismissed::default(),
         }
@@ -173,6 +195,28 @@ impl PickerState {
 
     pub(crate) fn insert_live_frames(&mut self, frames: LiveFrameMap) {
         self.live_frames.extend(frames);
+    }
+
+    pub(crate) fn await_fresh_frame(&mut self, wid: Option<u32>) {
+        let (settle, settled) = oneshot::channel();
+        self.fresh.awaiting = wid;
+        self.fresh.landed = None;
+        self.fresh.generation += 1;
+        self.fresh.settle = wid.map(|_| settle);
+        self.fresh.settled = wid.map(|_| settled);
+    }
+
+    pub(crate) fn land_fresh_frame(&mut self, wid: u32, frames: LiveFrameMap) -> bool {
+        if self.fresh.awaiting != Some(wid) {
+            return false;
+        }
+        self.fresh.awaiting = None;
+        self.fresh.settle = None;
+        if frames.contains_key(&wid) {
+            self.fresh.landed = Some(wid);
+            self.live_frames.extend(frames);
+        }
+        true
     }
 
     pub(crate) fn clear_live_frames(&mut self) {

@@ -188,7 +188,7 @@ pub(crate) fn warm_shots_session(required: &[u32]) -> Option<Arc<ShotsSession>> 
     Some(session)
 }
 
-pub(crate) fn fetch_shots_session() -> Option<ShotsSession> {
+fn fetch_shots_session() -> Option<ShotsSession> {
     if !sc_framework_ready() {
         return None;
     }

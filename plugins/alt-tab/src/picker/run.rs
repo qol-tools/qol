@@ -4,14 +4,16 @@ use crate::capture;
 use crate::config::AltTabConfig;
 use crate::discovery::{Platform, WindowDiscovery, WindowInfo};
 use crate::picker::gather::{build_icon_cache, PreviewCaptureScheduler};
-use crate::picker::{PickerWindowState, SharedIconCache};
+use crate::picker::{LiveFrameMap, PickerWindowState, SharedIconCache};
 use crate::runtime::daemon;
+use futures::FutureExt;
 use gpui::*;
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::picker::PreviewMap>>;
@@ -315,6 +317,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
                 .unwrap_or_default()
         })
         .await;
+    let fresh_target = windows.first().and_then(capture::fresh_frame_target);
     let rendered_icons = refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
     #[cfg(debug_assertions)]
     let (query_ms, window_count) = (t_query.elapsed().as_millis(), windows.len());
@@ -329,6 +332,11 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let t_update = std::time::Instant::now();
     let _ = cx.update(move |app_cx| {
         apply_show_windows(&state_for_update.caches, windows, app_cx);
+        await_fresh_frame(
+            &state_for_update.current,
+            fresh_target.map(|(wid, _)| wid),
+            app_cx,
+        );
         if let Some(icons) = rendered_icons {
             commit_icons_to_shared_cache(&state_for_update.caches.icon_cache, icons, app_cx);
         }
@@ -338,6 +346,9 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         #[cfg(debug_assertions)]
         crate::app::clear_cycle_origin();
     });
+    if let Some(target) = fresh_target {
+        spawn_fresh_frame_capture(cx, state.current.clone(), target);
+    }
     #[cfg(debug_assertions)]
     let update_ms = t_update.elapsed().as_millis();
     #[cfg(debug_assertions)]
@@ -362,6 +373,69 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         "show_id={show_id} show_generation={generation} total={total_ms}ms config={config_ms}ms query={query_ms}ms({window_count} windows) update={update_ms}ms capture_lane=none active_workers={} cancellation_reason=none reveal_frame={reveal_frame} reveal_frame_ms={update_ms} first_paint_latency_ms=not_measured",
         state.caches.capture_scheduler.active_workers(),
     );
+}
+
+const FRESH_FRAME_BAIL: Duration = Duration::from_millis(200);
+
+fn picker_handles(current: &PickerWindowState) -> Vec<WindowHandle<crate::app::AltTabApp>> {
+    current
+        .borrow()
+        .iter()
+        .into_iter()
+        .map(|(_, handle)| handle)
+        .collect()
+}
+
+fn await_fresh_frame(current: &PickerWindowState, wid: Option<u32>, app: &mut App) {
+    for handle in picker_handles(current) {
+        let _ = handle.update(app, |view, _, cx| {
+            view.delegate
+                .update(cx, |state, _| state.await_fresh_frame(wid));
+        });
+    }
+}
+
+fn spawn_fresh_frame_capture(
+    cx: &AsyncApp,
+    current: PickerWindowState,
+    (wid, dims): (u32, (usize, usize)),
+) {
+    let executor = cx.background_executor().clone();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let capture = executor
+            .spawn(async move { capture::capture_live_frame(wid, dims) })
+            .fuse();
+        let bail = executor.timer(FRESH_FRAME_BAIL).fuse();
+        futures::pin_mut!(capture, bail);
+        let frame = futures::select_biased! {
+            frame = capture => frame,
+            _ = bail => None,
+        };
+        qol_runtime::probe!(
+            "PREVIEW_FRESH",
+            "wid={wid} outcome={}",
+            if frame.is_some() { "landed" } else { "missed" }
+        );
+        let frames: LiveFrameMap = frame
+            .and_then(capture::SendCVBuf::into_live_frame)
+            .map(|frame| (wid, frame))
+            .into_iter()
+            .collect();
+        let _ = cx.update(|app| {
+            for handle in picker_handles(&current) {
+                let frames = frames.clone();
+                let _ = handle.update(app, |view, _, cx| {
+                    let landed = view
+                        .delegate
+                        .update(cx, |state, _| state.land_fresh_frame(wid, frames));
+                    if landed {
+                        cx.notify();
+                    }
+                });
+            }
+        });
+    })
+    .detach();
 }
 
 pub(super) fn apply_show_windows(caches: &PickerCaches, windows: Vec<WindowInfo>, app: &mut App) {

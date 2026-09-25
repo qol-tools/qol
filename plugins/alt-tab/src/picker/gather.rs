@@ -129,7 +129,7 @@ fn spawn_capture_worker(
 
 fn capture_blocking(wid: u32, dims: (usize, usize)) -> BlockingCaptureResult {
     if capture::live_shots_available() {
-        if let Some(buffer) = capture_live_frame_blocking(wid, dims) {
+        if let Some(buffer) = capture::capture_live_frame(wid, dims) {
             return BlockingCaptureResult::Live(buffer);
         }
     }
@@ -733,25 +733,6 @@ async fn run_capture(
         BlockingCaptureResult::Preview(None) => {
             CaptureResult::with_capture(CaptureOutcome::Empty("capture_failed"), capture_duration)
         }
-    }
-}
-
-fn capture_live_frame_blocking(
-    wid: u32,
-    (width, height): (usize, usize),
-) -> Option<capture::SendCVBuf> {
-    let session = capture::warm_shots_session(&[wid])?;
-    let (tx, rx) = std::sync::mpsc::channel();
-    if !session.request_capture(wid, width, height, &tx) {
-        return None;
-    }
-    match rx.recv_timeout(Duration::from_millis(120)) {
-        Ok((reply_wid, Some(buf)))
-            if reply_wid == wid && buf.pixel_format() == capture::PIXEL_FORMAT_420F =>
-        {
-            Some(buf)
-        }
-        _ => None,
     }
 }
 

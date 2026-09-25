@@ -59,13 +59,16 @@ async fn shots_loop(
         return false;
     }
     let executor = cx.background_executor().clone();
+    if let Some(settled) = take_fresh_settled(delegate, cx) {
+        let _ = settled.await;
+    }
+    let (_, visible, _) = read_shot_targets(delegate, cx);
     let Some(session) = executor
-        .spawn(async { capture::fetch_shots_session() })
+        .spawn(async move { capture::warm_shots_session(&visible) })
         .await
     else {
         return false;
     };
-    let session = Arc::new(session);
     let (tx, rx) = mpsc::channel();
     let mut scheduler = LaneScheduler::new();
     let mut in_flight: Vec<(u32, Instant)> = Vec::new();
@@ -88,7 +91,7 @@ async fn shots_loop(
             clear_live_frames(delegate, this, cx);
             return false;
         }
-        let (selected, visible, dims) = read_shot_targets(delegate, cx);
+        let (live, visible, dims) = read_shot_targets(delegate, cx);
         for wid in failed.into_iter().chain(expired) {
             gate.note_failure(wid);
         }
@@ -96,7 +99,7 @@ async fn shots_loop(
             push_live_frames(batch, delegate, this, cx);
         }
         let in_flight_wids: Vec<u32> = in_flight.iter().map(|(wid, _)| *wid).collect();
-        for wid in scheduler.plan(selected, &visible, &in_flight_wids, SHOTS_BACKGROUND_LANES) {
+        for wid in scheduler.plan(&live, &visible, &in_flight_wids, SHOTS_BACKGROUND_LANES) {
             in_flight.push((wid, Instant::now()));
             let (w, h) = dims
                 .get(&wid)
@@ -117,6 +120,15 @@ async fn shots_loop(
     true
 }
 
+fn take_fresh_settled(
+    delegate: &Entity<PickerState>,
+    cx: &AsyncApp,
+) -> Option<futures::channel::oneshot::Receiver<()>> {
+    cx.update(|app_cx| delegate.update(app_cx, |state, _| state.fresh.take_settled()))
+        .ok()
+        .flatten()
+}
+
 fn read_live_frames_empty(delegate: &Entity<PickerState>, cx: &AsyncApp) -> bool {
     cx.update(|app_cx| delegate.read(app_cx).live_frames.is_empty())
         .unwrap_or(true)
@@ -134,6 +146,7 @@ fn drain_shot_results(
         match result {
             Some(buf) if buf.pixel_format() == capture::PIXEL_FORMAT_420F => {
                 *failures = 0;
+                qol_runtime::probe!("PREVIEW_LIVE", "source=shots outcome=frame wid={wid}");
                 frames.push((wid, buf));
             }
             Some(_buf) => {
@@ -192,26 +205,31 @@ fn push_live_frames(
     });
 }
 
-type ShotTargets = (Option<u32>, Vec<u32>, HashMap<u32, (usize, usize)>);
+type ShotTargets = (Vec<u32>, Vec<u32>, HashMap<u32, (usize, usize)>);
 
 fn read_shot_targets(delegate: &Entity<PickerState>, cx: &AsyncApp) -> ShotTargets {
     cx.update(|app_cx| {
         let state = delegate.read(app_cx);
-        let selected = state
-            .selected_index
-            .and_then(|ix| state.windows.get(ix))
+        let mut live: Vec<u32> = [state.selected_index, Some(0)]
+            .into_iter()
+            .flatten()
+            .filter_map(|ix| state.windows.get(ix))
             .filter(|w| !w.is_minimized)
-            .map(|w| w.id);
+            .map(|w| w.id)
+            .collect();
+        live.dedup();
         let mut visible = Vec::new();
         let mut dims = HashMap::new();
         for w in state.windows.iter().filter(|w| !w.is_minimized) {
-            visible.push(w.id);
+            if live.contains(&w.id) || !state.fresh.covers(w.id) {
+                visible.push(w.id);
+            }
             dims.insert(w.id, shot_request_dims(w.width, w.height));
         }
         visible.sort_by_key(|wid| state.live_frames.contains_key(wid));
-        (selected, visible, dims)
+        (live, visible, dims)
     })
-    .unwrap_or((None, Vec::new(), HashMap::new()))
+    .unwrap_or_default()
 }
 
 fn clear_live_frames(delegate: &Entity<PickerState>, this: &WeakEntity<AltTabApp>, cx: &AsyncApp) {

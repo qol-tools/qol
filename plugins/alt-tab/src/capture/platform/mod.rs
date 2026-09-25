@@ -20,13 +20,13 @@ mod fallback;
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) use fallback::{
-    fetch_shots_session, live_frame_element, live_shots_available, warm_shots_session, LiveFrame,
-    SendCVBuf, ShotReply, PIXEL_FORMAT_420F,
+    live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
+    PIXEL_FORMAT_420F,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::shots::{
-    fetch_shots_session, live_frame_element, live_shots_available, warm_shots_session, LiveFrame,
-    SendCVBuf, ShotReply, PIXEL_FORMAT_420F,
+    live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
+    PIXEL_FORMAT_420F,
 };
 
 pub fn capture_previews_cg(

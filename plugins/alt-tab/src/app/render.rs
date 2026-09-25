@@ -3,6 +3,7 @@ use crate::capture::LiveFrame;
 use crate::config::{capitalize_first, ActionMode, LabelConfig, PreviewIconPosition};
 use crate::discovery::WindowInfo;
 use crate::picker::layout::{picker_layout, CardMetrics};
+use crate::picker::state::FreshFrame;
 use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
 use crate::rendering::RenderingFlow;
 use gpui::prelude::FluentBuilder;
@@ -45,6 +46,7 @@ struct CardRenderContext<'a> {
     label_config: &'a LabelConfig,
     previews: &'a PreviewMap,
     live_frames: &'a LiveFrameMap,
+    fresh: &'a FreshFrame,
     icons: &'a IconMap,
     entity: WeakEntity<AltTabApp>,
     window: &'a Window,
@@ -164,6 +166,7 @@ impl Render for AltTabApp {
             label_config: &d.label_config,
             previews: &d.live_previews,
             live_frames: &d.live_frames,
+            fresh: &d.fresh,
             icons: &d.icon_cache,
             entity,
             window,
@@ -425,6 +428,8 @@ fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div
     })
 }
 
+const FRESH_FRAME_FADE: std::time::Duration = std::time::Duration::from_millis(180);
+
 fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &CardMetrics) -> Div {
     let snap = context.snap;
     let palette = &snap.palette;
@@ -450,15 +455,22 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &C
         .h(px(metrics.preview_height))
         .flex_none()
         .overflow_hidden()
-        .child(if render_gpui_preview {
-            preview_tile(
+        .child(if context.fresh.awaiting == Some(win.id) {
+            placeholder_frame(metrics, palette, snap.system.border_subtle).into_any_element()
+        } else if render_gpui_preview {
+            let tile = preview_tile(
                 context.live_frames.get(&win.id),
                 context.previews.get(&win.id),
                 minimized_icon,
                 metrics,
                 palette,
                 snap.system.border_subtle,
-            )
+            );
+            if context.fresh.landed == Some(win.id) {
+                fade_in(tile, context.fresh.generation, metrics, palette)
+            } else {
+                tile
+            }
         } else {
             preview_plane_slot(metrics, snap.system.border_subtle)
         })
@@ -626,6 +638,31 @@ fn preview_tile(
             .into_any_element();
     }
     empty_placeholder(metrics, palette, border_subtle)
+}
+
+fn fade_in(
+    tile: AnyElement,
+    generation: usize,
+    metrics: &CardMetrics,
+    palette: &PickerSurfacePalette,
+) -> AnyElement {
+    div()
+        .relative()
+        .w(px(metrics.preview_width))
+        .h(px(metrics.preview_height))
+        .child(tile)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .bg(rgb(palette.placeholder_bg))
+                .with_animation(
+                    ("fresh-frame", generation),
+                    Animation::new(FRESH_FRAME_FADE).with_easing(ease_out_quint()),
+                    |overlay, delta| overlay.opacity(1.0 - delta),
+                ),
+        )
+        .into_any_element()
 }
 
 fn preview_plane_slot(metrics: &CardMetrics, border_subtle: u32) -> AnyElement {

@@ -1,44 +1,41 @@
+use std::collections::HashSet;
+
 pub(crate) struct LaneScheduler {
-    cursor: usize,
+    attempted: HashSet<u32>,
 }
 
 impl LaneScheduler {
     pub(crate) fn new() -> Self {
-        Self { cursor: 0 }
+        Self {
+            attempted: HashSet::new(),
+        }
     }
 
     pub(crate) fn plan(
         &mut self,
-        selected: Option<u32>,
+        live: &[u32],
         visible: &[u32],
         in_flight: &[u32],
         background_slots: usize,
     ) -> Vec<u32> {
         let mut targets = Vec::new();
-        if let Some(wid) = selected {
+        for &wid in live {
             if visible.contains(&wid) && !in_flight.contains(&wid) {
+                self.attempted.insert(wid);
                 targets.push(wid);
             }
         }
-        let background_in_flight = in_flight.iter().filter(|w| Some(**w) != selected).count();
-        let free_slots = background_slots.saturating_sub(background_in_flight);
-        if free_slots == 0 || visible.is_empty() {
-            return targets;
-        }
-        let start = self.cursor % visible.len();
-        let mut picked = 0;
-        for offset in 0..visible.len() {
-            if picked == free_slots {
+        let background_in_flight = in_flight.iter().filter(|w| !live.contains(w)).count();
+        let mut free_slots = background_slots.saturating_sub(background_in_flight);
+        for &wid in visible {
+            if free_slots == 0 {
                 break;
             }
-            let idx = (start + offset) % visible.len();
-            let wid = visible[idx];
-            if Some(wid) == selected || in_flight.contains(&wid) || targets.contains(&wid) {
+            if live.contains(&wid) || in_flight.contains(&wid) || !self.attempted.insert(wid) {
                 continue;
             }
             targets.push(wid);
-            picked += 1;
-            self.cursor = start + offset + 1;
+            free_slots -= 1;
         }
         targets
     }
@@ -49,31 +46,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn selected_goes_first_then_backgrounds_round_robin_across_calls() {
+    fn only_the_selected_window_is_recaptured_after_one_pass() {
         let mut scheduler = LaneScheduler::new();
+        let all = [1, 2, 3, 4];
 
-        let first = scheduler.plan(Some(1), &[1, 2, 3, 4], &[], 2);
-        assert_eq!(first, vec![1, 2, 3], "selected first, then two backgrounds");
-
-        let saturated = scheduler.plan(Some(1), &[1, 2, 3, 4], &[1, 2, 3], 2);
-        assert_eq!(saturated, Vec::<u32>::new(), "all lanes busy");
-
-        let second = scheduler.plan(Some(1), &[1, 2, 3, 4], &[], 2);
+        assert_eq!(scheduler.plan(&[1], &all, &[], 2), vec![1, 2, 3]);
+        assert_eq!(scheduler.plan(&[1], &all, &[], 2), vec![1, 4]);
         assert_eq!(
-            second,
-            vec![1, 4, 2],
-            "cursor continues rotation instead of restarting"
+            scheduler.plan(&[1], &all, &[], 2),
+            vec![1],
+            "backgrounds are captured once per show"
         );
     }
 
-    type Case<'a> = (&'a str, Option<u32>, &'a [u32], &'a [u32], usize, &'a [u32]);
+    #[test]
+    fn every_live_window_is_recaptured_each_pass() {
+        let mut scheduler = LaneScheduler::new();
+        let all = [1, 2, 3];
+
+        assert_eq!(scheduler.plan(&[1, 2], &all, &[], 2), vec![1, 2, 3]);
+        assert_eq!(scheduler.plan(&[1, 2], &all, &[], 2), vec![1, 2]);
+        assert_eq!(scheduler.plan(&[1, 2], &all, &[2], 2), vec![1]);
+    }
+
+    type Case<'a> = (&'a str, &'a [u32], &'a [u32], &'a [u32], usize, &'a [u32]);
 
     #[test]
     fn plan_respects_selection_and_capacity() {
         let cases: [Case; 6] = [
             (
                 "selected in flight yields backgrounds only",
-                Some(1),
+                &[1],
                 &[1, 2, 3],
                 &[1],
                 2,
@@ -81,7 +84,7 @@ mod tests {
             ),
             (
                 "one background in flight leaves one slot",
-                Some(1),
+                &[1],
                 &[1, 2, 3, 4],
                 &[2],
                 2,
@@ -89,7 +92,7 @@ mod tests {
             ),
             (
                 "full background lanes leave selected only",
-                Some(1),
+                &[1],
                 &[1, 2, 3, 4],
                 &[2, 3],
                 2,
@@ -97,7 +100,7 @@ mod tests {
             ),
             (
                 "no selection fills backgrounds",
-                None,
+                &[],
                 &[5, 6, 7],
                 &[],
                 2,
@@ -105,17 +108,17 @@ mod tests {
             ),
             (
                 "closed selected window falls back to backgrounds",
-                Some(9),
+                &[9],
                 &[1, 2],
                 &[],
                 2,
                 &[1, 2],
             ),
-            ("empty visible plans nothing", Some(1), &[], &[], 2, &[]),
+            ("empty visible plans nothing", &[1], &[], &[], 2, &[]),
         ];
-        for (label, selected, visible, in_flight, slots, expected) in cases {
+        for (label, live, visible, in_flight, slots, expected) in cases {
             let mut scheduler = LaneScheduler::new();
-            let plan = scheduler.plan(selected, visible, in_flight, slots);
+            let plan = scheduler.plan(live, visible, in_flight, slots);
             assert_eq!(plan, expected, "{label}");
         }
     }
@@ -123,19 +126,13 @@ mod tests {
     #[test]
     fn single_visible_window_is_planned_once() {
         let mut scheduler = LaneScheduler::new();
-        assert_eq!(scheduler.plan(Some(1), &[1], &[], 2), vec![1]);
+        assert_eq!(scheduler.plan(&[1], &[1], &[], 2), vec![1]);
     }
 
     #[test]
-    fn cursor_survives_visible_set_shrinking() {
+    fn a_window_that_appears_mid_show_is_captured_once() {
         let mut scheduler = LaneScheduler::new();
-        let big: Vec<u32> = (1..=20).collect();
-        scheduler.plan(None, &big, &[], 8);
-
-        let plan = scheduler.plan(None, &[30, 31], &[], 2);
-        assert_eq!(plan.len(), 2, "shrunken visible set still plans");
-        for wid in &plan {
-            assert!([30, 31].contains(wid), "plans only current wids, got {wid}");
-        }
+        assert_eq!(scheduler.plan(&[], &[1, 2], &[], 2), vec![1, 2]);
+        assert_eq!(scheduler.plan(&[], &[1, 2, 3], &[], 2), vec![3]);
     }
 }

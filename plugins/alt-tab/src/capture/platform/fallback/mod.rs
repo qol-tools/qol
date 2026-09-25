@@ -40,10 +40,6 @@ pub(crate) fn live_shots_available() -> bool {
     false
 }
 
-pub(crate) fn fetch_shots_session() -> Option<ShotsSession> {
-    None
-}
-
 pub(crate) fn warm_shots_session(_required: &[u32]) -> Option<std::sync::Arc<ShotsSession>> {
     None
 }
