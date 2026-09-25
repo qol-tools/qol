@@ -1,5 +1,7 @@
 use super::CloseOutcome;
-use crate::discovery::platform::macos::ax::{ax_find_window, ax_find_window_brute_force};
+use crate::discovery::platform::macos::ax::{
+    ax_find_window, ax_find_window_brute_force, ax_find_window_on_any_space,
+};
 use crate::discovery::platform::macos::ffi;
 use crate::discovery::platform::macos::ffi::{
     copy_window_list_timed, CFArrayGetCount, CFArrayGetValueAtIndex, CFDictionaryRef, CFRelease,
@@ -224,10 +226,7 @@ pub fn activate_window(window_id: u32) -> bool {
             }
             activation::ns_activate_app(pid);
             activation::ax_app_frontmost(pid);
-            let mut win = unsafe { ax_find_window(pid, window_id, &title) };
-            if win.is_null() {
-                win = unsafe { ax_find_window_brute_force(pid, window_id) };
-            }
+            let win = unsafe { ax_find_window_on_any_space(pid, window_id, &title) };
             if !win.is_null() {
                 unsafe {
                     ax_raise(win);
@@ -388,7 +387,7 @@ pub fn close_window(window_id: u32) -> CloseOutcome {
         );
         return CloseOutcome::Unsupported;
     };
-    let win = unsafe { ax_find_window(info.pid, window_id, &info.title) };
+    let win = unsafe { ax_find_window_on_any_space(info.pid, window_id, &info.title) };
     if win.is_null() {
         qol_runtime::probe!(
             "CLOSE_WINDOW",

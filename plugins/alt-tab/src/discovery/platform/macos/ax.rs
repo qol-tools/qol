@@ -492,6 +492,20 @@ pub(crate) unsafe fn ax_find_window(
     result
 }
 
+// AXWindows only lists windows on the current Space, so a window on another
+// Space needs the brute-force scan.
+pub(crate) unsafe fn ax_find_window_on_any_space(
+    pid: i32,
+    cg_window_id: u32,
+    title_hint: &str,
+) -> *const c_void {
+    let win = ax_find_window(pid, cg_window_id, title_hint);
+    if !win.is_null() {
+        return win;
+    }
+    ax_find_window_brute_force(pid, cg_window_id)
+}
+
 pub(crate) unsafe fn ax_find_window_brute_force(pid: i32, cg_window_id: u32) -> *const c_void {
     let started = Instant::now();
     let deadline = started + Duration::from_millis(100);
