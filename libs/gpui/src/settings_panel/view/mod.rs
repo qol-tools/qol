@@ -38,7 +38,7 @@ use super::{
 };
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
-use crate::gamepad::{gamepad_panel, GamepadPalette};
+use crate::gamepad::gamepad_panel;
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
@@ -2952,18 +2952,6 @@ impl SettingsPanelView {
             return div().id(("settings-gamepad-empty", index));
         };
         let selected = index == self.level().selected;
-        let palette = GamepadPalette {
-            surface: self.palette.window_bg,
-            raised: self.palette.surface_raised,
-            border: self.palette.panel_border,
-            text: self.palette.section_text,
-            text_muted: self.palette.label_text,
-            accent: self.palette.row_border_selected,
-            info: self.palette.status_info,
-            success: self.palette.status_success,
-            warning: self.palette.status_warning,
-            danger: self.palette.status_danger,
-        };
         div()
             .id(("settings-gamepad", index))
             .h(px(super::PANEL_GAMEPAD_HEIGHT))
@@ -2990,7 +2978,7 @@ impl SettingsPanelView {
                 monitor,
                 &row.label,
                 row.description.as_deref(),
-                palette,
+                self.kit,
             ))
     }
 

@@ -2093,6 +2093,8 @@ every other settings-scope file keeps its exact counts in LEAF_STYLING_DEBT.\n{}
 
 const PALETTE_PREFIXES: [&str; 3] = ["kit.palette.", "kit().palette", "shared.palette."];
 
+const SEMANTIC_HUES: [&str; 5] = ["success", "info", "warning", "warning_ink", "danger"];
+
 #[test]
 fn settings_surfaces_take_colour_from_the_settings_palette() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2109,9 +2111,17 @@ fn settings_surfaces_take_colour_from_the_settings_palette() {
         for (index, line) in contents.lines().enumerate() {
             let compact = compact_line(line);
             for prefix in PALETTE_PREFIXES {
-                if compact.contains(prefix) {
+                let reads_raw = compact.match_indices(prefix).any(|(at, _)| {
+                    let field: String = compact[at + prefix.len()..]
+                        .trim_start_matches('.')
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    !SEMANTIC_HUES.contains(&field.as_str())
+                });
+                if reads_raw {
                     problems.push(format!(
-                        "{relative}:{} reads {prefix}; take the colour from a SettingsPanelPalette field, a kit wash or a kit recipe",
+                        "{relative}:{} reads {prefix}; take the colour from a ground, a kit wash, a kit recipe or a semantic hue",
                         index + 1
                     ));
                 }
@@ -2121,8 +2131,8 @@ fn settings_surfaces_take_colour_from_the_settings_palette() {
 
     assert!(
         problems.is_empty(),
-        "Colour in settings scope comes from SettingsPanelPalette fields, kit.washes or a kit \
-recipe; only kit.rs and settings_panel/components/ may read kit.palette.\n{}",
+        "Colour in settings scope comes from the grounds, kit.washes, a kit recipe or a semantic \
+hue; only kit.rs and settings_panel/components/ may read the rest of kit.palette.\n{}",
         problems.join("\n")
     );
 }

@@ -1,13 +1,11 @@
 use gpui::*;
 
 use super::{at, scaled};
-use crate::gamepad::{ControllerSnapshot, GamepadPalette};
+use crate::gamepad::ControllerSnapshot;
+use crate::kit::Kit;
 use qol_theme::{translucent, Alpha};
 
-pub(super) fn top_controls_canvas(
-    controller: &ControllerSnapshot,
-    palette: GamepadPalette,
-) -> impl IntoElement {
+pub(super) fn top_controls_canvas(controller: &ControllerSnapshot, kit: Kit) -> impl IntoElement {
     let states = [
         controller.button_value(6),
         controller.button_value(7),
@@ -15,7 +13,7 @@ pub(super) fn top_controls_canvas(
         f32::from(controller.button_pressed(5)),
     ];
     canvas(
-        move |bounds, _, _| top_control_paths(bounds, states, palette),
+        move |bounds, _, _| top_control_paths(bounds, states, kit),
         |_, paths, window, _| {
             for (path, color) in paths {
                 window.paint_path(path, color);
@@ -66,7 +64,7 @@ const CONTROLS: [CapGeometry; 4] = [
 fn top_control_paths(
     bounds: Bounds<Pixels>,
     states: [f32; 4],
-    palette: GamepadPalette,
+    kit: Kit,
 ) -> Vec<(Path<Pixels>, Rgba)> {
     let mut layers = Vec::new();
     for (index, &(start, to, control_a, control_b, lead)) in CONTROLS.iter().enumerate() {
@@ -79,11 +77,11 @@ fn top_control_paths(
             control_b,
             PathBuilder::stroke(scaled(20.0)),
         ) {
-            layers.push((path, rgba(translucent(palette.accent, Alpha::Veil))));
+            layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Veil))));
         }
         for end in [start, to] {
             if let Some(path) = round_cap(bounds, end, 10.0) {
-                layers.push((path, rgba(translucent(palette.accent, Alpha::Veil))));
+                layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Veil))));
             }
         }
         if let Some(path) = cap_path(
@@ -97,15 +95,15 @@ fn top_control_paths(
             layers.push((
                 path,
                 rgb(if engaged {
-                    palette.accent
+                    kit.grounds.pane.mark
                 } else {
-                    palette.raised
+                    kit.grounds.menu.bg
                 }),
             ));
             let fill = rgb(if engaged {
-                palette.accent
+                kit.grounds.pane.mark
             } else {
-                palette.raised
+                kit.grounds.menu.bg
             });
             for end in [start, to] {
                 if let Some(path) = round_cap(bounds, end, 8.0) {
@@ -114,7 +112,7 @@ fn top_control_paths(
             }
         }
         if let Some(path) = lead_path(bounds, lead, PathBuilder::stroke(scaled(2.0))) {
-            layers.push((path, rgba(translucent(palette.text_muted, Alpha::Veil))));
+            layers.push((path, rgba(translucent(kit.grounds.pane.faint, Alpha::Veil))));
         }
     }
     layers
@@ -163,7 +161,7 @@ pub(super) fn top_control_labels(
     controller: &ControllerSnapshot,
     triggers: [&'static str; 2],
     shoulders: [&'static str; 2],
-    palette: GamepadPalette,
+    kit: Kit,
 ) -> Div {
     let controls = [
         (
@@ -220,7 +218,7 @@ pub(super) fn top_control_labels(
                             value,
                             engaged,
                         },
-                        palette,
+                        kit,
                     )
                 }),
         )
@@ -236,7 +234,7 @@ struct ChipSpec {
     engaged: bool,
 }
 
-fn control_chip(spec: ChipSpec, palette: GamepadPalette) -> Div {
+fn control_chip(spec: ChipSpec, kit: Kit) -> Div {
     let ChipSpec {
         left,
         top,
@@ -255,14 +253,14 @@ fn control_chip(spec: ChipSpec, palette: GamepadPalette) -> Div {
         .rounded(scaled(9.0))
         .border_1()
         .border_color(if engaged {
-            rgb(palette.accent)
+            rgb(kit.grounds.pane.mark)
         } else {
-            rgba(translucent(palette.text_muted, Alpha::Veil))
+            rgba(translucent(kit.grounds.pane.faint, Alpha::Veil))
         })
         .bg(if engaged {
-            rgba(translucent(palette.accent, Alpha::Wash))
+            rgba(translucent(kit.grounds.pane.mark, Alpha::Wash))
         } else {
-            rgb(palette.surface)
+            rgb(kit.grounds.pane.bg)
         })
         .child(chip_text(
             label,
@@ -271,7 +269,7 @@ fn control_chip(spec: ChipSpec, palette: GamepadPalette) -> Div {
             scaled(17.0),
             FontWeight::BOLD,
             engaged,
-            palette,
+            kit,
         ));
     if let Some((value_x, value)) = value {
         chip.child(chip_text(
@@ -281,7 +279,7 @@ fn control_chip(spec: ChipSpec, palette: GamepadPalette) -> Div {
             scaled(14.0),
             FontWeight::MEDIUM,
             engaged,
-            palette,
+            kit,
         ))
     } else {
         chip
@@ -295,7 +293,7 @@ fn chip_text(
     font_size: Pixels,
     weight: FontWeight,
     engaged: bool,
-    palette: GamepadPalette,
+    kit: Kit,
 ) -> Div {
     div()
         .absolute()
@@ -309,9 +307,9 @@ fn chip_text(
         .text_size(font_size)
         .font_weight(weight)
         .text_color(rgb(if engaged {
-            palette.text
+            kit.grounds.pane.ink
         } else {
-            palette.text_muted
+            kit.grounds.pane.faint
         }))
         .child(text)
 }

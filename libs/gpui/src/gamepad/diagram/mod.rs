@@ -2,7 +2,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use qol_theme::{translucent, Alpha};
 
-use super::{ControllerProfile, ControllerSnapshot, GamepadPalette};
+use super::{ControllerProfile, ControllerSnapshot};
+use crate::kit::Kit;
 
 mod controls;
 mod top;
@@ -22,7 +23,7 @@ struct ControlLayout {
     face: (f32, f32),
 }
 
-pub fn controller_diagram(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
+pub fn controller_diagram(controller: &ControllerSnapshot, kit: Kit) -> Div {
     let profile = controller.profile();
     let layout = control_layout(profile);
     let triggers = profile.trigger_labels();
@@ -32,17 +33,17 @@ pub fn controller_diagram(controller: &ControllerSnapshot, palette: GamepadPalet
         .flex_none()
         .w(px(WIDTH))
         .h(px(HEIGHT))
-        .child(body_canvas(palette))
-        .child(top_controls_canvas(controller, palette))
-        .child(top_control_labels(controller, triggers, shoulders, palette))
-        .child(port(controller.is_active(), palette))
+        .child(body_canvas(kit))
+        .child(top_controls_canvas(controller, kit))
+        .child(top_control_labels(controller, triggers, shoulders, kit))
+        .child(port(controller.is_active(), kit))
         .child(stick(
             layout.left_stick,
             "L3",
             controller.axis_state(0),
             controller.axis_state(1),
             controller.button_pressed(10),
-            palette,
+            kit,
         ))
         .child(stick(
             layout.right_stick,
@@ -50,16 +51,16 @@ pub fn controller_diagram(controller: &ControllerSnapshot, palette: GamepadPalet
             controller.axis_state(2),
             controller.axis_state(3),
             controller.button_pressed(11),
-            palette,
+            kit,
         ))
-        .child(dpad_control(controller, layout.dpad, palette))
-        .child(face_controls(controller, profile, layout.face, palette))
-        .child(center_controls(controller, profile, palette))
+        .child(dpad_control(controller, layout.dpad, kit))
+        .child(face_controls(controller, profile, layout.face, kit))
+        .child(center_controls(controller, profile, kit))
 }
 
-fn body_canvas(palette: GamepadPalette) -> impl IntoElement {
+fn body_canvas(kit: Kit) -> impl IntoElement {
     canvas(
-        move |bounds, _, _| body_paths(bounds, palette),
+        move |bounds, _, _| body_paths(bounds, kit),
         |_, paths, window, _| {
             for (path, color) in paths {
                 window.paint_path(path, color);
@@ -70,31 +71,31 @@ fn body_canvas(palette: GamepadPalette) -> impl IntoElement {
     .inset_0()
 }
 
-fn body_paths(bounds: Bounds<Pixels>, palette: GamepadPalette) -> Vec<(Path<Pixels>, Rgba)> {
+fn body_paths(bounds: Bounds<Pixels>, kit: Kit) -> Vec<(Path<Pixels>, Rgba)> {
     let mut layers = Vec::new();
     if let Some(path) = body_path(bounds, PathBuilder::stroke(scaled(10.0))) {
-        layers.push((path, rgba(translucent(palette.accent, Alpha::Wash))));
+        layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Wash))));
     }
     if let Some(path) = body_path(bounds, PathBuilder::fill()) {
-        layers.push((path, rgb(palette.surface)));
+        layers.push((path, rgb(kit.grounds.pane.bg)));
     }
     if let Some(path) = body_path(bounds, PathBuilder::stroke(scaled(2.0))) {
-        layers.push((path, rgba(translucent(palette.accent, Alpha::Veil))));
+        layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Veil))));
     }
     for left in [true, false] {
         if let Some(path) = grip_path(bounds, left, PathBuilder::fill()) {
-            layers.push((path, rgba(translucent(palette.raised, Alpha::Strong))));
+            layers.push((path, rgba(translucent(kit.grounds.menu.bg, Alpha::Strong))));
         }
     }
     if let Some(path) = crown_path(bounds, PathBuilder::fill()) {
-        layers.push((path, rgba(translucent(palette.accent, Alpha::Wash))));
+        layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Wash))));
     }
     if let Some(path) = crown_path(bounds, PathBuilder::stroke(scaled(1.5))) {
-        layers.push((path, rgba(translucent(palette.accent, Alpha::Edge))));
+        layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Edge))));
     }
     for left in [true, false] {
         if let Some(path) = seam_path(bounds, left, PathBuilder::stroke(scaled(1.2))) {
-            layers.push((path, rgba(translucent(palette.accent, Alpha::Halo))));
+            layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Halo))));
         }
     }
     layers
@@ -237,7 +238,7 @@ fn seam_path(bounds: Bounds<Pixels>, left: bool, mut path: PathBuilder) -> Optio
     path.build().ok()
 }
 
-fn port(active: bool, palette: GamepadPalette) -> Div {
+fn port(active: bool, kit: Kit) -> Div {
     div()
         .absolute()
         .left(scaled(380.0))
@@ -246,9 +247,9 @@ fn port(active: bool, palette: GamepadPalette) -> Div {
         .h(scaled(6.0))
         .rounded(scaled(3.0))
         .bg(if active {
-            rgb(palette.accent)
+            rgb(kit.grounds.pane.mark)
         } else {
-            rgba(translucent(palette.text_muted, Alpha::Veil))
+            rgba(translucent(kit.grounds.pane.faint, Alpha::Veil))
         })
         .when(active, |port| {
             port.child(
@@ -256,7 +257,7 @@ fn port(active: bool, palette: GamepadPalette) -> Div {
                     .absolute()
                     .inset(px(-4.0))
                     .rounded(scaled(5.0))
-                    .bg(rgba(translucent(palette.accent, Alpha::Halo))),
+                    .bg(rgba(translucent(kit.grounds.pane.mark, Alpha::Halo))),
             )
         })
 }
