@@ -33,12 +33,8 @@ impl InstallerOps for Platform {
         super::unix_common::start_now(binary_path)
     }
 
-    fn stop_running(&self, binary_path: &Path) -> Result<()> {
-        if !binary_path.exists() {
-            return super::unix_common::stop_running_by_name("qol-tray");
-        }
-        stop_running_binary(binary_path);
-        Ok(())
+    fn stop_running(&self, _binary_path: &Path) -> Result<()> {
+        super::unix_common::stop_running_by_name("qol-tray")
     }
 
     fn set_executable_permissions(&self, path: &Path) -> Result<()> {
@@ -74,60 +70,6 @@ impl InstallerOps for Platform {
     }
 
     fn remove_legacy_install(&self) {}
-}
-
-fn stop_running_binary(binary_path: &Path) {
-    let pids = pids_for_binary(binary_path);
-    if pids.is_empty() {
-        return;
-    }
-    for pid in &pids {
-        crate::process_utils::terminate_pid(*pid, std::time::Duration::from_millis(100));
-    }
-    if wait_all_pids_exit(&pids) {
-        return;
-    }
-    for pid in pids {
-        crate::process_utils::terminate_pid(pid, std::time::Duration::from_millis(10));
-    }
-}
-
-fn wait_all_pids_exit(pids: &[i32]) -> bool {
-    for _ in 0..30 {
-        if pids
-            .iter()
-            .all(|pid| !crate::process_utils::is_pid_alive(*pid))
-        {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    false
-}
-
-fn pid_matches_binary(pid: i32, target: &Path) -> bool {
-    let exe = Path::new("/proc").join(pid.to_string()).join("exe");
-    let Ok(exe_path) = std::fs::read_link(exe) else {
-        return false;
-    };
-    std::fs::canonicalize(&exe_path)
-        .unwrap_or(exe_path)
-        .as_path()
-        == target
-}
-
-fn pids_for_binary(binary_path: &Path) -> Vec<i32> {
-    let target = std::fs::canonicalize(binary_path).unwrap_or_else(|_| binary_path.to_path_buf());
-    let current_pid = std::process::id() as i32;
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i32>().ok())
-        .filter(|&pid| pid > 0 && pid != current_pid)
-        .filter(|&pid| pid_matches_binary(pid, &target))
-        .collect()
 }
 
 fn install_icons() -> Result<()> {
