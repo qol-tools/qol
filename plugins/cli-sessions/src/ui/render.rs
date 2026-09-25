@@ -124,27 +124,10 @@ fn header(
 }
 
 fn empty_state() -> impl IntoElement {
-    let palette = current_palette();
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(8.0))
-        .px(px(24.0))
-        .child(
-            div()
-                .text_color(rgb(palette.text_heading))
-                .text(TextStyle::Value)
-                .child("No sessions running"),
-        )
-        .child(
-            div()
-                .text_color(rgb(palette.text_muted))
-                .text(TextStyle::Detail)
-                .child("spawned lanes appear here"),
-        )
+    qol_gpui::kit::kit().empty(
+        "No sessions running",
+        Some("Spawned lanes appear here.".into()),
+    )
 }
 
 fn panel_controls(collapsed: bool, cx: &mut Context<SessionsView>) -> impl IntoElement {

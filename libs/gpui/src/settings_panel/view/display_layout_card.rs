@@ -814,18 +814,11 @@ impl SettingsPanelView {
             .selected()
             .is_some_and(|display| staged.conflicts(&display.id))
         {
-            primary_body = primary_body.child(SettingsFeedback::new(
-                "This display overlaps another",
-                palette.status_danger,
-                true,
-            ));
+            primary_body =
+                primary_body.child(SettingsFeedback::new("This display overlaps another", true));
         }
         if let Some(error) = staged.error() {
-            primary_body = primary_body.child(SettingsFeedback::new(
-                error.to_string(),
-                palette.status_danger,
-                true,
-            ));
+            primary_body = primary_body.child(SettingsFeedback::new(error.to_string(), true));
         }
         let slider = staged.bindings().slider.clone();
         let brightness_ground = RowGround::of(

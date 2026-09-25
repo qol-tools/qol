@@ -1954,9 +1954,8 @@ fn rem_spacing_helper_calls(compact: &str) -> Vec<String> {
     found
 }
 
-const REM_SPACING_HELPER_DEBT: [(&str, usize); 3] = [
+const REM_SPACING_HELPER_DEBT: [(&str, usize); 2] = [
     ("libs/gpui/src/status_indicator.rs", 1),
-    ("libs/gpui/src/toast.rs", 4),
     ("plugins/alt-tab/src/app/render.rs", 2),
 ];
 
@@ -2015,17 +2014,15 @@ Files outside settings scope keep their exact count in REM_SPACING_HELPER_DEBT u
     );
 }
 
-const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 11] = [
+const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 9] = [
     ("libs/gpui/src/toast.rs", 10.0),
     ("libs/gpui/src/toast.rs", 3.0),
     ("plugins/alt-tab/src/app/render.rs", 26.0),
     ("plugins/alt-tab/src/app/render.rs", 18.0),
-    ("plugins/cli-sessions/src/ui/render.rs", 24.0),
     ("plugins/launcher/src/ui/view.rs", 10.0),
     ("plugins/launcher/src/ui/view.rs", 5.0),
     ("plugins/launcher/src/ui/view.rs", 14.0),
     ("plugins/removeapp/src/ui/mod.rs", 10.0),
-    ("plugins/removeapp/src/ui/mod.rs", 24.0),
     ("plugins/removeapp/src/ui/mod.rs", 3.0),
 ];
 
@@ -3299,6 +3296,53 @@ fn every_chip_badge_and_pill_is_the_kit_chip() {
     assert!(
         problems.is_empty(),
         "A chip, badge or pill is kit.chip(Chip::Key | KeyText | Count | Status | Tag, ground).\n{}",
+        problems.join("\n")
+    );
+}
+
+const HEADING_TEXT_OWNERS: [&str; 3] = [
+    "libs/gpui/src/kit.rs",
+    "libs/gpui/src/settings_panel/components/mod.rs",
+    "plugins/launcher/src/ui/view.rs",
+];
+
+#[test]
+fn every_heading_notice_and_empty_list_is_a_kit_part() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        if !HEADING_TEXT_OWNERS.contains(&relative.as_str()) {
+            for style in ["Heading", "Masthead", "Colophon"] {
+                if body.contains(&format!(".text(TextStyle::{style})")) {
+                    problems.push(format!(
+                        "{relative} sets TextStyle::{style} itself; use kit.heading or kit.heading_title"
+                    ));
+                }
+            }
+        }
+        if relative != "libs/gpui/src/kit.rs" {
+            for (needle, part) in [
+                ("fn empty_state", ".empty("),
+                ("fn render_compact", ".notice("),
+                ("fn render_status", ".notice("),
+                ("fn tone_bar", ".notice("),
+            ] {
+                let Some(at) = body.find(needle) else {
+                    continue;
+                };
+                let rest = &body[at..];
+                let end = rest.find("\n}\n").unwrap_or(rest.len());
+                if !rest[..end].contains(part) {
+                    problems.push(format!("{relative} draws {needle} by hand; use kit{part}"));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Headings, notices and empty lists are kit parts.\n{}",
         problems.join("\n")
     );
 }

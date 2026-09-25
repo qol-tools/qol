@@ -5,7 +5,7 @@ use gpui::{
     div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable,
     KeyDownEvent, WeakEntity, Window,
 };
-use qol_gpui::kit::Chip;
+use qol_gpui::kit::{Chip, NoticeTone};
 use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::theme::TextStyle;
 use qol_gpui::Key;
@@ -496,44 +496,15 @@ impl RemoveAppView {
             .into_any_element(),
         };
         Some(
-            div()
-                .flex_none()
-                .relative()
-                .h(px(FAILBAR_H))
-                .w_full()
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .px(px(qol_gpui::theme::SPACE_PAD))
-                .bg(rgb(kit.grounds.invalid.bg))
-                .border_t(px(qol_gpui::theme::LINE))
-                .border_color(rgba(kit.washes.hairline.packed()))
-                .child(kit.status_dot(palette.danger, kit.washes.halo_invalid.packed()))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            div()
-                                .text(TextStyle::ListName)
-                                .text_color(rgb(palette.text_primary))
-                                .child(format!("Remove {}", app.name)),
-                        )
-                        .child(
-                            div()
-                                .text(TextStyle::Detail)
-                                .text_color(rgb(palette.text_secondary))
-                                .child(subtitle),
-                        ),
-                )
-                .child(
-                    kit.keycap_inked(REMOVE_KEY, palette.danger)
-                        .border_color(rgba(kit.washes.edge_invalid.packed())),
-                )
-                .into_any_element(),
+            kit.notice(
+                NoticeTone::Invalid,
+                format!("Remove {}", app.name),
+                Some(subtitle),
+            )
+            .h(px(FAILBAR_H))
+            .w_full()
+            .child(kit.chip(Chip::Key(REMOVE_KEY), kit.grounds.invalid))
+            .into_any_element(),
         )
     }
 
@@ -785,71 +756,44 @@ impl RemoveAppView {
     }
 
     fn render_done(&self) -> AnyElement {
-        let palette = current_palette();
-        if let Some(error) = &self.error {
-            return div()
-                .flex()
-                .flex_col()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .gap(px(10.0))
-                .px(px(24.0))
-                .panel_drag_area()
-                .child(
-                    div()
-                        .text(TextStyle::Heading)
-                        .text_color(rgb(palette.danger))
-                        .child("Removal failed"),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(palette.text_secondary))
-                        .text(TextStyle::Detail)
-                        .wraps()
-                        .child(error.clone()),
-                )
-                .child(continue_or_quit_hint())
-                .into_any_element();
-        }
-        let Some(outcome) = &self.outcome else {
-            return div().into_any_element();
+        let kit = qol_gpui::kit::kit();
+        let notice = if let Some(error) = &self.error {
+            kit.notice(
+                NoticeTone::Invalid,
+                "Removal failed",
+                Some(error.clone().into_any_element()),
+            )
+        } else {
+            let Some(outcome) = &self.outcome else {
+                return div().into_any_element();
+            };
+            let failed = outcome.failed.len();
+            let tone = if failed > 0 {
+                NoticeTone::Attention
+            } else {
+                NoticeTone::Done
+            };
+            let freed = format!("Freed {}", qol_gpui::format_bytes(outcome.freed_bytes));
+            let detail = if failed > 0 {
+                format!("{freed} \u{00B7} {failed} failed")
+            } else {
+                freed
+            };
+            kit.notice(
+                tone,
+                format!("Removed {} item(s)", outcome.removed.len()),
+                Some(detail.into_any_element()),
+            )
         };
-        let removed = outcome.removed.len();
-        let failed = outcome.failed.len();
         div()
             .flex()
             .flex_col()
             .size_full()
-            .items_center()
             .justify_center()
-            .gap(px(10.0))
-            .px(px(24.0))
+            .gap(px(qol_gpui::theme::SPACE_CELL))
             .panel_drag_area()
-            .child(
-                div()
-                    .text(TextStyle::Heading)
-                    .text_color(rgb(palette.success))
-                    .child(format!("Removed {removed} item(s)")),
-            )
-            .child(
-                div()
-                    .text_color(rgb(palette.text_secondary))
-                    .text(TextStyle::Detail)
-                    .child(format!(
-                        "Freed {}",
-                        qol_gpui::format_bytes(outcome.freed_bytes)
-                    )),
-            )
-            .when(failed > 0, |d| {
-                d.child(
-                    div()
-                        .text_color(rgb(palette.danger))
-                        .text(TextStyle::Detail)
-                        .child(format!("{failed} failed")),
-                )
-            })
-            .child(continue_or_quit_hint())
+            .child(notice.w_full())
+            .child(div().flex().justify_center().child(continue_or_quit_hint()))
             .into_any_element()
     }
 }

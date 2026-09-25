@@ -4025,7 +4025,7 @@ impl SettingsPanelView {
     }
 
     fn render_failure_bar(&self, message: String) -> impl IntoElement {
-        SettingsFeedback::new(message, self.palette.status_danger, true)
+        SettingsFeedback::new(message, true)
     }
 
     fn resize_canvas(&mut self) -> impl IntoElement {

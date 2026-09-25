@@ -53,6 +53,14 @@ pub enum ActionCircleState {
 
 pub const SECTION_MARK_WIDTH: f32 = 10.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeTone {
+    Attention,
+    Invalid,
+    Done,
+    Quiet,
+}
+
 pub const CHIP_HEIGHT: f32 = 22.0;
 pub const KEY_CHIP_HEIGHT: f32 = 20.0;
 
@@ -303,6 +311,96 @@ impl Kit {
                 .child(text),
             Chip::Tag(text) => self.chip_frame(ground).child(text),
         }
+    }
+
+    pub fn notice(
+        &self,
+        tone: NoticeTone,
+        title: impl Into<SharedString>,
+        detail: Option<gpui::AnyElement>,
+    ) -> Div {
+        let (ground, dot, halo) = match tone {
+            NoticeTone::Attention => (
+                self.grounds.attention,
+                self.palette.warning,
+                self.washes.halo_attention,
+            ),
+            NoticeTone::Invalid => (
+                self.grounds.invalid,
+                self.palette.danger,
+                self.washes.halo_invalid,
+            ),
+            NoticeTone::Done => (
+                self.grounds.pane,
+                self.palette.success,
+                self.washes.halo_success,
+            ),
+            NoticeTone::Quiet => (
+                self.grounds.pane,
+                self.palette.text_muted,
+                self.washes.fill_resting,
+            ),
+        };
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_CELL))
+            .px(px(qol_theme::SPACE_GUTTER))
+            .py(px(qol_theme::SPACE_CELL))
+            .bg(rgb(ground.bg))
+            .child(self.status_dot(dot, halo.packed()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(qol_theme::SPACE_STACK))
+                    .child(
+                        div()
+                            .text(TextStyle::ListName)
+                            .text_color(rgb(ground.ink))
+                            .child(title.into()),
+                    )
+                    .when_some(detail, |block, detail| {
+                        block.child(
+                            div()
+                                .text(TextStyle::Detail)
+                                .line_clamp(2)
+                                .text_color(rgb(ground.soft))
+                                .child(detail),
+                        )
+                    }),
+            )
+    }
+
+    pub fn empty(&self, title: impl Into<SharedString>, detail: Option<SharedString>) -> Div {
+        let pane = self.grounds.pane;
+        div()
+            .flex_1()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(qol_theme::SPACE_STACK))
+            .px(px(qol_theme::SPACE_GUTTER))
+            .child(
+                div()
+                    .text(TextStyle::ListName)
+                    .text_color(rgb(pane.ink))
+                    .child(title.into()),
+            )
+            .when_some(detail, |block, detail| {
+                block.child(
+                    div()
+                        .text(TextStyle::Detail)
+                        .text_color(rgb(pane.soft))
+                        .child(detail),
+                )
+            })
     }
 
     pub fn keycap_inked(&self, key: Key, ink: u32) -> Div {

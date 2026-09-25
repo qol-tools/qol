@@ -132,6 +132,15 @@ impl ToastTone {
         }
     }
 
+    fn notice(self) -> crate::kit::NoticeTone {
+        match self {
+            Self::Neutral | Self::Info => crate::kit::NoticeTone::Quiet,
+            Self::Success => crate::kit::NoticeTone::Done,
+            Self::Warning => crate::kit::NoticeTone::Attention,
+            Self::Danger => crate::kit::NoticeTone::Invalid,
+        }
+    }
+
     fn color(self, palette: ToastPalette) -> u32 {
         match self {
             Self::Neutral => palette.border,
@@ -291,7 +300,7 @@ impl Toast {
     }
 
     pub fn element(&self) -> Div {
-        self.layout.render(self, toast_runtime())
+        toast_notice(self)
     }
 
     pub fn positioned(&self, bounds: Bounds<Pixels>) -> Div {
@@ -1175,84 +1184,13 @@ fn dismiss_control(
     crate::kit::kit().pointable(control, lift)
 }
 
-impl ToastLayout {
-    fn render(self, toast: &Toast, palette: ToastPalette) -> Div {
-        match self.style {
-            ToastStyle::Compact => render_compact(toast, palette),
-            ToastStyle::Status => render_status(toast, palette),
-        }
-    }
-}
-
-fn render_compact(toast: &Toast, palette: ToastPalette) -> Div {
-    toast_root(toast, palette)
-        .items_center()
-        .pl(px(qol_theme::SPACE_PAD))
-        .child(tone_dot(toast.tone, palette))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex_col()
-                .justify_center()
-                .gap(px(2.0))
-                .px_4()
-                .py_3()
-                .child(
-                    div()
-                        .w_full()
-                        .text(TextStyle::Name)
-                        .text_color(rgb(palette.text_primary))
-                        .child(toast.title.clone()),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .text(TextStyle::Detail)
-                        .text_color(rgb(palette.text_secondary))
-                        .child(toast.message.clone()),
-                ),
-        )
-}
-
-fn render_status(toast: &Toast, palette: ToastPalette) -> Div {
-    toast_root(toast, palette).child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(2.0))
-            .px_6()
-            .py_3()
-            .text_center()
-            .child(
-                div()
-                    .w_full()
-                    .text(TextStyle::Heading)
-                    .text_color(rgb(palette.text_primary))
-                    .child(toast.title.clone()),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .text(TextStyle::Value)
-                    .text_color(rgb(palette.text_secondary))
-                    .child(toast.message.clone()),
-            ),
-    )
-}
-
-fn toast_root(toast: &Toast, palette: ToastPalette) -> Div {
-    div()
+fn toast_notice(toast: &Toast) -> Div {
+    let kit = crate::kit::kit();
+    let detail = (!toast.message.is_empty()).then(|| toast.message.clone().into_any_element());
+    kit.notice(toast.tone.notice(), toast.title.clone(), detail)
         .size_full()
-        .flex()
-        .flex_row()
         .overflow_hidden()
-        .rounded_none()
-        .shadow(crate::kit::float_shadow(palette.text_primary))
-        .bg(rgb(tone_ground(toast.tone, palette)))
+        .shadow(crate::kit::float_shadow(kit.palette.text_primary))
 }
 
 #[cfg(test)]

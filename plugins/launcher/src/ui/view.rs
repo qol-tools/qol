@@ -498,14 +498,7 @@ fn vague_fence(kit: &qol_gpui::kit::Kit, checking: bool) -> Div {
 }
 
 pub fn flow_empty_state(kit: &qol_gpui::kit::Kit) -> Div {
-    div()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(rgb(kit.palette.text_muted))
-        .text(TextStyle::Value)
-        .child("no memory covers this")
+    kit.empty("no memory covers this", None)
 }
 
 pub fn detail_body(

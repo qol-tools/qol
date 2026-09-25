@@ -411,12 +411,16 @@ pub fn settings_message(
     danger: bool,
     palette: SettingsPanelPalette,
 ) -> gpui::Div {
-    settings_message_frame(if danger {
-        palette.status_danger
+    let kit = kit();
+    if danger {
+        settings_message_frame(palette.status_danger).child(kit.notice(
+            crate::kit::NoticeTone::Invalid,
+            text,
+            None,
+        ))
     } else {
-        palette.status_muted
-    })
-    .child(text.into())
+        kit.empty(text, None)
+    }
 }
 
 fn settings_message_frame(color: u32) -> gpui::Div {
