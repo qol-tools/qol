@@ -236,41 +236,6 @@ impl Kit {
         }
     }
 
-    pub fn row_selected_tinted_after<E: Styled + ParentElement>(
-        &self,
-        row: E,
-        selected: bool,
-        tone: u32,
-        leading_width: f32,
-    ) -> E {
-        let colors = qol_theme::tinted_row_palette(tone, self.palette);
-        let row = row
-            .relative()
-            .border(px(LINE))
-            .border_color(rgba(0))
-            .bg(rgba(
-                if selected {
-                    colors.selected
-                } else {
-                    colors.resting
-                }
-                .packed(),
-            ));
-        if !selected {
-            return row;
-        }
-        row.child(
-            div()
-                .absolute()
-                .left(px(leading_width - LINE))
-                .right(px(-LINE))
-                .top(px(-LINE))
-                .bottom(px(-LINE))
-                .border(px(LINE))
-                .border_color(rgba(colors.selected_edge.packed())),
-        )
-    }
-
     pub fn value(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()

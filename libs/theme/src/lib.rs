@@ -903,23 +903,6 @@ impl CssRgba {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TintedRowPalette {
-    pub resting: CssRgba,
-    pub hover: CssRgba,
-    pub selected: CssRgba,
-    pub selected_edge: CssRgba,
-}
-
-pub fn tinted_row_palette(tone: u32, palette: SystemPalette) -> TintedRowPalette {
-    TintedRowPalette {
-        resting: css_rgba_milli(tone, 45),
-        hover: css_rgba_milli(tone, 80),
-        selected: css_rgba_milli(tone, 110),
-        selected_edge: css_rgba_milli(mix_rgb(tone, palette.text_primary, 0.45), 850),
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WashPalette {
     pub hairline: CssRgba,
     pub hairline_strong: CssRgba,
@@ -1769,8 +1752,8 @@ impl PickerSurfacePalette {
             ),
             None => (
                 lift(card_bg, system.text_primary),
-                system.accent_fill,
-                system.accent,
+                band_fill(system),
+                band_fill(system),
             ),
         };
         Self {

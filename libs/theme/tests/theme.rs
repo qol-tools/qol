@@ -330,8 +330,8 @@ fn picker_surface_palette_themed_none_uses_system_roles() {
         palette.card_hover_bg,
         qol_theme::lift(system.surface_raised, system.text_primary)
     );
-    assert_eq!(palette.card_selected_bg, system.accent_fill);
-    assert_eq!(palette.card_selected_border, system.accent);
+    assert_eq!(palette.card_selected_bg, qol_theme::band_fill(system));
+    assert_eq!(palette.card_selected_border, qol_theme::band_fill(system));
     assert_eq!(
         palette.panel_bg,
         mix_rgb(system.surface_raised, system.surface_canvas, 0.56)

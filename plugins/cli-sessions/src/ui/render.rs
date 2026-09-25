@@ -284,8 +284,6 @@ fn session_row(
     let id = s.id.clone();
     let kit = qol_gpui::kit::kit();
     let idle = is_idle(s.status);
-    let (tone, _) = (s.status.definition().colors)(&current_palette());
-    let tint = qol_gpui::theme::tinted_row_palette(tone, kit.palette);
     let name = meaningful_name(s.name.as_deref())
         .or_else(|| meaningful_name(Some(&s.project)))
         .unwrap_or(&s.tool.label)
@@ -353,9 +351,7 @@ fn session_row(
             this.jump_to_session(id.clone(), "row-click", cx);
             cx.notify();
         }));
-    let lift = if selected { tint.selected } else { tint.hover };
-    let row = kit.pointable(row, rgba(lift.packed()));
-    kit.row_selected_tinted_after(row, selected, tone, qol_gpui::vertical_label::WIDTH)
+    kit.highlight(row, selected)
 }
 
 enum StripAction {
