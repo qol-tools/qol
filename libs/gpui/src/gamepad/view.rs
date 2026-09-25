@@ -1,3 +1,4 @@
+use crate::kit::{kit, Chip};
 use crate::text::TextStyled;
 use gpui::*;
 use qol_theme::{translucent, Alpha, TextStyle};
@@ -88,7 +89,7 @@ fn controller_content(
         }))
         .child(active_inputs(controller, palette))
         .child(axis_readout(controller, palette))
-        .child(button_readout(controller, palette))
+        .child(button_readout(controller))
 }
 
 fn device_header(
@@ -114,10 +115,10 @@ fn device_header(
         metadata = metadata.child(connection_badge(connection, palette));
     }
     metadata = metadata
-        .child(metadata_chip(controller.profile().label(), palette))
-        .child(metadata_chip(&controller.hardware_id(), palette));
+        .child(metadata_chip(controller.profile().label()))
+        .child(metadata_chip(&controller.hardware_id()));
     if let Some(source) = &monitor.source {
-        metadata = metadata.child(metadata_chip(source, palette));
+        metadata = metadata.child(metadata_chip(source));
     }
     div()
         .flex()
@@ -173,40 +174,22 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
                     })
             }))
     });
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(qol_theme::SPACE_TIGHT))
-        .px(px(qol_theme::SPACE_INSET))
-        .py(px(qol_theme::SPACE_STACK))
-        .rounded_none()
-        .border_1()
-        .border_color(rgba(translucent(tone, Alpha::Veil)))
-        .bg(rgba(translucent(tone, Alpha::Wash)))
-        .children(bars)
-        .child(
-            div()
-                .text(TextStyle::Detail)
-                .text_color(rgb(palette.text_muted))
-                .child(connection.transport),
-        )
-        .child(
-            div()
-                .text(TextStyle::ListName)
-                .text_color(rgb(tone))
-                .child(connection.detail),
-        )
+    let kit = kit();
+    kit.chip(
+        Chip::Status {
+            tone,
+            halo: translucent(tone, Alpha::Halo),
+            text: connection.transport.into(),
+        },
+        kit.grounds.pane,
+    )
+    .children(bars)
+    .child(connection.detail)
 }
 
-fn metadata_chip(label: &str, palette: GamepadPalette) -> Div {
-    div()
-        .px(px(qol_theme::SPACE_TIGHT))
-        .rounded_none()
-        .bg(rgba(translucent(palette.raised, Alpha::Strong)))
-        .text(TextStyle::Detail)
-        .text_color(rgb(palette.text_muted))
-        .child(label.to_string())
+fn metadata_chip(label: &str) -> Div {
+    let kit = kit();
+    kit.chip(Chip::Tag(label.to_string().into()), kit.grounds.pane)
 }
 
 fn active_inputs(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
@@ -301,63 +284,28 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
         }))
 }
 
-fn button_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
+fn button_readout(controller: &ControllerSnapshot) -> Div {
     div()
         .flex()
         .w_full()
         .flex_wrap()
         .content_start()
         .gap(px(qol_theme::SPACE_TIGHT))
-        .children(
-            controller
-                .buttons
-                .iter()
-                .map(|button| button_chip(button, palette)),
-        )
+        .children(controller.buttons.iter().map(button_chip))
 }
 
-fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
+fn button_chip(button: &GamepadButton) -> Div {
     let active = button.pressed || button.value > 0.05;
-    div()
-        .flex()
+    let kit = kit();
+    let ground = if active {
+        kit.grounds.band
+    } else {
+        kit.grounds.pane
+    };
+    kit.chip(Chip::Tag(short_button_name(&button.name).into()), ground)
         .w(px(89.0))
-        .h(px(22.0))
-        .items_center()
         .justify_between()
-        .px(px(qol_theme::SPACE_TIGHT))
-        .rounded_none()
-        .border_1()
-        .border_color(if active {
-            rgb(palette.accent)
-        } else {
-            rgba(translucent(palette.border, Alpha::Veil))
-        })
-        .bg(if active {
-            rgba(translucent(palette.accent, Alpha::Edge))
-        } else {
-            rgba(translucent(palette.raised, Alpha::Strong))
-        })
-        .child(
-            div()
-                .text(TextStyle::Detail)
-                .text_color(rgb(if active {
-                    palette.text
-                } else {
-                    palette.text_muted
-                }))
-                .child(short_button_name(&button.name)),
-        )
-        .child(
-            div()
-                .flex_none()
-                .text(TextStyle::Detail)
-                .text_color(rgb(if active {
-                    palette.accent
-                } else {
-                    palette.text_muted
-                }))
-                .child(format!("{:.2}", button.value)),
-        )
+        .child(format!("{:.2}", button.value))
 }
 
 fn short_button_name(name: &str) -> String {
@@ -423,22 +371,20 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
 }
 
 fn status_badge(status: MonitorStatus, palette: GamepadPalette) -> Div {
-    let (label, color) = match status {
-        MonitorStatus::Ready => ("LIVE", palette.success),
-        MonitorStatus::Waiting => ("WAITING", palette.warning),
-        MonitorStatus::Unavailable => ("OFFLINE", palette.danger),
+    let (label, tone) = match status {
+        MonitorStatus::Ready => ("live", palette.success),
+        MonitorStatus::Waiting => ("waiting", palette.warning),
+        MonitorStatus::Unavailable => ("offline", palette.danger),
     };
-    div()
-        .flex_none()
-        .px(px(qol_theme::SPACE_INSET))
-        .py(px(qol_theme::SPACE_TIGHT))
-        .rounded_none()
-        .border_1()
-        .border_color(rgba(translucent(color, Alpha::Veil)))
-        .bg(rgba(translucent(color, Alpha::Wash)))
-        .text(TextStyle::Label)
-        .text_color(rgb(color))
-        .child(label)
+    let kit = kit();
+    kit.chip(
+        Chip::Status {
+            tone,
+            halo: translucent(tone, Alpha::Halo),
+            text: label.into(),
+        },
+        kit.grounds.pane,
+    )
 }
 
 fn tone_color(tone: SignalTone, palette: GamepadPalette) -> u32 {

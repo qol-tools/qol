@@ -2152,7 +2152,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 27] = [
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 26] = [
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
@@ -2182,9 +2182,9 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 27] = [
     ("libs/gpui/src/gamepad/diagram/top.rs", ".rounded(", 1),
     ("libs/gpui/src/gamepad/diagram/top.rs", ".text_color(", 1),
     ("libs/gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
-    ("libs/gpui/src/gamepad/view.rs", ".bg(", 11),
-    ("libs/gpui/src/gamepad/view.rs", ".border_color(", 8),
-    ("libs/gpui/src/gamepad/view.rs", ".text_color(", 17),
+    ("libs/gpui/src/gamepad/view.rs", ".bg(", 7),
+    ("libs/gpui/src/gamepad/view.rs", ".border_color(", 5),
+    ("libs/gpui/src/gamepad/view.rs", ".text_color(", 11),
     (
         "libs/gpui/src/settings_panel/view/display_layout_card.rs",
         ".text_color(",
@@ -2212,13 +2212,8 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 27] = [
     ),
     (
         "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".border_color(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
         ".text_color(",
-        2,
+        1,
     ),
 ];
 
@@ -3268,6 +3263,42 @@ fn the_web_settings_page_takes_sizes_times_and_shadows_from_the_theme() {
     assert!(
         problems.is_empty(),
         "The web settings page sets text sizes, times and shadows through the generated --qol-* tokens and never draws a coloured side line.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn every_chip_badge_and_pill_is_the_kit_chip() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if relative.ends_with("libs/gpui/src/kit.rs") || relative.contains("gamepad/diagram/") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        for (at, _) in body.match_indices("fn ") {
+            let rest = &body[at + 3..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !(name.ends_with("_chip") || name.ends_with("_badge") || name.ends_with("_pill")) {
+                continue;
+            }
+            let signature = rest.split('{').next().unwrap_or_default();
+            if !signature.contains("-> Div") && !signature.contains("impl IntoElement") {
+                continue;
+            }
+            let end = rest.find("\n}\n").unwrap_or(rest.len());
+            if !rest[..end].contains(".chip(") {
+                problems.push(format!("{relative}: {name} draws a chip by hand"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A chip, badge or pill is kit.chip(Chip::Key | KeyText | Count | Status | Tag, ground).\n{}",
         problems.join("\n")
     );
 }

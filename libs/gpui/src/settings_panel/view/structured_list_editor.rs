@@ -1,4 +1,5 @@
 use crate::key::Key;
+use crate::kit::Chip as KitChip;
 use crate::text::TextStyled;
 use qol_theme::TextStyle;
 use std::cell::Cell;
@@ -812,10 +813,6 @@ impl SettingsPanelView {
             RowGround::Pane => self.palette.status_muted,
             RowGround::Band => ground.soft,
         };
-        let plain = match row {
-            RowGround::Pane => self.palette.label_text,
-            RowGround::Band => ground.ink,
-        };
         let mut strip = div()
             .flex()
             .flex_row()
@@ -831,15 +828,10 @@ impl SettingsPanelView {
                     .text_color(rgb(arrow))
                     .child("\u{2192}"),
                 ChipRowPart::Chip(chip) => match chip.tone {
-                    ChipTone::Modifier | ChipTone::Key => match row {
-                        RowGround::Pane => self.kit.key_text(chip.label),
-                        RowGround::Band => self
-                            .kit
-                            .key_text(chip.label)
-                            .text_color(rgb(ground.faint))
-                            .border_color(rgba(ground.edge.packed())),
-                    },
-                    ChipTone::Plain => self.kit.chip(chip.label, plain),
+                    ChipTone::Modifier | ChipTone::Key => {
+                        self.kit.chip(KitChip::KeyText(chip.label.into()), ground)
+                    }
+                    ChipTone::Plain => self.kit.chip(KitChip::Tag(chip.label.into()), ground),
                 },
             });
         }

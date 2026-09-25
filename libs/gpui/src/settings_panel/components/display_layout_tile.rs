@@ -3,7 +3,7 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, SharedString};
 use qol_theme::TextStyle;
 
-use crate::kit::kit;
+use crate::kit::{kit, Chip};
 use crate::theme::SettingsPanelPalette;
 
 pub struct DisplayLayoutTile {
@@ -110,7 +110,7 @@ pub fn display_layout_tile(
                 )
                 .children(
                     tile.selected
-                        .then(|| kit().status_pill("selected", palette.status_accent)),
+                        .then(|| status_chip("selected", palette.status_accent)),
                 ),
         )
         .child(
@@ -124,10 +124,22 @@ pub fn display_layout_tile(
         cell = cell.child(
             div()
                 .px(px(qol_theme::SPACE_STACK))
-                .child(kit().status_pill("primary", palette.status_success)),
+                .child(status_chip("primary", palette.status_success)),
         );
     }
     cell
+}
+
+fn status_chip(text: &'static str, tone: u32) -> gpui::Div {
+    let kit = kit();
+    kit.chip(
+        Chip::Status {
+            tone,
+            halo: qol_theme::translucent(tone, qol_theme::Alpha::Halo),
+            text: text.into(),
+        },
+        kit.grounds.pane,
+    )
 }
 
 #[cfg(test)]

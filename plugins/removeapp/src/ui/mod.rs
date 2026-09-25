@@ -5,6 +5,7 @@ use gpui::{
     div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable,
     KeyDownEvent, WeakEntity, Window,
 };
+use qol_gpui::kit::Chip;
 use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::theme::TextStyle;
 use qol_gpui::Key;
@@ -602,7 +603,7 @@ impl RemoveAppView {
                                     .render(),
                             ),
                     )
-                    .child(kit.keycap(Key::symbol('/'))),
+                    .child(kit.chip(Chip::Key(Key::symbol('/')), kit.grounds.pane)),
             )
     }
 

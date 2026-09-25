@@ -1,3 +1,4 @@
+use crate::kit::Chip;
 use crate::text::TextStyled;
 use qol_theme::TextStyle;
 use std::cell::Cell;
@@ -783,7 +784,7 @@ impl SettingsPanelView {
                     .text_color(rgb(self.palette.state_on))
                     .child("Apply"),
             )
-            .child(self.kit.keycap(Key::ENTER))
+            .child(self.kit.chip(Chip::Key(Key::ENTER), self.kit.grounds.pane))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;
@@ -797,7 +798,7 @@ impl SettingsPanelView {
                 self.body_has_focus(),
             )
             .child(settings_label("Cancel", palette))
-            .child(self.kit.keycap(Key::ESC))
+            .child(self.kit.chip(Chip::Key(Key::ESC), self.kit.grounds.pane))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;

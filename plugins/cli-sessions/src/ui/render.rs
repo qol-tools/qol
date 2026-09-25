@@ -3,6 +3,7 @@ use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, KeyDownEvent, KeyUpEvent,
     Modifiers, SharedString, Window,
 };
+use qol_gpui::kit::Chip;
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::TextStyle;
@@ -111,7 +112,10 @@ fn header(
                 .flex()
                 .items_center()
                 .gap(px(qol_gpui::theme::SPACE_STACK))
-                .child(kit.count_chip_small(live_count(rows), "live"))
+                .child(kit.chip(
+                    Chip::Count(live_count(rows), "live".into()),
+                    kit.grounds.pane,
+                ))
                 .child(panel_controls(collapsed, cx)),
         )
 }
@@ -221,15 +225,21 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
             .h(px(qol_gpui::theme::SPACE_PAD))
             .child(
                 kit.pointable(
-                    kit.status_pill("your turn", tone)
-                        .gap(px(qol_gpui::theme::SPACE_STACK))
-                        .child(qol_gpui::icon::icon(
-                            qol_gpui::Icon::Tick,
-                            qol_gpui::theme::TEXT_NANO,
+                    kit.chip(
+                        Chip::Status {
                             tone,
-                        ))
-                        .id(SharedString::from(format!("ack-{}", s.id)))
-                        .cursor(CursorStyle::PointingHand),
+                            halo: qol_gpui::theme::translucent(tone, qol_gpui::theme::Alpha::Halo),
+                            text: "your turn".into(),
+                        },
+                        kit.grounds.pane,
+                    )
+                    .child(qol_gpui::icon::icon(
+                        qol_gpui::Icon::Tick,
+                        qol_gpui::theme::TEXT_NANO,
+                        tone,
+                    ))
+                    .id(SharedString::from(format!("ack-{}", s.id)))
+                    .cursor(CursorStyle::PointingHand),
                     rgba(current_palette().your_turn_hover_rgba),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -271,13 +281,16 @@ fn agent_chip(
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
     let driver = session.id.clone();
-    kit.count_button(session.driving.len())
-        .id(("cycle-agents", index))
-        .cursor(CursorStyle::PointingHand)
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.cycle_implementers_of(&driver, true, cx);
-            cx.stop_propagation();
-        }))
+    kit.chip(
+        Chip::Count(session.driving.len(), SharedString::default()),
+        kit.grounds.pane,
+    )
+    .id(("cycle-agents", index))
+    .cursor(CursorStyle::PointingHand)
+    .on_click(cx.listener(move |this, _, _, cx| {
+        this.cycle_implementers_of(&driver, true, cx);
+        cx.stop_propagation();
+    }))
 }
 
 fn session_row(

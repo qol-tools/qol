@@ -4,6 +4,7 @@ mod list_card;
 mod structured_list_editor;
 
 use crate::key::Key;
+use crate::kit::Chip;
 use crate::text::TextStyled;
 use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
 use qol_theme::TextStyle;
@@ -2645,9 +2646,10 @@ impl SettingsPanelView {
             }
             RowControl::Action { .. } => return self.render_action_value(index, row),
             RowControl::TextList(values) => {
-                return self
-                    .kit
-                    .count_chip(values.len(), plural(values.len(), "item"));
+                return self.kit.chip(
+                    Chip::Count(values.len(), plural(values.len(), "item").into()),
+                    row.rest(self.palette),
+                );
             }
             RowControl::Unsupported { reason, .. } => {
                 return div()
@@ -3802,7 +3804,10 @@ impl SettingsPanelView {
                         .bg(rgb(self.palette.row_border_selected)),
                 );
         }
-        field.child(self.kit.keycap(Key::symbol('/')))
+        field.child(
+            self.kit
+                .chip(Chip::Key(Key::symbol('/')), self.kit.grounds.pane),
+        )
     }
 
     fn render_filter_overlay(&self) -> Div {

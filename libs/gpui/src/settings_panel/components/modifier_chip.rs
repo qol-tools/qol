@@ -4,7 +4,7 @@ use gpui::{
     SharedString, Window,
 };
 
-use crate::kit::kit;
+use crate::kit::{kit, Chip};
 use crate::theme::{Ground, SettingsPanelPalette};
 
 use super::{ground_bg, ground_border, ground_text, RowGround};
@@ -83,7 +83,7 @@ impl RenderOnce for SettingsModifierChip {
             }
         };
         let border = |ground: Ground| chip_border(on, cursor, ground);
-        let chip = kit().key_text(label).id(id);
+        let chip = kit().chip(Chip::KeyText(label), ground).id(id);
         let chip = ground_bg(chip, fill(ground), hover.map(fill));
         let chip = ground_text(chip, text(ground), hover.map(text));
         let chip = ground_border(chip, border(ground), hover.map(border));

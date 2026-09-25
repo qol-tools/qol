@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use qol_gpui::kit::Chip;
 use qol_gpui::text::shaped_width;
 use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
@@ -125,7 +126,7 @@ pub fn search_bar(
         )
         .when_some(status.mode, |bar, mode| {
             bar.child(
-                kit.chip(mode.label(), kit.palette.accent_ink)
+                kit.chip(Chip::Tag(mode.label().into()), kit.grounds.pane)
                     .id("launcher-search-mode")
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -430,7 +431,7 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
         );
     }
     let mut meta = div().mt(px(4.0)).flex().items_center().gap(px(8.0));
-    meta = meta.child(kit.chip("true now", kit.palette.accent));
+    meta = meta.child(kit.chip(Chip::Tag("true now".into()), kit.grounds.pane));
     if let Some(sources) = sources_of(&row.raw).filter(|count| *count >= 2) {
         meta = meta.child(
             div()
@@ -585,7 +586,7 @@ pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
         .child(kit.hint(Key::DOWN, "back in time"))
         .child(kit.hint(Key::UP, "forward"))
         .child(kit.hint(Key::ESC, "back"))
-        .child(kit.chip(entry.title.clone(), kit.palette.accent))
+        .child(kit.chip(Chip::Tag(entry.title.clone().into()), kit.grounds.pane))
         .child(div().flex_1())
 }
 

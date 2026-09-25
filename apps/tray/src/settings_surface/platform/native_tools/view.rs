@@ -1,4 +1,5 @@
 use qol_gpui::key::Key;
+use qol_gpui::kit::Chip;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1189,8 +1190,12 @@ impl NativeToolsView {
             .find(|error| error.key == key)?;
         let kit = qol_gpui::kit::kit();
         Some(kit.chip(
-            failure.error.clone(),
-            settings_panel_runtime().status_warning,
+            Chip::Status {
+                tone: settings_panel_runtime().status_warning,
+                halo: kit.washes.halo_attention.packed(),
+                text: failure.error.clone().into(),
+            },
+            kit.grounds.pane,
         ))
     }
 

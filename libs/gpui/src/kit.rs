@@ -53,6 +53,21 @@ pub enum ActionCircleState {
 
 pub const SECTION_MARK_WIDTH: f32 = 10.0;
 
+pub const CHIP_HEIGHT: f32 = 22.0;
+pub const KEY_CHIP_HEIGHT: f32 = 20.0;
+
+pub enum Chip {
+    Key(Key),
+    KeyText(SharedString),
+    Count(usize, SharedString),
+    Status {
+        tone: u32,
+        halo: u32,
+        text: SharedString,
+    },
+    Tag(SharedString),
+}
+
 #[derive(Clone, Copy)]
 pub struct Kit {
     pub palette: SystemPalette,
@@ -216,26 +231,54 @@ impl Kit {
             .child(text.into())
     }
 
-    fn keycap_frame(&self) -> Div {
+    fn key_frame(&self, ground: Ground) -> Div {
         div()
             .flex_none()
             .flex()
             .items_center()
+            .h(px(KEY_CHIP_HEIGHT))
             .px(px(qol_theme::SPACE_SNUG))
-            .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_KEYCAP))
             .border(px(qol_theme::LINE))
-            .border_color(rgba(self.washes.hairline_strong.packed()))
+            .border_color(rgba(translucent(ground.ink, Alpha::Edge)))
             .text(TextStyle::Key)
-            .text_color(rgb(self.palette.text_muted))
+            .text_color(rgb(ground.faint))
     }
 
-    pub fn keycap(&self, key: Key) -> Div {
-        self.keycap_inked(key, self.palette.text_muted)
+    fn chip_frame(&self, ground: Ground) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(qol_theme::SPACE_SNUG))
+            .h(px(CHIP_HEIGHT))
+            .px(px(qol_theme::SPACE_INSET))
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .bg(rgba(ground.well.packed()))
+            .text(TextStyle::Detail)
+            .text_color(rgb(ground.soft))
+    }
+
+    pub fn chip(&self, chip: Chip, ground: Ground) -> Div {
+        match chip {
+            Chip::Key(key) => self
+                .key_frame(ground)
+                .child(self.key_name(&[key], ground.faint)),
+            Chip::KeyText(text) => self.key_frame(ground).child(text),
+            Chip::Count(count, label) => self
+                .chip_frame(ground)
+                .child(div().text_color(rgb(ground.ink)).child(count.to_string()))
+                .child(label),
+            Chip::Status { tone, halo, text } => self
+                .chip_frame(ground)
+                .child(self.status_dot(tone, halo))
+                .child(text),
+            Chip::Tag(text) => self.chip_frame(ground).child(text),
+        }
     }
 
     pub fn keycap_inked(&self, key: Key, ink: u32) -> Div {
-        self.keycap_frame()
+        self.key_frame(self.grounds.pane)
             .text_color(rgb(ink))
             .child(self.key_name(&[key], ink))
     }
@@ -260,10 +303,6 @@ impl Kit {
             }
         }
         name
-    }
-
-    pub fn key_text(&self, text: impl Into<SharedString>) -> Div {
-        self.keycap_frame().child(text.into())
     }
 
     pub fn status_dot(&self, tone: u32, halo: u32) -> Div {
@@ -295,45 +334,6 @@ impl Kit {
         }
     }
 
-    pub fn count_chip(&self, count: usize, label: impl Into<SharedString>) -> Div {
-        self.count_chip_of_height(count, label, qol_theme::HEIGHT_INLINE)
-    }
-
-    pub fn count_chip_small(&self, count: usize, label: impl Into<SharedString>) -> Div {
-        self.count_chip_of_height(count, label, 22.0)
-    }
-
-    fn count_chip_of_height(
-        &self,
-        count: usize,
-        label: impl Into<SharedString>,
-        height: f32,
-    ) -> Div {
-        let label = cased(TextStyle::Label, &label.into());
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(qol_theme::SPACE_SNUG))
-            .h(px(height))
-            .px(px(qol_theme::SPACE_INSET))
-            .rounded(px(qol_theme::RADIUS_CONTROL))
-            .border(px(qol_theme::LINE))
-            .border_color(rgba(self.washes.hairline.packed()))
-            .bg(rgba(self.washes.fill_resting.packed()))
-            .text(TextStyle::Label)
-            .child(
-                div()
-                    .text_color(rgb(self.palette.text_primary))
-                    .child(format!("{count}")),
-            )
-            .child(
-                div()
-                    .text_color(rgb(self.palette.text_secondary))
-                    .child(label),
-            )
-    }
-
     pub fn hint_bar(&self) -> Div {
         div()
             .flex_none()
@@ -356,7 +356,7 @@ impl Kit {
             .flex()
             .items_center()
             .gap(px(qol_theme::SPACE_SNUG))
-            .child(self.keycap(key))
+            .child(self.chip(Chip::Key(key), self.grounds.pane))
             .child(label.into())
     }
 
@@ -378,19 +378,6 @@ impl Kit {
             .text_color(rgb(0xffffff))
             .text(TextStyle::Label)
             .child(glyph)
-    }
-
-    pub fn chip(&self, text: impl Into<SharedString>, tone: u32) -> Div {
-        let text = cased(TextStyle::Label, &text.into());
-        div()
-            .flex_none()
-            .px(px(qol_theme::SPACE_SNUG))
-            .py(px(qol_theme::SPACE_STACK))
-            .rounded(px(qol_theme::RADIUS_TIGHT))
-            .bg(rgba(translucent(tone, Alpha::Halo)))
-            .text(TextStyle::Label)
-            .text_color(rgb(tone))
-            .child(text)
     }
 
     pub fn vertical_identity_tab(&self, text: impl Into<SharedString>, tone: u32) -> Div {
@@ -423,19 +410,6 @@ impl Kit {
             .flex_col()
             .items_end()
             .gap(px(qol_theme::SPACE_STACK))
-    }
-
-    pub fn count_button(&self, count: usize) -> Div {
-        let label = if count > 99 {
-            "99+".to_owned()
-        } else {
-            count.to_string()
-        };
-        self.button_ghost(label)
-            .size(px(qol_theme::HEIGHT_INLINE))
-            .p(px(qol_theme::SPACE_STACK))
-            .justify_center()
-            .text(TextStyle::Label)
     }
 
     pub fn row_separator(&self) -> Div {
@@ -511,21 +485,6 @@ impl Kit {
                         .size(px(qol_theme::SPACE_CELL)),
                     ),
             )
-    }
-
-    pub fn status_pill(&self, text: impl Into<SharedString>, tone: u32) -> Div {
-        let text = cased(TextStyle::Label, &text.into());
-        div()
-            .flex_none()
-            .h(px(qol_theme::SPACE_PAD))
-            .px(px(qol_theme::SPACE_SNUG))
-            .flex()
-            .items_center()
-            .rounded_full()
-            .bg(rgba(translucent(tone, Alpha::Halo)))
-            .text(TextStyle::Label)
-            .text_color(rgb(tone))
-            .child(text)
     }
 
     fn button_base(&self, text: impl Into<SharedString>) -> Div {
