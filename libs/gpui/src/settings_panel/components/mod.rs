@@ -380,6 +380,18 @@ pub fn settings_page() -> gpui::Div {
         .gap(px(qol_theme::SPACE_TIGHT))
 }
 
+pub fn settings_list() -> gpui::Div {
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .gap(px(qol_theme::SPACE_TIGHT))
+        .mr(px(-qol_theme::SPACE_PAD))
+        .pr(px(qol_theme::SPACE_PAD))
+}
+
 pub fn settings_label_group(
     label: impl Into<SharedString>,
     description: Option<SharedString>,

@@ -11,8 +11,8 @@ mod view;
 pub mod components;
 pub use components::{
     settings_action_affordance, settings_action_spinner, settings_busy_message,
-    settings_description, settings_query_spinner, settings_value_text, SettingsGroupHeader,
-    SettingsRow, SettingsValueTone,
+    settings_description, settings_list, settings_query_spinner, settings_value_text,
+    SettingsGroupHeader, SettingsRow, SettingsValueTone,
 };
 pub use form_nav::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,

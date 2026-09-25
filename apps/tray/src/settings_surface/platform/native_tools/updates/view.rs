@@ -14,7 +14,7 @@ use qol_gpui::settings_panel::components::{
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
-    settings_busy_message, settings_description, settings_value_text, CustomHints,
+    settings_busy_message, settings_description, settings_list, settings_value_text, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
 };
@@ -383,14 +383,8 @@ impl UpdatesView {
     ) -> AnyElement {
         let total = rows.len();
         let last = total.checked_sub(1);
-        let mut list = div()
+        let mut list = settings_list()
             .id("updates-list")
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(qol_theme::SPACE_TIGHT))
             .on_scroll_wheel(
                 cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let rows = wheel_rows(&event.delta, qol_theme::HEIGHT_SETTING_ROW);

@@ -18,7 +18,7 @@ use qol_gpui::settings_panel::components::{
     SettingsTextField, SettingsTile, SettingsToggle, TileArt,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, wrapping_visible_row, CustomHints,
+    adjacent_visible_row, escape_step, intent, settings_list, wrapping_visible_row, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination,
 };
@@ -1037,14 +1037,8 @@ impl NativeToolsView {
 
     fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
         let total = self.list_len();
-        let mut list = div()
+        let mut list = settings_list()
             .id("native-tools-list")
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(qol_theme::SPACE_TIGHT))
             .on_scroll_wheel(
                 cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let rows = wheel_rows(&event.delta, ROW_HEIGHT);
