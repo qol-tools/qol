@@ -2,13 +2,13 @@ use qol_color::{mix_rgb, rgba_from_rgb, with_alpha};
 use qol_theme::{
     contrast_ratio, css, css_rgba_milli, dark_accent_preset, dark_theme,
     dark_theme_with_accent_key, desktop_theme_preview, preset_accent_key, resolve_surface_override,
-    runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Motion,
-    PickerSurfacePalette, SettingsPanelPalette, ThemeMode, WashPalette, DARK_ACCENT_PRESETS,
-    DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR,
-    HEIGHT_INLINE, HEIGHT_LADDER, HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS,
-    LIGHT_REFERENCE, LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER,
-    SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE,
-    THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
+    runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Face, Motion,
+    PickerSurfacePalette, SettingsPanelPalette, TextStyle, ThemeMode, WashPalette,
+    DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL, HEIGHT_BAND,
+    HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER, HEIGHT_RULE_ROW,
+    HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS,
+    PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER, STAY_BRIEF,
+    STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE, THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
 };
 use std::{
     fs,
@@ -2154,7 +2154,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 30] = [
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
@@ -2188,29 +2188,17 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
     ("libs/gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
     ("libs/gpui/src/gamepad/view.rs", ".bg(", 11),
     ("libs/gpui/src/gamepad/view.rs", ".border_color(", 8),
-    ("libs/gpui/src/gamepad/view.rs", ".font_weight(", 7),
     ("libs/gpui/src/gamepad/view.rs", ".shadow(", 1),
     ("libs/gpui/src/gamepad/view.rs", ".text_color(", 17),
-    ("libs/gpui/src/gamepad/view.rs", ".text_size(", 17),
     (
         "libs/gpui/src/settings_panel/view/display_layout_card.rs",
         ".text_color(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/display_layout_card.rs",
-        ".text_size(",
         1,
     ),
     ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 2),
     (
         "libs/gpui/src/settings_panel/view/list_card.rs",
         ".text_color(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".text_size(",
         1,
     ),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 9),
@@ -2220,11 +2208,6 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
         ".border_color(",
         4,
     ),
-    (
-        "libs/gpui/src/settings_panel/view/mod.rs",
-        ".font_weight(",
-        3,
-    ),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".rounded(", 5),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".shadow(", 2),
     (
@@ -2232,7 +2215,6 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
         ".text_color(",
         9,
     ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".text_size(", 8),
     (
         "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
         ".border_color(",
@@ -2242,11 +2224,6 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
         "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
         ".text_color(",
         2,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".text_size(",
-        1,
     ),
 ];
 
@@ -2887,5 +2864,72 @@ fn every_character_a_window_draws_is_in_the_shipped_fonts() {
         problems.is_empty(),
         "Symbols the shipped fonts lack come from the host and change per machine; draw them with qol_gpui::Icon.\n{}",
         problems.join("\n")
+    );
+}
+
+const TEXT_METHODS: [&str; 4] = [
+    ".text_size(",
+    ".font_weight(",
+    ".font_family(",
+    ".line_height(",
+];
+
+const TEXT_OWNERS: [&str; 3] = [
+    "libs/gpui/src/text.rs",
+    "libs/gpui/src/pictures/",
+    "libs/gpui/src/gamepad/diagram/",
+];
+
+#[test]
+fn every_text_takes_a_text_style() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if TEXT_OWNERS.iter().any(|owner| relative.starts_with(owner)) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            for method in TEXT_METHODS {
+                if line.contains(method) {
+                    problems.push(format!("{relative}:{} sets {method}", index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Text is set with .text(TextStyle::…), so every window uses the same eleven styles.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn text_styles_hold_their_approved_values() {
+    let table = TextStyle::ALL.map(|style| {
+        let spec = style.spec();
+        (
+            spec.face,
+            spec.size,
+            spec.weight,
+            spec.line_height,
+            spec.caps,
+        )
+    });
+    assert_eq!(
+        table,
+        [
+            (Face::Display, 34.0, 600, 1.0, false),
+            (Face::Display, 20.0, 600, 1.15, false),
+            (Face::Display, 11.5, 600, 1.2, false),
+            (Face::Ui, 15.0, 500, 1.25, false),
+            (Face::Ui, 13.5, 500, 1.25, false),
+            (Face::Ui, 15.0, 400, 1.25, false),
+            (Face::Ui, 12.5, 400, 1.25, false),
+            (Face::Ui, 12.5, 400, 1.0, false),
+            (Face::Mono, 12.5, 400, 1.0, false),
+            (Face::Mono, 13.5, 400, 1.25, false),
+            (Face::Ui, 11.5, 600, 1.2, true),
+        ]
     );
 }

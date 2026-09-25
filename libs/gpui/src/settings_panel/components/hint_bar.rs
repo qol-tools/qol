@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, Div, FontWeight, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, rgba, App, Div, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
 use crate::key::Key;
 use crate::kit::{alpha, kit};
@@ -101,8 +103,7 @@ impl RenderOnce for SettingsHintBar {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text(TextStyle::ListName)
                         .text_color(rgb(ground.ink))
                         .child(question),
                 );

@@ -1,3 +1,5 @@
+use crate::text::TextStyled;
+use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -671,7 +673,7 @@ where
         )
         .child(
             div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
+                .text(TextStyle::Code)
                 .text_color(rgb(palette.label_text))
                 .child(percent),
         )

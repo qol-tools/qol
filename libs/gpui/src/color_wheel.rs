@@ -1,3 +1,5 @@
+use crate::text::TextStyled;
+use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -202,7 +204,7 @@ impl Focusable for ColorWheelPopup {
 impl Render for ColorWheelPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .font_family(qol_theme::font_ui())
+            .text(TextStyle::Value)
             .id("qol-color-wheel-popup")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

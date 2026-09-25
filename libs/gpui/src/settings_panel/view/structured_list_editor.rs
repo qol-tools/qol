@@ -1,4 +1,6 @@
 use crate::key::Key;
+use crate::text::TextStyled;
+use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -825,7 +827,7 @@ impl SettingsPanelView {
             strip = strip.child(match part {
                 ChipRowPart::Arrow => div()
                     .flex_none()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text(TextStyle::Detail)
                     .text_color(rgb(arrow))
                     .child("\u{2192}"),
                 ChipRowPart::Chip(chip) => match chip.tone {

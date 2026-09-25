@@ -1,5 +1,7 @@
 use anyhow::Context as _;
 use anyhow::Result;
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use std::cell::{Cell, RefCell};
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
@@ -20,8 +22,7 @@ use qol_gpui::kit::{action_row_width, kit, row_circle_state, wrap_index, ActionC
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
 use qol_gpui::theme::{
-    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP,
-    RADIUS_THUMB, TEXT_CAPTION, TEXT_NANO,
+    runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP, RADIUS_THUMB,
 };
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, sync_cursor_window_layout,
@@ -1501,7 +1502,7 @@ impl Render for PreviewView {
         let palette = current_palette();
 
         let mut root = div()
-            .font_family(qol_gpui::theme::font_ui())
+            .text(TextStyle::Value)
             .id("shot-preview")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
@@ -1568,7 +1569,7 @@ impl Render for PreviewView {
                     .right_0()
                     .flex()
                     .justify_center()
-                    .text_size(px(TEXT_CAPTION))
+                    .text(TextStyle::Detail)
                     .text_color(rgb(palette.label_text))
                     .child(label),
             )
@@ -1577,8 +1578,7 @@ impl Render for PreviewView {
                     .absolute()
                     .bottom(px(MARGIN / 2.0))
                     .right(px(MARGIN))
-                    .font_family(SharedString::from(font_mono()))
-                    .text_size(px(TEXT_NANO))
+                    .text(TextStyle::Code)
                     .text_color(rgb(system.text_muted))
                     .when_some(self.size_label.clone(), |bar, size| bar.child(size)),
             );

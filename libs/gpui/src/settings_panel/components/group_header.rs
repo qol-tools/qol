@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, App, FontWeight, IntoElement, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, App, IntoElement, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
 use super::{
     masthead_rule, settings_action_spinner, settings_value_text, RowGround, SettingsValueTone,
@@ -71,8 +73,6 @@ impl RenderOnce for SettingsGroupHeader {
             .gap(px(qol_theme::SPACE_STACK))
             .pt(px(qol_theme::SPACE_PAD))
             .pb(px(qol_theme::SPACE_SNUG))
-            .font_family(SharedString::from(qol_theme::font_display()))
-            .font_weight(FontWeight::SEMIBOLD)
             .child(
                 div()
                     .flex()
@@ -83,9 +83,7 @@ impl RenderOnce for SettingsGroupHeader {
                         div()
                             .min_w_0()
                             .flex_1()
-                            .line_clamp(1)
-                            .text_size(px(qol_theme::TEXT_DISPLAY))
-                            .line_height(gpui::relative(1.15))
+                            .text(TextStyle::Heading)
                             .text_color(rgb(name))
                             .child(SharedString::from(self.title.to_lowercase())),
                     )
@@ -114,9 +112,7 @@ impl RenderOnce for SettingsGroupHeader {
             Some(detail) => block.child(
                 div()
                     .w_full()
-                    .line_clamp(1)
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .line_height(gpui::relative(1.2))
+                    .text(TextStyle::Colophon)
                     .text_color(rgb(detail_ink))
                     .child(SharedString::from(detail.to_lowercase())),
             ),

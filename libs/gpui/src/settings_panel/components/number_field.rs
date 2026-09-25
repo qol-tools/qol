@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba};
+use qol_theme::TextStyle;
 
 use crate::theme::SettingsPanelPalette;
 
@@ -116,16 +118,12 @@ pub(in crate::settings_panel) fn number_field(
         .border(px(1.0))
         .border_color(rgba(ground.edge.packed()))
         .child(
-            ground_text(
-                div().text_size(px(qol_theme::TEXT_BODY)),
-                rgb(text),
-                text_hover.map(rgb),
-            )
-            .child(display),
+            ground_text(div().text(TextStyle::Value), rgb(text), text_hover.map(rgb))
+                .child(display),
         )
         .children(unit.map(|unit| {
             ground_text(
-                div().text_size(px(qol_theme::TEXT_CAPTION)),
+                div().text(TextStyle::Detail),
                 rgb(ground.faint),
                 hover.map(|hover| rgb(hover.faint)),
             )

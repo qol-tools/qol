@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, SharedString};
+use qol_theme::TextStyle;
 
 use crate::kit::kit;
 use crate::theme::SettingsPanelPalette;
@@ -104,8 +106,7 @@ pub fn display_layout_tile(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_MICRO))
+                        .text(TextStyle::Detail)
                         .text_color(rgb(palette.label_text))
                         .child(SharedString::from(tile.connector.clone())),
                 )
@@ -116,9 +117,8 @@ pub fn display_layout_tile(
         )
         .child(
             div()
-                .truncate()
                 .px(px(qol_theme::SPACE_STACK))
-                .text_size(px(qol_theme::TEXT_NANO))
+                .text(TextStyle::Label)
                 .text_color(rgb(palette.status_muted))
                 .child(SharedString::from(tile.resolution.clone())),
         );

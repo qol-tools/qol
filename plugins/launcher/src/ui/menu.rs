@@ -5,6 +5,8 @@ use super::trace;
 use super::LauncherView;
 use crate::discovery::search::{ResultSource, SearchMode};
 use qol_gpui::icon::{icon, Icon};
+use qol_gpui::text::{cased, TextStyled};
+use qol_gpui::theme::TextStyle;
 use qol_gpui::Key;
 
 const HELP_ROW_HEIGHT: f32 = 17.0;
@@ -337,13 +339,9 @@ fn menu_title(label: &str, shortcut: Key) -> Div {
         .items_center()
         .justify_between()
         .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(qol_gpui::theme::TEXT_NANO))
-        .child(label.to_owned())
-        .child(kit.key_name(
-            &[shortcut],
-            qol_gpui::theme::TEXT_IDENTITY,
-            kit.palette.text_muted,
-        ))
+        .text(TextStyle::Label)
+        .child(cased(TextStyle::Label, label))
+        .child(kit.key_name(&[shortcut], kit.palette.text_muted))
 }
 
 fn menu_section(label: &str) -> Div {
@@ -355,8 +353,8 @@ fn menu_section(label: &str) -> Div {
         .flex()
         .items_center()
         .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(qol_gpui::theme::TEXT_NANO))
-        .child(label.to_owned())
+        .text(TextStyle::Label)
+        .child(cased(TextStyle::Label, label))
 }
 
 fn help_row(label: &str, shortcut: &[Key]) -> Div {
@@ -370,13 +368,9 @@ fn help_row(label: &str, shortcut: &[Key]) -> Div {
         .justify_between()
         .gap(px(qol_gpui::theme::SPACE_SNUG))
         .text_color(rgb(kit.palette.text_primary))
-        .text_size(px(qol_gpui::theme::TEXT_NANO))
-        .child(div().flex_1().min_w_0().truncate().child(label.to_owned()))
-        .child(kit.key_name(
-            shortcut,
-            qol_gpui::theme::TEXT_IDENTITY,
-            kit.palette.text_muted,
-        ))
+        .text(TextStyle::Detail)
+        .child(div().flex_1().min_w_0().child(label.to_owned()))
+        .child(kit.key_name(shortcut, kit.palette.text_muted))
 }
 
 fn help_column(rows: HelpRows, extra: HelpRows) -> Div {
@@ -392,8 +386,8 @@ fn help_column(rows: HelpRows, extra: HelpRows) -> Div {
                     .flex()
                     .items_center()
                     .text_color(rgb(kit.palette.text_muted))
-                    .text_size(px(qol_gpui::theme::TEXT_NANO))
-                    .child((*label).to_owned()),
+                    .text(TextStyle::Label)
+                    .child(cased(TextStyle::Label, label)),
             )
         } else {
             column.child(help_row(label, shortcut))
@@ -418,13 +412,12 @@ fn option_row(
     let mark = if chosen {
         icon(
             Icon::Tick,
-            qol_gpui::theme::TEXT_IDENTITY,
+            TextStyle::Key.spec().size,
             kit.highlight_ground(selected).ink,
         )
         .into_any_element()
     } else {
-        kit.key_name(action.shortcut(), qol_gpui::theme::TEXT_IDENTITY, ink)
-            .into_any_element()
+        kit.key_name(action.shortcut(), ink).into_any_element()
     };
     let row = div()
         .id(SharedString::from(format!("launcher-option-{action:?}")))
@@ -436,8 +429,8 @@ fn option_row(
         .gap(px(qol_gpui::theme::SPACE_SNUG))
         .cursor_pointer()
         .text_color(rgb(kit.palette.text_primary))
-        .text_size(px(qol_gpui::theme::TEXT_MICRO))
-        .child(div().flex_1().min_w_0().truncate().child(action.label()))
+        .text(TextStyle::ListName)
+        .child(div().flex_1().min_w_0().child(action.label()))
         .child(mark)
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.activate_option(action, window, cx);

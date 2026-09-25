@@ -1,5 +1,7 @@
 use gpui::prelude::FluentBuilder;
 #[cfg(debug_assertions)]
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
@@ -101,7 +103,7 @@ impl Render for LauncherView {
             }
 
             return div()
-                .font_family(qol_gpui::theme::font_ui())
+                .text(TextStyle::Value)
                 .id("launcher")
                 .track_focus(&self.focus_handle)
                 .w(px(WINDOW_WIDTH))
@@ -262,7 +264,7 @@ impl Render for LauncherView {
             .is_some_and(|session| session.pending);
         let menu = self.menu_kind.map(|_| self.menu_overlay(cx));
         div()
-            .font_family(qol_gpui::theme::font_ui())
+            .text(TextStyle::Value)
             .id("launcher")
             .track_focus(&self.focus_handle)
             .w(px(WINDOW_WIDTH))

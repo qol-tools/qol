@@ -1,13 +1,15 @@
 use gpui::prelude::*;
 use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
-    FontWeight, Rgba, SharedString,
+    Rgba, SharedString,
 };
 use qol_hotkeys::chord::Cap;
 use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
 
 use crate::icon::{icon, Icon, IconView};
 use crate::key::Key;
+use crate::text::{cased, TextStyled};
+use qol_theme::TextStyle;
 
 pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
 pub const FLOAT_SHADOW_ALPHA: u8 = 0x1a;
@@ -91,15 +93,14 @@ impl Kit {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_TITLE))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .text(TextStyle::Heading)
                     .text_color(rgb(self.palette.text_primary))
                     .child(title.into()),
             )
     }
 
     pub fn section(&self, label: impl Into<SharedString>) -> Div {
+        let label = cased(TextStyle::Label, &label.into());
         div()
             .flex_none()
             .flex()
@@ -117,11 +118,9 @@ impl Kit {
             )
             .child(
                 div()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_MICRO))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .text(TextStyle::Label)
                     .text_color(rgb(self.palette.text_muted))
-                    .child(label.into()),
+                    .child(label),
             )
     }
 
@@ -129,7 +128,6 @@ impl Kit {
         self.row_of_height(qol_theme::LIST_ENTRY_HEIGHTS[1])
             .h(px(qol_theme::LIST_ENTRY_HEIGHTS[1]))
             .py(px(qol_theme::SPACE_TIGHT))
-            .line_height(gpui::relative(1.0))
     }
 
     fn row_of_height(&self, height: f32) -> Div {
@@ -207,7 +205,7 @@ impl Kit {
     pub fn value(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
-            .text_size(px(qol_theme::TEXT_BODY))
+            .text(TextStyle::Value)
             .text_color(rgb(self.palette.text_secondary))
             .child(text.into())
     }
@@ -222,8 +220,7 @@ impl Kit {
             .rounded(px(qol_theme::RADIUS_KEYCAP))
             .border(px(1.0))
             .border_color(rgba(self.washes.hairline_strong.packed()))
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_KEYCAP))
+            .text(TextStyle::Key)
             .text_color(rgb(self.palette.text_muted))
     }
 
@@ -234,16 +231,16 @@ impl Kit {
     pub fn keycap_inked(&self, key: Key, ink: u32) -> Div {
         self.keycap_frame()
             .text_color(rgb(ink))
-            .child(self.key_name(&[key], qol_theme::TEXT_KEYCAP, ink))
+            .child(self.key_name(&[key], ink))
     }
 
-    pub fn key_name(&self, keys: &[Key], size: f32, ink: u32) -> Div {
+    pub fn key_name(&self, keys: &[Key], ink: u32) -> Div {
+        let size = TextStyle::Key.spec().size;
         let mut name = div()
             .flex_none()
             .flex()
             .items_center()
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(size))
+            .text(TextStyle::Key)
             .text_color(rgb(ink));
         for (index, key) in keys.iter().enumerate() {
             if index > 0 {
@@ -293,16 +290,11 @@ impl Kit {
     }
 
     pub fn count_chip(&self, count: usize, label: impl Into<SharedString>) -> Div {
-        self.count_chip_of_height(
-            count,
-            label,
-            qol_theme::HEIGHT_INLINE,
-            qol_theme::TEXT_MICRO,
-        )
+        self.count_chip_of_height(count, label, qol_theme::HEIGHT_INLINE)
     }
 
     pub fn count_chip_small(&self, count: usize, label: impl Into<SharedString>) -> Div {
-        self.count_chip_of_height(count, label, 22.0, qol_theme::TEXT_NANO)
+        self.count_chip_of_height(count, label, 22.0)
     }
 
     fn count_chip_of_height(
@@ -310,8 +302,8 @@ impl Kit {
         count: usize,
         label: impl Into<SharedString>,
         height: f32,
-        text_size: f32,
     ) -> Div {
+        let label = cased(TextStyle::Label, &label.into());
         div()
             .flex_none()
             .flex()
@@ -323,17 +315,16 @@ impl Kit {
             .border(px(1.0))
             .border_color(rgba(self.washes.hairline.packed()))
             .bg(rgba(self.washes.fill_resting.packed()))
-            .text_size(px(text_size))
+            .text(TextStyle::Label)
             .child(
                 div()
-                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(self.palette.text_primary))
                     .child(format!("{count}")),
             )
             .child(
                 div()
                     .text_color(rgb(self.palette.text_secondary))
-                    .child(label.into()),
+                    .child(label),
             )
     }
 
@@ -349,7 +340,7 @@ impl Kit {
             .border_t(px(1.0))
             .border_color(rgba(self.washes.hairline.packed()))
             .bg(rgba(self.washes.fill_hover.packed()))
-            .text_size(px(qol_theme::TEXT_MICRO))
+            .text(TextStyle::Hint)
             .text_color(rgb(self.palette.text_secondary))
     }
 
@@ -379,22 +370,21 @@ impl Kit {
             .justify_center()
             .bg(rgb(tile_tone(name)))
             .text_color(rgb(0xffffff))
-            .text_size(px(qol_theme::TEXT_NANO))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::Label)
             .child(glyph)
     }
 
     pub fn chip(&self, text: impl Into<SharedString>, tone: u32) -> Div {
+        let text = cased(TextStyle::Label, &text.into());
         div()
             .flex_none()
             .px(px(qol_theme::SPACE_SNUG))
             .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_TIGHT))
             .bg(rgba(alpha(tone, 0x33)))
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::Label)
             .text_color(rgb(tone))
-            .child(text.into())
+            .child(text)
     }
 
     pub fn vertical_identity_tab(&self, text: impl Into<SharedString>, tone: u32) -> Div {
@@ -431,7 +421,7 @@ impl Kit {
             .size(px(qol_theme::HEIGHT_INLINE))
             .p(px(qol_theme::SPACE_STACK))
             .justify_center()
-            .text_size(px(qol_theme::TEXT_NANO))
+            .text(TextStyle::Label)
     }
 
     pub fn row_separator(&self) -> Div {
@@ -510,6 +500,7 @@ impl Kit {
     }
 
     pub fn status_pill(&self, text: impl Into<SharedString>, tone: u32) -> Div {
+        let text = cased(TextStyle::Label, &text.into());
         div()
             .flex_none()
             .h(px(qol_theme::SPACE_PAD))
@@ -518,9 +509,9 @@ impl Kit {
             .items_center()
             .rounded_full()
             .bg(rgba(alpha(tone, 0x33)))
-            .text_size(px(qol_theme::TEXT_NANO))
+            .text(TextStyle::Label)
             .text_color(rgb(tone))
-            .child(text.into())
+            .child(text)
     }
 
     fn button_base(&self, text: impl Into<SharedString>) -> Div {
@@ -531,8 +522,7 @@ impl Kit {
             .px(px(qol_theme::SPACE_CELL))
             .py(px(qol_theme::SPACE_SNUG))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::ListName)
             .child(text.into())
     }
 
@@ -559,7 +549,6 @@ impl Kit {
             .justify_center()
             .border(px(1.0))
             .shadow(float_shadow(self.palette.text_primary))
-            .text_size(px(qol_theme::TEXT_BODY))
             .text_color(rgb(self.action_ink(state)));
         match state {
             ActionCircleState::Resting => circle
@@ -570,8 +559,7 @@ impl Kit {
                 .border_color(rgb(self.palette.border_subtle)),
             ActionCircleState::Armed => circle
                 .bg(rgb(self.palette.accent_fill))
-                .border_color(rgb(self.palette.accent))
-                .font_weight(FontWeight::SEMIBOLD),
+                .border_color(rgb(self.palette.accent)),
             ActionCircleState::Disabled => circle
                 .bg(rgb(self.palette.surface_raised))
                 .border_color(rgb(self.palette.border_subtle))
@@ -591,8 +579,7 @@ impl Kit {
             .px(px(qol_theme::SPACE_CELL))
             .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_TIGHT))
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::ListName)
             .child(label.into());
         if active {
             segment

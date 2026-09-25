@@ -1,5 +1,7 @@
+use crate::text::{cased, TextStyled};
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, ElementId, FontWeight, Rgba, SharedString};
+use gpui::{div, px, rgb, rgba, ElementId, Rgba, SharedString};
+use qol_theme::TextStyle;
 
 use crate::busy::Busy;
 use crate::kit::{alpha, kit};
@@ -151,9 +153,8 @@ pub fn one_line<E: Styled>(element: E) -> E {
 }
 
 pub fn settings_label(text: impl Into<SharedString>, palette: SettingsPanelPalette) -> gpui::Div {
-    one_line(div())
-        .text_size(px(qol_theme::TEXT_BODY))
-        .font_weight(FontWeight::MEDIUM)
+    div()
+        .text(TextStyle::Name)
         .text_color(rgb(palette.section_text))
         .child(text.into())
 }
@@ -169,9 +170,7 @@ pub fn settings_description(
         RowGround::Band => (ground.soft, row.hover(palette).map(|hover| hover.soft)),
     };
     ground_text(
-        one_line(div())
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .child(text.into()),
+        div().text(TextStyle::Detail).child(text.into()),
         rgb(rest),
         hover.map(rgb),
     )
@@ -201,9 +200,7 @@ pub fn settings_mono_label(
         div()
             .flex_1()
             .min_w_0()
-            .truncate()
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_CAPTION))
+            .text(TextStyle::Code)
             .child(text.into()),
         rgb(rest),
         hover.map(rgb),
@@ -286,8 +283,7 @@ pub fn settings_action_affordance(
         .when(variant == Some("ghost") && !band, |control| {
             control.shadow(crate::kit::raised_shadow(palette.section_text))
         })
-        .text_size(px(qol_theme::TEXT_CAPTION))
-        .font_weight(FontWeight::SEMIBOLD);
+        .text(TextStyle::ListName);
     let control = if variant == Some("danger") {
         control.bg(background)
     } else {
@@ -306,7 +302,6 @@ pub fn settings_action_affordance(
 }
 
 const CRUMB_MAX_WIDTH: f32 = 200.0;
-const CRUMB_LINE_HEIGHT: f32 = 20.0;
 
 pub fn settings_crumb_trail(trail: Vec<String>, palette: SettingsPanelPalette) -> gpui::Div {
     let last = trail.len().saturating_sub(1);
@@ -329,17 +324,14 @@ pub fn settings_crumb_trail(trail: Vec<String>, palette: SettingsPanelPalette) -
                 .max_w(px(CRUMB_MAX_WIDTH))
                 .text_color(rgb(palette.status_muted))
         };
-        crumbs.push(crumb.truncate().child(label.to_lowercase()));
+        crumbs.push(crumb.child(label.to_lowercase()));
     }
     div()
         .min_w_0()
         .flex()
         .flex_row()
         .items_center()
-        .font_family(SharedString::from(qol_theme::font_display()))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_size(px(qol_theme::TEXT_CAPTION))
-        .line_height(px(CRUMB_LINE_HEIGHT))
+        .text(TextStyle::Heading)
         .children(crumbs)
 }
 
@@ -364,13 +356,9 @@ pub fn rail_caption(
         .h(px(rail_caption_height()))
         .gap(px(qol_theme::SPACE_STACK))
         .px(px(qol_theme::SPACE_CELL))
-        .font_family(SharedString::from(qol_theme::font_display()))
-        .font_weight(FontWeight::SEMIBOLD)
         .child(
             div()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_MASTHEAD))
-                .line_height(gpui::relative(1.15))
+                .text(TextStyle::Masthead)
                 .text_color(rgb(kit.palette.text_primary))
                 .child(SharedString::from(label.to_lowercase())),
         );
@@ -378,15 +366,13 @@ pub fn rail_caption(
         None => block,
         Some(detail) => block.child(
             div()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_NANO))
-                .line_height(gpui::relative(1.2))
+                .text(TextStyle::Label)
                 .text_color(rgb(if focused {
                     kit.palette.accent_ink
                 } else {
                     kit.palette.text_muted
                 }))
-                .child(SharedString::from(detail.to_uppercase())),
+                .child(cased(TextStyle::Label, &detail)),
         ),
     };
     block.child(
@@ -444,7 +430,7 @@ fn settings_message_frame(color: u32) -> gpui::Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(qol_theme::TEXT_BODY))
+        .text(TextStyle::Value)
         .text_color(rgb(color))
 }
 

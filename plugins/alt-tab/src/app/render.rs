@@ -10,9 +10,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
 use qol_gpui::kit::float_shadow;
-use qol_gpui::theme::{
-    runtime_theme, PickerSurfacePalette, SystemPalette, SPACE_GUTTER, TEXT_CAPTION, TEXT_NANO,
-};
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
+use qol_gpui::theme::{runtime_theme, PickerSurfacePalette, SystemPalette, SPACE_GUTTER};
 use qol_gpui::Key;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
@@ -50,8 +50,6 @@ struct CardRenderContext<'a> {
     fresh: &'a FreshFrame,
     icons: &'a IconMap,
     entity: WeakEntity<AltTabApp>,
-    window: &'a Window,
-    app: &'a App,
 }
 
 impl Render for AltTabApp {
@@ -170,13 +168,11 @@ impl Render for AltTabApp {
             fresh: &d.fresh,
             icons: &d.icon_cache,
             entity,
-            window,
-            app: cx,
         };
         let grid = render_grid(&d.windows, &render_context);
 
         let panel = div()
-            .font_family(qol_gpui::theme::font_ui())
+            .text(TextStyle::Value)
             .id("alt-tab-panel")
             .track_focus(&self.focus_handle)
             .flex()
@@ -308,8 +304,7 @@ fn header_bar(left: &str, snap: &RenderSnap) -> Div {
         .child(
             div()
                 .text_color(rgb(snap.palette.header_left_text))
-                .text_size(px(TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text(TextStyle::ListName)
                 .child(left.to_string()),
         )
         .child(
@@ -318,7 +313,7 @@ fn header_bar(left: &str, snap: &RenderSnap) -> Div {
                 .items_center()
                 .gap(px(SPACE_GUTTER))
                 .text_color(rgb(snap.palette.header_right_text))
-                .text_size(px(TEXT_CAPTION))
+                .text(TextStyle::Hint)
                 .child(kit.hint(Key::ARROWS, "navigate"))
                 .child(kit.hint(Key::ENTER, "switch"))
                 .child(kit.hint(Key::ESC, "close")),
@@ -393,15 +388,7 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> D
                 .map(|el| card_bg(el, is_selected, snap))
                 .when(!is_selected, |el| el.opacity(snap.unselected_card_opacity))
                 .child(render_preview(win, context, &stepped))
-                .child(render_label(
-                    i,
-                    win,
-                    snap,
-                    &stepped,
-                    context.label_config,
-                    context.window,
-                    context.app,
-                )),
+                .child(render_label(i, win, snap, &stepped, context.label_config)),
         )
 }
 
@@ -501,17 +488,13 @@ fn render_label(
     snap: &RenderSnap,
     metrics: &CardMetrics,
     label_config: &LabelConfig,
-    window: &Window,
-    cx: &App,
 ) -> Div {
     let selected = snap.selected_index == Some(i);
     let palette = &snap.palette;
     let label = label_text(i, win, snap, label_config);
-    let line_height_px = metrics.label_line_height_px(label_config.size.factor());
     let label_slot_px = metrics.label_strip_height;
     let label_padding_px = (metrics.scale * 3.0).clamp(3.0, 7.0);
     let label_width_px = (metrics.preview_width - label_padding_px * 2.0).max(1.0);
-    let font_weight = FontWeight::NORMAL;
     let primary_color = rgb(if selected {
         palette.label_selected_text
     } else {
@@ -540,15 +523,7 @@ fn render_label(
         return base;
     }
 
-    base.child(render_single_label(
-        label,
-        label_width_px,
-        line_height_px,
-        font_weight,
-        primary_color,
-        window,
-        cx,
-    ))
+    base.child(render_single_label(label, label_width_px, primary_color))
 }
 
 fn label_text(i: usize, win: &WindowInfo, snap: &RenderSnap, label_config: &LabelConfig) -> String {
@@ -576,36 +551,15 @@ fn label_text(i: usize, win: &WindowInfo, snap: &RenderSnap, label_config: &Labe
     }
 }
 
-fn render_single_label(
-    label: String,
-    width_px: f32,
-    line_height_px: f32,
-    font_weight: FontWeight,
-    color: Rgba,
-    window: &Window,
-    cx: &App,
-) -> Div {
-    let label = qol_gpui::text::truncate_to_width(
-        &label,
-        window.text_style().font(),
-        TEXT_CAPTION,
-        font_weight,
-        width_px,
-        "…",
-        cx,
-    );
+fn render_single_label(label: String, width_px: f32, color: Rgba) -> Div {
     div()
         .w(px(width_px))
         .max_w(px(width_px))
         .flex_none()
         .min_w(px(0.))
         .text_center()
-        .text_size(px(TEXT_CAPTION))
-        .line_height(px(line_height_px))
-        .font_weight(font_weight)
+        .text(TextStyle::ListName)
         .text_color(color)
-        .truncate()
-        .overflow_hidden()
         .child(label)
 }
 
@@ -689,9 +643,11 @@ fn empty_placeholder(
     border_subtle: u32,
 ) -> AnyElement {
     placeholder_frame(metrics, palette, border_subtle)
-        .text_size(px(TEXT_NANO))
-        .text_color(rgb(palette.placeholder_text))
-        .child("...")
+        .child(qol_gpui::icon::icon(
+            qol_gpui::Icon::More,
+            TextStyle::Detail.spec().size,
+            palette.placeholder_text,
+        ))
         .into_any_element()
 }
 

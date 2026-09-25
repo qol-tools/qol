@@ -1,9 +1,11 @@
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
-    KeyUpEvent, Modifiers, SharedString, Window,
+    div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, KeyDownEvent, KeyUpEvent,
+    Modifiers, SharedString, Window,
 };
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
 use qol_gpui::Key;
 use qol_terminal_sessions::SessionId;
@@ -101,9 +103,8 @@ fn header(
                         }))
                 })
                 .text_color(rgb(palette.text_heading))
-                .text_size(px(qol_gpui::theme::TEXT_BODY))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("Sessions"),
+                .text(TextStyle::Heading)
+                .child("sessions"),
         )
         .child(
             div()
@@ -128,13 +129,13 @@ fn empty_state() -> impl IntoElement {
         .child(
             div()
                 .text_color(rgb(palette.text_heading))
-                .text_size(px(qol_gpui::theme::TEXT_BODY))
+                .text(TextStyle::Value)
                 .child("No sessions running"),
         )
         .child(
             div()
                 .text_color(rgb(palette.text_muted))
-                .text_size(px(qol_gpui::theme::TEXT_NANO))
+                .text(TextStyle::Detail)
                 .child("spawned lanes appear here"),
         )
 }
@@ -245,22 +246,19 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
         } else {
             s.summary.clone()
         },
-        qol_gpui::theme::TEXT_NANO,
-        FontWeight::NORMAL,
+        TextStyle::Detail,
         kit.palette.text_muted,
     )
     .h(px(qol_gpui::theme::SPACE_PAD))
     .into_any_element()
 }
 
-fn text_line(text: String, size: f32, weight: FontWeight, color: u32) -> gpui::Div {
+fn text_line(text: String, style: TextStyle, color: u32) -> gpui::Div {
     div().flex().w_full().min_w_0().overflow_hidden().child(
         div()
             .flex_1()
             .min_w_0()
-            .truncate()
-            .text_size(px(size))
-            .font_weight(weight)
+            .text(style)
             .text_color(rgb(color))
             .child(text),
     )
@@ -325,8 +323,7 @@ fn session_row(
                 .child(
                     text_line(
                         name,
-                        qol_gpui::theme::TEXT_CAPTION,
-                        FontWeight::SEMIBOLD,
+                        TextStyle::ListName,
                         if idle {
                             kit.palette.text_secondary
                         } else {
@@ -351,8 +348,7 @@ fn session_row(
                 .child(
                     div()
                         .flex_none()
-                        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                        .text_size(px(qol_gpui::theme::TEXT_NANO))
+                        .text(TextStyle::Code)
                         .text_color(rgb(kit.palette.text_muted))
                         .child(format_elapsed(s.last_activity)),
                 ),

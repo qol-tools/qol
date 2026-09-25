@@ -1,8 +1,10 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, AnimationExt as _, AnyElement, App, Div, ElementId, Hsla, RenderOnce, Window,
 };
 use qol_theme::SystemPalette;
+use qol_theme::TextStyle;
 
 pub mod model;
 pub mod motion;
@@ -17,8 +19,6 @@ const HEAD_SIZE: f32 = 7.0;
 const LINE_WIDTH: f32 = 1.5;
 const LINE_CX: f32 = PAD_X + 6.0;
 const TEXT_LEFT: f32 = PAD_X + 24.0;
-const META_LINE_HEIGHT: f32 = 15.0;
-const BODY_LINE_HEIGHT: f32 = 18.0;
 const META_GAP: f32 = 8.0;
 const META_BODY_GAP: f32 = 2.0;
 
@@ -376,8 +376,7 @@ fn node(
         palette.text_muted
     };
     let mut body = div()
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .line_height(px(BODY_LINE_HEIGHT))
+        .text(TextStyle::Detail)
         .text_color(rgb(body_tone))
         .line_clamp(3)
         .child(item.text.clone());
@@ -406,8 +405,7 @@ fn node(
                 div()
                     .flex()
                     .gap(px(META_GAP))
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .line_height(px(META_LINE_HEIGHT))
+                    .text(TextStyle::Detail)
                     .child(div().text_color(rgb(at_tone)).child(item.at.clone()))
                     .child(
                         div()

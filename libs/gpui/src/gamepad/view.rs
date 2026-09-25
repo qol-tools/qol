@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use qol_theme::TextStyle;
 
 use super::diagram::controller_diagram;
 use super::model::{ConnectionBadge, GamepadButton, MonitorStatus, SignalTone};
@@ -27,15 +29,13 @@ pub fn gamepad_panel(
                 .gap(px(qol_theme::SPACE_TIGHT))
                 .child(
                     div()
-                        .text_size(px(qol_theme::TEXT_BODY))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text(TextStyle::Name)
                         .text_color(rgb(palette.text))
                         .child(label.to_string()),
                 )
                 .children(description.map(|description| {
                     div()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
+                        .text(TextStyle::Detail)
                         .text_color(rgb(palette.text_muted))
                         .child(description.to_string())
                 })),
@@ -83,7 +83,7 @@ fn controller_content(
         .children(controller.profile().device_note().map(|note| {
             div()
                 .px(px(qol_theme::SPACE_INSET))
-                .text_size(px(qol_theme::TEXT_MICRO))
+                .text(TextStyle::Detail)
                 .text_color(rgb(palette.text_muted))
                 .child(note)
         }))
@@ -139,9 +139,7 @@ fn device_header(
                 .flex_col()
                 .child(
                     div()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_BODY))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text(TextStyle::Name)
                         .text_color(rgb(palette.text))
                         .child(controller.name.clone()),
                 )
@@ -150,7 +148,7 @@ fn device_header(
         .child(
             div()
                 .flex_none()
-                .text_size(px(qol_theme::TEXT_CAPTION))
+                .text(TextStyle::Detail)
                 .text_color(rgb(palette.text_muted))
                 .child(selector),
         )
@@ -190,14 +188,13 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
         .children(bars)
         .child(
             div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
+                .text(TextStyle::Detail)
                 .text_color(rgb(palette.text_muted))
                 .child(connection.transport),
         )
         .child(
             div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text(TextStyle::ListName)
                 .text_color(rgb(tone))
                 .child(connection.detail),
         )
@@ -208,7 +205,7 @@ fn metadata_chip(label: &str, palette: GamepadPalette) -> Div {
         .px(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .bg(rgba(alpha(palette.raised, 0xc8)))
-        .text_size(px(qol_theme::TEXT_MICRO))
+        .text(TextStyle::Detail)
         .text_color(rgb(palette.text_muted))
         .child(label.to_string())
 }
@@ -232,16 +229,13 @@ fn active_inputs(controller: &ControllerSnapshot, palette: GamepadPalette) -> Di
         .child(
             div()
                 .flex_none()
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text(TextStyle::Label)
                 .text_color(rgb(palette.text_muted))
                 .child("ACTIVE INPUTS"),
         )
         .child(
             div()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text(TextStyle::ListName)
                 .text_color(rgb(if active.is_empty() {
                     palette.text_muted
                 } else {
@@ -269,7 +263,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                 .child(
                     div()
                         .w(px(46.0))
-                        .text_size(px(qol_theme::TEXT_MICRO))
+                        .text(TextStyle::Detail)
                         .text_color(rgb(palette.text_muted))
                         .child(axis.name.clone()),
                 )
@@ -301,7 +295,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                     div()
                         .w(px(36.0))
                         .text_right()
-                        .text_size(px(qol_theme::TEXT_MICRO))
+                        .text(TextStyle::Detail)
                         .text_color(rgb(palette.text))
                         .child(format!("{:+.2}", axis.value)),
                 )
@@ -347,8 +341,7 @@ fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
         .when(active, |chip| chip.shadow(glow(palette.accent)))
         .child(
             div()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_MICRO))
+                .text(TextStyle::Detail)
                 .text_color(rgb(if active {
                     palette.text
                 } else {
@@ -359,7 +352,7 @@ fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
         .child(
             div()
                 .flex_none()
-                .text_size(px(qol_theme::TEXT_MICRO))
+                .text(TextStyle::Detail)
                 .text_color(rgb(if active {
                     palette.accent
                 } else {
@@ -415,8 +408,7 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
         )
         .child(
             div()
-                .text_size(px(qol_theme::TEXT_BODY))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text(TextStyle::Name)
                 .text_color(rgb(palette.text))
                 .child(if monitor.status == MonitorStatus::Waiting {
                     "Wake a controller"
@@ -426,7 +418,7 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
         )
         .child(
             div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
+                .text(TextStyle::Detail)
                 .text_color(rgb(palette.text_muted))
                 .child(monitor.message.clone()),
         )
@@ -446,8 +438,7 @@ fn status_badge(status: MonitorStatus, palette: GamepadPalette) -> Div {
         .border_1()
         .border_color(rgba(alpha(color, 0x70)))
         .bg(rgba(alpha(color, 0x18)))
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .font_weight(FontWeight::BOLD)
+        .text(TextStyle::Label)
         .text_color(rgb(color))
         .child(label)
 }

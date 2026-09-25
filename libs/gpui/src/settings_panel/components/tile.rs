@@ -1,9 +1,11 @@
 use crate::key::Key;
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{
     div, img, px, rgb, rgba, AnyElement, App, ClickEvent, CursorStyle, Div, ElementId, RenderOnce,
     SharedString, Window,
 };
+use qol_theme::TextStyle;
 
 use qol_config::contract::is_picture_spec;
 
@@ -18,7 +20,6 @@ pub const TILE_HEIGHT: f32 = 116.0;
 
 const TICK_WIDTH: f32 = 16.0;
 const TICK_HEIGHT: f32 = 12.0;
-const NAME_LINE_HEIGHT: f32 = 1.25;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TileArt {
@@ -32,7 +33,7 @@ pub struct TileLayout {
     pub art_width: f32,
     pub art_height: f32,
     pub gap: f32,
-    pub name_size: f32,
+    pub name_style: TextStyle,
 }
 
 pub fn tile_layout(tile_count: usize) -> TileLayout {
@@ -42,7 +43,7 @@ pub fn tile_layout(tile_count: usize) -> TileLayout {
             art_width: 112.0,
             art_height: 70.0,
             gap: qol_theme::SPACE_INSET,
-            name_size: qol_theme::TEXT_CAPTION,
+            name_style: TextStyle::ListName,
         }
     } else if tile_count <= 8 {
         TileLayout {
@@ -50,7 +51,7 @@ pub fn tile_layout(tile_count: usize) -> TileLayout {
             art_width: 104.0,
             art_height: 65.0,
             gap: qol_theme::SPACE_INSET,
-            name_size: qol_theme::TEXT_CAPTION,
+            name_style: TextStyle::ListName,
         }
     } else {
         TileLayout {
@@ -58,7 +59,7 @@ pub fn tile_layout(tile_count: usize) -> TileLayout {
             art_width: 88.0,
             art_height: 55.0,
             gap: qol_theme::SPACE_SNUG,
-            name_size: qol_theme::TEXT_MICRO,
+            name_style: TextStyle::Detail,
         }
     }
 }
@@ -293,9 +294,8 @@ impl RenderOnce for SettingsTile {
         let name = div()
             .w_full()
             .text_center()
+            .text(layout.name_style)
             .line_clamp(2)
-            .line_height(gpui::relative(NAME_LINE_HEIGHT))
-            .text_size(px(layout.name_size))
             .text_color(rgb(name_color))
             .child(name);
 
@@ -304,8 +304,7 @@ impl RenderOnce for SettingsTile {
             div()
                 .w_full()
                 .text_center()
-                .line_clamp(1)
-                .text_size(px(qol_theme::TEXT_NANO))
+                .text(TextStyle::Detail)
                 .text_color(rgb(color))
                 .child(detail)
         });
@@ -351,6 +350,7 @@ mod tests {
         choose_hints, choose_step, tile_arts, tile_grid_gap, tile_layout, TileArt, TileLayout,
     };
     use crate::key::Key;
+    use qol_theme::TextStyle;
 
     #[test]
     fn tile_layout_steps_with_the_option_count() {
@@ -362,7 +362,7 @@ mod tests {
                     art_width: 112.0,
                     art_height: 70.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -372,7 +372,7 @@ mod tests {
                     art_width: 112.0,
                     art_height: 70.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -382,7 +382,7 @@ mod tests {
                     art_width: 104.0,
                     art_height: 65.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -392,7 +392,7 @@ mod tests {
                     art_width: 104.0,
                     art_height: 65.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -402,7 +402,7 @@ mod tests {
                     art_width: 88.0,
                     art_height: 55.0,
                     gap: qol_theme::SPACE_SNUG,
-                    name_size: qol_theme::TEXT_MICRO,
+                    name_style: TextStyle::Detail,
                 },
             ),
             (
@@ -412,7 +412,7 @@ mod tests {
                     art_width: 88.0,
                     art_height: 55.0,
                     gap: qol_theme::SPACE_SNUG,
-                    name_size: qol_theme::TEXT_MICRO,
+                    name_style: TextStyle::Detail,
                 },
             ),
         ];

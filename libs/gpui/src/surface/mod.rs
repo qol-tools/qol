@@ -1,3 +1,5 @@
+use crate::text::TextStyled;
+use qol_theme::TextStyle;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -557,7 +559,7 @@ impl<V: Render + 'static> Render for SurfaceRoot<V> {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .font_family(qol_theme::font_ui())
+            .text(TextStyle::Value)
             .child(self.inner.clone())
     }
 }

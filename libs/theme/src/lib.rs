@@ -1,10 +1,12 @@
 pub mod css;
 pub mod motion;
+pub mod text;
 
 pub use motion::{
     Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED,
     WAIT_BEFORE_BUSY,
 };
+pub use text::{Face, TextSpec, TextStyle};
 
 use qol_color::{
     clamp_unit, mix_rgb, parse_hex_color, rgb24, rgba_from_rgb, scale_rgb, with_alpha,
@@ -23,22 +25,18 @@ pub const PROD_ACCENT_KEY: &str = "amber";
 
 pub const THEME_COLOR_SENTINEL: &str = "theme";
 
-pub const TEXT_IDENTITY: f32 = 10.5;
 pub const TEXT_NANO: f32 = 11.5;
 pub const TEXT_MICRO: f32 = 12.5;
 pub const TEXT_CAPTION: f32 = 13.5;
 pub const TEXT_BODY: f32 = 15.0;
-pub const TEXT_TITLE: f32 = 18.0;
 pub const TEXT_DISPLAY: f32 = 20.0;
 pub const TEXT_MASTHEAD: f32 = 34.0;
 
-pub const TEXT_SCALE: [f32; 8] = [
-    TEXT_IDENTITY,
+pub const TEXT_SCALE: [f32; 6] = [
     TEXT_NANO,
     TEXT_MICRO,
     TEXT_CAPTION,
     TEXT_BODY,
-    TEXT_TITLE,
     TEXT_DISPLAY,
     TEXT_MASTHEAD,
 ];

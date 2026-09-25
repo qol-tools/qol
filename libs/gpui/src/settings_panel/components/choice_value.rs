@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, img, px, rgb, App, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
 use super::{
     ground_text, RowGround, CHOICE_CHEVRON_HEIGHT, CHOICE_CHEVRON_REST_OPACITY,
@@ -184,8 +186,7 @@ impl RenderOnce for SettingsChoiceValue {
         let word = div()
             .flex_none()
             .max_w(px(CHOICE_WORD_MAX_WIDTH))
-            .truncate()
-            .text_size(px(qol_theme::TEXT_BODY));
+            .text(TextStyle::Value);
         let word = match word_color {
             Some(color) => word.text_color(rgb(color)),
             None => ground_text(word, rgb(tones.word), Some(rgb(tones.word_hover))),

@@ -3,10 +3,11 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::text::shaped_width;
+use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
+use qol_gpui::theme::TextStyle;
 use qol_gpui::theme::{
-    launcher_runtime, LauncherPalette, RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO, TEXT_NANO,
-    TEXT_TITLE,
+    launcher_runtime, LauncherPalette, RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO,
 };
 use qol_gpui::trail::{Trail, TrailItem};
 use qol_gpui::Key;
@@ -45,7 +46,7 @@ pub fn search_bar(
 ) -> Div {
     let kit = qol_gpui::kit::kit();
     let mono_font = font(qol_gpui::theme::font_mono());
-    let mono_advance = shaped_width(window, "0", mono_font.clone(), TEXT_BODY);
+    let mono_advance = shaped_width(window, "0", mono_font.clone(), TextStyle::Code.spec().size);
     let trailing = if status.mode.is_some() { 94.0 } else { 40.0 };
     let visible = text_edit::visible_char_count(
         WINDOW_WIDTH
@@ -77,7 +78,6 @@ pub fn search_bar(
                 .flex_1()
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                 .flex()
                 .flex_col()
                 .justify_center()
@@ -85,7 +85,7 @@ pub fn search_bar(
                     div()
                         .h(px(18.))
                         .overflow_hidden()
-                        .text_size(px(TEXT_BODY))
+                        .text(TextStyle::Code)
                         .text_color(rgb(current_palette().text))
                         .flex()
                         .items_center()
@@ -117,10 +117,8 @@ pub fn search_bar(
                 .when_some(launch_error, |field, error| {
                     field.child(
                         div()
-                            .h(px(12.))
-                            .overflow_hidden()
+                            .text(TextStyle::Detail)
                             .text_color(rgb(current_palette().highlight_warm))
-                            .text_size(px(TEXT_NANO))
                             .child(error.to_owned()),
                     )
                 }),
@@ -247,7 +245,7 @@ pub fn result_row(
                 } else {
                     current_palette().text_muted
                 }))
-                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                .text(TextStyle::ListName)
                 .child(styled_name),
         );
     if selected {
@@ -259,7 +257,7 @@ pub fn result_row(
                 .items_center()
                 .gap(px(qol_gpui::theme::SPACE_SNUG))
                 .text_color(rgb(band.soft))
-                .text_size(px(TEXT_NANO))
+                .text(TextStyle::Hint)
                 .child(
                     kit.keycap_inked(shortcut, band.soft)
                         .border_color(rgba(band.edge.packed())),
@@ -271,21 +269,18 @@ pub fn result_row(
             .flex()
             .items_center()
             .gap(px(qol_gpui::theme::SPACE_SNUG))
-            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+            .text(TextStyle::Code)
             .text_color(rgb(band.soft))
-            .text_size(px(TEXT_NANO))
             .child("match")
             .child(
                 div()
                     .text_color(rgb(band.ink))
-                    .font_weight(FontWeight::SEMIBOLD)
                     .child(match_score.to_string()),
             );
         if scored.manual_boost > 0 {
             score = score.child(
                 div()
                     .text_color(rgb(band.ink))
-                    .font_weight(FontWeight::SEMIBOLD)
                     .child(format!("+{}", scored.manual_boost)),
             );
         }
@@ -295,10 +290,9 @@ pub fn result_row(
         row = row.child(
             div()
                 .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text(TextStyle::Label)
                 .text_color(rgb(kit.palette.text_secondary))
-                .text_size(px(TEXT_NANO))
-                .child("flow"),
+                .child(cased(TextStyle::Label, "flow")),
         );
     }
     kit.highlight(row, selected)
@@ -405,9 +399,8 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
                 .flex_1()
                 .min_w_0()
                 .text_color(rgb(kit.palette.text_primary))
-                .text_size(px(TEXT_TITLE))
-                .line_height(px(24.0))
-                .font_weight(FontWeight::BOLD)
+                .text(TextStyle::Heading)
+                .wraps()
                 .child(lead.clone()),
         );
         if let Some(host) = host_of(&row.raw) {
@@ -422,8 +415,7 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
             card = card.child(
                 div()
                     .text_color(rgb(kit.palette.text_secondary))
-                    .text_size(px(TEXT_MICRO))
-                    .line_height(px(18.0))
+                    .text(TextStyle::Detail)
                     .line_clamp(3)
                     .child(explanation),
             );
@@ -432,22 +424,18 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
         card = card.child(
             div()
                 .text_color(rgb(kit.palette.text_primary))
-                .text_size(px(TEXT_MICRO))
-                .line_height(px(18.0))
+                .text(TextStyle::Detail)
                 .line_clamp(3)
                 .child(copy),
         );
     }
     let mut meta = div().mt(px(4.0)).flex().items_center().gap(px(8.0));
-    meta = meta.child(
-        kit.chip("TRUE NOW", kit.palette.accent)
-            .text_size(px(TEXT_NANO)),
-    );
+    meta = meta.child(kit.chip("true now", kit.palette.accent));
     if let Some(sources) = sources_of(&row.raw).filter(|count| *count >= 2) {
         meta = meta.child(
             div()
                 .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(TEXT_NANO))
+                .text(TextStyle::Detail)
                 .child(format!("{sources} sources agree")),
         );
     }
@@ -455,9 +443,8 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
     if !at.is_empty() {
         meta = meta.child(
             div()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text(TextStyle::Code)
                 .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(TEXT_NANO))
                 .child(at.to_string()),
         );
     }
@@ -476,9 +463,8 @@ fn host_tag(kit: &qol_gpui::kit::Kit, host: &str) -> Div {
         .rounded(px(RADIUS_TIGHT))
         .border(px(1.0))
         .border_color(rgba(kit.washes.hairline_strong.packed()))
-        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+        .text(TextStyle::Code)
         .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(TEXT_NANO))
         .child(host.to_string())
 }
 
@@ -499,9 +485,8 @@ fn vague_fence(kit: &qol_gpui::kit::Kit, checking: bool) -> Div {
         .child(
             div()
                 .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text(TextStyle::Label)
                 .text_color(rgb(kit.palette.text_secondary))
-                .text_size(px(TEXT_NANO))
                 .child(if checking {
                     "CHECKING ANSWER · RELATED MEMORIES"
                 } else {
@@ -518,7 +503,7 @@ pub fn flow_empty_state(kit: &qol_gpui::kit::Kit) -> Div {
         .items_center()
         .justify_center()
         .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(TEXT_MICRO))
+        .text(TextStyle::Value)
         .child("no memory covers this")
 }
 
@@ -541,16 +526,15 @@ pub fn detail_body(
                         .w(px(92.0))
                         .flex_none()
                         .text_color(rgb(kit.palette.text_muted))
-                        .text_size(px(TEXT_NANO))
-                        .child(label.to_uppercase()),
+                        .text(TextStyle::Label)
+                        .child(cased(TextStyle::Label, label)),
                 )
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
-                        .truncate()
                         .text_color(rgb(kit.palette.text_secondary))
-                        .text_size(px(TEXT_NANO))
+                        .text(TextStyle::Detail)
                         .child(value.clone()),
                 ),
         );
@@ -574,8 +558,8 @@ pub fn detail_body(
                 .child(
                     div()
                         .text_color(rgb(kit.palette.text_primary))
-                        .text_size(px(TEXT_MICRO))
-                        .line_height(px(18.0))
+                        .text(TextStyle::Detail)
+                        .wraps()
                         .child(text),
                 )
                 .when(!detail.is_empty(), |body| body.child(fields)),
@@ -630,7 +614,7 @@ fn char_highlights(
                 byte_pos..byte_pos + byte_len,
                 HighlightStyle {
                     color: Some(rgb(ink).into()),
-                    font_weight: Some(FontWeight::BOLD),
+                    font_weight: Some(FontWeight::SEMIBOLD),
                     underline: Some(UnderlineStyle {
                         thickness: px(1.5),
                         color: Some(rgb(ink).into()),

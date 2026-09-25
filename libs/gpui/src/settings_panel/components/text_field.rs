@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, AnyElement, App, BoxShadow, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
 use crate::kit::{FOCUS_RING_EDGE, FOCUS_RING_HALO};
 use crate::text_edit::{CaretStyle, TextField, TextFieldElement};
@@ -190,8 +192,7 @@ impl RenderOnce for SettingsTextField {
                     spread_radius: px(FOCUS_RING_HALO),
                 }])
             })
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_CAPTION))
+            .text(TextStyle::Code)
             .overflow_hidden();
         let field = ground_bg(
             field,

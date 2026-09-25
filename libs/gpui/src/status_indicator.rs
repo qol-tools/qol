@@ -1,9 +1,9 @@
 use std::f32::consts::TAU;
 
+use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{
-    div, px, AnyElement, App, ElementId, FontWeight, Hsla, RenderOnce, SharedString, Window,
-};
+use gpui::{div, px, AnyElement, App, ElementId, Hsla, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusTone {
@@ -71,8 +71,7 @@ impl RenderOnce for StatusIndicator {
             .flex()
             .items_center()
             .gap_1()
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::Detail)
             .text_color(self.color)
             .child(dot)
             .child(self.label)

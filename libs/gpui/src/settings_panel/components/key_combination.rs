@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, BoxShadow, IntoElement, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
 use crate::kit::{FOCUS_RING_EDGE, FOCUS_RING_HALO};
 use crate::theme::SettingsPanelPalette;
@@ -67,8 +69,7 @@ impl RenderOnce for SettingsKeyCombination {
                     spread_radius: px(FOCUS_RING_HALO),
                 }])
             })
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_CAPTION));
+            .text(TextStyle::Key);
         ground_bg(
             combo,
             rgba(ground.well.packed()),

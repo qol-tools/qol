@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
 use crate::kit::kit;
 
@@ -44,7 +46,7 @@ impl RenderOnce for SettingsFeedback {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_size(px(qol_theme::TEXT_MICRO))
+                    .text(TextStyle::Detail)
                     .text_color(rgb(ground.ink))
                     .child(self.message),
             )

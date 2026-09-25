@@ -1,3 +1,5 @@
+use crate::text::TextStyled;
+use qol_theme::TextStyle;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -95,10 +97,9 @@ impl ArtifactPreview for ExtensionBadge {
             .bg(rgba(crate::kit::alpha(tone_color, 51)))
             .child(
                 div()
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .text(TextStyle::Label)
                     .text_color(rgb(tone_color))
-                    .child(self.label.clone()),
+                    .child(crate::text::cased(TextStyle::Label, &self.label)),
             )
             .into_any_element()
     }

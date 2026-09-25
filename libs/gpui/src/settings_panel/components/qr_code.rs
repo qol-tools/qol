@@ -1,5 +1,7 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, FontWeight};
+use gpui::{div, px, rgb};
+use qol_theme::TextStyle;
 
 use crate::settings_panel::rows::{Row, RowControl};
 use crate::settings_panel::{PANEL_QR_CODE_HEIGHT, PANEL_QR_URL_HEIGHT};
@@ -48,7 +50,6 @@ pub(in crate::settings_panel) fn qr_code_display(
             .items_center()
             .h(px(header_height))
             .gap(px(qol_theme::SPACE_CELL))
-            .text_size(px(qol_theme::TEXT_BODY))
             .child(
                 div()
                     .flex()
@@ -57,16 +58,14 @@ pub(in crate::settings_panel) fn qr_code_display(
                     .flex_col()
                     .child(
                         div()
-                            .truncate()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .text(TextStyle::Name)
                             .text_color(rgb(ground.ink))
                             .child(row.label.clone()),
                     )
                     .when_some(row.description.clone(), |group, description| {
                         group.child(
                             div()
-                                .truncate()
-                                .text_size(px(qol_theme::TEXT_CAPTION))
+                                .text(TextStyle::Detail)
                                 .text_color(rgb(ground.soft))
                                 .child(description),
                         )
@@ -123,7 +122,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                     .clone()
                     .unwrap_or_else(|| "unavailable".into());
                 frame
-                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text(TextStyle::Value)
                     .text_color(rgb(ground.soft))
                     .child(placeholder)
             }
@@ -142,7 +141,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                 .flex_none()
                 .items_center()
                 .h(px(PANEL_QR_URL_HEIGHT))
-                .text_size(px(qol_theme::TEXT_CAPTION))
+                .text(TextStyle::Code)
                 .text_color(if error.is_some() {
                     rgb(palette.state_off)
                 } else {

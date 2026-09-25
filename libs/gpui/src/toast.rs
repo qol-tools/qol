@@ -1,3 +1,5 @@
+use crate::text::TextStyled;
+use qol_theme::TextStyle;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -958,7 +960,7 @@ fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> 
         .flex_row()
         .items_center()
         .px(px(12.0))
-        .text_size(px(qol_theme::TEXT_NANO))
+        .text(TextStyle::Detail)
         .text_color(rgb(palette.text_muted))
         .child(SharedString::from(format!("{row_count} notifications")))
         .child(div().flex_1())
@@ -973,7 +975,7 @@ fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> 
                 .flex()
                 .items_center()
                 .cursor_pointer()
-                .text_size(px(qol_theme::TEXT_NANO))
+                .text(TextStyle::Detail)
                 .text_color(rgb(palette.text_muted))
                 .child(SharedString::from("Clear all"))
                 .on_click(move |_, _, cx| host.clear_all(cx)),
@@ -988,8 +990,7 @@ fn live_band_label(palette: ToastPalette) -> Div {
         .flex_row()
         .items_center()
         .px(px(16.0))
-        .text_size(px(qol_theme::TEXT_NANO))
-        .font_weight(FontWeight::SEMIBOLD)
+        .text(TextStyle::Label)
         .text_color(rgb(palette.text_muted))
         .child(SharedString::from("LIVE"))
 }
@@ -1004,8 +1005,7 @@ fn summary_row(hidden_count: usize, palette: ToastPalette, host: SlabPresenter) 
         .items_center()
         .cursor_pointer()
         .bg(rgb(palette.surface_raised))
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .font_weight(FontWeight::SEMIBOLD)
+        .text(TextStyle::Detail)
         .text_color(rgb(palette.text_muted))
         .child(SharedString::from(format!(
             "{hidden_count} older notifications"
@@ -1103,9 +1103,7 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
                     div()
                         .min_w_0()
                         .flex_1()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text(TextStyle::ListName)
                         .text_color(rgb(palette.text_primary))
                         .child(row.toast.title.clone()),
                 ),
@@ -1121,9 +1119,8 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
             div()
                 .w_full()
                 .min_w_0()
+                .text(TextStyle::Detail)
                 .line_clamp(2)
-                .text_ellipsis()
-                .text_size(px(qol_theme::TEXT_MICRO))
                 .text_color(rgb(palette.text_secondary))
                 .child(row.toast.message.clone()),
         );
@@ -1138,8 +1135,7 @@ fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
             div()
                 .min_w_0()
                 .flex_1()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_MICRO))
+                .text(TextStyle::Code)
                 .text_color(rgb(palette.text_secondary))
                 .child(SharedString::from(head)),
         );
@@ -1148,8 +1144,7 @@ fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
         div()
             .min_w_0()
             .flex_1()
-            .truncate()
-            .text_size(px(qol_theme::TEXT_MICRO))
+            .text(TextStyle::Code)
             .text_color(rgb(palette.text_secondary))
             .child(SharedString::from(tail)),
     )
@@ -1206,17 +1201,14 @@ fn render_compact(toast: &Toast, palette: ToastPalette) -> Div {
                 .child(
                     div()
                         .w_full()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_BODY))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text(TextStyle::Name)
                         .text_color(rgb(palette.text_primary))
                         .child(toast.title.clone()),
                 )
                 .child(
                     div()
                         .w_full()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_MICRO))
+                        .text(TextStyle::Detail)
                         .text_color(rgb(palette.text_secondary))
                         .child(toast.message.clone()),
                 ),
@@ -1238,17 +1230,14 @@ fn render_status(toast: &Toast, palette: ToastPalette) -> Div {
             .child(
                 div()
                     .w_full()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_DISPLAY))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .text(TextStyle::Heading)
                     .text_color(rgb(palette.text_primary))
                     .child(toast.title.clone()),
             )
             .child(
                 div()
                     .w_full()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text(TextStyle::Value)
                     .text_color(rgb(palette.text_secondary))
                     .child(toast.message.clone()),
             ),

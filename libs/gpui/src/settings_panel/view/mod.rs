@@ -4,7 +4,9 @@ mod list_card;
 mod structured_list_editor;
 
 use crate::key::Key;
+use crate::text::TextStyled;
 use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
+use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -2673,7 +2675,7 @@ impl SettingsPanelView {
             }
             RowControl::Unsupported { reason, .. } => {
                 return div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text(TextStyle::Detail)
                     .text_color(rgb(match row {
                         RowGround::Pane => self.palette.grounds.pane.faint,
                         RowGround::Band => self.palette.grounds.band.soft,
@@ -2958,7 +2960,7 @@ impl SettingsPanelView {
             container = container.child(
                 div()
                     .px(px(qol_theme::SPACE_INSET))
-                    .text_size(px(qol_theme::TEXT_CAPTION))
+                    .text(TextStyle::Detail)
                     .text_color(rgb(self.palette.state_off))
                     .child(error.clone()),
             );
@@ -3034,10 +3036,8 @@ impl SettingsPanelView {
             .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
             .child(
                 div()
-                    .truncate()
                     .min_w_0()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .when(active, |label| label.font_weight(FontWeight::SEMIBOLD))
+                    .text(TextStyle::Name)
                     .text_color(rgb(if active {
                         self.palette.rail_active_text
                     } else {
@@ -3183,29 +3183,23 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap(px(qol_theme::SPACE_CELL))
-                .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
                         .flex()
                         .min_w_0()
                         .flex_1()
                         .flex_col()
-                        .child(
-                            div()
-                                .truncate()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(rest.ink))
-                                .child(if filter.trim().is_empty() {
-                                    row.label.clone()
-                                } else {
-                                    filter.clone()
-                                }),
-                        )
+                        .child(div().text(TextStyle::Name).text_color(rgb(rest.ink)).child(
+                            if filter.trim().is_empty() {
+                                row.label.clone()
+                            } else {
+                                filter.clone()
+                            },
+                        ))
                         .when_some(row.description.clone(), |group, description| {
                             group.child(
                                 div()
-                                    .truncate()
-                                    .text_size(px(qol_theme::TEXT_CAPTION))
+                                    .text(TextStyle::Detail)
                                     .text_color(rgb(rest.soft))
                                     .child(description),
                             )
@@ -3282,7 +3276,6 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap(px(qol_theme::SPACE_CELL))
-                .text_size(px(qol_theme::TEXT_BODY))
                 .child(
                     div()
                         .flex()
@@ -3291,16 +3284,14 @@ impl SettingsPanelView {
                         .flex_col()
                         .child(
                             div()
-                                .truncate()
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text(TextStyle::Name)
                                 .text_color(rgb(rest.ink))
                                 .child(row.label.clone()),
                         )
                         .when_some(row.description.clone(), |group, description| {
                             group.child(
                                 div()
-                                    .truncate()
-                                    .text_size(px(qol_theme::TEXT_CAPTION))
+                                    .text(TextStyle::Detail)
                                     .text_color(rgb(rest.soft))
                                     .child(description),
                             )
@@ -3824,8 +3815,7 @@ impl SettingsPanelView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text(TextStyle::Code)
                     .text_color(rgb(if empty {
                         self.palette.status_muted
                     } else {

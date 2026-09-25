@@ -1,3 +1,5 @@
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use qol_gpui::Icon;
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -1285,7 +1287,7 @@ impl Render for PinnedView {
                     .border_color(rgb(palette.thumb_border));
             }
             return div()
-                .font_family(qol_gpui::theme::font_ui())
+                .text(TextStyle::Value)
                 .id("shot-pin")
                 .track_focus(&self.focus_handle)
                 .on_key_down(cx.listener(Self::on_key))
@@ -1308,7 +1310,7 @@ impl Render for PinnedView {
             window.is_window_hovered(),
         );
         let mut root = div()
-            .font_family(qol_gpui::theme::font_ui())
+            .text(TextStyle::Value)
             .id("shot-pin")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))

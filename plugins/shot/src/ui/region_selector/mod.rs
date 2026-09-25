@@ -1,5 +1,7 @@
 use anyhow::Result;
 use gpui::*;
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,9 +13,7 @@ use crate::capture::geometry::rect_label;
 use crate::capture::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
 use qol_gpui::placement::{intersect_bounds, monitor_at_point, project_bounds, MonitorPlacement};
-use qol_gpui::theme::{
-    font_mono, runtime_theme, shot_selector_runtime, ShotSelectorPalette, TEXT_MICRO,
-};
+use qol_gpui::theme::{runtime_theme, shot_selector_runtime, ShotSelectorPalette};
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
 use qol_gpui::window_options::PopupWindowOptions;
 
@@ -1091,7 +1091,7 @@ impl Render for RegionSelector {
         let guide_bounds = self.guide_bounds();
         let selection = self.selection_bounds();
         let mut root = div()
-            .font_family(qol_gpui::theme::font_ui())
+            .text(TextStyle::Value)
             .id("shot-region-selector")
             .track_focus(&self.focus_handle)
             .size_full()
@@ -1336,9 +1336,7 @@ fn chip_element(bounds: Bounds<Pixels>, text: String, level: Level) -> Div {
         .items_center()
         .justify_center()
         .text_center()
-        .text_size(px(qol_gpui::theme::TEXT_BODY))
-        .line_height(px(CHIP_H))
-        .font_weight(FontWeight::SEMIBOLD)
+        .text(TextStyle::Name)
         .text_color(rgba(foreground))
         .child(SharedString::from(text))
 }
@@ -1468,8 +1466,7 @@ impl SelectionLabel {
                     .px(px(6.0))
                     .py(px(2.0))
                     .text_center()
-                    .font_family(SharedString::from(font_mono()))
-                    .text_size(px(TEXT_MICRO))
+                    .text(TextStyle::Code)
                     .text_color(rgb(system.accent_ink))
                     .bg(rgb(system.surface_raised))
                     .border_1()

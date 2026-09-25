@@ -1,3 +1,5 @@
+use crate::text::TextStyled;
+use qol_theme::TextStyle;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -777,7 +779,7 @@ impl SettingsPanelView {
             .dimmed(!staged.has_staged_edits() || !staged.is_committable())
             .child(
                 div()
-                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text(TextStyle::Name)
                     .text_color(rgb(self.palette.state_on))
                     .child("Apply"),
             )

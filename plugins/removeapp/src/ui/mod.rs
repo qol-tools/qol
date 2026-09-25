@@ -3,8 +3,10 @@ pub mod run;
 use gpui::prelude::*;
 use gpui::{
     div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable,
-    FontWeight, KeyDownEvent, SharedString, WeakEntity, Window,
+    KeyDownEvent, WeakEntity, Window,
 };
+use qol_gpui::text::{cased, TextStyled};
+use qol_gpui::theme::TextStyle;
 use qol_gpui::Key;
 
 use crate::core::{
@@ -38,7 +40,7 @@ fn continue_or_quit_hint() -> gpui::Div {
         .items_center()
         .gap(px(qol_gpui::theme::SPACE_GUTTER))
         .text_color(rgb(current_palette().text_muted))
-        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+        .text(TextStyle::Hint)
         .child(kit.hint(Key::ENTER, "continue"))
         .child(kit.hint(Key::ESC, "quit"))
 }
@@ -502,16 +504,13 @@ impl RemoveAppView {
                         .gap(px(2.0))
                         .child(
                             div()
-                                .truncate()
-                                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text(TextStyle::ListName)
                                 .text_color(rgb(palette.text_primary))
                                 .child(format!("Remove {}", app.name)),
                         )
                         .child(
                             div()
-                                .truncate()
-                                .text_size(px(qol_gpui::theme::TEXT_MICRO))
+                                .text(TextStyle::Detail)
                                 .text_color(rgb(palette.text_secondary))
                                 .child(subtitle),
                         ),
@@ -564,8 +563,7 @@ impl RemoveAppView {
                             .flex_1()
                             .min_w(px(0.0))
                             .overflow_hidden()
-                            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                            .text(TextStyle::Code)
                             .text_color(rgb(if empty {
                                 palette.text_muted
                             } else {
@@ -614,15 +612,14 @@ impl RemoveAppView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .truncate()
-                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                            .text(TextStyle::Code)
                             .text_color(rgb(palette.text_secondary))
                             .child(l.path.display().to_string()),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                            .text(TextStyle::Code)
                             .text_color(rgb(palette.text_muted))
                             .child(qol_gpui::format_bytes(l.size_bytes)),
                     )
@@ -692,13 +689,13 @@ impl RemoveAppView {
                     .child(
                         div()
                             .text_color(rgb(disp_color))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .text(TextStyle::Name)
                             .child(disp_label),
                     )
                     .child(
                         div()
                             .text_color(rgb(palette.text_primary))
-                            .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                            .text(TextStyle::Detail)
                             .child(format!(
                                 "{} items \u{00b7} {}",
                                 plan.items.len(),
@@ -772,14 +769,15 @@ impl RemoveAppView {
                 .panel_drag_area()
                 .child(
                     div()
-                        .text_size(px(qol_gpui::theme::TEXT_TITLE))
+                        .text(TextStyle::Heading)
                         .text_color(rgb(palette.danger))
                         .child("Removal failed"),
                 )
                 .child(
                     div()
                         .text_color(rgb(palette.text_secondary))
-                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                        .text(TextStyle::Detail)
+                        .wraps()
                         .child(error.clone()),
                 )
                 .child(continue_or_quit_hint())
@@ -801,14 +799,14 @@ impl RemoveAppView {
             .panel_drag_area()
             .child(
                 div()
-                    .text_size(px(qol_gpui::theme::TEXT_TITLE))
+                    .text(TextStyle::Heading)
                     .text_color(rgb(palette.success))
                     .child(format!("Removed {removed} item(s)")),
             )
             .child(
                 div()
                     .text_color(rgb(palette.text_secondary))
-                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                    .text(TextStyle::Detail)
                     .child(format!(
                         "Freed {}",
                         qol_gpui::format_bytes(outcome.freed_bytes)
@@ -818,7 +816,7 @@ impl RemoveAppView {
                 d.child(
                     div()
                         .text_color(rgb(palette.danger))
-                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                        .text(TextStyle::Detail)
                         .child(format!("{failed} failed")),
                 )
             })
@@ -900,9 +898,7 @@ fn app_row(
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .truncate()
-                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                .font_weight(FontWeight::MEDIUM)
+                .text(TextStyle::ListName)
                 .text_color(if protected {
                     rgb(palette.text_muted)
                 } else {
@@ -914,17 +910,16 @@ fn app_row(
             d.child(
                 div()
                     .flex_none()
-                    .text_size(px(qol_gpui::theme::TEXT_NANO))
+                    .text(TextStyle::Label)
                     .text_color(rgb(palette.danger))
-                    .child("protected"),
+                    .child(cased(TextStyle::Label, "protected")),
             )
         })
         .when_some(size, |d, size| {
             d.child(
                 div()
                     .flex_none()
-                    .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                    .text_size(px(qol_gpui::theme::TEXT_MICRO))
+                    .text(TextStyle::Code)
                     .text_color(rgb(ground.soft))
                     .child(qol_gpui::format_bytes(size)),
             )
@@ -947,7 +942,7 @@ fn section_header(title: &str) -> impl IntoElement {
         .child(
             div()
                 .text_color(rgb(palette.text_primary))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text(TextStyle::Heading)
                 .child(format!("Remove {title}")),
         )
 }
@@ -964,8 +959,7 @@ fn footer(hints: &[(Key, &str)], counter: Option<String>) -> impl IntoElement {
             bar.child(
                 div()
                     .flex_none()
-                    .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                    .text_size(px(qol_gpui::theme::TEXT_NANO))
+                    .text(TextStyle::Code)
                     .text_color(rgb(palette.text_muted))
                     .child(counter),
             )
@@ -989,9 +983,7 @@ fn banner_container(lines: Vec<AnyElement>) -> AnyElement {
 }
 
 fn banner_frame(color: u32) -> gpui::Div {
-    div()
-        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-        .text_color(rgb(color))
+    div().text(TextStyle::Detail).text_color(rgb(color))
 }
 
 fn banner_line(color: u32, text: &str) -> impl IntoElement {
