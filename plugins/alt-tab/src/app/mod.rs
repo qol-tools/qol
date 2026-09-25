@@ -373,6 +373,17 @@ impl AltTabApp {
         cx.notify();
     }
 
+    pub(crate) fn forget_window(
+        &mut self,
+        window_id: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delegate
+            .update(cx, |s, ctx| s.remove_window(window_id, ctx, Some(window)));
+        cx.notify();
+    }
+
     pub(crate) fn apply_ghost_gathered(
         &mut self,
         gathered: &GatheredWindows,

@@ -73,9 +73,9 @@ fn on_close(this: &mut AltTabApp, window: &mut Window, cx: &mut Context<AltTabAp
         .map(|w| w.app_name.clone());
     match actions::close_window(win_id) {
         actions::CloseWindowResult::ClosedWindow => {
-            this.delegate
-                .update(cx, |s, ctx| s.remove_window(win_id, ctx, Some(window)));
+            this.forget_window(win_id, window, cx);
         }
+        actions::CloseWindowResult::CloseRequested => {}
         actions::CloseWindowResult::QuitApp => {
             if let Some(name) = app_name {
                 this.delegate

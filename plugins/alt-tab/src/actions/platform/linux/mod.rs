@@ -261,7 +261,10 @@ pub fn close_window(window_id: u32) -> super::CloseOutcome {
         "CLOSE_WIN",
         "wid={window_id} outcome=sent timestamp={time} payload={payload:?}"
     );
-    super::CloseOutcome::Closed { quit_app: false }
+    super::CloseOutcome::Closed {
+        quit_app: false,
+        awaits_destroy_event: false,
+    }
 }
 
 fn close_window_payload(timestamp: u32) -> [u32; 5] {
@@ -408,4 +411,8 @@ mod tests {
     fn close_window_payload_uses_ewmh_field_order() {
         assert_eq!(close_window_payload(42), [42, 2, 0, 0, 0]);
     }
+}
+
+pub fn destroyed_windows() -> Option<futures::channel::mpsc::UnboundedReceiver<u32>> {
+    None
 }

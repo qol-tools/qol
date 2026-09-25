@@ -126,6 +126,8 @@ pub(crate) fn run_app(
             cx,
         );
 
+        spawn_destroyed_window_listener(cx, &state);
+
         if show_on_start {
             let show_id = next_show_id();
             state.caches.record_show(show_id);
@@ -133,6 +135,36 @@ pub(crate) fn run_app(
         }
         spawn_daemon_loop(cx, rx, state);
     });
+}
+
+fn spawn_destroyed_window_listener(cx: &mut App, state: &PickerState) {
+    let Some(mut destroyed) = crate::actions::destroyed_windows() else {
+        return;
+    };
+    let current = state.current.clone();
+    let window_cache = state.caches.window_cache.clone();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        use futures::StreamExt;
+        while let Some(window_id) = destroyed.next().await {
+            if let Ok(mut windows) = window_cache.lock() {
+                windows.retain(|w| w.id != window_id);
+            }
+            let handles: Vec<_> = current
+                .borrow()
+                .iter()
+                .into_iter()
+                .map(|(_, handle)| handle)
+                .collect();
+            let _ = cx.update(|app_cx| {
+                for handle in handles {
+                    let _ = handle.update(app_cx, |view, window, cx| {
+                        view.forget_window(window_id, window, cx)
+                    });
+                }
+            });
+        }
+    })
+    .detach();
 }
 
 fn picker_window_state() -> PickerWindowState {

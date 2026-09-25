@@ -1,3 +1,7 @@
+mod destroy_watch;
+
+pub use destroy_watch::destroyed_windows;
+
 use super::CloseOutcome;
 use crate::discovery::platform::macos::ax::{
     ax_find_window, ax_find_window_brute_force, ax_find_window_on_any_space,
@@ -397,18 +401,28 @@ pub fn close_window(window_id: u32) -> CloseOutcome {
         );
         return CloseOutcome::Unsupported;
     }
-    let close_pressed = unsafe { ax_press_button(win, b"AXCloseButton") };
+    let press = unsafe { press_close_button(info.pid, win, window_id) };
     unsafe { CFRelease(win) };
-    if close_pressed {
-        qol_runtime::probe!(
-            "CLOSE_WINDOW",
-            "wid={window_id} pid={} layer={} result=closed",
-            info.pid,
-            info.layer,
-        );
-        return CloseOutcome::Closed { quit_app: false };
+    let awaits_destroy_event = match press {
+        ClosePress::Watched => true,
+        ClosePress::Pressed => false,
+        ClosePress::NoButton | ClosePress::Failed => {
+            return close_fallback(window_id, &info);
+        }
+    };
+    qol_runtime::probe!(
+        "CLOSE_WINDOW",
+        "wid={window_id} pid={} layer={} result=pressed awaits_destroy_event={awaits_destroy_event}",
+        info.pid,
+        info.layer,
+    );
+    CloseOutcome::Closed {
+        quit_app: false,
+        awaits_destroy_event,
     }
+}
 
+fn close_fallback(window_id: u32, info: &WindowActionInfo) -> CloseOutcome {
     let has_normal_window = pid_has_on_screen_normal_window(info.pid);
     if should_quit_on_close_fallback(info.layer, has_normal_window) {
         let terminated = ns_terminate_app(info.pid);
@@ -419,7 +433,10 @@ pub fn close_window(window_id: u32) -> CloseOutcome {
             info.layer,
         );
         if terminated {
-            return CloseOutcome::Closed { quit_app: true };
+            return CloseOutcome::Closed {
+                quit_app: true,
+                awaits_destroy_event: false,
+            };
         }
     }
 
@@ -477,19 +494,31 @@ unsafe fn ax_make_main(win: *const c_void) {
     ax_set_bool_attr(win, b"AXFocused", kCFBooleanTrue);
 }
 
-unsafe fn ax_press_button(win: *const c_void, button_attr: &[u8]) -> bool {
-    let attr = ffi::cfstr(button_attr);
-    let action = ffi::cfstr(b"AXPress");
+enum ClosePress {
+    Watched,
+    Pressed,
+    NoButton,
+    Failed,
+}
+
+unsafe fn press_close_button(pid: i32, win: *const c_void, window_id: u32) -> ClosePress {
+    let attr = ffi::cfstr(b"AXCloseButton");
     let mut button: *const c_void = std::ptr::null();
     let err = AXUIElementCopyAttributeValue(win, attr, &mut button);
-    let mut pressed = false;
-    if err == 0 && !button.is_null() {
-        pressed = AXUIElementPerformAction(button, action) == 0;
-        CFRelease(button);
-    }
     CFRelease(attr);
+    if err != 0 || button.is_null() {
+        return ClosePress::NoButton;
+    }
+    let watched = destroy_watch::watch(pid, win, window_id);
+    let action = ffi::cfstr(b"AXPress");
+    let pressed = AXUIElementPerformAction(button, action) == 0;
     CFRelease(action);
-    pressed
+    CFRelease(button);
+    match (watched, pressed) {
+        (true, _) => ClosePress::Watched,
+        (false, true) => ClosePress::Pressed,
+        (false, false) => ClosePress::Failed,
+    }
 }
 
 unsafe fn ax_set_bool_attr(win: *const c_void, name: &[u8], val: *const c_void) {

@@ -39,3 +39,7 @@ pub fn close_window(_window_id: u32) -> super::CloseOutcome {
 }
 
 pub fn quit_app(_window_id: u32) {}
+
+pub fn destroyed_windows() -> Option<futures::channel::mpsc::UnboundedReceiver<u32>> {
+    None
+}

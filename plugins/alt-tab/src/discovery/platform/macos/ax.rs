@@ -492,8 +492,6 @@ pub(crate) unsafe fn ax_find_window(
     result
 }
 
-// AXWindows only lists windows on the current Space, so a window on another
-// Space needs the brute-force scan.
 pub(crate) unsafe fn ax_find_window_on_any_space(
     pid: i32,
     cg_window_id: u32,

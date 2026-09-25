@@ -21,6 +21,10 @@ pub fn quit_app(window_id: u32) {
     platform::quit_app(window_id)
 }
 
+pub fn destroyed_windows() -> Option<futures::channel::mpsc::UnboundedReceiver<u32>> {
+    platform::destroyed_windows()
+}
+
 pub fn minimize_window_by_id(window_id: u32) {
     platform::minimize_window_by_id(window_id)
 }
