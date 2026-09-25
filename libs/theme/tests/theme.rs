@@ -37,7 +37,6 @@ fn runtime_dark_theme_uses_valid_injected_accent_key() {
     let expected = dark_accent_preset("blue").unwrap().rgb;
 
     assert_eq!(theme.system.accent, expected);
-    assert_eq!(theme.components.launcher.highlight, expected);
 }
 
 #[test]
@@ -53,21 +52,6 @@ fn runtime_dark_theme_falls_back_for_unknown_injected_accent_key() {
 fn css_color_serializers_are_shared() {
     assert_eq!(css::rgb_string(0xffb454), "255, 180, 84");
     assert_eq!(css::hex_string(0xffc77a), "#ffc77a");
-}
-
-#[test]
-fn launcher_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.launcher;
-    assert_eq!(palette.bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.bg_badge, DARK_SYSTEM.surface_raised);
-    assert_eq!(palette.text_selected, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.highlight, DARK_SYSTEM.accent_ink);
-    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.momentum_up.len(), 5);
-    assert_eq!(palette.momentum_down.len(), 5);
-    assert_eq!(palette.compass_up.len(), 3);
-    assert_eq!(palette.compass_down.len(), 3);
 }
 
 #[test]

@@ -1037,7 +1037,6 @@ pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentPalettes {
-    pub launcher: LauncherPalette,
     pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
     pub picker_surface: PickerSurfacePalette,
@@ -1046,7 +1045,6 @@ pub struct ComponentPalettes {
 impl ComponentPalettes {
     pub fn new(mode: ThemeMode, reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            launcher: LauncherPalette::from_system(system),
             settings_panel: SettingsPanelPalette::from_theme(mode, system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
             picker_surface: PickerSurfacePalette::themed(system, None, 1.0),
@@ -1408,79 +1406,6 @@ impl AltTabPreviewPlanePalette {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LauncherPalette {
-    pub bg: u32,
-    pub bg_selected: u32,
-    pub bg_trail_hot: u32,
-    pub bg_trail: u32,
-    pub bg_near: u32,
-    pub bg_edge: u32,
-    pub bg_badge: u32,
-    pub text: u32,
-    pub text_selected: u32,
-    pub text_dim: u32,
-    pub text_muted: u32,
-    pub text_faint: u32,
-    pub highlight: u32,
-    pub highlight_warm: u32,
-    pub highlight_hot: u32,
-    pub highlight_cool: u32,
-    pub border: u32,
-    pub border_selected: u32,
-    pub momentum_up: [u32; 5],
-    pub momentum_down: [u32; 5],
-    pub compass_up: [u32; 3],
-    pub compass_down: [u32; 3],
-    pub semantic_prefix: u32,
-    pub semantic_contains: u32,
-    pub semantic_fuzzy: u32,
-    pub semantic_freq: u32,
-    pub boost_bg: u32,
-}
-
-impl LauncherPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            bg: system.surface_elevated,
-            bg_selected: system.accent_fill,
-            bg_trail_hot: mix_rgb(system.surface_raised, system.accent, 0.14),
-            bg_trail: mix_rgb(system.surface_raised, system.accent, 0.09),
-            bg_near: system.surface_hovered,
-            bg_edge: mix_rgb(system.surface_elevated, system.surface_raised, 0.5),
-            bg_badge: system.surface_raised,
-            text: system.text_secondary,
-            text_selected: system.text_primary,
-            text_dim: system.text_muted,
-            text_muted: system.text_faint,
-            text_faint: mix_rgb(system.text_faint, system.surface_canvas, 0.24),
-            highlight: system.accent_ink,
-            highlight_warm: mix_rgb(system.accent_ink, system.warning, 0.36),
-            highlight_hot: mix_rgb(system.accent_ink, system.text_primary, 0.22),
-            highlight_cool: mix_rgb(system.accent_ink, system.info, 0.28),
-            border: system.border_subtle,
-            border_selected: system.accent,
-            momentum_up: ramp(system.surface_raised, system.info),
-            momentum_down: ramp(system.surface_raised, system.danger),
-            compass_up: [
-                mix_rgb(system.text_muted, system.info, 0.2),
-                mix_rgb(system.text_muted, system.info, 0.45),
-                mix_rgb(system.text_muted, system.info, 0.75),
-            ],
-            compass_down: [
-                mix_rgb(system.text_muted, system.danger, 0.2),
-                mix_rgb(system.text_muted, system.danger, 0.45),
-                mix_rgb(system.text_muted, system.danger, 0.75),
-            ],
-            semantic_prefix: system.text_muted,
-            semantic_contains: system.text_muted,
-            semantic_fuzzy: system.text_muted,
-            semantic_freq: system.text_muted,
-            boost_bg: mix_rgb(system.surface_raised, system.surface_hovered, 0.5),
-        }
-    }
-}
-
 pub const fn band_fill(system: SystemPalette) -> u32 {
     mix_const(system.accent_fill_base, system.accent, RAIL_FILL_MIX)
 }
@@ -1555,10 +1480,6 @@ impl PickerSurfacePalette {
     }
 }
 
-pub fn launcher_runtime() -> LauncherPalette {
-    runtime_theme().components.launcher
-}
-
 pub fn settings_panel_runtime() -> SettingsPanelPalette {
     runtime_theme().components.settings_panel
 }
@@ -1587,16 +1508,6 @@ pub fn resolve_surface_override(
 fn parse_rgb24(hex: &str) -> Option<u32> {
     let (red, green, blue) = parse_hex_color(hex)?;
     Some(rgb24(red, green, blue))
-}
-
-fn ramp(base: u32, target: u32) -> [u32; 5] {
-    [
-        mix_rgb(base, target, 0.08),
-        mix_rgb(base, target, 0.14),
-        mix_rgb(base, target, 0.2),
-        mix_rgb(base, target, 0.26),
-        mix_rgb(base, target, 0.32),
-    ]
 }
 
 #[cfg(test)]

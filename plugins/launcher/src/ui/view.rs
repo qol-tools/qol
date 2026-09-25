@@ -7,9 +7,7 @@ use qol_gpui::text::shaped_width;
 use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::TextStyle;
-use qol_gpui::theme::{
-    launcher_runtime, LauncherPalette, RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO,
-};
+use qol_gpui::theme::{RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO};
 use qol_gpui::trail::{Trail, TrailItem};
 use qol_gpui::Key;
 
@@ -25,10 +23,6 @@ pub const CARD_HEIGHT: f32 = 116.0;
 // so it has to end one PAD_TOP short of the next slot to keep that rhythm.
 const CARD_GAP: f32 = qol_gpui::trail::motion::PAD_TOP;
 const CARD_DOT_CY: f32 = 36.0;
-
-fn current_palette() -> LauncherPalette {
-    launcher_runtime()
-}
 
 pub struct SearchBarStatus {
     pub mode: Option<SearchMode>,
@@ -66,7 +60,7 @@ pub fn search_bar(
         .items_center()
         .px(px(qol_gpui::theme::SPACE_PAD))
         .gap(px(10.0))
-        .bg(rgb(current_palette().bg))
+        .bg(rgb(qol_gpui::kit::kit().grounds.pane.bg))
         .border_b(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .child(qol_gpui::icon::icon(
@@ -87,20 +81,20 @@ pub fn search_bar(
                         .h(px(18.))
                         .overflow_hidden()
                         .text(TextStyle::Code)
-                        .text_color(rgb(current_palette().text))
+                        .text_color(rgb(qol_gpui::kit::kit().grounds.pane.soft))
                         .flex()
                         .items_center()
                         .child({
                             let element = TextFieldElement::new(field, visible, mono_advance)
                                 .selection(
-                                    rgb(current_palette().bg_selected).into(),
-                                    Some(rgb(current_palette().text).into()),
+                                    rgb(qol_gpui::kit::kit().grounds.band.bg).into(),
+                                    Some(rgb(qol_gpui::kit::kit().grounds.pane.soft).into()),
                                 );
                             let element = if status.list_focused {
                                 element
                             } else {
                                 element.caret(CaretStyle {
-                                    color: rgb(current_palette().highlight).into(),
+                                    color: rgb(qol_gpui::kit::kit().palette.accent_ink).into(),
                                     width: CARET_WIDTH,
                                     height: 16.0,
                                     top: 1.0,
@@ -110,7 +104,7 @@ pub fn search_bar(
                             element
                                 .placeholder(
                                     placeholder.to_owned(),
-                                    rgb(current_palette().text_muted).into(),
+                                    rgb(qol_gpui::kit::kit().grounds.pane.faint).into(),
                                 )
                                 .render()
                         }),
@@ -119,7 +113,7 @@ pub fn search_bar(
                     field.child(
                         div()
                             .text(TextStyle::Detail)
-                            .text_color(rgb(current_palette().highlight_warm))
+                            .text_color(rgb(qol_gpui::kit::kit().palette.warning_ink))
                             .child(error.to_owned()),
                     )
                 }),
@@ -244,7 +238,7 @@ pub fn result_row(
                 .text_color(rgb(if selected {
                     band.ink
                 } else {
-                    current_palette().text_muted
+                    qol_gpui::kit::kit().grounds.pane.faint
                 }))
                 .text(TextStyle::ListName)
                 .child(styled_name),
@@ -624,7 +618,7 @@ fn char_highlights(
 }
 
 pub fn bg_color() -> gpui::Rgba {
-    rgb(current_palette().bg)
+    rgb(qol_gpui::kit::kit().grounds.pane.bg)
 }
 
 #[cfg(test)]
