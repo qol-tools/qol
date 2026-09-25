@@ -3,7 +3,7 @@ use gpui::{div, px, rgb, rgba, ElementId, FontWeight, Rgba, SharedString};
 
 use crate::busy::Busy;
 use crate::kit::{alpha, kit};
-use crate::theme::{SettingsGround, SettingsPanelPalette};
+use crate::theme::{Ground, SettingsPanelPalette};
 
 mod choice_value;
 mod display_layout_tile;
@@ -67,14 +67,14 @@ impl RowGround {
         }
     }
 
-    pub fn rest(self, palette: SettingsPanelPalette) -> SettingsGround {
+    pub fn rest(self, palette: SettingsPanelPalette) -> Ground {
         match self {
             Self::Pane => palette.grounds.pane,
             Self::Band => palette.grounds.band,
         }
     }
 
-    pub fn hover(self, palette: SettingsPanelPalette) -> Option<SettingsGround> {
+    pub fn hover(self, palette: SettingsPanelPalette) -> Option<Ground> {
         match self {
             Self::Pane => None,
             Self::Band => Some(palette.grounds.band_hover),
@@ -135,24 +135,15 @@ pub fn paint_rail_selection<E: Styled>(row: E, palette: SettingsPanelPalette, fo
 }
 
 fn paint_settings_attention<E: Styled + ParentElement>(row: E, palette: SettingsPanelPalette) -> E {
+    row.bg(rgb(palette.grounds.attention.bg))
+}
+
+fn attention_dot(palette: SettingsPanelPalette) -> gpui::Div {
     let shared = kit();
-    row.relative()
-        .w_auto()
-        .ml(px(-qol_theme::SPACE_PAD))
-        .pl(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
-        .rounded_none()
-        .rounded_r(px(qol_theme::RADIUS_CARD))
-        .bg(rgba(shared.washes.wash_attention.packed()))
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(px(qol_theme::SPACE_MARK))
-                .bg(rgb(palette.status_warning)),
-        )
+    shared.status_dot(
+        palette.grounds.attention.mark,
+        shared.washes.halo_attention.packed(),
+    )
 }
 
 pub fn one_line<E: Styled>(element: E) -> E {

@@ -424,9 +424,7 @@ fn option_row(
         .items_center()
         .justify_between()
         .gap(px(qol_gpui::theme::SPACE_SNUG))
-        .rounded(px(qol_gpui::theme::RADIUS_TIGHT))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
         .text_color(rgb(kit.palette.text_primary))
         .text_size(px(qol_gpui::theme::TEXT_MICRO))
         .child(div().flex_1().min_w_0().truncate().child(action.label()))
@@ -434,14 +432,14 @@ fn option_row(
             div()
                 .flex_none()
                 .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                .text_color(rgb(kit.palette.text_muted))
+                .text_color(rgb(kit.highlight_ground(selected).faint))
                 .text_size(px(qol_gpui::theme::TEXT_IDENTITY))
                 .child(display_shortcut(mark)),
         )
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.activate_option(action, window, cx);
         }));
-    kit.row_selected(row, selected)
+    kit.highlight(row, selected)
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use gpui::{
 };
 
 use crate::kit::kit;
-use crate::theme::{SettingsGround, SettingsPanelPalette};
+use crate::theme::{Ground, SettingsPanelPalette};
 
 use super::{ground_bg, ground_border, ground_text, RowGround};
 
@@ -51,7 +51,7 @@ impl SettingsModifierChip {
     }
 }
 
-fn chip_border(on: bool, cursor: bool, ground: SettingsGround) -> Rgba {
+fn chip_border(on: bool, cursor: bool, ground: Ground) -> Rgba {
     if cursor {
         rgb(ground.ink)
     } else if on {
@@ -74,15 +74,15 @@ impl RenderOnce for SettingsModifierChip {
         } = self;
         let ground = row.rest(palette);
         let hover = row.hover(palette);
-        let text = |ground: SettingsGround| rgb(if on { ground.ink } else { ground.faint });
-        let fill = |ground: SettingsGround| {
+        let text = |ground: Ground| rgb(if on { ground.ink } else { ground.faint });
+        let fill = |ground: Ground| {
             if on {
                 rgba(ground.well.packed())
             } else {
                 rgba(palette.transparent_rgba)
             }
         };
-        let border = |ground: SettingsGround| chip_border(on, cursor, ground);
+        let border = |ground: Ground| chip_border(on, cursor, ground);
         let chip = kit().keycap(label).id(id);
         let chip = ground_bg(chip, fill(ground), hover.map(fill));
         let chip = ground_text(chip, text(ground), hover.map(text));

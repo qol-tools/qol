@@ -1,9 +1,9 @@
 use gpui::prelude::*;
 use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
-    FontWeight, Rgba, SharedString,
+    FontWeight, SharedString,
 };
-use qol_theme::{SystemPalette, ThemeMode, WashPalette};
+use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
 
 pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
 pub const FLOAT_SHADOW_ALPHA: u8 = 0x1a;
@@ -19,18 +19,6 @@ pub const ROW_BORDER_WIDTH: f32 = 1.0;
 
 pub const FOCUS_RING_EDGE: f32 = 1.5;
 pub const FOCUS_RING_HALO: f32 = 4.0;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RowState {
-    #[default]
-    Resting,
-    Hover,
-    Current,
-    CurrentQuiet,
-    NeedsAttention,
-    Invalid,
-    Disabled,
-}
 
 #[derive(Clone, Copy)]
 pub enum WindowControlIcon {
@@ -70,6 +58,7 @@ pub const SECTION_MARK_WIDTH: f32 = 10.0;
 pub struct Kit {
     pub palette: SystemPalette,
     pub washes: WashPalette,
+    pub grounds: Grounds,
 }
 
 impl Kit {
@@ -77,6 +66,7 @@ impl Kit {
         Self {
             palette,
             washes: WashPalette::for_mode(mode, palette),
+            grounds: Grounds::from_theme(mode, palette),
         }
     }
 
@@ -151,15 +141,26 @@ impl Kit {
             .rounded_none()
     }
 
-    pub fn row_selected<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
-        self.row_state(
-            row,
-            if selected {
-                RowState::Current
-            } else {
-                RowState::Resting
-            },
-        )
+    pub fn highlight_ground(&self, selected: bool) -> Ground {
+        if selected {
+            self.grounds.band
+        } else {
+            self.grounds.pane
+        }
+    }
+
+    pub fn highlight<E: Styled + InteractiveElement>(&self, row: E, selected: bool) -> E {
+        let hover = if selected {
+            rgb(self.grounds.band.lift)
+        } else {
+            rgba(self.washes.fill_hover.packed())
+        };
+        let row = row.rounded_none().hover(move |style| style.bg(hover));
+        if selected {
+            row.bg(rgb(self.grounds.band.bg))
+        } else {
+            row
+        }
     }
 
     pub fn row_selected_tinted_after<E: Styled + ParentElement>(
@@ -195,50 +196,6 @@ impl Kit {
                 .border(px(ROW_BORDER_WIDTH))
                 .border_color(rgba(colors.selected_edge.packed())),
         )
-    }
-
-    pub fn row_state<E: Styled + ParentElement>(&self, row: E, state: RowState) -> E {
-        let row = row.relative().border(px(1.0));
-        let (wash, edge, bar) = match state {
-            RowState::Resting => return row.border_color(rgba(0x00000000)),
-            RowState::Disabled => {
-                return row.border_color(rgba(0x00000000)).opacity(DISABLED_OPACITY)
-            }
-            RowState::Hover => (self.washes.fill_hover, None, None),
-            RowState::Current => (
-                self.washes.wash_selected,
-                Some(self.washes.hairline),
-                Some(self.palette.accent),
-            ),
-            RowState::CurrentQuiet => (
-                self.washes.wash_selected,
-                Some(self.washes.hairline),
-                Some(self.palette.text_muted),
-            ),
-            RowState::NeedsAttention => {
-                (self.washes.wash_attention, None, Some(self.palette.warning))
-            }
-            RowState::Invalid => (
-                self.washes.wash_invalid,
-                Some(self.washes.edge_invalid),
-                Some(self.palette.danger),
-            ),
-        };
-        let row = row
-            .bg(rgba(wash.packed()))
-            .border_color(rgba(edge.map(|tone| tone.packed()).unwrap_or(0)));
-        match bar {
-            None => row,
-            Some(tone) => row.overflow_hidden().child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(qol_theme::SPACE_MARK))
-                    .bg(rgb(tone)),
-            ),
-        }
     }
 
     pub fn value(&self, text: impl Into<SharedString>) -> Div {
@@ -744,19 +701,6 @@ pub fn raised_shadow(text_primary: u32) -> Vec<BoxShadow> {
             spread_radius: px(0.0),
         },
     ]
-}
-
-pub fn left_edge(radius: f32, width: f32, color: Rgba) -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .rounded_l(px(radius))
-        .border_l(px(width))
-        .border_color(color)
-}
-
-pub fn accent_left_edge(radius: f32, width: f32, accent: u32) -> Div {
-    left_edge(radius, width, rgb(accent))
 }
 
 pub const RAIL_SCRIM_START: f32 = 0.32;

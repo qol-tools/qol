@@ -3685,36 +3685,16 @@ impl SettingsPanelView {
         };
         let card_layer = match depth {
             0 if drawer.is_none() => {
-                let card = card
-                    .absolute()
-                    .right_0()
-                    .top_0()
-                    .bottom_0()
-                    .bg(rgb(self.palette.window_bg))
-                    .border_t(px(1.))
-                    .border_r(px(1.))
-                    .border_b(px(1.))
-                    .border_color(self.hairline())
-                    .shadow(crate::kit::float_shadow(self.palette.section_text))
-                    .occlude();
-                let accent = crate::kit::accent_left_edge(
-                    qol_theme::RADIUS_CARD,
-                    deck::CARD_ACCENT,
-                    self.palette.row_border_selected,
-                );
+                let card = deck::card_edges(
+                    card.absolute().right_0().top_0().bottom_0(),
+                    self.palette,
+                    self.hairline(),
+                )
+                .shadow(crate::kit::float_shadow(self.palette.section_text));
                 if snapped {
                     let reached = progress(1.0);
                     let base = super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached;
-                    let card = if custom_breadcrumbs > 0 {
-                        card
-                    } else {
-                        card.child(
-                            accent
-                                .rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                                .border_l(px(deck::CARD_ACCENT * reached)),
-                        )
-                    }
-                    .rounded_l(px(qol_theme::RADIUS_CARD * reached));
+                    let card = card.rounded_l(px(qol_theme::RADIUS_CARD * reached));
                     match slide {
                         Some(slide) => card
                             .with_animation(
@@ -3730,19 +3710,6 @@ impl SettingsPanelView {
                         None => card.left(px(base)).into_any_element(),
                     }
                 } else {
-                    let card = if custom_breadcrumbs > 0 {
-                        card
-                    } else {
-                        card.child(accent.with_animation(
-                            ("settings-card-accent", step),
-                            ease(),
-                            move |edge, delta| {
-                                let reached = progress(delta);
-                                edge.rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                                    .border_l(px(deck::CARD_ACCENT * reached))
-                            },
-                        ))
-                    };
                     card.with_animation(
                         ("settings-card-slide", step),
                         ease(),

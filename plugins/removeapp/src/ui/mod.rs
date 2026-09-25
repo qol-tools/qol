@@ -483,18 +483,9 @@ impl RemoveAppView {
                 .items_center()
                 .gap(px(10.0))
                 .px(px(qol_gpui::theme::SPACE_PAD))
-                .bg(rgba(kit.washes.fill_hover.packed()))
+                .bg(rgb(kit.grounds.invalid.bg))
                 .border_t(px(1.0))
                 .border_color(rgba(kit.washes.hairline.packed()))
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(qol_gpui::theme::SPACE_MARK))
-                        .bg(rgb(palette.danger)),
-                )
                 .child(kit.status_dot(palette.danger, kit.washes.halo_invalid.packed()))
                 .child(
                     div()
@@ -910,16 +901,14 @@ fn app_row(
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
     let palette = current_palette();
+    let ground = kit.highlight_ground(selected);
     let row = div()
         .flex_none()
         .h(px(ROW_H))
-        .mx(px(8.0))
         .px(px(qol_gpui::theme::SPACE_PAD))
         .flex()
         .items_center()
         .gap(px(12.0))
-        .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
-        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
         .child(kit.letter_tile(&app.name))
         .child(
             div()
@@ -950,11 +939,11 @@ fn app_row(
                     .flex_none()
                     .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                     .text_size(px(qol_gpui::theme::TEXT_MICRO))
-                    .text_color(rgb(palette.text_secondary))
+                    .text_color(rgb(ground.soft))
                     .child(qol_gpui::format_bytes(size)),
             )
         });
-    kit.row_selected(row, selected)
+    kit.highlight(row, selected)
 }
 
 fn section_header(title: &str) -> impl IntoElement {

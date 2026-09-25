@@ -5,7 +5,8 @@ use crate::kit::kit;
 use crate::theme::SettingsPanelPalette;
 
 use super::{
-    paint_settings_attention, paint_settings_selection, DIMMED_OPACITY, SETTINGS_ROW_GROUP,
+    attention_dot, paint_settings_attention, paint_settings_selection, DIMMED_OPACITY,
+    SETTINGS_ROW_GROUP,
 };
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -95,6 +96,7 @@ impl SettingsRow {
 impl RenderOnce for SettingsRow {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let shared = kit();
+        let attention = self.attention && !(self.selected && self.focused);
         let height = match self.kind {
             RowKind::Setting => qol_theme::HEIGHT_SETTING_ROW,
             RowKind::Rule | RowKind::Add => qol_theme::HEIGHT_RULE_ROW,
@@ -113,6 +115,7 @@ impl RenderOnce for SettingsRow {
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
             .rounded_none()
+            .when(attention, |row| row.child(attention_dot(self.palette)))
             .children(self.children);
         if self.kind == RowKind::Rule {
             row = row.rounded(px(qol_theme::RADIUS_CONTROL));
@@ -122,7 +125,7 @@ impl RenderOnce for SettingsRow {
         }
         if self.selected && self.focused {
             row = paint_settings_selection(row, self.palette);
-        } else if self.attention {
+        } else if attention {
             row = paint_settings_attention(row, self.palette);
         }
         if let Some(on_click) = self.on_click {

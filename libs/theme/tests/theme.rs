@@ -2212,12 +2212,12 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
         ".text_size(",
         1,
     ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 10),
+    ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 9),
     ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
     (
         "libs/gpui/src/settings_panel/view/mod.rs",
         ".border_color(",
-        5,
+        4,
     ),
     (
         "libs/gpui/src/settings_panel/view/mod.rs",
@@ -2664,4 +2664,51 @@ fn stays_and_waits_hold_their_approved_values() {
     assert_eq!(STAY_UNTIL_CLOSED, None);
     assert_eq!(WAIT_BEFORE_BUSY, Duration::from_millis(300));
     assert_eq!(SETTLE_INPUT, Duration::from_millis(140));
+}
+
+const SIDE_LINE_METHODS: [&str; 4] = [
+    ".border_l(",
+    ".border_r(",
+    ".rounded_l(px(qol_theme::RADIUS_TONE",
+    "SPACE_MARK",
+];
+
+fn draws_a_side_strip(window: &[String]) -> bool {
+    let joined = window.join("");
+    let pinned_to_an_edge = (joined.contains(".left_0()") || joined.contains(".right_0()"))
+        && joined.contains(".top_0()")
+        && joined.contains(".bottom_0()");
+    let thin = [".w(px(1.", ".w(px(2.", ".w(px(3.", ".w(px(4."]
+        .iter()
+        .any(|width| joined.contains(width));
+    pinned_to_an_edge && thin && joined.contains(".bg(")
+}
+
+#[test]
+fn no_surface_draws_a_coloured_side_line() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let lines: Vec<String> = contents.lines().map(compact_line).collect();
+        for (index, line) in lines.iter().enumerate() {
+            for method in SIDE_LINE_METHODS {
+                if line.contains(method) {
+                    problems.push(format!("{relative}:{} uses {method}", index + 1));
+                }
+            }
+            let window = &lines[index..(index + 8).min(lines.len())];
+            if line.contains(".absolute()") && draws_a_side_strip(window) {
+                problems.push(format!(
+                    "{relative}:{} draws a thin strip on an edge",
+                    index + 1
+                ));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "State is a ground, never a line: a row, card or message shows its state with its ground and a status dot.\n{}",
+        problems.join("\n")
+    );
 }

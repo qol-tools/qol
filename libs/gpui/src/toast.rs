@@ -27,8 +27,9 @@ const LIVE_BAND_HEIGHT: f32 = 20.0;
 const PREVIEW_WIDTH: f32 = 72.0;
 const DISMISS_WIDTH: f32 = 44.0;
 const GUTTER: f32 = 8.0;
-const PREVIEW_EDGE: f32 = 3.0;
 const TEXT_PAD: f32 = 16.0;
+const DOT_SLOT_WIDTH: f32 =
+    qol_theme::SPACE_PAD + crate::kit::STATUS_DOT_SIZE + qol_theme::SPACE_CELL - TEXT_PAD;
 const MAX_ROWS_PER_GROUP: usize = 3;
 const MAX_VISIBLE_NON_LIVE_ROWS: usize = 4;
 const HOVER_HOLD_RECHECK: Duration = Duration::from_millis(400);
@@ -140,12 +141,22 @@ impl ToastTone {
     }
 }
 
-fn tone_glyph(tone: ToastTone) -> &'static str {
-    match tone {
-        ToastTone::Neutral | ToastTone::Info => "\u{25CF}",
-        ToastTone::Success => "\u{2713}",
-        ToastTone::Warning => "!",
-        ToastTone::Danger => "\u{2715}",
+fn tone_dot(tone: ToastTone, palette: ToastPalette) -> Div {
+    let kit = crate::kit::kit();
+    let halo = match tone {
+        ToastTone::Neutral | ToastTone::Info => 0,
+        ToastTone::Success => kit.washes.halo_success.packed(),
+        ToastTone::Warning => kit.washes.halo_attention.packed(),
+        ToastTone::Danger => kit.washes.halo_invalid.packed(),
+    };
+    kit.status_dot(tone.color(palette), halo)
+}
+
+fn tone_ground(tone: ToastTone, palette: ToastPalette) -> u32 {
+    if tone == ToastTone::Danger {
+        crate::kit::kit().grounds.invalid.bg
+    } else {
+        palette.window_bg
     }
 }
 
@@ -998,7 +1009,7 @@ fn slab_row_view(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresent
     if row.toast.live {
         container = container.bg(rgb(palette.surface_raised));
     } else if row.toast.tone == ToastTone::Danger {
-        container = container.bg(rgba(crate::kit::alpha(palette.danger, 26)));
+        container = container.bg(rgb(tone_ground(row.toast.tone, palette)));
     }
     container
         .child(preview_zone(row, palette, host.clone()))
@@ -1046,42 +1057,17 @@ fn gutter() -> Div {
 }
 
 fn preview_slot(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
-    let tone_color = row.toast.tone.color(palette);
-    let mut content = div().flex_1().min_w_0().h_full().overflow_hidden();
+    let slot = div().flex_none().h_full().flex().overflow_hidden();
     match &row.toast.preview {
-        Some(preview) => {
-            content = content.child(preview.render(tone_color));
-        }
-        None => {
-            content = content
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(rgba(crate::kit::alpha(tone_color, 51)))
-                .child(
-                    div()
-                        .text_size(px(15.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(tone_color))
-                        .child(SharedString::from(tone_glyph(row.toast.tone))),
-                );
-        }
+        Some(preview) => slot
+            .w(px(PREVIEW_WIDTH))
+            .child(preview.render(row.toast.tone.color(palette))),
+        None => slot
+            .w(px(DOT_SLOT_WIDTH))
+            .items_center()
+            .pl(px(qol_theme::SPACE_PAD))
+            .child(tone_dot(row.toast.tone, palette)),
     }
-    div()
-        .flex_none()
-        .w(px(PREVIEW_WIDTH))
-        .h_full()
-        .flex()
-        .flex_row()
-        .overflow_hidden()
-        .child(
-            div()
-                .flex_none()
-                .w(px(PREVIEW_EDGE))
-                .h_full()
-                .bg(rgb(tone_color)),
-        )
-        .child(content)
 }
 
 fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
@@ -1197,37 +1183,41 @@ impl ToastLayout {
 }
 
 fn render_compact(toast: &Toast, palette: ToastPalette) -> Div {
-    toast_root(palette).child(tone_bar(toast, palette)).child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .flex_col()
-            .justify_center()
-            .gap(px(2.0))
-            .px_4()
-            .py_3()
-            .child(
-                div()
-                    .w_full()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(palette.text_primary))
-                    .child(toast.title.clone()),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_MICRO))
-                    .text_color(rgb(palette.text_secondary))
-                    .child(toast.message.clone()),
-            ),
-    )
+    toast_root(toast, palette)
+        .items_center()
+        .pl(px(qol_theme::SPACE_PAD))
+        .child(tone_dot(toast.tone, palette))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex_col()
+                .justify_center()
+                .gap(px(2.0))
+                .px_4()
+                .py_3()
+                .child(
+                    div()
+                        .w_full()
+                        .truncate()
+                        .text_size(px(qol_theme::TEXT_BODY))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette.text_primary))
+                        .child(toast.title.clone()),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .truncate()
+                        .text_size(px(qol_theme::TEXT_MICRO))
+                        .text_color(rgb(palette.text_secondary))
+                        .child(toast.message.clone()),
+                ),
+        )
 }
 
 fn render_status(toast: &Toast, palette: ToastPalette) -> Div {
-    toast_root(palette).child(tone_bar(toast, palette)).child(
+    toast_root(toast, palette).child(
         div()
             .flex_1()
             .min_w_0()
@@ -1258,7 +1248,7 @@ fn render_status(toast: &Toast, palette: ToastPalette) -> Div {
     )
 }
 
-fn toast_root(palette: ToastPalette) -> Div {
+fn toast_root(toast: &Toast, palette: ToastPalette) -> Div {
     div()
         .size_full()
         .flex()
@@ -1266,16 +1256,7 @@ fn toast_root(palette: ToastPalette) -> Div {
         .overflow_hidden()
         .rounded_none()
         .shadow(crate::kit::float_shadow(palette.text_primary))
-        .bg(rgb(palette.window_bg))
-}
-
-fn tone_bar(toast: &Toast, palette: ToastPalette) -> Div {
-    div()
-        .flex_none()
-        .w(px(qol_theme::SPACE_MARK))
-        .h_full()
-        .rounded(px(qol_theme::RADIUS_TONE_BAR))
-        .bg(rgb(toast.tone.color(palette)))
+        .bg(rgb(tone_ground(toast.tone, palette)))
 }
 
 #[cfg(test)]

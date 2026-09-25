@@ -95,18 +95,8 @@ impl RenderOnce for SettingsHintBar {
         if let Some(question) = self.question {
             let ground = palette.grounds.pane;
             bar = bar
-                .relative()
                 .bg(rgba(qol_theme::css_rgba_milli(ground.ink, 70).packed()))
                 .text_color(rgb(ground.ink))
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(qol_theme::SPACE_MARK))
-                        .bg(rgb(ground.faint)),
-                )
                 .child(
                     div()
                         .flex_none()

@@ -72,7 +72,6 @@ pub const RADIUS_KEYCAP: f32 = RADIUS_TIGHT;
 pub const RADIUS_THUMB: f32 = 3.0;
 pub const ACTION_CIRCLE_SIZE: f32 = 46.0;
 pub const ACTION_CIRCLE_GAP: f32 = 14.0;
-pub const RADIUS_TONE_BAR: f32 = 2.0;
 pub const RADIUS_WINDOW: f32 = 12.0;
 
 pub const TEXT_KEYCAP: f32 = TEXT_MICRO;
@@ -84,7 +83,6 @@ pub const SPACE_INSET: f32 = 8.0;
 pub const SPACE_CELL: f32 = 12.0;
 pub const SPACE_PAD: f32 = 16.0;
 pub const SPACE_GUTTER: f32 = 20.0;
-pub const SPACE_MARK: f32 = 3.0;
 
 pub const SPACE_LADDER: [f32; 7] = [
     SPACE_STACK,
@@ -1291,7 +1289,7 @@ impl ToastPalette {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SettingsGround {
+pub struct Ground {
     pub bg: u32,
     pub ink: u32,
     pub soft: u32,
@@ -1304,14 +1302,73 @@ pub struct SettingsGround {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SettingsGrounds {
-    pub pane: SettingsGround,
-    pub rail: SettingsGround,
-    pub band: SettingsGround,
-    pub band_hover: SettingsGround,
-    pub menu: SettingsGround,
-    pub attention: SettingsGround,
-    pub invalid: SettingsGround,
+pub struct Grounds {
+    pub pane: Ground,
+    pub rail: Ground,
+    pub band: Ground,
+    pub band_hover: Ground,
+    pub menu: Ground,
+    pub attention: Ground,
+    pub invalid: Ground,
+}
+
+impl Grounds {
+    pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
+        let washes = WashPalette::for_mode(mode, system);
+        let band = mixed_ground(band_fill(system), system.text_primary);
+        Self {
+            pane: surface_ground(
+                system.surface_elevated,
+                system.text_primary,
+                system.text_secondary,
+                system.accent,
+                system,
+                washes,
+            ),
+            rail: surface_ground(
+                system.surface_rail,
+                system.text_primary,
+                system.text_rail,
+                system.accent,
+                system,
+                washes,
+            ),
+            band,
+            band_hover: mixed_ground(band.lift, system.text_primary),
+            menu: surface_ground(
+                system.surface_raised,
+                system.text_primary,
+                system.text_secondary,
+                system.accent,
+                system,
+                washes,
+            ),
+            attention: surface_ground(
+                mix_const(
+                    system.surface_elevated,
+                    system.warning,
+                    washes.wash_attention.alpha_milli as u32,
+                ),
+                system.text_primary,
+                system.text_secondary,
+                system.warning,
+                system,
+                washes,
+            ),
+            invalid: surface_ground(
+                mix_const(
+                    system.surface_elevated,
+                    system.danger,
+                    washes.wash_invalid.alpha_milli as u32,
+                ),
+                system.text_primary,
+                system.text_secondary,
+                system.danger,
+                system,
+                washes,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1410,8 +1467,8 @@ fn surface_ground(
     mark: u32,
     system: SystemPalette,
     washes: WashPalette,
-) -> SettingsGround {
-    SettingsGround {
+) -> Ground {
+    Ground {
         bg,
         ink,
         soft,
@@ -1424,8 +1481,8 @@ fn surface_ground(
     }
 }
 
-fn mixed_ground(bg: u32, ink: u32) -> SettingsGround {
-    SettingsGround {
+fn mixed_ground(bg: u32, ink: u32) -> Ground {
+    Ground {
         bg,
         ink,
         soft: floored_mix(bg, ink, GROUND_SOFT_MIX, GROUND_SOFT_FLOOR),
@@ -1491,7 +1548,7 @@ pub struct SettingsPanelPalette {
     pub rail_active_text: u32,
     pub fill_current: u32,
     pub fill_current_quiet: u32,
-    pub grounds: SettingsGrounds,
+    pub grounds: Grounds,
     pub surface_raised: u32,
     pub state_on: u32,
     pub state_off: u32,
@@ -1510,11 +1567,9 @@ pub struct SettingsPanelPalette {
 
 impl SettingsPanelPalette {
     pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
-        let washes = WashPalette::for_mode(mode, system);
         let (rail_bg, rail_text, rail_text_muted) =
             (system.surface_rail, system.text_rail, system.text_rail);
         let fill_current = band_fill(system);
-        let band = mixed_ground(fill_current, system.text_primary);
         Self {
             window_bg: system.surface_elevated,
             panel_border: system.border_subtle,
@@ -1532,58 +1587,7 @@ impl SettingsPanelPalette {
                 system.text_muted,
                 RAIL_FILL_MIX,
             ),
-            grounds: SettingsGrounds {
-                pane: surface_ground(
-                    system.surface_elevated,
-                    system.text_primary,
-                    system.text_secondary,
-                    system.accent,
-                    system,
-                    washes,
-                ),
-                rail: surface_ground(
-                    system.surface_rail,
-                    system.text_primary,
-                    system.text_rail,
-                    system.accent,
-                    system,
-                    washes,
-                ),
-                band,
-                band_hover: mixed_ground(band.lift, system.text_primary),
-                menu: surface_ground(
-                    system.surface_raised,
-                    system.text_primary,
-                    system.text_secondary,
-                    system.accent,
-                    system,
-                    washes,
-                ),
-                attention: surface_ground(
-                    mix_const(
-                        system.surface_elevated,
-                        system.warning,
-                        washes.wash_attention.alpha_milli as u32,
-                    ),
-                    system.text_primary,
-                    system.text_secondary,
-                    system.warning,
-                    system,
-                    washes,
-                ),
-                invalid: surface_ground(
-                    mix_const(
-                        system.surface_elevated,
-                        system.danger,
-                        washes.wash_invalid.alpha_milli as u32,
-                    ),
-                    system.text_primary,
-                    system.text_secondary,
-                    system.danger,
-                    system,
-                    washes,
-                ),
-            },
+            grounds: Grounds::from_theme(mode, system),
             surface_raised: system.surface_raised,
             state_on: system.success,
             state_off: system.danger,
