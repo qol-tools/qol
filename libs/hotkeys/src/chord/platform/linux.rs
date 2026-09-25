@@ -1,24 +1,24 @@
-use crate::chord::ModifierToken;
+use crate::chord::{Cap, ModifierToken};
 
-pub(super) struct Platform;
+pub(super) use super::text::JOINER;
 
-impl super::ChordStyle for Platform {
-    fn modifier_label(&self, modifier: ModifierToken) -> &'static str {
-        super::text::shared_label(modifier)
-    }
-
-    fn join(&self, mods: &[&str], key: &str) -> String {
-        super::text::join(mods, key)
-    }
+pub(super) fn modifier_cap(modifier: ModifierToken) -> Cap {
+    super::text::word(super::text::shared_word(modifier))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::chord::label_for;
+    use crate::chord::{caps_for, Cap, Glyph};
 
     #[test]
     fn the_meta_key_reads_as_super() {
-        assert_eq!(label_for("platform+w").unwrap(), "Super+W");
-        assert_eq!(label_for("platform+backspace").unwrap(), "Super+\u{232B}");
+        assert_eq!(
+            caps_for("platform+w").unwrap(),
+            [Cap::Text("super+w".into())]
+        );
+        assert_eq!(
+            caps_for("platform+backspace").unwrap(),
+            [Cap::Text("super+".into()), Cap::Glyph(Glyph::Backspace)]
+        );
     }
 }

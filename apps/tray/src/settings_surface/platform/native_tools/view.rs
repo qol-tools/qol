@@ -1,3 +1,4 @@
+use qol_gpui::key::Key;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1791,21 +1792,21 @@ impl NativeToolsView {
             return CustomHints {
                 question: None,
                 left: Vec::new(),
-                right: vec![SettingsHint::new("esc", "cancel")],
+                right: vec![SettingsHint::new(Key::ESC, "cancel")],
             };
         }
         let mut left = vec![
-            SettingsHint::new("\u{21b5}", self.field_hint_label(selected)),
-            SettingsHint::new("\u{2191}\u{2193}", "move"),
+            SettingsHint::new(Key::ENTER, self.field_hint_label(selected)),
+            SettingsHint::new(Key::UP_DOWN, "move"),
         ];
         if self.selected_field_is_text(selected) {
-            left.push(SettingsHint::new("type", "edit"));
+            left.push(SettingsHint::new(Key::TYPE, "edit"));
         }
         CustomHints {
             question: None,
             left,
             right: vec![SettingsHint::new(
-                "esc",
+                Key::ESC,
                 if self.editor_changed() {
                     "back, asks to save"
                 } else {
@@ -1936,22 +1937,22 @@ impl CustomSettingsBreadcrumbs for NativeToolsView {
             return Some(CustomHints {
                 question: question.map(|question| self.editor_question_text(question).into()),
                 left: vec![SettingsHint::busy("saving")],
-                right: vec![SettingsHint::new("esc", "back")],
+                right: vec![SettingsHint::new(Key::ESC, "back")],
             });
         }
         if let Some(question) = question {
             let left = match question {
                 EditorQuestion::Save => {
-                    vec![SettingsHint::new("\u{21b5}", "save").tone(HintTone::Save)]
+                    vec![SettingsHint::new(Key::ENTER, "save").tone(HintTone::Save)]
                 }
                 EditorQuestion::Blocked { .. } => {
-                    vec![SettingsHint::new("\u{21b5}", "fill it in")]
+                    vec![SettingsHint::new(Key::ENTER, "fill it in")]
                 }
             };
             return Some(CustomHints {
                 question: Some(self.editor_question_text(question).into()),
                 left,
-                right: vec![SettingsHint::new("esc", "discard").tone(HintTone::Discard)],
+                right: vec![SettingsHint::new(Key::ESC, "discard").tone(HintTone::Discard)],
             });
         }
         Some(self.field_hints())

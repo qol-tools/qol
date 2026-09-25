@@ -71,6 +71,22 @@ pub fn chevron(line: u32, width_px: u32, height_px: u32) -> Option<Arc<RenderIma
     render_markup(key, &source, width_px, height_px, false)
 }
 
+pub fn icon(name: &str, markup: &str, ink: u32, size_px: u32) -> Option<Arc<RenderImage>> {
+    let key = CacheKey {
+        spec: format!("icon:{name}"),
+        ink,
+        width_px: size_px,
+        height_px: size_px,
+        context: None,
+        fit: None,
+    };
+    if let Some(cached) = cached(&key) {
+        return Some(cached);
+    }
+    let source = markup.replace("currentColor", &format!("#{ink:06x}"));
+    render_markup(key, &source, size_px, size_px, false)
+}
+
 pub fn fitted_image(
     spec: &str,
     line: u32,

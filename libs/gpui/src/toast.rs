@@ -1121,7 +1121,8 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
             div()
                 .w_full()
                 .min_w_0()
-                .truncate()
+                .line_clamp(2)
+                .text_ellipsis()
                 .text_size(px(qol_theme::TEXT_MICRO))
                 .text_color(rgb(palette.text_secondary))
                 .child(row.toast.message.clone()),
@@ -1170,9 +1171,11 @@ fn dismiss_control(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .text_color(rgb(palette.text_secondary))
-        .child(SharedString::from("\u{2715}"))
+        .child(crate::icon::icon(
+            crate::Icon::Close,
+            qol_theme::TEXT_MICRO,
+            palette.text_secondary,
+        ))
         .on_click(move |_, _, cx| host.remove(id, cx));
     crate::kit::kit().pointable(control, lift)
 }

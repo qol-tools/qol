@@ -5,6 +5,7 @@ use gpui::{
 };
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
+use qol_gpui::Key;
 use qol_terminal_sessions::SessionId;
 
 use crate::session::registry::{meaningful_name, SessionState};
@@ -138,10 +139,6 @@ fn empty_state() -> impl IntoElement {
         )
 }
 
-fn chord(input: &str) -> String {
-    qol_hotkeys::chord::label_for(input).unwrap_or_default()
-}
-
 fn panel_controls(collapsed: bool, cx: &mut Context<SessionsView>) -> impl IntoElement {
     div()
         .flex_none()
@@ -206,11 +203,10 @@ fn header_control(
 
 fn footer() -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
-    kit.hint_bar_compact()
-        .justify_center()
-        .child(kit.hint_label_first("Focus", "Enter"))
-        .child(kit.hint_label_first("Acknowledge", "A"))
-        .child(kit.hint_label_first("Collapse", chord("alt+s")))
+    kit.hint_bar()
+        .child(kit.hint(Key::ENTER, "focus"))
+        .child(kit.hint(Key::letter('a'), "acknowledge"))
+        .child(kit.hint(Key::letter('s').alt(), "collapse"))
 }
 
 fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyElement {
@@ -224,7 +220,13 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
             .h(px(qol_gpui::theme::SPACE_PAD))
             .child(
                 kit.pointable(
-                    kit.status_pill("your turn ✓", tone)
+                    kit.status_pill("your turn", tone)
+                        .gap(px(qol_gpui::theme::SPACE_STACK))
+                        .child(qol_gpui::icon::icon(
+                            qol_gpui::Icon::Tick,
+                            qol_gpui::theme::TEXT_NANO,
+                            tone,
+                        ))
                         .id(SharedString::from(format!("ack-{}", s.id)))
                         .cursor(CursorStyle::PointingHand),
                     rgba(current_palette().your_turn_hover_rgba),

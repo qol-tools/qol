@@ -1,4 +1,7 @@
+use qol_hotkeys::chord::Cap;
 use qol_theme::{SPACE_GUTTER, SPACE_PAD, SPACE_SNUG, TEXT_KEYCAP, TEXT_MICRO};
+
+use crate::key::Key;
 
 const KEYCAP_BORDER: f32 = 1.0;
 const LABEL_ADVANCE_PER_CHAR: f32 = 0.62;
@@ -6,14 +9,14 @@ const KEYCAP_ADVANCE_PER_CHAR: f32 = 0.62;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HintDescriptor {
-    pub key: &'static str,
+    pub key: Key,
     pub label: &'static str,
     pub priority: u8,
     pub pinned: bool,
 }
 
 impl HintDescriptor {
-    pub fn new(key: &'static str, label: &'static str, priority: u8) -> Self {
+    pub fn new(key: Key, label: &'static str, priority: u8) -> Self {
         Self {
             key,
             label,
@@ -22,7 +25,7 @@ impl HintDescriptor {
         }
     }
 
-    pub fn pinned(key: &'static str, label: &'static str) -> Self {
+    pub fn pinned(key: Key, label: &'static str) -> Self {
         Self {
             key,
             label,
@@ -74,10 +77,16 @@ fn estimated_item_width(item: &BarItem) -> f32 {
     }
 }
 
-fn estimated_keycap_width(text: &str) -> f32 {
-    text.chars().count() as f32 * KEYCAP_ADVANCE_PER_CHAR * TEXT_KEYCAP
-        + 2.0 * SPACE_SNUG
-        + 2.0 * KEYCAP_BORDER
+fn estimated_keycap_width(key: Key) -> f32 {
+    let advance: f32 = key
+        .caps()
+        .iter()
+        .map(|cap| match cap {
+            Cap::Text(text) => text.chars().count() as f32 * KEYCAP_ADVANCE_PER_CHAR,
+            Cap::Glyph(_) => 1.0,
+        })
+        .sum();
+    advance * TEXT_KEYCAP + 2.0 * SPACE_SNUG + 2.0 * KEYCAP_BORDER
 }
 
 fn estimated_label_width(text: &str) -> f32 {
@@ -104,17 +113,17 @@ mod tests {
 
     fn launcher_items() -> Vec<BarItem> {
         vec![
-            BarItem::Hint(HintDescriptor::new("\u{23CE}", "open", 2)),
-            BarItem::Hint(HintDescriptor::new("\u{2191}\u{2193}", "move", 2)),
-            BarItem::Hint(HintDescriptor::new("\u{21E5}", "mode", 1)),
+            BarItem::Hint(HintDescriptor::new(Key::ENTER, "open", 2)),
+            BarItem::Hint(HintDescriptor::new(Key::UP_DOWN, "move", 2)),
+            BarItem::Hint(HintDescriptor::new(Key::TAB, "mode", 1)),
             BarItem::FixedWidth(estimated_chip_width("Apps")),
-            BarItem::Hint(HintDescriptor::new("type", "search", 0)),
+            BarItem::Hint(HintDescriptor::new(Key::TYPE, "search", 0)),
             BarItem::Spacer,
-            BarItem::Hint(HintDescriptor::pinned("esc", "dismiss")),
+            BarItem::Hint(HintDescriptor::pinned(Key::ESC, "dismiss")),
         ]
     }
 
-    fn hint_keys(items: &[BarItem]) -> Vec<&'static str> {
+    fn hint_keys(items: &[BarItem]) -> Vec<Key> {
         items
             .iter()
             .filter_map(|item| match item {
@@ -148,7 +157,7 @@ mod tests {
         assert!(estimated_bar_width(&fit) <= 500.0);
         assert_eq!(
             hint_keys(&fit),
-            ["\u{23CE}", "\u{2191}\u{2193}", "\u{21E5}", "esc"]
+            [Key::ENTER, Key::UP_DOWN, Key::TAB, Key::ESC]
         );
         assert!(has_fixed_chip(&fit));
         assert!(has_spacer(&fit));
@@ -160,16 +169,13 @@ mod tests {
         for (width, expected_keys) in [
             (
                 600.0,
-                vec!["\u{23CE}", "\u{2191}\u{2193}", "\u{21E5}", "type", "esc"],
+                vec![Key::ENTER, Key::UP_DOWN, Key::TAB, Key::TYPE, Key::ESC],
             ),
-            (
-                500.0,
-                vec!["\u{23CE}", "\u{2191}\u{2193}", "\u{21E5}", "esc"],
-            ),
-            (400.0, vec!["\u{23CE}", "\u{2191}\u{2193}", "esc"]),
-            (300.0, vec!["\u{23CE}", "esc"]),
-            (250.0, vec!["esc"]),
-            (100.0, vec!["esc"]),
+            (500.0, vec![Key::ENTER, Key::UP_DOWN, Key::TAB, Key::ESC]),
+            (400.0, vec![Key::ENTER, Key::UP_DOWN, Key::ESC]),
+            (300.0, vec![Key::ENTER, Key::ESC]),
+            (250.0, vec![Key::ESC]),
+            (100.0, vec![Key::ESC]),
         ] {
             let fit = fit_hints(width, &items);
             assert_eq!(hint_keys(&fit), expected_keys, "width {width}");
@@ -181,19 +187,19 @@ mod tests {
     #[test]
     fn equal_priority_drops_the_later_hint_first() {
         let items = vec![
-            BarItem::Hint(HintDescriptor::new("a", "x", 1)),
-            BarItem::Hint(HintDescriptor::new("b", "y", 1)),
+            BarItem::Hint(HintDescriptor::new(Key::letter('a'), "x", 1)),
+            BarItem::Hint(HintDescriptor::new(Key::letter('b'), "y", 1)),
         ];
         let fit = fit_hints(100.0, &items);
-        assert_eq!(hint_keys(&fit), ["a"]);
+        assert_eq!(hint_keys(&fit), [Key::letter('a')]);
     }
 
     #[test]
     fn the_pinned_hint_is_never_dropped() {
-        let pinned_only = vec![BarItem::Hint(HintDescriptor::pinned("esc", "dismiss"))];
+        let pinned_only = vec![BarItem::Hint(HintDescriptor::pinned(Key::ESC, "dismiss"))];
         assert_eq!(fit_hints(0.0, &pinned_only), pinned_only);
         let fit = fit_hints(1.0, &launcher_items());
-        assert_eq!(hint_keys(&fit), ["esc"]);
+        assert_eq!(hint_keys(&fit), [Key::ESC]);
         assert!(has_fixed_chip(&fit));
         assert!(has_spacer(&fit));
     }
@@ -204,7 +210,7 @@ mod tests {
         let floor = estimated_bar_width(&[
             BarItem::FixedWidth(estimated_chip_width("Apps")),
             BarItem::Spacer,
-            BarItem::Hint(HintDescriptor::pinned("esc", "dismiss")),
+            BarItem::Hint(HintDescriptor::pinned(Key::ESC, "dismiss")),
         ]);
         for width in [
             floor,

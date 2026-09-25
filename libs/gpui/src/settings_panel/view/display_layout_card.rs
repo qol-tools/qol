@@ -20,6 +20,7 @@ use super::list_card::{
     SliderTrackStyle,
 };
 use super::{slider_fraction, Level, LevelHeader, SettingsPanelView};
+use crate::key::Key;
 use crate::pictures::PictureContext;
 
 const DISPLAY_LAYOUT_STAGE_PAD: f32 = qol_theme::SPACE_INSET;
@@ -780,12 +781,7 @@ impl SettingsPanelView {
                     .text_color(rgb(self.palette.state_on))
                     .child("Apply"),
             )
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.label_text))
-                    .child("enter"),
-            )
+            .child(self.kit.keycap(Key::ENTER))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;
@@ -799,7 +795,7 @@ impl SettingsPanelView {
                 self.body_has_focus(),
             )
             .child(settings_label("Cancel", palette))
-            .child(self.kit.keycap("esc"))
+            .child(self.kit.keycap(Key::ESC))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;

@@ -1,3 +1,4 @@
+use qol_gpui::Icon;
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -1194,7 +1195,7 @@ impl PinnedView {
                     .map(|(index, control)| {
                         kit.action_circle(ActionCircleSize::Control, ActionCircleState::Resting)
                             .id(("pin-action", index))
-                            .child(control.glyph())
+                            .child(kit.action_icon(control.icon(), ActionCircleState::Resting))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                 this.activate(control, window, cx)
@@ -1210,7 +1211,7 @@ impl PinnedView {
             .absolute()
             .top(px(EDGE))
             .right(px(EDGE))
-            .child("\u{2715}")
+            .child(kit().action_icon(Icon::Close, ActionCircleState::Resting))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close(window, cx)))
     }

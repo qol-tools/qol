@@ -4,9 +4,11 @@ use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
 use super::trace;
 use super::LauncherView;
 use crate::discovery::search::{ResultSource, SearchMode};
+use qol_gpui::icon::{icon, Icon};
+use qol_gpui::Key;
 
 const HELP_ROW_HEIGHT: f32 = 17.0;
-type HelpRows = &'static [(&'static str, &'static str)];
+type HelpRows = &'static [(&'static str, &'static [Key])];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MenuKind {
@@ -36,13 +38,13 @@ impl OptionAction {
         }
     }
 
-    fn shortcut(self) -> &'static str {
+    fn shortcut(self) -> &'static [Key] {
         match self {
-            Self::Open => "Enter",
-            Self::OpenFolder => "Shift+Enter",
-            Self::BoostUp => "Ctrl+→ / Alt+→",
-            Self::BoostDown => "Ctrl+← / Alt+←",
-            Self::Apps | Self::Files => "",
+            Self::Open => &[Key::ENTER],
+            Self::OpenFolder => const { &[Key::ENTER.shift()] },
+            Self::BoostUp => const { &[Key::RIGHT.secondary(), Key::RIGHT.alt()] },
+            Self::BoostDown => const { &[Key::LEFT.secondary(), Key::LEFT.alt()] },
+            Self::Apps | Self::Files => &[],
         }
     }
 }
@@ -65,46 +67,53 @@ fn option_actions(source: Option<ResultSource>, boost: i32) -> Vec<OptionAction>
 }
 
 const HELP_SEARCH_LEFT_ROWS: HelpRows = &[
-    ("Open", "Enter"),
-    ("Open folder", "Shift+Enter"),
-    ("Apps or files", "Tab"),
-    ("Options", "Alt+Enter"),
-    ("Close", "Esc"),
+    ("Open", &[Key::ENTER]),
+    ("Open folder", &[Key::ENTER.shift()]),
+    ("Apps or files", &[Key::TAB]),
+    ("Options", &[Key::ENTER.alt()]),
+    ("Close", &[Key::ESC]),
 ];
 
 const HELP_SEARCH_RIGHT_ROWS: HelpRows = &[
-    ("Raise rank in list", "Ctrl+→"),
-    ("Lower rank in list", "Ctrl+←"),
-    ("Narrow", "Ctrl+↑"),
-    ("Broaden", "Ctrl+↓"),
+    ("Raise rank in list", &[Key::RIGHT.secondary()]),
+    ("Lower rank in list", &[Key::LEFT.secondary()]),
+    ("Narrow", &[Key::UP.secondary()]),
+    ("Broaden", &[Key::DOWN.secondary()]),
 ];
 
 const HELP_QUERY_ROWS: HelpRows = &[
-    ("Query", ""),
-    ("Move caret", "← / →"),
-    ("Select text", "Shift+← / →"),
-    ("Start / end", "Home / End"),
-    ("Delete text", "Backspace / Del"),
-    ("Select all", "Ctrl+A"),
-    ("Copy / cut / paste", "Ctrl+C/X/V"),
+    ("Query", &[]),
+    ("Move caret", &[Key::LEFT, Key::RIGHT]),
+    ("Select text", &[Key::LEFT.shift(), Key::RIGHT.shift()]),
+    ("Start / end", &[Key::HOME, Key::END]),
+    ("Delete text", &[Key::BACKSPACE, Key::DELETE]),
+    ("Select all", &[Key::letter('a').secondary()]),
+    (
+        "Copy / cut / paste",
+        &[
+            Key::letter('c').secondary(),
+            Key::letter('x').secondary(),
+            Key::letter('v').secondary(),
+        ],
+    ),
 ];
 
 const HELP_FLOW_LEFT_ROWS: HelpRows = &[
-    ("Flow results", ""),
-    ("Move through results", "↑ / ↓"),
-    ("Open detail", "Enter"),
-    ("Dislike result", "Alt+X"),
-    ("Back to search", "Esc"),
+    ("Flow results", &[]),
+    ("Move through results", &[Key::UP, Key::DOWN]),
+    ("Open detail", &[Key::ENTER]),
+    ("Dislike result", &[Key::letter('x').alt()]),
+    ("Back to search", &[Key::ESC]),
 ];
 
 const HELP_DETAIL_LEFT_ROWS: HelpRows = &[
-    ("Flow detail", ""),
-    ("Scroll", "↑ / ↓"),
-    ("Activate", "Enter"),
-    ("Back to results", "Esc"),
+    ("Flow detail", &[]),
+    ("Scroll", &[Key::UP, Key::DOWN]),
+    ("Activate", &[Key::ENTER]),
+    ("Back to results", &[Key::ESC]),
 ];
 
-const HELP_FLOW_WINDOW_ROWS: HelpRows = &[("Window", ""), ("Help", "Alt+H")];
+const HELP_FLOW_WINDOW_ROWS: HelpRows = &[("Window", &[]), ("Help", &[Key::letter('h').alt()])];
 
 fn help_height(left: HelpRows, right: HelpRows, right_extra: HelpRows) -> f32 {
     qol_gpui::theme::HEIGHT_INLINE
@@ -287,7 +296,7 @@ impl LauncherView {
         };
         if kind == MenuKind::Help {
             let (left, right, right_extra) = self.help_rows();
-            panel = panel.child(menu_title("Keys", "Alt+H"));
+            panel = panel.child(menu_title("Keys", Key::letter('h').alt()));
             panel = panel.child(
                 div()
                     .flex()
@@ -297,7 +306,7 @@ impl LauncherView {
             );
             return panel;
         }
-        panel = panel.child(menu_title("Options", "Alt+Enter"));
+        panel = panel.child(menu_title("Options", Key::ENTER.alt()));
         panel = panel.child(menu_section("Search type"));
         let selected = self.store.get(self.state.scroll_list.selected);
         let actions = self.available_options();
@@ -318,7 +327,7 @@ impl LauncherView {
     }
 }
 
-fn menu_title(label: &str, shortcut: &str) -> Div {
+fn menu_title(label: &str, shortcut: Key) -> Div {
     let kit = qol_gpui::kit::kit();
     div()
         .flex_none()
@@ -330,7 +339,11 @@ fn menu_title(label: &str, shortcut: &str) -> Div {
         .text_color(rgb(kit.palette.text_muted))
         .text_size(px(qol_gpui::theme::TEXT_NANO))
         .child(label.to_owned())
-        .child(shortcut.to_owned())
+        .child(kit.key_name(
+            &[shortcut],
+            qol_gpui::theme::TEXT_IDENTITY,
+            kit.palette.text_muted,
+        ))
 }
 
 fn menu_section(label: &str) -> Div {
@@ -346,7 +359,7 @@ fn menu_section(label: &str) -> Div {
         .child(label.to_owned())
 }
 
-fn help_row(label: &str, shortcut: &str) -> Div {
+fn help_row(label: &str, shortcut: &[Key]) -> Div {
     let kit = qol_gpui::kit::kit();
     div()
         .flex_none()
@@ -359,14 +372,11 @@ fn help_row(label: &str, shortcut: &str) -> Div {
         .text_color(rgb(kit.palette.text_primary))
         .text_size(px(qol_gpui::theme::TEXT_NANO))
         .child(div().flex_1().min_w_0().truncate().child(label.to_owned()))
-        .child(
-            div()
-                .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(qol_gpui::theme::TEXT_IDENTITY))
-                .child(display_shortcut(shortcut)),
-        )
+        .child(kit.key_name(
+            shortcut,
+            qol_gpui::theme::TEXT_IDENTITY,
+            kit.palette.text_muted,
+        ))
 }
 
 fn help_column(rows: HelpRows, extra: HelpRows) -> Div {
@@ -392,17 +402,6 @@ fn help_column(rows: HelpRows, extra: HelpRows) -> Div {
     column
 }
 
-fn display_shortcut_for(shortcut: &str, macos: bool) -> String {
-    if macos {
-        return shortcut.replace("Ctrl+", "Cmd+");
-    }
-    shortcut.to_owned()
-}
-
-pub(super) fn display_shortcut(shortcut: &str) -> String {
-    display_shortcut_for(shortcut, cfg!(target_os = "macos"))
-}
-
 fn option_row(
     action: OptionAction,
     selected: bool,
@@ -410,10 +409,22 @@ fn option_row(
     cx: &mut Context<LauncherView>,
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
-    let mark = match action {
-        OptionAction::Apps if mode == SearchMode::Apps => "✓",
-        OptionAction::Files if mode == SearchMode::Files => "✓",
-        _ => action.shortcut(),
+    let ink = kit.highlight_ground(selected).faint;
+    let chosen = match action {
+        OptionAction::Apps => mode == SearchMode::Apps,
+        OptionAction::Files => mode == SearchMode::Files,
+        _ => false,
+    };
+    let mark = if chosen {
+        icon(
+            Icon::Tick,
+            qol_gpui::theme::TEXT_IDENTITY,
+            kit.highlight_ground(selected).ink,
+        )
+        .into_any_element()
+    } else {
+        kit.key_name(action.shortcut(), qol_gpui::theme::TEXT_IDENTITY, ink)
+            .into_any_element()
     };
     let row = div()
         .id(SharedString::from(format!("launcher-option-{action:?}")))
@@ -427,14 +438,7 @@ fn option_row(
         .text_color(rgb(kit.palette.text_primary))
         .text_size(px(qol_gpui::theme::TEXT_MICRO))
         .child(div().flex_1().min_w_0().truncate().child(action.label()))
-        .child(
-            div()
-                .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                .text_color(rgb(kit.highlight_ground(selected).faint))
-                .text_size(px(qol_gpui::theme::TEXT_IDENTITY))
-                .child(display_shortcut(mark)),
-        )
+        .child(mark)
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.activate_option(action, window, cx);
         }));
@@ -444,9 +448,8 @@ fn option_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        display_shortcut_for, help_height, option_actions, OptionAction, HELP_DETAIL_LEFT_ROWS,
-        HELP_FLOW_LEFT_ROWS, HELP_FLOW_WINDOW_ROWS, HELP_QUERY_ROWS, HELP_SEARCH_LEFT_ROWS,
-        HELP_SEARCH_RIGHT_ROWS,
+        help_height, option_actions, OptionAction, HELP_DETAIL_LEFT_ROWS, HELP_FLOW_LEFT_ROWS,
+        HELP_FLOW_WINDOW_ROWS, HELP_QUERY_ROWS, HELP_SEARCH_LEFT_ROWS, HELP_SEARCH_RIGHT_ROWS,
     };
     use crate::discovery::search::ResultSource;
     use crate::ui::input::InputEffect;
@@ -521,19 +524,6 @@ mod tests {
             state.list_focused = true;
             assert_eq!(state.apply_key(key, &modifiers, 1), effect, "{label}");
         }
-    }
-
-    #[test]
-    fn shortcut_labels_use_the_platform_secondary_key() {
-        assert_eq!(
-            display_shortcut_for("Ctrl+→ / Alt+→", false),
-            "Ctrl+→ / Alt+→"
-        );
-        assert_eq!(
-            display_shortcut_for("Ctrl+→ / Alt+→", true),
-            "Cmd+→ / Alt+→"
-        );
-        assert_eq!(display_shortcut_for("Ctrl+C/X/V", true), "Cmd+C/X/V");
     }
 
     #[test]

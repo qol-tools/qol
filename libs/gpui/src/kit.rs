@@ -3,7 +3,11 @@ use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
     FontWeight, Rgba, SharedString,
 };
+use qol_hotkeys::chord::Cap;
 use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
+
+use crate::icon::{icon, Icon, IconView};
+use crate::key::Key;
 
 pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
 pub const FLOAT_SHADOW_ALPHA: u8 = 0x1a;
@@ -208,9 +212,11 @@ impl Kit {
             .child(text.into())
     }
 
-    pub fn keycap(&self, text: impl Into<SharedString>) -> Div {
+    fn keycap_frame(&self) -> Div {
         div()
             .flex_none()
+            .flex()
+            .items_center()
             .px(px(qol_theme::SPACE_SNUG))
             .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_KEYCAP))
@@ -219,7 +225,42 @@ impl Kit {
             .font_family(SharedString::from(qol_theme::font_mono()))
             .text_size(px(qol_theme::TEXT_KEYCAP))
             .text_color(rgb(self.palette.text_muted))
-            .child(text.into())
+    }
+
+    pub fn keycap(&self, key: Key) -> Div {
+        self.keycap_inked(key, self.palette.text_muted)
+    }
+
+    pub fn keycap_inked(&self, key: Key, ink: u32) -> Div {
+        self.keycap_frame()
+            .text_color(rgb(ink))
+            .child(self.key_name(&[key], qol_theme::TEXT_KEYCAP, ink))
+    }
+
+    pub fn key_name(&self, keys: &[Key], size: f32, ink: u32) -> Div {
+        let mut name = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .font_family(SharedString::from(qol_theme::font_mono()))
+            .text_size(px(size))
+            .text_color(rgb(ink));
+        for (index, key) in keys.iter().enumerate() {
+            if index > 0 {
+                name = name.child(" / ");
+            }
+            for part in key.caps() {
+                name = match part {
+                    Cap::Text(text) => name.child(text),
+                    Cap::Glyph(glyph) => name.child(icon(glyph.into(), size, ink)),
+                };
+            }
+        }
+        name
+    }
+
+    pub fn key_text(&self, text: impl Into<SharedString>) -> Div {
+        self.keycap_frame().child(text.into())
     }
 
     pub fn status_dot(&self, tone: u32, halo: u32) -> Div {
@@ -312,7 +353,7 @@ impl Kit {
             .text_color(rgb(self.palette.text_secondary))
     }
 
-    pub fn hint(&self, key: impl Into<SharedString>, label: impl Into<SharedString>) -> Div {
+    pub fn hint(&self, key: Key, label: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
             .flex()
@@ -320,41 +361,6 @@ impl Kit {
             .gap(px(qol_theme::SPACE_SNUG))
             .child(self.keycap(key))
             .child(label.into())
-    }
-
-    pub fn hint_bar_compact(&self) -> Div {
-        self.hint_bar()
-            .h(px(qol_theme::HEIGHT_INLINE))
-            .bg(rgb(self.palette.surface_canvas))
-            .text_size(px(qol_theme::TEXT_NANO))
-            .text_color(rgb(self.palette.text_muted))
-    }
-
-    pub fn hint_label_first(
-        &self,
-        label: impl Into<SharedString>,
-        key: impl Into<SharedString>,
-    ) -> Div {
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(qol_theme::SPACE_SNUG))
-            .child(label.into())
-            .child(
-                div()
-                    .flex_none()
-                    .h(px(qol_theme::SPACE_PAD))
-                    .px(px(qol_theme::SPACE_STACK))
-                    .flex()
-                    .items_center()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .bg(rgba(self.washes.fill_resting.packed()))
-                    .font_family(SharedString::from(qol_theme::font_mono()))
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .text_color(rgb(self.palette.text_secondary))
-                    .child(key.into()),
-            )
     }
 
     pub fn letter_tile(&self, name: &str) -> Div {
@@ -530,6 +536,18 @@ impl Kit {
             .child(text.into())
     }
 
+    pub fn action_ink(&self, state: ActionCircleState) -> u32 {
+        match state {
+            ActionCircleState::Resting | ActionCircleState::Disabled => self.palette.text_primary,
+            ActionCircleState::Primary => self.palette.solid_ink,
+            ActionCircleState::Armed => self.palette.accent_ink,
+        }
+    }
+
+    pub fn action_icon(&self, glyph: Icon, state: ActionCircleState) -> IconView {
+        icon(glyph, qol_theme::TEXT_BODY, self.action_ink(state))
+    }
+
     pub fn action_circle(&self, size: ActionCircleSize, state: ActionCircleState) -> Div {
         let circle = div()
             .flex_none()
@@ -541,25 +559,22 @@ impl Kit {
             .justify_center()
             .border(px(1.0))
             .shadow(float_shadow(self.palette.text_primary))
-            .text_size(px(qol_theme::TEXT_BODY));
+            .text_size(px(qol_theme::TEXT_BODY))
+            .text_color(rgb(self.action_ink(state)));
         match state {
             ActionCircleState::Resting => circle
                 .bg(rgb(self.palette.surface_raised))
-                .border_color(rgb(self.palette.border_subtle))
-                .text_color(rgb(self.palette.text_primary)),
+                .border_color(rgb(self.palette.border_subtle)),
             ActionCircleState::Primary => circle
                 .bg(rgb(self.palette.accent))
-                .border_color(rgb(self.palette.border_subtle))
-                .text_color(rgb(self.palette.solid_ink)),
+                .border_color(rgb(self.palette.border_subtle)),
             ActionCircleState::Armed => circle
                 .bg(rgb(self.palette.accent_fill))
                 .border_color(rgb(self.palette.accent))
-                .text_color(rgb(self.palette.accent_ink))
                 .font_weight(FontWeight::SEMIBOLD),
             ActionCircleState::Disabled => circle
                 .bg(rgb(self.palette.surface_raised))
                 .border_color(rgb(self.palette.border_subtle))
-                .text_color(rgb(self.palette.text_primary))
                 .opacity(DISABLED_OPACITY),
         }
     }

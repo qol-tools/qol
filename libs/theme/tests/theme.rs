@@ -2017,7 +2017,7 @@ Files outside settings scope keep their exact count in REM_SPACING_HELPER_DEBT u
     );
 }
 
-const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 13] = [
+const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 11] = [
     ("libs/gpui/src/toast.rs", 10.0),
     ("libs/gpui/src/toast.rs", 3.0),
     ("plugins/alt-tab/src/app/render.rs", 26.0),
@@ -2027,8 +2027,6 @@ const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 13] = [
     ("plugins/launcher/src/ui/view.rs", 5.0),
     ("plugins/launcher/src/ui/view.rs", 14.0),
     ("plugins/removeapp/src/ui/mod.rs", 10.0),
-    ("plugins/removeapp/src/ui/mod.rs", 5.0),
-    ("plugins/removeapp/src/ui/mod.rs", 1.0),
     ("plugins/removeapp/src/ui/mod.rs", 24.0),
     ("plugins/removeapp/src/ui/mod.rs", 3.0),
 ];
@@ -2166,18 +2164,18 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
         ".font_weight(",
-        3,
+        2,
     ),
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".shadow(", 2),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
         ".text_color(",
-        3,
+        2,
     ),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
         ".text_size(",
-        3,
+        2,
     ),
     ("libs/gpui/src/gamepad/diagram/mod.rs", ".bg(", 2),
     ("libs/gpui/src/gamepad/diagram/mod.rs", ".rounded(", 2),
@@ -2197,12 +2195,12 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
     (
         "libs/gpui/src/settings_panel/view/display_layout_card.rs",
         ".text_color(",
-        2,
+        1,
     ),
     (
         "libs/gpui/src/settings_panel/view/display_layout_card.rs",
         ".text_size(",
-        2,
+        1,
     ),
     ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 2),
     (
@@ -2772,6 +2770,122 @@ fn every_window_is_square() {
     assert!(
         problems.is_empty(),
         "A window has no corner radius; only what sits inside it is rounded.\n{}",
+        problems.join("\n")
+    );
+}
+
+const HINT_CALLS: [&str; 5] = [
+    ".hint(\"",
+    ".keycap(\"",
+    "SettingsHint::new(\"",
+    "HintDescriptor::new(\"",
+    "HintDescriptor::pinned(\"",
+];
+
+#[test]
+fn every_hint_takes_a_key() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let lines: Vec<String> = contents.lines().map(compact_line).collect();
+        for (index, line) in lines.iter().enumerate() {
+            let joined = match lines.get(index + 1) {
+                Some(next) => format!("{line}{next}"),
+                None => line.clone(),
+            };
+            for call in HINT_CALLS {
+                if line.contains(call.trim_end_matches('"')) && joined.contains(call) {
+                    problems.push(format!("{relative}:{} spells a key as {call}", index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A hint takes a qol_gpui::Key, so every key is named by libs/hotkeys and drawn the same way.\n{}",
+        problems.join("\n")
+    );
+}
+
+const SHIPPED_FONTS: [&str; 3] = [
+    "libs/gpui/assets/fonts/IBMPlexSans-Regular.ttf",
+    "libs/gpui/assets/fonts/IBMPlexMono-Regular.ttf",
+    "libs/gpui/assets/fonts/SairaSemiCondensed-SemiBold.ttf",
+];
+
+const NOT_DRAWN: [&str; 7] = [
+    "eprintln!",
+    "println!",
+    "probe(",
+    "log::",
+    "tracing::",
+    "anyhow!",
+    "bail!",
+];
+
+fn drawn_literals(line: &str) -> Vec<String> {
+    string_literals(line)
+        .into_iter()
+        .map(|literal| {
+            let mut decoded = String::new();
+            let mut rest = literal;
+            while let Some(at) = rest.find("\\u{") {
+                decoded.push_str(&rest[..at]);
+                let tail = &rest[at + 3..];
+                let Some(end) = tail.find('}') else {
+                    break;
+                };
+                if let Some(ch) = u32::from_str_radix(&tail[..end], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    decoded.push(ch);
+                }
+                rest = &tail[end + 1..];
+            }
+            decoded.push_str(rest);
+            decoded
+        })
+        .collect()
+}
+
+#[test]
+fn every_character_a_window_draws_is_in_the_shipped_fonts() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fonts: Vec<Vec<u8>> = SHIPPED_FONTS
+        .iter()
+        .map(|font| fs::read(workspace.join(font)).expect("read shipped font"))
+        .collect();
+    let faces: Vec<ttf_parser::Face> = fonts
+        .iter()
+        .map(|data| ttf_parser::Face::parse(data, 0).expect("parse shipped font"))
+        .collect();
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        if !contents.contains("use gpui") {
+            continue;
+        }
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        for (index, line) in body.lines().enumerate() {
+            if line.trim_start().starts_with("//")
+                || NOT_DRAWN.iter().any(|call| line.contains(call))
+            {
+                continue;
+            }
+            for literal in drawn_literals(line) {
+                for ch in literal.chars().filter(|ch| !ch.is_ascii()) {
+                    if !faces.iter().any(|face| face.glyph_index(ch).is_some()) {
+                        problems.push(format!("{relative}:{} draws {ch:?}", index + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Symbols the shipped fonts lack come from the host and change per machine; draw them with qol_gpui::Icon.\n{}",
         problems.join("\n")
     );
 }

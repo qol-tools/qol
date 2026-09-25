@@ -39,18 +39,52 @@ pub fn parse(input: &str) -> Option<Chord> {
     Some(Chord { mods, key: key? })
 }
 
-pub fn label(chord: &Chord) -> Option<String> {
-    let key = key_label(chord.key)?;
-    let mods = chord
-        .mods
-        .iter()
-        .map(|modifier| platform::modifier_label(*modifier))
-        .collect::<Vec<_>>();
-    Some(platform::join(&mods, &key))
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Glyph {
+    Enter,
+    Tab,
+    Backspace,
+    Up,
+    Down,
+    Left,
+    Right,
+    Control,
+    Option,
+    Shift,
+    Command,
 }
 
-pub fn label_for(input: &str) -> Option<String> {
-    label(&parse(input)?)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cap {
+    Text(String),
+    Glyph(Glyph),
+}
+
+pub fn caps(chord: &Chord) -> Option<Vec<Cap>> {
+    let key = key_cap(chord.key)?;
+    let mut mods = chord.mods.iter().copied().collect::<Vec<_>>();
+    mods.sort_by_key(|modifier| platform::order(*modifier));
+    let mut caps = Vec::new();
+    for modifier in mods {
+        push(&mut caps, platform::modifier_cap(modifier));
+        if let Some(joiner) = platform::JOINER {
+            push(&mut caps, Cap::Text(joiner.to_owned()));
+        }
+    }
+    push(&mut caps, key);
+    Some(caps)
+}
+
+pub fn caps_for(input: &str) -> Option<Vec<Cap>> {
+    caps(&parse(input)?)
+}
+
+pub fn push(caps: &mut Vec<Cap>, cap: Cap) {
+    if let (Some(Cap::Text(last)), Cap::Text(next)) = (caps.last_mut(), &cap) {
+        last.push_str(next);
+        return;
+    }
+    caps.push(cap);
 }
 
 fn parse_token(token: &str) -> Option<ModifierToken> {
@@ -64,37 +98,40 @@ fn parse_token(token: &str) -> Option<ModifierToken> {
     }
 }
 
-pub(crate) fn key_label(key: Key) -> Option<String> {
+pub fn key_cap(key: Key) -> Option<Cap> {
     match key {
-        Key::Letter(index) if index < 26 => Some(char::from(b'A' + index).to_string()),
-        Key::Digit(index) if index < 10 => Some(char::from(b'0' + index).to_string()),
-        Key::Function(number) if (1..=12).contains(&number) => Some(format!("F{number}")),
-        Key::Named(named) => Some(named_label(named).to_string()),
-        Key::Symbol(symbol) => Some(symbol.to_string()),
+        Key::Letter(index) if index < 26 => Some(Cap::Text(char::from(b'a' + index).to_string())),
+        Key::Digit(index) if index < 10 => Some(Cap::Text(char::from(b'0' + index).to_string())),
+        Key::Function(number) if (1..=12).contains(&number) => {
+            Some(Cap::Text(format!("f{number}")))
+        }
+        Key::Named(named) => Some(named_cap(named)),
+        Key::Symbol(symbol) => Some(Cap::Text(symbol.to_string())),
         _ => None,
     }
 }
 
-fn named_label(named: NamedKey) -> &'static str {
-    match named {
-        NamedKey::Space => "Space",
-        NamedKey::Enter => "\u{23CE}",
-        NamedKey::Escape => "\u{238B}",
-        NamedKey::Tab => "\u{21E5}",
-        NamedKey::Backspace => "\u{232B}",
-        NamedKey::Delete => "Del",
-        NamedKey::Insert => "Ins",
-        NamedKey::Home => "Home",
-        NamedKey::End => "End",
-        NamedKey::PageUp => "PgUp",
-        NamedKey::PageDown => "PgDn",
-        NamedKey::Up => "\u{2191}",
-        NamedKey::Down => "\u{2193}",
-        NamedKey::Left => "\u{2190}",
-        NamedKey::Right => "\u{2192}",
-        NamedKey::PrintScreen => "PrtSc",
-        NamedKey::Pause => "Pause",
-    }
+fn named_cap(named: NamedKey) -> Cap {
+    let word = match named {
+        NamedKey::Enter => return Cap::Glyph(Glyph::Enter),
+        NamedKey::Tab => return Cap::Glyph(Glyph::Tab),
+        NamedKey::Backspace => return Cap::Glyph(Glyph::Backspace),
+        NamedKey::Up => return Cap::Glyph(Glyph::Up),
+        NamedKey::Down => return Cap::Glyph(Glyph::Down),
+        NamedKey::Left => return Cap::Glyph(Glyph::Left),
+        NamedKey::Right => return Cap::Glyph(Glyph::Right),
+        NamedKey::Space => "space",
+        NamedKey::Escape => "esc",
+        NamedKey::Delete => "del",
+        NamedKey::Insert => "ins",
+        NamedKey::Home => "home",
+        NamedKey::End => "end",
+        NamedKey::PageUp => "pgup",
+        NamedKey::PageDown => "pgdn",
+        NamedKey::PrintScreen => "prtsc",
+        NamedKey::Pause => "pause",
+    };
+    Cap::Text(word.to_owned())
 }
 
 pub const RENDERED_LITERALS: &[&str] = &[
@@ -151,20 +188,31 @@ mod tests {
     }
 
     #[test]
-    fn every_literal_the_repo_renders_has_a_label() {
+    fn every_literal_the_repo_renders_has_caps() {
         for input in RENDERED_LITERALS {
-            assert!(label_for(input).is_some(), "input: {input} has no label");
+            assert!(caps_for(input).is_some(), "input: {input} has no caps");
         }
     }
 
     #[test]
-    fn a_label_never_repeats_the_token_name() {
+    fn caps_never_repeat_the_token_name() {
         for input in RENDERED_LITERALS {
-            let rendered = label_for(input).unwrap();
-            assert!(
-                !rendered.contains("platform") && !rendered.contains("secondary"),
-                "input: {input} rendered as {rendered}"
-            );
+            for cap in caps_for(input).unwrap() {
+                if let Cap::Text(text) = cap {
+                    assert!(
+                        !text.contains("platform") && !text.contains("secondary"),
+                        "input: {input} rendered as {text}"
+                    );
+                }
+            }
         }
+    }
+
+    #[test]
+    fn keys_are_lowercase_words_and_drawn_glyphs() {
+        assert_eq!(caps_for("escape").unwrap(), [Cap::Text("esc".into())]);
+        assert_eq!(caps_for("p").unwrap(), [Cap::Text("p".into())]);
+        assert_eq!(caps_for("enter").unwrap(), [Cap::Glyph(Glyph::Enter)]);
+        assert_eq!(caps_for("f5").unwrap(), [Cap::Text("f5".into())]);
     }
 }

@@ -6,7 +6,7 @@ mod svg;
 
 pub use fitted::Tone;
 pub use letters::letters_for;
-pub use raster::{chevron, fitted_image, image, stacked_image, tick};
+pub use raster::{chevron, fitted_image, icon, image, stacked_image, tick};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PictureContext {

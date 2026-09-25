@@ -1,3 +1,4 @@
+use qol_gpui::key::Key;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
@@ -629,9 +630,9 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
         let (rows, _) = self.page_rows();
         let mut left = Vec::new();
         if let Some(label) = rows.get(self.selected).and_then(PageRow::action_label) {
-            left.push(SettingsHint::new("\u{21b5}", label.to_lowercase()));
+            left.push(SettingsHint::new(Key::ENTER, label.to_lowercase()));
         }
-        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
             question: None,
             left,

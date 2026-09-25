@@ -3,6 +3,7 @@ mod display_layout_card;
 mod list_card;
 mod structured_list_editor;
 
+use crate::key::Key;
 use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -3844,7 +3845,7 @@ impl SettingsPanelView {
                         .bg(rgb(self.palette.row_border_selected)),
                 );
         }
-        field.child(self.kit.keycap("/"))
+        field.child(self.kit.keycap(Key::symbol('/')))
     }
 
     fn render_filter_overlay(&self) -> Div {
@@ -4001,7 +4002,7 @@ impl SettingsPanelView {
             if let Some(hints) = self.custom_view().and_then(|custom| custom.hints(cx)) {
                 let mut right = hints.right;
                 if right.is_empty() {
-                    right.push(SettingsHint::new("esc", "back"));
+                    right.push(SettingsHint::new(Key::ESC, "back"));
                 }
                 let mut bar = bar.left(hints.left).right(right);
                 if let Some(question) = hints.question {
@@ -4010,44 +4011,46 @@ impl SettingsPanelView {
                 return bar;
             }
             let mut left = vec![
-                SettingsHint::new("\u{2191}\u{2193}", "move"),
-                SettingsHint::new("\u{21b5}", "open"),
-                SettingsHint::new("A", "add"),
-                SettingsHint::new("\u{232b}", "delete"),
+                SettingsHint::new(Key::UP_DOWN, "move"),
+                SettingsHint::new(Key::ENTER, "open"),
+                SettingsHint::new(Key::letter('a'), "add"),
+                SettingsHint::new(Key::BACKSPACE, "delete"),
             ];
             if self.custom_tool_is_shortcuts() {
-                left.push(SettingsHint::new("R", "run"));
+                left.push(SettingsHint::new(Key::letter('r'), "run"));
             }
-            return bar.left(left).right(vec![SettingsHint::new("esc", "back")]);
+            return bar
+                .left(left)
+                .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
         if self.level().choose.is_some() && !self.filter_open {
             return bar
                 .left(self.choose_hints())
-                .right(vec![SettingsHint::new("esc", "back")]);
+                .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
         if (self.level().entries.is_some() || self.level().form.is_some()) && !self.filter_open {
             return self.card_hint_bar(bar);
         }
         let mut left = Vec::new();
         if let Some(label) = self.enter_hint() {
-            left.push(SettingsHint::new("\u{21b5}", label));
+            left.push(SettingsHint::new(Key::ENTER, label));
         }
         if let Some(state) = self.level().display_layout.as_ref() {
             if let Some(label) =
                 display_layout_card::arrows_hint(self.level().selected, state.editing())
             {
-                left.push(SettingsHint::new("\u{2190}\u{2192}", label));
+                left.push(SettingsHint::new(Key::LEFT_RIGHT, label));
             }
         }
-        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         let mut right = Vec::new();
         if self.filtering() {
-            left.push(SettingsHint::new("esc", "back to plugins"));
+            left.push(SettingsHint::new(Key::ESC, "back to plugins"));
         } else if self.stack.len() == 1 {
-            left.push(SettingsHint::new("type", "search every plugin"));
-            right.push(SettingsHint::new("esc", "close"));
+            left.push(SettingsHint::new(Key::TYPE, "search every plugin"));
+            right.push(SettingsHint::new(Key::ESC, "close"));
         } else {
-            right.push(SettingsHint::new("esc", "back"));
+            right.push(SettingsHint::new(Key::ESC, "back"));
         }
         bar.left(left).right(right)
     }

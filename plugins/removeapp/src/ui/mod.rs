@@ -5,6 +5,7 @@ use gpui::{
     div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable,
     FontWeight, KeyDownEvent, SharedString, WeakEntity, Window,
 };
+use qol_gpui::Key;
 
 use crate::core::{
     self, Disposal, Guards, InstalledApp, PackageIndex, PackageStatus, RemovalOutcome, RemovalPlan,
@@ -28,10 +29,18 @@ const MAX_VISIBLE: usize = ((WINDOW_HEIGHT
     - FAILBAR_H
     - qol_gpui::theme::HEIGHT_HINT_BAR)
     / ROW_H) as usize;
-const CONTINUE_OR_QUIT_HINT: &str = "Enter to continue \u{00b7} Esc to quit";
+const REMOVE_KEY: Key = Key::BACKSPACE.platform();
 
-fn chord(input: &str) -> String {
-    qol_hotkeys::chord::label_for(input).unwrap_or_default()
+fn continue_or_quit_hint() -> gpui::Div {
+    let kit = qol_gpui::kit::kit();
+    div()
+        .flex()
+        .items_center()
+        .gap(px(qol_gpui::theme::SPACE_GUTTER))
+        .text_color(rgb(current_palette().text_muted))
+        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+        .child(kit.hint(Key::ENTER, "continue"))
+        .child(kit.hint(Key::ESC, "quit"))
 }
 
 fn current_palette() -> RemoveAppPalette {
@@ -446,10 +455,7 @@ impl RemoveAppView {
             )
             .children(self.remove_bar())
             .child(footer(
-                &[
-                    (chord("enter").as_str(), "select"),
-                    (chord("platform+backspace").as_str(), "remove"),
-                ],
+                &[(Key::ENTER, "select"), (REMOVE_KEY, "remove")],
                 Some(counter),
             ))
             .into_any_element()
@@ -511,17 +517,8 @@ impl RemoveAppView {
                         ),
                 )
                 .child(
-                    div()
-                        .flex_none()
-                        .px(px(5.0))
-                        .py(px(1.0))
-                        .rounded(px(qol_gpui::theme::RADIUS_KEYCAP))
-                        .border(px(1.0))
-                        .border_color(rgba(kit.washes.edge_invalid.packed()))
-                        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                        .text_size(px(qol_gpui::theme::TEXT_KEYCAP))
-                        .text_color(rgb(palette.danger))
-                        .child(chord("platform+backspace")),
+                    kit.keycap_inked(REMOVE_KEY, palette.danger)
+                        .border_color(rgba(kit.washes.edge_invalid.packed())),
                 )
                 .into_any_element(),
         )
@@ -594,7 +591,7 @@ impl RemoveAppView {
                                     .render(),
                             ),
                     )
-                    .child(kit.keycap("/")),
+                    .child(kit.keycap(Key::symbol('/'))),
             )
     }
 
@@ -646,10 +643,10 @@ impl RemoveAppView {
             (None, Disposal::Trash) => ("Move to Trash".to_string(), palette.success),
             (None, Disposal::Delete) => ("PERMANENTLY DELETE".to_string(), palette.danger),
         };
-        let mut hints: Vec<(&str, &str)> = Vec::new();
+        let mut hints: Vec<(Key, &str)> = Vec::new();
         if let Some(g) = &self.guards {
             if g.running {
-                hints.push(("Q", "quit app"));
+                hints.push((Key::letter('q'), "quit app"));
             }
             if !g.running {
                 if let PackageStatus::Managed(package) = &g.package {
@@ -658,16 +655,16 @@ impl RemoveAppView {
                         crate::core::PackageManager::Apt => "uninstall with APT",
                         crate::core::PackageManager::Flatpak => "uninstall with Flatpak",
                     };
-                    hints.push(("\u{23CE}", label));
+                    hints.push((Key::ENTER, label));
                 }
             }
         }
         if primary_action(self.guards.as_ref()) == PrimaryAction::Remove {
-            hints.push(("\u{23CE}", "confirm"));
-            hints.push(("d", "trash/delete"));
+            hints.push((Key::ENTER, "confirm"));
+            hints.push((Key::letter('d'), "trash/delete"));
         }
-        hints.push(("T", "trash anyway"));
-        hints.push(("Esc", "back"));
+        hints.push((Key::letter('t'), "trash anyway"));
+        hints.push((Key::ESC, "back"));
         div()
             .flex()
             .flex_col()
@@ -785,12 +782,7 @@ impl RemoveAppView {
                         .text_size(px(qol_gpui::theme::TEXT_CAPTION))
                         .child(error.clone()),
                 )
-                .child(
-                    div()
-                        .text_color(rgb(palette.text_muted))
-                        .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                        .child(CONTINUE_OR_QUIT_HINT),
-                )
+                .child(continue_or_quit_hint())
                 .into_any_element();
         }
         let Some(outcome) = &self.outcome else {
@@ -830,12 +822,7 @@ impl RemoveAppView {
                         .child(format!("{failed} failed")),
                 )
             })
-            .child(
-                div()
-                    .text_color(rgb(palette.text_muted))
-                    .text_size(px(qol_gpui::theme::TEXT_CAPTION))
-                    .child(CONTINUE_OR_QUIT_HINT),
-            )
+            .child(continue_or_quit_hint())
             .into_any_element()
     }
 }
@@ -965,12 +952,12 @@ fn section_header(title: &str) -> impl IntoElement {
         )
 }
 
-fn footer(hints: &[(&str, &str)], counter: Option<String>) -> impl IntoElement {
+fn footer(hints: &[(Key, &str)], counter: Option<String>) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
     let palette = current_palette();
     let mut bar = kit.hint_bar();
     for (key, label) in hints {
-        bar = bar.child(kit.hint(key.to_string(), label.to_string()));
+        bar = bar.child(kit.hint(*key, label.to_string()));
     }
     bar.child(div().flex_1())
         .when_some(counter, |bar, counter| {

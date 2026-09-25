@@ -83,7 +83,7 @@ impl RenderOnce for SettingsModifierChip {
             }
         };
         let border = |ground: Ground| chip_border(on, cursor, ground);
-        let chip = kit().keycap(label).id(id);
+        let chip = kit().key_text(label).id(id);
         let chip = ground_bg(chip, fill(ground), hover.map(fill));
         let chip = ground_text(chip, text(ground), hover.map(text));
         let chip = ground_border(chip, border(ground), hover.map(border));

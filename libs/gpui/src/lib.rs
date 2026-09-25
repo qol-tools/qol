@@ -12,9 +12,11 @@ pub mod gamepad;
 pub mod ghost;
 pub mod hint_bar;
 pub mod history;
+pub mod icon;
 pub mod image;
 pub mod image_registry;
 pub mod keepalive;
+pub mod key;
 pub mod kit;
 pub mod monitor;
 pub mod motion;
@@ -40,6 +42,8 @@ pub mod window_options;
 
 pub use busy::Busy;
 pub use format::format_bytes;
+pub use icon::Icon;
+pub use key::Key;
 pub use status_indicator::StatusIndicator;
 pub use trail::Trail;
 

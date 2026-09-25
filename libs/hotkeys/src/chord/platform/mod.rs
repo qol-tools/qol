@@ -18,17 +18,20 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-use crate::chord::ModifierToken;
+use crate::chord::{Cap, ModifierToken};
 
-trait ChordStyle {
-    fn modifier_label(&self, modifier: ModifierToken) -> &'static str;
-    fn join(&self, mods: &[&str], key: &str) -> String;
+pub(super) const JOINER: Option<&str> = imp::JOINER;
+
+pub(super) fn modifier_cap(modifier: ModifierToken) -> Cap {
+    imp::modifier_cap(modifier)
 }
 
-pub(super) fn modifier_label(modifier: ModifierToken) -> &'static str {
-    imp::Platform.modifier_label(modifier)
-}
-
-pub(super) fn join(mods: &[&str], key: &str) -> String {
-    imp::Platform.join(mods, key)
+pub(super) fn order(modifier: ModifierToken) -> u8 {
+    match modifier {
+        ModifierToken::Ctrl => 0,
+        ModifierToken::Secondary => 1,
+        ModifierToken::Shift => 2,
+        ModifierToken::Alt => 3,
+        ModifierToken::Platform => 4,
+    }
 }

@@ -1,3 +1,4 @@
+use crate::key::Key;
 use gpui::prelude::*;
 use gpui::{AnyElement, ClickEvent, KeyDownEvent};
 
@@ -451,7 +452,7 @@ impl SettingsPanelView {
             .is_some_and(|tile| tile.saved);
         let mut hints = choose_hints(count);
         if let Some(first) = hints.first_mut() {
-            *first = SettingsHint::new("\u{21b5}", choose_enter_label(multi, saved));
+            *first = SettingsHint::new(Key::ENTER, choose_enter_label(multi, saved));
         }
         hints
     }

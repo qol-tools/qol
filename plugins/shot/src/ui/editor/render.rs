@@ -103,8 +103,8 @@ impl EditorView {
                     .absolute()
                     .inset_0(),
                 );
-        } else {
-            circle = circle.child(control.glyph());
+        } else if let Some(icon) = control.icon() {
+            circle = circle.child(kit.action_icon(icon, state));
         }
         circle
     }

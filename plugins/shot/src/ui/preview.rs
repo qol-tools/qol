@@ -1593,7 +1593,7 @@ impl Render for PreviewView {
                     .absolute()
                     .left(px(left))
                     .top(px(circle_top))
-                    .child(control.glyph())
+                    .child(kit.action_icon(control.icon(), state))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.activate(control, window, cx)

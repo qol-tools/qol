@@ -3,6 +3,7 @@
 //! carries the same controls as the preview it came from, minus the pin.
 
 use gpui::Keystroke;
+use qol_gpui::Icon;
 
 use crate::capture::actions::ShotAction;
 use crate::config::CopyCommand;
@@ -16,11 +17,13 @@ pub(crate) enum SurfaceControl {
 }
 
 impl SurfaceControl {
-    pub(crate) fn glyph(self) -> &'static str {
+    pub(crate) fn icon(self) -> Icon {
         match self {
-            Self::Action(action) => action.glyph(),
-            Self::Edit => "✎",
-            Self::Pin => "◉",
+            Self::Action(ShotAction::Copy) => Icon::Copy,
+            Self::Action(ShotAction::CopyPath) => Icon::CopyPath,
+            Self::Action(ShotAction::OpenFolder) => Icon::Reveal,
+            Self::Edit => Icon::Edit,
+            Self::Pin => Icon::Pin,
         }
     }
 

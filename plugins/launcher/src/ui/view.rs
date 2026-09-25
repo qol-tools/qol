@@ -9,6 +9,7 @@ use qol_gpui::theme::{
     TEXT_TITLE,
 };
 use qol_gpui::trail::{Trail, TrailItem};
+use qol_gpui::Key;
 
 use super::layout::{FLOW_ROW_HEIGHT, HEADER_HEIGHT, WINDOW_WIDTH};
 use super::menu::MenuKind;
@@ -43,15 +44,13 @@ pub fn search_bar(
     cx: &mut Context<LauncherView>,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
-    let chevron_font = window.text_style().font().bold();
     let mono_font = font(qol_gpui::theme::font_mono());
     let mono_advance = shaped_width(window, "0", mono_font.clone(), TEXT_BODY);
     let trailing = if status.mode.is_some() { 94.0 } else { 40.0 };
-    let chevron_width = shaped_width(window, "\u{203A}", chevron_font, TEXT_BODY);
     let visible = text_edit::visible_char_count(
         WINDOW_WIDTH
             - 2.0 * qol_gpui::theme::SPACE_PAD
-            - chevron_width
+            - TEXT_BODY
             - 2.0 * 10.0
             - trailing
             - CARET_WIDTH,
@@ -68,14 +67,11 @@ pub fn search_bar(
         .bg(rgb(current_palette().bg))
         .border_b(px(1.0))
         .border_color(rgba(kit.washes.hairline.packed()))
-        .child(
-            div()
-                .flex_none()
-                .text_color(rgb(kit.palette.accent_ink))
-                .text_size(px(TEXT_BODY))
-                .font_weight(FontWeight::BOLD)
-                .child("\u{203A}"),
-        )
+        .child(qol_gpui::icon::icon(
+            qol_gpui::Icon::Prompt,
+            TEXT_BODY,
+            kit.palette.accent_ink,
+        ))
         .child(
             div()
                 .flex_1()
@@ -163,9 +159,11 @@ pub fn search_bar(
                 }))
                 .bg(rgba(kit.washes.fill_resting.packed()))
                 .cursor_pointer()
-                .text_color(rgb(kit.palette.text_secondary))
-                .text_size(px(TEXT_MICRO))
-                .child("\u{2026}")
+                .child(qol_gpui::icon::icon(
+                    qol_gpui::Icon::More,
+                    TEXT_MICRO,
+                    kit.palette.text_secondary,
+                ))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.toggle_menu(MenuKind::Help, cx);
                 })),
@@ -185,22 +183,22 @@ pub fn row_action(
     source: ResultSource,
     held: &Modifiers,
     list_focused: bool,
-) -> (&'static str, &'static str) {
+) -> (Key, &'static str) {
     let secondary = held.secondary();
     if held.shift
         && !secondary
         && !held.alt
         && matches!(source, ResultSource::App | ResultSource::File)
     {
-        return ("Shift+\u{21b5}", "open folder");
+        return (Key::ENTER.shift(), "open folder");
     }
     if held.alt && !held.shift {
-        return ("Alt+\u{21b5}", "options");
+        return (Key::ENTER.alt(), "options");
     }
     if list_focused && secondary && !held.shift && matches!(source, ResultSource::App) {
-        return ("Ctrl+\u{2192}", "raise rank");
+        return (Key::RIGHT.secondary(), "raise rank");
     }
-    ("\u{21b5}", "open")
+    (Key::ENTER, "open")
 }
 
 pub fn match_percent(score: i32, best: i32, worst: i32) -> u8 {
@@ -263,9 +261,8 @@ pub fn result_row(
                 .text_color(rgb(band.soft))
                 .text_size(px(TEXT_NANO))
                 .child(
-                    kit.keycap(super::menu::display_shortcut(shortcut))
-                        .border_color(rgba(band.edge.packed()))
-                        .text_color(rgb(band.soft)),
+                    kit.keycap_inked(shortcut, band.soft)
+                        .border_color(rgba(band.edge.packed())),
                 )
                 .child(word),
         );
@@ -598,10 +595,10 @@ pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
         .and_then(|action| action.label.as_deref())
         .unwrap_or("copy");
     kit.hint_bar()
-        .child(kit.hint("\u{23CE}", enter_label.to_owned()))
-        .child(kit.hint("\u{2193}", "back in time"))
-        .child(kit.hint("\u{2191}", "forward"))
-        .child(kit.hint("esc", "back"))
+        .child(kit.hint(Key::ENTER, enter_label.to_owned()))
+        .child(kit.hint(Key::DOWN, "back in time"))
+        .child(kit.hint(Key::UP, "forward"))
+        .child(kit.hint(Key::ESC, "back"))
         .child(kit.chip(entry.title.clone(), kit.palette.accent))
         .child(div().flex_1())
 }
@@ -609,9 +606,9 @@ pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
 pub fn hint_bar_detail() -> Div {
     let kit = qol_gpui::kit::kit();
     kit.hint_bar()
-        .child(kit.hint("\u{23CE}", "copy"))
-        .child(kit.hint("\u{2191}\u{2193}", "scroll"))
-        .child(kit.hint("esc", "back"))
+        .child(kit.hint(Key::ENTER, "copy"))
+        .child(kit.hint(Key::UP_DOWN, "scroll"))
+        .child(kit.hint(Key::ESC, "back"))
         .child(div().flex_1())
 }
 
@@ -658,6 +655,7 @@ mod tests {
     use crate::ui::input::InputEffect;
     use crate::ui::state::LauncherState;
     use gpui::Modifiers;
+    use qol_gpui::Key;
 
     #[test]
     fn empty_line_names_the_mode_tab_switches_to() {
@@ -684,32 +682,32 @@ mod tests {
         let secondary = Modifiers::secondary_key();
         assert_eq!(
             row_action(ResultSource::App, &Modifiers::none(), true),
-            ("\u{21b5}", "open")
+            (Key::ENTER, "open")
         );
         assert_eq!(
             row_action(ResultSource::File, &shift, true),
-            ("Shift+\u{21b5}", "open folder")
+            (Key::ENTER.shift(), "open folder")
         );
         assert_eq!(
             row_action(ResultSource::Flow, &shift, true),
-            ("\u{21b5}", "open")
+            (Key::ENTER, "open")
         );
         assert_eq!(
             row_action(ResultSource::File, &alt, true),
-            ("Alt+\u{21b5}", "options")
+            (Key::ENTER.alt(), "options")
         );
         assert_eq!(
             row_action(ResultSource::App, &secondary, true),
-            ("Ctrl+\u{2192}", "raise rank")
+            (Key::RIGHT.secondary(), "raise rank")
         );
         assert_eq!(
             row_action(ResultSource::App, &secondary, false),
-            ("\u{21b5}", "open"),
+            (Key::ENTER, "open"),
             "the search box keeps Ctrl+arrows for words"
         );
         assert_eq!(
             row_action(ResultSource::File, &secondary, true),
-            ("\u{21b5}", "open")
+            (Key::ENTER, "open")
         );
         assert_eq!(
             LauncherState::new().apply_key("enter", &shift, 1),

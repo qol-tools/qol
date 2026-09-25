@@ -1,3 +1,5 @@
+use qol_gpui::Icon;
+use qol_gpui::Key;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -98,14 +100,14 @@ impl EditorControl {
         }
     }
 
-    fn glyph(self) -> &'static str {
+    fn icon(self) -> Option<Icon> {
         match self {
-            Self::Color => "",
-            Self::Undo => "↶",
-            Self::Redo => "↷",
-            Self::Action(action) => action.glyph(),
-            Self::Save => "✓",
-            Self::Pin => SurfaceControl::Pin.glyph(),
+            Self::Color => None,
+            Self::Undo => Some(Icon::Undo),
+            Self::Redo => Some(Icon::Redo),
+            Self::Action(action) => Some(SurfaceControl::Action(action).icon()),
+            Self::Save => Some(Icon::Tick),
+            Self::Pin => Some(SurfaceControl::Pin.icon()),
         }
     }
 }
@@ -243,7 +245,7 @@ enum EditorCommand {
 
 #[derive(Clone, Copy)]
 pub(crate) struct EditorHint {
-    pub(crate) key: &'static str,
+    pub(crate) key: Key,
     pub(crate) label: &'static str,
     pub(crate) priority: u8,
     pub(crate) pinned: bool,
@@ -257,7 +259,7 @@ pub(crate) struct EditorKeyRow {
 pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "\u{23CE}",
+            key: Key::ENTER,
             label: "activate",
             priority: 3,
             pinned: false,
@@ -270,7 +272,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "\u{2190}\u{2192}",
+            key: Key::LEFT_RIGHT,
             label: "move",
             priority: 2,
             pinned: false,
@@ -285,7 +287,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "H",
+            key: Key::letter('h'),
             label: "hue",
             priority: 2,
             pinned: false,
@@ -294,7 +296,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "W",
+            key: Key::letter('w'),
             label: "width",
             priority: 2,
             pinned: false,
@@ -303,7 +305,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "U",
+            key: Key::letter('u'),
             label: "undo",
             priority: 1,
             pinned: false,
@@ -312,7 +314,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "S",
+            key: Key::letter('s'),
             label: "save",
             priority: 1,
             pinned: false,
@@ -321,7 +323,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "I",
+            key: Key::letter('i'),
             label: "pin",
             priority: 1,
             pinned: false,
@@ -330,7 +332,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "drag",
+            key: Key::DRAG,
             label: "draw",
             priority: 0,
             pinned: false,
@@ -339,7 +341,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "esc",
+            key: Key::ESC,
             label: "close",
             priority: 0,
             pinned: true,

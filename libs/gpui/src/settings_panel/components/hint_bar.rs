@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, Div, FontWeight, RenderOnce, SharedString, Window};
 
+use crate::key::Key;
 use crate::kit::{alpha, kit};
 use crate::theme::SettingsPanelPalette;
 
@@ -15,16 +16,16 @@ pub enum HintTone {
 
 #[derive(Clone, Debug)]
 pub struct SettingsHint {
-    pub key: SharedString,
+    pub key: Option<Key>,
     pub label: SharedString,
     pub tone: HintTone,
     pub busy: bool,
 }
 
 impl SettingsHint {
-    pub fn new(key: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+    pub fn new(key: Key, label: impl Into<SharedString>) -> Self {
         Self {
-            key: key.into(),
+            key: Some(key),
             label: label.into(),
             tone: HintTone::Plain,
             busy: false,
@@ -33,7 +34,7 @@ impl SettingsHint {
 
     pub fn busy(label: impl Into<SharedString>) -> Self {
         Self {
-            key: SharedString::default(),
+            key: None,
             label: label.into(),
             tone: HintTone::Plain,
             busy: true,
@@ -118,7 +119,7 @@ impl RenderOnce for SettingsHintBar {
 }
 
 fn hint_element(hint: SettingsHint, palette: SettingsPanelPalette) -> Div {
-    if hint.busy {
+    let Some(key) = hint.key.filter(|_| !hint.busy) else {
         return div()
             .flex_none()
             .flex()
@@ -126,9 +127,9 @@ fn hint_element(hint: SettingsHint, palette: SettingsPanelPalette) -> Div {
             .gap(px(qol_theme::SPACE_SNUG))
             .child(settings_action_spinner("settings-hint-busy", palette).size(px(12.)))
             .child(hint.label);
-    }
+    };
     match hint_tone_color(hint.tone, palette) {
-        None => kit().hint(hint.key, hint.label),
+        None => kit().hint(key, hint.label),
         Some(color) => div()
             .flex_none()
             .flex()
@@ -136,8 +137,7 @@ fn hint_element(hint: SettingsHint, palette: SettingsPanelPalette) -> Div {
             .gap(px(qol_theme::SPACE_SNUG))
             .child(
                 kit()
-                    .keycap(hint.key)
-                    .text_color(rgb(color))
+                    .keycap_inked(key, color)
                     .border_color(rgba(alpha(color, 0x73))),
             )
             .child(div().text_color(rgb(color)).child(hint.label)),
@@ -166,7 +166,7 @@ mod tests {
     fn a_busy_hint_carries_no_key_and_the_label() {
         let hint = SettingsHint::busy("saving");
         assert!(hint.busy);
-        assert_eq!(hint.key, "");
+        assert_eq!(hint.key, None);
         assert_eq!(hint.label, "saving");
         assert_eq!(hint.tone, HintTone::Plain);
     }

@@ -1,13 +1,7 @@
-use crate::chord::ModifierToken;
+use crate::chord::{Cap, ModifierToken};
 
-pub(super) struct Platform;
+pub(super) use super::text::JOINER;
 
-impl super::ChordStyle for Platform {
-    fn modifier_label(&self, modifier: ModifierToken) -> &'static str {
-        super::text::shared_label(modifier)
-    }
-
-    fn join(&self, mods: &[&str], key: &str) -> String {
-        super::text::join(mods, key)
-    }
+pub(super) fn modifier_cap(modifier: ModifierToken) -> Cap {
+    super::text::word(super::text::shared_word(modifier))
 }

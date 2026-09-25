@@ -1,3 +1,4 @@
+use crate::key::Key;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -829,10 +830,10 @@ impl SettingsPanelView {
                     .child("\u{2192}"),
                 ChipRowPart::Chip(chip) => match chip.tone {
                     ChipTone::Modifier | ChipTone::Key => match row {
-                        RowGround::Pane => self.kit.keycap(chip.label),
+                        RowGround::Pane => self.kit.key_text(chip.label),
                         RowGround::Band => self
                             .kit
-                            .keycap(chip.label)
+                            .key_text(chip.label)
                             .text_color(rgb(ground.faint))
                             .border_color(rgba(ground.edge.packed())),
                     },
@@ -1024,16 +1025,16 @@ fn write_root_entries(root_rows: &mut [Row], level: &Level) -> bool {
 pub(super) fn entries_hints(on_add: bool) -> (Vec<SettingsHint>, Vec<SettingsHint>) {
     let left = vec![
         SettingsHint::new(
-            "\u{21b5}",
+            Key::ENTER,
             match on_add {
                 true => "add",
                 false => "open",
             },
         ),
-        SettingsHint::new("\u{2191}\u{2193}", "move"),
-        SettingsHint::new("A", "add"),
+        SettingsHint::new(Key::UP_DOWN, "move"),
+        SettingsHint::new(Key::letter('a'), "add"),
     ];
-    let right = vec![SettingsHint::new("esc", "back")];
+    let right = vec![SettingsHint::new(Key::ESC, "back")];
     (left, right)
 }
 
@@ -1043,16 +1044,16 @@ pub(super) fn form_hints(
 ) -> (Option<String>, Vec<SettingsHint>, Vec<SettingsHint>) {
     if let Some(question) = form.question {
         let left = vec![match question {
-            FormQuestion::Save => SettingsHint::new("\u{21b5}", "save").tone(HintTone::Save),
-            FormQuestion::Blocked(_) => SettingsHint::new("\u{21b5}", "fill it in"),
+            FormQuestion::Save => SettingsHint::new(Key::ENTER, "save").tone(HintTone::Save),
+            FormQuestion::Blocked(_) => SettingsHint::new(Key::ENTER, "fill it in"),
         }];
-        let right = vec![SettingsHint::new("esc", "discard").tone(HintTone::Discard)];
+        let right = vec![SettingsHint::new(Key::ESC, "discard").tone(HintTone::Discard)];
         return (Some(form.question_text(question)), left, right);
     }
     let mut left = Vec::new();
     if let Some(field) = form.fields.get(selected) {
         left.push(SettingsHint::new(
-            "\u{21b5}",
+            Key::ENTER,
             match &field.value {
                 FormValue::Text(_) | FormValue::Mods { .. } => "next",
                 FormValue::Boolean(_) => "flip",
@@ -1060,23 +1061,20 @@ pub(super) fn form_hints(
             },
         ));
         if matches!(field.value, FormValue::Mods { .. }) {
-            left.push(SettingsHint::new(
-                "\u{2190}\u{2192}\u{2191}\u{2193}",
-                "move",
-            ));
-            left.push(SettingsHint::new("space", "toggle"));
+            left.push(SettingsHint::new(Key::ARROWS, "move"));
+            left.push(SettingsHint::new(Key::SPACE, "toggle"));
         } else {
-            left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+            left.push(SettingsHint::new(Key::UP_DOWN, "move"));
             if matches!(field.value, FormValue::Text(_)) {
-                left.push(SettingsHint::new("type", "edit"));
+                left.push(SettingsHint::new(Key::TYPE, "edit"));
             }
         }
     } else {
-        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
     }
     let right = vec![match form.changed() {
-        true => SettingsHint::new("esc", "back, asks to save"),
-        false => SettingsHint::new("esc", "back"),
+        true => SettingsHint::new(Key::ESC, "back, asks to save"),
+        false => SettingsHint::new(Key::ESC, "back"),
     }];
     (None, left, right)
 }
@@ -1123,6 +1121,7 @@ pub(super) fn chip_row_parts(chips: &ItemChips) -> Vec<ChipRowPart> {
 
 #[cfg(test)]
 mod tests {
+    use crate::key::Key;
     use std::collections::BTreeMap;
 
     use qol_config::object_array::ItemFieldKind;
@@ -1468,7 +1467,7 @@ mod tests {
         let (question, left, right) = form_hints(&form, 0);
         assert_eq!(question, None);
         assert_eq!(hint_labels(&left), vec!["next", "move", "edit"]);
-        assert_eq!(left[0].key, "\u{21b5}");
+        assert_eq!(left[0].key, Some(Key::ENTER));
         assert_eq!(hint_labels(&right), vec!["back"]);
     }
 

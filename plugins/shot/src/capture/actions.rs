@@ -27,14 +27,6 @@ impl ShotAction {
         }
     }
 
-    pub fn glyph(self) -> &'static str {
-        match self {
-            ShotAction::Copy => "⧉",
-            ShotAction::CopyPath => "∕",
-            ShotAction::OpenFolder => "↗",
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             ShotAction::Copy => "Copy",

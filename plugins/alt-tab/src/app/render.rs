@@ -11,8 +11,9 @@ use gpui::*;
 use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
 use qol_gpui::kit::float_shadow;
 use qol_gpui::theme::{
-    runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_CAPTION, TEXT_NANO,
+    runtime_theme, PickerSurfacePalette, SystemPalette, SPACE_GUTTER, TEXT_CAPTION, TEXT_NANO,
 };
+use qol_gpui::Key;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -194,11 +195,7 @@ impl Render for AltTabApp {
                     .on_click(|_, _, cx| cx.stop_propagation())
             })
             .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
-                s.child(header_bar(
-                    "Alt Tab  ·  Live Window Grid",
-                    "↑↓←→ navigate  ·  ⏎ switch  ·  Esc close",
-                    &snap,
-                ))
+                s.child(header_bar("Alt Tab  ·  Live Window Grid", &snap))
             })
             .child(grid)
             .when(snap.show_hotkey_hints, |s| s.child(hint_bar(panel_w)));
@@ -283,13 +280,9 @@ fn probe_rendered_front(
 fn hint_bar(available_width: f32) -> Div {
     let kit = qol_gpui::kit::kit();
     let items = [
-        BarItem::Hint(HintDescriptor::new("\u{2325}\u{21E5}", "next", 3)),
-        BarItem::Hint(HintDescriptor::new(
-            "\u{2325}\u{21E7}\u{21E5}",
-            "previous",
-            2,
-        )),
-        BarItem::Hint(HintDescriptor::new("W", "close window", 1)),
+        BarItem::Hint(HintDescriptor::new(Key::TAB.alt(), "next", 3)),
+        BarItem::Hint(HintDescriptor::new(Key::TAB.alt().shift(), "previous", 2)),
+        BarItem::Hint(HintDescriptor::new(Key::letter('w'), "close window", 1)),
     ];
     let mut bar = kit.hint_bar().justify_center().gap(px(26.0));
     for item in fit_hints(available_width, &items) {
@@ -300,8 +293,9 @@ fn hint_bar(available_width: f32) -> Div {
     bar
 }
 
-fn header_bar(left: &str, right: &str, snap: &RenderSnap) -> Div {
+fn header_bar(left: &str, snap: &RenderSnap) -> Div {
     let system = &snap.system;
+    let kit = qol_gpui::kit::kit();
     div()
         .px_4()
         .py_2()
@@ -320,9 +314,14 @@ fn header_bar(left: &str, right: &str, snap: &RenderSnap) -> Div {
         )
         .child(
             div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_GUTTER))
                 .text_color(rgb(snap.palette.header_right_text))
                 .text_size(px(TEXT_CAPTION))
-                .child(right.to_string()),
+                .child(kit.hint(Key::ARROWS, "navigate"))
+                .child(kit.hint(Key::ENTER, "switch"))
+                .child(kit.hint(Key::ESC, "close")),
         )
 }
 

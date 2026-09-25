@@ -1,3 +1,4 @@
+use crate::key::Key;
 use gpui::prelude::*;
 use gpui::{
     div, img, px, rgb, rgba, AnyElement, App, ClickEvent, CursorStyle, Div, ElementId, RenderOnce,
@@ -116,11 +117,11 @@ pub fn choose_step(highlighted: usize, count: usize, per_row: usize, key: &str) 
 
 pub fn choose_hints(count: usize) -> Vec<SettingsHint> {
     let movement = if count > tile_layout(count).per_row {
-        SettingsHint::new("\u{2190}\u{2192}\u{2191}\u{2193}", "move")
+        SettingsHint::new(Key::ARROWS, "move")
     } else {
-        SettingsHint::new("\u{2190}\u{2192}", "move")
+        SettingsHint::new(Key::LEFT_RIGHT, "move")
     };
-    vec![SettingsHint::new("\u{21b5}", "choose"), movement]
+    vec![SettingsHint::new(Key::ENTER, "choose"), movement]
 }
 
 pub fn settings_tile_rows(per_row: usize, tiles: Vec<AnyElement>) -> Vec<Div> {
@@ -349,6 +350,7 @@ mod tests {
     use super::{
         choose_hints, choose_step, tile_arts, tile_grid_gap, tile_layout, TileArt, TileLayout,
     };
+    use crate::key::Key;
 
     #[test]
     fn tile_layout_steps_with_the_option_count() {
@@ -490,16 +492,16 @@ mod tests {
     fn choose_hints_follow_the_tile_grid() {
         let three = choose_hints(3);
         assert_eq!(three.len(), 2);
-        assert_eq!(three[0].key, "\u{21b5}");
+        assert_eq!(three[0].key, Some(Key::ENTER));
         assert_eq!(three[0].label, "choose");
-        assert_eq!(three[1].key, "\u{2190}\u{2192}");
+        assert_eq!(three[1].key, Some(Key::LEFT_RIGHT));
         assert_eq!(three[1].label, "move");
 
         let ten = choose_hints(10);
         assert_eq!(ten.len(), 2);
-        assert_eq!(ten[0].key, "\u{21b5}");
+        assert_eq!(ten[0].key, Some(Key::ENTER));
         assert_eq!(ten[0].label, "choose");
-        assert_eq!(ten[1].key, "\u{2190}\u{2192}\u{2191}\u{2193}");
+        assert_eq!(ten[1].key, Some(Key::ARROWS));
         assert_eq!(ten[1].label, "move");
     }
 }
