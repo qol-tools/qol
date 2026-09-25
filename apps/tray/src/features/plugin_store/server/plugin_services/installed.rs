@@ -170,7 +170,7 @@ fn add_unloaded_plugins(
     plugins_by_id: &mut HashMap<PluginId, InstalledPlugin>,
 ) {
     for (raw_id, _plugin_dir) in read_installed_plugin_dirs(plugins_dir) {
-        if plugins_by_id.contains_key(raw_id.as_str()) {
+        if plugins_by_id.contains_key(raw_id.as_str()) || superseded(plugins_dir, &raw_id) {
             continue;
         }
         let resolved_root =
@@ -181,6 +181,10 @@ fn add_unloaded_plugins(
             unloaded_plugin(id, resolved_root, cached_versions),
         );
     }
+}
+
+fn superseded(plugins_dir: &Path, id: &str) -> bool {
+    qol_migrations::renamed_plugin_id(id).is_some_and(|renamed| plugins_dir.join(renamed).is_dir())
 }
 
 fn unloaded_plugin(
@@ -417,6 +421,33 @@ mod uid_tests {
         ];
         for (input, expected) in cases {
             assert_eq!(manifest_uid(input, &id), expected, "expected {expected}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod superseded_tests {
+    use super::*;
+
+    #[test]
+    fn pre_rename_folder_is_hidden_only_beside_its_renamed_folder() {
+        let temp = tempfile::TempDir::new().unwrap();
+        for dir in [
+            "qol-alt-tab",
+            "plugin-alt-tab",
+            "plugin-lights",
+            "plugin-custom",
+        ] {
+            std::fs::create_dir_all(temp.path().join(dir)).unwrap();
+        }
+        let cases = [
+            ("plugin-alt-tab", true),
+            ("plugin-lights", false),
+            ("plugin-custom", false),
+            ("qol-alt-tab", false),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(superseded(temp.path(), id), expected, "{id}");
         }
     }
 }
