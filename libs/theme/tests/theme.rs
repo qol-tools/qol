@@ -326,7 +326,10 @@ fn picker_surface_palette_themed_none_uses_system_roles() {
     let system = DARK_SYSTEM;
     let palette = PickerSurfacePalette::themed(system, None, 1.0);
     assert_eq!(palette.card_bg, system.surface_raised);
-    assert_eq!(palette.card_hover_bg, system.surface_hovered);
+    assert_eq!(
+        palette.card_hover_bg,
+        qol_theme::lift(system.surface_raised, system.text_primary)
+    );
     assert_eq!(palette.card_selected_bg, system.accent_fill);
     assert_eq!(palette.card_selected_border, system.accent);
     assert_eq!(
@@ -352,7 +355,7 @@ fn picker_surface_palette_themed_override_mixes_toward_text_primary() {
     assert_eq!(palette.card_bg, card);
     assert_eq!(
         palette.card_hover_bg,
-        mix_rgb(card, system.text_primary, 0.07)
+        qol_theme::lift(card, system.text_primary)
     );
     assert_eq!(
         palette.card_selected_bg,
@@ -2709,6 +2712,34 @@ fn no_surface_draws_a_coloured_side_line() {
     assert!(
         problems.is_empty(),
         "State is a ground, never a line: a row, card or message shows its state with its ground and a status dot.\n{}",
+        problems.join("\n")
+    );
+}
+
+const HOVER_OWNERS: [&str; 2] = [
+    "libs/gpui/src/kit.rs",
+    "libs/gpui/src/settings_panel/components/",
+];
+
+#[test]
+fn every_hover_is_the_kit_pointable_lift() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if HOVER_OWNERS.iter().any(|owner| relative.starts_with(owner)) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            let compact = compact_line(line);
+            if compact.contains(".hover(") || compact.contains("group_hover(") {
+                problems.push(format!("{relative}:{}", index + 1));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Pointing at something lifts its ground through kit.pointable; windows never style a hover themselves.\n{}",
         problems.join("\n")
     );
 }

@@ -223,15 +223,17 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
             .min_w_0()
             .h(px(qol_gpui::theme::SPACE_PAD))
             .child(
-                kit.status_pill("your turn ✓", tone)
-                    .id(SharedString::from(format!("ack-{}", s.id)))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(|style| style.bg(rgba(current_palette().your_turn_hover_rgba)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.acknowledge(&id);
-                        cx.notify();
-                        cx.stop_propagation();
-                    })),
+                kit.pointable(
+                    kit.status_pill("your turn ✓", tone)
+                        .id(SharedString::from(format!("ack-{}", s.id)))
+                        .cursor(CursorStyle::PointingHand),
+                    rgba(current_palette().your_turn_hover_rgba),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.acknowledge(&id);
+                    cx.notify();
+                    cx.stop_propagation();
+                })),
             )
             .into_any_element();
     }
@@ -305,11 +307,6 @@ fn session_row(
         .overflow_hidden()
         .gap(px(qol_gpui::theme::SPACE_CELL))
         .cursor(CursorStyle::PointingHand)
-        .hover(move |style| {
-            style.bg(rgba(
-                if selected { tint.selected } else { tint.hover }.packed(),
-            ))
-        })
         .child(kit.vertical_identity_tab(s.tool.label.clone(), s.tool.accent.rgb24()))
         .child(status_dot_el(
             &kit,
@@ -358,16 +355,13 @@ fn session_row(
                         .child(format_elapsed(s.last_activity)),
                 ),
         )
-        .when(!selected, |row| {
-            row.child(
-                kit.row_separator()
-                    .group_hover("session-row", |style| style.opacity(0.0)),
-            )
-        })
+        .when(!selected, |row| row.child(kit.row_separator()))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.jump_to_session(id.clone(), "row-click", cx);
             cx.notify();
         }));
+    let lift = if selected { tint.selected } else { tint.hover };
+    let row = kit.pointable(row, rgba(lift.packed()));
     kit.row_selected_tinted_after(row, selected, tone, qol_gpui::vertical_label::WIDTH)
 }
 

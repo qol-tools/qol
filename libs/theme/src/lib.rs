@@ -1477,8 +1477,12 @@ fn surface_ground(
         edge: washes.hairline,
         mark,
         on_mark: bg,
-        lift: mix_const(bg, ink, GROUND_LIFT_MIX),
+        lift: lift(bg, ink),
     }
+}
+
+pub const fn lift(bg: u32, ink: u32) -> u32 {
+    mix_const(bg, ink, GROUND_LIFT_MIX)
 }
 
 fn mixed_ground(bg: u32, ink: u32) -> Ground {
@@ -1743,11 +1747,15 @@ impl PickerSurfacePalette {
         let opacity = clamp_unit(opacity);
         let (card_hover_bg, card_selected_bg, card_selected_border) = match card_override {
             Some(_) => (
-                mix_rgb(card_bg, system.text_primary, 0.07),
+                lift(card_bg, system.text_primary),
                 mix_rgb(card_bg, system.text_primary, 0.13),
                 mix_rgb(card_bg, system.text_primary, 0.36),
             ),
-            None => (system.surface_hovered, system.accent_fill, system.accent),
+            None => (
+                lift(card_bg, system.text_primary),
+                system.accent_fill,
+                system.accent,
+            ),
         };
         Self {
             panel_bg: mix_rgb(card_bg, system.surface_canvas, 0.56),

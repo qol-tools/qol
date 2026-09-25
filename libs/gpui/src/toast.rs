@@ -152,6 +152,21 @@ fn tone_dot(tone: ToastTone, palette: ToastPalette) -> Div {
     kit.status_dot(tone.color(palette), halo)
 }
 
+fn row_ground(row: &SlabSnapshotRow, palette: ToastPalette) -> u32 {
+    if row.toast.live {
+        palette.surface_raised
+    } else {
+        tone_ground(row.toast.tone, palette)
+    }
+}
+
+fn row_lift(row: &SlabSnapshotRow, palette: ToastPalette) -> Rgba {
+    rgb(qol_theme::lift(
+        row_ground(row, palette),
+        palette.text_primary,
+    ))
+}
+
 fn tone_ground(tone: ToastTone, palette: ToastPalette) -> u32 {
     if tone == ToastTone::Danger {
         crate::kit::kit().grounds.invalid.bg
@@ -948,8 +963,11 @@ fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> 
         .child(SharedString::from(format!("{row_count} notifications")))
         .child(div().flex_1())
         .child(
-            div()
-                .id("toast-clear-all")
+            crate::kit::kit()
+                .pointable(
+                    div().id("toast-clear-all"),
+                    rgb(qol_theme::lift(palette.window_bg, palette.text_primary)),
+                )
                 .h_full()
                 .px(px(10.0))
                 .flex()
@@ -957,10 +975,6 @@ fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> 
                 .cursor_pointer()
                 .text_size(px(qol_theme::TEXT_NANO))
                 .text_color(rgb(palette.text_muted))
-                .hover(move |mut style| {
-                    style.background = Some(rgb(palette.surface_hovered).into());
-                    style
-                })
                 .child(SharedString::from("Clear all"))
                 .on_click(move |_, _, cx| host.clear_all(cx)),
         )
@@ -1006,10 +1020,8 @@ fn slab_row_view(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresent
         .w_full()
         .flex()
         .flex_row();
-    if row.toast.live {
-        container = container.bg(rgb(palette.surface_raised));
-    } else if row.toast.tone == ToastTone::Danger {
-        container = container.bg(rgb(tone_ground(row.toast.tone, palette)));
+    if row.toast.live || row.toast.tone == ToastTone::Danger {
+        container = container.bg(rgb(row_ground(row, palette)));
     }
     container
         .child(preview_zone(row, palette, host.clone()))
@@ -1024,13 +1036,11 @@ fn preview_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresente
         return slot.into_any_element();
     }
     let id = row.id;
-    slot.id(("toast-preview", id.0))
-        .cursor_pointer()
-        .hover(move |mut style| {
-            style.background = Some(rgb(palette.surface_hovered).into());
-            style.opacity = Some(0.8);
-            style
-        })
+    crate::kit::kit()
+        .pointable(
+            slot.id(("toast-preview", id.0)).cursor_pointer(),
+            row_lift(row, palette),
+        )
         .on_click(move |_, _, cx| host.open_preview(id, cx))
         .into_any_element()
 }
@@ -1041,13 +1051,11 @@ fn text_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) 
         return column.into_any_element();
     }
     let id = row.id;
-    column
-        .id(("toast-open", id.0))
-        .cursor_pointer()
-        .hover(move |mut style| {
-            style.background = Some(rgb(palette.surface_hovered).into());
-            style
-        })
+    crate::kit::kit()
+        .pointable(
+            column.id(("toast-open", id.0)).cursor_pointer(),
+            row_lift(row, palette),
+        )
         .on_click(move |_, _, cx| host.activate(id, cx))
         .into_any_element()
 }
@@ -1152,7 +1160,8 @@ fn dismiss_control(
     host: SlabPresenter,
 ) -> Stateful<Div> {
     let id = row.id;
-    div()
+    let lift = row_lift(row, palette);
+    let control = div()
         .id(("toast-dismiss", id.0))
         .flex_none()
         .w(px(DISMISS_WIDTH))
@@ -1163,14 +1172,9 @@ fn dismiss_control(
         .cursor_pointer()
         .text_size(px(qol_theme::TEXT_MICRO))
         .text_color(rgb(palette.text_secondary))
-        .hover(move |mut style| {
-            style.background = Some(rgb(palette.surface_hovered).into());
-            style.text.get_or_insert_with(Default::default).color =
-                Some(rgb(palette.danger).into());
-            style
-        })
         .child(SharedString::from("\u{2715}"))
-        .on_click(move |_, _, cx| host.remove(id, cx))
+        .on_click(move |_, _, cx| host.remove(id, cx));
+    crate::kit::kit().pointable(control, lift)
 }
 
 impl ToastLayout {

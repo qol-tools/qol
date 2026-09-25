@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, AnyElement, App, ClickEvent, ElementId, RenderOnce, Window};
+use gpui::{div, px, rgb, AnyElement, App, ClickEvent, ElementId, RenderOnce, Window};
 
 use crate::kit::kit;
 use crate::theme::SettingsPanelPalette;
@@ -129,14 +129,16 @@ impl RenderOnce for SettingsRow {
             row = paint_settings_attention(row, self.palette);
         }
         if let Some(on_click) = self.on_click {
-            let hover_fill = if self.selected && self.focused {
-                rgb(self.palette.grounds.band_hover.bg)
+            let ground = if self.selected && self.focused {
+                self.palette.grounds.band
             } else {
-                rgba(shared.washes.fill_hover.packed())
+                self.palette.grounds.pane
             };
-            row = row
-                .cursor(gpui::CursorStyle::PointingHand)
-                .hover(move |style| style.bg(hover_fill))
+            row = shared
+                .pointable(
+                    row.cursor(gpui::CursorStyle::PointingHand),
+                    rgb(ground.lift),
+                )
                 .on_click(move |event, window, cx| on_click(event, window, cx));
         }
         row

@@ -422,10 +422,10 @@ fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div
     if !snap.visible {
         return base.bg(rgb(snap.palette.card_bg));
     }
-    base.bg(rgb(snap.palette.card_bg)).hover(|mut h| {
-        h.background = Some(rgb(snap.palette.card_hover_bg).into());
-        h
-    })
+    qol_gpui::kit::kit().pointable(
+        base.bg(rgb(snap.palette.card_bg)),
+        rgb(snap.palette.card_hover_bg),
+    )
 }
 
 fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &CardMetrics) -> Div {

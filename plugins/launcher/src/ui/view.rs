@@ -162,7 +162,6 @@ pub fn search_bar(
                     kit.washes.hairline_strong.packed()
                 }))
                 .bg(rgba(kit.washes.fill_resting.packed()))
-                .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
                 .cursor_pointer()
                 .text_color(rgb(kit.palette.text_secondary))
                 .text_size(px(TEXT_MICRO))
@@ -223,7 +222,7 @@ pub fn result_row(
     list_focused: bool,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
-    let band = qol_gpui::theme::settings_panel_runtime().grounds.band;
+    let band = kit.grounds.band;
     let positions = &scored.m.positions;
     let highlights = if selected && !positions.is_empty() {
         char_highlights(name, positions, band.ink)
@@ -239,13 +238,6 @@ pub fn result_row(
         .flex()
         .items_center()
         .gap(px(12.0))
-        .map(|row| {
-            if selected {
-                row.bg(rgb(band.bg))
-            } else {
-                row.hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
-            }
-        })
         .child(kit.letter_tile(name))
         .child(
             div()
@@ -312,7 +304,7 @@ pub fn result_row(
                 .child("flow"),
         );
     }
-    row
+    kit.highlight(row, selected)
 }
 
 pub fn trail_body(

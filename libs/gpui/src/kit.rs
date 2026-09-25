@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
-    FontWeight, SharedString,
+    FontWeight, Rgba, SharedString,
 };
 use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
 
@@ -141,6 +141,10 @@ impl Kit {
             .rounded_none()
     }
 
+    pub fn pointable<E: Styled + InteractiveElement>(&self, element: E, lift: Rgba) -> E {
+        element.hover(move |style| style.bg(lift))
+    }
+
     pub fn highlight_ground(&self, selected: bool) -> Ground {
         if selected {
             self.grounds.band
@@ -150,12 +154,10 @@ impl Kit {
     }
 
     pub fn highlight<E: Styled + InteractiveElement>(&self, row: E, selected: bool) -> E {
-        let hover = if selected {
-            rgb(self.grounds.band.lift)
-        } else {
-            rgba(self.washes.fill_hover.packed())
-        };
-        let row = row.rounded_none().hover(move |style| style.bg(hover));
+        let row = self.pointable(
+            row.rounded_none(),
+            rgb(self.highlight_ground(selected).lift),
+        );
         if selected {
             row.bg(rgb(self.grounds.band.bg))
         } else {
