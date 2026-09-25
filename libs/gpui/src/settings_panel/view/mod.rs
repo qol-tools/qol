@@ -117,8 +117,6 @@ fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Ins
 /// never flash an indicator.
 fn rollup_query_state<'a>(
     states: impl Iterator<Item = Option<&'a RowQueryState>>,
-    grace: std::time::Duration,
-    now: std::time::Instant,
 ) -> RowQueryState {
     let mut rolled = RowQueryState::Idle;
     for state in states {
@@ -126,9 +124,7 @@ fn rollup_query_state<'a>(
             Some(RowQueryState::Unavailable(message)) => {
                 return RowQueryState::Unavailable(message.clone());
             }
-            Some(RowQueryState::Loading { since })
-                if now.saturating_duration_since(*since) >= grace =>
-            {
+            Some(RowQueryState::Loading { since }) => {
                 rolled = RowQueryState::Loading { since: *since };
             }
             Some(RowQueryState::Ready) if rolled == RowQueryState::Idle => {
@@ -1017,7 +1013,6 @@ impl SettingsPanelView {
                 .entry((source, query.clone()))
                 .or_insert(RowQueryState::Loading { since });
         }
-        self.notify_after_loading_grace(cx);
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
         let apply_tick = queries
@@ -1154,23 +1149,6 @@ impl SettingsPanelView {
                 false
             }
         }
-    }
-
-    /// A query that never answers produces no sample and therefore no redraw,
-    /// so nothing would ever reveal that the row is waiting. One timer past the
-    /// grace period gives the indicator a chance to appear.
-    fn notify_after_loading_grace(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                async_cx
-                    .background_executor()
-                    .timer(qol_theme::WAIT_BEFORE_BUSY)
-                    .await;
-                let _ = this.update(&mut async_cx, |_, cx| cx.notify());
-            }
-        })
-        .detach();
     }
 
     fn pump_frame_paced_samples(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -2604,8 +2582,6 @@ impl SettingsPanelView {
             row_query_names(row)
                 .into_iter()
                 .map(|query| self.query_states.get(&(row.source, query.to_string()))),
-            qol_theme::WAIT_BEFORE_BUSY,
-            std::time::Instant::now(),
         )
     }
 
@@ -6861,43 +6837,17 @@ default = "visible"
 #[cfg(test)]
 mod query_state_tests {
     use super::{rollup_query_state, RowQueryState};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
-    const GRACE: Duration = Duration::from_millis(300);
-
-    fn rollup(states: &[Option<RowQueryState>], now: Instant) -> RowQueryState {
-        rollup_query_state(states.iter().map(Option::as_ref), GRACE, now)
-    }
-
-    /// A healthy plugin answers well inside the grace period, so its rows must
-    /// never flash a spinner on the way to their value.
-    #[test]
-    fn a_query_inside_its_grace_period_shows_no_indicator() {
-        let now = Instant::now();
-        let fresh = RowQueryState::Loading { since: now };
-        assert_eq!(rollup(&[Some(fresh)], now), RowQueryState::Idle);
-    }
-
-    /// Past the grace period the row has to admit it is waiting, otherwise a
-    /// wedged daemon is indistinguishable from a working one.
-    #[test]
-    fn a_query_past_its_grace_period_reports_loading() {
-        let now = Instant::now();
-        let stale = RowQueryState::Loading {
-            since: now - GRACE - Duration::from_millis(1),
-        };
-        assert!(matches!(
-            rollup(&[Some(stale)], now),
-            RowQueryState::Loading { .. }
-        ));
+    fn rollup(states: &[Option<RowQueryState>]) -> RowQueryState {
+        rollup_query_state(states.iter().map(Option::as_ref))
     }
 
     /// A row backed by several queries is only as good as its worst one.
     #[test]
     fn the_worst_query_decides_what_the_row_shows() {
-        let now = Instant::now();
         let waiting = RowQueryState::Loading {
-            since: now - GRACE * 2,
+            since: Instant::now(),
         };
         let cases = [
             (
@@ -6916,7 +6866,7 @@ mod query_state_tests {
             (vec![None, None], "idle"),
         ];
         for (states, expected) in cases {
-            let actual = match rollup(&states, now) {
+            let actual = match rollup(&states) {
                 RowQueryState::Idle => "idle",
                 RowQueryState::Loading { .. } => "loading",
                 RowQueryState::Ready => "ready",

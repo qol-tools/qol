@@ -6,6 +6,8 @@ const DEFAULT_SIZE: Pixels = px(14.);
 const DOT_SHARE: f32 = 3. / 14.;
 const TAIL_OPACITY: f32 = 0.25;
 
+struct Since(std::time::Instant);
+
 #[derive(IntoElement)]
 pub struct Busy {
     id: ElementId,
@@ -42,7 +44,13 @@ impl Busy {
 }
 
 impl RenderOnce for Busy {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let since = window.use_keyed_state(
+            ElementId::NamedChild(Box::new(self.id.clone()), "since".into()),
+            cx,
+            |_, _| Since(std::time::Instant::now()),
+        );
+        let shown = has_waited(since.read(cx).0.elapsed());
         let step = step_of(crate::activity_animation::progress_of(
             qol_theme::MOTION_LOOP,
         ));
@@ -66,8 +74,8 @@ impl RenderOnce for Busy {
             }));
         let ring = crate::activity_animation::ActivityAnimation::new(self.id, true, ring)
             .interval(qol_theme::MOTION_LOOP / DOTS as u32);
-        match self.label {
-            None => ring.into_any_element(),
+        let busy = match self.label {
+            None => div().flex_none().child(ring),
             Some(label) => div()
                 .flex()
                 .flex_row()
@@ -75,10 +83,14 @@ impl RenderOnce for Busy {
                 .gap(px(qol_theme::SPACE_INSET))
                 .text_color(self.color)
                 .child(ring)
-                .child(label)
-                .into_any_element(),
-        }
+                .child(label),
+        };
+        busy.opacity(if shown { 1. } else { 0. })
     }
+}
+
+fn has_waited(elapsed: std::time::Duration) -> bool {
+    elapsed >= qol_theme::WAIT_BEFORE_BUSY
 }
 
 fn step_of(progress: f32) -> usize {
@@ -93,6 +105,15 @@ fn dot_opacity(place: usize, step: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quick_answer_never_shows_busy() {
+        assert!(!has_waited(std::time::Duration::ZERO));
+        assert!(!has_waited(
+            qol_theme::WAIT_BEFORE_BUSY - std::time::Duration::from_millis(1)
+        ));
+        assert!(has_waited(qol_theme::WAIT_BEFORE_BUSY));
+    }
 
     #[test]
     fn loop_progress_maps_to_one_step_per_dot() {
