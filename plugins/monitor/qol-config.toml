@@ -128,14 +128,6 @@ section = "preferences"
 default = true
 description = "Show a notification with the new brightness level whenever brightness changes. Turn this off to silence the brightness toasts."
 
-[field.sync_brightness_levels]
-type = "boolean"
-config_key = "sync_brightness_levels"
-label = "Sync brightness levels"
-section = "preferences"
-default = true
-description = "Changing a display's brightness sets every connected display to the same percentage. Brightness hotkeys step them together."
-
 [field.arrangement]
 type = "display_layout"
 label = "Displays"
@@ -147,3 +139,11 @@ active_action = "set_mode"
 description = "Arrange displays and set each one's brightness, resolution and role."
 card_description = "Arrange and tune each display."
 row_slider = { value_from = "brightness", min = 0, max = 100, step = 5, action = "set_brightness", input = { id = "{id}", value = "{value}" } }
+
+[field.sync_brightness_levels]
+type = "boolean"
+config_key = "sync_brightness_levels"
+label = "Sync brightness levels"
+section = "display"
+default = true
+description = "Changing a display's brightness sets every connected display to the same percentage. Brightness hotkeys step them together."
