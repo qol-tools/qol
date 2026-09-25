@@ -1040,7 +1040,6 @@ pub struct ComponentPalettes {
     pub launcher: LauncherPalette,
     pub shot_selector: ShotSelectorPalette,
     pub shot_preview: ShotPreviewPalette,
-    pub toast: ToastPalette,
     pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
     pub picker_surface: PickerSurfacePalette,
@@ -1052,7 +1051,6 @@ impl ComponentPalettes {
             launcher: LauncherPalette::from_system(system),
             shot_selector: ShotSelectorPalette::from_theme(reference, system),
             shot_preview: ShotPreviewPalette::from_system(system),
-            toast: ToastPalette::from_system(system),
             settings_panel: SettingsPanelPalette::from_theme(mode, system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
             picker_surface: PickerSurfacePalette::themed(system, None, 1.0),
@@ -1129,41 +1127,6 @@ impl ShotPreviewPalette {
             action_border_selected: system.accent,
             state_on: system.success,
             state_off: system.danger,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ToastPalette {
-    pub window_bg: u32,
-    pub border: u32,
-    pub text_primary: u32,
-    pub text_secondary: u32,
-    pub surface_raised: u32,
-    pub surface_hovered: u32,
-    pub text_muted: u32,
-    pub accent: u32,
-    pub info: u32,
-    pub success: u32,
-    pub warning: u32,
-    pub danger: u32,
-}
-
-impl ToastPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            window_bg: system.surface_elevated,
-            border: system.border_subtle,
-            text_primary: system.text_primary,
-            text_secondary: system.text_secondary,
-            surface_raised: system.surface_raised,
-            surface_hovered: system.surface_hovered,
-            text_muted: system.text_muted,
-            accent: system.accent,
-            info: system.info,
-            success: system.success,
-            warning: system.warning,
-            danger: system.danger,
         }
     }
 }
@@ -1679,10 +1642,6 @@ pub fn shot_selector_runtime() -> ShotSelectorPalette {
 
 pub fn shot_preview_runtime() -> ShotPreviewPalette {
     runtime_theme().components.shot_preview
-}
-
-pub fn toast_runtime() -> ToastPalette {
-    runtime_theme().components.toast
 }
 
 pub fn settings_panel_runtime() -> SettingsPanelPalette {

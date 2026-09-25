@@ -8,13 +8,13 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
+use crate::kit::Kit;
 use crate::monitor::MonitorTracker;
 use crate::placement::{
     anchor_placement, Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN,
 };
 use crate::popup_window::{present_topmost, restore_composite, HiddenWindowsBarrier};
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
-use crate::theme::{toast_runtime, ToastPalette};
 
 const COMPACT_WIDTH: f32 = 340.0;
 const COMPACT_HEIGHT: f32 = 76.0;
@@ -141,48 +141,44 @@ impl ToastTone {
         }
     }
 
-    fn color(self, palette: ToastPalette) -> u32 {
+    fn color(self, kit: Kit) -> u32 {
         match self {
-            Self::Neutral => palette.border,
-            Self::Info => palette.info,
-            Self::Success => palette.success,
-            Self::Warning => palette.warning,
-            Self::Danger => palette.danger,
+            Self::Neutral => kit.palette.border_subtle,
+            Self::Info => kit.palette.info,
+            Self::Success => kit.palette.success,
+            Self::Warning => kit.palette.warning,
+            Self::Danger => kit.palette.danger,
         }
     }
 }
 
-fn tone_dot(tone: ToastTone, palette: ToastPalette) -> Div {
-    let kit = crate::kit::kit();
+fn tone_dot(tone: ToastTone, kit: Kit) -> Div {
     let halo = match tone {
         ToastTone::Neutral | ToastTone::Info => 0,
         ToastTone::Success => kit.washes.halo_success.packed(),
         ToastTone::Warning => kit.washes.halo_attention.packed(),
         ToastTone::Danger => kit.washes.halo_invalid.packed(),
     };
-    kit.status_dot(tone.color(palette), halo)
+    kit.status_dot(tone.color(kit), halo)
 }
 
-fn row_ground(row: &SlabSnapshotRow, palette: ToastPalette) -> u32 {
+fn row_ground(row: &SlabSnapshotRow, kit: Kit) -> u32 {
     if row.toast.live {
-        palette.surface_raised
+        kit.grounds.menu.bg
     } else {
-        tone_ground(row.toast.tone, palette)
+        tone_ground(row.toast.tone, kit)
     }
 }
 
-fn row_lift(row: &SlabSnapshotRow, palette: ToastPalette) -> Rgba {
-    rgb(qol_theme::lift(
-        row_ground(row, palette),
-        palette.text_primary,
-    ))
+fn row_lift(row: &SlabSnapshotRow, kit: Kit) -> Rgba {
+    rgb(qol_theme::lift(row_ground(row, kit), kit.grounds.pane.ink))
 }
 
-fn tone_ground(tone: ToastTone, palette: ToastPalette) -> u32 {
+fn tone_ground(tone: ToastTone, kit: Kit) -> u32 {
     if tone == ToastTone::Danger {
         crate::kit::kit().grounds.invalid.bg
     } else {
-        palette.window_bg
+        kit.grounds.pane.bg
     }
 }
 
@@ -889,7 +885,7 @@ struct SlabToastView {
 
 impl Render for SlabToastView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = toast_runtime();
+        let kit = crate::kit::kit();
         let (snapshot, expanded) = self.host.slab_snapshot();
 
         let mut live_rows: Vec<SlabSnapshotRow> = Vec::new();
@@ -930,20 +926,19 @@ impl Render for SlabToastView {
 
         let mut contents: Vec<AnyElement> = Vec::new();
         if header_shown {
-            contents
-                .push(slab_header(non_live_total, palette, self.host.clone()).into_any_element());
+            contents.push(slab_header(non_live_total, kit, self.host.clone()).into_any_element());
         }
         if !live_rows.is_empty() {
-            contents.push(live_band_label(palette).into_any_element());
+            contents.push(live_band_label(kit).into_any_element());
             for row in &live_rows {
-                contents.push(slab_row_view(row, palette, self.host.clone()).into_any_element());
+                contents.push(slab_row_view(row, kit, self.host.clone()).into_any_element());
             }
         }
         for row in &display_rows {
-            contents.push(slab_row_view(row, palette, self.host.clone()).into_any_element());
+            contents.push(slab_row_view(row, kit, self.host.clone()).into_any_element());
         }
         if summary_shown {
-            contents.push(summary_row(hidden_count, palette, self.host.clone()).into_any_element());
+            contents.push(summary_row(hidden_count, kit, self.host.clone()).into_any_element());
         }
 
         slab_root().children(contents)
@@ -954,7 +949,7 @@ fn slab_root() -> Div {
     crate::kit::kit().window().flex().flex_col()
 }
 
-fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> Div {
+fn slab_header(row_count: usize, kit: Kit, host: SlabPresenter) -> Div {
     div()
         .flex_none()
         .h(px(HEADER_HEIGHT))
@@ -963,14 +958,14 @@ fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> 
         .items_center()
         .px(px(12.0))
         .text(TextStyle::Detail)
-        .text_color(rgb(palette.text_muted))
+        .text_color(rgb(kit.grounds.pane.faint))
         .child(SharedString::from(format!("{row_count} notifications")))
         .child(div().flex_1())
         .child(
             crate::kit::kit()
                 .pointable(
                     div().id("toast-clear-all"),
-                    rgb(qol_theme::lift(palette.window_bg, palette.text_primary)),
+                    rgb(qol_theme::lift(kit.grounds.pane.bg, kit.grounds.pane.ink)),
                 )
                 .h_full()
                 .px(px(10.0))
@@ -978,13 +973,13 @@ fn slab_header(row_count: usize, palette: ToastPalette, host: SlabPresenter) -> 
                 .items_center()
                 .cursor_pointer()
                 .text(TextStyle::Detail)
-                .text_color(rgb(palette.text_muted))
+                .text_color(rgb(kit.grounds.pane.faint))
                 .child(SharedString::from("Clear all"))
                 .on_click(move |_, _, cx| host.clear_all(cx)),
         )
 }
 
-fn live_band_label(palette: ToastPalette) -> Div {
+fn live_band_label(kit: Kit) -> Div {
     div()
         .flex_none()
         .h(px(LIVE_BAND_HEIGHT))
@@ -993,11 +988,11 @@ fn live_band_label(palette: ToastPalette) -> Div {
         .items_center()
         .px(px(16.0))
         .text(TextStyle::Label)
-        .text_color(rgb(palette.text_muted))
+        .text_color(rgb(kit.grounds.pane.faint))
         .child(SharedString::from("LIVE"))
 }
 
-fn summary_row(hidden_count: usize, palette: ToastPalette, host: SlabPresenter) -> Stateful<Div> {
+fn summary_row(hidden_count: usize, kit: Kit, host: SlabPresenter) -> Stateful<Div> {
     div()
         .id("toast-summary")
         .flex_none()
@@ -1006,16 +1001,16 @@ fn summary_row(hidden_count: usize, palette: ToastPalette, host: SlabPresenter) 
         .flex()
         .items_center()
         .cursor_pointer()
-        .bg(rgb(palette.surface_raised))
+        .bg(rgb(kit.grounds.menu.bg))
         .text(TextStyle::Detail)
-        .text_color(rgb(palette.text_muted))
+        .text_color(rgb(kit.grounds.pane.faint))
         .child(SharedString::from(format!(
             "{hidden_count} older notifications"
         )))
         .on_click(move |_, _, cx| host.toggle_expanded(cx))
 }
 
-fn slab_row_view(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) -> Div {
+fn slab_row_view(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> Div {
     let mut container = div()
         .flex_none()
         .h(px(ROW_HEIGHT))
@@ -1023,17 +1018,17 @@ fn slab_row_view(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresent
         .flex()
         .flex_row();
     if row.toast.live || row.toast.tone == ToastTone::Danger {
-        container = container.bg(rgb(row_ground(row, palette)));
+        container = container.bg(rgb(row_ground(row, kit)));
     }
     container
-        .child(preview_zone(row, palette, host.clone()))
-        .child(text_zone(row, palette, host.clone()))
+        .child(preview_zone(row, kit, host.clone()))
+        .child(text_zone(row, kit, host.clone()))
         .child(gutter())
-        .child(dismiss_control(row, palette, host))
+        .child(dismiss_control(row, kit, host))
 }
 
-fn preview_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) -> AnyElement {
-    let slot = preview_slot(row, palette);
+fn preview_zone(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> AnyElement {
+    let slot = preview_slot(row, kit);
     if row.toast.preview_action.is_none() {
         return slot.into_any_element();
     }
@@ -1041,14 +1036,14 @@ fn preview_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresente
     crate::kit::kit()
         .pointable(
             slot.id(("toast-preview", id.0)).cursor_pointer(),
-            row_lift(row, palette),
+            row_lift(row, kit),
         )
         .on_click(move |_, _, cx| host.open_preview(id, cx))
         .into_any_element()
 }
 
-fn text_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) -> AnyElement {
-    let column = text_column(row, palette);
+fn text_zone(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> AnyElement {
+    let column = text_column(row, kit);
     if row.toast.activation.is_none() {
         return column.into_any_element();
     }
@@ -1056,7 +1051,7 @@ fn text_zone(row: &SlabSnapshotRow, palette: ToastPalette, host: SlabPresenter) 
     crate::kit::kit()
         .pointable(
             column.id(("toast-open", id.0)).cursor_pointer(),
-            row_lift(row, palette),
+            row_lift(row, kit),
         )
         .on_click(move |_, _, cx| host.activate(id, cx))
         .into_any_element()
@@ -1066,21 +1061,21 @@ fn gutter() -> Div {
     div().flex_none().h_full().w(px(GUTTER))
 }
 
-fn preview_slot(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
+fn preview_slot(row: &SlabSnapshotRow, kit: Kit) -> Div {
     let slot = div().flex_none().h_full().flex().overflow_hidden();
     match &row.toast.preview {
         Some(preview) => slot
             .w(px(PREVIEW_WIDTH))
-            .child(preview.render(row.toast.tone.color(palette))),
+            .child(preview.render(row.toast.tone.color(kit))),
         None => slot
             .w(px(DOT_SLOT_WIDTH))
             .items_center()
             .pl(px(qol_theme::SPACE_PAD))
-            .child(tone_dot(row.toast.tone, palette)),
+            .child(tone_dot(row.toast.tone, kit)),
     }
 }
 
-fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
+fn text_column(row: &SlabSnapshotRow, kit: Kit) -> Div {
     let mut column = div()
         .flex_1()
         .min_w_0()
@@ -1099,14 +1094,14 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
                 .items_center()
                 .gap(px(qol_theme::SPACE_TIGHT))
                 .children(row.toast.busy.then(|| {
-                    crate::busy::Busy::ring(("toast-busy", row.id.0), rgb(palette.text_secondary))
+                    crate::busy::Busy::ring(("toast-busy", row.id.0), rgb(kit.grounds.pane.soft))
                 }))
                 .child(
                     div()
                         .min_w_0()
                         .flex_1()
                         .text(TextStyle::ListName)
-                        .text_color(rgb(palette.text_primary))
+                        .text_color(rgb(kit.grounds.pane.ink))
                         .child(row.toast.title.clone()),
                 ),
         );
@@ -1115,7 +1110,7 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
     }
     if row.toast.message_is_path {
         let (head, tail) = crate::kit::path_label(&row.toast.message);
-        column = column.child(path_body_line(head, tail, palette));
+        column = column.child(path_body_line(head, tail, kit));
     } else {
         column = column.child(
             div()
@@ -1123,14 +1118,14 @@ fn text_column(row: &SlabSnapshotRow, palette: ToastPalette) -> Div {
                 .min_w_0()
                 .text(TextStyle::Detail)
                 .line_clamp(2)
-                .text_color(rgb(palette.text_secondary))
+                .text_color(rgb(kit.grounds.pane.soft))
                 .child(row.toast.message.clone()),
         );
     }
     column
 }
 
-fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
+fn path_body_line(head: String, tail: String, kit: Kit) -> Div {
     let mut line = div().w_full().min_w_0().flex().flex_row().overflow_hidden();
     if !head.is_empty() {
         line = line.child(
@@ -1138,7 +1133,7 @@ fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
                 .min_w_0()
                 .flex_1()
                 .text(TextStyle::Code)
-                .text_color(rgb(palette.text_secondary))
+                .text_color(rgb(kit.grounds.pane.soft))
                 .child(SharedString::from(head)),
         );
     }
@@ -1147,18 +1142,14 @@ fn path_body_line(head: String, tail: String, palette: ToastPalette) -> Div {
             .min_w_0()
             .flex_1()
             .text(TextStyle::Code)
-            .text_color(rgb(palette.text_secondary))
+            .text_color(rgb(kit.grounds.pane.soft))
             .child(SharedString::from(tail)),
     )
 }
 
-fn dismiss_control(
-    row: &SlabSnapshotRow,
-    palette: ToastPalette,
-    host: SlabPresenter,
-) -> Stateful<Div> {
+fn dismiss_control(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> Stateful<Div> {
     let id = row.id;
-    let lift = row_lift(row, palette);
+    let lift = row_lift(row, kit);
     let control = div()
         .id(("toast-dismiss", id.0))
         .flex_none()
@@ -1171,7 +1162,7 @@ fn dismiss_control(
         .child(crate::icon::icon(
             crate::Icon::Close,
             qol_theme::TEXT_MICRO,
-            palette.text_secondary,
+            kit.grounds.pane.soft,
         ))
         .on_click(move |_, _, cx| host.remove(id, cx));
     crate::kit::kit().pointable(control, lift)
@@ -1191,7 +1182,6 @@ mod tests {
     use std::time::Duration;
 
     use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
-    use crate::theme::ToastPalette;
 
     use super::{
         routed_presentation, slab_height, visible_slab_counts, Presentation, Toast, ToastLayout,
@@ -1307,30 +1297,18 @@ mod tests {
 
     #[test]
     fn tones_map_to_semantic_palette_roles() {
-        let palette = ToastPalette {
-            window_bg: 1,
-            border: 2,
-            text_primary: 3,
-            text_secondary: 4,
-            info: 5,
-            success: 6,
-            warning: 7,
-            danger: 8,
-            surface_raised: 9,
-            surface_hovered: 10,
-            text_muted: 11,
-            accent: 12,
-        };
+        let system = qol_theme::DARK_SYSTEM;
+        let kit = crate::kit::Kit::new(qol_theme::ThemeMode::Dark, system);
         let cases = [
-            (ToastTone::Neutral, 2),
-            (ToastTone::Info, 5),
-            (ToastTone::Success, 6),
-            (ToastTone::Warning, 7),
-            (ToastTone::Danger, 8),
+            (ToastTone::Neutral, system.border_subtle),
+            (ToastTone::Info, system.info),
+            (ToastTone::Success, system.success),
+            (ToastTone::Warning, system.warning),
+            (ToastTone::Danger, system.danger),
         ];
 
         for (tone, expected) in cases {
-            assert_eq!(tone.color(palette), expected, "tone: {tone:?}");
+            assert_eq!(tone.color(kit), expected, "tone: {tone:?}");
         }
     }
 

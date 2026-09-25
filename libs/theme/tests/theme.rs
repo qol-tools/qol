@@ -87,19 +87,6 @@ fn shot_preview_palette_derives_from_system_roles() {
 }
 
 #[test]
-fn toast_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.toast;
-    assert_eq!(palette.window_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.info, DARK_SYSTEM.info);
-    assert_eq!(palette.success, DARK_SYSTEM.success);
-    assert_eq!(palette.warning, DARK_SYSTEM.warning);
-    assert_eq!(palette.danger, DARK_SYSTEM.danger);
-}
-
-#[test]
 fn settings_panel_palette_derives_status_tones_from_system_roles() {
     let palette = dark_theme().components.settings_panel;
     assert_eq!(palette.status_accent, DARK_SYSTEM.accent_ink);
