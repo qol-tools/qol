@@ -3,7 +3,7 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba};
 use qol_theme::TextStyle;
 
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 use super::{ground_bg, ground_text, RowGround};
 
@@ -49,10 +49,10 @@ pub(in crate::settings_panel) fn number_field(
     track: Option<(f32, SliderStyle)>,
     interact: impl FnOnce(gpui::Div) -> gpui::Div,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Div {
-    let ground = row.rest(palette);
-    let hover = row.hover(palette);
+    let ground = row.rest(kit);
+    let hover = row.hover(kit);
     let (text, text_hover) = match row {
         RowGround::Pane => (ground.soft, None),
         RowGround::Band => (ground.ink, hover.map(|hover| hover.ink)),

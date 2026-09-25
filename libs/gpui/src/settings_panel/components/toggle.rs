@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, App, RenderOnce, Window};
 
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 use super::{ground_bg, RowGround};
 
@@ -12,23 +12,19 @@ const TOGGLE_TRACK_HEIGHT: f32 = qol_theme::HEIGHT_INLINE - 4.0;
 pub struct SettingsToggle {
     active: bool,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 }
 
 impl SettingsToggle {
-    pub fn new(active: bool, row: RowGround, palette: SettingsPanelPalette) -> Self {
-        Self {
-            active,
-            row,
-            palette,
-        }
+    pub fn new(active: bool, row: RowGround, kit: Kit) -> Self {
+        Self { active, row, kit }
     }
 }
 
 impl RenderOnce for SettingsToggle {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let ground = self.row.rest(self.palette);
-        let hover = self.row.hover(self.palette);
+        let ground = self.row.rest(self.kit);
+        let hover = self.row.hover(self.kit);
         let (track, track_hover) = if self.active {
             (rgb(ground.mark), hover.map(|hover| rgb(hover.mark)))
         } else {

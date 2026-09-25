@@ -403,7 +403,7 @@ impl SettingsPanelView {
         let current = self.body_has_focus();
         let mut items: Vec<AnyElement> = Vec::new();
         items.push(
-            SettingsGroupHeader::new(label, description.map(Into::into), self.palette)
+            SettingsGroupHeader::new(label, description.map(Into::into), self.kit)
                 .current(current)
                 .into_any_element(),
         );
@@ -416,7 +416,7 @@ impl SettingsPanelView {
                 tile.art,
                 layout,
                 context,
-                self.palette,
+                self.kit,
             )
             .detail(tile.detail.map(Into::into))
             .highlighted(index == highlighted && current)

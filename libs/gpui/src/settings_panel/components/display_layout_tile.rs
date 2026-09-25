@@ -3,8 +3,8 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, SharedString};
 use qol_theme::TextStyle;
 
+use crate::kit::Kit;
 use crate::kit::{kit, Chip};
-use crate::theme::SettingsPanelPalette;
 
 pub struct DisplayLayoutTile {
     pub connector: String,
@@ -24,44 +24,35 @@ pub struct DisplayLayoutTileStyle {
     pub background: u32,
 }
 
-pub fn display_layout_tile_style(
-    tile: &DisplayLayoutTile,
-    palette: SettingsPanelPalette,
-) -> DisplayLayoutTileStyle {
+pub fn display_layout_tile_style(tile: &DisplayLayoutTile, kit: Kit) -> DisplayLayoutTileStyle {
     let border_color = if tile.conflicted {
-        palette.state_off
+        kit.palette.danger
     } else if tile.selected {
-        palette.row_border_selected
+        kit.grounds.pane.mark
     } else {
-        palette.panel_border
+        kit.palette.border_subtle
     };
     DisplayLayoutTileStyle {
         border_color,
         background: if tile.selected {
-            palette.row_bg_selected
+            kit.grounds.band.bg
         } else {
-            palette.surface_raised
+            kit.grounds.menu.bg
         },
     }
 }
 
-pub fn display_layout_stage(palette: SettingsPanelPalette, height: f32) -> gpui::Div {
+pub fn display_layout_stage(kit: Kit, height: f32) -> gpui::Div {
     div()
         .relative()
         .w_full()
         .h(px(height))
         .overflow_hidden()
         .rounded(px(qol_theme::RADIUS_CARD))
-        .bg(rgb(palette.surface_raised))
+        .bg(rgb(kit.grounds.menu.bg))
 }
 
-pub fn display_layout_ghost(
-    left: f32,
-    top: f32,
-    width: f32,
-    height: f32,
-    palette: SettingsPanelPalette,
-) -> gpui::Div {
+pub fn display_layout_ghost(left: f32, top: f32, width: f32, height: f32, kit: Kit) -> gpui::Div {
     div()
         .absolute()
         .left(px(left))
@@ -70,17 +61,17 @@ pub fn display_layout_ghost(
         .h(px(height))
         .rounded(px(qol_theme::RADIUS_TIGHT))
         .border(px(qol_theme::LINE))
-        .border_color(rgb(palette.row_border_selected))
-        .bg(rgb(palette.row_bg_selected))
+        .border_color(rgb(kit.grounds.pane.mark))
+        .bg(rgb(kit.grounds.band.bg))
         .opacity(qol_theme::OPACITY_REST)
 }
 
 pub fn display_layout_tile(
     index: usize,
     tile: &DisplayLayoutTile,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Stateful<gpui::Div> {
-    let style = display_layout_tile_style(tile, palette);
+    let style = display_layout_tile_style(tile, kit);
     let mut cell = div()
         .id(("settings-display-layout-tile", index))
         .absolute()
@@ -105,26 +96,26 @@ pub fn display_layout_tile(
                         .flex_1()
                         .min_w_0()
                         .text(TextStyle::Detail)
-                        .text_color(rgb(palette.label_text))
+                        .text_color(rgb(kit.grounds.pane.soft))
                         .child(SharedString::from(tile.connector.clone())),
                 )
                 .children(
                     tile.selected
-                        .then(|| status_chip("selected", palette.status_accent)),
+                        .then(|| status_chip("selected", kit.palette.accent_ink)),
                 ),
         )
         .child(
             div()
                 .px(px(qol_theme::SPACE_STACK))
                 .text(TextStyle::Label)
-                .text_color(rgb(palette.status_muted))
+                .text_color(rgb(kit.grounds.pane.faint))
                 .child(SharedString::from(tile.resolution.clone())),
         );
     if tile.primary {
         cell = cell.child(
             div()
                 .px(px(qol_theme::SPACE_STACK))
-                .child(status_chip("primary", palette.status_success)),
+                .child(status_chip("primary", kit.palette.success)),
         );
     }
     cell
@@ -146,8 +137,8 @@ fn status_chip(text: &'static str, tone: u32) -> gpui::Div {
 mod tests {
     use super::*;
 
-    fn palette() -> SettingsPanelPalette {
-        qol_theme::settings_panel_runtime()
+    fn kit() -> Kit {
+        crate::kit::kit()
     }
 
     fn tile(selected: bool, conflicted: bool) -> DisplayLayoutTile {
@@ -166,49 +157,49 @@ mod tests {
 
     #[test]
     fn selected_tile_takes_the_accent_border() {
-        let palette = palette();
-        let style = display_layout_tile_style(&tile(true, false), palette);
-        assert_eq!(style.border_color, palette.row_border_selected);
-        assert_ne!(style.border_color, palette.panel_border);
+        let kit = kit();
+        let style = display_layout_tile_style(&tile(true, false), kit);
+        assert_eq!(style.border_color, kit.grounds.pane.mark);
+        assert_ne!(style.border_color, kit.palette.border_subtle);
     }
 
     #[test]
     fn unselected_tile_keeps_the_panel_border() {
-        let palette = palette();
-        let style = display_layout_tile_style(&tile(false, false), palette);
-        assert_eq!(style.border_color, palette.panel_border);
+        let kit = kit();
+        let style = display_layout_tile_style(&tile(false, false), kit);
+        assert_eq!(style.border_color, kit.palette.border_subtle);
     }
 
     #[test]
     fn conflicted_selected_tile_stays_on_danger() {
-        let palette = palette();
-        let style = display_layout_tile_style(&tile(true, true), palette);
-        assert_eq!(style.border_color, palette.state_off);
-        assert_ne!(style.border_color, palette.row_border_selected);
+        let kit = kit();
+        let style = display_layout_tile_style(&tile(true, true), kit);
+        assert_eq!(style.border_color, kit.palette.danger);
+        assert_ne!(style.border_color, kit.grounds.pane.mark);
     }
 
     #[test]
     fn conflicted_unselected_tile_stays_on_danger() {
-        let palette = palette();
-        let style = display_layout_tile_style(&tile(false, true), palette);
-        assert_eq!(style.border_color, palette.state_off);
-        assert_eq!(style.background, palette.surface_raised);
+        let kit = kit();
+        let style = display_layout_tile_style(&tile(false, true), kit);
+        assert_eq!(style.border_color, kit.palette.danger);
+        assert_eq!(style.background, kit.grounds.menu.bg);
     }
 
     #[test]
     fn background_follows_selection() {
-        let palette = palette();
-        let selected = display_layout_tile_style(&tile(true, false), palette);
-        let unselected = display_layout_tile_style(&tile(false, false), palette);
-        assert_eq!(selected.background, palette.row_bg_selected);
-        assert_eq!(unselected.background, palette.surface_raised);
+        let kit = kit();
+        let selected = display_layout_tile_style(&tile(true, false), kit);
+        let unselected = display_layout_tile_style(&tile(false, false), kit);
+        assert_eq!(selected.background, kit.grounds.band.bg);
+        assert_eq!(unselected.background, kit.grounds.menu.bg);
     }
 
     #[test]
     fn a_plain_tile_is_unchanged_from_todays_colors() {
-        let palette = palette();
-        let style = display_layout_tile_style(&tile(false, false), palette);
-        assert_eq!(style.border_color, palette.panel_border);
-        assert_eq!(style.background, palette.surface_raised);
+        let kit = kit();
+        let style = display_layout_tile_style(&tile(false, false), kit);
+        assert_eq!(style.border_color, kit.palette.border_subtle);
+        assert_eq!(style.background, kit.grounds.menu.bg);
     }
 }

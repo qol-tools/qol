@@ -2,13 +2,13 @@ use qol_color::{mix_rgb, rgba_from_rgb, with_alpha};
 use qol_theme::{
     contrast_ratio, css, css_rgba_milli, dark_accent_preset, dark_theme,
     dark_theme_with_accent_key, desktop_theme_preview, preset_accent_key, resolve_surface_override,
-    runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Face, Motion,
-    PickerSurfacePalette, SettingsPanelPalette, TextStyle, ThemeMode, WashPalette,
-    DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM, DARK_TRAY_INTERNAL, HEIGHT_BAND,
-    HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER, HEIGHT_RULE_ROW,
-    HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS,
-    PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER, STAY_BRIEF,
-    STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE, THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
+    runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Face, Grounds, Motion,
+    PickerSurfacePalette, TextStyle, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE,
+    DARK_SYSTEM, DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE,
+    HEIGHT_LADDER, HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE,
+    LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER,
+    SPACE_LADDER, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE, THEME_COLOR_SENTINEL,
+    WAIT_BEFORE_BUSY,
 };
 use std::{
     fs,
@@ -52,21 +52,6 @@ fn runtime_dark_theme_falls_back_for_unknown_injected_accent_key() {
 fn css_color_serializers_are_shared() {
     assert_eq!(css::rgb_string(0xffb454), "255, 180, 84");
     assert_eq!(css::hex_string(0xffc77a), "#ffc77a");
-}
-
-#[test]
-fn settings_panel_palette_derives_status_tones_from_system_roles() {
-    let palette = dark_theme().components.settings_panel;
-    assert_eq!(palette.status_accent, DARK_SYSTEM.accent_ink);
-    assert_eq!(palette.status_success, DARK_SYSTEM.success);
-    assert_eq!(palette.status_danger, DARK_SYSTEM.danger);
-    assert_eq!(palette.status_warning, DARK_SYSTEM.warning);
-    assert_eq!(palette.status_warning_ink, DARK_SYSTEM.warning_ink);
-    assert_eq!(palette.status_muted, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.transparent_rgba, 0x00000000);
-    assert_eq!(palette.qr_dark, DARK_REFERENCE.black);
-    assert_eq!(palette.qr_light, DARK_REFERENCE.white);
-    assert_eq!(palette.live_color_fallback, DARK_REFERENCE.white);
 }
 
 #[test]
@@ -1370,21 +1355,17 @@ fn the_settings_panel_rail_stays_readable_in_both_themes() {
     let modes = [
         (
             "light",
-            SettingsPanelPalette::from_theme(ThemeMode::Light, LIGHT_SYSTEM),
+            Grounds::from_theme(ThemeMode::Light, LIGHT_SYSTEM).rail,
         ),
         (
             "dark",
-            SettingsPanelPalette::from_theme(ThemeMode::Dark, DARK_SYSTEM),
+            Grounds::from_theme(ThemeMode::Dark, DARK_SYSTEM).rail,
         ),
     ];
 
     for (mode, rail) in modes {
-        for (name, ink) in [
-            ("rail text", rail.rail_text),
-            ("inactive section", rail.rail_text_muted),
-            ("active section", rail.rail_active_text),
-        ] {
-            let ratio = contrast_ratio(ink, rail.rail_bg);
+        for (name, ink) in [("rail text", rail.soft), ("active section", rail.ink)] {
+            let ratio = contrast_ratio(ink, rail.bg);
             assert!(
                 ratio >= ACCENT_INK_FLOOR,
                 "{mode} {name} on the rail = {ratio:.2}, floor {ACCENT_INK_FLOOR}"
@@ -1407,15 +1388,13 @@ fn the_selected_rail_row_carries_its_label_in_every_accent() {
 
     for (mode, theme, system, presets) in modes {
         for preset in presets {
-            let rail = SettingsPanelPalette::from_theme(
-                theme,
-                system.with_accent_pair(preset.rgb, preset.ink),
-            );
+            let system = system.with_accent_pair(preset.rgb, preset.ink);
+            let grounds = Grounds::from_theme(theme, system);
             for (name, fill) in [
-                ("selected", rail.fill_current),
-                ("selected while away", rail.fill_current_quiet),
+                ("selected", grounds.band.bg),
+                ("selected while away", qol_theme::band_rest_fill(system)),
             ] {
-                let ratio = contrast_ratio(rail.rail_active_text, fill);
+                let ratio = contrast_ratio(grounds.rail.ink, fill);
                 assert!(
                     ratio >= ACCENT_INK_FLOOR,
                     "{mode} {} {name} filled row = {ratio:.2}, floor {ACCENT_INK_FLOOR}",
@@ -1423,7 +1402,7 @@ fn the_selected_rail_row_carries_its_label_in_every_accent() {
                 );
             }
             assert_ne!(
-                rail.fill_current, rail.rail_bg,
+                grounds.band.bg, grounds.rail.bg,
                 "{mode} {} selected rail row has to read against the rail",
                 preset.key
             );
@@ -2077,7 +2056,14 @@ every other settings-scope file keeps its exact counts in LEAF_STYLING_DEBT.\n{}
 
 const PALETTE_PREFIXES: [&str; 3] = ["kit.palette.", "kit().palette", "shared.palette."];
 
-const SEMANTIC_HUES: [&str; 5] = ["success", "info", "warning", "warning_ink", "danger"];
+const SEMANTIC_HUES: [&str; 6] = [
+    "success",
+    "info",
+    "warning",
+    "warning_ink",
+    "danger",
+    "accent_ink",
+];
 
 #[test]
 fn settings_surfaces_take_colour_from_the_settings_palette() {
@@ -2261,35 +2247,35 @@ fn settings_surfaces_build_spinners_through_components() {
 
 #[test]
 fn settings_grounds_resolve_the_locked_roles() {
-    let dark = SettingsPanelPalette::from_theme(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7));
+    let dark = Grounds::from_theme(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7));
 
-    assert_eq!(dark.grounds.band.bg, 0x464a79);
-    assert_eq!(dark.grounds.band.soft, 0xd4d4db);
-    assert_eq!(dark.grounds.band.faint, 0xb8b9c8);
-    assert_eq!(dark.grounds.band_hover.bg, 0x545783);
+    assert_eq!(dark.band.bg, 0x464a79);
+    assert_eq!(dark.band.soft, 0xd4d4db);
+    assert_eq!(dark.band.faint, 0xb8b9c8);
+    assert_eq!(dark.band_hover.bg, 0x545783);
 
     assert_eq!(
-        dark.grounds.band.well,
+        dark.band.well,
         css_rgba_milli(DARK_SYSTEM.text_primary, 140)
     );
     assert_eq!(
-        dark.grounds.band.edge,
+        dark.band.edge,
         css_rgba_milli(DARK_SYSTEM.text_primary, 240)
     );
-    assert_eq!(dark.grounds.band.mark, DARK_SYSTEM.text_primary);
-    assert_eq!(dark.grounds.band.on_mark, dark.grounds.band.bg);
+    assert_eq!(dark.band.mark, DARK_SYSTEM.text_primary);
+    assert_eq!(dark.band.on_mark, dark.band.bg);
 
-    assert_eq!(dark.grounds.pane.ink, DARK_SYSTEM.text_primary);
-    assert_eq!(dark.grounds.pane.soft, DARK_SYSTEM.text_secondary);
-    assert_eq!(dark.grounds.pane.faint, DARK_SYSTEM.text_muted);
+    assert_eq!(dark.pane.ink, DARK_SYSTEM.text_primary);
+    assert_eq!(dark.pane.soft, DARK_SYSTEM.text_secondary);
+    assert_eq!(dark.pane.faint, DARK_SYSTEM.text_muted);
 
     let dark_washes = WashPalette::dark(DARK_SYSTEM);
-    assert_eq!(dark.grounds.pane.well, dark_washes.fill_resting);
-    assert_eq!(dark.grounds.pane.edge, dark_washes.hairline);
+    assert_eq!(dark.pane.well, dark_washes.fill_resting);
+    assert_eq!(dark.pane.edge, dark_washes.hairline);
 
     let light_system = LIGHT_SYSTEM.with_accent(0x6f5da8);
-    let light = SettingsPanelPalette::from_theme(ThemeMode::Light, light_system);
-    assert_eq!(light.grounds.band.bg, 0xbbb2d1);
+    let light = Grounds::from_theme(ThemeMode::Light, light_system);
+    assert_eq!(light.band.bg, 0xbbb2d1);
 }
 
 #[test]
@@ -2309,7 +2295,7 @@ fn settings_ground_text_clears_its_floor_in_every_accent() {
         for preset in presets {
             let preset_key = preset.key;
             let system = base.with_accent_pair(preset.rgb, preset.ink);
-            let grounds = SettingsPanelPalette::from_theme(theme_mode, system).grounds;
+            let grounds = Grounds::from_theme(theme_mode, system);
             for (name, ground) in [
                 ("pane", grounds.pane),
                 ("rail", grounds.rail),

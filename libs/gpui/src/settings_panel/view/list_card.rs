@@ -19,9 +19,9 @@ use super::{
     align_to_step, horizontal_step_direction, round_to_step_precision, slider_drag_track,
     slider_fraction, status_tone_color, Level, LevelHeader, ListItemCard, SettingsPanelView,
 };
+use crate::kit::Kit;
 use crate::phantom_nav::NavAxis;
 use crate::pictures::PictureContext;
-use crate::theme::SettingsPanelPalette;
 
 pub(super) const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration =
     std::time::Duration::from_millis(200);
@@ -453,7 +453,7 @@ impl SettingsPanelView {
                 fraction,
                 percent,
                 ground: row,
-                palette: self.palette,
+                kit: self.kit,
             },
             move |panel: &mut SettingsPanelView,
                   row: usize,
@@ -503,22 +503,22 @@ impl SettingsPanelView {
             qol_theme::runtime_theme().mode,
             qol_theme::runtime_accent_key(),
         );
-        let word_color = (row == RowGround::Pane).then(|| list_card_word_color(item, self.palette));
-        let mut line = SettingsRow::rule(("settings-list-card-item", index), self.palette)
+        let word_color = (row == RowGround::Pane).then(|| list_card_word_color(item, self.kit));
+        let mut line = SettingsRow::rule(("settings-list-card-item", index), self.kit)
             .selected(selected, self.body_has_focus())
             .child(
-                settings_label(item.label.clone(), self.palette)
+                settings_label(item.label.clone(), self.kit)
                     .flex_1()
                     .min_w(px(0.)),
             );
         if item.pending {
             line = line.child(settings_action_spinner(
                 ("settings-list-card-spinner", index),
-                self.palette,
+                self.kit,
             ));
         }
         line = line.child(
-            SettingsChoiceValue::new(list_item_value_text(item), art, row, context, self.palette)
+            SettingsChoiceValue::new(list_item_value_text(item), art, row, context, self.kit)
                 .word_color(word_color),
         );
         if let Some((slider, value)) = slider.as_deref().and_then(|slider| {
@@ -560,17 +560,17 @@ fn list_item_art(items: &[ListItem], visible: &[usize], slot: usize) -> ChoiceAr
     }
 }
 
-fn list_card_word_color(item: &ListItem, palette: SettingsPanelPalette) -> u32 {
+fn list_card_word_color(item: &ListItem, kit: Kit) -> u32 {
     if item.error.is_some() {
-        return palette.state_off;
+        return kit.palette.danger;
     }
     if item.badge.is_some() {
-        return status_tone_color(palette, item.effective_badge_tone());
+        return status_tone_color(kit, item.effective_badge_tone());
     }
     if list_item_value_text(item).is_empty() {
-        palette.grounds.pane.faint
+        kit.grounds.pane.faint
     } else {
-        palette.grounds.pane.soft
+        kit.grounds.pane.soft
     }
 }
 
@@ -622,7 +622,7 @@ pub(super) struct SliderTrackStyle {
     pub fraction: f32,
     pub percent: String,
     pub ground: RowGround,
-    pub palette: SettingsPanelPalette,
+    pub kit: Kit,
 }
 
 pub(super) fn slider_track<O, M, R>(
@@ -641,8 +641,8 @@ where
 {
     let fraction = style.fraction;
     let percent = style.percent;
-    let palette = style.palette;
-    let ground = style.ground.rest(palette);
+    let kit = style.kit;
+    let ground = style.ground.rest(kit);
     let fill = fraction * 72.0;
     div()
         .flex()
@@ -674,7 +674,7 @@ where
         .child(
             div()
                 .text(TextStyle::Code)
-                .text_color(rgb(palette.label_text))
+                .text_color(rgb(kit.grounds.pane.soft))
                 .child(percent),
         )
 }

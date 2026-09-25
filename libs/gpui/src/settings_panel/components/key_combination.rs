@@ -4,7 +4,7 @@ use gpui::{div, px, rgb, rgba, App, IntoElement, RenderOnce, SharedString, Windo
 use qol_theme::TextStyle;
 
 use crate::kit::kit;
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 use super::{ground_bg, ground_text, RowGround};
 
@@ -14,7 +14,7 @@ pub struct SettingsKeyCombination {
     focused: bool,
     recording: bool,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 }
 
 impl SettingsKeyCombination {
@@ -23,22 +23,22 @@ impl SettingsKeyCombination {
         focused: bool,
         recording: bool,
         row: RowGround,
-        palette: SettingsPanelPalette,
+        kit: Kit,
     ) -> Self {
         Self {
             text: text.into(),
             focused,
             recording,
             row,
-            palette,
+            kit,
         }
     }
 }
 
 impl RenderOnce for SettingsKeyCombination {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let ground = self.row.rest(self.palette);
-        let hover = self.row.hover(self.palette);
+        let ground = self.row.rest(self.kit);
+        let hover = self.row.hover(self.kit);
         let editing = self.focused || self.recording;
         let (text, text_hover) = if self.text.is_empty() {
             (ground.faint, hover.map(|hover| hover.faint))

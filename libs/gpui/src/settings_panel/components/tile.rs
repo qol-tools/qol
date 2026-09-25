@@ -10,8 +10,8 @@ use qol_theme::TextStyle;
 use qol_config::contract::is_picture_spec;
 
 use crate::kit::kit;
+use crate::kit::Kit;
 use crate::pictures::{self, PictureContext};
-use crate::theme::SettingsPanelPalette;
 
 use super::hint_bar::SettingsHint;
 use super::settings_tile_spinner;
@@ -165,7 +165,7 @@ pub struct SettingsTile {
     art: TileArt,
     layout: TileLayout,
     context: PictureContext,
-    palette: SettingsPanelPalette,
+    kit: Kit,
     highlighted: bool,
     ticked: bool,
     on_click: Option<ClickHandler>,
@@ -178,7 +178,7 @@ impl SettingsTile {
         art: TileArt,
         layout: TileLayout,
         context: PictureContext,
-        palette: SettingsPanelPalette,
+        kit: Kit,
     ) -> Self {
         Self {
             id: id.into(),
@@ -187,7 +187,7 @@ impl SettingsTile {
             art,
             layout,
             context,
-            palette,
+            kit,
             highlighted: false,
             ticked: false,
             on_click: None,
@@ -228,13 +228,13 @@ impl RenderOnce for SettingsTile {
             art,
             layout,
             context,
-            palette,
+            kit,
             highlighted,
             ticked,
             on_click,
         } = self;
-        let ground = palette.grounds.pane;
-        let band = palette.grounds.band;
+        let ground = kit.grounds.pane;
+        let band = kit.grounds.band;
         let waiting = matches!(art, TileArt::Waiting);
         let scale = window.scale_factor();
 
@@ -281,7 +281,7 @@ impl RenderOnce for SettingsTile {
                     None => art_box,
                 }
             }
-            TileArt::Waiting => art_box.child(settings_tile_spinner(id, palette)),
+            TileArt::Waiting => art_box.child(settings_tile_spinner(id, kit)),
         };
 
         let name_color = if waiting {

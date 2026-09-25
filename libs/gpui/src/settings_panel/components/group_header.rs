@@ -6,7 +6,7 @@ use qol_theme::TextStyle;
 use super::{
     masthead_rule, settings_action_spinner, settings_value_text, RowGround, SettingsValueTone,
 };
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 #[derive(IntoElement)]
 pub struct SettingsGroupHeader {
@@ -14,31 +14,27 @@ pub struct SettingsGroupHeader {
     detail: Option<SharedString>,
     current: bool,
     activity: Option<SharedString>,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 }
 
 impl SettingsGroupHeader {
-    pub fn new(
-        title: impl Into<SharedString>,
-        detail: Option<SharedString>,
-        palette: SettingsPanelPalette,
-    ) -> Self {
+    pub fn new(title: impl Into<SharedString>, detail: Option<SharedString>, kit: Kit) -> Self {
         Self {
             title: title.into(),
             detail,
             current: false,
             activity: None,
-            palette,
+            kit,
         }
     }
 
-    pub fn titled(title: impl Into<SharedString>, palette: SettingsPanelPalette) -> Self {
+    pub fn titled(title: impl Into<SharedString>, kit: Kit) -> Self {
         Self {
             title: title.into(),
             detail: None,
             current: false,
             activity: None,
-            palette,
+            kit,
         }
     }
 
@@ -83,15 +79,12 @@ impl RenderOnce for SettingsGroupHeader {
                                 .flex()
                                 .items_center()
                                 .gap(px(qol_theme::SPACE_INSET))
-                                .child(settings_action_spinner(
-                                    "settings-group-activity",
-                                    self.palette,
-                                ))
+                                .child(settings_action_spinner("settings-group-activity", self.kit))
                                 .child(settings_value_text(
                                     label,
                                     SettingsValueTone::Muted,
                                     RowGround::Pane,
-                                    self.palette,
+                                    self.kit,
                                 )),
                         )
                     }),

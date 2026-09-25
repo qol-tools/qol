@@ -1,6 +1,6 @@
 use gpui::*;
 
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Motion {
@@ -138,8 +138,8 @@ fn stage() -> Div {
     div().relative().flex_1().min_w_0().h_full()
 }
 
-pub(crate) fn card_edges(card: Div, palette: SettingsPanelPalette, hairline: Rgba) -> Div {
-    card.bg(rgb(palette.window_bg))
+pub(crate) fn card_edges(card: Div, kit: Kit, hairline: Rgba) -> Div {
+    card.bg(rgb(kit.grounds.pane.bg))
         .border(px(qol_theme::LINE))
         .border_color(hairline)
         .rounded_l(px(qol_theme::RADIUS_CARD))
@@ -148,26 +148,22 @@ pub(crate) fn card_edges(card: Div, palette: SettingsPanelPalette, hairline: Rgb
 
 /// The card that is on its way out. It keeps its own content while it slides
 /// off to the right, so the page underneath is revealed instead of replaced.
-pub fn drawer(palette: SettingsPanelPalette, card: Div, slide: Slide) -> AnyElement {
+pub fn drawer(kit: Kit, card: Div, slide: Slide) -> AnyElement {
     let hairline = rgba(crate::kit::kit().washes.hairline.packed());
-    card_edges(
-        card.absolute().right_0().top_0().bottom_0(),
-        palette,
-        hairline,
-    )
-    .shadow(crate::kit::float_shadow(palette.section_text))
-    .with_animation(
-        ("settings-card-drawer", slide.step),
-        crate::motion::animation(qol_theme::Motion::SETTLE),
-        move |card, delta| card.left(px(slide.from + (slide.to - slide.from) * delta)),
-    )
-    .into_any_element()
+    card_edges(card.absolute().right_0().top_0().bottom_0(), kit, hairline)
+        .shadow(crate::kit::float_shadow(kit.grounds.pane.ink))
+        .with_animation(
+            ("settings-card-drawer", slide.step),
+            crate::motion::animation(qol_theme::Motion::SETTLE),
+            move |card, delta| card.left(px(slide.from + (slide.to - slide.from) * delta)),
+        )
+        .into_any_element()
 }
 
-pub fn reveal(palette: SettingsPanelPalette, page: Div, card: Div, slide: Slide) -> Div {
+pub fn reveal(kit: Kit, page: Div, card: Div, slide: Slide) -> Div {
     stage()
         .child(page.absolute().inset_0())
-        .child(drawer(palette, card, slide))
+        .child(drawer(kit, card, slide))
 }
 
 fn animate_sliver<E: Styled + IntoElement + 'static>(
@@ -194,7 +190,7 @@ fn animate_sliver<E: Styled + IntoElement + 'static>(
     .into_any_element()
 }
 
-pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div {
+pub fn render(kit: Kit, card: Div, frame: DeckFrame) -> Div {
     let hairline = rgba(crate::kit::kit().washes.hairline.packed());
     let DeckFrame {
         depth,
@@ -204,13 +200,9 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
         marks,
         on_sliver,
     } = frame;
-    let front = card_edges(
-        card.absolute().right_0().top_0().bottom_0(),
-        palette,
-        hairline,
-    )
-    .left(px(resting(depth)))
-    .shadow(crate::kit::float_shadow(palette.section_text));
+    let front = card_edges(card.absolute().right_0().top_0().bottom_0(), kit, hairline)
+        .left(px(resting(depth)))
+        .shadow(crate::kit::float_shadow(kit.grounds.pane.ink));
     let front = match slide {
         Some(slide) => front
             .with_animation(
@@ -224,7 +216,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
     let shrink = slide
         .or_else(|| closing.as_ref().map(|(_, slide)| *slide))
         .filter(|slide| slide.from_depth != depth);
-    let leaving = closing.map(|(card, slide)| drawer(palette, card, slide));
+    let leaving = closing.map(|(card, slide)| drawer(kit, card, slide));
     stage()
         .children(
             slivers_for(depth)
@@ -237,7 +229,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
                     let start = shrink.map(|shrink| sliver_start(shrink.from_depth, index, sliver));
                     let mark = marks.get(index).copied().flatten().map(|y| {
                         let mark_end =
-                            with_alpha(palette.status_muted, 0.9 * edge_alpha(depth, index));
+                            with_alpha(kit.grounds.pane.faint, 0.9 * edge_alpha(depth, index));
                         let base = div()
                             .absolute()
                             .left_0()
@@ -247,7 +239,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
                         match shrink {
                             Some(shrink) => {
                                 let mark_start = with_alpha(
-                                    palette.status_muted,
+                                    kit.grounds.pane.faint,
                                     if born {
                                         0.0
                                     } else {
@@ -279,7 +271,7 @@ pub fn render(palette: SettingsPanelPalette, card: Div, frame: DeckFrame) -> Div
                             .w(px(sliver.width))
                             .top(px(sliver.inset))
                             .bottom(px(sliver.inset)),
-                        palette,
+                        kit,
                         hairline,
                     )
                     .overflow_hidden()

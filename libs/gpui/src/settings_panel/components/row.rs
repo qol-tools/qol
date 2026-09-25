@@ -2,7 +2,7 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, App, ClickEvent, ElementId, RenderOnce, Window};
 
 use crate::kit::kit;
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 use super::{
     attention_dot, paint_settings_attention, paint_settings_selection, DIMMED_OPACITY,
@@ -21,7 +21,7 @@ enum RowKind {
 #[derive(IntoElement)]
 pub struct SettingsRow {
     id: ElementId,
-    palette: SettingsPanelPalette,
+    kit: Kit,
     kind: RowKind,
     selected: bool,
     focused: bool,
@@ -32,22 +32,22 @@ pub struct SettingsRow {
 }
 
 impl SettingsRow {
-    pub fn setting(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Self {
-        Self::new(id, palette, RowKind::Setting)
+    pub fn setting(id: impl Into<ElementId>, kit: Kit) -> Self {
+        Self::new(id, kit, RowKind::Setting)
     }
 
-    pub fn rule(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Self {
-        Self::new(id, palette, RowKind::Rule)
+    pub fn rule(id: impl Into<ElementId>, kit: Kit) -> Self {
+        Self::new(id, kit, RowKind::Rule)
     }
 
-    pub fn add(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Self {
-        Self::new(id, palette, RowKind::Add)
+    pub fn add(id: impl Into<ElementId>, kit: Kit) -> Self {
+        Self::new(id, kit, RowKind::Add)
     }
 
-    fn new(id: impl Into<ElementId>, palette: SettingsPanelPalette, kind: RowKind) -> Self {
+    fn new(id: impl Into<ElementId>, kit: Kit, kind: RowKind) -> Self {
         Self {
             id: id.into(),
-            palette,
+            kit,
             kind,
             selected: false,
             focused: true,
@@ -115,7 +115,7 @@ impl RenderOnce for SettingsRow {
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
             .rounded_none()
-            .when(attention, |row| row.child(attention_dot(self.palette)))
+            .when(attention, |row| row.child(attention_dot(self.kit)))
             .children(self.children);
         if self.kind == RowKind::Rule {
             row = row.rounded(px(qol_theme::RADIUS_CONTROL));
@@ -124,15 +124,15 @@ impl RenderOnce for SettingsRow {
             row = row.opacity(DIMMED_OPACITY);
         }
         if self.selected && self.focused {
-            row = paint_settings_selection(row, self.palette);
+            row = paint_settings_selection(row, self.kit);
         } else if attention {
-            row = paint_settings_attention(row, self.palette);
+            row = paint_settings_attention(row, self.kit);
         }
         if let Some(on_click) = self.on_click {
             let ground = if self.selected && self.focused {
-                self.palette.grounds.band
+                self.kit.grounds.band
             } else {
-                self.palette.grounds.pane
+                self.kit.grounds.pane
             };
             row = shared
                 .pointable(

@@ -191,7 +191,7 @@ impl Theme {
         reference: ReferencePalette,
         system: SystemPalette,
     ) -> Self {
-        let components = ComponentPalettes::new(mode, reference, system);
+        let components = ComponentPalettes::new(reference, system);
         Self {
             mode,
             reference,
@@ -1037,15 +1037,13 @@ pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentPalettes {
-    pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
     pub picker_surface: PickerSurfacePalette,
 }
 
 impl ComponentPalettes {
-    pub fn new(mode: ThemeMode, reference: ReferencePalette, system: SystemPalette) -> Self {
+    pub fn new(reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            settings_panel: SettingsPanelPalette::from_theme(mode, system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
             picker_surface: PickerSurfacePalette::themed(system, None, 1.0),
         }
@@ -1306,78 +1304,6 @@ pub fn contrast_ratio(a: u32, b: u32) -> f64 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SettingsPanelPalette {
-    pub window_bg: u32,
-    pub panel_border: u32,
-    pub label_text: u32,
-    pub section_text: u32,
-    pub row_bg_selected: u32,
-    pub row_border_selected: u32,
-    pub rail_bg: u32,
-    pub rail_text: u32,
-    pub rail_text_muted: u32,
-    pub rail_active_text: u32,
-    pub fill_current: u32,
-    pub fill_current_quiet: u32,
-    pub grounds: Grounds,
-    pub surface_raised: u32,
-    pub state_on: u32,
-    pub state_off: u32,
-    pub status_accent: u32,
-    pub status_info: u32,
-    pub status_success: u32,
-    pub status_danger: u32,
-    pub status_warning: u32,
-    pub status_warning_ink: u32,
-    pub status_muted: u32,
-    pub qr_dark: u32,
-    pub qr_light: u32,
-    pub live_color_fallback: u32,
-    pub transparent_rgba: u32,
-}
-
-impl SettingsPanelPalette {
-    pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
-        let (rail_bg, rail_text, rail_text_muted) =
-            (system.surface_rail, system.text_rail, system.text_rail);
-        let fill_current = band_fill(system);
-        Self {
-            window_bg: system.surface_elevated,
-            panel_border: system.border_subtle,
-            label_text: system.text_secondary,
-            section_text: system.text_primary,
-            row_bg_selected: system.accent_fill,
-            row_border_selected: system.accent,
-            rail_bg,
-            rail_text,
-            rail_text_muted,
-            rail_active_text: system.text_primary,
-            fill_current,
-            fill_current_quiet: mix_const(
-                system.accent_fill_base,
-                system.text_muted,
-                RAIL_FILL_MIX,
-            ),
-            grounds: Grounds::from_theme(mode, system),
-            surface_raised: system.surface_raised,
-            state_on: system.success,
-            state_off: system.danger,
-            status_accent: system.accent_ink,
-            status_info: system.info,
-            status_success: system.success,
-            status_danger: system.danger,
-            status_warning: system.warning,
-            status_warning_ink: system.warning_ink,
-            status_muted: system.text_muted,
-            qr_dark: DARK_TRAY_INTERNAL.config_qr_dark,
-            qr_light: DARK_TRAY_INTERNAL.config_qr_light,
-            live_color_fallback: DARK_TRAY_INTERNAL.config_live_color_fallback,
-            transparent_rgba: 0x00000000,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AltTabPreviewPlanePalette {
     pub backdrop_rgba: u32,
     pub label_text: u32,
@@ -1404,6 +1330,10 @@ impl AltTabPreviewPlanePalette {
             ),
         }
     }
+}
+
+pub const fn band_rest_fill(system: SystemPalette) -> u32 {
+    mix_const(system.accent_fill_base, system.text_muted, RAIL_FILL_MIX)
 }
 
 pub const fn band_fill(system: SystemPalette) -> u32 {
@@ -1478,10 +1408,6 @@ impl PickerSurfacePalette {
             placeholder_border: system.border_subtle,
         }
     }
-}
-
-pub fn settings_panel_runtime() -> SettingsPanelPalette {
-    runtime_theme().components.settings_panel
 }
 
 pub fn alt_tab_preview_plane_runtime() -> AltTabPreviewPlanePalette {

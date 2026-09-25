@@ -39,11 +39,11 @@ use super::{
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
 use crate::gamepad::gamepad_panel;
+use crate::kit::Kit;
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
-use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
 type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
@@ -248,8 +248,7 @@ pub(super) struct SettingsPanelView {
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     poll_visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
     dismisser: SurfaceDismisser,
-    palette: SettingsPanelPalette,
-    kit: crate::kit::Kit,
+    kit: Kit,
     streams: Vec<super::stream::StreamClient>,
     focus_handle: FocusHandle,
     nav_guard: PhantomNavGuard,
@@ -404,7 +403,6 @@ impl SettingsPanelView {
             sampler_stop: None,
             poll_visible: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dismisser: dismisser.clone(),
-            palette: settings_panel_runtime(),
             kit: crate::kit::kit(),
             focus_handle: cx.focus_handle(),
             nav_guard: PhantomNavGuard::new(),
@@ -2125,14 +2123,22 @@ impl SettingsPanelView {
 
     fn stream_hex(&self) -> String {
         let Some(source) = self.source_for(self.level().selected) else {
-            return format!("{:06x}", self.palette.live_color_fallback);
+            return format!(
+                "{:06x}",
+                qol_theme::DARK_TRAY_INTERNAL.config_live_color_fallback
+            );
         };
         source
             .values
             .get("live_color_hex")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
-            .unwrap_or_else(|| format!("{:06x}", self.palette.live_color_fallback))
+            .unwrap_or_else(|| {
+                format!(
+                    "{:06x}",
+                    qol_theme::DARK_TRAY_INTERNAL.config_live_color_fallback
+                )
+            })
     }
 
     fn dispatch_live_number(
@@ -2550,9 +2556,9 @@ impl SettingsPanelView {
 
     fn wheel_style(&self) -> WheelStyle {
         WheelStyle {
-            bg: self.palette.surface_raised,
-            border: self.palette.row_border_selected,
-            thumb_border: self.palette.section_text,
+            bg: self.kit.grounds.menu.bg,
+            border: self.kit.grounds.pane.mark,
+            thumb_border: self.kit.grounds.pane.ink,
         }
     }
 
@@ -2568,11 +2574,11 @@ impl SettingsPanelView {
     }
 
     fn paint_selection<E: Styled>(&self, row: E) -> E {
-        super::components::paint_rail_selection(row, self.palette, self.rail_source_level())
+        super::components::paint_rail_selection(row, self.kit, self.rail_source_level())
     }
 
     fn paint_body_selection<E: Styled + ParentElement>(&self, row: E) -> E {
-        paint_settings_selection(row, self.palette)
+        paint_settings_selection(row, self.kit)
     }
 
     /// The freshness of a row's value: unavailable wins over loading, and a row
@@ -2604,7 +2610,7 @@ impl SettingsPanelView {
             RowQueryState::Loading { .. } => Some(cell().child(settings_query_spinner(
                 ("settings-query-spinner", index),
                 row,
-                self.palette,
+                self.kit,
             ))),
             RowQueryState::Unavailable(_)
                 if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
@@ -2648,15 +2654,15 @@ impl SettingsPanelView {
             RowControl::TextList(values) => {
                 return self.kit.chip(
                     Chip::Count(values.len(), plural(values.len(), "item").into()),
-                    row.rest(self.palette),
+                    row.rest(self.kit),
                 );
             }
             RowControl::Unsupported { reason, .. } => {
                 return div()
                     .text(TextStyle::Detail)
                     .text_color(rgb(match row {
-                        RowGround::Pane => self.palette.grounds.pane.faint,
-                        RowGround::Band => self.palette.grounds.band.soft,
+                        RowGround::Pane => self.kit.grounds.pane.faint,
+                        RowGround::Band => self.kit.grounds.band.soft,
                     }))
                     .child(format!("Unsupported: {reason}"));
             }
@@ -2683,13 +2689,13 @@ impl SettingsPanelView {
             return cell.child(StatusIndicator::new(
                 ("settings-status", index),
                 self.display_value(index),
-                rgb(status_tone_color(self.palette, tone)),
+                rgb(status_tone_color(self.kit, tone)),
             ));
         }
         if self.action_is_busy(index) {
             cell = cell.child(settings_action_spinner(
                 ("settings-action-spinner", index),
-                self.palette,
+                self.kit,
             ));
         }
         if let Some(color) = self.swatch_color(index) {
@@ -2713,7 +2719,7 @@ impl SettingsPanelView {
                     self.display_value(index),
                     self.value_tone(index),
                     row,
-                    self.palette,
+                    self.kit,
                 )
                 .flex_shrink()
                 .min_w_0(),
@@ -2724,12 +2730,12 @@ impl SettingsPanelView {
         StatusIndicator::new(
             ("settings-unavailable", index),
             "unavailable",
-            rgb(self.palette.status_muted),
+            rgb(self.kit.grounds.pane.faint),
         )
     }
 
     fn render_toggle_value(&self, active: bool, row: RowGround) -> Div {
-        div().child(SettingsToggle::new(active, row, self.palette))
+        div().child(SettingsToggle::new(active, row, self.kit))
     }
 
     fn render_select_value(&self, index: usize, row: RowGround) -> Div {
@@ -2753,7 +2759,7 @@ impl SettingsPanelView {
             art,
             row,
             context,
-            self.palette,
+            self.kit,
         ))
     }
 
@@ -2814,7 +2820,7 @@ impl SettingsPanelView {
             track,
             interact,
             row,
-            self.palette,
+            self.kit,
         )
     }
 
@@ -2825,7 +2831,7 @@ impl SettingsPanelView {
             self.level().rows[index].variant.as_deref(),
             self.action_is_busy(index),
             row,
-            self.palette,
+            self.kit,
         )
     }
 
@@ -2908,10 +2914,10 @@ impl SettingsPanelView {
             label,
             row.description.clone().map(SharedString::from),
             ground,
-            self.palette,
+            self.kit,
         );
         let value_cell = self.render_value_cell(index, ground, cx);
-        let mut line = SettingsRow::setting(("settings-row", index), self.palette)
+        let mut line = SettingsRow::setting(("settings-row", index), self.kit)
             .selected(selected, self.body_has_focus())
             .child(label_group)
             .child(self.row_bounds_canvas(index));
@@ -2939,7 +2945,7 @@ impl SettingsPanelView {
                 div()
                     .px(px(qol_theme::SPACE_INSET))
                     .text(TextStyle::Detail)
-                    .text_color(rgb(self.palette.state_off))
+                    .text_color(rgb(self.kit.palette.danger))
                     .child(error.clone()),
             );
         }
@@ -2958,9 +2964,9 @@ impl SettingsPanelView {
             .rounded(px(qol_theme::RADIUS_CARD))
             .border_1()
             .border_color(if selected {
-                rgb(self.palette.row_border_selected)
+                rgb(self.kit.grounds.pane.mark)
             } else {
-                rgba(self.palette.transparent_rgba)
+                rgba(0)
             })
             .cursor(CursorStyle::PointingHand)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -3005,9 +3011,9 @@ impl SettingsPanelView {
                     .min_w_0()
                     .text(TextStyle::Name)
                     .text_color(rgb(if active {
-                        self.palette.rail_active_text
+                        self.kit.grounds.rail.ink
                     } else {
-                        self.palette.rail_text_muted
+                        self.kit.grounds.rail.soft
                     }))
                     .child(label),
             )
@@ -3079,7 +3085,7 @@ impl SettingsPanelView {
 
     fn render_rail_dot(&self) -> Div {
         let halo = self.kit.washes.halo_attention.packed();
-        self.kit.status_dot(self.palette.status_warning, halo)
+        self.kit.status_dot(self.kit.palette.warning, halo)
     }
 
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -3094,14 +3100,14 @@ impl SettingsPanelView {
             return div().id(("settings-list", index));
         };
         let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
-        let rest = ground.rest(self.palette);
+        let rest = ground.rest(self.kit);
         let mut header_status = div().flex().items_center().gap(px(qol_theme::SPACE_INSET));
         if *runtime_active {
             header_status = header_status.child(
                 StatusIndicator::new(
                     ("settings-list-activity", index),
                     active_label.as_deref().unwrap_or("Live").to_string(),
-                    rgb(self.palette.state_on),
+                    rgb(self.kit.palette.success),
                 )
                 .pulse(),
             );
@@ -3110,7 +3116,7 @@ impl SettingsPanelView {
             self.display_value(index),
             self.value_tone(index),
             ground,
-            self.palette,
+            self.kit,
         ));
         let mut container = div()
             .id(("settings-list", index))
@@ -3187,7 +3193,7 @@ impl SettingsPanelView {
             loading,
             row_body_height(row, true),
             list_header_height(row),
-            self.palette,
+            self.kit,
         )
     }
 
@@ -3207,7 +3213,7 @@ impl SettingsPanelView {
         cx: &mut Context<Self>,
     ) -> Div {
         let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
-        let rest = ground.rest(self.palette);
+        let rest = ground.rest(self.kit);
         let mut container = div()
             .flex()
             .flex_col()
@@ -3267,7 +3273,7 @@ impl SettingsPanelView {
                     value,
                     self.value_tone(index),
                     ground,
-                    self.palette,
+                    self.kit,
                 )),
         );
         container.child(self.row_bounds_canvas(index))
@@ -3295,7 +3301,6 @@ impl Render for SettingsPanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(debug_assertions)]
         let build_started = std::time::Instant::now();
-        self.palette = settings_panel_runtime();
         self.kit = crate::kit::kit();
         self.poll_visible.store(
             window.is_window_active(),
@@ -3383,7 +3388,7 @@ impl Render for SettingsPanelView {
             )
             .flex()
             .flex_col()
-            .text_color(rgb(self.palette.section_text))
+            .text_color(rgb(self.kit.grounds.pane.ink))
             .child(self.render_band(cx))
             .child(self.render_content(
                 cx,
@@ -3481,7 +3486,7 @@ impl SettingsPanelView {
                             handle: self.stack[level_index].body_scroll.handle().clone(),
                             children,
                         },
-                        self.palette.grounds.pane,
+                        self.kit.grounds.pane,
                     ))
                 })
                 .when(self.filter_open && front && !has_custom_view, |frame| {
@@ -3584,7 +3589,7 @@ impl SettingsPanelView {
         let scrim = div()
             .absolute()
             .inset_0()
-            .bg(crate::kit::rail_scrim(self.palette.window_bg));
+            .bg(crate::kit::rail_scrim(self.kit.grounds.pane.bg));
         let custom_breadcrumbs = if self.current_source_is_custom() {
             self.custom_view()
                 .map(|custom| custom.breadcrumb_labels(cx).len())
@@ -3631,10 +3636,10 @@ impl SettingsPanelView {
             0 if drawer.is_none() => {
                 let card = deck::card_edges(
                     card.absolute().right_0().top_0().bottom_0(),
-                    self.palette,
+                    self.kit,
                     self.hairline(),
                 )
-                .shadow(crate::kit::float_shadow(self.palette.section_text));
+                .shadow(crate::kit::float_shadow(self.kit.grounds.pane.ink));
                 if snapped {
                     let reached = progress(1.0);
                     let base = super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached;
@@ -3709,7 +3714,7 @@ impl SettingsPanelView {
             let _ = view.update(cx, |this, cx| this.back_to(level, window, cx));
         });
         deck::render(
-            self.palette,
+            self.kit,
             card,
             deck::DeckFrame {
                 depth,
@@ -3739,9 +3744,9 @@ impl SettingsPanelView {
             .px(px(qol_theme::SPACE_GUTTER))
             .border_b(px(qol_theme::LINE))
             .border_color(self.hairline())
-            .bg(rgb(self.palette.rail_bg))
+            .bg(rgb(self.kit.grounds.rail.bg))
             .panel_drag_area()
-            .child(super::components::settings_crumb_trail(trail, self.palette))
+            .child(super::components::settings_crumb_trail(trail, self.kit))
     }
 
     fn render_filter_field(&self) -> Div {
@@ -3769,22 +3774,22 @@ impl SettingsPanelView {
                     .min_w_0()
                     .text(TextStyle::Code)
                     .text_color(rgb(if empty {
-                        self.palette.status_muted
+                        self.kit.grounds.pane.faint
                     } else {
-                        self.palette.section_text
+                        self.kit.grounds.pane.ink
                     }))
                     .child(text),
             );
         if self.filter_open {
             return field
-                .bg(rgb(self.palette.window_bg))
-                .border_color(rgb(self.palette.row_border_selected))
+                .bg(rgb(self.kit.grounds.pane.bg))
+                .border_color(rgb(self.kit.grounds.pane.mark))
                 .child(
                     div()
                         .flex_none()
                         .w(px(1.5))
                         .h(px(16.))
-                        .bg(rgb(self.palette.row_border_selected)),
+                        .bg(rgb(self.kit.grounds.pane.mark)),
                 );
         }
         field.child(
@@ -3802,7 +3807,7 @@ impl SettingsPanelView {
             .px(px(qol_theme::SPACE_PAD))
             .pt(px(qol_theme::SPACE_CELL))
             .pb(px(qol_theme::SPACE_INSET))
-            .bg(rgb(self.palette.window_bg))
+            .bg(rgb(self.kit.grounds.pane.bg))
             .child(self.render_filter_field())
     }
 
@@ -3902,7 +3907,7 @@ impl SettingsPanelView {
         let header = SettingsGroupHeader::new(
             title.to_string(),
             detail.map(|detail| SharedString::from(detail.to_string())),
-            self.palette,
+            self.kit,
         )
         .current(here);
         match list_card::list_card_activity(self.level(), &self.root().rows) {
@@ -3942,7 +3947,7 @@ impl SettingsPanelView {
     }
 
     fn render_hint_bar(&self, cx: &App) -> impl IntoElement {
-        let bar = SettingsHintBar::new(self.palette);
+        let bar = SettingsHintBar::new(self.kit);
         if self.current_source_is_custom() && self.body_has_focus() {
             if let Some(hints) = self.custom_view().and_then(|custom| custom.hints(cx)) {
                 let mut right = hints.right;
@@ -4428,13 +4433,13 @@ fn binary_state_tone(active: bool) -> SettingsValueTone {
     }
 }
 
-fn status_tone_color(palette: SettingsPanelPalette, tone: StatusTone) -> u32 {
+fn status_tone_color(kit: Kit, tone: StatusTone) -> u32 {
     match tone {
-        StatusTone::Accent => palette.status_accent,
-        StatusTone::Success => palette.status_success,
-        StatusTone::Danger => palette.status_danger,
-        StatusTone::Warning => palette.status_warning,
-        StatusTone::Muted => palette.status_muted,
+        StatusTone::Accent => kit.palette.accent_ink,
+        StatusTone::Success => kit.palette.success,
+        StatusTone::Danger => kit.palette.danger,
+        StatusTone::Warning => kit.palette.warning,
+        StatusTone::Muted => kit.grounds.pane.faint,
     }
 }
 

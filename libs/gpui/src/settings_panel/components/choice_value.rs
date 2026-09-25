@@ -8,8 +8,8 @@ use super::{
     CHOICE_CHEVRON_WIDTH, CHOICE_PICTURE_HEIGHT, CHOICE_PICTURE_WIDTH, CHOICE_WORD_MAX_WIDTH,
     SETTINGS_ROW_GROUP,
 };
+use crate::kit::Kit;
 use crate::pictures::{self, PictureContext, Tone};
-use crate::theme::SettingsPanelPalette;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceArt {
@@ -27,21 +27,21 @@ struct ChoiceTones {
     wakes_on_hover: bool,
 }
 
-fn choice_tones(row: RowGround, palette: SettingsPanelPalette) -> ChoiceTones {
+fn choice_tones(row: RowGround, kit: Kit) -> ChoiceTones {
     match row {
         RowGround::Pane => ChoiceTones {
-            word: palette.grounds.pane.faint,
-            word_hover: palette.grounds.pane.soft,
-            line: palette.grounds.pane.soft,
-            chevron: palette.grounds.pane.faint,
+            word: kit.grounds.pane.faint,
+            word_hover: kit.grounds.pane.soft,
+            line: kit.grounds.pane.soft,
+            chevron: kit.grounds.pane.faint,
             chevron_opacity: CHOICE_CHEVRON_REST_OPACITY,
             wakes_on_hover: true,
         },
         RowGround::Band => ChoiceTones {
-            word: palette.grounds.band.ink,
-            word_hover: palette.grounds.band_hover.ink,
-            line: palette.grounds.band.ink,
-            chevron: palette.grounds.band.faint,
+            word: kit.grounds.band.ink,
+            word_hover: kit.grounds.band_hover.ink,
+            line: kit.grounds.band.ink,
+            chevron: kit.grounds.band.faint,
             chevron_opacity: 1.0,
             wakes_on_hover: false,
         },
@@ -54,7 +54,7 @@ pub struct SettingsChoiceValue {
     art: ChoiceArt,
     row: RowGround,
     context: PictureContext,
-    palette: SettingsPanelPalette,
+    kit: Kit,
     word_color: Option<u32>,
 }
 
@@ -64,14 +64,14 @@ impl SettingsChoiceValue {
         art: ChoiceArt,
         row: RowGround,
         context: PictureContext,
-        palette: SettingsPanelPalette,
+        kit: Kit,
     ) -> Self {
         Self {
             text: text.into(),
             art,
             row,
             context,
-            palette,
+            kit,
             word_color: None,
         }
     }
@@ -89,7 +89,7 @@ impl RenderOnce for SettingsChoiceValue {
             art,
             row,
             context,
-            palette,
+            kit,
             word_color,
         } = self;
         let font = window.text_style().font();
@@ -103,7 +103,7 @@ impl RenderOnce for SettingsChoiceValue {
             cx,
         );
         let scale = window.scale_factor();
-        let tones = choice_tones(row, palette);
+        let tones = choice_tones(row, kit);
         let art_image = |tone: Tone| {
             let image = match &art {
                 ChoiceArt::Picture(spec) => pictures::fitted_image(
@@ -206,17 +206,18 @@ impl RenderOnce for SettingsChoiceValue {
 #[cfg(test)]
 mod tests {
     use super::{choice_tones, ChoiceTones, RowGround, CHOICE_CHEVRON_REST_OPACITY};
-    use crate::theme::{SettingsPanelPalette, ThemeMode, DARK_SYSTEM};
+    use crate::kit::Kit;
+    use crate::theme::{ThemeMode, DARK_SYSTEM};
 
-    fn palette() -> SettingsPanelPalette {
-        SettingsPanelPalette::from_theme(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7))
+    fn kit() -> Kit {
+        Kit::new(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7))
     }
 
     #[test]
     fn choice_tones_follow_the_row_ground() {
-        let palette = palette();
+        let kit = kit();
         assert_eq!(
-            choice_tones(RowGround::Pane, palette),
+            choice_tones(RowGround::Pane, kit),
             ChoiceTones {
                 word: 0x8b8880,
                 word_hover: 0xb3b1ac,
@@ -227,7 +228,7 @@ mod tests {
             }
         );
         assert_eq!(
-            choice_tones(RowGround::Band, palette),
+            choice_tones(RowGround::Band, kit),
             ChoiceTones {
                 word: 0xf3f2f0,
                 word_hover: 0xf3f2f0,

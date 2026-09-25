@@ -524,7 +524,7 @@ impl SettingsPanelView {
         let Some(state) = self.level().display_layout.as_ref() else {
             return Vec::new();
         };
-        let palette = self.palette;
+        let palette = self.kit;
         let mut staged = state.clone();
         let (stage_width, stage_height) = self.display_layout_viewport();
         staged.set_viewport(stage_width, stage_height, DISPLAY_LAYOUT_STAGE_PAD);
@@ -781,7 +781,7 @@ impl SettingsPanelView {
             .child(
                 div()
                     .text(TextStyle::Name)
-                    .text_color(rgb(self.palette.state_on))
+                    .text_color(rgb(self.kit.palette.success))
                     .child("Apply"),
             )
             .child(self.kit.chip(Chip::Key(Key::ENTER), self.kit.grounds.pane))
@@ -852,7 +852,7 @@ impl SettingsPanelView {
                                 fraction,
                                 percent,
                                 ground: brightness_ground,
-                                palette,
+                                kit: self.kit,
                             },
                             move |panel: &mut SettingsPanelView,
                                   _row: usize,

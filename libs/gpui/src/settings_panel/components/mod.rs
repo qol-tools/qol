@@ -5,7 +5,8 @@ use qol_theme::TextStyle;
 
 use crate::busy::Busy;
 use crate::kit::kit;
-use crate::theme::{Ground, SettingsPanelPalette};
+use crate::kit::Kit;
+use crate::theme::Ground;
 
 mod choice_value;
 mod display_layout_tile;
@@ -69,17 +70,17 @@ impl RowGround {
         }
     }
 
-    pub fn rest(self, palette: SettingsPanelPalette) -> Ground {
+    pub fn rest(self, kit: Kit) -> Ground {
         match self {
-            Self::Pane => palette.grounds.pane,
-            Self::Band => palette.grounds.band,
+            Self::Pane => kit.grounds.pane,
+            Self::Band => kit.grounds.band,
         }
     }
 
-    pub fn hover(self, palette: SettingsPanelPalette) -> Option<Ground> {
+    pub fn hover(self, kit: Kit) -> Option<Ground> {
         match self {
             Self::Pane => None,
-            Self::Band => Some(palette.grounds.band_hover),
+            Self::Band => Some(kit.grounds.band_hover),
         }
     }
 }
@@ -119,32 +120,31 @@ fn masthead_rule() -> gpui::Div {
         .bg(rgba(kit().washes.hairline.packed()))
 }
 
-pub fn paint_settings_selection<E: Styled>(row: E, palette: SettingsPanelPalette) -> E {
+pub fn paint_settings_selection<E: Styled>(row: E, kit: Kit) -> E {
     row.relative()
         .w_auto()
         .mx(px(-qol_theme::SPACE_PAD))
         .px(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
         .rounded_none()
-        .bg(rgb(palette.grounds.band.bg))
+        .bg(rgb(kit.grounds.band.bg))
 }
 
-pub fn paint_rail_selection<E: Styled>(row: E, palette: SettingsPanelPalette, focused: bool) -> E {
+pub fn paint_rail_selection<E: Styled>(row: E, kit: Kit, focused: bool) -> E {
     row.bg(rgb(if focused {
-        palette.fill_current
+        kit.grounds.band.bg
     } else {
-        palette.fill_current_quiet
+        qol_theme::band_rest_fill(kit.palette)
     }))
 }
 
-fn paint_settings_attention<E: Styled + ParentElement>(row: E, palette: SettingsPanelPalette) -> E {
-    row.bg(rgb(palette.grounds.attention.bg))
+fn paint_settings_attention<E: Styled + ParentElement>(row: E, kit: Kit) -> E {
+    row.bg(rgb(kit.grounds.attention.bg))
 }
 
-fn attention_dot(palette: SettingsPanelPalette) -> gpui::Div {
-    let shared = kit();
-    shared.status_dot(
-        palette.grounds.attention.mark,
-        shared.washes.halo_attention.packed(),
+fn attention_dot(kit: Kit) -> gpui::Div {
+    kit.status_dot(
+        kit.grounds.attention.mark,
+        kit.washes.halo_attention.packed(),
     )
 }
 
@@ -152,22 +152,18 @@ pub fn one_line<E: Styled>(element: E) -> E {
     element.line_clamp(1).text_ellipsis()
 }
 
-pub fn settings_label(text: impl Into<SharedString>, palette: SettingsPanelPalette) -> gpui::Div {
+pub fn settings_label(text: impl Into<SharedString>, kit: Kit) -> gpui::Div {
     div()
         .text(TextStyle::Name)
-        .text_color(rgb(palette.section_text))
+        .text_color(rgb(kit.grounds.pane.ink))
         .child(text.into())
 }
 
-pub fn settings_description(
-    text: impl Into<SharedString>,
-    row: RowGround,
-    palette: SettingsPanelPalette,
-) -> gpui::Div {
-    let ground = row.rest(palette);
+pub fn settings_description(text: impl Into<SharedString>, row: RowGround, kit: Kit) -> gpui::Div {
+    let ground = row.rest(kit);
     let (rest, hover) = match row {
         RowGround::Pane => (ground.faint, None),
-        RowGround::Band => (ground.soft, row.hover(palette).map(|hover| hover.soft)),
+        RowGround::Band => (ground.soft, row.hover(kit).map(|hover| hover.soft)),
     };
     ground_text(
         div().text(TextStyle::Detail).child(text.into()),
@@ -186,15 +182,11 @@ pub fn settings_value_group() -> gpui::Div {
         .gap(px(qol_theme::SPACE_INSET))
 }
 
-pub fn settings_mono_label(
-    text: impl Into<SharedString>,
-    row: RowGround,
-    palette: SettingsPanelPalette,
-) -> gpui::Div {
-    let ground = row.rest(palette);
+pub fn settings_mono_label(text: impl Into<SharedString>, row: RowGround, kit: Kit) -> gpui::Div {
+    let ground = row.rest(kit);
     let (rest, hover) = match row {
         RowGround::Pane => (ground.soft, None),
-        RowGround::Band => (ground.ink, row.hover(palette).map(|hover| hover.ink)),
+        RowGround::Band => (ground.ink, row.hover(kit).map(|hover| hover.ink)),
     };
     ground_text(
         div()
@@ -220,11 +212,11 @@ pub fn settings_value_text(
     text: impl Into<SharedString>,
     tone: SettingsValueTone,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Div {
-    let value = kit().value(text);
-    let ground = row.rest(palette);
-    let hover = row.hover(palette);
+    let value = kit.value(text);
+    let ground = row.rest(kit);
+    let hover = row.hover(kit);
     match tone {
         SettingsValueTone::Normal => {
             let (rest, hover) = match row {
@@ -240,9 +232,9 @@ pub fn settings_value_text(
             };
             ground_text(value, rgb(rest), hover.map(rgb))
         }
-        SettingsValueTone::Attention => value.text_color(rgb(palette.status_warning_ink)),
-        SettingsValueTone::Danger => value.text_color(rgb(palette.status_danger)),
-        SettingsValueTone::Success => value.text_color(rgb(palette.status_success)),
+        SettingsValueTone::Attention => value.text_color(rgb(kit.palette.warning_ink)),
+        SettingsValueTone::Danger => value.text_color(rgb(kit.palette.danger)),
+        SettingsValueTone::Success => value.text_color(rgb(kit.palette.success)),
     }
 }
 
@@ -252,26 +244,24 @@ pub fn settings_action_affordance(
     variant: Option<&str>,
     busy: bool,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Div {
-    let ground = row.rest(palette);
-    let hover = row.hover(palette);
+    let ground = row.rest(kit);
+    let hover = row.hover(kit);
     let band = row == RowGround::Band;
     let (background, text) = if band && variant != Some("danger") {
         (rgba(ground.well.packed()), ground.ink)
     } else {
         match variant {
-            Some("ghost") => (rgb(palette.surface_raised), palette.label_text),
+            Some("ghost") => (rgb(kit.grounds.menu.bg), kit.grounds.pane.soft),
             Some("danger") => (
                 rgba(qol_theme::translucent(
-                    palette.state_off,
+                    kit.palette.danger,
                     qol_theme::Alpha::Halo,
                 )),
-                palette.state_off,
+                kit.palette.danger,
             ),
-            Some("primary") | None | Some(_) => {
-                (rgb(palette.row_bg_selected), palette.section_text)
-            }
+            Some("primary") | None | Some(_) => (rgb(kit.grounds.band.bg), kit.grounds.pane.ink),
         }
     };
     let mut control = div()
@@ -280,14 +270,14 @@ pub fn settings_action_affordance(
         .items_center()
         .gap(px(qol_theme::SPACE_TIGHT));
     if busy {
-        control = control.child(settings_action_spinner(id, palette).size(px(12.)));
+        control = control.child(settings_action_spinner(id, kit).size(px(12.)));
     }
     let control = control
         .px(px(qol_theme::SPACE_INSET))
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded(px(qol_theme::RADIUS_CONTROL))
         .when(variant == Some("ghost") && !band, |control| {
-            control.shadow(crate::kit::raised_shadow(palette.section_text))
+            control.shadow(crate::kit::raised_shadow(kit.grounds.pane.ink))
         })
         .text(TextStyle::ListName);
     let control = if variant == Some("danger") {
@@ -309,10 +299,10 @@ pub fn settings_action_affordance(
 
 const CRUMB_MAX_WIDTH: f32 = 200.0;
 
-pub fn settings_crumb_trail(trail: Vec<String>, palette: SettingsPanelPalette) -> gpui::Div {
+pub fn settings_crumb_trail(trail: Vec<String>, kit: Kit) -> gpui::Div {
     let last = trail.len().saturating_sub(1);
     let separator = rgba(qol_theme::translucent(
-        palette.status_muted,
+        kit.grounds.pane.faint,
         qol_theme::Alpha::Veil,
     ));
     let mut crumbs = Vec::with_capacity(trail.len() * 2);
@@ -327,11 +317,11 @@ pub fn settings_crumb_trail(trail: Vec<String>, palette: SettingsPanelPalette) -
             );
         }
         let crumb = if index == last {
-            div().text_color(rgb(palette.section_text))
+            div().text_color(rgb(kit.grounds.pane.ink))
         } else {
             div()
                 .max_w(px(CRUMB_MAX_WIDTH))
-                .text_color(rgb(palette.status_muted))
+                .text_color(rgb(kit.grounds.pane.faint))
         };
         crumbs.push(crumb.child(label.to_lowercase()));
     }
@@ -394,7 +384,7 @@ pub fn settings_label_group(
     label: impl Into<SharedString>,
     description: Option<SharedString>,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Div {
     div()
         .flex_1()
@@ -402,18 +392,13 @@ pub fn settings_label_group(
         .flex()
         .flex_col()
         .gap(px(qol_theme::SPACE_STACK))
-        .child(settings_label(label, palette))
-        .children(description.map(|text| settings_description(text, row, palette)))
+        .child(settings_label(label, kit))
+        .children(description.map(|text| settings_description(text, row, kit)))
 }
 
-pub fn settings_message(
-    text: impl Into<SharedString>,
-    danger: bool,
-    palette: SettingsPanelPalette,
-) -> gpui::Div {
-    let kit = kit();
+pub fn settings_message(text: impl Into<SharedString>, danger: bool, kit: Kit) -> gpui::Div {
     if danger {
-        settings_message_frame(palette.status_danger).child(kit.notice(
+        settings_message_frame(kit.palette.danger).child(kit.notice(
             crate::kit::NoticeTone::Invalid,
             text,
             None,
@@ -434,37 +419,33 @@ fn settings_message_frame(color: u32) -> gpui::Div {
 }
 
 /// Busy recipe for a query-backed value that has not answered yet.
-pub fn settings_query_spinner(
-    id: impl Into<ElementId>,
-    row: RowGround,
-    palette: SettingsPanelPalette,
-) -> Busy {
+pub fn settings_query_spinner(id: impl Into<ElementId>, row: RowGround, kit: Kit) -> Busy {
     let color = match row {
-        RowGround::Pane => palette.grounds.pane.faint,
-        RowGround::Band => palette.grounds.band.soft,
+        RowGround::Pane => kit.grounds.pane.faint,
+        RowGround::Band => kit.grounds.band.soft,
     };
     Busy::ring(id, rgb(color))
 }
 
-pub fn settings_tile_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Busy {
-    Busy::ring(id, rgb(palette.grounds.pane.faint)).size(px(TILE_SPINNER_SIZE))
+pub fn settings_tile_spinner(id: impl Into<ElementId>, kit: Kit) -> Busy {
+    Busy::ring(id, rgb(kit.grounds.pane.faint)).size(px(TILE_SPINNER_SIZE))
 }
 
 /// Busy recipe for a pending action inside a settings surface.
-pub fn settings_action_spinner(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Busy {
-    Busy::ring(id, rgb(palette.state_on))
+pub fn settings_action_spinner(id: impl Into<ElementId>, kit: Kit) -> Busy {
+    Busy::ring(id, rgb(kit.palette.success))
 }
 
 /// Busy recipe sharing the settings_message frame for in-progress work.
 pub fn settings_busy_message(
     id: impl Into<ElementId>,
     text: impl Into<SharedString>,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Div {
-    settings_message_frame(palette.status_muted).child(Busy::new(
+    settings_message_frame(kit.grounds.pane.faint).child(Busy::new(
         id,
         text,
-        rgb(palette.status_muted),
+        rgb(kit.grounds.pane.faint),
     ))
 }
 

@@ -294,17 +294,17 @@ impl SettingsPanelView {
         let selected = index == level.selected;
         let focused = self.body_has_focus();
         let ground = RowGround::of(selected, focused);
-        let mut row = SettingsRow::rule(("settings-entry", index), self.palette)
+        let mut row = SettingsRow::rule(("settings-entry", index), self.kit)
             .selected(selected, focused)
             .child(self.row_bounds_canvas(index));
         if index == 0 {
-            row = row.child(settings_label_group("+ Add", None, ground, self.palette));
+            row = row.child(settings_label_group("+ Add", None, ground, self.kit));
             if level_entries_len(level) == 0 {
                 row = row.child(settings_value_text(
                     "Empty",
                     SettingsValueTone::Muted,
                     ground,
-                    self.palette,
+                    self.kit,
                 ));
             }
         } else if let Some(state) = level.object_array.as_ref() {
@@ -315,7 +315,7 @@ impl SettingsPanelView {
                     .get(entry)
                     .and_then(|entry| entry.key.clone())
                     .unwrap_or_default();
-                row = row.child(settings_label_group(key, None, ground, self.palette));
+                row = row.child(settings_label_group(key, None, ground, self.kit));
                 let summary = level
                     .entries
                     .as_ref()
@@ -326,7 +326,7 @@ impl SettingsPanelView {
                         summary,
                         SettingsValueTone::Muted,
                         ground,
-                        self.palette,
+                        self.kit,
                     ));
                 }
             } else {
@@ -334,7 +334,7 @@ impl SettingsPanelView {
             }
         } else if let Some(values) = level.entries.as_ref().and_then(|card| card.values.as_ref()) {
             let value = values.get(index - 1).cloned().unwrap_or_default();
-            row = row.child(settings_mono_label(value, ground, self.palette));
+            row = row.child(settings_mono_label(value, ground, self.kit));
         }
         row.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
@@ -354,33 +354,33 @@ impl SettingsPanelView {
         let Some(field) = level.form.as_ref().and_then(|form| form.fields.get(index)) else {
             return div().id(("settings-form-field", index)).into_any_element();
         };
-        let mut row = SettingsRow::rule(("settings-form-field", index), self.palette)
+        let mut row = SettingsRow::rule(("settings-form-field", index), self.kit)
             .selected(selected, focused)
             .child(self.row_bounds_canvas(index))
             .child(settings_label_group(
                 field.label.clone(),
                 None,
                 ground,
-                self.palette,
+                self.kit,
             ));
         match &field.value {
             FormValue::Text(text) => {
                 let control = if selected && focused {
-                    SettingsTextField::live(text.clone(), ground, self.palette)
+                    SettingsTextField::live(text.clone(), ground, self.kit)
                 } else {
                     SettingsTextField::new(
                         text.text().to_owned(),
                         text.is_empty(),
                         false,
                         ground,
-                        self.palette,
+                        self.kit,
                     )
                     .placeholder("Empty")
                 };
                 row = row.child(control);
             }
             FormValue::Boolean(on) => {
-                row = row.child(SettingsToggle::new(*on, ground, self.palette));
+                row = row.child(SettingsToggle::new(*on, ground, self.kit));
             }
             FormValue::Mods {
                 options,
@@ -398,7 +398,7 @@ impl SettingsPanelView {
                             on,
                             cursor_here,
                             ground,
-                            self.palette,
+                            self.kit,
                         )
                         .on_click(cx.listener(
                             move |this, event: &ClickEvent, _, cx| {
@@ -430,7 +430,7 @@ impl SettingsPanelView {
                     count_label(values.len(), &noun),
                     SettingsValueTone::Muted,
                     ground,
-                    self.palette,
+                    self.kit,
                 ));
             }
         }
@@ -808,9 +808,9 @@ impl SettingsPanelView {
     }
 
     pub(super) fn render_chip_row(&self, parts: Vec<ChipRowPart>, row: RowGround) -> Div {
-        let ground = row.rest(self.palette);
+        let ground = row.rest(self.kit);
         let arrow = match row {
-            RowGround::Pane => self.palette.status_muted,
+            RowGround::Pane => self.kit.grounds.pane.faint,
             RowGround::Band => ground.soft,
         };
         let mut strip = div()
