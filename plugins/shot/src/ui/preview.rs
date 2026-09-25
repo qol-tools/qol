@@ -1497,6 +1497,7 @@ impl Focusable for PreviewView {
 
 impl Render for PreviewView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         self.ensure_dismiss_tracking(window, cx);
         self.schedule_reveal_after_present(window, cx);
         let palette = current_palette();

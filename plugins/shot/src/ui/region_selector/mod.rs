@@ -1087,6 +1087,7 @@ impl Focusable for RegionSelector {
 
 impl Render for RegionSelector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         self.schedule_reveal_after_present(window, cx);
         let guide_bounds = self.guide_bounds();
         let selection = self.selection_bounds();

@@ -427,7 +427,7 @@ impl UpdatesView {
             qol_gpui::scrollbar::ScrollSource::Window {
                 first: range.start,
                 shown: range.len(),
-                total: total,
+                total,
             },
             settings_panel_runtime().grounds.pane,
         ));

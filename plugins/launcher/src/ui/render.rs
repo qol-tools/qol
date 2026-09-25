@@ -32,6 +32,7 @@ impl Focusable for LauncherView {
 
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         REGISTER_NATIVE_DISPLAY.call_once(|| {
             qol_gpui::popup_window::register_native_display(window);
         });

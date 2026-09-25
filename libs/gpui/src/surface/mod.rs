@@ -1,3 +1,4 @@
+use crate::kit::{enter_window, WindowLook};
 use crate::text::TextStyled;
 use qol_theme::TextStyle;
 use std::cell::{Cell, RefCell};
@@ -395,6 +396,8 @@ impl Surface {
         );
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
+        let follows_focus = self.takes_focus();
+        let root_visible = visible.clone();
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
         }
@@ -407,9 +410,21 @@ impl Surface {
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
                 let bounds_subscription = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
+                let activation_subscription = cx.observe_window_activation(
+                    window,
+                    move |root: &mut SurfaceRoot<V>, window, _| {
+                        root.look = surface_look(
+                            follows_focus,
+                            root_visible.get(),
+                            window.is_window_active(),
+                        );
+                    },
+                );
                 SurfaceRoot {
                     inner,
+                    look: WindowLook::Live,
                     _bounds_subscription: bounds_subscription,
+                    _activation_subscription: activation_subscription,
                 }
             })
         }) {
@@ -430,6 +445,7 @@ impl Surface {
             .replace(Box::new(move |cx: &mut App| {
                 dismiss_visible.set(false);
                 dismiss_reveal_pending.set(false);
+                let _ = handle.update(cx, |root, _, _| root.look = WindowLook::Live);
                 crate::popup_window::restore_composite(&lease_owner);
                 if retain_on_dismiss {
                     let current_title = dismiss_state.title.borrow().clone();
@@ -552,11 +568,22 @@ impl Surface {
 
 pub(crate) struct SurfaceRoot<V> {
     pub(crate) inner: Entity<V>,
+    look: WindowLook,
     _bounds_subscription: Subscription,
+    _activation_subscription: Subscription,
+}
+
+fn surface_look(follows_focus: bool, visible: bool, active: bool) -> WindowLook {
+    if follows_focus && visible && !active {
+        WindowLook::Quiet
+    } else {
+        WindowLook::Live
+    }
 }
 
 impl<V: Render + 'static> Render for SurfaceRoot<V> {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        enter_window(self.look);
         div()
             .size_full()
             .text(TextStyle::Value)
@@ -1245,9 +1272,10 @@ mod tests {
     use super::platform::SurfacePlatform;
     use super::{
         cancel_focus_reassert, resolved_app_id, reveal_cancelled, state_restore_needs_retry,
-        DragGestureState, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+        surface_look, DragGestureState, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
         PANEL_FOCUS_GENERATION,
     };
+    use crate::kit::WindowLook;
     use crate::placement::MonitorPlacement;
     use gpui::{point, px, size, Pixels, WindowKind};
     use std::cell::Cell;
@@ -1258,6 +1286,40 @@ mod tests {
         point(px(x), px(y))
     }
 
+    #[test]
+    fn only_a_shown_panel_that_lost_focus_goes_quiet() {
+        let cases = [
+            (
+                true,
+                true,
+                false,
+                WindowLook::Quiet,
+                "a shown panel you left",
+            ),
+            (true, true, true, WindowLook::Live, "a panel you are in"),
+            (
+                true,
+                false,
+                false,
+                WindowLook::Live,
+                "a hidden panel reopens live",
+            ),
+            (
+                false,
+                true,
+                false,
+                WindowLook::Live,
+                "a toast never takes focus",
+            ),
+        ];
+        for (follows_focus, visible, active, expected, note) in cases {
+            assert_eq!(
+                surface_look(follows_focus, visible, active),
+                expected,
+                "{note}"
+            );
+        }
+    }
     #[test]
     fn drag_gesture_plain_click_never_starts_a_move() {
         let mut g = DragGestureState::new(4.0);

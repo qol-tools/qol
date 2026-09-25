@@ -203,6 +203,7 @@ impl Focusable for ColorWheelPopup {
 
 impl Render for ColorWheelPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::kit::enter_window(crate::kit::WindowLook::Live);
         div()
             .text(TextStyle::Value)
             .id("qol-color-wheel-popup")

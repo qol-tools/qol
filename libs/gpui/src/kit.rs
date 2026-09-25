@@ -758,7 +758,25 @@ pub fn path_label(path: &str) -> (String, String) {
 
 pub fn kit() -> Kit {
     let theme = qol_theme::runtime_theme();
-    Kit::new(theme.mode, theme.system)
+    let kit = Kit::new(theme.mode, theme.system);
+    if qol_theme::window_is_quiet() {
+        Kit {
+            washes: kit.washes.quiet(),
+            ..kit
+        }
+    } else {
+        kit
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowLook {
+    Live,
+    Quiet,
+}
+
+pub fn enter_window(look: WindowLook) {
+    qol_theme::set_window_quiet(look == WindowLook::Quiet);
 }
 
 #[cfg(test)]

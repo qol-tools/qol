@@ -54,6 +54,7 @@ struct CardRenderContext<'a> {
 
 impl Render for AltTabApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         let visible = self.is_active_visible();
         #[cfg(debug_assertions)]
         if let Some(p) = self.pending_cycle.take() {

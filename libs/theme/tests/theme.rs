@@ -2956,3 +2956,122 @@ fn every_scrolling_list_says_when_there_is_more() {
         problems.join("\n")
     );
 }
+
+const WINDOW_OPENERS: [(&str, Option<(&str, &str)>); 9] = [
+    (
+        "libs/gpui/src/color_wheel.rs",
+        Some(("libs/gpui/src/color_wheel.rs", "ColorWheelPopup")),
+    ),
+    ("libs/gpui/src/keepalive.rs", None),
+    (
+        "libs/gpui/src/surface/mod.rs",
+        Some(("libs/gpui/src/surface/mod.rs", "SurfaceRoot<V>")),
+    ),
+    ("libs/gpui/src/window.rs", None),
+    (
+        "plugins/alt-tab/src/picker/create.rs",
+        Some(("plugins/alt-tab/src/app/render.rs", "AltTabApp")),
+    ),
+    (
+        "plugins/launcher/src/ui/window_host.rs",
+        Some(("plugins/launcher/src/ui/render.rs", "LauncherView")),
+    ),
+    (
+        "plugins/shot/src/ui/pinned.rs",
+        Some(("plugins/shot/src/ui/pinned.rs", "PinnedView")),
+    ),
+    (
+        "plugins/shot/src/ui/preview.rs",
+        Some(("plugins/shot/src/ui/preview.rs", "PreviewView")),
+    ),
+    (
+        "plugins/shot/src/ui/region_selector/mod.rs",
+        Some((
+            "plugins/shot/src/ui/region_selector/mod.rs",
+            "RegionSelector",
+        )),
+    ),
+];
+
+#[test]
+fn every_window_says_whether_it_goes_quiet() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let openers: Vec<String> = surface_sources(&workspace)
+        .into_iter()
+        .filter(|(_, path)| {
+            let contents = fs::read_to_string(path).expect("read gpui source");
+            let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+            body.contains(".open_window(")
+        })
+        .map(|(relative, _)| relative)
+        .collect();
+    let listed: Vec<String> = WINDOW_OPENERS
+        .iter()
+        .map(|(file, _)| file.to_string())
+        .collect();
+    assert_eq!(
+        openers, listed,
+        "A new window needs its root in WINDOW_OPENERS, and the root's render calls kit::enter_window."
+    );
+    let mut problems = Vec::new();
+    for (file, root) in WINDOW_OPENERS.iter().filter_map(|(_, root)| *root) {
+        let contents = fs::read_to_string(workspace.join(file)).expect("read root source");
+        let needle = format!("impl Render for {root} {{");
+        let generic = format!("> Render for {root} {{");
+        let Some(at) = contents.find(&needle).or_else(|| contents.find(&generic)) else {
+            problems.push(format!("{file} has no render for {root}"));
+            continue;
+        };
+        let render = &contents[at..];
+        let head = render.split('\n').take(4).collect::<Vec<_>>().join("\n");
+        if !head.contains("enter_window(") {
+            problems.push(format!(
+                "{file}: {root} does not start its render with enter_window"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Every window root tells the kit whether it is live or quiet before anything reads a colour.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn a_quiet_window_greys_only_the_accent_and_the_running_green() {
+    for (mode, presets) in [
+        (ThemeMode::Light, qol_theme::light_accent_presets()),
+        (ThemeMode::Dark, qol_theme::dark_accent_presets()),
+    ] {
+        for preset in presets {
+            let theme = match mode {
+                ThemeMode::Light => qol_theme::light_theme_with_accent_key(preset.key),
+                ThemeMode::Dark => qol_theme::dark_theme_with_accent_key(preset.key),
+            };
+            let quiet = theme.quiet();
+            let (grey, grey_ink) = match mode {
+                ThemeMode::Light => (
+                    qol_theme::quiet::LIGHT_QUIET_ACCENT,
+                    qol_theme::quiet::LIGHT_QUIET_ACCENT_INK,
+                ),
+                ThemeMode::Dark => (
+                    qol_theme::quiet::DARK_QUIET_ACCENT,
+                    qol_theme::quiet::DARK_QUIET_ACCENT_INK,
+                ),
+            };
+            assert_eq!(quiet.system.accent, grey, "{}", preset.key);
+            assert_eq!(quiet.system.accent_ink, grey_ink, "{}", preset.key);
+            assert_eq!(quiet.system.success, grey, "{}", preset.key);
+            let untouched = qol_theme::SystemPalette {
+                accent: theme.system.accent,
+                accent_ink: theme.system.accent_ink,
+                accent_fill: theme.system.accent_fill,
+                success: theme.system.success,
+                ..quiet.system
+            };
+            assert_eq!(untouched, theme.system, "{}", preset.key);
+            let washes = qol_theme::WashPalette::for_mode(mode, quiet.system).quiet();
+            assert_eq!(washes.accent_halo.alpha_milli, 0, "{}", preset.key);
+        }
+    }
+}

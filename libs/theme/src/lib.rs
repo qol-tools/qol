@@ -1,11 +1,13 @@
 pub mod css;
 pub mod motion;
+pub mod quiet;
 pub mod text;
 
 pub use motion::{
     Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED,
     WAIT_BEFORE_BUSY,
 };
+pub use quiet::{set_window_quiet, window_is_quiet};
 pub use text::{Face, TextSpec, TextStyle};
 
 use qol_color::{
@@ -499,6 +501,15 @@ pub fn set_runtime_theme_override(native: Option<&str>, accent: Option<&str>) {
 }
 
 pub fn runtime_theme() -> Theme {
+    let theme = chosen_theme();
+    if window_is_quiet() {
+        theme.quiet()
+    } else {
+        theme
+    }
+}
+
+fn chosen_theme() -> Theme {
     let override_guard = RUNTIME_THEME_OVERRIDE
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

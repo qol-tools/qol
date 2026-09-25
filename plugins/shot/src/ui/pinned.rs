@@ -1258,6 +1258,7 @@ impl Focusable for PinnedView {
 
 impl Render for PinnedView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         self.schedule_reveal_after_present(window, cx);
         if !self.active {
             return div().id("shot-pin").size_full();
