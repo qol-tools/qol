@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::*;
+use qol_gpui::activity_animation::ActivityAnimation;
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
@@ -27,6 +28,8 @@ use super::model::{
 const MAX_VISIBLE: usize = 10;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_STALE_AFTER: Duration = Duration::from_secs(5);
+const FINISHED_SHOWN: Duration = Duration::from_secs(4);
+const FINISHED_FADE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Selection {
@@ -85,7 +88,7 @@ pub(super) struct UpdatesView {
     selection: Selection,
     selected: usize,
     snapshot: Option<UpdatesSnapshot>,
-    visited: BTreeSet<String>,
+    visited: BTreeMap<String, Option<Instant>>,
     pending: bool,
     last_render: Option<Instant>,
     poll_skipped: bool,
@@ -108,7 +111,7 @@ impl UpdatesView {
             selection: Selection::None,
             selected: 0,
             snapshot: None,
-            visited: BTreeSet::new(),
+            visited: BTreeMap::new(),
             pending: false,
             last_render: None,
             poll_skipped: false,
@@ -160,11 +163,11 @@ impl UpdatesView {
     fn apply_snapshot(&mut self, snapshot: UpdatesSnapshot) {
         if self.poll_skipped {
             self.poll_skipped = false;
-            self.visited.retain(|id| {
-                snapshot.plugins.iter().any(|plugin| {
-                    &plugin.id == id
-                        && !matches!(plugin.state, TargetState::UpToDate | TargetState::DevLinked)
-                })
+            self.visited.retain(|id, _| {
+                snapshot
+                    .plugins
+                    .iter()
+                    .any(|plugin| &plugin.id == id && !finished(plugin.state))
             });
         }
         self.note_visited(&snapshot);
@@ -173,17 +176,37 @@ impl UpdatesView {
 
     fn note_visited(&mut self, snapshot: &UpdatesSnapshot) {
         for plugin in &snapshot.plugins {
-            if !matches!(plugin.state, TargetState::UpToDate | TargetState::DevLinked) {
-                self.visited.insert(plugin.id.clone());
+            if !finished(plugin.state) {
+                self.visited.insert(plugin.id.clone(), None);
+            } else if let Some(since @ None) = self.visited.get_mut(&plugin.id) {
+                *since = Some(Instant::now());
             }
         }
+    }
+
+    fn forget_faded(&mut self) {
+        self.visited.retain(|_, since| {
+            since.is_none_or(|since| since.elapsed() < FINISHED_SHOWN + FINISHED_FADE)
+        });
+    }
+
+    fn fading(&self) -> bool {
+        self.visited.values().any(Option::is_some)
+    }
+
+    fn row_opacity(&self, id: &str) -> f32 {
+        let Some(Some(since)) = self.visited.get(id) else {
+            return 1.0;
+        };
+        fade_opacity(since.elapsed())
     }
 
     fn page_rows(&self) -> (Vec<PageRow>, Option<String>) {
         let Some(snapshot) = &self.snapshot else {
             return (Vec::new(), None);
         };
-        let model = page(snapshot, &self.visited);
+        let shown: BTreeSet<String> = self.visited.keys().cloned().collect();
+        let model = page(snapshot, &shown);
         let mut rows = vec![
             PageRow::Header {
                 title: "Status".to_string(),
@@ -434,7 +457,17 @@ impl UpdatesView {
             PageRow::Host(target) => self.render_target(index, target, Selection::Host, cx),
             PageRow::Plugin(target) => {
                 let selection = Selection::Plugin(target.id.clone());
-                self.render_target(index, target, selection, cx)
+                let row = self.render_target(index, target, selection, cx);
+                let opacity = self.row_opacity(&target.id);
+                if opacity < 1.0 {
+                    div()
+                        .w_full()
+                        .opacity(opacity)
+                        .child(row)
+                        .into_any_element()
+                } else {
+                    row
+                }
             }
         }
     }
@@ -617,6 +650,7 @@ impl Render for UpdatesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.body_focused = self.focus_handle.is_focused(window);
         self.last_render = Some(Instant::now());
+        self.forget_faded();
         let (rows, fold) = self.page_rows();
         self.sync_selection(&rows);
         div()
@@ -639,9 +673,22 @@ impl Render for UpdatesView {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(self.render_body(&rows, fold.as_deref(), cx)),
+                    .child(ActivityAnimation::new(
+                        "qol-native-updates-fade",
+                        self.fading(),
+                        self.render_body(&rows, fold.as_deref(), cx),
+                    )),
             )
     }
+}
+
+fn fade_opacity(elapsed: Duration) -> f32 {
+    let faded = elapsed.saturating_sub(FINISHED_SHOWN);
+    1.0 - (faded.as_secs_f32() / FINISHED_FADE.as_secs_f32()).min(1.0)
+}
+
+fn finished(state: TargetState) -> bool {
+    matches!(state, TargetState::UpToDate | TargetState::DevLinked)
 }
 
 fn navigable(rows: &[PageRow]) -> Vec<(usize, Selection)> {
@@ -680,10 +727,11 @@ fn value_tone(tone: ValueTone) -> SettingsValueTone {
 
 #[cfg(test)]
 mod tests {
-    use super::{navigable, nearest_navigable, PageRow, Selection};
+    use super::{fade_opacity, navigable, nearest_navigable, PageRow, Selection};
     use crate::settings_surface::platform::native_tools::updates::model::{
         CheckRow, Summary, TargetRow, ValueTone,
     };
+    use std::time::Duration;
 
     fn summary() -> Summary {
         Summary {
@@ -719,6 +767,18 @@ mod tests {
             action_label: None,
             attention: false,
             spinner: false,
+        }
+    }
+
+    #[test]
+    fn finished_row_holds_then_fades_out() {
+        let cases = [(0, 1.0), (4000, 1.0), (4500, 0.5), (5000, 0.0), (9000, 0.0)];
+        for (millis, expected) in cases {
+            let opacity = fade_opacity(Duration::from_millis(millis));
+            assert!(
+                (opacity - expected).abs() < 0.001,
+                "{millis} ms gave {opacity}"
+            );
         }
     }
 
