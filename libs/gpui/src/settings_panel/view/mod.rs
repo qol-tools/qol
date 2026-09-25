@@ -262,6 +262,7 @@ pub(super) struct SettingsPanelView {
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     display_layout_stage: Rc<Cell<(f32, f32)>>,
     display_layout_press: Option<(String, Point<Pixels>)>,
+    display_layout_motion: display_layout_card::DisplayLayoutMotion,
     attention: std::collections::HashSet<String>,
     attention_error_logged: bool,
 }
@@ -416,6 +417,7 @@ impl SettingsPanelView {
             body_bounds: Rc::new(Cell::new(None)),
             display_layout_stage: Rc::new(Cell::new((0.0, 0.0))),
             display_layout_press: None,
+            display_layout_motion: Default::default(),
             attention: std::collections::HashSet::new(),
             attention_error_logged: false,
         };
@@ -3998,8 +4000,8 @@ impl SettingsPanelView {
     }
 
     fn enter_hint(&self) -> Option<&'static str> {
-        if self.level().display_layout.is_some() {
-            return display_layout_card::enter_hint(self.level().selected);
+        if let Some(state) = self.level().display_layout.as_ref() {
+            return display_layout_card::enter_hint(self.level().selected, state.editing());
         }
         if let Some(hint) = card_enter_hint(self.level()) {
             return Some(hint);
@@ -4063,6 +4065,13 @@ impl SettingsPanelView {
         let mut left = Vec::new();
         if let Some(label) = self.enter_hint() {
             left.push(SettingsHint::new("\u{21b5}", label));
+        }
+        if let Some(state) = self.level().display_layout.as_ref() {
+            if let Some(label) =
+                display_layout_card::arrows_hint(self.level().selected, state.editing())
+            {
+                left.push(SettingsHint::new("\u{2190}\u{2192}", label));
+            }
         }
         left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
         let mut right = Vec::new();
@@ -4830,8 +4839,8 @@ fn card_enter_hint(level: &Level) -> Option<&'static str> {
     if level.choose.is_some() {
         return Some("choose");
     }
-    if level.display_layout.is_some() {
-        return display_layout_card::enter_hint(level.selected);
+    if let Some(state) = level.display_layout.as_ref() {
+        return display_layout_card::enter_hint(level.selected, state.editing());
     }
     if level.list_card {
         return Some("open");

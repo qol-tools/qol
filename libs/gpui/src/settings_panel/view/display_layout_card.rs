@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use gpui::*;
@@ -23,6 +24,12 @@ use crate::pictures::PictureContext;
 
 const DISPLAY_LAYOUT_STAGE_PAD: f32 = qol_theme::SPACE_INSET;
 
+#[derive(Default)]
+pub(super) struct DisplayLayoutMotion {
+    step: usize,
+    from: BTreeMap<String, Rect>,
+}
+
 impl SettingsPanelView {
     pub(super) fn on_display_layout_card_key(
         &mut self,
@@ -45,6 +52,13 @@ impl SettingsPanelView {
             DisplayLayoutCardAction::CycleDisplays(step) => {
                 if let Some(state) = self.level_mut().display_layout.as_mut() {
                     state.cycle(step);
+                }
+                cx.notify();
+                true
+            }
+            DisplayLayoutCardAction::StepAcross(step) => {
+                if let Some(state) = self.level_mut().display_layout.as_mut() {
+                    state.step_across(step);
                 }
                 cx.notify();
                 true
@@ -95,9 +109,7 @@ impl SettingsPanelView {
                 true
             }
             DisplayLayoutCardAction::LeaveEditing => {
-                if let Some(state) = self.level_mut().display_layout.as_mut() {
-                    state.set_editing(false);
-                }
+                self.change_display_layout(true, DisplayLayoutState::cancel_editing);
                 cx.notify();
                 true
             }
@@ -281,12 +293,47 @@ impl SettingsPanelView {
     }
 
     fn stage_display_layout_nudge(&mut self, dx: i32, dy: i32) {
+        self.change_display_layout(false, |state| state.nudge(dx, dy));
+    }
+
+    fn change_display_layout(
+        &mut self,
+        animate_selected_alone: bool,
+        change: impl FnOnce(&mut DisplayLayoutState) -> bool,
+    ) {
         let (width, height) = self.display_layout_viewport();
         let Some(state) = self.level_mut().display_layout.as_mut() else {
             return;
         };
         state.set_viewport(width, height, DISPLAY_LAYOUT_STAGE_PAD);
-        state.nudge(dx, dy);
+        let before: BTreeMap<String, Rect> = state
+            .displays()
+            .iter()
+            .map(|display| (display.id.clone(), state.rect_of(display)))
+            .collect();
+        if !change(state) {
+            return;
+        }
+        let selected = state.selected_id().map(str::to_string);
+        let moved: BTreeMap<String, Rect> = state
+            .displays()
+            .iter()
+            .filter_map(|display| {
+                let from = *before.get(&display.id)?;
+                (from != state.rect_of(display)).then(|| (display.id.clone(), from))
+            })
+            .collect();
+        let animate = if animate_selected_alone {
+            !moved.is_empty()
+        } else {
+            moved.keys().any(|id| Some(id) != selected.as_ref())
+        };
+        if animate {
+            self.display_layout_motion = DisplayLayoutMotion {
+                step: self.display_layout_motion.step + 1,
+                from: moved,
+            };
+        }
     }
 
     pub(super) fn choose_display_mode(&mut self, pick: usize, cx: &mut Context<Self>) {
@@ -453,6 +500,7 @@ impl SettingsPanelView {
             .get(&row.id)
             .and_then(|copy| copy.card_description.clone());
         let state = state.as_ref().clone();
+        self.display_layout_motion.from.clear();
         let Some(destination) = self.card_destination(&label, cx) else {
             return;
         };
@@ -547,7 +595,28 @@ impl SettingsPanelView {
                     let rect = staged.rect_of(display);
                     let conflicted = staged.conflicts(&display.id);
                     let tile = tile_at(index, display, rect, conflicted);
-                    stage = stage.child(tile);
+                    stage = match self.display_layout_motion.from.get(&display.id) {
+                        Some(from) => {
+                            let start = (fit.to_client_x(from.x), fit.to_client_y(from.y));
+                            let end = (fit.to_client_x(rect.x), fit.to_client_y(rect.y));
+                            let id = format!(
+                                "settings-display-layout-swap-{index}-{}",
+                                self.display_layout_motion.step
+                            );
+                            stage.child(
+                                tile.with_animation(
+                                    ElementId::Name(id.into()),
+                                    Animation::new(crate::deck::TRANSITION)
+                                        .with_easing(ease_out_quint()),
+                                    move |tile, delta| {
+                                        tile.left(px(start.0 + (end.0 - start.0) * delta))
+                                            .top(px(start.1 + (end.1 - start.1) * delta))
+                                    },
+                                ),
+                            )
+                        }
+                        None => stage.child(tile),
+                    };
                 }
                 if let Some((dragged_id, pointer, landing)) = preview {
                     if let Some((dragged_index, display)) = staged
@@ -1083,6 +1152,7 @@ fn display_layout_escape(level: &mut Level) -> bool {
 enum DisplayLayoutCardAction {
     Nudge(i32, i32),
     CycleDisplays(i32),
+    StepAcross(i32),
     ToggleEditing,
     OpenModePicker,
     ChoosePrimary,
@@ -1129,6 +1199,9 @@ fn display_layout_card_action(
             DISPLAY_LAYOUT_CANCEL_ROW => DisplayLayoutCardAction::Pop,
             _ => DisplayLayoutCardAction::FallThrough,
         },
+        "left" | "right" if selected == DISPLAY_LAYOUT_STAGE_ROW => {
+            DisplayLayoutCardAction::StepAcross(if key == "left" { -1 } else { 1 })
+        }
         "left" | "right" if selected == DISPLAY_LAYOUT_BRIGHTNESS_ROW => {
             DisplayLayoutCardAction::StepBrightness(if key == "left" { -1 } else { 1 })
         }
@@ -1140,8 +1213,13 @@ fn display_layout_card_action(
     }
 }
 
-pub(super) fn enter_hint(selected: usize) -> Option<&'static str> {
+pub(super) fn arrows_hint(selected: usize, editing: bool) -> Option<&'static str> {
+    (selected == DISPLAY_LAYOUT_STAGE_ROW && !editing).then_some("display")
+}
+
+pub(super) fn enter_hint(selected: usize, editing: bool) -> Option<&'static str> {
     match selected {
+        DISPLAY_LAYOUT_STAGE_ROW if editing => Some("done"),
         DISPLAY_LAYOUT_STAGE_ROW => Some("edit"),
         DISPLAY_LAYOUT_RESOLUTION_ROW => Some("choose"),
         DISPLAY_LAYOUT_PRIMARY_ROW => Some("choose"),
@@ -1582,6 +1660,36 @@ mod tests {
         );
         assert_eq!(
             super::display_layout_card_action(
+                super::DISPLAY_LAYOUT_STAGE_ROW,
+                false,
+                "left",
+                false
+            ),
+            super::DisplayLayoutCardAction::StepAcross(-1)
+        );
+        assert_eq!(
+            super::display_layout_card_action(
+                super::DISPLAY_LAYOUT_STAGE_ROW,
+                false,
+                "right",
+                false
+            ),
+            super::DisplayLayoutCardAction::StepAcross(1)
+        );
+        assert_eq!(
+            super::arrows_hint(super::DISPLAY_LAYOUT_STAGE_ROW, false),
+            Some("display")
+        );
+        assert_eq!(
+            super::arrows_hint(super::DISPLAY_LAYOUT_STAGE_ROW, true),
+            None
+        );
+        assert_eq!(
+            super::arrows_hint(super::DISPLAY_LAYOUT_BRIGHTNESS_ROW, false),
+            None
+        );
+        assert_eq!(
+            super::display_layout_card_action(
                 super::DISPLAY_LAYOUT_RESOLUTION_ROW,
                 false,
                 "right",
@@ -1655,6 +1763,10 @@ mod tests {
                 "row: {selected}"
             );
         }
+        assert_eq!(
+            super::enter_hint(super::DISPLAY_LAYOUT_STAGE_ROW, true),
+            Some("done")
+        );
     }
 
     #[test]

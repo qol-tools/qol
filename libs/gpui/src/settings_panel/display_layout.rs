@@ -441,7 +441,7 @@ pub struct StagedEdit {
     pub kind: EditKind,
     pub active: bool,
     pub moved: bool,
-    pub swapped: Option<(String, i32, i32)>,
+    pub swapped: BTreeMap<String, (i32, i32)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -481,6 +481,7 @@ pub struct DisplayLayoutState {
     pending: bool,
     error: Option<String>,
     editing: bool,
+    editing_start: Option<StagedEdit>,
 }
 
 impl DisplayLayoutState {
@@ -498,6 +499,7 @@ impl DisplayLayoutState {
             pending: false,
             error: None,
             editing: false,
+            editing_start: None,
         }
     }
 
@@ -537,7 +539,22 @@ impl DisplayLayoutState {
     }
 
     pub fn set_editing(&mut self, editing: bool) {
+        if editing && !self.editing {
+            self.editing_start = self.edit.clone();
+        }
+        if !editing {
+            self.editing_start = None;
+        }
         self.editing = editing;
+    }
+
+    pub fn cancel_editing(&mut self) -> bool {
+        if !self.editing {
+            return false;
+        }
+        self.edit = self.editing_start.take();
+        self.editing = false;
+        true
     }
 
     pub fn staged_mode(&self, display_id: &str) -> Option<&StagedMode> {
@@ -671,6 +688,21 @@ impl DisplayLayoutState {
         true
     }
 
+    pub fn step_across(&mut self, step: i32) -> bool {
+        let mut order: Vec<&Display> = self.displays.iter().collect();
+        order.sort_by_key(|display| self.effective_position(&display.id));
+        let Some(index) = self
+            .selected
+            .as_deref()
+            .and_then(|id| order.iter().position(|display| display.id == id))
+        else {
+            return self.cycle(0);
+        };
+        let next = (index as i32 + step).clamp(0, order.len() as i32 - 1) as usize;
+        self.selected = Some(order[next].id.clone());
+        next != index
+    }
+
     pub fn begin_drag(&mut self, id: &str) -> bool {
         let Some((display_id, x, y)) = self
             .displays
@@ -690,7 +722,7 @@ impl DisplayLayoutState {
             kind: EditKind::Drag,
             active: true,
             moved: false,
-            swapped: None,
+            swapped: BTreeMap::new(),
         });
         true
     }
@@ -721,7 +753,7 @@ impl DisplayLayoutState {
         };
         if let Some(edit) = self.edit.as_mut() {
             edit.pointer = pointer;
-            edit.swapped = None;
+            edit.swapped.clear();
         }
         let others = self.other_rects(&id);
         let snapped = snap_rect(candidate, &others, snap_threshold(fit.scale));
@@ -739,7 +771,7 @@ impl DisplayLayoutState {
             Some((placed, (other_id, other_x, other_y))) => {
                 edit.x = placed.x;
                 edit.y = placed.y;
-                edit.swapped = Some((other_id, other_x, other_y));
+                edit.swapped = BTreeMap::from([(other_id, (other_x, other_y))]);
             }
             None => {
                 edit.x = landing.x;
@@ -795,29 +827,106 @@ impl DisplayLayoutState {
         let Some(display) = self.selected().cloned() else {
             return false;
         };
-        let mut edit = match self.edit.take() {
+        let (x, y) = self.effective_position(&display.id);
+        let edit = match self.edit.take() {
             Some(edit) if edit.id == display.id && edit.kind == EditKind::Nudge => edit,
-            _ => StagedEdit {
-                id: display.id.clone(),
-                x: display.x,
-                y: display.y,
-                origin: (display.x, display.y),
-                pointer: (display.x, display.y),
-                kind: EditKind::Nudge,
-                active: false,
-                moved: false,
-                swapped: None,
-            },
+            previous => {
+                let mut swapped = BTreeMap::new();
+                if let Some(previous) = previous {
+                    if previous.moved {
+                        swapped.insert(previous.id.clone(), (previous.x, previous.y));
+                    }
+                    swapped.extend(previous.swapped);
+                }
+                swapped.remove(&display.id);
+                StagedEdit {
+                    id: display.id.clone(),
+                    x,
+                    y,
+                    origin: (display.x, display.y),
+                    pointer: (x, y),
+                    kind: EditKind::Nudge,
+                    active: false,
+                    moved: (x, y) != (display.x, display.y),
+                    swapped,
+                }
+            }
         };
-        edit.x = edit.x.saturating_add(dx).clamp(SCREEN_MIN, SCREEN_MAX);
-        edit.y = edit.y.saturating_add(dy).clamp(SCREEN_MIN, SCREEN_MAX);
-        edit.moved = edit.moved || (edit.x, edit.y) != edit.origin;
         self.edit = Some(edit);
+        let current = self.effective_rect(&display.id);
+        let candidate = Rect {
+            x: current.x.saturating_add(dx).clamp(SCREEN_MIN, SCREEN_MAX),
+            y: current.y.saturating_add(dy).clamp(SCREEN_MIN, SCREEN_MAX),
+            ..current
+        };
+        let blocker = self
+            .displays
+            .iter()
+            .filter(|other| other.id != display.id)
+            .map(|other| (other.id.clone(), self.effective_rect(&other.id)))
+            .filter(|(_, rect)| candidate.overlaps(rect) && ahead(current, *rect, (dx, dy)))
+            .max_by_key(|(_, rect)| overlap_area(candidate, *rect));
+        let (placed, swap) = match blocker {
+            None => ((candidate.x, candidate.y), None),
+            Some((other_id, other)) => {
+                let Some((placed, pushed)) =
+                    self.swap_with(&display.id, current, &other_id, other, (dx, dy))
+                else {
+                    return false;
+                };
+                (placed, Some((other_id, pushed)))
+            }
+        };
+        let Some(edit) = self.edit.as_mut() else {
+            return false;
+        };
+        edit.x = placed.0;
+        edit.y = placed.1;
+        if let Some((other_id, pushed)) = swap {
+            edit.swapped.insert(other_id, pushed);
+        }
+        edit.moved = edit.moved || (edit.x, edit.y) != edit.origin;
         true
     }
 
+    fn swap_with(
+        &self,
+        id: &str,
+        moving: Rect,
+        other_id: &str,
+        other: Rect,
+        direction: (i32, i32),
+    ) -> Option<((i32, i32), (i32, i32))> {
+        let (placed, pushed) = swap_along(moving, other, direction);
+        let placed_moving = Rect {
+            x: placed.0,
+            y: placed.1,
+            ..moving
+        };
+        let placed_other = Rect {
+            x: pushed.0,
+            y: pushed.1,
+            ..other
+        };
+        let in_range = [placed.0, placed.1, pushed.0, pushed.1]
+            .into_iter()
+            .all(in_screen_range);
+        let clear = !placed_moving.overlaps(&placed_other)
+            && self
+                .displays
+                .iter()
+                .filter(|display| display.id != id && display.id != other_id)
+                .all(|display| {
+                    let rect = self.effective_rect(&display.id);
+                    !placed_moving.overlaps(&rect) && !placed_other.overlaps(&rect)
+                });
+        (in_range && clear).then_some((placed, pushed))
+    }
+
     pub fn has_staged_edits(&self) -> bool {
-        self.edit.as_ref().is_some_and(|edit| edit.moved)
+        self.edit
+            .as_ref()
+            .is_some_and(|edit| edit.moved || !edit.swapped.is_empty())
             || !self.staged_modes.is_empty()
             || self.primary.is_some()
     }
@@ -902,11 +1011,10 @@ impl DisplayLayoutState {
                 display.x = edit.x;
                 display.y = edit.y;
             }
-            if let Some((_, x, y)) = self
+            if let Some((x, y)) = self
                 .edit
                 .as_ref()
-                .and_then(|edit| edit.swapped.as_ref())
-                .filter(|(id, _, _)| id == &display.id)
+                .and_then(|edit| edit.swapped.get(&display.id))
             {
                 display.x = *x;
                 display.y = *y;
@@ -921,6 +1029,7 @@ impl DisplayLayoutState {
         self.staged_modes.clear();
         self.primary = None;
         self.editing = false;
+        self.editing_start = None;
     }
 
     pub fn abort_commit(&mut self) {
@@ -928,6 +1037,7 @@ impl DisplayLayoutState {
         self.staged_modes.clear();
         self.primary = None;
         self.editing = false;
+        self.editing_start = None;
     }
 
     pub fn rect_of(&self, display: &Display) -> Rect {
@@ -995,12 +1105,7 @@ impl DisplayLayoutState {
         if let Some(edit) = self.edit.as_ref().filter(|edit| edit.id == id) {
             return (edit.x, edit.y);
         }
-        if let Some((_, x, y)) = self
-            .edit
-            .as_ref()
-            .and_then(|edit| edit.swapped.as_ref())
-            .filter(|(other_id, _, _)| other_id == id)
-        {
+        if let Some((x, y)) = self.edit.as_ref().and_then(|edit| edit.swapped.get(id)) {
             return (*x, *y);
         }
         match self.displays.iter().find(|display| display.id == id) {
@@ -1140,8 +1245,49 @@ impl DisplayLayoutState {
             kind: EditKind::Nudge,
             active: false,
             moved: (x, y) != (origin_x, origin_y),
-            swapped: None,
+            swapped: BTreeMap::new(),
         });
+    }
+}
+
+fn ahead(from: Rect, other: Rect, direction: (i32, i32)) -> bool {
+    match direction {
+        (dx, _) if dx > 0 => other.x > from.x,
+        (dx, _) if dx < 0 => other.x < from.x,
+        (_, dy) if dy > 0 => other.y > from.y,
+        (_, dy) if dy < 0 => other.y < from.y,
+        _ => false,
+    }
+}
+
+fn overlap_area(a: Rect, b: Rect) -> i64 {
+    let width = a.right().min(b.right()).saturating_sub(a.x.max(b.x)).max(0);
+    let height = a
+        .bottom()
+        .min(b.bottom())
+        .saturating_sub(a.y.max(b.y))
+        .max(0);
+    i64::from(width) * i64::from(height)
+}
+
+fn swap_along(moving: Rect, other: Rect, direction: (i32, i32)) -> ((i32, i32), (i32, i32)) {
+    match direction {
+        (dx, _) if dx > 0 => (
+            (moving.x.saturating_add(other.width), moving.y),
+            (moving.x, other.y),
+        ),
+        (dx, _) if dx < 0 => (
+            (other.x, moving.y),
+            (other.x.saturating_add(moving.width), other.y),
+        ),
+        (_, dy) if dy > 0 => (
+            (moving.x, moving.y.saturating_add(other.height)),
+            (other.x, moving.y),
+        ),
+        _ => (
+            (moving.x, other.y),
+            (other.x, other.y.saturating_add(moving.height)),
+        ),
     }
 }
 
@@ -1891,7 +2037,7 @@ mod tests {
     fn arrange_payload_round_trips_through_the_daemon_parser() {
         let mut layout = two_displays();
         assert!(layout.select("beta"));
-        assert!(layout.nudge(-120, 0));
+        assert!(layout.nudge(0, 120));
         let intent = layout.arrange_intent().expect("arrange intent");
         assert_eq!(intent.action(), "arrange");
         match parse_arrange_input(&intent.input()) {
@@ -1912,7 +2058,7 @@ mod tests {
                         parsed.placements[1].x,
                         parsed.placements[1].y
                     ),
-                    ("beta", 3720, 0)
+                    ("beta", 3840, 120)
                 );
             }
             Err(error) => panic!("the arrange payload must parse: {error}"),
@@ -2195,11 +2341,11 @@ mod tests {
     fn enter_commits_a_pending_nudge_and_escape_reverts_it() {
         let mut layout = two_displays();
         assert!(layout.select("beta"));
-        assert!(layout.nudge(-1, 0));
+        assert!(layout.nudge(1, 0));
         let intent = layout.arrange_intent().expect("commit intent");
         match intent {
             DisplayLayoutIntent::Arrange { placements, .. } => {
-                assert_eq!(placements[1].x, 3839)
+                assert_eq!(placements[1].x, 3841)
             }
             DisplayLayoutIntent::SetMode { .. } => panic!("a nudge must commit as arrange"),
         }
@@ -2515,6 +2661,141 @@ mod tests {
         assert_eq!(layout.selected_id(), Some("alpha"));
         assert!(layout.cycle(-1));
         assert_eq!(layout.selected_id(), Some("beta"));
+    }
+
+    #[test]
+    fn a_nudge_into_a_neighbour_swaps_the_two_displays() {
+        let mut layout = two_displays();
+        assert!(layout.select("beta"));
+        assert!(layout.nudge(-10, 0));
+        assert_eq!(layout.effective_position("beta"), (0, 0));
+        assert_eq!(layout.effective_position("alpha"), (1920, 0));
+        assert!(!layout.conflicts("beta"));
+        assert!(layout.nudge(10, 0));
+        assert_eq!(layout.effective_position("beta"), (3840, 0));
+        assert_eq!(layout.effective_position("alpha"), (0, 0));
+    }
+
+    fn row_of(tiles: &[(&str, i32, i32, i32, i32)]) -> DisplayLayoutState {
+        let mut layout = state();
+        layout.set_viewport(720.0, 368.0, 16.0);
+        let rows: Vec<Value> = tiles
+            .iter()
+            .enumerate()
+            .map(|(index, (id, x, y, width, height))| {
+                json!({
+                    "id": id,
+                    "connector": format!("card0-DP-{index}"),
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "primary": index == 0,
+                })
+            })
+            .collect();
+        layout.load_layout(&Value::Array(rows));
+        layout
+    }
+
+    #[test]
+    fn swaps_walk_a_display_along_a_row_and_keep_earlier_swaps() {
+        let mut layout = row_of(&[
+            ("a", 0, 0, 1000, 500),
+            ("b", 1000, 0, 1000, 500),
+            ("c", 2000, 0, 1000, 500),
+        ]);
+        assert!(layout.select("a"));
+        assert!(layout.nudge(10, 0));
+        assert!(layout.nudge(10, 0));
+        assert_eq!(layout.effective_position("b"), (0, 0));
+        assert_eq!(layout.effective_position("c"), (1000, 0));
+        assert_eq!(layout.effective_position("a"), (2000, 0));
+        assert!(layout.select("c"));
+        assert!(layout.nudge(-10, 0));
+        assert_eq!(layout.effective_position("c"), (0, 0));
+        assert_eq!(layout.effective_position("b"), (1000, 0));
+        assert_eq!(layout.effective_position("a"), (2000, 0));
+        assert!(layout.issues().is_empty());
+    }
+
+    #[test]
+    fn a_swapped_display_swaps_back_the_other_way() {
+        let mut layout = row_of(&[("hdmi", 0, 0, 2560, 1440), ("dp", 2560, 0, 1920, 1080)]);
+        assert!(layout.select("hdmi"));
+        assert!(layout.nudge(10, 0));
+        assert_eq!(layout.effective_position("hdmi"), (1920, 0));
+        assert!(layout.nudge(-10, 0));
+        assert_eq!(layout.effective_position("hdmi"), (0, 0));
+        assert_eq!(layout.effective_position("dp"), (2560, 0));
+    }
+
+    #[test]
+    fn step_across_follows_where_the_displays_are_staged() {
+        let mut layout = row_of(&[("hdmi", 0, 0, 2560, 1440), ("dp", 2560, 0, 1920, 1080)]);
+        assert!(layout.select("hdmi"));
+        assert!(layout.nudge(10, 0));
+        assert!(layout.step_across(-1));
+        assert_eq!(layout.selected_id(), Some("dp"));
+        assert!(layout.step_across(1));
+        assert_eq!(layout.selected_id(), Some("hdmi"));
+    }
+
+    #[test]
+    fn cancelling_a_move_session_restores_where_it_started() {
+        let mut layout = row_of(&[("hdmi", 0, 0, 2560, 1440), ("dp", 2560, 0, 1920, 1080)]);
+        assert!(layout.select("hdmi"));
+        assert!(layout.nudge(0, 10));
+        layout.set_editing(true);
+        assert!(layout.nudge(10, 0));
+        assert!(layout.nudge(10, 0));
+        assert!(layout.cancel_editing());
+        assert!(!layout.editing());
+        assert_eq!(layout.effective_position("hdmi"), (0, 10));
+        assert_eq!(layout.effective_position("dp"), (2560, 0));
+        layout.set_editing(true);
+        assert!(layout.nudge(10, 0));
+        layout.set_editing(false);
+        assert!(!layout.cancel_editing());
+        assert_eq!(layout.effective_position("hdmi"), (1920, 10));
+    }
+
+    #[test]
+    fn swaps_work_up_and_down() {
+        let mut layout = row_of(&[("a", 0, 0, 1000, 500), ("b", 0, 500, 1000, 400)]);
+        assert!(layout.select("a"));
+        assert!(layout.nudge(0, 10));
+        assert_eq!(layout.effective_position("b"), (0, 0));
+        assert_eq!(layout.effective_position("a"), (0, 400));
+        assert!(layout.nudge(0, -10));
+        assert_eq!(layout.effective_position("a"), (0, 0));
+        assert_eq!(layout.effective_position("b"), (0, 500));
+    }
+
+    #[test]
+    fn a_swap_that_would_collide_with_a_third_display_stays_put() {
+        let mut layout = row_of(&[
+            ("a", 0, 0, 1000, 1000),
+            ("b", 1000, 0, 500, 500),
+            ("c", 1500, 0, 1000, 500),
+            ("d", 1000, 500, 1000, 500),
+        ]);
+        assert!(layout.select("a"));
+        assert!(!layout.nudge(10, 0));
+        assert_eq!(layout.effective_position("a"), (0, 0));
+        assert_eq!(layout.effective_position("b"), (1000, 0));
+    }
+
+    #[test]
+    fn step_across_walks_displays_left_to_right_without_wrapping() {
+        let mut layout = two_displays();
+        assert!(layout.select("beta"));
+        assert!(!layout.step_across(1));
+        assert_eq!(layout.selected_id(), Some("beta"));
+        assert!(layout.step_across(-1));
+        assert_eq!(layout.selected_id(), Some("alpha"));
+        assert!(!layout.step_across(-1));
+        assert_eq!(layout.selected_id(), Some("alpha"));
     }
 
     #[test]
