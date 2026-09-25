@@ -138,17 +138,14 @@ pub fn clamp_into_view(
 
     *selected = (*selected).min(count - 1);
     let max_offset = count.saturating_sub(max_visible);
+    let lead = usize::from(max_visible >= 3);
+
+    if *selected < *scroll_offset + lead {
+        *scroll_offset = selected.saturating_sub(lead);
+    } else if *selected + lead + 1 > *scroll_offset + max_visible {
+        *scroll_offset = *selected + lead + 1 - max_visible;
+    }
     *scroll_offset = (*scroll_offset).min(max_offset);
-
-    if *selected < *scroll_offset {
-        *scroll_offset = *selected;
-        return;
-    }
-
-    let bottom = *scroll_offset + max_visible.saturating_sub(1);
-    if *selected > bottom {
-        *scroll_offset = *selected + 1 - max_visible;
-    }
 }
 
 pub fn shift_window(scroll_offset: usize, steps: i32, count: usize, max_visible: usize) -> usize {
@@ -304,9 +301,28 @@ mod tests {
         clamp_into_view(&mut selected, &mut offset, 20, 5);
         assert_eq!(
             (selected, offset),
-            (7, 3),
-            "offset follows the selection past the window bottom"
+            (7, 4),
+            "offset follows the selection and keeps one row below it in view"
         );
+    }
+
+    #[test]
+    fn a_chosen_row_keeps_a_row_between_it_and_a_faded_edge() {
+        let mut list = ScrollList::new(9);
+        let count = 109;
+        for step in 1..count {
+            list.move_down(count);
+            list.sync(count);
+            let window = list.visible_range(count);
+            let inside = list.selected > window.start || window.start == 0;
+            let below = list.selected + 1 < window.end || window.end == count;
+            assert!(
+                inside && below,
+                "step {step}: {:?} holds {}",
+                window,
+                list.selected
+            );
+        }
     }
 
     #[test]

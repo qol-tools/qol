@@ -386,7 +386,16 @@ impl Render for LauncherView {
                                     cx.notify();
                                 },
                             ))
-                            .children(rows),
+                            .relative()
+                            .children(rows)
+                            .child(kit.scroll_cue(
+                                qol_gpui::scrollbar::ScrollSource::Window {
+                                    first: scroll_offset,
+                                    shown: visible,
+                                    total: result_count,
+                                },
+                                kit.grounds.pane,
+                            )),
                     )
                 }
             })

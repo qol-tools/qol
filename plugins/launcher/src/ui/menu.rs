@@ -1,3 +1,4 @@
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
@@ -268,64 +269,88 @@ impl LauncherView {
     pub(super) fn menu_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
         let kind = self.menu_kind.expect("menu overlay requires an open menu");
-        let panel = div()
+        let frame = div()
             .id("launcher-menu")
             .absolute()
-            .h(px(self.menu_height()))
+            .h(px(self.menu_height()));
+        let (frame, ground) = if kind == MenuKind::Help {
+            (
+                frame
+                    .top(px(HEADER_HEIGHT))
+                    .left_0()
+                    .w(px(WINDOW_WIDTH))
+                    .border_b(px(1.0))
+                    .border_color(rgba(kit.washes.hairline.packed()))
+                    .bg(super::view::bg_color()),
+                kit.grounds.pane,
+            )
+        } else {
+            (
+                frame
+                    .top(px(HEADER_HEIGHT + 4.0))
+                    .right(px(8.0))
+                    .w(px(280.0))
+                    .border(px(1.0))
+                    .border_color(rgba(kit.washes.hairline_strong.packed()))
+                    .bg(rgb(kit.palette.surface_raised))
+                    .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary)),
+                kit.grounds.menu,
+            )
+        };
+        let items = self.menu_items(kind, cx);
+        let children = items.len();
+        let panel = div()
+            .id("launcher-menu-scroll")
+            .size_full()
             .p(px(qol_gpui::theme::SPACE_TIGHT))
+            .when(kind == MenuKind::Help, |panel| {
+                panel.px(px(qol_gpui::theme::SPACE_PAD))
+            })
             .track_scroll(&self.menu_scroll)
             .overflow_y_scroll()
             .flex()
-            .flex_col();
-        let mut panel = if kind == MenuKind::Help {
-            panel
-                .top(px(HEADER_HEIGHT))
-                .left_0()
-                .w(px(WINDOW_WIDTH))
-                .px(px(qol_gpui::theme::SPACE_PAD))
-                .border_b(px(1.0))
-                .border_color(rgba(kit.washes.hairline.packed()))
-                .bg(super::view::bg_color())
-        } else {
-            panel
-                .top(px(HEADER_HEIGHT + 4.0))
-                .right(px(8.0))
-                .w(px(280.0))
-                .border(px(1.0))
-                .border_color(rgba(kit.washes.hairline_strong.packed()))
-                .bg(rgb(kit.palette.surface_raised))
-                .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary))
-        };
+            .flex_col()
+            .children(items);
+        frame.child(panel).child(kit.scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Handle {
+                handle: self.menu_scroll.clone(),
+                children,
+            },
+            ground,
+        ))
+    }
+
+    fn menu_items(&self, kind: MenuKind, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if kind == MenuKind::Help {
             let (left, right, right_extra) = self.help_rows();
-            panel = panel.child(menu_title("Keys", Key::letter('h').alt()));
-            panel = panel.child(
+            return vec![
+                menu_title("Keys", Key::letter('h').alt()).into_any_element(),
                 div()
                     .flex()
                     .gap(px(qol_gpui::theme::SPACE_INSET))
                     .child(help_column(left, &[]))
-                    .child(help_column(right, right_extra)),
-            );
-            return panel;
+                    .child(help_column(right, right_extra))
+                    .into_any_element(),
+            ];
         }
-        panel = panel.child(menu_title("Options", Key::ENTER.alt()));
-        panel = panel.child(menu_section("Search type"));
+        let mut items = vec![
+            menu_title("Options", Key::ENTER.alt()).into_any_element(),
+            menu_section("Search type").into_any_element(),
+        ];
         let selected = self.store.get(self.state.scroll_list.selected);
         let actions = self.available_options();
         for (index, action) in actions.into_iter().enumerate() {
             if index == 2 {
                 if let Some(scored) = selected {
-                    panel = panel.child(menu_section(self.store.name(scored)));
+                    items.push(menu_section(self.store.name(scored)).into_any_element());
                 }
             }
-            panel = panel.child(option_row(
-                action,
-                index == self.menu_selected,
-                self.state.mode,
-                cx,
-            ));
+            items.push(
+                option_row(action, index == self.menu_selected, self.state.mode, cx)
+                    .into_any_element(),
+            );
         }
-        panel
+        items
     }
 }
 

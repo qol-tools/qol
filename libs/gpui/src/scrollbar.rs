@@ -12,47 +12,132 @@ pub const OVERFLOW_CHEVRON_WIDTH: f32 = qol_theme::SPACE_PAD;
 pub const OVERFLOW_CHEVRON_RISE: f32 = qol_theme::SPACE_SNUG;
 pub const OVERFLOW_CHEVRON_STROKE: f32 = 2.0;
 
-pub fn seam_track(handle: ScrollHandle, track_rgba: u32, thumb_rgba: u32) -> impl IntoElement {
+#[derive(Clone)]
+pub enum ScrollSource {
+    Handle {
+        handle: ScrollHandle,
+        children: usize,
+    },
+    Window {
+        first: usize,
+        shown: usize,
+        total: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CueState {
+    top: bool,
+    bottom: bool,
+    share: f32,
+    at: f32,
+}
+
+impl ScrollSource {
+    fn state(&self) -> Option<CueState> {
+        match self {
+            Self::Handle { handle, children } => {
+                let max = handle.max_offset().height;
+                if max <= px(0.) || *children == 0 {
+                    return None;
+                }
+                let first = handle.bounds_for_item(0)?;
+                let last = handle.bounds_for_item(children - 1)?;
+                let viewport = handle.bounds();
+                let (top, bottom) = overflow_edges(viewport, first, last, handle.offset().y);
+                let view = viewport.size.height;
+                Some(CueState {
+                    top,
+                    bottom,
+                    share: view / (view + max),
+                    at: (-handle.offset().y / max).clamp(0.0, 1.0),
+                })
+            }
+            Self::Window {
+                first,
+                shown,
+                total,
+            } => window_state(*first, *shown, *total),
+        }
+    }
+}
+
+fn window_state(first: usize, shown: usize, total: usize) -> Option<CueState> {
+    if shown == 0 || shown >= total {
+        return None;
+    }
+    let hidden = total - shown;
+    Some(CueState {
+        top: first > 0,
+        bottom: first + shown < total,
+        share: shown as f32 / total as f32,
+        at: (first.min(hidden) as f32 / hidden as f32).clamp(0.0, 1.0),
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CueInk {
+    surface: u32,
+    chevron: u32,
+    streak: u32,
+    track: u32,
+    thumb: u32,
+}
+
+impl CueInk {
+    fn of(ground: qol_theme::Ground) -> Self {
+        Self {
+            surface: ground.bg,
+            chevron: crate::kit::alpha(ground.ink, 0xc8),
+            streak: crate::kit::alpha(ground.ink, 0x1f),
+            track: ground.edge.packed(),
+            thumb: crate::kit::alpha(ground.ink, 0x8c),
+        }
+    }
+}
+
+pub fn scroll_cue(source: ScrollSource, ground: qol_theme::Ground) -> impl IntoElement {
+    let ink = CueInk::of(ground);
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
-            let max = handle.max_offset().height;
-            if max <= px(0.) {
+            let Some(state) = source.state() else {
                 return;
+            };
+            if state.top {
+                paint_overflow_edge(window, bounds, OverflowEdge::Top, ink);
             }
-            let view_h = bounds.size.height;
-            let track_x = bounds.right() - px(SEAM_TRACK_INSET + SEAM_TRACK_WIDTH);
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(track_x, bounds.top()),
-                    size(px(SEAM_TRACK_WIDTH), view_h),
-                ),
-                rgba(track_rgba),
-            ));
-            let content = view_h + max;
-            let thumb_h = (view_h * (view_h / content)).max(px(SEAM_THUMB_MIN));
-            let frac = (-handle.offset().y / max).clamp(0.0, 1.0);
-            let thumb_y = bounds.top() + (view_h - thumb_h) * frac;
-            window.paint_quad(fill(
-                Bounds::new(point(track_x, thumb_y), size(px(SEAM_TRACK_WIDTH), thumb_h)),
-                rgba(thumb_rgba),
-            ));
+            if state.bottom {
+                paint_overflow_edge(window, bounds, OverflowEdge::Bottom, ink);
+            }
+            paint_track(window, bounds, state, ink);
         },
     )
     .absolute()
     .inset_0()
 }
 
+fn paint_track(window: &mut Window, bounds: Bounds<Pixels>, state: CueState, ink: CueInk) {
+    let view_h = bounds.size.height;
+    let track_x = bounds.right() - px(SEAM_TRACK_INSET + SEAM_TRACK_WIDTH);
+    window.paint_quad(fill(
+        Bounds::new(
+            point(track_x, bounds.top()),
+            size(px(SEAM_TRACK_WIDTH), view_h),
+        ),
+        rgba(ink.track),
+    ));
+    let thumb_h = (view_h * state.share).max(px(SEAM_THUMB_MIN)).min(view_h);
+    let thumb_y = bounds.top() + (view_h - thumb_h) * state.at;
+    window.paint_quad(fill(
+        Bounds::new(point(track_x, thumb_y), size(px(SEAM_TRACK_WIDTH), thumb_h)),
+        rgba(ink.thumb),
+    ));
+}
+
 enum OverflowEdge {
     Top,
     Bottom,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct OverflowFadeStyle {
-    pub surface_rgb: u32,
-    pub ink_rgba: u32,
-    pub wash_rgba: u32,
 }
 
 pub fn overflow_edges(
@@ -66,45 +151,11 @@ pub fn overflow_edges(
     (top, bottom)
 }
 
-pub fn overflow_fade(
-    handle: ScrollHandle,
-    children: usize,
-    style: OverflowFadeStyle,
-) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let max = handle.max_offset().height;
-            if max <= px(0.) {
-                return;
-            }
-            if children == 0 {
-                return;
-            }
-            let (Some(first), Some(last)) = (
-                handle.bounds_for_item(0),
-                handle.bounds_for_item(children - 1),
-            ) else {
-                return;
-            };
-            let (top, bottom) = overflow_edges(handle.bounds(), first, last, handle.offset().y);
-            if top {
-                paint_overflow_edge(window, bounds, OverflowEdge::Top, style);
-            }
-            if bottom {
-                paint_overflow_edge(window, bounds, OverflowEdge::Bottom, style);
-            }
-        },
-    )
-    .absolute()
-    .inset_0()
-}
-
 fn paint_overflow_edge(
     window: &mut Window,
     bounds: Bounds<Pixels>,
     edge: OverflowEdge,
-    style: OverflowFadeStyle,
+    ink: CueInk,
 ) {
     let fade_h = px(OVERFLOW_FADE_HEIGHT).min(bounds.size.height);
     let rise = px(OVERFLOW_CHEVRON_RISE);
@@ -140,11 +191,11 @@ fn paint_overflow_edge(
         ),
         linear_gradient(
             180.0,
-            linear_color_stop(rgba(crate::kit::alpha(style.surface_rgb, band_start)), 0.0),
-            linear_color_stop(rgba(crate::kit::alpha(style.surface_rgb, band_end)), 1.0),
+            linear_color_stop(rgba(crate::kit::alpha(ink.surface, band_start)), 0.0),
+            linear_color_stop(rgba(crate::kit::alpha(ink.surface, band_end)), 1.0),
         ),
     ));
-    let clear = style.wash_rgba & 0xffff_ff00;
+    let clear = ink.streak & 0xffff_ff00;
     let half_streak = px(OVERFLOW_STREAK_WIDTH / 2.0);
     let streak_size = size(half_streak, px(OVERFLOW_STREAK_HEIGHT));
     let streak_top = centre_y - px(OVERFLOW_STREAK_HEIGHT / 2.0);
@@ -154,14 +205,14 @@ fn paint_overflow_edge(
         linear_gradient(
             90.0,
             linear_color_stop(rgba(clear), 0.0),
-            linear_color_stop(rgba(style.wash_rgba), 1.0),
+            linear_color_stop(rgba(ink.streak), 1.0),
         ),
     ));
     window.paint_quad(fill(
         Bounds::new(point(center_x, streak_top), streak_size),
         linear_gradient(
             90.0,
-            linear_color_stop(rgba(style.wash_rgba), 0.0),
+            linear_color_stop(rgba(ink.streak), 0.0),
             linear_color_stop(rgba(clear), 1.0),
         ),
     ));
@@ -170,15 +221,15 @@ fn paint_overflow_edge(
     path.line_to(point(center_x, tip_y));
     path.line_to(point(center_x + half_chevron, wing_y));
     if let Ok(path) = path.build() {
-        window.paint_path(path, rgba(style.ink_rgba));
+        window.paint_path(path, rgba(ink.chevron));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        overflow_edges, OVERFLOW_CHEVRON_RISE, OVERFLOW_CHEVRON_STROKE, OVERFLOW_CUE_CENTRE,
-        OVERFLOW_FADE_HEIGHT, OVERFLOW_STREAK_HEIGHT, OVERFLOW_STREAK_WIDTH,
+        overflow_edges, window_state, OVERFLOW_CHEVRON_RISE, OVERFLOW_CHEVRON_STROKE,
+        OVERFLOW_CUE_CENTRE, OVERFLOW_FADE_HEIGHT, OVERFLOW_STREAK_HEIGHT, OVERFLOW_STREAK_WIDTH,
     };
     use gpui::{point, px, size, Bounds, Pixels};
 
@@ -245,5 +296,17 @@ mod tests {
         assert!(OVERFLOW_CUE_CENTRE + OVERFLOW_STREAK_HEIGHT / 2.0 <= OVERFLOW_FADE_HEIGHT);
         assert!(OVERFLOW_CHEVRON_RISE + OVERFLOW_CHEVRON_STROKE <= OVERFLOW_STREAK_HEIGHT);
         assert_eq!((OVERFLOW_STREAK_WIDTH / 2.0).fract(), 0.0);
+    }
+
+    #[test]
+    fn a_windowed_list_shows_more_on_each_hidden_side() {
+        assert_eq!(window_state(0, 9, 9), None);
+        let first = window_state(0, 9, 109).expect("more below");
+        assert!(!first.top && first.bottom);
+        let middle = window_state(50, 9, 109).expect("more both ways");
+        assert!(middle.top && middle.bottom);
+        let last = window_state(100, 9, 109).expect("more above");
+        assert!(last.top && !last.bottom);
+        assert_eq!(last.at, 1.0);
     }
 }

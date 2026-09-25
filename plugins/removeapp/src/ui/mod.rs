@@ -13,6 +13,7 @@ use crate::core::{
     self, Disposal, Guards, InstalledApp, PackageIndex, PackageStatus, RemovalOutcome, RemovalPlan,
 };
 use qol_gpui::scroll_list::ScrollList;
+use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{remove_app_runtime, RemoveAppPalette};
@@ -83,6 +84,7 @@ pub struct RemoveAppView {
     package_index: Option<PackageIndex>,
     sizes: std::collections::HashMap<std::path::PathBuf, u64>,
     quit_failed: bool,
+    items_scroll: gpui::ScrollHandle,
     focus_handle: FocusHandle,
 }
 
@@ -106,6 +108,7 @@ impl RemoveAppView {
             package_index: None,
             sizes: std::collections::HashMap::new(),
             quit_failed: false,
+            items_scroll: gpui::ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
         }
     }
@@ -424,6 +427,7 @@ impl RemoveAppView {
     }
 
     fn render_picking(&self, window: &mut Window) -> AnyElement {
+        let kit = qol_gpui::kit::kit();
         let range = self.list.visible_range(self.matches.len());
         let selected = self.list.selected;
         let rows: Vec<_> = self.matches[range.clone()]
@@ -447,13 +451,22 @@ impl RemoveAppView {
             .child(self.search_box(window))
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
                     .flex()
                     .flex_col()
                     .pt(px(SEARCH_PAD))
-                    .children(rows),
+                    .children(rows)
+                    .child(kit.scroll_cue(
+                        ScrollSource::Window {
+                            first: range.start,
+                            shown: range.len(),
+                            total: self.matches.len(),
+                        },
+                        kit.grounds.pane,
+                    )),
             )
             .children(self.remove_bar())
             .child(footer(
@@ -598,6 +611,8 @@ impl RemoveAppView {
         let Some(plan) = &self.plan else {
             return div().into_any_element();
         };
+        let kit = qol_gpui::kit::kit();
+        let item_count = plan.items.len();
         let items: Vec<_> = plan
             .items
             .iter()
@@ -670,12 +685,25 @@ impl RemoveAppView {
             .children(self.guard_banner())
             .child(
                 div()
-                    .id("qol-removeapp-items")
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .overflow_y_scroll()
-                    .children(items),
+                    .child(
+                        div()
+                            .id("qol-removeapp-items")
+                            .size_full()
+                            .track_scroll(&self.items_scroll)
+                            .overflow_y_scroll()
+                            .children(items),
+                    )
+                    .child(kit.scroll_cue(
+                        ScrollSource::Handle {
+                            handle: self.items_scroll.clone(),
+                            children: item_count,
+                        },
+                        kit.grounds.pane,
+                    )),
             )
             .child(
                 div()

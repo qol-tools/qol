@@ -401,6 +401,14 @@ impl Kit {
             .child(crate::vertical_label::VerticalLabel::new(text))
     }
 
+    pub fn scroll_cue(
+        &self,
+        source: crate::scrollbar::ScrollSource,
+        ground: Ground,
+    ) -> impl IntoElement {
+        crate::scrollbar::scroll_cue(source, ground)
+    }
+
     pub fn row_metadata(&self) -> Div {
         div()
             .flex_none()

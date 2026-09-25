@@ -1039,6 +1039,7 @@ impl NativeToolsView {
         let total = self.list_len();
         let mut list = div()
             .id("native-tools-list")
+            .relative()
             .flex_1()
             .min_h_0()
             .flex()
@@ -1056,7 +1057,8 @@ impl NativeToolsView {
                     cx.notify();
                 }),
             );
-        for index in self.list().visible_range(total) {
+        let range = self.list().visible_range(total);
+        for index in range.clone() {
             list = list.child(match index.checked_sub(1) {
                 None => self.render_add_row(cx),
                 Some(item) => match self.tool {
@@ -1068,6 +1070,14 @@ impl NativeToolsView {
         if self.item_count() == 0 {
             list = list.child(self.render_message(self.empty_message(), false));
         }
+        list = list.child(qol_gpui::kit::kit().scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Window {
+                first: range.start,
+                shown: range.len(),
+                total: total,
+            },
+            settings_panel_runtime().grounds.pane,
+        ));
         list.into_any_element()
     }
 

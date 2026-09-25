@@ -3515,21 +3515,12 @@ impl SettingsPanelView {
                 .child(body)
                 .when(front, |frame| frame.child(frame_bounds))
                 .when(front && !has_custom_view, |frame| {
-                    frame.child(crate::scrollbar::overflow_fade(
-                        self.stack[level_index].body_scroll.handle().clone(),
-                        children,
-                        crate::scrollbar::OverflowFadeStyle {
-                            surface_rgb: self.palette.window_bg,
-                            ink_rgba: crate::kit::alpha(self.palette.section_text, 0xc8),
-                            wash_rgba: crate::kit::alpha(self.palette.section_text, 0x1f),
+                    frame.child(self.kit.scroll_cue(
+                        crate::scrollbar::ScrollSource::Handle {
+                            handle: self.stack[level_index].body_scroll.handle().clone(),
+                            children,
                         },
-                    ))
-                })
-                .when(front && !has_custom_view, |frame| {
-                    frame.child(crate::scrollbar::seam_track(
-                        self.stack[level_index].body_scroll.handle().clone(),
-                        crate::kit::alpha(self.palette.panel_border, 0x48),
-                        crate::kit::alpha(self.palette.section_text, 0x8c),
+                        self.palette.grounds.pane,
                     ))
                 })
                 .when(self.filter_open && front && !has_custom_view, |frame| {

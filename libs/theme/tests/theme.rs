@@ -2933,3 +2933,26 @@ fn text_styles_hold_their_approved_values() {
         ]
     );
 }
+
+#[test]
+fn every_scrolling_list_says_when_there_is_more() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        let scrolls =
+            body.matches(".overflow_y_scroll()").count() + body.matches(".visible_range(").count();
+        let cues = body.matches("scroll_cue(").count();
+        if scrolls > cues {
+            problems.push(format!(
+                "{relative} scrolls {scrolls} lists but draws {cues} scroll cues"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A list that scrolls ends in kit.scroll_cue, so it always shows when there is more.\n{}",
+        problems.join("\n")
+    );
+}

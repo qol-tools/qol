@@ -564,10 +564,12 @@ pub fn detail_body(
                 )
                 .when(!detail.is_empty(), |body| body.child(fields)),
         )
-        .child(qol_gpui::scrollbar::seam_track(
-            scroll.clone(),
-            qol_gpui::kit::alpha(kit.palette.border_subtle, 0x48),
-            qol_gpui::kit::alpha(kit.palette.text_secondary, 0x8c),
+        .child(kit.scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Handle {
+                handle: scroll.clone(),
+                children: 1 + usize::from(!detail.is_empty()),
+            },
+            kit.grounds.pane,
         ))
 }
 

@@ -321,34 +321,50 @@ fn header_bar(left: &str, snap: &RenderSnap) -> Div {
 }
 
 fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
-    div().flex_1().w_full().min_h_0().child(
-        div()
-            .id("preview-grid")
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .content_start()
-            .w_full()
-            .h_full()
-            .track_scroll(context.grid_scroll)
-            .overflow_y_scroll()
-            .px_5()
-            .py(px(18.0))
-            .gap_4()
-            .when(windows.is_empty(), |s| {
-                s.items_center().justify_center().child(qol_gpui::Busy::new(
-                    "alt-tab-scanning",
-                    "Scanning windows",
-                    rgb(context.snap.palette.grid_empty_text),
-                ))
-            })
-            .children(
-                windows
-                    .iter()
-                    .enumerate()
-                    .map(|(i, win)| render_card(i, win, context)),
-            ),
-    )
+    let kit = qol_gpui::kit::kit();
+    let cue = (!context.snap.transparent_bg).then(|| {
+        kit.scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Handle {
+                handle: context.grid_scroll.clone(),
+                children: windows.len(),
+            },
+            kit.grounds.pane,
+        )
+    });
+    div()
+        .relative()
+        .flex_1()
+        .w_full()
+        .min_h_0()
+        .child(
+            div()
+                .id("preview-grid")
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .content_start()
+                .w_full()
+                .h_full()
+                .track_scroll(context.grid_scroll)
+                .overflow_y_scroll()
+                .px_5()
+                .py(px(18.0))
+                .gap_4()
+                .when(windows.is_empty(), |s| {
+                    s.items_center().justify_center().child(qol_gpui::Busy::new(
+                        "alt-tab-scanning",
+                        "Scanning windows",
+                        rgb(context.snap.palette.grid_empty_text),
+                    ))
+                })
+                .children(
+                    windows
+                        .iter()
+                        .enumerate()
+                        .map(|(i, win)| render_card(i, win, context)),
+                ),
+        )
+        .children(cue)
 }
 
 fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> Div {

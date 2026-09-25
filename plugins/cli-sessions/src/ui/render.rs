@@ -403,6 +403,8 @@ impl SessionsView {
         if body_visible {
             self.list_scroll.follow(highlight, None, px(0.));
         }
+        let kit = qol_gpui::kit::kit();
+        let row_count = rows.len();
         let row_els: Vec<_> = rows
             .iter()
             .filter(|_| body_visible)
@@ -497,16 +499,28 @@ impl SessionsView {
                 panel
                     .child(
                         div()
-                            .id("cli-sessions-list")
+                            .relative()
                             .flex_1()
                             .min_h_0()
                             .w_full()
-                            .track_scroll(self.list_scroll.handle())
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_col()
-                            .when(is_empty, |d| d.child(empty_state()))
-                            .children(row_els),
+                            .child(
+                                div()
+                                    .id("cli-sessions-list")
+                                    .size_full()
+                                    .track_scroll(self.list_scroll.handle())
+                                    .overflow_y_scroll()
+                                    .flex()
+                                    .flex_col()
+                                    .when(is_empty, |d| d.child(empty_state()))
+                                    .children(row_els),
+                            )
+                            .child(kit.scroll_cue(
+                                qol_gpui::scrollbar::ScrollSource::Handle {
+                                    handle: self.list_scroll.handle().clone(),
+                                    children: row_count,
+                                },
+                                kit.grounds.pane,
+                            )),
                     )
                     .child(footer())
             })

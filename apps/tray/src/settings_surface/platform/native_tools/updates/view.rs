@@ -389,6 +389,7 @@ impl UpdatesView {
         let last = total.checked_sub(1);
         let mut list = div()
             .id("updates-list")
+            .relative()
             .flex_1()
             .min_h_0()
             .flex()
@@ -414,13 +415,22 @@ impl UpdatesView {
                 seen.iter()
                     .rposition(|row| matches!(row, PageRow::Header { .. }))
             });
-        for index in self.list.visible_range(total) {
+        let range = self.list.visible_range(total);
+        for index in range.clone() {
             let current = self.body_focused && cursor_group == Some(index);
             list = list.child(self.render_row(index, &rows[index], current, cx));
             if Some(index) == last {
                 list = list.children(fold.map(|text| self.render_fold(text)));
             }
         }
+        list = list.child(qol_gpui::kit::kit().scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Window {
+                first: range.start,
+                shown: range.len(),
+                total: total,
+            },
+            settings_panel_runtime().grounds.pane,
+        ));
         list.into_any_element()
     }
 
