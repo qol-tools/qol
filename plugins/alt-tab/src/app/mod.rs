@@ -292,6 +292,7 @@ impl AltTabApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.delegate.update(cx, |s, _| s.forget_dismissed());
         self.apply_gathered(req.gathered, req.config.reset_selection_on_open, window, cx);
         if req.config.open_behavior != crate::config::OpenBehavior::CycleOnce {
             return;

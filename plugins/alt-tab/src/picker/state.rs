@@ -25,6 +25,29 @@ pub(crate) struct PickerState {
     pub(crate) live_previews: PreviewMap,
     pub(crate) live_frames: LiveFrameMap,
     pub(crate) icon_cache: IconMap,
+    pub(crate) dismissed: Dismissed,
+}
+
+// A background refresh can land before a closed window or quit app leaves the
+// window server list, so W and Q hold their removals until the next show.
+#[derive(Default)]
+pub(crate) struct Dismissed {
+    window_ids: std::collections::HashSet<u32>,
+    app_names: std::collections::HashSet<String>,
+}
+
+impl Dismissed {
+    pub(crate) fn close_window(&mut self, window_id: u32) {
+        self.window_ids.insert(window_id);
+    }
+
+    pub(crate) fn quit_app(&mut self, app_name: &str) {
+        self.app_names.insert(app_name.to_string());
+    }
+
+    fn keeps(&self, window: &WindowInfo) -> bool {
+        !self.window_ids.contains(&window.id) && !self.app_names.contains(&window.app_name)
+    }
 }
 
 impl PickerState {
@@ -59,6 +82,7 @@ impl PickerState {
             live_previews: init.previews,
             live_frames: LiveFrameMap::new(),
             icon_cache: init.icons,
+            dismissed: Dismissed::default(),
         }
     }
 
@@ -74,11 +98,12 @@ impl PickerState {
 
     pub(crate) fn set_windows(
         &mut self,
-        windows: Vec<WindowInfo>,
+        mut windows: Vec<WindowInfo>,
         reset_selection: bool,
         app: &mut App,
         window: Option<&mut Window>,
     ) {
+        windows.retain(|w| self.dismissed.keeps(w));
         self.windows = windows;
         let active_ids: std::collections::HashSet<u32> =
             self.windows.iter().map(|w| w.id).collect();
@@ -92,9 +117,10 @@ impl PickerState {
     #[cfg(test)]
     pub(crate) fn replace_windows_for_test(
         &mut self,
-        windows: Vec<WindowInfo>,
+        mut windows: Vec<WindowInfo>,
         reset_selection: bool,
     ) {
+        windows.retain(|w| self.dismissed.keeps(w));
         self.windows = windows;
         self.update_selection_after_resize(reset_selection);
     }
@@ -200,13 +226,8 @@ impl PickerState {
         app: &mut App,
         window: Option<&mut Window>,
     ) {
-        let remaining: Vec<_> = self
-            .windows
-            .iter()
-            .filter(|w| w.id != window_id)
-            .cloned()
-            .collect();
-        self.set_windows(remaining, false, app, window);
+        self.dismissed.close_window(window_id);
+        self.set_windows(self.windows.clone(), false, app, window);
     }
 
     pub(crate) fn remove_app_windows(
@@ -215,13 +236,12 @@ impl PickerState {
         app: &mut App,
         window: Option<&mut Window>,
     ) {
-        let remaining: Vec<_> = self
-            .windows
-            .iter()
-            .filter(|w| w.app_name != app_name)
-            .cloned()
-            .collect();
-        self.set_windows(remaining, false, app, window);
+        self.dismissed.quit_app(app_name);
+        self.set_windows(self.windows.clone(), false, app, window);
+    }
+
+    pub(crate) fn forget_dismissed(&mut self) {
+        self.dismissed = Dismissed::default();
     }
 
     pub(crate) fn mark_minimized(
@@ -717,6 +737,43 @@ mod set_windows_tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         picker.activate_selected_target();
+    }
+
+    #[test]
+    fn a_refresh_does_not_bring_back_a_window_closed_while_the_picker_is_open() {
+        let mut picker = picker_at(3, Some(1));
+        picker.dismissed.close_window(1);
+
+        picker.replace_windows_for_test(windows(3), false);
+
+        let ids: Vec<u32> = picker.windows.iter().map(|w| w.id).collect();
+        assert_eq!(ids, vec![0, 2]);
+    }
+
+    #[test]
+    fn a_refresh_does_not_bring_back_windows_of_an_app_quit_while_the_picker_is_open() {
+        let mut picker = picker_at(0, None);
+        picker.dismissed.quit_app("Notes");
+        let mut refreshed = windows(3);
+        refreshed[0].app_name = "Notes".into();
+        refreshed[2].app_name = "Notes".into();
+
+        picker.replace_windows_for_test(refreshed, false);
+
+        let ids: Vec<u32> = picker.windows.iter().map(|w| w.id).collect();
+        assert_eq!(ids, vec![1]);
+    }
+
+    #[test]
+    fn a_new_show_forgets_what_the_last_one_closed() {
+        let mut picker = picker_at(3, Some(0));
+        picker.dismissed.close_window(1);
+        picker.dismissed.quit_app("");
+
+        picker.forget_dismissed();
+        picker.replace_windows_for_test(windows(3), false);
+
+        assert_eq!(picker.windows.len(), 3);
     }
 
     #[test]
