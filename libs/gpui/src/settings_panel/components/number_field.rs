@@ -1,7 +1,9 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba};
+use qol_theme::TextStyle;
 
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 use super::{ground_bg, ground_text, RowGround};
 
@@ -47,10 +49,10 @@ pub(in crate::settings_panel) fn number_field(
     track: Option<(f32, SliderStyle)>,
     interact: impl FnOnce(gpui::Div) -> gpui::Div,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Div {
-    let ground = row.rest(palette);
-    let hover = row.hover(palette);
+    let ground = row.rest(kit);
+    let hover = row.hover(kit);
     let (text, text_hover) = match row {
         RowGround::Pane => (ground.soft, None),
         RowGround::Band => (ground.ink, hover.map(|hover| hover.ink)),
@@ -113,19 +115,15 @@ pub(in crate::settings_panel) fn number_field(
         .h(px(qol_theme::HEIGHT_INLINE))
         .px(px(qol_theme::SPACE_INSET))
         .rounded(px(qol_theme::RADIUS_CONTROL))
-        .border(px(1.0))
+        .border(px(qol_theme::LINE))
         .border_color(rgba(ground.edge.packed()))
         .child(
-            ground_text(
-                div().text_size(px(qol_theme::TEXT_BODY)),
-                rgb(text),
-                text_hover.map(rgb),
-            )
-            .child(display),
+            ground_text(div().text(TextStyle::Value), rgb(text), text_hover.map(rgb))
+                .child(display),
         )
         .children(unit.map(|unit| {
             ground_text(
-                div().text_size(px(qol_theme::TEXT_CAPTION)),
+                div().text(TextStyle::Detail),
                 rgb(ground.faint),
                 hover.map(|hover| rgb(hover.faint)),
             )

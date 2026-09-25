@@ -50,3 +50,34 @@ pub fn truncate_to_width(
             &mut runs,
         )
 }
+
+pub trait TextStyled: gpui::Styled + Sized {
+    fn text(mut self, style: qol_theme::TextStyle) -> Self {
+        let spec = style.spec();
+        let text = self.text_style().get_or_insert_with(Default::default);
+        text.font_family = Some(SharedString::from(spec.face.family()));
+        text.font_size = Some(px(spec.size).into());
+        text.font_weight = Some(FontWeight(f32::from(spec.weight)));
+        text.line_height = Some(gpui::relative(spec.line_height));
+        text.line_clamp = Some(1);
+        text.text_overflow = Some(gpui::TextOverflow::Truncate(SharedString::from("…")));
+        self
+    }
+
+    fn wraps(mut self) -> Self {
+        self.text_style()
+            .get_or_insert_with(Default::default)
+            .line_clamp = Some(usize::MAX);
+        self
+    }
+}
+
+impl<E: gpui::Styled> TextStyled for E {}
+
+pub fn cased(style: qol_theme::TextStyle, text: &str) -> String {
+    if style.spec().caps {
+        text.to_uppercase()
+    } else {
+        text.to_owned()
+    }
+}

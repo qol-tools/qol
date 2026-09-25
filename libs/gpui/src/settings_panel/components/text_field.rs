@@ -1,9 +1,10 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, AnyElement, App, BoxShadow, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, rgba, AnyElement, App, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
-use crate::kit::{FOCUS_RING_EDGE, FOCUS_RING_HALO};
+use crate::kit::Kit;
 use crate::text_edit::{CaretStyle, TextField, TextFieldElement};
-use crate::theme::SettingsPanelPalette;
 
 use super::{ground_bg, ground_text, RowGround, FIELD_MAX_WIDTH, TEXT_FIELD_MIN_WIDTH};
 
@@ -12,13 +13,13 @@ fn editable_element(
     visible: usize,
     advance: f32,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> AnyElement {
-    let ground = row.rest(palette);
+    let ground = row.rest(kit);
     TextFieldElement::new(field, visible, advance)
         .selection(
-            rgb(palette.row_bg_selected).into(),
-            Some(rgb(palette.section_text).into()),
+            rgb(kit.grounds.band.bg).into(),
+            Some(rgb(kit.grounds.pane.ink).into()),
         )
         .caret(CaretStyle {
             color: rgb(ground.ink).into(),
@@ -37,7 +38,7 @@ pub struct SettingsTextField {
     empty: bool,
     focused: bool,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
     editable: Option<AnyElement>,
     live: Option<TextField>,
     placeholder: Option<SharedString>,
@@ -50,14 +51,14 @@ impl SettingsTextField {
         empty: bool,
         focused: bool,
         row: RowGround,
-        palette: SettingsPanelPalette,
+        kit: Kit,
     ) -> Self {
         Self {
             text: text.into(),
             empty,
             focused,
             row,
-            palette,
+            kit,
             editable: None,
             live: None,
             placeholder: None,
@@ -71,28 +72,28 @@ impl SettingsTextField {
         advance: f32,
         focused: bool,
         row: RowGround,
-        palette: SettingsPanelPalette,
+        kit: Kit,
     ) -> Self {
         Self {
             text: field.text().to_owned().into(),
             empty: field.is_empty(),
             focused,
             row,
-            palette,
-            editable: Some(editable_element(field, visible, advance, row, palette)),
+            kit,
+            editable: Some(editable_element(field, visible, advance, row, kit)),
             live: None,
             placeholder: None,
             width: None,
         }
     }
 
-    pub fn live(field: TextField, row: RowGround, palette: SettingsPanelPalette) -> Self {
+    pub fn live(field: TextField, row: RowGround, kit: Kit) -> Self {
         Self {
             text: field.text().to_owned().into(),
             empty: field.is_empty(),
             focused: true,
             row,
-            palette,
+            kit,
             editable: None,
             live: Some(field),
             placeholder: None,
@@ -118,7 +119,7 @@ impl RenderOnce for SettingsTextField {
             empty,
             focused,
             row,
-            palette,
+            kit,
             editable,
             live,
             placeholder,
@@ -137,13 +138,13 @@ impl RenderOnce for SettingsTextField {
                     width - 2.0 * qol_theme::SPACE_CELL - 4.0,
                     advance,
                 );
-                let element = editable_element(&field, visible, advance, row, palette);
+                let element = editable_element(&field, visible, advance, row, kit);
                 (Some(element), Some(width))
             }
             None => (editable, width),
         };
-        let ground = row.rest(palette);
-        let hover = row.hover(palette);
+        let ground = row.rest(kit);
+        let hover = row.hover(kit);
         let band = row == RowGround::Band;
         let placeholder = placeholder.filter(|_| empty && !focused);
         let truncate_plain = editable.is_none() && placeholder.is_none();
@@ -170,28 +171,13 @@ impl RenderOnce for SettingsTextField {
             .h(px(qol_theme::HEIGHT_CONTROL))
             .px(px(qol_theme::SPACE_CELL))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .border(px(if focused {
-                FOCUS_RING_EDGE
-            } else if band {
-                1.0
-            } else {
-                0.0
-            }))
-            .border_color(if focused {
-                rgb(ground.ink)
-            } else {
-                rgba(ground.edge.packed())
+            .when(band, |field| {
+                field
+                    .border(px(qol_theme::LINE))
+                    .border_color(rgba(ground.edge.packed()))
             })
-            .when(focused, |field| {
-                field.shadow(vec![BoxShadow {
-                    color: rgba(qol_theme::css_rgba_milli(ground.ink, 160).packed()).into(),
-                    offset: gpui::point(px(0.0), px(0.0)),
-                    blur_radius: px(0.0),
-                    spread_radius: px(FOCUS_RING_HALO),
-                }])
-            })
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_CAPTION))
+            .when(focused, |field| field.shadow(kit.focus_ring(ground)))
+            .text(TextStyle::Code)
             .overflow_hidden();
         let field = ground_bg(
             field,

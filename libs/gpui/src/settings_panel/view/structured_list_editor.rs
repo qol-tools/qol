@@ -1,3 +1,5 @@
+use crate::key::Key;
+use crate::kit::Chip as KitChip;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -7,9 +9,9 @@ use qol_config::contract::NestedListSpec;
 use qol_config::object_array::pretty_label;
 
 use super::super::components::{
-    settings_label_group, settings_mono_label, settings_value_group, settings_value_text, HintTone,
-    RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip, SettingsRow, SettingsTextField,
-    SettingsToggle, SettingsValueTone,
+    settings_arrow, settings_label_group, settings_mono_label, settings_value_group,
+    settings_value_text, HintTone, RowGround, SettingsHint, SettingsHintBar, SettingsModifierChip,
+    SettingsRow, SettingsTextField, SettingsToggle, SettingsValueTone,
 };
 use super::super::entry_form::{count_label, EntryForm, FormOutput, FormQuestion, FormValue};
 use super::super::object_array_row::{
@@ -290,17 +292,17 @@ impl SettingsPanelView {
         let selected = index == level.selected;
         let focused = self.body_has_focus();
         let ground = RowGround::of(selected, focused);
-        let mut row = SettingsRow::rule(("settings-entry", index), self.palette)
+        let mut row = SettingsRow::rule(("settings-entry", index), self.kit)
             .selected(selected, focused)
             .child(self.row_bounds_canvas(index));
         if index == 0 {
-            row = row.child(settings_label_group("+ Add", None, ground, self.palette));
+            row = row.child(settings_label_group("+ Add", None, ground, self.kit));
             if level_entries_len(level) == 0 {
                 row = row.child(settings_value_text(
                     "Empty",
                     SettingsValueTone::Muted,
                     ground,
-                    self.palette,
+                    self.kit,
                 ));
             }
         } else if let Some(state) = level.object_array.as_ref() {
@@ -311,7 +313,7 @@ impl SettingsPanelView {
                     .get(entry)
                     .and_then(|entry| entry.key.clone())
                     .unwrap_or_default();
-                row = row.child(settings_label_group(key, None, ground, self.palette));
+                row = row.child(settings_label_group(key, None, ground, self.kit));
                 let summary = level
                     .entries
                     .as_ref()
@@ -322,7 +324,7 @@ impl SettingsPanelView {
                         summary,
                         SettingsValueTone::Muted,
                         ground,
-                        self.palette,
+                        self.kit,
                     ));
                 }
             } else {
@@ -330,7 +332,7 @@ impl SettingsPanelView {
             }
         } else if let Some(values) = level.entries.as_ref().and_then(|card| card.values.as_ref()) {
             let value = values.get(index - 1).cloned().unwrap_or_default();
-            row = row.child(settings_mono_label(value, ground, self.palette));
+            row = row.child(settings_mono_label(value, ground, self.kit));
         }
         row.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
@@ -350,33 +352,33 @@ impl SettingsPanelView {
         let Some(field) = level.form.as_ref().and_then(|form| form.fields.get(index)) else {
             return div().id(("settings-form-field", index)).into_any_element();
         };
-        let mut row = SettingsRow::rule(("settings-form-field", index), self.palette)
+        let mut row = SettingsRow::rule(("settings-form-field", index), self.kit)
             .selected(selected, focused)
             .child(self.row_bounds_canvas(index))
             .child(settings_label_group(
                 field.label.clone(),
                 None,
                 ground,
-                self.palette,
+                self.kit,
             ));
         match &field.value {
             FormValue::Text(text) => {
                 let control = if selected && focused {
-                    SettingsTextField::live(text.clone(), ground, self.palette)
+                    SettingsTextField::live(text.clone(), ground, self.kit)
                 } else {
                     SettingsTextField::new(
                         text.text().to_owned(),
                         text.is_empty(),
                         false,
                         ground,
-                        self.palette,
+                        self.kit,
                     )
                     .placeholder("Empty")
                 };
                 row = row.child(control);
             }
             FormValue::Boolean(on) => {
-                row = row.child(SettingsToggle::new(*on, ground, self.palette));
+                row = row.child(SettingsToggle::new(*on, ground, self.kit));
             }
             FormValue::Mods {
                 options,
@@ -394,7 +396,7 @@ impl SettingsPanelView {
                             on,
                             cursor_here,
                             ground,
-                            self.palette,
+                            self.kit,
                         )
                         .on_click(cx.listener(
                             move |this, event: &ClickEvent, _, cx| {
@@ -426,7 +428,7 @@ impl SettingsPanelView {
                     count_label(values.len(), &noun),
                     SettingsValueTone::Muted,
                     ground,
-                    self.palette,
+                    self.kit,
                 ));
             }
         }
@@ -804,14 +806,10 @@ impl SettingsPanelView {
     }
 
     pub(super) fn render_chip_row(&self, parts: Vec<ChipRowPart>, row: RowGround) -> Div {
-        let ground = row.rest(self.palette);
+        let ground = row.rest(self.kit);
         let arrow = match row {
-            RowGround::Pane => self.palette.status_muted,
+            RowGround::Pane => self.kit.grounds.pane.faint,
             RowGround::Band => ground.soft,
-        };
-        let plain = match row {
-            RowGround::Pane => self.palette.label_text,
-            RowGround::Band => ground.ink,
         };
         let mut strip = div()
             .flex()
@@ -822,21 +820,12 @@ impl SettingsPanelView {
             .overflow_hidden();
         for part in parts {
             strip = strip.child(match part {
-                ChipRowPart::Arrow => div()
-                    .flex_none()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(arrow))
-                    .child("\u{2192}"),
+                ChipRowPart::Arrow => settings_arrow(arrow),
                 ChipRowPart::Chip(chip) => match chip.tone {
-                    ChipTone::Modifier | ChipTone::Key => match row {
-                        RowGround::Pane => self.kit.keycap(chip.label),
-                        RowGround::Band => self
-                            .kit
-                            .keycap(chip.label)
-                            .text_color(rgb(ground.faint))
-                            .border_color(rgba(ground.edge.packed())),
-                    },
-                    ChipTone::Plain => self.kit.chip(chip.label, plain),
+                    ChipTone::Modifier | ChipTone::Key => {
+                        self.kit.chip(KitChip::KeyText(chip.label.into()), ground)
+                    }
+                    ChipTone::Plain => self.kit.chip(KitChip::Tag(chip.label.into()), ground),
                 },
             });
         }
@@ -1024,16 +1013,16 @@ fn write_root_entries(root_rows: &mut [Row], level: &Level) -> bool {
 pub(super) fn entries_hints(on_add: bool) -> (Vec<SettingsHint>, Vec<SettingsHint>) {
     let left = vec![
         SettingsHint::new(
-            "\u{21b5}",
+            Key::ENTER,
             match on_add {
                 true => "add",
                 false => "open",
             },
         ),
-        SettingsHint::new("\u{2191}\u{2193}", "move"),
-        SettingsHint::new("A", "add"),
+        SettingsHint::new(Key::UP_DOWN, "move"),
+        SettingsHint::new(Key::letter('a'), "add"),
     ];
-    let right = vec![SettingsHint::new("esc", "back")];
+    let right = vec![SettingsHint::new(Key::ESC, "back")];
     (left, right)
 }
 
@@ -1043,16 +1032,16 @@ pub(super) fn form_hints(
 ) -> (Option<String>, Vec<SettingsHint>, Vec<SettingsHint>) {
     if let Some(question) = form.question {
         let left = vec![match question {
-            FormQuestion::Save => SettingsHint::new("\u{21b5}", "save").tone(HintTone::Save),
-            FormQuestion::Blocked(_) => SettingsHint::new("\u{21b5}", "fill it in"),
+            FormQuestion::Save => SettingsHint::new(Key::ENTER, "save").tone(HintTone::Save),
+            FormQuestion::Blocked(_) => SettingsHint::new(Key::ENTER, "fill it in"),
         }];
-        let right = vec![SettingsHint::new("esc", "discard").tone(HintTone::Discard)];
+        let right = vec![SettingsHint::new(Key::ESC, "discard").tone(HintTone::Discard)];
         return (Some(form.question_text(question)), left, right);
     }
     let mut left = Vec::new();
     if let Some(field) = form.fields.get(selected) {
         left.push(SettingsHint::new(
-            "\u{21b5}",
+            Key::ENTER,
             match &field.value {
                 FormValue::Text(_) | FormValue::Mods { .. } => "next",
                 FormValue::Boolean(_) => "flip",
@@ -1060,23 +1049,20 @@ pub(super) fn form_hints(
             },
         ));
         if matches!(field.value, FormValue::Mods { .. }) {
-            left.push(SettingsHint::new(
-                "\u{2190}\u{2192}\u{2191}\u{2193}",
-                "move",
-            ));
-            left.push(SettingsHint::new("space", "toggle"));
+            left.push(SettingsHint::new(Key::ARROWS, "move"));
+            left.push(SettingsHint::new(Key::SPACE, "toggle"));
         } else {
-            left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+            left.push(SettingsHint::new(Key::UP_DOWN, "move"));
             if matches!(field.value, FormValue::Text(_)) {
-                left.push(SettingsHint::new("type", "edit"));
+                left.push(SettingsHint::new(Key::TYPE, "edit"));
             }
         }
     } else {
-        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
     }
     let right = vec![match form.changed() {
-        true => SettingsHint::new("esc", "back, asks to save"),
-        false => SettingsHint::new("esc", "back"),
+        true => SettingsHint::new(Key::ESC, "back, asks to save"),
+        false => SettingsHint::new(Key::ESC, "back"),
     }];
     (None, left, right)
 }
@@ -1123,6 +1109,7 @@ pub(super) fn chip_row_parts(chips: &ItemChips) -> Vec<ChipRowPart> {
 
 #[cfg(test)]
 mod tests {
+    use crate::key::Key;
     use std::collections::BTreeMap;
 
     use qol_config::object_array::ItemFieldKind;
@@ -1468,7 +1455,7 @@ mod tests {
         let (question, left, right) = form_hints(&form, 0);
         assert_eq!(question, None);
         assert_eq!(hint_labels(&left), vec!["next", "move", "edit"]);
-        assert_eq!(left[0].key, "\u{21b5}");
+        assert_eq!(left[0].key, Some(Key::ENTER));
         assert_eq!(hint_labels(&right), vec!["back"]);
     }
 

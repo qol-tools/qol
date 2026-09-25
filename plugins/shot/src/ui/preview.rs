@@ -1,5 +1,7 @@
 use anyhow::Context as _;
 use anyhow::Result;
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use std::cell::{Cell, RefCell};
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
@@ -19,10 +21,7 @@ use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window
 use qol_gpui::kit::{action_row_width, kit, row_circle_state, wrap_index, ActionCircleSize};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
-use qol_gpui::theme::{
-    font_mono, runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP,
-    RADIUS_THUMB, TEXT_CAPTION, TEXT_NANO,
-};
+use qol_gpui::theme::{runtime_theme, ACTION_CIRCLE_GAP, RADIUS_THUMB};
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, sync_cursor_window_layout,
     target_monitor_key, ActiveWindows, CursorWindowPlacement, MonitorKey, ResolvedCursorPlacement,
@@ -48,7 +47,6 @@ pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
 static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
-static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
 #[cfg(target_os = "linux")]
 static PIN_TRANSITIONS: LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -72,20 +70,6 @@ pub(crate) fn complete_pin_transition(title: &str, succeeded: bool) {
     if let Some(sender) = sender {
         let _ = sender.send(succeeded);
     }
-}
-
-pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
-    &CURRENT_PALETTE
-}
-
-pub(super) fn surface_shadow() -> Vec<BoxShadow> {
-    let system = runtime_theme().system;
-    vec![BoxShadow {
-        color: rgba((system.text_primary << 8) | 0x1a).into(),
-        offset: point(px(2.0), px(2.0)),
-        blur_radius: px(0.0),
-        spread_radius: px(0.0),
-    }]
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1496,22 +1480,18 @@ impl Focusable for PreviewView {
 
 impl Render for PreviewView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         self.ensure_dismiss_tracking(window, cx);
         self.schedule_reveal_after_present(window, cx);
-        let palette = current_palette();
+        let kit = kit();
 
-        let mut root = div()
-            .font_family(qol_gpui::theme::font_ui())
+        let mut root = kit
+            .window()
+            .text(TextStyle::Value)
             .id("shot-preview")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_move))
-            .size_full()
-            .relative()
-            .bg(rgb(palette.window_bg))
-            .border_1()
-            .border_color(rgb(palette.thumb_border))
-            .shadow(surface_shadow());
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_move));
 
         if !self.ready {
             return root;
@@ -1534,7 +1514,6 @@ impl Render for PreviewView {
         }
 
         let system = runtime_theme().system;
-        let kit = kit();
         let controls = controls(ControlSurface::Preview, self.default_copy_action);
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
@@ -1557,7 +1536,7 @@ impl Render for PreviewView {
                     .overflow_hidden()
                     .rounded(px(RADIUS_THUMB))
                     .border_1()
-                    .border_color(rgb(palette.thumb_border))
+                    .border_color(rgb(kit.palette.border_subtle))
                     .child(self.thumbnail(thumb_w, thumb_h)),
             )
             .child(
@@ -1568,8 +1547,8 @@ impl Render for PreviewView {
                     .right_0()
                     .flex()
                     .justify_center()
-                    .text_size(px(TEXT_CAPTION))
-                    .text_color(rgb(palette.label_text))
+                    .text(TextStyle::Detail)
+                    .text_color(rgb(kit.grounds.pane.soft))
                     .child(label),
             )
             .child(
@@ -1577,8 +1556,7 @@ impl Render for PreviewView {
                     .absolute()
                     .bottom(px(MARGIN / 2.0))
                     .right(px(MARGIN))
-                    .font_family(SharedString::from(font_mono()))
-                    .text_size(px(TEXT_NANO))
+                    .text(TextStyle::Code)
                     .text_color(rgb(system.text_muted))
                     .when_some(self.size_label.clone(), |bar, size| bar.child(size)),
             );
@@ -1593,7 +1571,7 @@ impl Render for PreviewView {
                     .absolute()
                     .left(px(left))
                     .top(px(circle_top))
-                    .child(control.glyph())
+                    .child(kit.action_icon(control.icon(), state))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.activate(control, window, cx)

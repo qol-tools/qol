@@ -4,9 +4,12 @@ use qol_color::mix_rgb;
 
 use crate::{
     dark_accent_preset, dark_accent_presets, dark_theme, dark_theme_with_accent_key,
-    tray_theme_preset, tray_theme_presets, CssRgba, Theme, ThemeIdentity, ThemeMode,
-    TrayThemePreset, DARK_REFERENCE, DARK_TRAY_INTERNAL, DARK_TRAY_RAMP, DEFAULT_TRAY_THEME_KEY,
-    PROD_ACCENT_KEY,
+    tray_theme_preset, tray_theme_presets, Alpha, CssRgba, Face, Motion, Shadow, TextStyle, Theme,
+    ThemeIdentity, ThemeMode, TrayThemePreset, DARK_REFERENCE, DARK_TRAY_INTERNAL, DARK_TRAY_RAMP,
+    DEFAULT_TRAY_THEME_KEY, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE, MOTION_LOOP, OPACITY_DISABLED,
+    OPACITY_REST, PROD_ACCENT_KEY, RADIUS_CARD, RADIUS_CONTROL, RADIUS_TIGHT, RADIUS_WELL,
+    SHADOW_FLOAT, SHADOW_RAISED, SPACE_CELL, SPACE_GUTTER, SPACE_INSET, SPACE_PAD, SPACE_SNUG,
+    SPACE_STACK, SPACE_TIGHT, STATUS_DOT, WAIT_BEFORE_BUSY,
 };
 
 pub fn dark_css() -> String {
@@ -396,8 +399,162 @@ fn tray_variables(selector: &str) -> String {
     push_reference_variables(&mut out);
     push_tray_ramp_variables(&mut out);
     push_accent_preset_variables(&mut out);
+    push_design_variables(&mut out);
     out.push_str("}\n");
+    push_text_classes(&mut out);
     out
+}
+
+fn text_style_name(style: TextStyle) -> &'static str {
+    match style {
+        TextStyle::Masthead => "masthead",
+        TextStyle::Heading => "heading",
+        TextStyle::Colophon => "colophon",
+        TextStyle::Name => "name",
+        TextStyle::ListName => "list-name",
+        TextStyle::Value => "value",
+        TextStyle::Detail => "detail",
+        TextStyle::Hint => "hint",
+        TextStyle::Key => "key",
+        TextStyle::Code => "code",
+        TextStyle::Label => "label",
+    }
+}
+
+fn alpha_name(alpha: Alpha) -> &'static str {
+    match alpha {
+        Alpha::Trace => "trace",
+        Alpha::Wash => "wash",
+        Alpha::Halo => "halo",
+        Alpha::Edge => "edge",
+        Alpha::Veil => "veil",
+        Alpha::Strong => "strong",
+    }
+}
+
+fn css_shadow(shadow: Shadow) -> String {
+    shadow
+        .iter()
+        .map(|layer| {
+            format!(
+                "0 {}px {}px rgba(var(--qol-system-ink-rgb), var(--qol-alpha-{}))",
+                layer.y,
+                layer.blur,
+                alpha_name(layer.alpha)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn push_design_variables(out: &mut String) {
+    push_value(
+        out,
+        "qol-font-mono",
+        &format!("\"{}\", monospace", crate::font_mono()),
+    );
+    for style in TextStyle::ALL {
+        let spec = style.spec();
+        let name = text_style_name(style);
+        push_value(
+            out,
+            &format!("qol-text-{name}-size"),
+            &format!("{}px", spec.size),
+        );
+        push_value(
+            out,
+            &format!("qol-text-{name}-weight"),
+            &spec.weight.to_string(),
+        );
+        push_value(
+            out,
+            &format!("qol-text-{name}-line-height"),
+            &spec.line_height.to_string(),
+        );
+    }
+    for (name, value) in [
+        ("stack", SPACE_STACK),
+        ("tight", SPACE_TIGHT),
+        ("snug", SPACE_SNUG),
+        ("inset", SPACE_INSET),
+        ("cell", SPACE_CELL),
+        ("pad", SPACE_PAD),
+        ("gutter", SPACE_GUTTER),
+    ] {
+        push_value(out, &format!("qol-space-{name}"), &format!("{value}px"));
+    }
+    for (name, value) in [
+        ("tight", RADIUS_TIGHT),
+        ("control", RADIUS_CONTROL),
+        ("card", RADIUS_CARD),
+        ("well", RADIUS_WELL),
+    ] {
+        push_value(out, &format!("qol-radius-{name}"), &format!("{value}px"));
+    }
+    for (name, motion) in [
+        ("quick", Motion::QUICK),
+        ("settle", Motion::SETTLE),
+        ("travel", Motion::TRAVEL),
+        ("fade", Motion::FADE),
+    ] {
+        push_value(
+            out,
+            &format!("qol-motion-{name}"),
+            &format!("{}ms", motion.duration.as_millis()),
+        );
+    }
+    push_value(out, "qol-curve-settle", "cubic-bezier(0.22, 1, 0.36, 1)");
+    push_value(out, "qol-curve-travel", "cubic-bezier(0.45, 0, 0.55, 1)");
+    push_value(
+        out,
+        "qol-motion-loop",
+        &format!("{}ms", MOTION_LOOP.as_millis()),
+    );
+    push_value(
+        out,
+        "qol-wait-before-busy",
+        &format!("{}ms", WAIT_BEFORE_BUSY.as_millis()),
+    );
+    for alpha in Alpha::ALL {
+        push_value(
+            out,
+            &format!("qol-alpha-{}", alpha_name(alpha)),
+            &alpha.unit().to_string(),
+        );
+    }
+    push_value(out, "qol-opacity-disabled", &OPACITY_DISABLED.to_string());
+    push_value(out, "qol-opacity-rest", &OPACITY_REST.to_string());
+    push_value(out, "qol-line", &format!("{LINE}px"));
+    push_value(out, "qol-status-dot", &format!("{STATUS_DOT}px"));
+    push_value(out, "qol-shadow-float", &css_shadow(SHADOW_FLOAT));
+    push_value(out, "qol-shadow-raised", &css_shadow(SHADOW_RAISED));
+    push_value(
+        out,
+        "qol-focus-ring",
+        &format!(
+            "0 0 0 {FOCUS_RING_EDGE}px rgb(var(--qol-system-accent-rgb)), 0 0 0 {FOCUS_RING_HALO}px rgba(var(--qol-system-accent-rgb), var(--qol-alpha-edge))"
+        ),
+    );
+}
+
+fn push_text_classes(out: &mut String) {
+    for style in TextStyle::ALL {
+        let name = text_style_name(style);
+        let spec = style.spec();
+        let family = match spec.face {
+            Face::Mono => "var(--qol-font-mono)",
+            Face::Ui | Face::Display => "inherit",
+        };
+        let _ = writeln!(out, ".qol-text-{name} {{");
+        let _ = writeln!(out, "    font-family: {family};");
+        let _ = writeln!(out, "    font-size: var(--qol-text-{name}-size);");
+        let _ = writeln!(out, "    font-weight: var(--qol-text-{name}-weight);");
+        let _ = writeln!(out, "    line-height: var(--qol-text-{name}-line-height);");
+        if spec.caps {
+            let _ = writeln!(out, "    text-transform: uppercase;");
+        }
+        out.push_str("}\n");
+    }
 }
 
 fn push_reference_variables(out: &mut String) {

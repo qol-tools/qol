@@ -1,4 +1,19 @@
 pub mod css;
+pub mod depth;
+pub mod motion;
+pub mod quiet;
+pub mod text;
+
+pub use depth::{
+    clear, solid, translucent, Alpha, Shadow, ShadowLayer, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
+    OPACITY_DISABLED, OPACITY_REST, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
+};
+pub use motion::{
+    Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED,
+    WAIT_BEFORE_BUSY,
+};
+pub use quiet::{set_window_quiet, window_is_quiet};
+pub use text::{Face, TextSpec, TextStyle};
 
 use qol_color::{
     clamp_unit, mix_rgb, parse_hex_color, rgb24, rgba_from_rgb, scale_rgb, with_alpha,
@@ -17,22 +32,18 @@ pub const PROD_ACCENT_KEY: &str = "amber";
 
 pub const THEME_COLOR_SENTINEL: &str = "theme";
 
-pub const TEXT_IDENTITY: f32 = 10.5;
 pub const TEXT_NANO: f32 = 11.5;
 pub const TEXT_MICRO: f32 = 12.5;
 pub const TEXT_CAPTION: f32 = 13.5;
 pub const TEXT_BODY: f32 = 15.0;
-pub const TEXT_TITLE: f32 = 18.0;
 pub const TEXT_DISPLAY: f32 = 20.0;
 pub const TEXT_MASTHEAD: f32 = 34.0;
 
-pub const TEXT_SCALE: [f32; 8] = [
-    TEXT_IDENTITY,
+pub const TEXT_SCALE: [f32; 6] = [
     TEXT_NANO,
     TEXT_MICRO,
     TEXT_CAPTION,
     TEXT_BODY,
-    TEXT_TITLE,
     TEXT_DISPLAY,
     TEXT_MASTHEAD,
 ];
@@ -66,8 +77,6 @@ pub const RADIUS_KEYCAP: f32 = RADIUS_TIGHT;
 pub const RADIUS_THUMB: f32 = 3.0;
 pub const ACTION_CIRCLE_SIZE: f32 = 46.0;
 pub const ACTION_CIRCLE_GAP: f32 = 14.0;
-pub const RADIUS_TONE_BAR: f32 = 2.0;
-pub const RADIUS_WINDOW: f32 = 12.0;
 
 pub const TEXT_KEYCAP: f32 = TEXT_MICRO;
 
@@ -78,7 +87,6 @@ pub const SPACE_INSET: f32 = 8.0;
 pub const SPACE_CELL: f32 = 12.0;
 pub const SPACE_PAD: f32 = 16.0;
 pub const SPACE_GUTTER: f32 = 20.0;
-pub const SPACE_MARK: f32 = 3.0;
 
 pub const SPACE_LADDER: [f32; 7] = [
     SPACE_STACK,
@@ -183,7 +191,7 @@ impl Theme {
         reference: ReferencePalette,
         system: SystemPalette,
     ) -> Self {
-        let components = ComponentPalettes::new(mode, reference, system);
+        let components = ComponentPalettes::new(reference, system);
         Self {
             mode,
             reference,
@@ -498,6 +506,15 @@ pub fn set_runtime_theme_override(native: Option<&str>, accent: Option<&str>) {
 }
 
 pub fn runtime_theme() -> Theme {
+    let theme = chosen_theme();
+    if window_is_quiet() {
+        theme.quiet()
+    } else {
+        theme
+    }
+}
+
+fn chosen_theme() -> Theme {
     let override_guard = RUNTIME_THEME_OVERRIDE
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -624,7 +641,7 @@ pub const RETRO_IDENTITY: ThemeIdentity = ThemeIdentity {
     crt_band_display: "block",
     card_border: "var(--border-w-1) solid var(--tui-line-soft)",
     card_bg: "linear-gradient(180deg, rgba(var(--accent-rgb), 0.05), transparent 55%), var(--tui-bg-card)",
-    card_shadow: "inset 0 1px 0 rgba(var(--accent-rgb), 0.08), 0 6px 18px var(--layer-ink-45)",
+    card_shadow: "var(--qol-shadow-float)",
     cover_bg: "var(--tui-screen-bg)",
     cover_texture: "var(--tui-scanline)",
     cover_scrim: "var(--ink-overlay-strong)",
@@ -639,7 +656,7 @@ pub const RETRO_IDENTITY: ThemeIdentity = ThemeIdentity {
     panel_border: "var(--border-w-1) solid var(--tui-line)",
     panel_radius: "var(--radius-md)",
     panel_shadow: "none",
-    heading_size: "var(--fs-xl-plus)",
+    heading_size: "var(--qol-text-heading-size)",
     heading_weight: "var(--fw-bold)",
     heading_border: "var(--border-w-3) double var(--tui-line)",
     heading_bg: "var(--tui-sign-bg)",
@@ -672,11 +689,11 @@ pub const MODERN_IDENTITY: ThemeIdentity = ThemeIdentity {
         "linear-gradient(180deg, rgba(var(--paper-rgb), 0.035), rgba(var(--paper-rgb), 0.015))",
     frame_bg: "var(--surface-elevated)",
     frame_radius: "var(--radius-xl)",
-    frame_shadow: "0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07)",
+    frame_shadow: "var(--qol-shadow-float)",
     crt_band_display: "none",
     card_border: "none",
     card_bg: "var(--qol-system-surface-raised)",
-    card_shadow: "0 14px 36px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35)",
+    card_shadow: "var(--qol-shadow-float)",
     cover_bg: "transparent",
     cover_texture: "none",
     cover_scrim: "var(--qol-system-surface-raised)",
@@ -686,12 +703,12 @@ pub const MODERN_IDENTITY: ThemeIdentity = ThemeIdentity {
     ghost_btn_radius: "10px",
     hint_bg: "var(--qol-system-surface-raised)",
     hint_border: "1px solid rgba(var(--accent-rgb), 0.25)",
-    hint_shadow: "0 6px 18px rgba(0, 0, 0, 0.4)",
+    hint_shadow: "var(--qol-shadow-float)",
     panel_bg: "var(--qol-system-surface-raised)",
     panel_border: "none",
     panel_radius: "16px",
-    panel_shadow: "0 14px 36px rgba(0, 0, 0, 0.5)",
-    heading_size: "1.55rem",
+    panel_shadow: "var(--qol-shadow-float)",
+    heading_size: "var(--qol-text-heading-size)",
     heading_weight: "700",
     heading_border: "none",
     heading_bg: "transparent",
@@ -886,23 +903,6 @@ impl CssRgba {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TintedRowPalette {
-    pub resting: CssRgba,
-    pub hover: CssRgba,
-    pub selected: CssRgba,
-    pub selected_edge: CssRgba,
-}
-
-pub fn tinted_row_palette(tone: u32, palette: SystemPalette) -> TintedRowPalette {
-    TintedRowPalette {
-        resting: css_rgba_milli(tone, 45),
-        hover: css_rgba_milli(tone, 80),
-        selected: css_rgba_milli(tone, 110),
-        selected_edge: css_rgba_milli(mix_rgb(tone, palette.text_primary, 0.45), 850),
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WashPalette {
     pub hairline: CssRgba,
     pub hairline_strong: CssRgba,
@@ -1037,27 +1037,13 @@ pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentPalettes {
-    pub cli_sessions: CliSessionsPalette,
-    pub launcher: LauncherPalette,
-    pub remove_app: RemoveAppPalette,
-    pub shot_selector: ShotSelectorPalette,
-    pub shot_preview: ShotPreviewPalette,
-    pub toast: ToastPalette,
-    pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
     pub picker_surface: PickerSurfacePalette,
 }
 
 impl ComponentPalettes {
-    pub fn new(mode: ThemeMode, reference: ReferencePalette, system: SystemPalette) -> Self {
+    pub fn new(reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
-            cli_sessions: CliSessionsPalette::from_system(system),
-            launcher: LauncherPalette::from_system(system),
-            remove_app: RemoveAppPalette::from_system(system),
-            shot_selector: ShotSelectorPalette::from_theme(reference, system),
-            shot_preview: ShotPreviewPalette::from_system(system),
-            toast: ToastPalette::from_system(system),
-            settings_panel: SettingsPanelPalette::from_theme(mode, system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
             picker_surface: PickerSurfacePalette::themed(system, None, 1.0),
         }
@@ -1065,227 +1051,7 @@ impl ComponentPalettes {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CliSessionsPalette {
-    pub panel_bg: u32,
-    pub band_bg: u32,
-    pub chrome_bg: u32,
-    pub border: u32,
-    pub divider: u32,
-    pub text_primary: u32,
-    pub text_heading: u32,
-    pub text_secondary: u32,
-    pub text_muted: u32,
-    pub text_faint: u32,
-    pub keycap_bg_rgba: u32,
-    pub selection_border: u32,
-    pub selection_bg: u32,
-    pub needs_you: u32,
-    pub your_turn: u32,
-    pub working: u32,
-    pub service: u32,
-    pub bridged: u32,
-    pub unknown: u32,
-    pub needs_you_tint_rgba: u32,
-    pub your_turn_tint_rgba: u32,
-    pub your_turn_badge_rgba: u32,
-    pub your_turn_hover_rgba: u32,
-    pub working_tint_rgba: u32,
-    pub service_tint_rgba: u32,
-    pub bridged_tint_rgba: u32,
-    pub bridged_badge_rgba: u32,
-    pub bridged_hover_rgba: u32,
-    pub transparent_rgba: u32,
-}
-
-impl CliSessionsPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            panel_bg: system.surface_elevated,
-            band_bg: system.surface_rail,
-            chrome_bg: system.surface_canvas,
-            border: system.border_subtle,
-            divider: mix_rgb(system.surface_elevated, system.border_subtle, 0.5),
-            text_primary: system.text_primary,
-            text_heading: system.text_secondary,
-            text_secondary: system.text_muted,
-            text_muted: system.text_muted,
-            text_faint: system.text_faint,
-            keycap_bg_rgba: with_alpha(system.text_primary, 0x14),
-            selection_border: system.accent,
-            selection_bg: system.accent_fill,
-            needs_you: system.danger,
-            your_turn: system.warning,
-            working: system.success,
-            service: system.info,
-            bridged: system.info,
-            unknown: system.text_faint,
-            needs_you_tint_rgba: with_alpha(system.danger, 0x22),
-            your_turn_tint_rgba: with_alpha(system.warning, 0x22),
-            your_turn_badge_rgba: with_alpha(system.warning, 0x33),
-            your_turn_hover_rgba: with_alpha(system.warning, 0x55),
-            working_tint_rgba: with_alpha(system.success, 0x1e),
-            service_tint_rgba: with_alpha(system.info, 0x14),
-            bridged_tint_rgba: with_alpha(system.info, 0x1e),
-            bridged_badge_rgba: with_alpha(system.info, 0x33),
-            bridged_hover_rgba: with_alpha(system.info, 0x55),
-            transparent_rgba: 0x00000000,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RemoveAppPalette {
-    pub panel_bg: u32,
-    pub chrome_bg: u32,
-    pub border: u32,
-    pub border_strong: u32,
-    pub text_primary: u32,
-    pub text_heading: u32,
-    pub text_secondary: u32,
-    pub text_muted: u32,
-    pub accent: u32,
-    pub success: u32,
-    pub danger: u32,
-    pub warning: u32,
-    pub selection_bg_rgba: u32,
-    pub transparent_rgba: u32,
-    pub keycap_bg_rgba: u32,
-    pub warning_banner_rgba: u32,
-}
-
-impl RemoveAppPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            panel_bg: system.surface_elevated,
-            chrome_bg: system.surface_canvas,
-            border: mix_rgb(system.surface_elevated, system.border_subtle, 0.5),
-            border_strong: system.border_subtle,
-            text_primary: system.text_primary,
-            text_heading: system.text_secondary,
-            text_secondary: system.text_muted,
-            text_muted: system.text_faint,
-            accent: system.accent,
-            success: system.success,
-            danger: system.danger,
-            warning: system.warning,
-            selection_bg_rgba: with_alpha(system.accent, 0x14),
-            transparent_rgba: 0x00000000,
-            keycap_bg_rgba: with_alpha(system.text_primary, 0x14),
-            warning_banner_rgba: with_alpha(system.warning, 0x1a),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShotSelectorPalette {
-    pub backdrop_rgba: u32,
-    pub panel_bg_rgba: u32,
-    pub panel_border_rgba: u32,
-    pub text_primary: u32,
-    pub text_subtitle_rgba: u32,
-    pub label_text_rgba: u32,
-    pub selection_outer: u32,
-    pub selection_inner: u32,
-    pub chip_ok_border_rgba: u32,
-    pub chip_ok_text_rgba: u32,
-    pub chip_low_border_rgba: u32,
-    pub chip_low_text_rgba: u32,
-    pub chip_critical_border_rgba: u32,
-    pub chip_critical_text_rgba: u32,
-}
-
-impl ShotSelectorPalette {
-    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
-        Self {
-            backdrop_rgba: with_alpha(system.info, 0x24),
-            panel_bg_rgba: with_alpha(reference.black, 0xc7),
-            panel_border_rgba: with_alpha(reference.white, 0xdb),
-            text_primary: reference.white,
-            text_subtitle_rgba: with_alpha(reference.white, 0xc7),
-            label_text_rgba: with_alpha(reference.white, 0xf5),
-            selection_outer: reference.white,
-            selection_inner: system.danger,
-            chip_ok_border_rgba: with_alpha(reference.white, 0xdb),
-            chip_ok_text_rgba: with_alpha(reference.white, 0xff),
-            chip_low_border_rgba: with_alpha(system.warning, 0xff),
-            chip_low_text_rgba: with_alpha(mix_rgb(system.warning, reference.white, 0.35), 0xff),
-            chip_critical_border_rgba: with_alpha(system.danger, 0xff),
-            chip_critical_text_rgba: with_alpha(
-                mix_rgb(system.danger, reference.white, 0.35),
-                0xff,
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShotPreviewPalette {
-    pub window_bg: u32,
-    pub thumb_border: u32,
-    pub label_text: u32,
-    pub action_glyph: u32,
-    pub action_bg: u32,
-    pub action_bg_selected: u32,
-    pub action_border: u32,
-    pub action_border_selected: u32,
-    pub state_on: u32,
-    pub state_off: u32,
-}
-
-impl ShotPreviewPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            window_bg: system.surface_elevated,
-            thumb_border: system.border_subtle,
-            label_text: system.text_secondary,
-            action_glyph: system.text_primary,
-            action_bg: system.surface_raised,
-            action_bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
-            action_border: system.border_subtle,
-            action_border_selected: system.accent,
-            state_on: system.success,
-            state_off: system.danger,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ToastPalette {
-    pub window_bg: u32,
-    pub border: u32,
-    pub text_primary: u32,
-    pub text_secondary: u32,
-    pub surface_raised: u32,
-    pub surface_hovered: u32,
-    pub text_muted: u32,
-    pub accent: u32,
-    pub info: u32,
-    pub success: u32,
-    pub warning: u32,
-    pub danger: u32,
-}
-
-impl ToastPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            window_bg: system.surface_elevated,
-            border: system.border_subtle,
-            text_primary: system.text_primary,
-            text_secondary: system.text_secondary,
-            surface_raised: system.surface_raised,
-            surface_hovered: system.surface_hovered,
-            text_muted: system.text_muted,
-            accent: system.accent,
-            info: system.info,
-            success: system.success,
-            warning: system.warning,
-            danger: system.danger,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SettingsGround {
+pub struct Ground {
     pub bg: u32,
     pub ink: u32,
     pub soft: u32,
@@ -1295,17 +1061,77 @@ pub struct SettingsGround {
     pub mark: u32,
     pub on_mark: u32,
     pub lift: u32,
+    pub halo: CssRgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SettingsGrounds {
-    pub pane: SettingsGround,
-    pub rail: SettingsGround,
-    pub band: SettingsGround,
-    pub band_hover: SettingsGround,
-    pub menu: SettingsGround,
-    pub attention: SettingsGround,
-    pub invalid: SettingsGround,
+pub struct Grounds {
+    pub pane: Ground,
+    pub rail: Ground,
+    pub band: Ground,
+    pub band_hover: Ground,
+    pub menu: Ground,
+    pub attention: Ground,
+    pub invalid: Ground,
+}
+
+impl Grounds {
+    pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
+        let washes = WashPalette::for_mode(mode, system);
+        let band = mixed_ground(band_fill(system), system.text_primary);
+        Self {
+            pane: surface_ground(
+                system.surface_elevated,
+                system.text_primary,
+                system.text_secondary,
+                system.accent,
+                system,
+                washes,
+            ),
+            rail: surface_ground(
+                system.surface_rail,
+                system.text_primary,
+                system.text_rail,
+                system.accent,
+                system,
+                washes,
+            ),
+            band,
+            band_hover: mixed_ground(band.lift, system.text_primary),
+            menu: surface_ground(
+                system.surface_raised,
+                system.text_primary,
+                system.text_secondary,
+                system.accent,
+                system,
+                washes,
+            ),
+            attention: surface_ground(
+                mix_const(
+                    system.surface_elevated,
+                    system.warning,
+                    washes.wash_attention.alpha_milli as u32,
+                ),
+                system.text_primary,
+                system.text_secondary,
+                system.warning,
+                system,
+                washes,
+            ),
+            invalid: surface_ground(
+                mix_const(
+                    system.surface_elevated,
+                    system.danger,
+                    washes.wash_invalid.alpha_milli as u32,
+                ),
+                system.text_primary,
+                system.text_secondary,
+                system.danger,
+                system,
+                washes,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1404,8 +1230,8 @@ fn surface_ground(
     mark: u32,
     system: SystemPalette,
     washes: WashPalette,
-) -> SettingsGround {
-    SettingsGround {
+) -> Ground {
+    Ground {
         bg,
         ink,
         soft,
@@ -1414,12 +1240,17 @@ fn surface_ground(
         edge: washes.hairline,
         mark,
         on_mark: bg,
-        lift: mix_const(bg, ink, GROUND_LIFT_MIX),
+        lift: lift(bg, ink),
+        halo: css_rgba_milli(mark, Alpha::Edge.milli()),
     }
 }
 
-fn mixed_ground(bg: u32, ink: u32) -> SettingsGround {
-    SettingsGround {
+pub const fn lift(bg: u32, ink: u32) -> u32 {
+    mix_const(bg, ink, GROUND_LIFT_MIX)
+}
+
+fn mixed_ground(bg: u32, ink: u32) -> Ground {
+    Ground {
         bg,
         ink,
         soft: floored_mix(bg, ink, GROUND_SOFT_MIX, GROUND_SOFT_FLOOR),
@@ -1429,6 +1260,7 @@ fn mixed_ground(bg: u32, ink: u32) -> SettingsGround {
         mark: ink,
         on_mark: bg,
         lift: mix_const(bg, ink, GROUND_HOVER_LIFT_MIX),
+        halo: css_rgba_milli(ink, Alpha::Halo.milli()),
     }
 }
 
@@ -1472,131 +1304,6 @@ pub fn contrast_ratio(a: u32, b: u32) -> f64 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SettingsPanelPalette {
-    pub window_bg: u32,
-    pub panel_border: u32,
-    pub label_text: u32,
-    pub section_text: u32,
-    pub row_bg_selected: u32,
-    pub row_border_selected: u32,
-    pub rail_bg: u32,
-    pub rail_text: u32,
-    pub rail_text_muted: u32,
-    pub rail_active_text: u32,
-    pub fill_current: u32,
-    pub fill_current_quiet: u32,
-    pub grounds: SettingsGrounds,
-    pub surface_raised: u32,
-    pub state_on: u32,
-    pub state_off: u32,
-    pub status_accent: u32,
-    pub status_info: u32,
-    pub status_success: u32,
-    pub status_danger: u32,
-    pub status_warning: u32,
-    pub status_warning_ink: u32,
-    pub status_muted: u32,
-    pub qr_dark: u32,
-    pub qr_light: u32,
-    pub live_color_fallback: u32,
-    pub transparent_rgba: u32,
-}
-
-impl SettingsPanelPalette {
-    pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
-        let washes = WashPalette::for_mode(mode, system);
-        let (rail_bg, rail_text, rail_text_muted) =
-            (system.surface_rail, system.text_rail, system.text_rail);
-        let fill_current = band_fill(system);
-        let band = mixed_ground(fill_current, system.text_primary);
-        Self {
-            window_bg: system.surface_elevated,
-            panel_border: system.border_subtle,
-            label_text: system.text_secondary,
-            section_text: system.text_primary,
-            row_bg_selected: system.accent_fill,
-            row_border_selected: system.accent,
-            rail_bg,
-            rail_text,
-            rail_text_muted,
-            rail_active_text: system.text_primary,
-            fill_current,
-            fill_current_quiet: mix_const(
-                system.accent_fill_base,
-                system.text_muted,
-                RAIL_FILL_MIX,
-            ),
-            grounds: SettingsGrounds {
-                pane: surface_ground(
-                    system.surface_elevated,
-                    system.text_primary,
-                    system.text_secondary,
-                    system.accent,
-                    system,
-                    washes,
-                ),
-                rail: surface_ground(
-                    system.surface_rail,
-                    system.text_primary,
-                    system.text_rail,
-                    system.accent,
-                    system,
-                    washes,
-                ),
-                band,
-                band_hover: mixed_ground(band.lift, system.text_primary),
-                menu: surface_ground(
-                    system.surface_raised,
-                    system.text_primary,
-                    system.text_secondary,
-                    system.accent,
-                    system,
-                    washes,
-                ),
-                attention: surface_ground(
-                    mix_const(
-                        system.surface_elevated,
-                        system.warning,
-                        washes.wash_attention.alpha_milli as u32,
-                    ),
-                    system.text_primary,
-                    system.text_secondary,
-                    system.warning,
-                    system,
-                    washes,
-                ),
-                invalid: surface_ground(
-                    mix_const(
-                        system.surface_elevated,
-                        system.danger,
-                        washes.wash_invalid.alpha_milli as u32,
-                    ),
-                    system.text_primary,
-                    system.text_secondary,
-                    system.danger,
-                    system,
-                    washes,
-                ),
-            },
-            surface_raised: system.surface_raised,
-            state_on: system.success,
-            state_off: system.danger,
-            status_accent: system.accent_ink,
-            status_info: system.info,
-            status_success: system.success,
-            status_danger: system.danger,
-            status_warning: system.warning,
-            status_warning_ink: system.warning_ink,
-            status_muted: system.text_muted,
-            qr_dark: DARK_TRAY_INTERNAL.config_qr_dark,
-            qr_light: DARK_TRAY_INTERNAL.config_qr_light,
-            live_color_fallback: DARK_TRAY_INTERNAL.config_live_color_fallback,
-            transparent_rgba: 0x00000000,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AltTabPreviewPlanePalette {
     pub backdrop_rgba: u32,
     pub label_text: u32,
@@ -1625,77 +1332,8 @@ impl AltTabPreviewPlanePalette {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LauncherPalette {
-    pub bg: u32,
-    pub bg_selected: u32,
-    pub bg_trail_hot: u32,
-    pub bg_trail: u32,
-    pub bg_near: u32,
-    pub bg_edge: u32,
-    pub bg_badge: u32,
-    pub text: u32,
-    pub text_selected: u32,
-    pub text_dim: u32,
-    pub text_muted: u32,
-    pub text_faint: u32,
-    pub highlight: u32,
-    pub highlight_warm: u32,
-    pub highlight_hot: u32,
-    pub highlight_cool: u32,
-    pub border: u32,
-    pub border_selected: u32,
-    pub momentum_up: [u32; 5],
-    pub momentum_down: [u32; 5],
-    pub compass_up: [u32; 3],
-    pub compass_down: [u32; 3],
-    pub semantic_prefix: u32,
-    pub semantic_contains: u32,
-    pub semantic_fuzzy: u32,
-    pub semantic_freq: u32,
-    pub boost_bg: u32,
-}
-
-impl LauncherPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            bg: system.surface_elevated,
-            bg_selected: system.accent_fill,
-            bg_trail_hot: mix_rgb(system.surface_raised, system.accent, 0.14),
-            bg_trail: mix_rgb(system.surface_raised, system.accent, 0.09),
-            bg_near: system.surface_hovered,
-            bg_edge: mix_rgb(system.surface_elevated, system.surface_raised, 0.5),
-            bg_badge: system.surface_raised,
-            text: system.text_secondary,
-            text_selected: system.text_primary,
-            text_dim: system.text_muted,
-            text_muted: system.text_faint,
-            text_faint: mix_rgb(system.text_faint, system.surface_canvas, 0.24),
-            highlight: system.accent_ink,
-            highlight_warm: mix_rgb(system.accent_ink, system.warning, 0.36),
-            highlight_hot: mix_rgb(system.accent_ink, system.text_primary, 0.22),
-            highlight_cool: mix_rgb(system.accent_ink, system.info, 0.28),
-            border: system.border_subtle,
-            border_selected: system.accent,
-            momentum_up: ramp(system.surface_raised, system.info),
-            momentum_down: ramp(system.surface_raised, system.danger),
-            compass_up: [
-                mix_rgb(system.text_muted, system.info, 0.2),
-                mix_rgb(system.text_muted, system.info, 0.45),
-                mix_rgb(system.text_muted, system.info, 0.75),
-            ],
-            compass_down: [
-                mix_rgb(system.text_muted, system.danger, 0.2),
-                mix_rgb(system.text_muted, system.danger, 0.45),
-                mix_rgb(system.text_muted, system.danger, 0.75),
-            ],
-            semantic_prefix: system.text_muted,
-            semantic_contains: system.text_muted,
-            semantic_fuzzy: system.text_muted,
-            semantic_freq: system.text_muted,
-            boost_bg: mix_rgb(system.surface_raised, system.surface_hovered, 0.5),
-        }
-    }
+pub const fn band_rest_fill(system: SystemPalette) -> u32 {
+    mix_const(system.accent_fill_base, system.text_muted, RAIL_FILL_MIX)
 }
 
 pub const fn band_fill(system: SystemPalette) -> u32 {
@@ -1733,11 +1371,15 @@ impl PickerSurfacePalette {
         let opacity = clamp_unit(opacity);
         let (card_hover_bg, card_selected_bg, card_selected_border) = match card_override {
             Some(_) => (
-                mix_rgb(card_bg, system.text_primary, 0.07),
+                lift(card_bg, system.text_primary),
                 mix_rgb(card_bg, system.text_primary, 0.13),
                 mix_rgb(card_bg, system.text_primary, 0.36),
             ),
-            None => (system.surface_hovered, system.accent_fill, system.accent),
+            None => (
+                lift(card_bg, system.text_primary),
+                band_fill(system),
+                band_fill(system),
+            ),
         };
         Self {
             panel_bg: mix_rgb(card_bg, system.surface_canvas, 0.56),
@@ -1768,34 +1410,6 @@ impl PickerSurfacePalette {
     }
 }
 
-pub fn launcher_runtime() -> LauncherPalette {
-    runtime_theme().components.launcher
-}
-
-pub fn cli_sessions_runtime() -> CliSessionsPalette {
-    runtime_theme().components.cli_sessions
-}
-
-pub fn remove_app_runtime() -> RemoveAppPalette {
-    runtime_theme().components.remove_app
-}
-
-pub fn shot_selector_runtime() -> ShotSelectorPalette {
-    runtime_theme().components.shot_selector
-}
-
-pub fn shot_preview_runtime() -> ShotPreviewPalette {
-    runtime_theme().components.shot_preview
-}
-
-pub fn toast_runtime() -> ToastPalette {
-    runtime_theme().components.toast
-}
-
-pub fn settings_panel_runtime() -> SettingsPanelPalette {
-    runtime_theme().components.settings_panel
-}
-
 pub fn alt_tab_preview_plane_runtime() -> AltTabPreviewPlanePalette {
     runtime_theme().components.alt_tab_preview_plane
 }
@@ -1820,16 +1434,6 @@ pub fn resolve_surface_override(
 fn parse_rgb24(hex: &str) -> Option<u32> {
     let (red, green, blue) = parse_hex_color(hex)?;
     Some(rgb24(red, green, blue))
-}
-
-fn ramp(base: u32, target: u32) -> [u32; 5] {
-    [
-        mix_rgb(base, target, 0.08),
-        mix_rgb(base, target, 0.14),
-        mix_rgb(base, target, 0.2),
-        mix_rgb(base, target, 0.26),
-        mix_rgb(base, target, 0.32),
-    ]
 }
 
 #[cfg(test)]

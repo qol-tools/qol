@@ -1,38 +1,39 @@
-use crate::chord::ModifierToken;
+use crate::chord::{Cap, Glyph, ModifierToken};
 
-pub(super) struct Platform;
+pub(super) const JOINER: Option<&str> = None;
 
-impl super::ChordStyle for Platform {
-    fn modifier_label(&self, modifier: ModifierToken) -> &'static str {
-        match modifier {
-            ModifierToken::Ctrl => "\u{2303}",
-            ModifierToken::Alt => "\u{2325}",
-            ModifierToken::Shift => "\u{21E7}",
-            ModifierToken::Platform | ModifierToken::Secondary => "\u{2318}",
-        }
-    }
-
-    fn join(&self, mods: &[&str], key: &str) -> String {
-        format!("{}{key}", mods.concat())
-    }
+pub(super) fn modifier_cap(modifier: ModifierToken) -> Cap {
+    Cap::Glyph(match modifier {
+        ModifierToken::Ctrl => Glyph::Control,
+        ModifierToken::Alt => Glyph::Option,
+        ModifierToken::Shift => Glyph::Shift,
+        ModifierToken::Platform | ModifierToken::Secondary => Glyph::Command,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::chord::label_for;
+    use crate::chord::{caps_for, Cap, Glyph};
 
     #[test]
-    fn renders_glyphs_without_separators() {
-        assert_eq!(label_for("platform+w").unwrap(), "\u{2318}W");
-        assert_eq!(label_for("secondary+z").unwrap(), "\u{2318}Z");
-        assert_eq!(label_for("alt+s").unwrap(), "\u{2325}S");
-        assert_eq!(label_for("secondary+shift+z").unwrap(), "\u{21E7}\u{2318}Z");
-        assert_eq!(label_for("platform+backspace").unwrap(), "\u{2318}\u{232B}");
-        assert_eq!(label_for("escape").unwrap(), "\u{238B}");
+    fn modifiers_are_drawn_without_separators() {
+        assert_eq!(
+            caps_for("platform+w").unwrap(),
+            [Cap::Glyph(Glyph::Command), Cap::Text("w".into())]
+        );
+        assert_eq!(
+            caps_for("secondary+shift+z").unwrap(),
+            [
+                Cap::Glyph(Glyph::Command),
+                Cap::Glyph(Glyph::Shift),
+                Cap::Text("z".into())
+            ]
+        );
+        assert_eq!(caps_for("escape").unwrap(), [Cap::Text("esc".into())]);
     }
 
     #[test]
     fn platform_and_secondary_are_the_same_key_here() {
-        assert_eq!(label_for("platform+w"), label_for("secondary+w"));
+        assert_eq!(caps_for("platform+w"), caps_for("secondary+w"));
     }
 }

@@ -19,6 +19,7 @@ qol-apps.workspace = true
 qol-config.workspace = true
 qol-color.workspace = true
 qol-conventions.workspace = true
+qol-hotkeys.workspace = true
 qol-runtime.workspace = true
 qol-theme.workspace = true
 serde = { workspace = true }

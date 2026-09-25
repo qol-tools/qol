@@ -1,28 +1,18 @@
+use std::time::Duration;
+
+use qol_theme::Motion;
+
 pub const ROW_H: f32 = 82.0;
 pub const VISIBLE: usize = 3;
 pub const PAD_TOP: f32 = 18.0;
 pub const DOT_OFFSET: f32 = PAD_TOP + 11.5;
-pub const TRAVEL_MS: u64 = 260;
-pub const DRAIN_MS: u64 = 140;
-pub const SETTLE_MS: u64 = TRAVEL_MS + DRAIN_MS;
+pub const SETTLE_MS: u64 =
+    (Motion::TRAVEL.duration.as_millis() + Motion::QUICK.duration.as_millis()) as u64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Phase {
     Travel,
     Drain,
-}
-
-pub fn ease_travel(delta: f32) -> f32 {
-    if delta < 0.5 {
-        2.0 * delta * delta
-    } else {
-        let x = -2.0 * delta + 2.0;
-        1.0 - x * x / 2.0
-    }
-}
-
-pub fn ease_drain(delta: f32) -> f32 {
-    1.0 - (1.0 - delta).powi(5)
 }
 
 pub fn viewport_height(head_h: f32) -> f32 {
@@ -112,8 +102,9 @@ pub fn fill(phase: Phase, delta: f32) -> f32 {
 }
 
 pub fn position_at(from: f32, to: usize, elapsed_ms: u64) -> f32 {
-    if elapsed_ms < TRAVEL_MS {
-        from + (to as f32 - from) * ease_travel(elapsed_ms as f32 / TRAVEL_MS as f32)
+    let elapsed = Duration::from_millis(elapsed_ms);
+    if elapsed < Motion::TRAVEL.duration {
+        from + (to as f32 - from) * Motion::TRAVEL.progress(elapsed)
     } else {
         to as f32
     }
@@ -349,9 +340,10 @@ mod tests {
     #[test]
     fn position_at_starts_at_from_ends_at_to_and_is_strictly_between_halfway() {
         assert_eq!(position_at(0.0, 4, 0), 0.0);
-        assert_eq!(position_at(0.0, 4, TRAVEL_MS), 4.0);
-        assert_eq!(position_at(0.0, 4, TRAVEL_MS + 1_000), 4.0);
-        let mid = position_at(0.0, 4, TRAVEL_MS / 2);
+        let travel_ms = Motion::TRAVEL.duration.as_millis() as u64;
+        assert_eq!(position_at(0.0, 4, travel_ms), 4.0);
+        assert_eq!(position_at(0.0, 4, travel_ms + 1_000), 4.0);
+        let mid = position_at(0.0, 4, travel_ms / 2);
         assert!(mid > 0.0 && mid < 4.0, "mid={mid}");
     }
 

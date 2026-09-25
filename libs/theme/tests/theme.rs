@@ -2,17 +2,19 @@ use qol_color::{mix_rgb, rgba_from_rgb, with_alpha};
 use qol_theme::{
     contrast_ratio, css, css_rgba_milli, dark_accent_preset, dark_theme,
     dark_theme_with_accent_key, desktop_theme_preview, preset_accent_key, resolve_surface_override,
-    runtime_dark_theme, theme_for_native_key, web_theme_preview, PickerSurfacePalette,
-    SettingsPanelPalette, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM,
-    DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
-    HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
-    LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SPACE_GUTTER, SPACE_LADDER, TEXT_SCALE,
-    THEME_COLOR_SENTINEL,
+    runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Face, Grounds, Motion,
+    PickerSurfacePalette, TextStyle, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE,
+    DARK_SYSTEM, DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE,
+    HEIGHT_LADDER, HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE,
+    LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER,
+    SPACE_LADDER, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE, THEME_COLOR_SENTINEL,
+    WAIT_BEFORE_BUSY,
 };
 use std::{
     fs,
     path::Path,
     sync::{Mutex, OnceLock},
+    time::Duration,
 };
 
 #[test]
@@ -35,9 +37,6 @@ fn runtime_dark_theme_uses_valid_injected_accent_key() {
     let expected = dark_accent_preset("blue").unwrap().rgb;
 
     assert_eq!(theme.system.accent, expected);
-    assert_eq!(theme.components.launcher.highlight, expected);
-    assert_eq!(theme.components.cli_sessions.selection_border, expected);
-    assert_eq!(theme.components.remove_app.accent, expected);
 }
 
 #[test]
@@ -53,163 +52,6 @@ fn runtime_dark_theme_falls_back_for_unknown_injected_accent_key() {
 fn css_color_serializers_are_shared() {
     assert_eq!(css::rgb_string(0xffb454), "255, 180, 84");
     assert_eq!(css::hex_string(0xffc77a), "#ffc77a");
-}
-
-#[test]
-fn launcher_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.launcher;
-    assert_eq!(palette.bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.bg_badge, DARK_SYSTEM.surface_raised);
-    assert_eq!(palette.text_selected, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.highlight, DARK_SYSTEM.accent_ink);
-    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.momentum_up.len(), 5);
-    assert_eq!(palette.momentum_down.len(), 5);
-    assert_eq!(palette.compass_up.len(), 3);
-    assert_eq!(palette.compass_down.len(), 3);
-}
-
-#[test]
-fn cli_sessions_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.cli_sessions;
-    assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
-    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
-    assert_eq!(
-        palette.divider,
-        mix_rgb(DARK_SYSTEM.surface_elevated, DARK_SYSTEM.border_subtle, 0.5)
-    );
-    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text_heading, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.text_muted, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.text_faint, DARK_SYSTEM.text_faint);
-    assert_eq!(
-        palette.keycap_bg_rgba,
-        with_alpha(DARK_SYSTEM.text_primary, 0x14)
-    );
-    assert_eq!(palette.selection_border, DARK_SYSTEM.accent);
-    assert_eq!(palette.needs_you, DARK_SYSTEM.danger);
-    assert_eq!(palette.your_turn, DARK_SYSTEM.warning);
-    assert_eq!(palette.working, DARK_SYSTEM.success);
-    assert_eq!(palette.service, DARK_SYSTEM.info);
-    assert_eq!(palette.bridged, DARK_SYSTEM.info);
-    assert_eq!(
-        palette.bridged_tint_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x1e)
-    );
-    assert_eq!(
-        palette.bridged_badge_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x33)
-    );
-    assert_eq!(
-        palette.bridged_hover_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x55)
-    );
-    assert_eq!(palette.unknown, DARK_SYSTEM.text_faint);
-    assert_eq!(
-        palette.needs_you_tint_rgba,
-        with_alpha(DARK_SYSTEM.danger, 0x22)
-    );
-    assert_eq!(
-        palette.your_turn_tint_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x22)
-    );
-    assert_eq!(
-        palette.your_turn_badge_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x33)
-    );
-    assert_eq!(
-        palette.your_turn_hover_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x55)
-    );
-    assert_eq!(
-        palette.working_tint_rgba,
-        with_alpha(DARK_SYSTEM.success, 0x1e)
-    );
-    assert_eq!(
-        palette.service_tint_rgba,
-        with_alpha(DARK_SYSTEM.info, 0x14)
-    );
-    assert_eq!(palette.transparent_rgba, 0x00000000);
-}
-
-#[test]
-fn remove_app_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.remove_app;
-    assert_eq!(palette.panel_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.chrome_bg, DARK_SYSTEM.surface_canvas);
-    assert_eq!(
-        palette.border,
-        mix_rgb(DARK_SYSTEM.surface_elevated, DARK_SYSTEM.border_subtle, 0.5)
-    );
-    assert_eq!(palette.border_strong, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text_heading, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.text_muted, DARK_SYSTEM.text_faint);
-    assert_eq!(palette.accent, DARK_SYSTEM.accent);
-    assert_eq!(palette.success, DARK_SYSTEM.success);
-    assert_eq!(palette.danger, DARK_SYSTEM.danger);
-    assert_eq!(palette.warning, DARK_SYSTEM.warning);
-    assert_eq!(
-        palette.selection_bg_rgba,
-        with_alpha(DARK_SYSTEM.accent, 0x14)
-    );
-    assert_eq!(palette.transparent_rgba, 0x00000000);
-    assert_eq!(
-        palette.keycap_bg_rgba,
-        with_alpha(DARK_SYSTEM.text_primary, 0x14)
-    );
-    assert_eq!(
-        palette.warning_banner_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0x1a)
-    );
-}
-
-#[test]
-fn shot_preview_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.shot_preview;
-    assert_eq!(palette.window_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.thumb_border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.label_text, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.action_glyph, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.action_bg, DARK_SYSTEM.surface_raised);
-    assert_eq!(
-        palette.action_bg_selected,
-        mix_rgb(DARK_SYSTEM.surface_raised, DARK_SYSTEM.accent, 0.28)
-    );
-    assert_eq!(palette.action_border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.action_border_selected, DARK_SYSTEM.accent);
-}
-
-#[test]
-fn toast_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.toast;
-    assert_eq!(palette.window_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.text_primary, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.text_secondary, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.info, DARK_SYSTEM.info);
-    assert_eq!(palette.success, DARK_SYSTEM.success);
-    assert_eq!(palette.warning, DARK_SYSTEM.warning);
-    assert_eq!(palette.danger, DARK_SYSTEM.danger);
-}
-
-#[test]
-fn settings_panel_palette_derives_status_tones_from_system_roles() {
-    let palette = dark_theme().components.settings_panel;
-    assert_eq!(palette.status_accent, DARK_SYSTEM.accent_ink);
-    assert_eq!(palette.status_success, DARK_SYSTEM.success);
-    assert_eq!(palette.status_danger, DARK_SYSTEM.danger);
-    assert_eq!(palette.status_warning, DARK_SYSTEM.warning);
-    assert_eq!(palette.status_warning_ink, DARK_SYSTEM.warning_ink);
-    assert_eq!(palette.status_muted, DARK_SYSTEM.text_muted);
-    assert_eq!(palette.transparent_rgba, 0x00000000);
-    assert_eq!(palette.qr_dark, DARK_REFERENCE.black);
-    assert_eq!(palette.qr_light, DARK_REFERENCE.white);
-    assert_eq!(palette.live_color_fallback, DARK_REFERENCE.white);
 }
 
 #[test]
@@ -265,68 +107,16 @@ fn alt_tab_cinnamon_js_emits_clutter_color_strings() {
 }
 
 #[test]
-fn shot_selector_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.shot_selector;
-    assert_eq!(palette.backdrop_rgba, with_alpha(DARK_SYSTEM.info, 0x24));
-    assert_eq!(
-        palette.panel_bg_rgba,
-        with_alpha(DARK_REFERENCE.black, 0xc7)
-    );
-    assert_eq!(
-        palette.panel_border_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xdb)
-    );
-    assert_eq!(palette.text_primary, DARK_REFERENCE.white);
-    assert_eq!(
-        palette.text_subtitle_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xc7)
-    );
-    assert_eq!(
-        palette.label_text_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xf5)
-    );
-    assert_eq!(palette.selection_outer, DARK_REFERENCE.white);
-    assert_eq!(palette.selection_inner, DARK_SYSTEM.danger);
-    assert_eq!(
-        palette.chip_ok_border_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xdb)
-    );
-    assert_eq!(
-        palette.chip_ok_text_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xff)
-    );
-    assert_eq!(
-        palette.chip_low_border_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0xff)
-    );
-    assert_eq!(
-        palette.chip_low_text_rgba,
-        with_alpha(
-            mix_rgb(DARK_SYSTEM.warning, DARK_REFERENCE.white, 0.35),
-            0xff
-        )
-    );
-    assert_eq!(
-        palette.chip_critical_border_rgba,
-        with_alpha(DARK_SYSTEM.danger, 0xff)
-    );
-    assert_eq!(
-        palette.chip_critical_text_rgba,
-        with_alpha(
-            mix_rgb(DARK_SYSTEM.danger, DARK_REFERENCE.white, 0.35),
-            0xff
-        )
-    );
-}
-
-#[test]
 fn picker_surface_palette_themed_none_uses_system_roles() {
     let system = DARK_SYSTEM;
     let palette = PickerSurfacePalette::themed(system, None, 1.0);
     assert_eq!(palette.card_bg, system.surface_raised);
-    assert_eq!(palette.card_hover_bg, system.surface_hovered);
-    assert_eq!(palette.card_selected_bg, system.accent_fill);
-    assert_eq!(palette.card_selected_border, system.accent);
+    assert_eq!(
+        palette.card_hover_bg,
+        qol_theme::lift(system.surface_raised, system.text_primary)
+    );
+    assert_eq!(palette.card_selected_bg, qol_theme::band_fill(system));
+    assert_eq!(palette.card_selected_border, qol_theme::band_fill(system));
     assert_eq!(
         palette.panel_bg,
         mix_rgb(system.surface_raised, system.surface_canvas, 0.56)
@@ -350,7 +140,7 @@ fn picker_surface_palette_themed_override_mixes_toward_text_primary() {
     assert_eq!(palette.card_bg, card);
     assert_eq!(
         palette.card_hover_bg,
-        mix_rgb(card, system.text_primary, 0.07)
+        qol_theme::lift(card, system.text_primary)
     );
     assert_eq!(
         palette.card_selected_bg,
@@ -1186,9 +976,7 @@ fn tray_css_emits_identity_tokens_per_theme() {
     assert!(midnight.contains("--qol-identity-frame-bg: var(--surface-elevated);"));
     assert!(midnight.contains("--qol-identity-cover-scrim: var(--qol-system-surface-raised);"));
     assert!(midnight.contains("--qol-identity-frame-radius: var(--radius-xl);"));
-    assert!(midnight.contains(
-        "--qol-identity-frame-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07);"
-    ));
+    assert!(midnight.contains("--qol-identity-frame-shadow: var(--qol-shadow-float);"));
     assert_eq!(
         css.matches(":root[data-qol-theme=").count(),
         1,
@@ -1567,21 +1355,17 @@ fn the_settings_panel_rail_stays_readable_in_both_themes() {
     let modes = [
         (
             "light",
-            SettingsPanelPalette::from_theme(ThemeMode::Light, LIGHT_SYSTEM),
+            Grounds::from_theme(ThemeMode::Light, LIGHT_SYSTEM).rail,
         ),
         (
             "dark",
-            SettingsPanelPalette::from_theme(ThemeMode::Dark, DARK_SYSTEM),
+            Grounds::from_theme(ThemeMode::Dark, DARK_SYSTEM).rail,
         ),
     ];
 
     for (mode, rail) in modes {
-        for (name, ink) in [
-            ("rail text", rail.rail_text),
-            ("inactive section", rail.rail_text_muted),
-            ("active section", rail.rail_active_text),
-        ] {
-            let ratio = contrast_ratio(ink, rail.rail_bg);
+        for (name, ink) in [("rail text", rail.soft), ("active section", rail.ink)] {
+            let ratio = contrast_ratio(ink, rail.bg);
             assert!(
                 ratio >= ACCENT_INK_FLOOR,
                 "{mode} {name} on the rail = {ratio:.2}, floor {ACCENT_INK_FLOOR}"
@@ -1604,15 +1388,13 @@ fn the_selected_rail_row_carries_its_label_in_every_accent() {
 
     for (mode, theme, system, presets) in modes {
         for preset in presets {
-            let rail = SettingsPanelPalette::from_theme(
-                theme,
-                system.with_accent_pair(preset.rgb, preset.ink),
-            );
+            let system = system.with_accent_pair(preset.rgb, preset.ink);
+            let grounds = Grounds::from_theme(theme, system);
             for (name, fill) in [
-                ("selected", rail.fill_current),
-                ("selected while away", rail.fill_current_quiet),
+                ("selected", grounds.band.bg),
+                ("selected while away", qol_theme::band_rest_fill(system)),
             ] {
-                let ratio = contrast_ratio(rail.rail_active_text, fill);
+                let ratio = contrast_ratio(grounds.rail.ink, fill);
                 assert!(
                     ratio >= ACCENT_INK_FLOOR,
                     "{mode} {} {name} filled row = {ratio:.2}, floor {ACCENT_INK_FLOOR}",
@@ -1620,7 +1402,7 @@ fn the_selected_rail_row_carries_its_label_in_every_accent() {
                 );
             }
             assert_ne!(
-                rail.fill_current, rail.rail_bg,
+                grounds.band.bg, grounds.rail.bg,
                 "{mode} {} selected rail row has to read against the rail",
                 preset.key
             );
@@ -1892,10 +1674,11 @@ fn in_settings_scope(relative: &str) -> bool {
         .any(|prefix| relative.starts_with(prefix))
 }
 
-const RECIPE_OWNERS: [&str; 3] = [
+const RECIPE_OWNERS: [&str; 4] = [
     "libs/gpui/src/kit.rs",
     "libs/gpui/src/deck.rs",
     "libs/gpui/src/hint_bar.rs",
+    "libs/gpui/src/gamepad/",
 ];
 
 fn is_component_recipe_owner(relative: &str) -> bool {
@@ -1951,11 +1734,7 @@ fn rem_spacing_helper_calls(compact: &str) -> Vec<String> {
     found
 }
 
-const REM_SPACING_HELPER_DEBT: [(&str, usize); 3] = [
-    ("libs/gpui/src/status_indicator.rs", 1),
-    ("libs/gpui/src/toast.rs", 4),
-    ("plugins/alt-tab/src/app/render.rs", 4),
-];
+const REM_SPACING_HELPER_DEBT: [(&str, usize); 0] = [];
 
 #[test]
 fn gpui_surfaces_do_not_use_rem_spacing_helpers() {
@@ -2012,21 +1791,7 @@ Files outside settings scope keep their exact count in REM_SPACING_HELPER_DEBT u
     );
 }
 
-const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 13] = [
-    ("libs/gpui/src/toast.rs", 10.0),
-    ("libs/gpui/src/toast.rs", 3.0),
-    ("plugins/alt-tab/src/app/render.rs", 26.0),
-    ("plugins/alt-tab/src/app/render.rs", 18.0),
-    ("plugins/cli-sessions/src/ui/render.rs", 24.0),
-    ("plugins/launcher/src/ui/view.rs", 10.0),
-    ("plugins/launcher/src/ui/view.rs", 5.0),
-    ("plugins/launcher/src/ui/view.rs", 14.0),
-    ("plugins/removeapp/src/ui/mod.rs", 10.0),
-    ("plugins/removeapp/src/ui/mod.rs", 5.0),
-    ("plugins/removeapp/src/ui/mod.rs", 1.0),
-    ("plugins/removeapp/src/ui/mod.rs", 24.0),
-    ("plugins/removeapp/src/ui/mod.rs", 3.0),
-];
+const OFF_LADDER_SPACING_LITERAL_DEBT: [(&str, f32); 0] = [];
 
 #[test]
 fn gpui_spacing_literals_stay_on_the_space_ladder() {
@@ -2151,101 +1916,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 37] = [
-    ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".border_color(",
-        8,
-    ),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".font_weight(",
-        3,
-    ),
-    ("libs/gpui/src/gamepad/diagram/controls.rs", ".shadow(", 2),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".text_color(",
-        3,
-    ),
-    (
-        "libs/gpui/src/gamepad/diagram/controls.rs",
-        ".text_size(",
-        3,
-    ),
-    ("libs/gpui/src/gamepad/diagram/mod.rs", ".bg(", 2),
-    ("libs/gpui/src/gamepad/diagram/mod.rs", ".rounded(", 2),
-    ("libs/gpui/src/gamepad/diagram/mod.rs", ".shadow(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".bg(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".border_color(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".font_weight(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".rounded(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".text_color(", 1),
-    ("libs/gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
-    ("libs/gpui/src/gamepad/view.rs", ".bg(", 11),
-    ("libs/gpui/src/gamepad/view.rs", ".border_color(", 8),
-    ("libs/gpui/src/gamepad/view.rs", ".font_weight(", 7),
-    ("libs/gpui/src/gamepad/view.rs", ".shadow(", 1),
-    ("libs/gpui/src/gamepad/view.rs", ".text_color(", 17),
-    ("libs/gpui/src/gamepad/view.rs", ".text_size(", 17),
-    (
-        "libs/gpui/src/settings_panel/view/display_layout_card.rs",
-        ".text_color(",
-        2,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/display_layout_card.rs",
-        ".text_size(",
-        2,
-    ),
-    ("libs/gpui/src/settings_panel/view/list_card.rs", ".bg(", 2),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".text_color(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/list_card.rs",
-        ".text_size(",
-        1,
-    ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".bg(", 10),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".border(", 1),
-    (
-        "libs/gpui/src/settings_panel/view/mod.rs",
-        ".border_color(",
-        5,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/mod.rs",
-        ".font_weight(",
-        3,
-    ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".rounded(", 5),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".shadow(", 2),
-    (
-        "libs/gpui/src/settings_panel/view/mod.rs",
-        ".text_color(",
-        10,
-    ),
-    ("libs/gpui/src/settings_panel/view/mod.rs", ".text_size(", 9),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".border_color(",
-        1,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".text_color(",
-        2,
-    ),
-    (
-        "libs/gpui/src/settings_panel/view/structured_list_editor.rs",
-        ".text_size(",
-        1,
-    ),
-];
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 0] = [];
 
 #[test]
 fn settings_surfaces_compose_shared_components() {
@@ -2255,7 +1926,9 @@ fn settings_surfaces_compose_shared_components() {
 
     for (relative, path) in surface_sources(&workspace) {
         if !in_settings_scope(&relative)
-            || RECIPE_OWNERS.contains(&relative.as_str())
+            || RECIPE_OWNERS
+                .iter()
+                .any(|owner| relative.starts_with(owner))
             || is_component_recipe_owner(&relative)
         {
             continue;
@@ -2310,6 +1983,15 @@ every other settings-scope file keeps its exact counts in LEAF_STYLING_DEBT.\n{}
 
 const PALETTE_PREFIXES: [&str; 3] = ["kit.palette.", "kit().palette", "shared.palette."];
 
+const SEMANTIC_HUES: [&str; 6] = [
+    "success",
+    "info",
+    "warning",
+    "warning_ink",
+    "danger",
+    "accent_ink",
+];
+
 #[test]
 fn settings_surfaces_take_colour_from_the_settings_palette() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2326,9 +2008,17 @@ fn settings_surfaces_take_colour_from_the_settings_palette() {
         for (index, line) in contents.lines().enumerate() {
             let compact = compact_line(line);
             for prefix in PALETTE_PREFIXES {
-                if compact.contains(prefix) {
+                let reads_raw = compact.match_indices(prefix).any(|(at, _)| {
+                    let field: String = compact[at + prefix.len()..]
+                        .trim_start_matches('.')
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    !SEMANTIC_HUES.contains(&field.as_str())
+                });
+                if reads_raw {
                     problems.push(format!(
-                        "{relative}:{} reads {prefix}; take the colour from a SettingsPanelPalette field, a kit wash or a kit recipe",
+                        "{relative}:{} reads {prefix}; take the colour from a ground, a kit wash, a kit recipe or a semantic hue",
                         index + 1
                     ));
                 }
@@ -2338,8 +2028,8 @@ fn settings_surfaces_take_colour_from_the_settings_palette() {
 
     assert!(
         problems.is_empty(),
-        "Colour in settings scope comes from SettingsPanelPalette fields, kit.washes or a kit \
-recipe; only kit.rs and settings_panel/components/ may read kit.palette.\n{}",
+        "Colour in settings scope comes from the grounds, kit.washes, a kit recipe or a semantic \
+hue; only kit.rs and settings_panel/components/ may read the rest of kit.palette.\n{}",
         problems.join("\n")
     );
 }
@@ -2448,7 +2138,7 @@ fn gpui_surfaces_draw_progress_with_the_spinner() {
 
     assert!(
         flagged.is_empty(),
-        "Progress is drawn by qol_gpui::Spinner (Busy pairs it with a caption); text never animates, \
+        "Progress is drawn by qol_gpui::Busy, a ring of eight dots with an optional caption; text never animates, \
          so a running phrase does not end in an ellipsis.\n{}",
         flagged.join("\n")
     );
@@ -2466,7 +2156,7 @@ fn settings_surfaces_build_spinners_through_components() {
         let contents = fs::read_to_string(&path).expect("read gpui source");
         for (index, line) in contents.lines().enumerate() {
             let compact = compact_line(line);
-            if compact.contains("Spinner::new(") || compact.contains("Busy::new(") {
+            if compact.contains("Busy::ring(") || compact.contains("Busy::new(") {
                 calls.push(format!("{relative}:{}", index + 1));
             }
         }
@@ -2476,7 +2166,7 @@ fn settings_surfaces_build_spinners_through_components() {
         calls
             .iter()
             .all(|call| call.starts_with("libs/gpui/src/settings_panel/components/mod.rs:")),
-        "Settings surfaces build spinners through the components recipes, so Spinner::new and \
+        "Settings surfaces build spinners through the components recipes, so Busy::ring and \
          Busy::new live only in settings_panel/components/mod.rs:\n{}",
         calls.join("\n")
     );
@@ -2484,35 +2174,35 @@ fn settings_surfaces_build_spinners_through_components() {
 
 #[test]
 fn settings_grounds_resolve_the_locked_roles() {
-    let dark = SettingsPanelPalette::from_theme(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7));
+    let dark = Grounds::from_theme(ThemeMode::Dark, DARK_SYSTEM.with_accent(0x8a93f7));
 
-    assert_eq!(dark.grounds.band.bg, 0x464a79);
-    assert_eq!(dark.grounds.band.soft, 0xd4d4db);
-    assert_eq!(dark.grounds.band.faint, 0xb8b9c8);
-    assert_eq!(dark.grounds.band_hover.bg, 0x545783);
+    assert_eq!(dark.band.bg, 0x464a79);
+    assert_eq!(dark.band.soft, 0xd4d4db);
+    assert_eq!(dark.band.faint, 0xb8b9c8);
+    assert_eq!(dark.band_hover.bg, 0x545783);
 
     assert_eq!(
-        dark.grounds.band.well,
+        dark.band.well,
         css_rgba_milli(DARK_SYSTEM.text_primary, 140)
     );
     assert_eq!(
-        dark.grounds.band.edge,
+        dark.band.edge,
         css_rgba_milli(DARK_SYSTEM.text_primary, 240)
     );
-    assert_eq!(dark.grounds.band.mark, DARK_SYSTEM.text_primary);
-    assert_eq!(dark.grounds.band.on_mark, dark.grounds.band.bg);
+    assert_eq!(dark.band.mark, DARK_SYSTEM.text_primary);
+    assert_eq!(dark.band.on_mark, dark.band.bg);
 
-    assert_eq!(dark.grounds.pane.ink, DARK_SYSTEM.text_primary);
-    assert_eq!(dark.grounds.pane.soft, DARK_SYSTEM.text_secondary);
-    assert_eq!(dark.grounds.pane.faint, DARK_SYSTEM.text_muted);
+    assert_eq!(dark.pane.ink, DARK_SYSTEM.text_primary);
+    assert_eq!(dark.pane.soft, DARK_SYSTEM.text_secondary);
+    assert_eq!(dark.pane.faint, DARK_SYSTEM.text_muted);
 
     let dark_washes = WashPalette::dark(DARK_SYSTEM);
-    assert_eq!(dark.grounds.pane.well, dark_washes.fill_resting);
-    assert_eq!(dark.grounds.pane.edge, dark_washes.hairline);
+    assert_eq!(dark.pane.well, dark_washes.fill_resting);
+    assert_eq!(dark.pane.edge, dark_washes.hairline);
 
     let light_system = LIGHT_SYSTEM.with_accent(0x6f5da8);
-    let light = SettingsPanelPalette::from_theme(ThemeMode::Light, light_system);
-    assert_eq!(light.grounds.band.bg, 0xbbb2d1);
+    let light = Grounds::from_theme(ThemeMode::Light, light_system);
+    assert_eq!(light.band.bg, 0xbbb2d1);
 }
 
 #[test]
@@ -2532,7 +2222,7 @@ fn settings_ground_text_clears_its_floor_in_every_accent() {
         for preset in presets {
             let preset_key = preset.key;
             let system = base.with_accent_pair(preset.rgb, preset.ink);
-            let grounds = SettingsPanelPalette::from_theme(theme_mode, system).grounds;
+            let grounds = Grounds::from_theme(theme_mode, system);
             for (name, ground) in [
                 ("pane", grounds.pane),
                 ("rail", grounds.rail),
@@ -2596,4 +2286,820 @@ fn web_theme_previews_match_the_locked_pictures() {
     assert_eq!(midnight.muted, 0x555974);
 
     assert!(web_theme_preview("nope").is_none());
+}
+
+const MOTION_OWNER: &str = "libs/gpui/src/motion.rs";
+
+const HAND_MOTION: [&str; 4] = [
+    "Animation::new(",
+    ".with_easing(",
+    "ease_out_quint",
+    "ease_in_out",
+];
+
+fn writes_hand_motion(line: &str, pattern: &str) -> bool {
+    line.match_indices(pattern).any(|(at, _)| {
+        !line[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|before| before.is_alphanumeric() || before == '_')
+    })
+}
+
+#[test]
+fn every_animation_takes_a_theme_motion() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if relative == MOTION_OWNER {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            for pattern in HAND_MOTION {
+                if writes_hand_motion(line, pattern) {
+                    problems.push(format!("{relative}:{} writes {pattern}", index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Every animation is qol_gpui::motion::animation(Motion::*), so its time and curve come from the theme.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn motion_curves_start_at_rest_and_arrive_exactly() {
+    for motion in Motion::ALL {
+        assert_eq!(motion.progress(Duration::ZERO), 0.0, "{motion:?}");
+        assert_eq!(motion.progress(motion.duration), 1.0, "{motion:?}");
+        assert_eq!(motion.progress(motion.duration * 3), 1.0, "{motion:?}");
+    }
+    assert_eq!(Curve::Travel.at(0.5), 0.5);
+    assert!(Curve::Settle.at(0.5) > 0.96);
+}
+
+#[test]
+fn stays_and_waits_hold_their_approved_values() {
+    assert_eq!(
+        Motion::ALL.map(|motion| motion.duration.as_millis()),
+        [140, 180, 260, 1000]
+    );
+    assert_eq!(STAY_BRIEF, Duration::from_secs(4));
+    assert_eq!(STAY_LONG, Duration::from_secs(8));
+    assert_eq!(STAY_UNTIL_CLOSED, None);
+    assert_eq!(WAIT_BEFORE_BUSY, Duration::from_millis(300));
+    assert_eq!(SETTLE_INPUT, Duration::from_millis(140));
+}
+
+const SIDE_LINE_METHODS: [&str; 4] = [
+    ".border_l(",
+    ".border_r(",
+    ".rounded_l(px(qol_theme::RADIUS_TONE",
+    "SPACE_MARK",
+];
+
+fn draws_a_side_strip(window: &[String]) -> bool {
+    let joined = window.join("");
+    let pinned_to_an_edge = (joined.contains(".left_0()") || joined.contains(".right_0()"))
+        && joined.contains(".top_0()")
+        && joined.contains(".bottom_0()");
+    let thin = [".w(px(1.", ".w(px(2.", ".w(px(3.", ".w(px(4."]
+        .iter()
+        .any(|width| joined.contains(width));
+    pinned_to_an_edge && thin && joined.contains(".bg(")
+}
+
+#[test]
+fn no_surface_draws_a_coloured_side_line() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let lines: Vec<String> = contents.lines().map(compact_line).collect();
+        for (index, line) in lines.iter().enumerate() {
+            for method in SIDE_LINE_METHODS {
+                if line.contains(method) {
+                    problems.push(format!("{relative}:{} uses {method}", index + 1));
+                }
+            }
+            let window = &lines[index..(index + 8).min(lines.len())];
+            if line.contains(".absolute()") && draws_a_side_strip(window) {
+                problems.push(format!(
+                    "{relative}:{} draws a thin strip on an edge",
+                    index + 1
+                ));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "State is a ground, never a line: a row, card or message shows its state with its ground and a status dot.\n{}",
+        problems.join("\n")
+    );
+}
+
+const HOVER_OWNERS: [&str; 2] = [
+    "libs/gpui/src/kit.rs",
+    "libs/gpui/src/settings_panel/components/",
+];
+
+#[test]
+fn every_hover_is_the_kit_pointable_lift() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if HOVER_OWNERS.iter().any(|owner| relative.starts_with(owner)) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            let compact = compact_line(line);
+            if compact.contains(".hover(") || compact.contains("group_hover(") {
+                problems.push(format!("{relative}:{}", index + 1));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Pointing at something lifts its ground through kit.pointable; windows never style a hover themselves.\n{}",
+        problems.join("\n")
+    );
+}
+
+fn builder_around(lines: &[String], at: usize) -> String {
+    let start = (0..=at)
+        .rev()
+        .find(|&index| lines[index].contains("div()"))
+        .unwrap_or(at);
+    let end = (at..lines.len())
+        .find(|&index| lines[index].contains(".child") || lines[index].ends_with(';'))
+        .unwrap_or(at);
+    lines[start..=end].join("")
+}
+
+#[test]
+fn every_window_is_square() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let lines: Vec<String> = contents.lines().map(compact_line).collect();
+        for (index, line) in lines.iter().enumerate() {
+            if line.contains(".size_full()") && builder_around(&lines, index).contains(".rounded(")
+            {
+                problems.push(format!("{relative}:{} rounds a window", index + 1));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A window has no corner radius; only what sits inside it is rounded.\n{}",
+        problems.join("\n")
+    );
+}
+
+const HINT_CALLS: [&str; 5] = [
+    ".hint(\"",
+    ".keycap(\"",
+    "SettingsHint::new(\"",
+    "HintDescriptor::new(\"",
+    "HintDescriptor::pinned(\"",
+];
+
+#[test]
+fn every_hint_takes_a_key() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let lines: Vec<String> = contents.lines().map(compact_line).collect();
+        for (index, line) in lines.iter().enumerate() {
+            let joined = match lines.get(index + 1) {
+                Some(next) => format!("{line}{next}"),
+                None => line.clone(),
+            };
+            for call in HINT_CALLS {
+                if line.contains(call.trim_end_matches('"')) && joined.contains(call) {
+                    problems.push(format!("{relative}:{} spells a key as {call}", index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A hint takes a qol_gpui::Key, so every key is named by libs/hotkeys and drawn the same way.\n{}",
+        problems.join("\n")
+    );
+}
+
+const SHIPPED_FONTS: [&str; 3] = [
+    "libs/gpui/assets/fonts/IBMPlexSans-Regular.ttf",
+    "libs/gpui/assets/fonts/IBMPlexMono-Regular.ttf",
+    "libs/gpui/assets/fonts/SairaSemiCondensed-SemiBold.ttf",
+];
+
+const NOT_DRAWN: [&str; 7] = [
+    "eprintln!",
+    "println!",
+    "probe(",
+    "log::",
+    "tracing::",
+    "anyhow!",
+    "bail!",
+];
+
+fn drawn_literals(line: &str) -> Vec<String> {
+    string_literals(line)
+        .into_iter()
+        .map(|literal| {
+            let mut decoded = String::new();
+            let mut rest = literal;
+            while let Some(at) = rest.find("\\u{") {
+                decoded.push_str(&rest[..at]);
+                let tail = &rest[at + 3..];
+                let Some(end) = tail.find('}') else {
+                    break;
+                };
+                if let Some(ch) = u32::from_str_radix(&tail[..end], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    decoded.push(ch);
+                }
+                rest = &tail[end + 1..];
+            }
+            decoded.push_str(rest);
+            decoded
+        })
+        .collect()
+}
+
+#[test]
+fn every_character_a_window_draws_is_in_the_shipped_fonts() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fonts: Vec<Vec<u8>> = SHIPPED_FONTS
+        .iter()
+        .map(|font| fs::read(workspace.join(font)).expect("read shipped font"))
+        .collect();
+    let faces: Vec<ttf_parser::Face> = fonts
+        .iter()
+        .map(|data| ttf_parser::Face::parse(data, 0).expect("parse shipped font"))
+        .collect();
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        if !contents.contains("use gpui") {
+            continue;
+        }
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        for (index, line) in body.lines().enumerate() {
+            if line.trim_start().starts_with("//")
+                || NOT_DRAWN.iter().any(|call| line.contains(call))
+            {
+                continue;
+            }
+            for literal in drawn_literals(line) {
+                for ch in literal.chars().filter(|ch| !ch.is_ascii()) {
+                    if !faces.iter().any(|face| face.glyph_index(ch).is_some()) {
+                        problems.push(format!("{relative}:{} draws {ch:?}", index + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Symbols the shipped fonts lack come from the host and change per machine; draw them with qol_gpui::Icon.\n{}",
+        problems.join("\n")
+    );
+}
+
+const TEXT_METHODS: [&str; 4] = [
+    ".text_size(",
+    ".font_weight(",
+    ".font_family(",
+    ".line_height(",
+];
+
+const TEXT_OWNERS: [&str; 3] = [
+    "libs/gpui/src/text.rs",
+    "libs/gpui/src/pictures/",
+    "libs/gpui/src/gamepad/diagram/",
+];
+
+#[test]
+fn every_text_takes_a_text_style() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if TEXT_OWNERS.iter().any(|owner| relative.starts_with(owner)) {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        for (index, line) in contents.lines().enumerate() {
+            for method in TEXT_METHODS {
+                if line.contains(method) {
+                    problems.push(format!("{relative}:{} sets {method}", index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Text is set with .text(TextStyle::…), so every window uses the same eleven styles.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn text_styles_hold_their_approved_values() {
+    let table = TextStyle::ALL.map(|style| {
+        let spec = style.spec();
+        (
+            spec.face,
+            spec.size,
+            spec.weight,
+            spec.line_height,
+            spec.caps,
+        )
+    });
+    assert_eq!(
+        table,
+        [
+            (Face::Display, 34.0, 600, 1.0, false),
+            (Face::Display, 20.0, 600, 1.15, false),
+            (Face::Display, 11.5, 600, 1.2, false),
+            (Face::Ui, 15.0, 500, 1.25, false),
+            (Face::Ui, 13.5, 500, 1.25, false),
+            (Face::Ui, 15.0, 400, 1.25, false),
+            (Face::Ui, 12.5, 400, 1.25, false),
+            (Face::Ui, 12.5, 400, 1.0, false),
+            (Face::Mono, 12.5, 400, 1.0, false),
+            (Face::Mono, 13.5, 400, 1.25, false),
+            (Face::Ui, 11.5, 600, 1.2, true),
+        ]
+    );
+}
+
+#[test]
+fn every_scrolling_list_says_when_there_is_more() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        let scrolls =
+            body.matches(".overflow_y_scroll()").count() + body.matches(".visible_range(").count();
+        let cues = body.matches("scroll_cue(").count();
+        if scrolls > cues {
+            problems.push(format!(
+                "{relative} scrolls {scrolls} lists but draws {cues} scroll cues"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A list that scrolls ends in kit.scroll_cue, so it always shows when there is more.\n{}",
+        problems.join("\n")
+    );
+}
+
+const WINDOW_OPENERS: [(&str, Option<(&str, &str)>); 9] = [
+    (
+        "libs/gpui/src/color_wheel.rs",
+        Some(("libs/gpui/src/color_wheel.rs", "ColorWheelPopup")),
+    ),
+    ("libs/gpui/src/keepalive.rs", None),
+    (
+        "libs/gpui/src/surface/mod.rs",
+        Some(("libs/gpui/src/surface/mod.rs", "SurfaceRoot<V>")),
+    ),
+    ("libs/gpui/src/window.rs", None),
+    (
+        "plugins/alt-tab/src/picker/create.rs",
+        Some(("plugins/alt-tab/src/app/render.rs", "AltTabApp")),
+    ),
+    (
+        "plugins/launcher/src/ui/window_host.rs",
+        Some(("plugins/launcher/src/ui/render.rs", "LauncherView")),
+    ),
+    (
+        "plugins/shot/src/ui/pinned.rs",
+        Some(("plugins/shot/src/ui/pinned.rs", "PinnedView")),
+    ),
+    (
+        "plugins/shot/src/ui/preview.rs",
+        Some(("plugins/shot/src/ui/preview.rs", "PreviewView")),
+    ),
+    (
+        "plugins/shot/src/ui/region_selector/mod.rs",
+        Some((
+            "plugins/shot/src/ui/region_selector/mod.rs",
+            "RegionSelector",
+        )),
+    ),
+];
+
+#[test]
+fn every_window_says_whether_it_goes_quiet() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let openers: Vec<String> = surface_sources(&workspace)
+        .into_iter()
+        .filter(|(_, path)| {
+            let contents = fs::read_to_string(path).expect("read gpui source");
+            let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+            body.contains(".open_window(")
+        })
+        .map(|(relative, _)| relative)
+        .collect();
+    let listed: Vec<String> = WINDOW_OPENERS
+        .iter()
+        .map(|(file, _)| file.to_string())
+        .collect();
+    assert_eq!(
+        openers, listed,
+        "A new window needs its root in WINDOW_OPENERS, and the root's render calls kit::enter_window."
+    );
+    let mut problems = Vec::new();
+    for (file, root) in WINDOW_OPENERS.iter().filter_map(|(_, root)| *root) {
+        let contents = fs::read_to_string(workspace.join(file)).expect("read root source");
+        let needle = format!("impl Render for {root} {{");
+        let generic = format!("> Render for {root} {{");
+        let Some(at) = contents.find(&needle).or_else(|| contents.find(&generic)) else {
+            problems.push(format!("{file} has no render for {root}"));
+            continue;
+        };
+        let render = &contents[at..];
+        let head = render.split('\n').take(4).collect::<Vec<_>>().join("\n");
+        if !head.contains("enter_window(") {
+            problems.push(format!(
+                "{file}: {root} does not start its render with enter_window"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Every window root tells the kit whether it is live or quiet before anything reads a colour.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn a_quiet_window_greys_only_the_accent_and_the_running_green() {
+    for (mode, presets) in [
+        (ThemeMode::Light, qol_theme::light_accent_presets()),
+        (ThemeMode::Dark, qol_theme::dark_accent_presets()),
+    ] {
+        for preset in presets {
+            let theme = match mode {
+                ThemeMode::Light => qol_theme::light_theme_with_accent_key(preset.key),
+                ThemeMode::Dark => qol_theme::dark_theme_with_accent_key(preset.key),
+            };
+            let quiet = theme.quiet();
+            let (grey, grey_ink) = match mode {
+                ThemeMode::Light => (
+                    qol_theme::quiet::LIGHT_QUIET_ACCENT,
+                    qol_theme::quiet::LIGHT_QUIET_ACCENT_INK,
+                ),
+                ThemeMode::Dark => (
+                    qol_theme::quiet::DARK_QUIET_ACCENT,
+                    qol_theme::quiet::DARK_QUIET_ACCENT_INK,
+                ),
+            };
+            assert_eq!(quiet.system.accent, grey, "{}", preset.key);
+            assert_eq!(quiet.system.accent_ink, grey_ink, "{}", preset.key);
+            assert_eq!(quiet.system.success, grey, "{}", preset.key);
+            let untouched = qol_theme::SystemPalette {
+                accent: theme.system.accent,
+                accent_ink: theme.system.accent_ink,
+                accent_fill: theme.system.accent_fill,
+                success: theme.system.success,
+                ..quiet.system
+            };
+            assert_eq!(untouched, theme.system, "{}", preset.key);
+            let grounds = qol_theme::Grounds::from_theme(mode, quiet.system).quiet();
+            assert_eq!(grounds.pane.halo.alpha_milli, 0, "{}", preset.key);
+            assert_eq!(grounds.band.halo.alpha_milli, 0, "{}", preset.key);
+        }
+    }
+}
+
+const DEPTH_OWNERS: [&str; 1] = ["libs/gpui/src/kit.rs"];
+
+fn literal_opacity_problem(argument: &str) -> bool {
+    let trimmed = argument.trim();
+    let number: String = trimmed
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if number.is_empty() {
+        return false;
+    }
+    let rest = trimmed[number.len()..].trim_start();
+    let value: f32 = number.parse().unwrap_or(0.0);
+    if rest.is_empty() {
+        return value != 0.0 && value != 1.0;
+    }
+    rest.starts_with('*')
+}
+
+#[test]
+fn every_shadow_alpha_opacity_and_line_comes_from_the_theme() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        let owner = DEPTH_OWNERS.contains(&relative.as_str());
+        for (needle, what) in [
+            ("css_rgba_milli(", "a hand see-through strength"),
+            ("<< 8) |", "a hand alpha byte"),
+            ("fn alpha(", "its own alpha helper"),
+            ("fn glow(", "a glow"),
+            (".border_2()", "a 2 px line"),
+            (".border_4()", "a 4 px line"),
+            (".border_8()", "an 8 px line"),
+        ] {
+            if body.contains(needle) {
+                problems.push(format!("{relative} has {what} ({needle})"));
+            }
+        }
+        if !owner && body.contains("BoxShadow {") {
+            problems.push(format!("{relative} builds its own shadow"));
+        }
+        for side in ["", "_t", "_b", "_l", "_r", "_x", "_y"] {
+            let needle = format!(".border{side}(px(");
+            for (at, _) in body.match_indices(&needle) {
+                let next = body[at + needle.len()..].chars().next().unwrap_or(' ');
+                if next.is_ascii_digit() {
+                    problems.push(format!(
+                        "{relative} sets a line width by hand ({needle}{next}..)"
+                    ));
+                }
+            }
+        }
+        for (at, _) in body.match_indices(".opacity(") {
+            let argument = body[at + ".opacity(".len()..]
+                .split(')')
+                .next()
+                .unwrap_or_default();
+            if literal_opacity_problem(argument) {
+                problems.push(format!("{relative} dims by hand (.opacity({argument}))"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Shadows are SHADOW_FLOAT or SHADOW_RAISED through the kit, see-through colours take an Alpha, dimming is OPACITY_DISABLED or OPACITY_REST, and a line is LINE.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn the_depth_ladders_hold_their_approved_values() {
+    let percents: Vec<u16> = qol_theme::Alpha::ALL.iter().map(|a| a.percent()).collect();
+    assert_eq!(percents, [5, 9, 16, 24, 40, 70]);
+    assert_eq!(qol_theme::OPACITY_DISABLED, 0.4);
+    assert_eq!(qol_theme::OPACITY_REST, 0.6);
+    assert_eq!(qol_theme::LINE, 1.0);
+    assert_eq!(qol_theme::FOCUS_RING_EDGE, 1.5);
+    assert_eq!(qol_theme::STATUS_DOT, 7.0);
+    let layers = |shadow: qol_theme::Shadow| {
+        shadow
+            .iter()
+            .map(|layer| (layer.y, layer.blur, layer.alpha.percent()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(layers(qol_theme::SHADOW_FLOAT), [(1, 2, 5), (8, 20, 9)]);
+    assert_eq!(layers(qol_theme::SHADOW_RAISED), [(1, 2, 9), (6, 16, 9)]);
+}
+
+fn css_declarations(css: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for chunk in css.split(['{', '}', ';']) {
+        let Some((property, value)) = chunk.split_once(':') else {
+            continue;
+        };
+        let property = property.trim();
+        if property.is_empty() || property.contains(char::is_whitespace) {
+            continue;
+        }
+        found.push((property.to_string(), value.trim().to_string()));
+    }
+    found
+}
+
+fn has_literal_time(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    for (at, _) in value.match_indices(['s']) {
+        let mut start = at;
+        if at > 0 && bytes[at - 1] == b'm' {
+            start -= 1;
+        }
+        let digits = value[..start]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .count();
+        let boundary = value[..start - digits]
+            .chars()
+            .last()
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-');
+        let after = value[at + 1..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        if digits > 0 && boundary && after {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn the_web_settings_page_takes_sizes_times_and_shadows_from_the_theme() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let styles = workspace.join("apps/tray/ui/styles");
+    let tokens = fs::read_to_string(styles.join("theme-tokens.css")).expect("read tokens");
+    let mut problems = Vec::new();
+    for (name, value) in css_declarations(&tokens) {
+        if (name.starts_with("--fs-") || name.starts_with("--dur-"))
+            && !value.starts_with("var(--qol-")
+        {
+            problems.push(format!("theme-tokens.css {name}: {value}"));
+        }
+    }
+    let mut files: Vec<_> = fs::read_dir(&styles)
+        .expect("read styles")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "css"))
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name != "generated-theme-tokens.css")
+        })
+        .collect();
+    files.sort();
+    for path in files {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let css = fs::read_to_string(&path).expect("read css");
+        for (property, value) in css_declarations(&css) {
+            let value = value.replace('\n', " ");
+            let bad = match property.as_str() {
+                "font-size" => {
+                    !(value.starts_with("var(--qol-")
+                        || value.starts_with("var(--fs-")
+                        || value == "0"
+                        || value == "inherit")
+                }
+                "transition" | "animation" | "transition-duration" | "animation-duration" => {
+                    has_literal_time(&value)
+                }
+                "box-shadow" => {
+                    !(value == "none"
+                        || value
+                            .split(", ")
+                            .all(|layer| layer.starts_with("var(--qol-")))
+                }
+                "border-left-color" => true,
+                "border-left" => {
+                    ["accent", "success", "danger", "warning"]
+                        .iter()
+                        .any(|hue| {
+                            value.contains(&format!("var(--{hue}"))
+                                || value.contains(&format!("--{hue}-rgb"))
+                        })
+                        && !value.starts_with("14px")
+                }
+                _ => false,
+            };
+            if bad {
+                problems.push(format!("{name} {property}: {value}"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "The web settings page sets text sizes, times and shadows through the generated --qol-* tokens and never draws a coloured side line.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn every_chip_badge_and_pill_is_the_kit_chip() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if relative.ends_with("libs/gpui/src/kit.rs") || relative.contains("gamepad/diagram/") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        for (at, _) in body.match_indices("fn ") {
+            let rest = &body[at + 3..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !(name.ends_with("_chip") || name.ends_with("_badge") || name.ends_with("_pill")) {
+                continue;
+            }
+            let signature = rest.split('{').next().unwrap_or_default();
+            if !signature.contains("-> Div") && !signature.contains("impl IntoElement") {
+                continue;
+            }
+            let end = rest.find("\n}\n").unwrap_or(rest.len());
+            if !rest[..end].contains(".chip(") {
+                problems.push(format!("{relative}: {name} draws a chip by hand"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A chip, badge or pill is kit.chip(Chip::Key | KeyText | Count | Status | Tag, ground).\n{}",
+        problems.join("\n")
+    );
+}
+
+const HEADING_TEXT_OWNERS: [&str; 3] = [
+    "libs/gpui/src/kit.rs",
+    "libs/gpui/src/settings_panel/components/mod.rs",
+    "plugins/launcher/src/ui/view.rs",
+];
+
+#[test]
+fn every_heading_notice_and_empty_list_is_a_kit_part() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        if !HEADING_TEXT_OWNERS.contains(&relative.as_str()) {
+            for style in ["Heading", "Masthead", "Colophon"] {
+                if body.contains(&format!(".text(TextStyle::{style})")) {
+                    problems.push(format!(
+                        "{relative} sets TextStyle::{style} itself; use kit.heading or kit.heading_title"
+                    ));
+                }
+            }
+        }
+        if relative != "libs/gpui/src/kit.rs" {
+            for (needle, part) in [
+                ("fn empty_state", ".empty("),
+                ("fn render_compact", ".notice("),
+                ("fn render_status", ".notice("),
+                ("fn tone_bar", ".notice("),
+            ] {
+                let Some(at) = body.find(needle) else {
+                    continue;
+                };
+                let rest = &body[at..];
+                let end = rest.find("\n}\n").unwrap_or(rest.len());
+                if !rest[..end].contains(part) {
+                    problems.push(format!("{relative} draws {needle} by hand; use kit{part}"));
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Headings, notices and empty lists are kit parts.\n{}",
+        problems.join("\n")
+    );
+}
+
+const FRAMED_WINDOWS: [&str; 8] = [
+    "libs/gpui/src/settings_panel/view/mod.rs",
+    "libs/gpui/src/toast.rs",
+    "plugins/cli-sessions/src/ui/render.rs",
+    "plugins/launcher/src/ui/render.rs",
+    "plugins/removeapp/src/ui/mod.rs",
+    "plugins/shot/src/ui/editor/render.rs",
+    "plugins/shot/src/ui/pinned.rs",
+    "plugins/shot/src/ui/preview.rs",
+];
+
+#[test]
+fn every_window_frame_is_kit_window() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for file in FRAMED_WINDOWS {
+        let contents = fs::read_to_string(workspace.join(file)).expect("read window source");
+        if !contents.contains(".window()") {
+            problems.push(format!("{file} draws its own window frame"));
+        }
+    }
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        if contents.contains("fn surface_shadow") || contents.contains("fn panel_shadow") {
+            problems.push(format!("{relative} keeps its own window shadow"));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A window is kit.window(): square, the float shadow and the edge hairline.\n{}",
+        problems.join("\n")
+    );
 }

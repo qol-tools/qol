@@ -1,11 +1,10 @@
-use std::time::Duration;
-
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, Animation, AnimationExt as _, AnyElement, App, Div, ElementId, Hsla, RenderOnce,
-    Window,
+    div, px, rgb, AnimationExt as _, AnyElement, App, Div, ElementId, Hsla, RenderOnce, Window,
 };
 use qol_theme::SystemPalette;
+use qol_theme::TextStyle;
 
 pub mod model;
 pub mod motion;
@@ -20,8 +19,6 @@ const HEAD_SIZE: f32 = 7.0;
 const LINE_WIDTH: f32 = 1.5;
 const LINE_CX: f32 = PAD_X + 6.0;
 const TEXT_LEFT: f32 = PAD_X + 24.0;
-const META_LINE_HEIGHT: f32 = 15.0;
-const BODY_LINE_HEIGHT: f32 = 18.0;
 const META_GAP: f32 = 8.0;
 const META_BODY_GAP: f32 = 2.0;
 
@@ -155,10 +152,8 @@ impl RenderOnce for Trail {
             .child(inner().with_animations(
                 animation_id,
                 vec![
-                    Animation::new(Duration::from_millis(motion::TRAVEL_MS))
-                        .with_easing(motion::ease_travel),
-                    Animation::new(Duration::from_millis(motion::DRAIN_MS))
-                        .with_easing(motion::ease_drain),
+                    crate::motion::animation(qol_theme::Motion::TRAVEL),
+                    crate::motion::animation(qol_theme::Motion::QUICK),
                 ],
                 move |inner, ix, delta| {
                     let phase = if ix == 0 {
@@ -304,7 +299,7 @@ fn gutter_children(lit: bool, fill: f32, dot_y: f32, palette: SystemPalette) -> 
                 .top(px(dot_y - glow_size / 2.0))
                 .size(px(glow_size))
                 .rounded_full()
-                .bg(glow.opacity(0.22 * fill))
+                .bg(glow.opacity(qol_theme::Alpha::Edge.unit() * fill))
                 .into_any_element(),
             div()
                 .absolute()
@@ -323,7 +318,7 @@ fn gutter_children(lit: bool, fill: f32, dot_y: f32, palette: SystemPalette) -> 
             .size(px(DOT_SIZE))
             .rounded_full()
             .bg(rgb(palette.surface_elevated))
-            .border(px(1.5))
+            .border(px(qol_theme::LINE))
             .border_color(rgb(palette.border_subtle))
             .into_any_element()]
     }
@@ -381,13 +376,12 @@ fn node(
         palette.text_muted
     };
     let mut body = div()
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .line_height(px(BODY_LINE_HEIGHT))
+        .text(TextStyle::Detail)
         .text_color(rgb(body_tone))
         .line_clamp(3)
         .child(item.text.clone());
     if index > here && !item.struck {
-        body = body.opacity(0.72);
+        body = body.opacity(qol_theme::OPACITY_REST);
     }
     if item.struck {
         body = body.line_through();
@@ -411,8 +405,7 @@ fn node(
                 div()
                     .flex()
                     .gap(px(META_GAP))
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .line_height(px(META_LINE_HEIGHT))
+                    .text(TextStyle::Detail)
                     .child(div().text_color(rgb(at_tone)).child(item.at.clone()))
                     .child(
                         div()

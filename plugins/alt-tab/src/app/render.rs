@@ -10,9 +10,10 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
 use qol_gpui::kit::float_shadow;
-use qol_gpui::theme::{
-    runtime_theme, PickerSurfacePalette, SystemPalette, TEXT_CAPTION, TEXT_NANO,
-};
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
+use qol_gpui::theme::{runtime_theme, PickerSurfacePalette, SystemPalette, SPACE_GUTTER};
+use qol_gpui::Key;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -49,12 +50,11 @@ struct CardRenderContext<'a> {
     fresh: &'a FreshFrame,
     icons: &'a IconMap,
     entity: WeakEntity<AltTabApp>,
-    window: &'a Window,
-    app: &'a App,
 }
 
 impl Render for AltTabApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         let visible = self.is_active_visible();
         #[cfg(debug_assertions)]
         if let Some(p) = self.pending_cycle.take() {
@@ -169,13 +169,11 @@ impl Render for AltTabApp {
             fresh: &d.fresh,
             icons: &d.icon_cache,
             entity,
-            window,
-            app: cx,
         };
         let grid = render_grid(&d.windows, &render_context);
 
         let panel = div()
-            .font_family(qol_gpui::theme::font_ui())
+            .text(TextStyle::Value)
             .id("alt-tab-panel")
             .track_focus(&self.focus_handle)
             .flex()
@@ -194,11 +192,7 @@ impl Render for AltTabApp {
                     .on_click(|_, _, cx| cx.stop_propagation())
             })
             .when(!snap.transparent_bg && snap.show_debug_overlay, |s| {
-                s.child(header_bar(
-                    "Alt Tab  ·  Live Window Grid",
-                    "↑↓←→ navigate  ·  ⏎ switch  ·  Esc close",
-                    &snap,
-                ))
+                s.child(header_bar(&snap))
             })
             .child(grid)
             .when(snap.show_hotkey_hints, |s| s.child(hint_bar(panel_w)));
@@ -283,15 +277,14 @@ fn probe_rendered_front(
 fn hint_bar(available_width: f32) -> Div {
     let kit = qol_gpui::kit::kit();
     let items = [
-        BarItem::Hint(HintDescriptor::new("\u{2325}\u{21E5}", "next", 3)),
-        BarItem::Hint(HintDescriptor::new(
-            "\u{2325}\u{21E7}\u{21E5}",
-            "previous",
-            2,
-        )),
-        BarItem::Hint(HintDescriptor::new("W", "close window", 1)),
+        BarItem::Hint(HintDescriptor::new(Key::TAB.alt(), "next", 3)),
+        BarItem::Hint(HintDescriptor::new(Key::TAB.alt().shift(), "previous", 2)),
+        BarItem::Hint(HintDescriptor::new(Key::letter('w'), "close window", 1)),
     ];
-    let mut bar = kit.hint_bar().justify_center().gap(px(26.0));
+    let mut bar = kit
+        .hint_bar()
+        .justify_center()
+        .gap(px(qol_gpui::theme::SPACE_GUTTER));
     for item in fit_hints(available_width, &items) {
         if let BarItem::Hint(hint) = item {
             bar = bar.child(kit.hint(hint.key, hint.label));
@@ -300,61 +293,70 @@ fn hint_bar(available_width: f32) -> Div {
     bar
 }
 
-fn header_bar(left: &str, right: &str, snap: &RenderSnap) -> Div {
-    let system = &snap.system;
-    div()
-        .px_4()
-        .py_2()
+fn header_bar(snap: &RenderSnap) -> Div {
+    let kit = qol_gpui::kit::kit();
+    kit.heading("alt tab", Some("live window grid".into()))
         .border_b_1()
-        .border_color(rgb(system.border_subtle))
+        .border_color(rgb(snap.system.border_subtle))
         .bg(rgb(snap.palette.header_bg))
-        .flex()
-        .items_center()
-        .justify_between()
         .child(
             div()
-                .text_color(rgb(snap.palette.header_left_text))
-                .text_size(px(TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(left.to_string()),
-        )
-        .child(
-            div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_GUTTER))
                 .text_color(rgb(snap.palette.header_right_text))
-                .text_size(px(TEXT_CAPTION))
-                .child(right.to_string()),
+                .text(TextStyle::Hint)
+                .child(kit.hint(Key::ARROWS, "navigate"))
+                .child(kit.hint(Key::ENTER, "switch"))
+                .child(kit.hint(Key::ESC, "close")),
         )
 }
 
 fn render_grid(windows: &[WindowInfo], context: &CardRenderContext<'_>) -> Div {
-    div().flex_1().w_full().min_h_0().child(
-        div()
-            .id("preview-grid")
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .content_start()
-            .w_full()
-            .h_full()
-            .track_scroll(context.grid_scroll)
-            .overflow_y_scroll()
-            .px_5()
-            .py(px(18.0))
-            .gap_4()
-            .when(windows.is_empty(), |s| {
-                s.items_center().justify_center().child(qol_gpui::Busy::new(
-                    "alt-tab-scanning",
-                    "Scanning windows",
-                    rgb(context.snap.palette.grid_empty_text),
-                ))
-            })
-            .children(
-                windows
-                    .iter()
-                    .enumerate()
-                    .map(|(i, win)| render_card(i, win, context)),
-            ),
-    )
+    let kit = qol_gpui::kit::kit();
+    let cue = (!context.snap.transparent_bg).then(|| {
+        kit.scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Handle {
+                handle: context.grid_scroll.clone(),
+                children: windows.len(),
+            },
+            kit.grounds.pane,
+        )
+    });
+    div()
+        .relative()
+        .flex_1()
+        .w_full()
+        .min_h_0()
+        .child(
+            div()
+                .id("preview-grid")
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .content_start()
+                .w_full()
+                .h_full()
+                .track_scroll(context.grid_scroll)
+                .overflow_y_scroll()
+                .px(px(qol_gpui::theme::SPACE_GUTTER))
+                .py(px(qol_gpui::theme::SPACE_PAD))
+                .gap(px(qol_gpui::theme::SPACE_PAD))
+                .when(windows.is_empty(), |s| {
+                    s.items_center().justify_center().child(qol_gpui::Busy::new(
+                        "alt-tab-scanning",
+                        "Scanning windows",
+                        rgb(context.snap.palette.grid_empty_text),
+                    ))
+                })
+                .children(
+                    windows
+                        .iter()
+                        .enumerate()
+                        .map(|(i, win)| render_card(i, win, context)),
+                ),
+        )
+        .children(cue)
 }
 
 fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> Div {
@@ -394,15 +396,7 @@ fn render_card(i: usize, win: &WindowInfo, context: &CardRenderContext<'_>) -> D
                 .map(|el| card_bg(el, is_selected, snap))
                 .when(!is_selected, |el| el.opacity(snap.unselected_card_opacity))
                 .child(render_preview(win, context, &stepped))
-                .child(render_label(
-                    i,
-                    win,
-                    snap,
-                    &stepped,
-                    context.label_config,
-                    context.window,
-                    context.app,
-                )),
+                .child(render_label(i, win, snap, &stepped, context.label_config)),
         )
 }
 
@@ -422,13 +416,11 @@ fn card_bg(el: Stateful<Div>, selected: bool, snap: &RenderSnap) -> Stateful<Div
     if !snap.visible {
         return base.bg(rgb(snap.palette.card_bg));
     }
-    base.bg(rgb(snap.palette.card_bg)).hover(|mut h| {
-        h.background = Some(rgb(snap.palette.card_hover_bg).into());
-        h
-    })
+    qol_gpui::kit::kit().pointable(
+        base.bg(rgb(snap.palette.card_bg)),
+        rgb(snap.palette.card_hover_bg),
+    )
 }
-
-const FRESH_FRAME_FADE: std::time::Duration = std::time::Duration::from_millis(180);
 
 fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &CardMetrics) -> Div {
     let snap = context.snap;
@@ -489,7 +481,7 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &C
                     img(icon)
                         .w(px(icon_px - 2.0))
                         .h(px(icon_px - 2.0))
-                        .opacity(0.8),
+                        .opacity(qol_gpui::theme::OPACITY_REST),
                 );
             match snap.icon_position {
                 PreviewIconPosition::TopLeft => el.child(icon.left(px(inset_px))),
@@ -504,17 +496,13 @@ fn render_label(
     snap: &RenderSnap,
     metrics: &CardMetrics,
     label_config: &LabelConfig,
-    window: &Window,
-    cx: &App,
 ) -> Div {
     let selected = snap.selected_index == Some(i);
     let palette = &snap.palette;
     let label = label_text(i, win, snap, label_config);
-    let line_height_px = metrics.label_line_height_px(label_config.size.factor());
     let label_slot_px = metrics.label_strip_height;
     let label_padding_px = (metrics.scale * 3.0).clamp(3.0, 7.0);
     let label_width_px = (metrics.preview_width - label_padding_px * 2.0).max(1.0);
-    let font_weight = FontWeight::NORMAL;
     let primary_color = rgb(if selected {
         palette.label_selected_text
     } else {
@@ -543,15 +531,7 @@ fn render_label(
         return base;
     }
 
-    base.child(render_single_label(
-        label,
-        label_width_px,
-        line_height_px,
-        font_weight,
-        primary_color,
-        window,
-        cx,
-    ))
+    base.child(render_single_label(label, label_width_px, primary_color))
 }
 
 fn label_text(i: usize, win: &WindowInfo, snap: &RenderSnap, label_config: &LabelConfig) -> String {
@@ -579,36 +559,15 @@ fn label_text(i: usize, win: &WindowInfo, snap: &RenderSnap, label_config: &Labe
     }
 }
 
-fn render_single_label(
-    label: String,
-    width_px: f32,
-    line_height_px: f32,
-    font_weight: FontWeight,
-    color: Rgba,
-    window: &Window,
-    cx: &App,
-) -> Div {
-    let label = qol_gpui::text::truncate_to_width(
-        &label,
-        window.text_style().font(),
-        TEXT_CAPTION,
-        font_weight,
-        width_px,
-        "…",
-        cx,
-    );
+fn render_single_label(label: String, width_px: f32, color: Rgba) -> Div {
     div()
         .w(px(width_px))
         .max_w(px(width_px))
         .flex_none()
         .min_w(px(0.))
         .text_center()
-        .text_size(px(TEXT_CAPTION))
-        .line_height(px(line_height_px))
-        .font_weight(font_weight)
+        .text(TextStyle::ListName)
         .text_color(color)
-        .truncate()
-        .overflow_hidden()
         .child(label)
 }
 
@@ -658,7 +617,7 @@ fn fade_in(
                 .bg(rgb(palette.placeholder_bg))
                 .with_animation(
                     ("fresh-frame", generation),
-                    Animation::new(FRESH_FRAME_FADE).with_easing(ease_out_quint()),
+                    qol_gpui::motion::animation(qol_gpui::theme::Motion::SETTLE),
                     |overlay, delta| overlay.opacity(1.0 - delta),
                 ),
         )
@@ -692,9 +651,11 @@ fn empty_placeholder(
     border_subtle: u32,
 ) -> AnyElement {
     placeholder_frame(metrics, palette, border_subtle)
-        .text_size(px(TEXT_NANO))
-        .text_color(rgb(palette.placeholder_text))
-        .child("...")
+        .child(qol_gpui::icon::icon(
+            qol_gpui::Icon::More,
+            TextStyle::Detail.spec().size,
+            palette.placeholder_text,
+        ))
         .into_any_element()
 }
 

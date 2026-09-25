@@ -1,3 +1,4 @@
+use qol_gpui::key::Key;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
@@ -5,6 +6,7 @@ use gpui::prelude::*;
 use gpui::*;
 use qol_gpui::activity_animation::ActivityAnimation;
 use qol_gpui::kit::kit;
+use qol_gpui::kit::Kit;
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::settings_panel::components::{
     settings_label, settings_label_group, settings_page, settings_value_group, RowGround,
@@ -12,12 +14,11 @@ use qol_gpui::settings_panel::components::{
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
-    settings_busy_message, settings_description, settings_value_text, CustomHints,
+    settings_busy_message, settings_description, settings_list, settings_value_text, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
 };
 use qol_gpui::surface::SurfaceDismisser;
-use qol_gpui::theme::{settings_panel_runtime, SettingsPanelPalette};
 
 use super::data;
 use super::model::{
@@ -28,8 +29,6 @@ use super::model::{
 const MAX_VISIBLE: usize = 10;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_STALE_AFTER: Duration = Duration::from_secs(5);
-const FINISHED_SHOWN: Duration = Duration::from_secs(4);
-const FINISHED_FADE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Selection {
@@ -186,7 +185,9 @@ impl UpdatesView {
 
     fn forget_faded(&mut self) {
         self.visited.retain(|_, since| {
-            since.is_none_or(|since| since.elapsed() < FINISHED_SHOWN + FINISHED_FADE)
+            since.is_none_or(|since| {
+                since.elapsed() < qol_theme::STAY_BRIEF + qol_theme::Motion::FADE.duration
+            })
         });
     }
 
@@ -366,12 +367,8 @@ impl UpdatesView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self.snapshot.is_none() {
-            return settings_busy_message(
-                "updates-loading",
-                "Loading updates",
-                settings_panel_runtime(),
-            )
-            .into_any_element();
+            return settings_busy_message("updates-loading", "Loading updates", kit())
+                .into_any_element();
         }
         settings_page()
             .child(self.render_list(rows, fold, cx))
@@ -386,13 +383,8 @@ impl UpdatesView {
     ) -> AnyElement {
         let total = rows.len();
         let last = total.checked_sub(1);
-        let mut list = div()
+        let mut list = settings_list()
             .id("updates-list")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(qol_theme::SPACE_TIGHT))
             .on_scroll_wheel(
                 cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let rows = wheel_rows(&event.delta, qol_theme::HEIGHT_SETTING_ROW);
@@ -413,18 +405,27 @@ impl UpdatesView {
                 seen.iter()
                     .rposition(|row| matches!(row, PageRow::Header { .. }))
             });
-        for index in self.list.visible_range(total) {
+        let range = self.list.visible_range(total);
+        for index in range.clone() {
             let current = self.body_focused && cursor_group == Some(index);
             list = list.child(self.render_row(index, &rows[index], current, cx));
             if Some(index) == last {
                 list = list.children(fold.map(|text| self.render_fold(text)));
             }
         }
+        list = list.child(kit().scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Window {
+                first: range.start,
+                shown: range.len(),
+                total,
+            },
+            kit().grounds.pane,
+        ));
         list.into_any_element()
     }
 
     fn render_fold(&self, text: &str) -> Div {
-        let palette = settings_panel_runtime();
+        let kit = kit();
         div()
             .flex_none()
             .h(px(qol_theme::HEIGHT_CONTROL))
@@ -434,7 +435,7 @@ impl UpdatesView {
             .child(settings_description(
                 text.to_string(),
                 RowGround::of(false, self.body_focused),
-                palette,
+                kit,
             ))
     }
 
@@ -445,10 +446,10 @@ impl UpdatesView {
         current: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = kit();
         match row {
             PageRow::Header { title, detail } => {
-                SettingsGroupHeader::new(title.clone(), Some((*detail).into()), palette)
+                SettingsGroupHeader::new(title.clone(), Some((*detail).into()), kit)
                     .current(current)
                     .into_any_element()
             }
@@ -478,38 +479,39 @@ impl UpdatesView {
         summary: &Summary,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = kit();
         let ground = RowGround::of(self.selected == index, self.body_focused);
-        let row = SettingsRow::setting(("updates-summary", index), palette)
+        let row = SettingsRow::setting(("updates-summary", index), kit)
             .selected(self.selected == index, self.body_focused)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if event.standard_click() {
                     this.select_row(index, Selection::Summary, cx);
                 }
             }));
-        let label = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(qol_theme::SPACE_STACK))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(qol_theme::SPACE_INSET))
-                    .children(summary.busy.then(|| {
-                        settings_action_spinner(("updates-summary-spinner", index), palette)
-                    }))
-                    .children(summary.dot.map(|dot| summary_dot(dot, palette)))
-                    .child(settings_label(summary.label.clone(), palette)),
-            )
-            .child(settings_description(
-                summary.description.clone(),
-                ground,
-                palette,
-            ));
+        let label =
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(qol_theme::SPACE_STACK))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(qol_theme::SPACE_INSET))
+                        .children(summary.busy.then(|| {
+                            settings_action_spinner(("updates-summary-spinner", index), kit)
+                        }))
+                        .children(summary.dot.map(|dot| summary_dot(dot, kit)))
+                        .child(settings_label(summary.label.clone(), kit)),
+                )
+                .child(settings_description(
+                    summary.description.clone(),
+                    ground,
+                    kit,
+                ));
         row.child(label)
             .child(
                 settings_value_group().children(summary.action_label.map(|label| {
@@ -519,7 +521,7 @@ impl UpdatesView {
                         None,
                         false,
                         ground,
-                        palette,
+                        kit,
                     )
                 })),
             )
@@ -527,9 +529,9 @@ impl UpdatesView {
     }
 
     fn render_check(&self, index: usize, check: &CheckRow, cx: &mut Context<Self>) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = kit();
         let ground = RowGround::of(self.selected == index, self.body_focused);
-        let row = SettingsRow::setting("updates-checked", palette)
+        let row = SettingsRow::setting("updates-checked", kit)
             .selected(self.selected == index, self.body_focused)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if event.standard_click() {
@@ -540,20 +542,20 @@ impl UpdatesView {
             check.label,
             Some(check.description.clone().into()),
             ground,
-            palette,
+            kit,
         ))
         .child(
             settings_value_group()
                 .children(
-                    check.checking.then(|| {
-                        settings_action_spinner(("updates-checked-spinner", index), palette)
-                    }),
+                    check
+                        .checking
+                        .then(|| settings_action_spinner(("updates-checked-spinner", index), kit)),
                 )
                 .child(settings_value_text(
                     check.value.clone(),
                     value_tone(check.tone),
                     ground,
-                    palette,
+                    kit,
                 ))
                 .children(check.action_label.map(|label| {
                     settings_action_affordance(
@@ -562,7 +564,7 @@ impl UpdatesView {
                         None,
                         false,
                         ground,
-                        palette,
+                        kit,
                     )
                 })),
         )
@@ -576,9 +578,9 @@ impl UpdatesView {
         selection: Selection,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = kit();
         let ground = RowGround::of(self.selected == index, self.body_focused);
-        let row = SettingsRow::setting(("updates-target", index), palette)
+        let row = SettingsRow::setting(("updates-target", index), kit)
             .selected(self.selected == index, self.body_focused)
             .attention(target.attention)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -590,20 +592,20 @@ impl UpdatesView {
             target.name.clone(),
             target.description.clone().map(Into::into),
             ground,
-            palette,
+            kit,
         ))
         .child(
             settings_value_group()
                 .children(
-                    target.spinner.then(|| {
-                        settings_action_spinner(("updates-target-spinner", index), palette)
-                    }),
+                    target
+                        .spinner
+                        .then(|| settings_action_spinner(("updates-target-spinner", index), kit)),
                 )
                 .child(settings_value_text(
                     target.value.clone(),
                     value_tone(target.tone),
                     ground,
-                    palette,
+                    kit,
                 ))
                 .children(target.action_label.map(|label| {
                     settings_action_affordance(
@@ -612,7 +614,7 @@ impl UpdatesView {
                         None,
                         false,
                         ground,
-                        palette,
+                        kit,
                     )
                 })),
         )
@@ -629,9 +631,9 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
         let (rows, _) = self.page_rows();
         let mut left = Vec::new();
         if let Some(label) = rows.get(self.selected).and_then(PageRow::action_label) {
-            left.push(SettingsHint::new("\u{21b5}", label.to_lowercase()));
+            left.push(SettingsHint::new(Key::ENTER, label.to_lowercase()));
         }
-        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
             question: None,
             left,
@@ -683,8 +685,7 @@ impl Render for UpdatesView {
 }
 
 fn fade_opacity(elapsed: Duration) -> f32 {
-    let faded = elapsed.saturating_sub(FINISHED_SHOWN);
-    1.0 - (faded.as_secs_f32() / FINISHED_FADE.as_secs_f32()).min(1.0)
+    1.0 - qol_theme::Motion::FADE.progress(elapsed.saturating_sub(qol_theme::STAY_BRIEF))
 }
 
 fn finished(state: TargetState) -> bool {
@@ -705,12 +706,11 @@ fn nearest_navigable(navigable: &[(usize, Selection)], index: usize) -> usize {
         .unwrap_or_else(|| navigable.len().saturating_sub(1))
 }
 
-fn summary_dot(dot: SummaryDot, palette: SettingsPanelPalette) -> Div {
-    let kit = kit();
+fn summary_dot(dot: SummaryDot, kit: Kit) -> Div {
     let (tone, halo) = match dot {
-        SummaryDot::Danger => (palette.status_danger, kit.washes.halo_invalid),
-        SummaryDot::Warning => (palette.status_warning, kit.washes.halo_attention),
-        SummaryDot::Success => (palette.status_success, kit.washes.halo_success),
+        SummaryDot::Danger => (kit.palette.danger, kit.washes.halo_invalid),
+        SummaryDot::Warning => (kit.palette.warning, kit.washes.halo_attention),
+        SummaryDot::Success => (kit.palette.success, kit.washes.halo_success),
     };
     kit.status_dot(tone, halo.packed())
 }
@@ -772,7 +772,13 @@ mod tests {
 
     #[test]
     fn finished_row_holds_then_fades_out() {
-        let cases = [(0, 1.0), (4000, 1.0), (4500, 0.5), (5000, 0.0), (9000, 0.0)];
+        let cases = [
+            (0, 1.0),
+            (4000, 1.0),
+            (4500, 0.03125),
+            (5000, 0.0),
+            (9000, 0.0),
+        ];
         for (millis, expected) in cases {
             let opacity = fade_opacity(Duration::from_millis(millis));
             assert!(

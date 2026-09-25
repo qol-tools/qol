@@ -2,13 +2,14 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use qol_gpui::kit::Chip;
 use qol_gpui::text::shaped_width;
+use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
-use qol_gpui::theme::{
-    launcher_runtime, LauncherPalette, RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO, TEXT_NANO,
-    TEXT_TITLE,
-};
+use qol_gpui::theme::TextStyle;
+use qol_gpui::theme::{RADIUS_CARD, RADIUS_TIGHT, TEXT_BODY, TEXT_MICRO};
 use qol_gpui::trail::{Trail, TrailItem};
+use qol_gpui::Key;
 
 use super::layout::{FLOW_ROW_HEIGHT, HEADER_HEIGHT, WINDOW_WIDTH};
 use super::menu::MenuKind;
@@ -22,10 +23,6 @@ pub const CARD_HEIGHT: f32 = 116.0;
 // so it has to end one PAD_TOP short of the next slot to keep that rhythm.
 const CARD_GAP: f32 = qol_gpui::trail::motion::PAD_TOP;
 const CARD_DOT_CY: f32 = 36.0;
-
-fn current_palette() -> LauncherPalette {
-    launcher_runtime()
-}
 
 pub struct SearchBarStatus {
     pub mode: Option<SearchMode>,
@@ -43,15 +40,13 @@ pub fn search_bar(
     cx: &mut Context<LauncherView>,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
-    let chevron_font = window.text_style().font().bold();
     let mono_font = font(qol_gpui::theme::font_mono());
-    let mono_advance = shaped_width(window, "0", mono_font.clone(), TEXT_BODY);
+    let mono_advance = shaped_width(window, "0", mono_font.clone(), TextStyle::Code.spec().size);
     let trailing = if status.mode.is_some() { 94.0 } else { 40.0 };
-    let chevron_width = shaped_width(window, "\u{203A}", chevron_font, TEXT_BODY);
     let visible = text_edit::visible_char_count(
         WINDOW_WIDTH
             - 2.0 * qol_gpui::theme::SPACE_PAD
-            - chevron_width
+            - TEXT_BODY
             - 2.0 * 10.0
             - trailing
             - CARET_WIDTH,
@@ -64,24 +59,20 @@ pub fn search_bar(
         .flex()
         .items_center()
         .px(px(qol_gpui::theme::SPACE_PAD))
-        .gap(px(10.0))
-        .bg(rgb(current_palette().bg))
-        .border_b(px(1.0))
+        .gap(px(qol_gpui::theme::SPACE_INSET))
+        .bg(rgb(qol_gpui::kit::kit().grounds.pane.bg))
+        .border_b(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
-        .child(
-            div()
-                .flex_none()
-                .text_color(rgb(kit.palette.accent_ink))
-                .text_size(px(TEXT_BODY))
-                .font_weight(FontWeight::BOLD)
-                .child("\u{203A}"),
-        )
+        .child(qol_gpui::icon::icon(
+            qol_gpui::Icon::Prompt,
+            TEXT_BODY,
+            kit.palette.accent_ink,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
                 .flex()
                 .flex_col()
                 .justify_center()
@@ -89,21 +80,21 @@ pub fn search_bar(
                     div()
                         .h(px(18.))
                         .overflow_hidden()
-                        .text_size(px(TEXT_BODY))
-                        .text_color(rgb(current_palette().text))
+                        .text(TextStyle::Code)
+                        .text_color(rgb(qol_gpui::kit::kit().grounds.pane.soft))
                         .flex()
                         .items_center()
                         .child({
                             let element = TextFieldElement::new(field, visible, mono_advance)
                                 .selection(
-                                    rgb(current_palette().bg_selected).into(),
-                                    Some(rgb(current_palette().text).into()),
+                                    rgb(qol_gpui::kit::kit().grounds.band.bg).into(),
+                                    Some(rgb(qol_gpui::kit::kit().grounds.pane.soft).into()),
                                 );
                             let element = if status.list_focused {
                                 element
                             } else {
                                 element.caret(CaretStyle {
-                                    color: rgb(current_palette().highlight).into(),
+                                    color: rgb(qol_gpui::kit::kit().palette.accent_ink).into(),
                                     width: CARET_WIDTH,
                                     height: 16.0,
                                     top: 1.0,
@@ -113,7 +104,7 @@ pub fn search_bar(
                             element
                                 .placeholder(
                                     placeholder.to_owned(),
-                                    rgb(current_palette().text_muted).into(),
+                                    rgb(qol_gpui::kit::kit().grounds.pane.faint).into(),
                                 )
                                 .render()
                         }),
@@ -121,17 +112,15 @@ pub fn search_bar(
                 .when_some(launch_error, |field, error| {
                     field.child(
                         div()
-                            .h(px(12.))
-                            .overflow_hidden()
-                            .text_color(rgb(current_palette().highlight_warm))
-                            .text_size(px(TEXT_NANO))
+                            .text(TextStyle::Detail)
+                            .text_color(rgb(qol_gpui::kit::kit().palette.warning_ink))
                             .child(error.to_owned()),
                     )
                 }),
         )
         .when_some(status.mode, |bar, mode| {
             bar.child(
-                kit.chip(mode.label(), kit.palette.accent_ink)
+                kit.chip(Chip::Tag(mode.label().into()), kit.grounds.pane)
                     .id("launcher-search-mode")
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -141,7 +130,7 @@ pub fn search_bar(
         })
         .when(status.pending, |bar| {
             bar.child(
-                qol_gpui::Spinner::new("flow-pending", rgb(kit.palette.accent_ink))
+                qol_gpui::Busy::ring("flow-pending", rgb(kit.palette.accent_ink))
                     .size(px(TEXT_BODY)),
             )
         })
@@ -155,18 +144,19 @@ pub fn search_bar(
                 .items_center()
                 .gap(px(qol_gpui::theme::SPACE_TIGHT))
                 .rounded(px(RADIUS_TIGHT))
-                .border(px(1.0))
+                .border(px(qol_gpui::theme::LINE))
                 .border_color(rgba(if status.help_open {
                     kit.washes.accent_border.packed()
                 } else {
                     kit.washes.hairline_strong.packed()
                 }))
                 .bg(rgba(kit.washes.fill_resting.packed()))
-                .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
                 .cursor_pointer()
-                .text_color(rgb(kit.palette.text_secondary))
-                .text_size(px(TEXT_MICRO))
-                .child("\u{2026}")
+                .child(qol_gpui::icon::icon(
+                    qol_gpui::Icon::More,
+                    TEXT_MICRO,
+                    kit.palette.text_secondary,
+                ))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.toggle_menu(MenuKind::Help, cx);
                 })),
@@ -186,22 +176,22 @@ pub fn row_action(
     source: ResultSource,
     held: &Modifiers,
     list_focused: bool,
-) -> (&'static str, &'static str) {
+) -> (Key, &'static str) {
     let secondary = held.secondary();
     if held.shift
         && !secondary
         && !held.alt
         && matches!(source, ResultSource::App | ResultSource::File)
     {
-        return ("Shift+\u{21b5}", "open folder");
+        return (Key::ENTER.shift(), "open folder");
     }
     if held.alt && !held.shift {
-        return ("Alt+\u{21b5}", "options");
+        return (Key::ENTER.alt(), "options");
     }
     if list_focused && secondary && !held.shift && matches!(source, ResultSource::App) {
-        return ("Ctrl+\u{2192}", "raise rank");
+        return (Key::RIGHT.secondary(), "raise rank");
     }
-    ("\u{21b5}", "open")
+    (Key::ENTER, "open")
 }
 
 pub fn match_percent(score: i32, best: i32, worst: i32) -> u8 {
@@ -223,7 +213,7 @@ pub fn result_row(
     list_focused: bool,
 ) -> Div {
     let kit = qol_gpui::kit::kit();
-    let band = qol_gpui::theme::settings_panel_runtime().grounds.band;
+    let band = kit.grounds.band;
     let positions = &scored.m.positions;
     let highlights = if selected && !positions.is_empty() {
         char_highlights(name, positions, band.ink)
@@ -239,13 +229,6 @@ pub fn result_row(
         .flex()
         .items_center()
         .gap(px(12.0))
-        .map(|row| {
-            if selected {
-                row.bg(rgb(band.bg))
-            } else {
-                row.hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
-            }
-        })
         .child(kit.letter_tile(name))
         .child(
             div()
@@ -255,9 +238,9 @@ pub fn result_row(
                 .text_color(rgb(if selected {
                     band.ink
                 } else {
-                    current_palette().text_muted
+                    qol_gpui::kit::kit().grounds.pane.faint
                 }))
-                .text_size(px(qol_gpui::theme::TEXT_CAPTION))
+                .text(TextStyle::ListName)
                 .child(styled_name),
         );
     if selected {
@@ -269,11 +252,10 @@ pub fn result_row(
                 .items_center()
                 .gap(px(qol_gpui::theme::SPACE_SNUG))
                 .text_color(rgb(band.soft))
-                .text_size(px(TEXT_NANO))
+                .text(TextStyle::Hint)
                 .child(
-                    kit.keycap(super::menu::display_shortcut(shortcut))
-                        .border_color(rgba(band.edge.packed()))
-                        .text_color(rgb(band.soft)),
+                    kit.keycap_inked(shortcut, band.soft)
+                        .border_color(rgba(band.edge.packed())),
                 )
                 .child(word),
         );
@@ -282,21 +264,18 @@ pub fn result_row(
             .flex()
             .items_center()
             .gap(px(qol_gpui::theme::SPACE_SNUG))
-            .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+            .text(TextStyle::Code)
             .text_color(rgb(band.soft))
-            .text_size(px(TEXT_NANO))
             .child("match")
             .child(
                 div()
                     .text_color(rgb(band.ink))
-                    .font_weight(FontWeight::SEMIBOLD)
                     .child(match_score.to_string()),
             );
         if scored.manual_boost > 0 {
             score = score.child(
                 div()
                     .text_color(rgb(band.ink))
-                    .font_weight(FontWeight::SEMIBOLD)
                     .child(format!("+{}", scored.manual_boost)),
             );
         }
@@ -306,13 +285,12 @@ pub fn result_row(
         row = row.child(
             div()
                 .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text(TextStyle::Label)
                 .text_color(rgb(kit.palette.text_secondary))
-                .text_size(px(TEXT_NANO))
-                .child("flow"),
+                .child(cased(TextStyle::Label, "flow")),
         );
     }
-    row
+    kit.highlight(row, selected)
 }
 
 pub fn trail_body(
@@ -402,10 +380,10 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
     let lead = lead_of(&row.raw);
     let mut card = div()
         .rounded(px(RADIUS_CARD))
-        .border(px(1.0))
+        .border(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .bg(rgb(kit.palette.surface_raised))
-        .py(px(10.0))
+        .py(px(qol_gpui::theme::SPACE_INSET))
         .px(px(12.0))
         .flex()
         .flex_col()
@@ -416,9 +394,8 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
                 .flex_1()
                 .min_w_0()
                 .text_color(rgb(kit.palette.text_primary))
-                .text_size(px(TEXT_TITLE))
-                .line_height(px(24.0))
-                .font_weight(FontWeight::BOLD)
+                .text(TextStyle::Heading)
+                .wraps()
                 .child(lead.clone()),
         );
         if let Some(host) = host_of(&row.raw) {
@@ -433,8 +410,7 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
             card = card.child(
                 div()
                     .text_color(rgb(kit.palette.text_secondary))
-                    .text_size(px(TEXT_MICRO))
-                    .line_height(px(18.0))
+                    .text(TextStyle::Detail)
                     .line_clamp(3)
                     .child(explanation),
             );
@@ -443,22 +419,18 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
         card = card.child(
             div()
                 .text_color(rgb(kit.palette.text_primary))
-                .text_size(px(TEXT_MICRO))
-                .line_height(px(18.0))
+                .text(TextStyle::Detail)
                 .line_clamp(3)
                 .child(copy),
         );
     }
     let mut meta = div().mt(px(4.0)).flex().items_center().gap(px(8.0));
-    meta = meta.child(
-        kit.chip("TRUE NOW", kit.palette.accent)
-            .text_size(px(TEXT_NANO)),
-    );
+    meta = meta.child(kit.chip(Chip::Tag("true now".into()), kit.grounds.pane));
     if let Some(sources) = sources_of(&row.raw).filter(|count| *count >= 2) {
         meta = meta.child(
             div()
                 .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(TEXT_NANO))
+                .text(TextStyle::Detail)
                 .child(format!("{sources} sources agree")),
         );
     }
@@ -466,9 +438,8 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
     if !at.is_empty() {
         meta = meta.child(
             div()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text(TextStyle::Code)
                 .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(TEXT_NANO))
                 .child(at.to_string()),
         );
     }
@@ -483,13 +454,12 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
 
 fn host_tag(kit: &qol_gpui::kit::Kit, host: &str) -> Div {
     div()
-        .px(px(5.0))
+        .px(px(qol_gpui::theme::SPACE_SNUG))
         .rounded(px(RADIUS_TIGHT))
-        .border(px(1.0))
+        .border(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline_strong.packed()))
-        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+        .text(TextStyle::Code)
         .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(TEXT_NANO))
         .child(host.to_string())
 }
 
@@ -505,14 +475,13 @@ fn vague_fence(kit: &qol_gpui::kit::Kit, checking: bool) -> Div {
         .h(px(FLOW_ROW_HEIGHT))
         .flex()
         .items_center()
-        .gap(px(10.0))
+        .gap(px(qol_gpui::theme::SPACE_INSET))
         .px(px(qol_gpui::theme::SPACE_PAD))
         .child(
             div()
                 .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
+                .text(TextStyle::Label)
                 .text_color(rgb(kit.palette.text_secondary))
-                .text_size(px(TEXT_NANO))
                 .child(if checking {
                     "CHECKING ANSWER · RELATED MEMORIES"
                 } else {
@@ -523,14 +492,7 @@ fn vague_fence(kit: &qol_gpui::kit::Kit, checking: bool) -> Div {
 }
 
 pub fn flow_empty_state(kit: &qol_gpui::kit::Kit) -> Div {
-    div()
-        .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(TEXT_MICRO))
-        .child("no memory covers this")
+    kit.empty("no memory covers this", None)
 }
 
 pub fn detail_body(
@@ -541,27 +503,26 @@ pub fn detail_body(
 ) -> Div {
     let text = row.copy.clone().unwrap_or_else(|| row.title.clone());
     let detail = crate::flow::detail_of(&row.raw);
-    let mut fields = div().flex().flex_col().gap(px(5.0));
+    let mut fields = div().flex().flex_col().gap(px(qol_gpui::theme::SPACE_SNUG));
     for (label, value) in &detail {
         fields = fields.child(
             div()
                 .flex()
-                .gap(px(10.0))
+                .gap(px(qol_gpui::theme::SPACE_INSET))
                 .child(
                     div()
                         .w(px(92.0))
                         .flex_none()
                         .text_color(rgb(kit.palette.text_muted))
-                        .text_size(px(TEXT_NANO))
-                        .child(label.to_uppercase()),
+                        .text(TextStyle::Label)
+                        .child(cased(TextStyle::Label, label)),
                 )
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
-                        .truncate()
                         .text_color(rgb(kit.palette.text_secondary))
-                        .text_size(px(TEXT_NANO))
+                        .text(TextStyle::Detail)
                         .child(value.clone()),
                 ),
         );
@@ -579,22 +540,24 @@ pub fn detail_body(
                 .size_full()
                 .flex()
                 .flex_col()
-                .p(px(14.0))
+                .p(px(qol_gpui::theme::SPACE_CELL))
                 .pt(px(16.0))
-                .gap(px(14.0))
+                .gap(px(qol_gpui::theme::SPACE_CELL))
                 .child(
                     div()
                         .text_color(rgb(kit.palette.text_primary))
-                        .text_size(px(TEXT_MICRO))
-                        .line_height(px(18.0))
+                        .text(TextStyle::Detail)
+                        .wraps()
                         .child(text),
                 )
                 .when(!detail.is_empty(), |body| body.child(fields)),
         )
-        .child(qol_gpui::scrollbar::seam_track(
-            scroll.clone(),
-            qol_gpui::kit::alpha(kit.palette.border_subtle, 0x48),
-            qol_gpui::kit::alpha(kit.palette.text_secondary, 0x8c),
+        .child(kit.scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Handle {
+                handle: scroll.clone(),
+                children: 1 + usize::from(!detail.is_empty()),
+            },
+            kit.grounds.pane,
         ))
 }
 
@@ -606,20 +569,20 @@ pub fn hint_bar_flow(entry: &FlowEntry) -> Div {
         .and_then(|action| action.label.as_deref())
         .unwrap_or("copy");
     kit.hint_bar()
-        .child(kit.hint("\u{23CE}", enter_label.to_owned()))
-        .child(kit.hint("\u{2193}", "back in time"))
-        .child(kit.hint("\u{2191}", "forward"))
-        .child(kit.hint("esc", "back"))
-        .child(kit.chip(entry.title.clone(), kit.palette.accent))
+        .child(kit.hint(Key::ENTER, enter_label.to_owned()))
+        .child(kit.hint(Key::DOWN, "back in time"))
+        .child(kit.hint(Key::UP, "forward"))
+        .child(kit.hint(Key::ESC, "back"))
+        .child(kit.chip(Chip::Tag(entry.title.clone().into()), kit.grounds.pane))
         .child(div().flex_1())
 }
 
 pub fn hint_bar_detail() -> Div {
     let kit = qol_gpui::kit::kit();
     kit.hint_bar()
-        .child(kit.hint("\u{23CE}", "copy"))
-        .child(kit.hint("\u{2191}\u{2193}", "scroll"))
-        .child(kit.hint("esc", "back"))
+        .child(kit.hint(Key::ENTER, "copy"))
+        .child(kit.hint(Key::UP_DOWN, "scroll"))
+        .child(kit.hint(Key::ESC, "back"))
         .child(div().flex_1())
 }
 
@@ -641,7 +604,7 @@ fn char_highlights(
                 byte_pos..byte_pos + byte_len,
                 HighlightStyle {
                     color: Some(rgb(ink).into()),
-                    font_weight: Some(FontWeight::BOLD),
+                    font_weight: Some(FontWeight::SEMIBOLD),
                     underline: Some(UnderlineStyle {
                         thickness: px(1.5),
                         color: Some(rgb(ink).into()),
@@ -655,7 +618,7 @@ fn char_highlights(
 }
 
 pub fn bg_color() -> gpui::Rgba {
-    rgb(current_palette().bg)
+    rgb(qol_gpui::kit::kit().grounds.pane.bg)
 }
 
 #[cfg(test)]
@@ -666,6 +629,7 @@ mod tests {
     use crate::ui::input::InputEffect;
     use crate::ui::state::LauncherState;
     use gpui::Modifiers;
+    use qol_gpui::Key;
 
     #[test]
     fn empty_line_names_the_mode_tab_switches_to() {
@@ -692,32 +656,32 @@ mod tests {
         let secondary = Modifiers::secondary_key();
         assert_eq!(
             row_action(ResultSource::App, &Modifiers::none(), true),
-            ("\u{21b5}", "open")
+            (Key::ENTER, "open")
         );
         assert_eq!(
             row_action(ResultSource::File, &shift, true),
-            ("Shift+\u{21b5}", "open folder")
+            (Key::ENTER.shift(), "open folder")
         );
         assert_eq!(
             row_action(ResultSource::Flow, &shift, true),
-            ("\u{21b5}", "open")
+            (Key::ENTER, "open")
         );
         assert_eq!(
             row_action(ResultSource::File, &alt, true),
-            ("Alt+\u{21b5}", "options")
+            (Key::ENTER.alt(), "options")
         );
         assert_eq!(
             row_action(ResultSource::App, &secondary, true),
-            ("Ctrl+\u{2192}", "raise rank")
+            (Key::RIGHT.secondary(), "raise rank")
         );
         assert_eq!(
             row_action(ResultSource::App, &secondary, false),
-            ("\u{21b5}", "open"),
+            (Key::ENTER, "open"),
             "the search box keeps Ctrl+arrows for words"
         );
         assert_eq!(
             row_action(ResultSource::File, &secondary, true),
-            ("\u{21b5}", "open")
+            (Key::ENTER, "open")
         );
         assert_eq!(
             LauncherState::new().apply_key("enter", &shift, 1),

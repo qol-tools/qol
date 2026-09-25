@@ -1,3 +1,4 @@
+use crate::key::Key;
 use gpui::prelude::*;
 use gpui::{AnyElement, ClickEvent, KeyDownEvent};
 
@@ -402,7 +403,7 @@ impl SettingsPanelView {
         let current = self.body_has_focus();
         let mut items: Vec<AnyElement> = Vec::new();
         items.push(
-            SettingsGroupHeader::new(label, description.map(Into::into), self.palette)
+            SettingsGroupHeader::new(label, description.map(Into::into), self.kit)
                 .current(current)
                 .into_any_element(),
         );
@@ -415,7 +416,7 @@ impl SettingsPanelView {
                 tile.art,
                 layout,
                 context,
-                self.palette,
+                self.kit,
             )
             .detail(tile.detail.map(Into::into))
             .highlighted(index == highlighted && current)
@@ -451,7 +452,7 @@ impl SettingsPanelView {
             .is_some_and(|tile| tile.saved);
         let mut hints = choose_hints(count);
         if let Some(first) = hints.first_mut() {
-            *first = SettingsHint::new("\u{21b5}", choose_enter_label(multi, saved));
+            *first = SettingsHint::new(Key::ENTER, choose_enter_label(multi, saved));
         }
         hints
     }

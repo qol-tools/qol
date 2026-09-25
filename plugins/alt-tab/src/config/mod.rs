@@ -65,16 +65,6 @@ pub enum LabelSize {
     Large,
 }
 
-impl LabelSize {
-    pub fn factor(&self) -> f32 {
-        match self {
-            LabelSize::Small => 0.8,
-            LabelSize::Medium => 0.92,
-            LabelSize::Large => 1.25,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LabelConfig {

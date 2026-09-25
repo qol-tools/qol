@@ -1,8 +1,12 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-use super::{alpha, glow, scaled};
-use crate::gamepad::{ControllerProfile, ControllerSnapshot, GamepadAxis, GamepadPalette};
+use super::{scaled, SCALE};
+use crate::gamepad::model::ButtonMark;
+use crate::gamepad::{ControllerProfile, ControllerSnapshot, GamepadAxis};
+use crate::icon::{icon, Icon};
+use crate::kit::Kit;
+use qol_theme::{translucent, Alpha};
 
 pub(super) fn stick(
     center: (f32, f32),
@@ -10,7 +14,7 @@ pub(super) fn stick(
     axis_x: GamepadAxis,
     axis_y: GamepadAxis,
     pressed: bool,
-    palette: GamepadPalette,
+    kit: Kit,
 ) -> Div {
     let active = pressed || axis_x.value.abs() > 0.08 || axis_y.value.abs() > 0.08;
     let gate = 114.0;
@@ -23,18 +27,17 @@ pub(super) fn stick(
         .w(scaled(knob))
         .h(scaled(knob))
         .rounded_full()
-        .border_2()
+        .border_1()
         .border_color(if active {
-            rgb(palette.accent)
+            rgb(kit.grounds.pane.mark)
         } else {
-            rgba(alpha(palette.accent, 0x78))
+            rgba(translucent(kit.grounds.pane.mark, Alpha::Veil))
         })
         .bg(if active {
-            rgba(alpha(palette.accent, 0x1e))
+            rgba(translucent(kit.grounds.pane.mark, Alpha::Wash))
         } else {
-            rgb(palette.raised)
+            rgb(kit.grounds.menu.bg)
         })
-        .when(active, |knob| knob.shadow(glow(palette.accent, 16.0)))
         .flex()
         .items_center()
         .justify_center()
@@ -44,7 +47,7 @@ pub(super) fn stick(
                 .inset(scaled(8.0))
                 .rounded_full()
                 .border_1()
-                .border_color(rgba(alpha(palette.text_muted, 0x58))),
+                .border_color(rgba(translucent(kit.grounds.pane.faint, Alpha::Veil))),
         )
         .child(
             div()
@@ -52,9 +55,9 @@ pub(super) fn stick(
                 .text_size(scaled(13.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(rgb(if active {
-                    palette.accent
+                    kit.grounds.pane.mark
                 } else {
-                    palette.text_muted
+                    kit.grounds.pane.faint
                 }))
                 .child(label),
         );
@@ -67,19 +70,19 @@ pub(super) fn stick(
         .rounded_full()
         .border_1()
         .border_color(if active {
-            rgb(palette.accent)
+            rgb(kit.grounds.pane.mark)
         } else {
-            rgba(alpha(palette.accent, 0x78))
+            rgba(translucent(kit.grounds.pane.mark, Alpha::Veil))
         })
-        .bg(rgba(alpha(palette.raised, 0xc8)))
+        .bg(rgba(translucent(kit.grounds.menu.bg, Alpha::Strong)))
         .when(active, |gate| {
             gate.child(
                 div()
                     .absolute()
                     .inset(px(-5.0))
                     .rounded_full()
-                    .border_2()
-                    .border_color(rgba(alpha(palette.accent, 0x28))),
+                    .border_1()
+                    .border_color(rgba(translucent(kit.grounds.pane.mark, Alpha::Halo))),
             )
         })
         .child(
@@ -89,7 +92,7 @@ pub(super) fn stick(
                 .right(scaled(14.0))
                 .top_1_2()
                 .h(px(1.0))
-                .bg(rgba(alpha(palette.text_muted, 0x32))),
+                .bg(rgba(translucent(kit.grounds.pane.faint, Alpha::Halo))),
         )
         .child(
             div()
@@ -98,16 +101,12 @@ pub(super) fn stick(
                 .bottom(scaled(14.0))
                 .left_1_2()
                 .w(px(1.0))
-                .bg(rgba(alpha(palette.text_muted, 0x32))),
+                .bg(rgba(translucent(kit.grounds.pane.faint, Alpha::Halo))),
         )
         .child(knob_element)
 }
 
-pub(super) fn dpad_control(
-    controller: &ControllerSnapshot,
-    center: (f32, f32),
-    palette: GamepadPalette,
-) -> Div {
+pub(super) fn dpad_control(controller: &ControllerSnapshot, center: (f32, f32), kit: Kit) -> Div {
     let pressed = [
         controller.button_pressed(12),
         controller.button_pressed(15),
@@ -116,10 +115,10 @@ pub(super) fn dpad_control(
     ];
     let (cx, cy) = center;
     let arrows = [
-        (0usize, "\u{25B2}", 0.0, -34.0),
-        (1, "\u{25B6}", 36.0, 0.0),
-        (2, "\u{25BC}", 0.0, 34.0),
-        (3, "\u{25C0}", -36.0, 0.0),
+        (0usize, Icon::Up, 0.0, -34.0),
+        (1, Icon::Right, 36.0, 0.0),
+        (2, Icon::Down, 0.0, 34.0),
+        (3, Icon::Left, -36.0, 0.0),
     ];
     div()
         .absolute()
@@ -128,12 +127,12 @@ pub(super) fn dpad_control(
         .w(scaled(116.0))
         .h(scaled(116.0))
         .rounded_full()
-        .border_2()
-        .border_color(rgba(alpha(palette.accent, 0x78)))
-        .bg(rgba(alpha(palette.raised, 0xc8)))
+        .border_1()
+        .border_color(rgba(translucent(kit.grounds.pane.mark, Alpha::Veil)))
+        .bg(rgba(translucent(kit.grounds.menu.bg, Alpha::Strong)))
         .child(
             canvas(
-                move |bounds, _, _| dpad_paths(bounds, pressed, palette),
+                move |bounds, _, _| dpad_paths(bounds, pressed, kit),
                 |_, paths, window, _| {
                     for (path, color) in paths {
                         window.paint_path(path, color);
@@ -152,8 +151,8 @@ pub(super) fn dpad_control(
                 .h(scaled(28.0))
                 .rounded_full()
                 .border_1()
-                .border_color(rgba(alpha(palette.text_muted, 0x58)))
-                .bg(rgb(palette.surface)),
+                .border_color(rgba(translucent(kit.grounds.pane.faint, Alpha::Veil)))
+                .bg(rgb(kit.grounds.pane.bg)),
         )
         .children(arrows.into_iter().map(|(index, glyph, dx, dy)| {
             div()
@@ -165,35 +164,32 @@ pub(super) fn dpad_control(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(scaled(13.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(if pressed[index] {
-                    palette.surface
-                } else {
-                    palette.text_muted
-                }))
-                .child(glyph)
+                .child(icon(
+                    glyph,
+                    13.0 * SCALE,
+                    if pressed[index] {
+                        kit.grounds.pane.bg
+                    } else {
+                        kit.grounds.pane.faint
+                    },
+                ))
         }))
 }
 
-fn dpad_paths(
-    bounds: Bounds<Pixels>,
-    pressed: [bool; 4],
-    palette: GamepadPalette,
-) -> Vec<(Path<Pixels>, Rgba)> {
+fn dpad_paths(bounds: Bounds<Pixels>, pressed: [bool; 4], kit: Kit) -> Vec<(Path<Pixels>, Rgba)> {
     let mut layers = Vec::new();
     if let Some(path) = dpad_plus(bounds, PathBuilder::fill()) {
-        layers.push((path, rgb(palette.raised)));
+        layers.push((path, rgb(kit.grounds.menu.bg)));
     }
     if let Some(path) = dpad_plus(bounds, PathBuilder::stroke(scaled(2.0))) {
-        layers.push((path, rgba(alpha(palette.accent, 0x78))));
+        layers.push((path, rgba(translucent(kit.grounds.pane.mark, Alpha::Veil))));
     }
     for (direction, held) in pressed.iter().enumerate() {
         if !held {
             continue;
         }
         if let Some(path) = dpad_cell(bounds, direction, PathBuilder::fill()) {
-            layers.push((path, rgb(palette.accent)));
+            layers.push((path, rgb(kit.grounds.pane.mark)));
         }
     }
     layers
@@ -295,14 +291,14 @@ pub(super) fn face_controls(
     controller: &ControllerSnapshot,
     profile: ControllerProfile,
     center: (f32, f32),
-    palette: GamepadPalette,
+    kit: Kit,
 ) -> Div {
     let labels = profile.face_labels();
     let controls = [
-        (0, labels[0], 0.0, 40.0, palette.success),
-        (1, labels[1], 40.0, 0.0, palette.danger),
-        (2, labels[2], -40.0, 0.0, palette.info),
-        (3, labels[3], 0.0, -40.0, palette.warning),
+        (0, labels[0], 0.0, 40.0, kit.palette.success),
+        (1, labels[1], 40.0, 0.0, kit.palette.danger),
+        (2, labels[2], -40.0, 0.0, kit.palette.info),
+        (3, labels[3], 0.0, -40.0, kit.palette.warning),
     ];
     div()
         .absolute()
@@ -318,7 +314,7 @@ pub(super) fn face_controls(
                     tone,
                     style: RoundStyle::Face,
                 },
-                palette,
+                kit,
             )
         }))
 }
@@ -326,28 +322,29 @@ pub(super) fn face_controls(
 pub(super) fn center_controls(
     controller: &ControllerSnapshot,
     profile: ControllerProfile,
-    palette: GamepadPalette,
+    kit: Kit,
 ) -> Div {
-    let controls: &[(usize, &'static str, f32, f32, f32)] = match profile {
+    use ButtonMark::{Icon as I, Text as T};
+    let controls: &[(usize, ButtonMark, f32, f32, f32)] = match profile {
         ControllerProfile::Nintendo => &[
-            (8, "−", 350.0, 181.0, 16.0),
-            (9, "+", 450.0, 181.0, 16.0),
-            (16, "⌂", 400.0, 236.0, 23.0),
+            (8, T("−"), 350.0, 181.0, 16.0),
+            (9, T("+"), 450.0, 181.0, 16.0),
+            (16, I(Icon::Home), 400.0, 236.0, 23.0),
         ],
         ControllerProfile::PlayStation => &[
-            (8, "SHARE", 340.0, 178.0, 20.0),
-            (9, "OPTIONS", 460.0, 178.0, 20.0),
-            (16, "PS", 400.0, 248.0, 23.0),
+            (8, T("SHARE"), 340.0, 178.0, 20.0),
+            (9, T("OPTIONS"), 460.0, 178.0, 20.0),
+            (16, T("PS"), 400.0, 248.0, 23.0),
         ],
         ControllerProfile::Xbox => &[
-            (8, "VIEW", 354.0, 215.0, 18.0),
-            (9, "MENU", 446.0, 215.0, 18.0),
-            (16, "Q", 400.0, 164.0, 23.0),
+            (8, T("VIEW"), 354.0, 215.0, 18.0),
+            (9, T("MENU"), 446.0, 215.0, 18.0),
+            (16, T("Q"), 400.0, 164.0, 23.0),
         ],
         ControllerProfile::GuliKit => &[
-            (8, "−", 338.0, 164.0, 16.0),
-            (16, "G", 400.0, 164.0, 23.0),
-            (9, "+", 462.0, 164.0, 16.0),
+            (8, T("−"), 338.0, 164.0, 16.0),
+            (16, T("G"), 400.0, 164.0, 23.0),
+            (9, T("+"), 462.0, 164.0, 16.0),
         ],
     };
     let device_markers: &[(&'static str, f32, f32)] = match profile {
@@ -372,10 +369,10 @@ pub(super) fn center_controls(
                     radius,
                     label,
                     active: controller.button_pressed(index),
-                    tone: palette.accent,
+                    tone: kit.grounds.pane.mark,
                     style: RoundStyle::Center,
                 },
-                palette,
+                kit,
             )
         }))
         .children(device_markers.iter().map(|&(label, x, y)| {
@@ -384,12 +381,12 @@ pub(super) fn center_controls(
                     x,
                     y,
                     radius: 15.0,
-                    label,
+                    label: ButtonMark::Text(label),
                     active: false,
-                    tone: palette.text_muted,
+                    tone: kit.grounds.pane.faint,
                     style: RoundStyle::Marker,
                 },
-                palette,
+                kit,
             )
         }))
 }
@@ -404,13 +401,13 @@ struct RoundControl {
     x: f32,
     y: f32,
     radius: f32,
-    label: &'static str,
+    label: ButtonMark,
     active: bool,
     tone: u32,
     style: RoundStyle,
 }
 
-fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
+fn round_control(control: RoundControl, kit: Kit) -> Div {
     let RoundControl {
         x,
         y,
@@ -426,35 +423,31 @@ fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
             if active {
                 rgb(tone)
             } else {
-                rgb(palette.raised)
+                rgb(kit.grounds.menu.bg)
             },
-            if active {
-                rgb(palette.surface)
-            } else {
-                rgb(tone)
-            },
+            if active { kit.grounds.pane.bg } else { tone },
         ),
         RoundStyle::Center => (
             if active {
-                rgb(palette.accent)
+                rgb(kit.grounds.pane.mark)
             } else {
-                rgba(alpha(palette.accent, 0x78))
+                rgba(translucent(kit.grounds.pane.mark, Alpha::Veil))
             },
             if active {
-                rgba(alpha(palette.accent, 0x1e))
+                rgba(translucent(kit.grounds.pane.mark, Alpha::Wash))
             } else {
-                rgb(palette.raised)
+                rgb(kit.grounds.menu.bg)
             },
             if active {
-                rgb(palette.accent)
+                kit.grounds.pane.mark
             } else {
-                rgb(palette.text_muted)
+                kit.grounds.pane.faint
             },
         ),
         RoundStyle::Marker => (
-            rgba(alpha(palette.text_muted, 0x58)),
-            rgb(palette.raised),
-            rgb(palette.text_muted),
+            rgba(translucent(kit.grounds.pane.faint, Alpha::Veil)),
+            rgb(kit.grounds.menu.bg),
+            kit.grounds.pane.faint,
         ),
     };
     let dashed = matches!(style, RoundStyle::Marker);
@@ -465,7 +458,7 @@ fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
         .w(scaled(radius * 2.0))
         .h(scaled(radius * 2.0))
         .rounded_full()
-        .when(!dashed, |control| control.border_2().border_color(border))
+        .when(!dashed, |control| control.border_1().border_color(border))
         .bg(bg)
         .when(dashed, |control| {
             control.child(
@@ -481,27 +474,30 @@ fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
                 .inset_0(),
             )
         })
-        .when(active, |control| control.shadow(glow(tone, 16.0)))
         .when(active, |control| {
             control.child(
                 div()
                     .absolute()
                     .inset(px(-5.0))
                     .rounded_full()
-                    .border_2()
-                    .border_color(rgba(alpha(tone, 0x38))),
+                    .border_1()
+                    .border_color(rgba(translucent(tone, Alpha::Edge))),
             )
         })
-        .child(
-            div()
+        .child({
+            let mark = div()
                 .relative()
                 .size_full()
                 .flex()
                 .items_center()
-                .justify_center()
-                .text_size(scaled(if label.len() > 2 { 10.0 } else { 13.0 }))
-                .font_weight(FontWeight::BOLD)
-                .text_color(ink)
-                .child(label),
-        )
+                .justify_center();
+            match label {
+                ButtonMark::Text(text) => mark
+                    .text_size(scaled(if text.len() > 2 { 10.0 } else { 13.0 }))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(ink))
+                    .child(text),
+                ButtonMark::Icon(glyph) => mark.child(icon(glyph, 13.0 * SCALE, ink)),
+            }
+        })
 }

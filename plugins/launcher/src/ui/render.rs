@@ -1,5 +1,7 @@
 use gpui::prelude::FluentBuilder;
 #[cfg(debug_assertions)]
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
@@ -30,6 +32,7 @@ impl Focusable for LauncherView {
 
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         REGISTER_NATIVE_DISPLAY.call_once(|| {
             qol_gpui::popup_window::register_native_display(window);
         });
@@ -101,7 +104,7 @@ impl Render for LauncherView {
             }
 
             return div()
-                .font_family(qol_gpui::theme::font_ui())
+                .text(TextStyle::Value)
                 .id("launcher")
                 .track_focus(&self.focus_handle)
                 .w(px(WINDOW_WIDTH))
@@ -261,17 +264,14 @@ impl Render for LauncherView {
             .as_ref()
             .is_some_and(|session| session.pending);
         let menu = self.menu_kind.map(|_| self.menu_overlay(cx));
-        div()
-            .font_family(qol_gpui::theme::font_ui())
+        kit.window()
+            .text(TextStyle::Value)
             .id("launcher")
             .track_focus(&self.focus_handle)
             .w(px(WINDOW_WIDTH))
             .h(px(target_height))
-            .relative()
-            .overflow_hidden()
             .flex()
             .flex_col()
-            .bg(view::bg_color())
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 if this.held != event.modifiers {
                     this.held = event.modifiers;
@@ -384,7 +384,16 @@ impl Render for LauncherView {
                                     cx.notify();
                                 },
                             ))
-                            .children(rows),
+                            .relative()
+                            .children(rows)
+                            .child(kit.scroll_cue(
+                                qol_gpui::scrollbar::ScrollSource::Window {
+                                    first: scroll_offset,
+                                    shown: visible,
+                                    total: result_count,
+                                },
+                                kit.grounds.pane,
+                            )),
                     )
                 }
             })

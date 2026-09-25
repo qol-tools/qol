@@ -1,36 +1,23 @@
 use gpui::prelude::*;
 use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
-    FontWeight, Rgba, SharedString,
+    Rgba, SharedString,
 };
-use qol_theme::{SystemPalette, ThemeMode, WashPalette};
+use qol_hotkeys::chord::Cap;
+use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
 
-pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
-pub const FLOAT_SHADOW_ALPHA: u8 = 0x1a;
-
-pub const DISABLED_OPACITY: f32 = 0.4;
+use crate::icon::{icon, Icon, IconView};
+use crate::key::Key;
+use crate::text::{cased, TextStyled};
+use qol_theme::{
+    clear, translucent, Alpha, Shadow, TextStyle, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
+    OPACITY_DISABLED, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
+};
 
 pub const HEADER_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
 pub const SECTION_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
 pub const GUTTER: f32 = qol_theme::SPACE_GUTTER;
-pub const LAMP_SIZE: f32 = 10.0;
 pub const ROW_METADATA_WIDTH: f32 = 48.0;
-pub const ROW_BORDER_WIDTH: f32 = 1.0;
-
-pub const FOCUS_RING_EDGE: f32 = 1.5;
-pub const FOCUS_RING_HALO: f32 = 4.0;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RowState {
-    #[default]
-    Resting,
-    Hover,
-    Current,
-    CurrentQuiet,
-    NeedsAttention,
-    Invalid,
-    Disabled,
-}
 
 #[derive(Clone, Copy)]
 pub enum WindowControlIcon {
@@ -66,10 +53,34 @@ pub enum ActionCircleState {
 
 pub const SECTION_MARK_WIDTH: f32 = 10.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeTone {
+    Attention,
+    Invalid,
+    Done,
+    Quiet,
+}
+
+pub const CHIP_HEIGHT: f32 = 22.0;
+pub const KEY_CHIP_HEIGHT: f32 = 20.0;
+
+pub enum Chip {
+    Key(Key),
+    KeyText(SharedString),
+    Count(usize, SharedString),
+    Status {
+        tone: u32,
+        halo: u32,
+        text: SharedString,
+    },
+    Tag(SharedString),
+}
+
 #[derive(Clone, Copy)]
 pub struct Kit {
     pub palette: SystemPalette,
     pub washes: WashPalette,
+    pub grounds: Grounds,
 }
 
 impl Kit {
@@ -77,35 +88,88 @@ impl Kit {
         Self {
             palette,
             washes: WashPalette::for_mode(mode, palette),
+            grounds: Grounds::from_theme(mode, palette),
         }
     }
 
-    pub fn focus_ring(&self) -> Vec<BoxShadow> {
-        focus_ring_from(self.palette.accent, self.washes.accent_halo.packed())
+    pub fn focus_ring(&self, ground: Ground) -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: rgb(ground.mark).into(),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(FOCUS_RING_EDGE),
+            },
+            BoxShadow {
+                color: rgba(ground.halo.packed()).into(),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(FOCUS_RING_HALO),
+            },
+        ]
     }
 
-    pub fn header(&self, title: impl Into<SharedString>) -> Div {
+    pub fn window(&self) -> Div {
+        div()
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .rounded_none()
+            .bg(rgb(self.grounds.pane.bg))
+            .border(px(LINE))
+            .border_color(rgba(self.grounds.pane.edge.packed()))
+            .shadow(float_shadow(self.palette.text_primary))
+    }
+
+    pub fn heading(&self, title: impl Into<SharedString>, colophon: Option<SharedString>) -> Div {
         div()
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(qol_theme::SPACE_INSET))
+            .gap(px(qol_theme::SPACE_CELL))
             .h(px(HEADER_HEIGHT))
             .px(px(GUTTER))
+            .child(self.heading_title(TextStyle::Heading, title, colophon, true))
+    }
+
+    pub fn heading_title(
+        &self,
+        style: TextStyle,
+        title: impl Into<SharedString>,
+        colophon: Option<SharedString>,
+        live: bool,
+    ) -> Div {
+        let pane = self.grounds.pane;
+        let (title_ink, colophon_ink) = if live {
+            (pane.ink, self.palette.accent_ink)
+        } else {
+            (pane.faint, pane.faint)
+        };
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(qol_theme::SPACE_STACK))
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_TITLE))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(self.palette.text_primary))
+                    .text(style)
+                    .text_color(rgb(title_ink))
                     .child(title.into()),
             )
+            .when_some(colophon, |block, colophon| {
+                block.child(
+                    div()
+                        .text(TextStyle::Colophon)
+                        .text_color(rgb(colophon_ink))
+                        .child(colophon),
+                )
+            })
     }
 
     pub fn section(&self, label: impl Into<SharedString>) -> Div {
+        let label = cased(TextStyle::Label, &label.into());
         div()
             .flex_none()
             .flex()
@@ -123,11 +187,9 @@ impl Kit {
             )
             .child(
                 div()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_MICRO))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .text(TextStyle::Label)
                     .text_color(rgb(self.palette.text_muted))
-                    .child(label.into()),
+                    .child(label),
             )
     }
 
@@ -135,7 +197,6 @@ impl Kit {
         self.row_of_height(qol_theme::LIST_ENTRY_HEIGHTS[1])
             .h(px(qol_theme::LIST_ENTRY_HEIGHTS[1]))
             .py(px(qol_theme::SPACE_TIGHT))
-            .line_height(gpui::relative(1.0))
     }
 
     fn row_of_height(&self, height: f32) -> Div {
@@ -151,191 +212,229 @@ impl Kit {
             .rounded_none()
     }
 
-    pub fn row_selected<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
-        self.row_state(
-            row,
-            if selected {
-                RowState::Current
-            } else {
-                RowState::Resting
-            },
-        )
+    pub fn pointable<E: Styled + InteractiveElement>(&self, element: E, lift: Rgba) -> E {
+        element.hover(move |style| style.bg(lift))
     }
 
-    pub fn row_selected_tinted_after<E: Styled + ParentElement>(
-        &self,
-        row: E,
-        selected: bool,
-        tone: u32,
-        leading_width: f32,
-    ) -> E {
-        let colors = qol_theme::tinted_row_palette(tone, self.palette);
-        let row = row
-            .relative()
-            .border(px(ROW_BORDER_WIDTH))
-            .border_color(rgba(0))
-            .bg(rgba(
-                if selected {
-                    colors.selected
-                } else {
-                    colors.resting
-                }
-                .packed(),
-            ));
-        if !selected {
-            return row;
+    pub fn highlight_ground(&self, selected: bool) -> Ground {
+        if selected {
+            self.grounds.band
+        } else {
+            self.grounds.pane
         }
-        row.child(
-            div()
-                .absolute()
-                .left(px(leading_width - ROW_BORDER_WIDTH))
-                .right(px(-ROW_BORDER_WIDTH))
-                .top(px(-ROW_BORDER_WIDTH))
-                .bottom(px(-ROW_BORDER_WIDTH))
-                .border(px(ROW_BORDER_WIDTH))
-                .border_color(rgba(colors.selected_edge.packed())),
-        )
     }
 
-    pub fn row_state<E: Styled + ParentElement>(&self, row: E, state: RowState) -> E {
-        let row = row.relative().border(px(1.0));
-        let (wash, edge, bar) = match state {
-            RowState::Resting => return row.border_color(rgba(0x00000000)),
-            RowState::Disabled => {
-                return row.border_color(rgba(0x00000000)).opacity(DISABLED_OPACITY)
-            }
-            RowState::Hover => (self.washes.fill_hover, None, None),
-            RowState::Current => (
-                self.washes.wash_selected,
-                Some(self.washes.hairline),
-                Some(self.palette.accent),
-            ),
-            RowState::CurrentQuiet => (
-                self.washes.wash_selected,
-                Some(self.washes.hairline),
-                Some(self.palette.text_muted),
-            ),
-            RowState::NeedsAttention => {
-                (self.washes.wash_attention, None, Some(self.palette.warning))
-            }
-            RowState::Invalid => (
-                self.washes.wash_invalid,
-                Some(self.washes.edge_invalid),
-                Some(self.palette.danger),
-            ),
-        };
-        let row = row
-            .bg(rgba(wash.packed()))
-            .border_color(rgba(edge.map(|tone| tone.packed()).unwrap_or(0)));
-        match bar {
-            None => row,
-            Some(tone) => row.overflow_hidden().child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(qol_theme::SPACE_MARK))
-                    .bg(rgb(tone)),
-            ),
+    pub fn highlight<E: Styled + InteractiveElement>(&self, row: E, selected: bool) -> E {
+        let row = self.pointable(
+            row.rounded_none(),
+            rgb(self.highlight_ground(selected).lift),
+        );
+        if selected {
+            row.bg(rgb(self.grounds.band.bg))
+        } else {
+            row
         }
     }
 
     pub fn value(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
-            .text_size(px(qol_theme::TEXT_BODY))
+            .text(TextStyle::Value)
             .text_color(rgb(self.palette.text_secondary))
             .child(text.into())
     }
 
-    pub fn keycap(&self, text: impl Into<SharedString>) -> Div {
+    fn key_frame(&self, ground: Ground) -> Div {
         div()
             .flex_none()
+            .flex()
+            .items_center()
+            .h(px(KEY_CHIP_HEIGHT))
             .px(px(qol_theme::SPACE_SNUG))
-            .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_KEYCAP))
-            .border(px(1.0))
-            .border_color(rgba(self.washes.hairline_strong.packed()))
-            .font_family(SharedString::from(qol_theme::font_mono()))
-            .text_size(px(qol_theme::TEXT_KEYCAP))
-            .text_color(rgb(self.palette.text_muted))
-            .child(text.into())
+            .border(px(qol_theme::LINE))
+            .border_color(rgba(translucent(ground.ink, Alpha::Edge)))
+            .text(TextStyle::Key)
+            .text_color(rgb(ground.faint))
+    }
+
+    fn chip_frame(&self, ground: Ground) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(qol_theme::SPACE_SNUG))
+            .h(px(CHIP_HEIGHT))
+            .px(px(qol_theme::SPACE_INSET))
+            .rounded(px(qol_theme::RADIUS_TIGHT))
+            .bg(rgba(ground.well.packed()))
+            .text(TextStyle::Detail)
+            .text_color(rgb(ground.soft))
+    }
+
+    pub fn chip(&self, chip: Chip, ground: Ground) -> Div {
+        match chip {
+            Chip::Key(key) => self
+                .key_frame(ground)
+                .child(self.key_name(&[key], ground.faint)),
+            Chip::KeyText(text) => self.key_frame(ground).child(text),
+            Chip::Count(count, label) => self
+                .chip_frame(ground)
+                .child(div().text_color(rgb(ground.ink)).child(count.to_string()))
+                .child(label),
+            Chip::Status { tone, halo, text } => self
+                .chip_frame(ground)
+                .child(self.status_dot(tone, halo))
+                .child(text),
+            Chip::Tag(text) => self.chip_frame(ground).child(text),
+        }
+    }
+
+    pub fn notice(
+        &self,
+        tone: NoticeTone,
+        title: impl Into<SharedString>,
+        detail: Option<gpui::AnyElement>,
+    ) -> Div {
+        let (ground, dot, halo) = match tone {
+            NoticeTone::Attention => (
+                self.grounds.attention,
+                self.palette.warning,
+                self.washes.halo_attention,
+            ),
+            NoticeTone::Invalid => (
+                self.grounds.invalid,
+                self.palette.danger,
+                self.washes.halo_invalid,
+            ),
+            NoticeTone::Done => (
+                self.grounds.pane,
+                self.palette.success,
+                self.washes.halo_success,
+            ),
+            NoticeTone::Quiet => (
+                self.grounds.pane,
+                self.palette.text_muted,
+                self.washes.fill_resting,
+            ),
+        };
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(qol_theme::SPACE_CELL))
+            .px(px(qol_theme::SPACE_GUTTER))
+            .py(px(qol_theme::SPACE_CELL))
+            .bg(rgb(ground.bg))
+            .child(self.status_dot(dot, halo.packed()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(qol_theme::SPACE_STACK))
+                    .child(
+                        div()
+                            .text(TextStyle::ListName)
+                            .text_color(rgb(ground.ink))
+                            .child(title.into()),
+                    )
+                    .when_some(detail, |block, detail| {
+                        block.child(
+                            div()
+                                .text(TextStyle::Detail)
+                                .line_clamp(2)
+                                .text_color(rgb(ground.soft))
+                                .child(detail),
+                        )
+                    }),
+            )
+    }
+
+    pub fn empty(&self, title: impl Into<SharedString>, detail: Option<SharedString>) -> Div {
+        let pane = self.grounds.pane;
+        div()
+            .flex_1()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(qol_theme::SPACE_STACK))
+            .px(px(qol_theme::SPACE_GUTTER))
+            .child(
+                div()
+                    .text(TextStyle::ListName)
+                    .text_color(rgb(pane.ink))
+                    .child(title.into()),
+            )
+            .when_some(detail, |block, detail| {
+                block.child(
+                    div()
+                        .text(TextStyle::Detail)
+                        .text_color(rgb(pane.soft))
+                        .child(detail),
+                )
+            })
+    }
+
+    pub fn keycap_inked(&self, key: Key, ink: u32) -> Div {
+        self.key_frame(self.grounds.pane)
+            .text_color(rgb(ink))
+            .child(self.key_name(&[key], ink))
+    }
+
+    pub fn key_name(&self, keys: &[Key], ink: u32) -> Div {
+        let size = TextStyle::Key.spec().size;
+        let mut name = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .text(TextStyle::Key)
+            .text_color(rgb(ink));
+        for (index, key) in keys.iter().enumerate() {
+            if index > 0 {
+                name = name.child(" / ");
+            }
+            for part in key.caps() {
+                name = match part {
+                    Cap::Text(text) => name.child(text),
+                    Cap::Glyph(glyph) => name.child(icon(glyph.into(), size, ink)),
+                };
+            }
+        }
+        name
     }
 
     pub fn status_dot(&self, tone: u32, halo: u32) -> Div {
         div()
             .flex_none()
-            .w(px(7.0))
-            .h(px(7.0))
+            .size(px(STATUS_DOT))
             .rounded_full()
             .bg(rgb(tone))
             .shadow(vec![BoxShadow {
                 color: rgba(halo).into(),
                 offset: point(px(0.0), px(0.0)),
                 blur_radius: px(0.0),
-                spread_radius: px(3.0),
+                spread_radius: px(STATUS_DOT_HALO),
             }])
     }
 
-    pub fn animated_status_dot(
+    pub fn live_dot(
         &self,
         id: impl Into<gpui::ElementId>,
         tone: u32,
         halo: u32,
-        pulsing: bool,
+        live: bool,
     ) -> gpui::AnyElement {
-        let dot = self.status_dot(tone, halo).size(px(LAMP_SIZE));
-        if pulsing {
-            crate::status_indicator::radiating_dot(dot, id.into(), tone)
+        let dot = self.status_dot(tone, halo);
+        if live {
+            crate::status_indicator::pulse_dot(dot, id.into())
         } else {
             dot.into_any_element()
         }
-    }
-
-    pub fn count_chip(&self, count: usize, label: impl Into<SharedString>) -> Div {
-        self.count_chip_of_height(
-            count,
-            label,
-            qol_theme::HEIGHT_INLINE,
-            qol_theme::TEXT_MICRO,
-        )
-    }
-
-    pub fn count_chip_small(&self, count: usize, label: impl Into<SharedString>) -> Div {
-        self.count_chip_of_height(count, label, 22.0, qol_theme::TEXT_NANO)
-    }
-
-    fn count_chip_of_height(
-        &self,
-        count: usize,
-        label: impl Into<SharedString>,
-        height: f32,
-        text_size: f32,
-    ) -> Div {
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(qol_theme::SPACE_SNUG))
-            .h(px(height))
-            .px(px(qol_theme::SPACE_INSET))
-            .rounded(px(qol_theme::RADIUS_CONTROL))
-            .border(px(1.0))
-            .border_color(rgba(self.washes.hairline.packed()))
-            .bg(rgba(self.washes.fill_resting.packed()))
-            .text_size(px(text_size))
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(self.palette.text_primary))
-                    .child(format!("{count}")),
-            )
-            .child(
-                div()
-                    .text_color(rgb(self.palette.text_secondary))
-                    .child(label.into()),
-            )
     }
 
     pub fn hint_bar(&self) -> Div {
@@ -347,56 +446,21 @@ impl Kit {
             .w_full()
             .h(px(qol_theme::HEIGHT_HINT_BAR))
             .px(px(qol_theme::SPACE_PAD))
-            .border_t(px(1.0))
+            .border_t(px(qol_theme::LINE))
             .border_color(rgba(self.washes.hairline.packed()))
             .bg(rgba(self.washes.fill_hover.packed()))
-            .text_size(px(qol_theme::TEXT_MICRO))
+            .text(TextStyle::Hint)
             .text_color(rgb(self.palette.text_secondary))
     }
 
-    pub fn hint(&self, key: impl Into<SharedString>, label: impl Into<SharedString>) -> Div {
+    pub fn hint(&self, key: Key, label: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(qol_theme::SPACE_SNUG))
-            .child(self.keycap(key))
+            .child(self.chip(Chip::Key(key), self.grounds.pane))
             .child(label.into())
-    }
-
-    pub fn hint_bar_compact(&self) -> Div {
-        self.hint_bar()
-            .h(px(qol_theme::HEIGHT_INLINE))
-            .bg(rgb(self.palette.surface_canvas))
-            .text_size(px(qol_theme::TEXT_NANO))
-            .text_color(rgb(self.palette.text_muted))
-    }
-
-    pub fn hint_label_first(
-        &self,
-        label: impl Into<SharedString>,
-        key: impl Into<SharedString>,
-    ) -> Div {
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(qol_theme::SPACE_SNUG))
-            .child(label.into())
-            .child(
-                div()
-                    .flex_none()
-                    .h(px(qol_theme::SPACE_PAD))
-                    .px(px(qol_theme::SPACE_STACK))
-                    .flex()
-                    .items_center()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .bg(rgba(self.washes.fill_resting.packed()))
-                    .font_family(SharedString::from(qol_theme::font_mono()))
-                    .text_size(px(qol_theme::TEXT_NANO))
-                    .text_color(rgb(self.palette.text_secondary))
-                    .child(key.into()),
-            )
     }
 
     pub fn letter_tile(&self, name: &str) -> Div {
@@ -415,36 +479,30 @@ impl Kit {
             .justify_center()
             .bg(rgb(tile_tone(name)))
             .text_color(rgb(0xffffff))
-            .text_size(px(qol_theme::TEXT_NANO))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::Label)
             .child(glyph)
-    }
-
-    pub fn chip(&self, text: impl Into<SharedString>, tone: u32) -> Div {
-        div()
-            .flex_none()
-            .px(px(qol_theme::SPACE_SNUG))
-            .py(px(qol_theme::SPACE_STACK))
-            .rounded(px(qol_theme::RADIUS_TIGHT))
-            .bg(rgba(alpha(tone, 0x33)))
-            .text_size(px(qol_theme::TEXT_MICRO))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(tone))
-            .child(text.into())
     }
 
     pub fn vertical_identity_tab(&self, text: impl Into<SharedString>, tone: u32) -> Div {
         div()
             .absolute()
-            .left(px(-ROW_BORDER_WIDTH))
-            .top(px(-ROW_BORDER_WIDTH))
-            .bottom(px(-ROW_BORDER_WIDTH))
+            .left(px(-LINE))
+            .top(px(-LINE))
+            .bottom(px(-LINE))
             .w(px(crate::vertical_label::WIDTH))
             .flex()
             .items_center()
             .justify_center()
             .bg(rgb(tone))
             .child(crate::vertical_label::VerticalLabel::new(text))
+    }
+
+    pub fn scroll_cue(
+        &self,
+        source: crate::scrollbar::ScrollSource,
+        ground: Ground,
+    ) -> impl IntoElement {
+        crate::scrollbar::scroll_cue(source, ground)
     }
 
     pub fn row_metadata(&self) -> Div {
@@ -455,19 +513,6 @@ impl Kit {
             .flex_col()
             .items_end()
             .gap(px(qol_theme::SPACE_STACK))
-    }
-
-    pub fn count_button(&self, count: usize) -> Div {
-        let label = if count > 99 {
-            "99+".to_owned()
-        } else {
-            count.to_string()
-        };
-        self.button_ghost(label)
-            .size(px(qol_theme::HEIGHT_INLINE))
-            .p(px(qol_theme::SPACE_STACK))
-            .justify_center()
-            .text_size(px(qol_theme::TEXT_NANO))
     }
 
     pub fn row_separator(&self) -> Div {
@@ -545,20 +590,6 @@ impl Kit {
             )
     }
 
-    pub fn status_pill(&self, text: impl Into<SharedString>, tone: u32) -> Div {
-        div()
-            .flex_none()
-            .h(px(qol_theme::SPACE_PAD))
-            .px(px(qol_theme::SPACE_SNUG))
-            .flex()
-            .items_center()
-            .rounded_full()
-            .bg(rgba(alpha(tone, 0x33)))
-            .text_size(px(qol_theme::TEXT_NANO))
-            .text_color(rgb(tone))
-            .child(text.into())
-    }
-
     fn button_base(&self, text: impl Into<SharedString>) -> Div {
         div()
             .flex_none()
@@ -567,9 +598,20 @@ impl Kit {
             .px(px(qol_theme::SPACE_CELL))
             .py(px(qol_theme::SPACE_SNUG))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::ListName)
             .child(text.into())
+    }
+
+    pub fn action_ink(&self, state: ActionCircleState) -> u32 {
+        match state {
+            ActionCircleState::Resting | ActionCircleState::Disabled => self.palette.text_primary,
+            ActionCircleState::Primary => self.palette.solid_ink,
+            ActionCircleState::Armed => self.palette.accent_ink,
+        }
+    }
+
+    pub fn action_icon(&self, glyph: Icon, state: ActionCircleState) -> IconView {
+        icon(glyph, qol_theme::TEXT_BODY, self.action_ink(state))
     }
 
     pub fn action_circle(&self, size: ActionCircleSize, state: ActionCircleState) -> Div {
@@ -581,28 +623,23 @@ impl Kit {
             .flex()
             .items_center()
             .justify_center()
-            .border(px(1.0))
+            .border(px(qol_theme::LINE))
             .shadow(float_shadow(self.palette.text_primary))
-            .text_size(px(qol_theme::TEXT_BODY));
+            .text_color(rgb(self.action_ink(state)));
         match state {
             ActionCircleState::Resting => circle
                 .bg(rgb(self.palette.surface_raised))
-                .border_color(rgb(self.palette.border_subtle))
-                .text_color(rgb(self.palette.text_primary)),
+                .border_color(rgb(self.palette.border_subtle)),
             ActionCircleState::Primary => circle
                 .bg(rgb(self.palette.accent))
-                .border_color(rgb(self.palette.border_subtle))
-                .text_color(rgb(self.palette.solid_ink)),
+                .border_color(rgb(self.palette.border_subtle)),
             ActionCircleState::Armed => circle
                 .bg(rgb(self.palette.accent_fill))
-                .border_color(rgb(self.palette.accent))
-                .text_color(rgb(self.palette.accent_ink))
-                .font_weight(FontWeight::SEMIBOLD),
+                .border_color(rgb(self.palette.accent)),
             ActionCircleState::Disabled => circle
                 .bg(rgb(self.palette.surface_raised))
                 .border_color(rgb(self.palette.border_subtle))
-                .text_color(rgb(self.palette.text_primary))
-                .opacity(DISABLED_OPACITY),
+                .opacity(OPACITY_DISABLED),
         }
     }
 
@@ -618,8 +655,7 @@ impl Kit {
             .px(px(qol_theme::SPACE_CELL))
             .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_TIGHT))
-            .text_size(px(qol_theme::TEXT_CAPTION))
-            .font_weight(FontWeight::SEMIBOLD)
+            .text(TextStyle::ListName)
             .child(label.into());
         if active {
             segment
@@ -691,89 +727,36 @@ pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
     count as f32 * size.px() + (count - 1) as f32 * qol_theme::ACTION_CIRCLE_GAP
 }
 
-fn focus_ring_from(accent: u32, halo: u32) -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: rgb(accent).into(),
-            offset: point(px(0.0), px(0.0)),
-            blur_radius: px(0.0),
-            spread_radius: px(FOCUS_RING_EDGE),
-        },
-        BoxShadow {
-            color: rgba(halo).into(),
-            offset: point(px(0.0), px(0.0)),
-            blur_radius: px(0.0),
-            spread_radius: px(FOCUS_RING_HALO),
-        },
-    ]
+pub fn float_shadow(ink: u32) -> Vec<BoxShadow> {
+    shadow(SHADOW_FLOAT, ink)
 }
 
-#[cfg(test)]
-fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
-    Kit::new(mode, palette).focus_ring()
+pub fn raised_shadow(ink: u32) -> Vec<BoxShadow> {
+    shadow(SHADOW_RAISED, ink)
 }
 
-pub fn float_shadow(text_primary: u32) -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x0d)).into(),
-            offset: point(px(0.0), px(1.0)),
-            blur_radius: px(2.0),
+fn shadow(layers: Shadow, ink: u32) -> Vec<BoxShadow> {
+    layers
+        .iter()
+        .map(|layer| BoxShadow {
+            color: rgba(translucent(ink, layer.alpha)).into(),
+            offset: point(px(0.0), px(f32::from(layer.y))),
+            blur_radius: px(f32::from(layer.blur)),
             spread_radius: px(0.0),
-        },
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x14)).into(),
-            offset: point(px(0.0), px(8.0)),
-            blur_radius: px(20.0),
-            spread_radius: px(0.0),
-        },
-    ]
-}
-
-pub fn raised_shadow(text_primary: u32) -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x1a)).into(),
-            offset: point(px(0.0), px(1.0)),
-            blur_radius: px(2.0),
-            spread_radius: px(0.0),
-        },
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x1a)).into(),
-            offset: point(px(0.0), px(6.0)),
-            blur_radius: px(16.0),
-            spread_radius: px(0.0),
-        },
-    ]
-}
-
-pub fn left_edge(radius: f32, width: f32, color: Rgba) -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .rounded_l(px(radius))
-        .border_l(px(width))
-        .border_color(color)
-}
-
-pub fn accent_left_edge(radius: f32, width: f32, accent: u32) -> Div {
-    left_edge(radius, width, rgb(accent))
+        })
+        .collect()
 }
 
 pub const RAIL_SCRIM_START: f32 = 0.32;
 pub const RAIL_SCRIM_END: f32 = 0.5;
-pub const RAIL_SCRIM_ALPHA: u8 = 0x66;
+pub const RAIL_SCRIM_ALPHA: Alpha = Alpha::Veil;
 
 pub fn rail_scrim(surface: u32) -> Background {
     linear_gradient(
         90.0,
-        linear_color_stop(rgba(alpha(surface, 0x00)), RAIL_SCRIM_START),
-        linear_color_stop(rgba(alpha(surface, RAIL_SCRIM_ALPHA)), RAIL_SCRIM_END),
+        linear_color_stop(rgba(clear(surface)), RAIL_SCRIM_START),
+        linear_color_stop(rgba(translucent(surface, RAIL_SCRIM_ALPHA)), RAIL_SCRIM_END),
     )
-}
-
-pub fn alpha(color: u32, opacity: u8) -> u32 {
-    (color << 8) | u32::from(opacity)
 }
 
 const TILE_TONES: [u32; 6] = [0x2f7350, 0x3a639b, 0x8a6208, 0x5c626d, 0x2f3238, 0x7a4a8a];
@@ -803,15 +786,34 @@ pub fn path_label(path: &str) -> (String, String) {
 
 pub fn kit() -> Kit {
     let theme = qol_theme::runtime_theme();
-    Kit::new(theme.mode, theme.system)
+    let kit = Kit::new(theme.mode, theme.system);
+    if qol_theme::window_is_quiet() {
+        Kit {
+            grounds: kit.grounds.quiet(),
+            ..kit
+        }
+    } else {
+        kit
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowLook {
+    Live,
+    Quiet,
+}
+
+pub fn enter_window(look: WindowLook) {
+    qol_theme::set_window_quiet(look == WindowLook::Quiet);
 }
 
 #[cfg(test)]
 mod tests {
+    use super::Kit;
     use super::{
-        action_row_width, focus_ring_for, next_selectable, path_label, rail_scrim,
-        row_circle_state, ActionCircleSize, ActionCircleState, FOCUS_RING_EDGE, FOCUS_RING_HALO,
-        RAIL_SCRIM_ALPHA, RAIL_SCRIM_END, RAIL_SCRIM_START,
+        action_row_width, next_selectable, path_label, rail_scrim, row_circle_state,
+        ActionCircleSize, ActionCircleState, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA,
+        RAIL_SCRIM_END, RAIL_SCRIM_START,
     };
     use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
 
@@ -863,19 +865,33 @@ mod tests {
             (ThemeMode::Light, LIGHT_SYSTEM),
             (ThemeMode::Dark, DARK_SYSTEM),
         ] {
-            let ring = focus_ring_for(mode, palette);
-            assert_eq!(ring.len(), 2);
+            let kit = Kit::new(mode, palette);
+            for (ground, mark) in [
+                (kit.grounds.pane, palette.accent),
+                (kit.grounds.band, palette.text_primary),
+            ] {
+                let ring = kit.focus_ring(ground);
+                assert_eq!(ring.len(), 2);
 
-            let edge = &ring[0];
-            assert_eq!(f32::from(edge.spread_radius), FOCUS_RING_EDGE);
-            assert_eq!(f32::from(edge.blur_radius), 0.0);
-            assert_eq!(edge.color.a, 1.0);
+                let edge = &ring[0];
+                assert_eq!(f32::from(edge.spread_radius), FOCUS_RING_EDGE);
+                assert_eq!(f32::from(edge.blur_radius), 0.0);
+                assert_eq!(edge.color.a, 1.0);
+                assert_eq!(edge.color, gpui::Hsla::from(gpui::rgb(mark)));
 
-            let halo = &ring[1];
-            assert_eq!(f32::from(halo.spread_radius), FOCUS_RING_HALO);
-            assert!(halo.color.a > 0.0 && halo.color.a < 1.0);
-            assert!(halo.spread_radius > edge.spread_radius);
+                let halo = &ring[1];
+                assert_eq!(f32::from(halo.spread_radius), FOCUS_RING_HALO);
+                assert!(halo.color.a > 0.0 && halo.color.a < 1.0);
+                assert!(halo.spread_radius > edge.spread_radius);
+            }
         }
+    }
+
+    #[test]
+    fn a_quiet_window_rings_focus_without_a_halo() {
+        let quiet = Kit::new(ThemeMode::Light, LIGHT_SYSTEM).grounds.quiet();
+        let ring = Kit::new(ThemeMode::Light, LIGHT_SYSTEM).focus_ring(quiet.pane);
+        assert_eq!(ring[1].color.a, 0.0);
     }
 
     #[test]
@@ -885,7 +901,10 @@ mod tests {
         assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_START}")));
         assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_END}")));
         assert!(rendered.contains("a: 0.0"));
-        assert!(rendered.contains(&format!("a: {}", f32::from(RAIL_SCRIM_ALPHA) / 255.0)));
+        assert!(rendered.contains(&format!(
+            "a: {}",
+            f32::from(RAIL_SCRIM_ALPHA.byte()) / 255.0
+        )));
     }
 
     #[test]

@@ -2,8 +2,10 @@ use super::*;
 use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
 use qol_gpui::kit::{action_row_width, row_circle_state, ActionCircleSize};
 use qol_gpui::surface::PanelDragArea;
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
 use qol_gpui::theme::{
-    ACTION_CIRCLE_SIZE, HEIGHT_HINT_BAR, HEIGHT_INLINE, SPACE_GUTTER, SPACE_PAD, TEXT_CAPTION,
+    ACTION_CIRCLE_SIZE, HEIGHT_HINT_BAR, HEIGHT_INLINE, SPACE_GUTTER, SPACE_PAD,
 };
 
 impl EditorView {
@@ -35,7 +37,7 @@ impl EditorView {
             .h(px(self.layout.image.1))
             .overflow_hidden()
             .border_1()
-            .border_color(rgb(current_palette().thumb_border))
+            .border_color(rgb(qol_gpui::kit::kit().palette.border_subtle))
             .cursor(CursorStyle::Crosshair)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_stroke))
             .on_mouse_move(cx.listener(Self::extend_stroke))
@@ -103,14 +105,13 @@ impl EditorView {
                     .absolute()
                     .inset_0(),
                 );
-        } else {
-            circle = circle.child(control.glyph());
+        } else if let Some(icon) = control.icon() {
+            circle = circle.child(kit.action_icon(icon, state));
         }
         circle
     }
 
     fn render_label(&self) -> AnyElement {
-        let palette = current_palette();
         let kit = qol_gpui::kit::kit();
         if let Some(error) = self.output_error.clone() {
             return div()
@@ -122,7 +123,7 @@ impl EditorView {
             return qol_gpui::Busy::new(
                 "shot-editor-pending",
                 output.pending_message(),
-                rgb(palette.label_text),
+                rgb(kit.grounds.pane.soft),
             )
             .into_any_element();
         }
@@ -132,7 +133,7 @@ impl EditorView {
             .map(|control| control.label())
             .unwrap_or_default();
         div()
-            .text_color(rgb(palette.label_text))
+            .text_color(rgb(kit.grounds.pane.soft))
             .child(label)
             .into_any_element()
     }
@@ -170,20 +171,14 @@ impl EditorView {
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
-        let palette = current_palette();
-        div()
+        kit.window()
             .id("shot-editor")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .size_full()
             .flex()
             .flex_col()
-            .rounded_none()
-            .border_1()
-            .border_color(rgb(palette.thumb_border))
-            .bg(rgb(palette.window_bg))
             .child(
-                kit.header("Edit screenshot")
+                kit.heading("edit screenshot", None)
                     .panel_drag_area()
                     .child(self.render_width_control(cx)),
             )
@@ -219,7 +214,7 @@ impl Render for EditorView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(TEXT_CAPTION))
+                    .text(TextStyle::Detail)
                     .child(self.render_label()),
             )
             .child(self.render_hint_bar(self.layout.window.0))

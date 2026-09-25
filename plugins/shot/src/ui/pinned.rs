@@ -1,3 +1,6 @@
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
+use qol_gpui::Icon;
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -16,8 +19,7 @@ use crate::ui::controls::{
     control_count, control_for_keystroke, controls, copy_actions, ControlSurface, SurfaceControl,
 };
 use crate::ui::preview::{
-    current_palette, live_topology, surface_shadow, MonitorTopology, WarmWindowKey, WarmWindowPool,
-    PREVIEW_APP_ID,
+    live_topology, MonitorTopology, WarmWindowKey, WarmWindowPool, PREVIEW_APP_ID,
 };
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
@@ -30,7 +32,6 @@ const EDGE: f32 = qol_gpui::theme::SPACE_INSET;
 const SCROLL_STEP: f32 = 1.1;
 const PIXELS_PER_NOTCH: f32 = 60.0;
 const RESIZE_TICK: std::time::Duration = std::time::Duration::from_millis(8);
-const SCROLL_COMMIT: std::time::Duration = std::time::Duration::from_millis(200);
 const PIN_CACHE_CAPACITY: usize = 2;
 const PIN_CACHE_SIZE: (f32, f32) = (360.0, 240.0);
 const PIN_CACHE_SIZE_KEY: (i32, i32) = (PIN_CACHE_SIZE.0 as i32, PIN_CACHE_SIZE.1 as i32);
@@ -1152,7 +1153,7 @@ impl PinnedView {
             session,
         });
         self.scroll_resize = Some(ScrollResize {
-            commit_at: Instant::now() + SCROLL_COMMIT,
+            commit_at: Instant::now() + qol_gpui::theme::SETTLE_INPUT,
         });
         true
     }
@@ -1164,7 +1165,7 @@ impl PinnedView {
         let Some(scroll) = self.scroll_resize.as_mut() else {
             return;
         };
-        scroll.commit_at = Instant::now() + SCROLL_COMMIT;
+        scroll.commit_at = Instant::now() + qol_gpui::theme::SETTLE_INPUT;
         let factor = clamp_scale_factor(SCROLL_STEP.powi(steps), current.w, current.h);
         if (factor - 1.0).abs() < f32::EPSILON {
             return;
@@ -1195,7 +1196,7 @@ impl PinnedView {
                     .map(|(index, control)| {
                         kit.action_circle(ActionCircleSize::Control, ActionCircleState::Resting)
                             .id(("pin-action", index))
-                            .child(control.glyph())
+                            .child(kit.action_icon(control.icon(), ActionCircleState::Resting))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                 this.activate(control, window, cx)
@@ -1211,7 +1212,7 @@ impl PinnedView {
             .absolute()
             .top(px(EDGE))
             .right(px(EDGE))
-            .child("\u{2715}")
+            .child(kit().action_icon(Icon::Close, ActionCircleState::Resting))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close(window, cx)))
     }
@@ -1256,6 +1257,7 @@ impl Focusable for PinnedView {
 
 impl Render for PinnedView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         self.schedule_reveal_after_present(window, cx);
         if !self.active {
             return div().id("shot-pin").size_full();
@@ -1269,7 +1271,7 @@ impl Render for PinnedView {
                 self.title
             );
         }
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         if let Some((canvas, image)) = self.canvas_drag_rects() {
             let mut picture_frame = div()
                 .absolute()
@@ -1277,15 +1279,15 @@ impl Render for PinnedView {
                 .top(px(image.y - canvas.y))
                 .w(px(image.w))
                 .h(px(image.h))
-                .bg(rgb(palette.window_bg))
+                .bg(rgb(kit.grounds.pane.bg))
                 .child(self.picture());
             if self.border {
                 picture_frame = picture_frame
                     .border_1()
-                    .border_color(rgb(palette.thumb_border));
+                    .border_color(rgb(kit.palette.border_subtle));
             }
             return div()
-                .font_family(qol_gpui::theme::font_ui())
+                .text(TextStyle::Value)
                 .id("shot-pin")
                 .track_focus(&self.focus_handle)
                 .on_key_down(cx.listener(Self::on_key))
@@ -1307,15 +1309,12 @@ impl Render for PinnedView {
             self.hovered,
             window.is_window_hovered(),
         );
-        let mut root = div()
-            .font_family(qol_gpui::theme::font_ui())
+        let mut root = kit
+            .window()
+            .text(TextStyle::Value)
             .id("shot-pin")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .size_full()
-            .relative()
-            .bg(rgb(palette.window_bg))
-            .shadow(surface_shadow())
             .on_hover(cx.listener(Self::on_hover))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .on_mouse_down(
@@ -1339,7 +1338,7 @@ impl Render for PinnedView {
             .child(self.picture());
 
         if self.border {
-            root = root.border_1().border_color(rgb(palette.thumb_border));
+            root = root.border_1().border_color(rgb(kit.palette.border_subtle));
         }
 
         if show_controls {

@@ -142,7 +142,7 @@ fn label_svg(label: &str) -> String {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}"></svg>"#
         );
     };
-    let scale = qol_theme::TEXT_IDENTITY / outline.upem;
+    let scale = qol_theme::TextStyle::Label.spec().size / outline.upem;
     let available = HEIGHT - 2.0 * qol_theme::SPACE_TIGHT;
     let natural = (outline.max_x - outline.min_x) * scale;
     let sx = if natural > 0.0 {

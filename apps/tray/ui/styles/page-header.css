@@ -38,7 +38,7 @@
 
 .page-header-main h1 {
     color: var(--text-primary);
-    font-size: clamp(1.05rem, 1.5vw, 1.4rem);
+    font-size: var(--qol-text-heading-size);
     line-height: var(--lh-tight);
     text-transform: var(--case-label);
     letter-spacing: var(--ls-3xl);

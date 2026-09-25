@@ -1,8 +1,10 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, Div, FontWeight, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, rgba, App, Div, RenderOnce, SharedString, Window};
+use qol_theme::TextStyle;
 
-use crate::kit::{alpha, kit};
-use crate::theme::SettingsPanelPalette;
+use crate::key::Key;
+use crate::kit::Kit;
 
 use super::settings_action_spinner;
 
@@ -15,16 +17,16 @@ pub enum HintTone {
 
 #[derive(Clone, Debug)]
 pub struct SettingsHint {
-    pub key: SharedString,
+    pub key: Option<Key>,
     pub label: SharedString,
     pub tone: HintTone,
     pub busy: bool,
 }
 
 impl SettingsHint {
-    pub fn new(key: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+    pub fn new(key: Key, label: impl Into<SharedString>) -> Self {
         Self {
-            key: key.into(),
+            key: Some(key),
             label: label.into(),
             tone: HintTone::Plain,
             busy: false,
@@ -33,7 +35,7 @@ impl SettingsHint {
 
     pub fn busy(label: impl Into<SharedString>) -> Self {
         Self {
-            key: SharedString::default(),
+            key: None,
             label: label.into(),
             tone: HintTone::Plain,
             busy: true,
@@ -46,26 +48,26 @@ impl SettingsHint {
     }
 }
 
-pub fn hint_tone_color(tone: HintTone, palette: SettingsPanelPalette) -> Option<u32> {
+pub fn hint_tone_color(tone: HintTone, kit: Kit) -> Option<u32> {
     match tone {
         HintTone::Plain => None,
-        HintTone::Save => Some(palette.state_on),
-        HintTone::Discard => Some(palette.state_off),
+        HintTone::Save => Some(kit.palette.success),
+        HintTone::Discard => Some(kit.palette.danger),
     }
 }
 
 #[derive(IntoElement)]
 pub struct SettingsHintBar {
-    palette: SettingsPanelPalette,
+    kit: Kit,
     question: Option<SharedString>,
     left: Vec<SettingsHint>,
     right: Vec<SettingsHint>,
 }
 
 impl SettingsHintBar {
-    pub fn new(palette: SettingsPanelPalette) -> Self {
+    pub fn new(kit: Kit) -> Self {
         Self {
-            palette,
+            kit,
             question: None,
             left: Vec::new(),
             right: Vec::new(),
@@ -90,65 +92,55 @@ impl SettingsHintBar {
 
 impl RenderOnce for SettingsHintBar {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let palette = self.palette;
-        let mut bar = kit().hint_bar();
+        let kit = self.kit;
+        let mut bar = kit.hint_bar();
         if let Some(question) = self.question {
-            let ground = palette.grounds.pane;
+            let ground = kit.grounds.pane;
             bar = bar
-                .relative()
-                .bg(rgba(qol_theme::css_rgba_milli(ground.ink, 70).packed()))
+                .bg(rgba(qol_theme::translucent(
+                    ground.ink,
+                    qol_theme::Alpha::Wash,
+                )))
                 .text_color(rgb(ground.ink))
                 .child(
                     div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(qol_theme::SPACE_MARK))
-                        .bg(rgb(ground.faint)),
-                )
-                .child(
-                    div()
                         .flex_none()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text(TextStyle::ListName)
                         .text_color(rgb(ground.ink))
                         .child(question),
                 );
         }
         for hint in self.left {
-            bar = bar.child(hint_element(hint, palette));
+            bar = bar.child(hint_element(hint, kit));
         }
         bar = bar.child(div().flex_1());
         for hint in self.right {
-            bar = bar.child(hint_element(hint, palette));
+            bar = bar.child(hint_element(hint, kit));
         }
         bar
     }
 }
 
-fn hint_element(hint: SettingsHint, palette: SettingsPanelPalette) -> Div {
-    if hint.busy {
+fn hint_element(hint: SettingsHint, kit: Kit) -> Div {
+    let Some(key) = hint.key.filter(|_| !hint.busy) else {
         return div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(qol_theme::SPACE_SNUG))
-            .child(settings_action_spinner("settings-hint-busy", palette).size(px(12.)))
+            .child(settings_action_spinner("settings-hint-busy", kit).size(px(12.)))
             .child(hint.label);
-    }
-    match hint_tone_color(hint.tone, palette) {
-        None => kit().hint(hint.key, hint.label),
+    };
+    match hint_tone_color(hint.tone, kit) {
+        None => kit.hint(key, hint.label),
         Some(color) => div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(qol_theme::SPACE_SNUG))
             .child(
-                kit()
-                    .keycap(hint.key)
-                    .text_color(rgb(color))
-                    .border_color(rgba(alpha(color, 0x73))),
+                kit.keycap_inked(key, color)
+                    .border_color(rgba(qol_theme::translucent(color, qol_theme::Alpha::Veil))),
             )
             .child(div().text_color(rgb(color)).child(hint.label)),
     }
@@ -160,15 +152,15 @@ mod tests {
 
     #[test]
     fn hint_tone_color_names_the_state_roles() {
-        let palette = qol_theme::settings_panel_runtime();
-        assert_eq!(hint_tone_color(HintTone::Plain, palette), None);
+        let kit = crate::kit::kit();
+        assert_eq!(hint_tone_color(HintTone::Plain, kit), None);
         assert_eq!(
-            hint_tone_color(HintTone::Save, palette),
-            Some(palette.state_on)
+            hint_tone_color(HintTone::Save, kit),
+            Some(kit.palette.success)
         );
         assert_eq!(
-            hint_tone_color(HintTone::Discard, palette),
-            Some(palette.state_off)
+            hint_tone_color(HintTone::Discard, kit),
+            Some(kit.palette.danger)
         );
     }
 
@@ -176,7 +168,7 @@ mod tests {
     fn a_busy_hint_carries_no_key_and_the_label() {
         let hint = SettingsHint::busy("saving");
         assert!(hint.busy);
-        assert_eq!(hint.key, "");
+        assert_eq!(hint.key, None);
         assert_eq!(hint.label, "saving");
         assert_eq!(hint.tone, HintTone::Plain);
     }

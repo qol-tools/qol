@@ -15,6 +15,7 @@ workspace-hack.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 tempfile = "3"
+ttf-parser = "0.25"
 
 [[bin]]
 name = "qol-theme-css"

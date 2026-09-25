@@ -1,34 +1,44 @@
-use crate::chord::ModifierToken;
+use crate::chord::{Cap, ModifierToken};
 
-pub(super) fn shared_label(modifier: ModifierToken) -> &'static str {
+pub(super) const JOINER: Option<&str> = Some("+");
+
+pub(super) fn shared_word(modifier: ModifierToken) -> &'static str {
     match modifier {
-        ModifierToken::Ctrl | ModifierToken::Secondary => "Ctrl",
-        ModifierToken::Alt => "Alt",
-        ModifierToken::Shift => "Shift",
-        ModifierToken::Platform => "Super",
+        ModifierToken::Ctrl | ModifierToken::Secondary => "ctrl",
+        ModifierToken::Alt => "alt",
+        ModifierToken::Shift => "shift",
+        ModifierToken::Platform => "super",
     }
 }
 
-pub(super) fn join(mods: &[&str], key: &str) -> String {
-    let mut parts = mods.iter().map(|part| part.to_string()).collect::<Vec<_>>();
-    parts.push(key.to_string());
-    parts.join("+")
+pub(super) fn word(word: &str) -> Cap {
+    Cap::Text(word.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::chord::label_for;
+    use crate::chord::{caps_for, Cap, Glyph};
+
+    fn text(value: &str) -> Cap {
+        Cap::Text(value.to_owned())
+    }
 
     #[test]
-    fn renders_text_modifiers_joined_with_plus() {
-        assert_eq!(label_for("secondary+z").unwrap(), "Ctrl+Z");
-        assert_eq!(label_for("alt+s").unwrap(), "Alt+S");
-        assert_eq!(label_for("secondary+shift+z").unwrap(), "Shift+Ctrl+Z");
-        assert_eq!(label_for("escape").unwrap(), "\u{238B}");
+    fn renders_lowercase_modifiers_joined_with_plus() {
+        assert_eq!(caps_for("secondary+z").unwrap(), [text("ctrl+z")]);
+        assert_eq!(caps_for("alt+s").unwrap(), [text("alt+s")]);
+        assert_eq!(
+            caps_for("secondary+shift+z").unwrap(),
+            [text("ctrl+shift+z")]
+        );
+        assert_eq!(
+            caps_for("shift+enter").unwrap(),
+            [text("shift+"), Cap::Glyph(Glyph::Enter)]
+        );
     }
 
     #[test]
     fn platform_and_secondary_are_different_keys_here() {
-        assert_ne!(label_for("platform+w"), label_for("secondary+w"));
+        assert_ne!(caps_for("platform+w"), caps_for("secondary+w"));
     }
 }

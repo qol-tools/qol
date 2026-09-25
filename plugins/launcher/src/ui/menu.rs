@@ -1,12 +1,17 @@
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
 use super::trace;
 use super::LauncherView;
 use crate::discovery::search::{ResultSource, SearchMode};
+use qol_gpui::icon::{icon, Icon};
+use qol_gpui::text::{cased, TextStyled};
+use qol_gpui::theme::TextStyle;
+use qol_gpui::Key;
 
 const HELP_ROW_HEIGHT: f32 = 17.0;
-type HelpRows = &'static [(&'static str, &'static str)];
+type HelpRows = &'static [(&'static str, &'static [Key])];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MenuKind {
@@ -36,13 +41,13 @@ impl OptionAction {
         }
     }
 
-    fn shortcut(self) -> &'static str {
+    fn shortcut(self) -> &'static [Key] {
         match self {
-            Self::Open => "Enter",
-            Self::OpenFolder => "Shift+Enter",
-            Self::BoostUp => "Ctrl+→ / Alt+→",
-            Self::BoostDown => "Ctrl+← / Alt+←",
-            Self::Apps | Self::Files => "",
+            Self::Open => &[Key::ENTER],
+            Self::OpenFolder => const { &[Key::ENTER.shift()] },
+            Self::BoostUp => const { &[Key::RIGHT.secondary(), Key::RIGHT.alt()] },
+            Self::BoostDown => const { &[Key::LEFT.secondary(), Key::LEFT.alt()] },
+            Self::Apps | Self::Files => &[],
         }
     }
 }
@@ -65,46 +70,53 @@ fn option_actions(source: Option<ResultSource>, boost: i32) -> Vec<OptionAction>
 }
 
 const HELP_SEARCH_LEFT_ROWS: HelpRows = &[
-    ("Open", "Enter"),
-    ("Open folder", "Shift+Enter"),
-    ("Apps or files", "Tab"),
-    ("Options", "Alt+Enter"),
-    ("Close", "Esc"),
+    ("Open", &[Key::ENTER]),
+    ("Open folder", &[Key::ENTER.shift()]),
+    ("Apps or files", &[Key::TAB]),
+    ("Options", &[Key::ENTER.alt()]),
+    ("Close", &[Key::ESC]),
 ];
 
 const HELP_SEARCH_RIGHT_ROWS: HelpRows = &[
-    ("Raise rank in list", "Ctrl+→"),
-    ("Lower rank in list", "Ctrl+←"),
-    ("Narrow", "Ctrl+↑"),
-    ("Broaden", "Ctrl+↓"),
+    ("Raise rank in list", &[Key::RIGHT.secondary()]),
+    ("Lower rank in list", &[Key::LEFT.secondary()]),
+    ("Narrow", &[Key::UP.secondary()]),
+    ("Broaden", &[Key::DOWN.secondary()]),
 ];
 
 const HELP_QUERY_ROWS: HelpRows = &[
-    ("Query", ""),
-    ("Move caret", "← / →"),
-    ("Select text", "Shift+← / →"),
-    ("Start / end", "Home / End"),
-    ("Delete text", "Backspace / Del"),
-    ("Select all", "Ctrl+A"),
-    ("Copy / cut / paste", "Ctrl+C/X/V"),
+    ("Query", &[]),
+    ("Move caret", &[Key::LEFT, Key::RIGHT]),
+    ("Select text", &[Key::LEFT.shift(), Key::RIGHT.shift()]),
+    ("Start / end", &[Key::HOME, Key::END]),
+    ("Delete text", &[Key::BACKSPACE, Key::DELETE]),
+    ("Select all", &[Key::letter('a').secondary()]),
+    (
+        "Copy / cut / paste",
+        &[
+            Key::letter('c').secondary(),
+            Key::letter('x').secondary(),
+            Key::letter('v').secondary(),
+        ],
+    ),
 ];
 
 const HELP_FLOW_LEFT_ROWS: HelpRows = &[
-    ("Flow results", ""),
-    ("Move through results", "↑ / ↓"),
-    ("Open detail", "Enter"),
-    ("Dislike result", "Alt+X"),
-    ("Back to search", "Esc"),
+    ("Flow results", &[]),
+    ("Move through results", &[Key::UP, Key::DOWN]),
+    ("Open detail", &[Key::ENTER]),
+    ("Dislike result", &[Key::letter('x').alt()]),
+    ("Back to search", &[Key::ESC]),
 ];
 
 const HELP_DETAIL_LEFT_ROWS: HelpRows = &[
-    ("Flow detail", ""),
-    ("Scroll", "↑ / ↓"),
-    ("Activate", "Enter"),
-    ("Back to results", "Esc"),
+    ("Flow detail", &[]),
+    ("Scroll", &[Key::UP, Key::DOWN]),
+    ("Activate", &[Key::ENTER]),
+    ("Back to results", &[Key::ESC]),
 ];
 
-const HELP_FLOW_WINDOW_ROWS: HelpRows = &[("Window", ""), ("Help", "Alt+H")];
+const HELP_FLOW_WINDOW_ROWS: HelpRows = &[("Window", &[]), ("Help", &[Key::letter('h').alt()])];
 
 fn help_height(left: HelpRows, right: HelpRows, right_extra: HelpRows) -> f32 {
     qol_gpui::theme::HEIGHT_INLINE
@@ -257,69 +269,92 @@ impl LauncherView {
     pub(super) fn menu_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
         let kind = self.menu_kind.expect("menu overlay requires an open menu");
-        let panel = div()
+        let frame = div()
             .id("launcher-menu")
             .absolute()
-            .h(px(self.menu_height()))
+            .h(px(self.menu_height()));
+        let (frame, ground) = if kind == MenuKind::Help {
+            (
+                frame
+                    .top(px(HEADER_HEIGHT))
+                    .left_0()
+                    .w(px(WINDOW_WIDTH))
+                    .border_b(px(qol_gpui::theme::LINE))
+                    .border_color(rgba(kit.washes.hairline.packed()))
+                    .bg(super::view::bg_color()),
+                kit.grounds.pane,
+            )
+        } else {
+            (
+                frame
+                    .top(px(HEADER_HEIGHT + 4.0))
+                    .right(px(8.0))
+                    .w(px(280.0))
+                    .border(px(qol_gpui::theme::LINE))
+                    .border_color(rgba(kit.washes.hairline_strong.packed()))
+                    .bg(rgb(kit.palette.surface_raised))
+                    .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary)),
+                kit.grounds.menu,
+            )
+        };
+        let items = self.menu_items(kind, cx);
+        let children = items.len();
+        let panel = div()
+            .id("launcher-menu-scroll")
+            .size_full()
             .p(px(qol_gpui::theme::SPACE_TIGHT))
+            .when(kind == MenuKind::Help, |panel| {
+                panel.px(px(qol_gpui::theme::SPACE_PAD))
+            })
             .track_scroll(&self.menu_scroll)
             .overflow_y_scroll()
             .flex()
-            .flex_col();
-        let mut panel = if kind == MenuKind::Help {
-            panel
-                .top(px(HEADER_HEIGHT))
-                .left_0()
-                .w(px(WINDOW_WIDTH))
-                .px(px(qol_gpui::theme::SPACE_PAD))
-                .border_b(px(1.0))
-                .border_color(rgba(kit.washes.hairline.packed()))
-                .bg(super::view::bg_color())
-        } else {
-            panel
-                .top(px(HEADER_HEIGHT + 4.0))
-                .right(px(8.0))
-                .w(px(280.0))
-                .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
-                .border(px(1.0))
-                .border_color(rgba(kit.washes.hairline_strong.packed()))
-                .bg(rgb(kit.palette.surface_raised))
-                .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary))
-        };
+            .flex_col()
+            .children(items);
+        frame.child(panel).child(kit.scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Handle {
+                handle: self.menu_scroll.clone(),
+                children,
+            },
+            ground,
+        ))
+    }
+
+    fn menu_items(&self, kind: MenuKind, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if kind == MenuKind::Help {
             let (left, right, right_extra) = self.help_rows();
-            panel = panel.child(menu_title("Keys", "Alt+H"));
-            panel = panel.child(
+            return vec![
+                menu_title("Keys", Key::letter('h').alt()).into_any_element(),
                 div()
                     .flex()
                     .gap(px(qol_gpui::theme::SPACE_INSET))
                     .child(help_column(left, &[]))
-                    .child(help_column(right, right_extra)),
-            );
-            return panel;
+                    .child(help_column(right, right_extra))
+                    .into_any_element(),
+            ];
         }
-        panel = panel.child(menu_title("Options", "Alt+Enter"));
-        panel = panel.child(menu_section("Search type"));
+        let mut items = vec![
+            menu_title("Options", Key::ENTER.alt()).into_any_element(),
+            menu_section("Search type").into_any_element(),
+        ];
         let selected = self.store.get(self.state.scroll_list.selected);
         let actions = self.available_options();
         for (index, action) in actions.into_iter().enumerate() {
             if index == 2 {
                 if let Some(scored) = selected {
-                    panel = panel.child(menu_section(self.store.name(scored)));
+                    items.push(menu_section(self.store.name(scored)).into_any_element());
                 }
             }
-            panel = panel.child(option_row(
-                action,
-                index == self.menu_selected,
-                self.state.mode,
-                cx,
-            ));
+            items.push(
+                option_row(action, index == self.menu_selected, self.state.mode, cx)
+                    .into_any_element(),
+            );
         }
-        panel
+        items
     }
 }
 
-fn menu_title(label: &str, shortcut: &str) -> Div {
+fn menu_title(label: &str, shortcut: Key) -> Div {
     let kit = qol_gpui::kit::kit();
     div()
         .flex_none()
@@ -329,9 +364,9 @@ fn menu_title(label: &str, shortcut: &str) -> Div {
         .items_center()
         .justify_between()
         .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(qol_gpui::theme::TEXT_NANO))
-        .child(label.to_owned())
-        .child(shortcut.to_owned())
+        .text(TextStyle::Label)
+        .child(cased(TextStyle::Label, label))
+        .child(kit.key_name(&[shortcut], kit.palette.text_muted))
 }
 
 fn menu_section(label: &str) -> Div {
@@ -343,11 +378,11 @@ fn menu_section(label: &str) -> Div {
         .flex()
         .items_center()
         .text_color(rgb(kit.palette.text_muted))
-        .text_size(px(qol_gpui::theme::TEXT_NANO))
-        .child(label.to_owned())
+        .text(TextStyle::Label)
+        .child(cased(TextStyle::Label, label))
 }
 
-fn help_row(label: &str, shortcut: &str) -> Div {
+fn help_row(label: &str, shortcut: &[Key]) -> Div {
     let kit = qol_gpui::kit::kit();
     div()
         .flex_none()
@@ -358,16 +393,9 @@ fn help_row(label: &str, shortcut: &str) -> Div {
         .justify_between()
         .gap(px(qol_gpui::theme::SPACE_SNUG))
         .text_color(rgb(kit.palette.text_primary))
-        .text_size(px(qol_gpui::theme::TEXT_NANO))
-        .child(div().flex_1().min_w_0().truncate().child(label.to_owned()))
-        .child(
-            div()
-                .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(qol_gpui::theme::TEXT_IDENTITY))
-                .child(display_shortcut(shortcut)),
-        )
+        .text(TextStyle::Detail)
+        .child(div().flex_1().min_w_0().child(label.to_owned()))
+        .child(kit.key_name(shortcut, kit.palette.text_muted))
 }
 
 fn help_column(rows: HelpRows, extra: HelpRows) -> Div {
@@ -383,25 +411,14 @@ fn help_column(rows: HelpRows, extra: HelpRows) -> Div {
                     .flex()
                     .items_center()
                     .text_color(rgb(kit.palette.text_muted))
-                    .text_size(px(qol_gpui::theme::TEXT_NANO))
-                    .child((*label).to_owned()),
+                    .text(TextStyle::Label)
+                    .child(cased(TextStyle::Label, label)),
             )
         } else {
             column.child(help_row(label, shortcut))
         };
     }
     column
-}
-
-fn display_shortcut_for(shortcut: &str, macos: bool) -> String {
-    if macos {
-        return shortcut.replace("Ctrl+", "Cmd+");
-    }
-    shortcut.to_owned()
-}
-
-pub(super) fn display_shortcut(shortcut: &str) -> String {
-    display_shortcut_for(shortcut, cfg!(target_os = "macos"))
 }
 
 fn option_row(
@@ -411,10 +428,21 @@ fn option_row(
     cx: &mut Context<LauncherView>,
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
-    let mark = match action {
-        OptionAction::Apps if mode == SearchMode::Apps => "✓",
-        OptionAction::Files if mode == SearchMode::Files => "✓",
-        _ => action.shortcut(),
+    let ink = kit.highlight_ground(selected).faint;
+    let chosen = match action {
+        OptionAction::Apps => mode == SearchMode::Apps,
+        OptionAction::Files => mode == SearchMode::Files,
+        _ => false,
+    };
+    let mark = if chosen {
+        icon(
+            Icon::Tick,
+            TextStyle::Key.spec().size,
+            kit.highlight_ground(selected).ink,
+        )
+        .into_any_element()
+    } else {
+        kit.key_name(action.shortcut(), ink).into_any_element()
     };
     let row = div()
         .id(SharedString::from(format!("launcher-option-{action:?}")))
@@ -424,32 +452,22 @@ fn option_row(
         .items_center()
         .justify_between()
         .gap(px(qol_gpui::theme::SPACE_SNUG))
-        .rounded(px(qol_gpui::theme::RADIUS_TIGHT))
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(kit.washes.fill_hover.packed())))
         .text_color(rgb(kit.palette.text_primary))
-        .text_size(px(qol_gpui::theme::TEXT_MICRO))
-        .child(div().flex_1().min_w_0().truncate().child(action.label()))
-        .child(
-            div()
-                .flex_none()
-                .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                .text_color(rgb(kit.palette.text_muted))
-                .text_size(px(qol_gpui::theme::TEXT_IDENTITY))
-                .child(display_shortcut(mark)),
-        )
+        .text(TextStyle::ListName)
+        .child(div().flex_1().min_w_0().child(action.label()))
+        .child(mark)
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.activate_option(action, window, cx);
         }));
-    kit.row_selected(row, selected)
+    kit.highlight(row, selected)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        display_shortcut_for, help_height, option_actions, OptionAction, HELP_DETAIL_LEFT_ROWS,
-        HELP_FLOW_LEFT_ROWS, HELP_FLOW_WINDOW_ROWS, HELP_QUERY_ROWS, HELP_SEARCH_LEFT_ROWS,
-        HELP_SEARCH_RIGHT_ROWS,
+        help_height, option_actions, OptionAction, HELP_DETAIL_LEFT_ROWS, HELP_FLOW_LEFT_ROWS,
+        HELP_FLOW_WINDOW_ROWS, HELP_QUERY_ROWS, HELP_SEARCH_LEFT_ROWS, HELP_SEARCH_RIGHT_ROWS,
     };
     use crate::discovery::search::ResultSource;
     use crate::ui::input::InputEffect;
@@ -524,19 +542,6 @@ mod tests {
             state.list_focused = true;
             assert_eq!(state.apply_key(key, &modifiers, 1), effect, "{label}");
         }
-    }
-
-    #[test]
-    fn shortcut_labels_use_the_platform_secondary_key() {
-        assert_eq!(
-            display_shortcut_for("Ctrl+→ / Alt+→", false),
-            "Ctrl+→ / Alt+→"
-        );
-        assert_eq!(
-            display_shortcut_for("Ctrl+→ / Alt+→", true),
-            "Cmd+→ / Alt+→"
-        );
-        assert_eq!(display_shortcut_for("Ctrl+C/X/V", true), "Cmd+C/X/V");
     }
 
     #[test]

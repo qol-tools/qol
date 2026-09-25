@@ -1,9 +1,11 @@
+use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, FontWeight};
+use gpui::{div, px, rgb};
+use qol_theme::TextStyle;
 
+use crate::kit::Kit;
 use crate::settings_panel::rows::{Row, RowControl};
 use crate::settings_panel::{PANEL_QR_CODE_HEIGHT, PANEL_QR_URL_HEIGHT};
-use crate::theme::SettingsPanelPalette;
 
 use super::{one_line, paint_settings_selection, settings_query_spinner, RowGround};
 
@@ -14,7 +16,7 @@ pub(in crate::settings_panel) fn qr_code_display(
     loading: bool,
     body_height: f32,
     header_height: f32,
-    palette: SettingsPanelPalette,
+    kit: Kit,
 ) -> gpui::Div {
     let RowControl::QrCode {
         url,
@@ -26,7 +28,7 @@ pub(in crate::settings_panel) fn qr_code_display(
         return div();
     };
     let row_ground = RowGround::of(highlighted, true);
-    let ground = row_ground.rest(palette);
+    let ground = row_ground.rest(kit);
     let mut container = div()
         .flex()
         .flex_col()
@@ -38,7 +40,7 @@ pub(in crate::settings_panel) fn qr_code_display(
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded(px(qol_theme::RADIUS_CARD));
     if highlighted {
-        container = paint_settings_selection(container, palette);
+        container = paint_settings_selection(container, kit);
     }
     container = container.child(
         div()
@@ -48,7 +50,6 @@ pub(in crate::settings_panel) fn qr_code_display(
             .items_center()
             .h(px(header_height))
             .gap(px(qol_theme::SPACE_CELL))
-            .text_size(px(qol_theme::TEXT_BODY))
             .child(
                 div()
                     .flex()
@@ -57,16 +58,14 @@ pub(in crate::settings_panel) fn qr_code_display(
                     .flex_col()
                     .child(
                         div()
-                            .truncate()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .text(TextStyle::Name)
                             .text_color(rgb(ground.ink))
                             .child(row.label.clone()),
                     )
                     .when_some(row.description.clone(), |group, description| {
                         group.child(
                             div()
-                                .truncate()
-                                .text_size(px(qol_theme::TEXT_CAPTION))
+                                .text(TextStyle::Detail)
                                 .text_color(rgb(ground.soft))
                                 .child(description),
                         )
@@ -83,7 +82,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                 .flex_none()
                 .items_center()
                 .justify_center()
-                .bg(rgb(palette.qr_light))
+                .bg(rgb(qol_theme::DARK_TRAY_INTERNAL.config_qr_light))
                 .h(px(PANEL_QR_CODE_HEIGHT));
             for y in 0..side {
                 let mut line = div().flex().flex_row().flex_none().h(px(module_px));
@@ -94,7 +93,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                             div()
                                 .w(px(module_px))
                                 .h(px(module_px))
-                                .bg(rgb(palette.qr_dark)),
+                                .bg(rgb(qol_theme::DARK_TRAY_INTERNAL.config_qr_dark)),
                         );
                     } else {
                         line = line.child(div().w(px(module_px)).h(px(module_px)));
@@ -115,7 +114,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                 frame.child(settings_query_spinner(
                     ("settings-qr-spinner", index),
                     row_ground,
-                    palette,
+                    kit,
                 ))
             } else {
                 let placeholder = row
@@ -123,7 +122,7 @@ pub(in crate::settings_panel) fn qr_code_display(
                     .clone()
                     .unwrap_or_else(|| "unavailable".into());
                 frame
-                    .text_size(px(qol_theme::TEXT_BODY))
+                    .text(TextStyle::Value)
                     .text_color(rgb(ground.soft))
                     .child(placeholder)
             }
@@ -142,9 +141,9 @@ pub(in crate::settings_panel) fn qr_code_display(
                 .flex_none()
                 .items_center()
                 .h(px(PANEL_QR_URL_HEIGHT))
-                .text_size(px(qol_theme::TEXT_CAPTION))
+                .text(TextStyle::Code)
                 .text_color(if error.is_some() {
-                    rgb(palette.state_off)
+                    rgb(kit.palette.danger)
                 } else {
                     rgb(ground.soft)
                 })

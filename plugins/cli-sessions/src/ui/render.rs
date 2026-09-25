@@ -1,10 +1,13 @@
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, FontWeight, KeyDownEvent,
-    KeyUpEvent, Modifiers, SharedString, Window,
+    div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, KeyDownEvent, KeyUpEvent,
+    Modifiers, SharedString, Window,
 };
+use qol_gpui::kit::Chip;
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
-use qol_gpui::theme::{cli_sessions_runtime, CliSessionsPalette};
+use qol_gpui::text::TextStyled;
+use qol_gpui::theme::TextStyle;
+use qol_gpui::Key;
 use qol_terminal_sessions::SessionId;
 
 use crate::session::registry::{meaningful_name, SessionState};
@@ -15,14 +18,6 @@ use crate::ui::SessionsView;
 const CLOSE_KEY_REASON: &str = "close-key";
 const ESCAPE_REASON: &str = "escape";
 const STRIP_ESCAPE_REASON: &str = "strip-escape";
-
-fn current_palette() -> CliSessionsPalette {
-    cli_sessions_runtime()
-}
-
-fn panel_shadow(palette: &CliSessionsPalette) -> Vec<gpui::BoxShadow> {
-    qol_gpui::kit::float_shadow(palette.text_primary)
-}
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -53,8 +48,8 @@ fn status_dot_el(
     status: Status,
     id: impl Into<gpui::ElementId>,
 ) -> AnyElement {
-    let (tone, halo) = (status.definition().colors)(&current_palette());
-    kit.animated_status_dot(id, tone, halo, status.is_active())
+    let (tone, halo) = (status.definition().colors)(kit);
+    kit.live_dot(id, tone, halo, status.is_active())
 }
 
 fn live_count(rows: &[SessionState]) -> usize {
@@ -67,7 +62,6 @@ fn header(
     cx: &mut Context<SessionsView>,
 ) -> impl IntoElement {
     let collapsed = view.is_collapsed();
-    let palette = current_palette();
     let kit = qol_gpui::kit::kit();
     div()
         .flex_none()
@@ -77,8 +71,8 @@ fn header(
         .items_center()
         .justify_between()
         .px(px(qol_gpui::theme::SPACE_PAD))
-        .bg(rgb(palette.band_bg))
-        .border_b(px(1.0))
+        .bg(rgb(kit.grounds.rail.bg))
+        .border_b(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .child(
             div()
@@ -99,47 +93,31 @@ fn header(
                             }
                         }))
                 })
-                .text_color(rgb(palette.text_heading))
-                .text_size(px(qol_gpui::theme::TEXT_BODY))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("Sessions"),
+                .child(kit.heading_title(
+                    TextStyle::Heading,
+                    "sessions",
+                    Some("every agent lane on this machine.".into()),
+                    true,
+                )),
         )
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(qol_gpui::theme::SPACE_STACK))
-                .child(kit.count_chip_small(live_count(rows), "live"))
+                .child(kit.chip(
+                    Chip::Count(live_count(rows), "live".into()),
+                    kit.grounds.pane,
+                ))
                 .child(panel_controls(collapsed, cx)),
         )
 }
 
 fn empty_state() -> impl IntoElement {
-    let palette = current_palette();
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(8.0))
-        .px(px(24.0))
-        .child(
-            div()
-                .text_color(rgb(palette.text_heading))
-                .text_size(px(qol_gpui::theme::TEXT_BODY))
-                .child("No sessions running"),
-        )
-        .child(
-            div()
-                .text_color(rgb(palette.text_muted))
-                .text_size(px(qol_gpui::theme::TEXT_NANO))
-                .child("spawned lanes appear here"),
-        )
-}
-
-fn chord(input: &str) -> String {
-    qol_hotkeys::chord::label_for(input).unwrap_or_default()
+    qol_gpui::kit::kit().empty(
+        "No sessions running",
+        Some("Spawned lanes appear here.".into()),
+    )
 }
 
 fn panel_controls(collapsed: bool, cx: &mut Context<SessionsView>) -> impl IntoElement {
@@ -206,32 +184,45 @@ fn header_control(
 
 fn footer() -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
-    kit.hint_bar_compact()
-        .justify_center()
-        .child(kit.hint_label_first("Focus", "Enter"))
-        .child(kit.hint_label_first("Acknowledge", "A"))
-        .child(kit.hint_label_first("Collapse", chord("alt+s")))
+    kit.hint_bar()
+        .child(kit.hint(Key::ENTER, "focus"))
+        .child(kit.hint(Key::letter('a'), "acknowledge"))
+        .child(kit.hint(Key::letter('s').alt(), "collapse"))
 }
 
 fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyElement {
     let kit = qol_gpui::kit::kit();
     if s.status == Status::YourTurn {
         let id = s.id.clone();
-        let (tone, _) = (s.status.definition().colors)(&current_palette());
+        let (tone, _) = (s.status.definition().colors)(&kit);
         return div()
             .flex()
             .min_w_0()
             .h(px(qol_gpui::theme::SPACE_PAD))
             .child(
-                kit.status_pill("your turn ✓", tone)
+                kit.pointable(
+                    kit.chip(
+                        Chip::Status {
+                            tone,
+                            halo: qol_gpui::theme::translucent(tone, qol_gpui::theme::Alpha::Halo),
+                            text: "your turn".into(),
+                        },
+                        kit.grounds.pane,
+                    )
+                    .child(qol_gpui::icon::icon(
+                        qol_gpui::Icon::Tick,
+                        qol_gpui::theme::TEXT_NANO,
+                        tone,
+                    ))
                     .id(SharedString::from(format!("ack-{}", s.id)))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(|style| style.bg(rgba(current_palette().your_turn_hover_rgba)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.acknowledge(&id);
-                        cx.notify();
-                        cx.stop_propagation();
-                    })),
+                    .cursor(CursorStyle::PointingHand),
+                    rgb(kit.grounds.pane.lift),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.acknowledge(&id);
+                    cx.notify();
+                    cx.stop_propagation();
+                })),
             )
             .into_any_element();
     }
@@ -241,22 +232,19 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
         } else {
             s.summary.clone()
         },
-        qol_gpui::theme::TEXT_NANO,
-        FontWeight::NORMAL,
+        TextStyle::Detail,
         kit.palette.text_muted,
     )
     .h(px(qol_gpui::theme::SPACE_PAD))
     .into_any_element()
 }
 
-fn text_line(text: String, size: f32, weight: FontWeight, color: u32) -> gpui::Div {
+fn text_line(text: String, style: TextStyle, color: u32) -> gpui::Div {
     div().flex().w_full().min_w_0().overflow_hidden().child(
         div()
             .flex_1()
             .min_w_0()
-            .truncate()
-            .text_size(px(size))
-            .font_weight(weight)
+            .text(style)
             .text_color(rgb(color))
             .child(text),
     )
@@ -269,13 +257,16 @@ fn agent_chip(
 ) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
     let driver = session.id.clone();
-    kit.count_button(session.driving.len())
-        .id(("cycle-agents", index))
-        .cursor(CursorStyle::PointingHand)
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.cycle_implementers_of(&driver, true, cx);
-            cx.stop_propagation();
-        }))
+    kit.chip(
+        Chip::Count(session.driving.len(), SharedString::default()),
+        kit.grounds.pane,
+    )
+    .id(("cycle-agents", index))
+    .cursor(CursorStyle::PointingHand)
+    .on_click(cx.listener(move |this, _, _, cx| {
+        this.cycle_implementers_of(&driver, true, cx);
+        cx.stop_propagation();
+    }))
 }
 
 fn session_row(
@@ -287,8 +278,6 @@ fn session_row(
     let id = s.id.clone();
     let kit = qol_gpui::kit::kit();
     let idle = is_idle(s.status);
-    let (tone, _) = (s.status.definition().colors)(&current_palette());
-    let tint = qol_gpui::theme::tinted_row_palette(tone, kit.palette);
     let name = meaningful_name(s.name.as_deref())
         .or_else(|| meaningful_name(Some(&s.project)))
         .unwrap_or(&s.tool.label)
@@ -305,11 +294,6 @@ fn session_row(
         .overflow_hidden()
         .gap(px(qol_gpui::theme::SPACE_CELL))
         .cursor(CursorStyle::PointingHand)
-        .hover(move |style| {
-            style.bg(rgba(
-                if selected { tint.selected } else { tint.hover }.packed(),
-            ))
-        })
         .child(kit.vertical_identity_tab(s.tool.label.clone(), s.tool.accent.rgb24()))
         .child(status_dot_el(
             &kit,
@@ -326,8 +310,7 @@ fn session_row(
                 .child(
                     text_line(
                         name,
-                        qol_gpui::theme::TEXT_CAPTION,
-                        FontWeight::SEMIBOLD,
+                        TextStyle::ListName,
                         if idle {
                             kit.palette.text_secondary
                         } else {
@@ -352,23 +335,17 @@ fn session_row(
                 .child(
                     div()
                         .flex_none()
-                        .font_family(SharedString::from(qol_gpui::theme::font_mono()))
-                        .text_size(px(qol_gpui::theme::TEXT_NANO))
+                        .text(TextStyle::Code)
                         .text_color(rgb(kit.palette.text_muted))
                         .child(format_elapsed(s.last_activity)),
                 ),
         )
-        .when(!selected, |row| {
-            row.child(
-                kit.row_separator()
-                    .group_hover("session-row", |style| style.opacity(0.0)),
-            )
-        })
+        .when(!selected, |row| row.child(kit.row_separator()))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.jump_to_session(id.clone(), "row-click", cx);
             cx.notify();
         }));
-    kit.row_selected_tinted_after(row, selected, tone, qol_gpui::vertical_label::WIDTH)
+    kit.highlight(row, selected)
 }
 
 enum StripAction {
@@ -404,13 +381,14 @@ impl SessionsView {
         body_visible: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = current_palette();
         let order: Vec<SessionId> = rows.iter().map(|s| s.id.clone()).collect();
         let highlight = self.selection().highlight_index(&order);
         let is_empty = rows.is_empty();
         if body_visible {
             self.list_scroll.follow(highlight, None, px(0.));
         }
+        let kit = qol_gpui::kit::kit();
+        let row_count = rows.len();
         let row_els: Vec<_> = rows
             .iter()
             .filter(|_| body_visible)
@@ -418,17 +396,13 @@ impl SessionsView {
             .map(|(i, s)| session_row(s, highlight == Some(i), i, cx))
             .collect();
 
-        div()
+        qol_gpui::kit::kit()
+            .window()
             .id("cli-sessions")
             .track_focus(&self.focus_handle)
             .tab_stop(true)
-            .size_full()
             .flex()
             .flex_col()
-            .rounded_none()
-            .overflow_hidden()
-            .bg(rgb(palette.panel_bg))
-            .shadow(panel_shadow(&palette))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 if this.is_collapsed() && ev.keystroke.key != "tab" {
                     match strip_key_action(&ev.keystroke.key, &ev.keystroke.modifiers) {
@@ -505,16 +479,28 @@ impl SessionsView {
                 panel
                     .child(
                         div()
-                            .id("cli-sessions-list")
+                            .relative()
                             .flex_1()
                             .min_h_0()
                             .w_full()
-                            .track_scroll(self.list_scroll.handle())
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_col()
-                            .when(is_empty, |d| d.child(empty_state()))
-                            .children(row_els),
+                            .child(
+                                div()
+                                    .id("cli-sessions-list")
+                                    .size_full()
+                                    .track_scroll(self.list_scroll.handle())
+                                    .overflow_y_scroll()
+                                    .flex()
+                                    .flex_col()
+                                    .when(is_empty, |d| d.child(empty_state()))
+                                    .children(row_els),
+                            )
+                            .child(kit.scroll_cue(
+                                qol_gpui::scrollbar::ScrollSource::Handle {
+                                    handle: self.list_scroll.handle().clone(),
+                                    children: row_count,
+                                },
+                                kit.grounds.pane,
+                            )),
                     )
                     .child(footer())
             })

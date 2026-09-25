@@ -64,6 +64,7 @@ toml_writer = { version = "1" }
 tracing-core = { version = "0.1" }
 tracing-log = { version = "0.2" }
 tracing-subscriber = { version = "0.3" }
+ttf-parser = { version = "0.25", features = ["no-std-float"] }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
@@ -123,6 +124,7 @@ toml_writer = { version = "1" }
 tracing-core = { version = "0.1" }
 tracing-log = { version = "0.2" }
 tracing-subscriber = { version = "0.3" }
+ttf-parser = { version = "0.25", features = ["no-std-float"] }
 typenum = { version = "1", default-features = false, features = ["const-generics"] }
 winnow-dff4ba8e3ae991db = { package = "winnow", version = "1" }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }

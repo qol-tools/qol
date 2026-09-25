@@ -11,7 +11,6 @@ const PREVIEW_ASPECT_W: f32 = 16.0;
 const PREVIEW_ASPECT_H: f32 = 9.0;
 const BASE_LABEL_FONT: f32 = 10.0;
 const BASE_LABEL_STRIP_HEIGHT: f32 = BASE_LABEL_FONT * 2.65;
-const LABEL_LINE_HEIGHT_FACTOR: f32 = 1.25;
 const BASE_LABEL_ICON: f32 = 16.0;
 const BASE_MINIMIZED_ICON: f32 = 48.0;
 /// Height of the hotkey hints bar (py_2 + text_xs + border_b_1).
@@ -56,14 +55,6 @@ impl CardMetrics {
             preview_height,
             label_strip_height,
         }
-    }
-
-    pub fn label_font_px(&self, size_factor: f32) -> f32 {
-        BASE_LABEL_FONT * self.scale * size_factor
-    }
-
-    pub fn label_line_height_px(&self, size_factor: f32) -> f32 {
-        self.label_font_px(size_factor) * LABEL_LINE_HEIGHT_FACTOR
     }
 
     pub fn label_icon_px(&self, size_factor: f32) -> f32 {

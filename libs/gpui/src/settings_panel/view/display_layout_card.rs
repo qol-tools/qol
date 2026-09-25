@@ -1,3 +1,4 @@
+use crate::kit::Chip;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -7,8 +8,9 @@ use qol_config::contract::resolve_slider_action;
 
 use super::super::components::{
     display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_spinner,
-    settings_description, settings_label, settings_label_group, settings_message, ChoiceArt,
-    DisplayLayoutTile, RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, TileArt,
+    settings_description, settings_label, settings_label_group, settings_message,
+    settings_value_text, ChoiceArt, DisplayLayoutTile, RowGround, SettingsChoiceValue,
+    SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
 };
 use super::super::display_layout::{mode_label, nudge_step, Display, DisplayLayoutState, Rect};
 use super::super::form_nav::adjacent_visible_row;
@@ -20,6 +22,7 @@ use super::list_card::{
     SliderTrackStyle,
 };
 use super::{slider_fraction, Level, LevelHeader, SettingsPanelView};
+use crate::key::Key;
 use crate::pictures::PictureContext;
 
 const DISPLAY_LAYOUT_STAGE_PAD: f32 = qol_theme::SPACE_INSET;
@@ -520,7 +523,7 @@ impl SettingsPanelView {
         let Some(state) = self.level().display_layout.as_ref() else {
             return Vec::new();
         };
-        let palette = self.palette;
+        let palette = self.kit;
         let mut staged = state.clone();
         let (stage_width, stage_height) = self.display_layout_viewport();
         staged.set_viewport(stage_width, stage_height, DISPLAY_LAYOUT_STAGE_PAD);
@@ -603,17 +606,14 @@ impl SettingsPanelView {
                                 "settings-display-layout-swap-{index}-{}",
                                 self.display_layout_motion.step
                             );
-                            stage.child(
-                                tile.with_animation(
-                                    ElementId::Name(id.into()),
-                                    Animation::new(crate::deck::TRANSITION)
-                                        .with_easing(ease_out_quint()),
-                                    move |tile, delta| {
-                                        tile.left(px(start.0 + (end.0 - start.0) * delta))
-                                            .top(px(start.1 + (end.1 - start.1) * delta))
-                                    },
-                                ),
-                            )
+                            stage.child(tile.with_animation(
+                                ElementId::Name(id.into()),
+                                crate::motion::animation(qol_theme::Motion::SETTLE),
+                                move |tile, delta| {
+                                    tile.left(px(start.0 + (end.0 - start.0) * delta))
+                                        .top(px(start.1 + (end.1 - start.1) * delta))
+                                },
+                            ))
                         }
                         None => stage.child(tile),
                     };
@@ -777,18 +777,13 @@ impl SettingsPanelView {
                 self.body_has_focus(),
             )
             .dimmed(!staged.has_staged_edits() || !staged.is_committable())
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(self.palette.state_on))
-                    .child("Apply"),
-            )
-            .child(
-                div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.label_text))
-                    .child("enter"),
-            )
+            .child(settings_value_text(
+                "Apply",
+                SettingsValueTone::Success,
+                RowGround::Pane,
+                self.kit,
+            ))
+            .child(self.kit.chip(Chip::Key(Key::ENTER), self.kit.grounds.pane))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;
@@ -802,7 +797,7 @@ impl SettingsPanelView {
                 self.body_has_focus(),
             )
             .child(settings_label("Cancel", palette))
-            .child(self.kit.keycap("esc"))
+            .child(self.kit.chip(Chip::Key(Key::ESC), self.kit.grounds.pane))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
                     return;
@@ -818,18 +813,11 @@ impl SettingsPanelView {
             .selected()
             .is_some_and(|display| staged.conflicts(&display.id))
         {
-            primary_body = primary_body.child(SettingsFeedback::new(
-                "This display overlaps another",
-                palette.status_danger,
-                true,
-            ));
+            primary_body =
+                primary_body.child(SettingsFeedback::new("This display overlaps another", true));
         }
         if let Some(error) = staged.error() {
-            primary_body = primary_body.child(SettingsFeedback::new(
-                error.to_string(),
-                palette.status_danger,
-                true,
-            ));
+            primary_body = primary_body.child(SettingsFeedback::new(error.to_string(), true));
         }
         let slider = staged.bindings().slider.clone();
         let brightness_ground = RowGround::of(
@@ -863,7 +851,7 @@ impl SettingsPanelView {
                                 fraction,
                                 percent,
                                 ground: brightness_ground,
-                                palette,
+                                kit: self.kit,
                             },
                             move |panel: &mut SettingsPanelView,
                                   _row: usize,

@@ -1,14 +1,17 @@
+use crate::key::Key;
+use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{
     div, img, px, rgb, rgba, AnyElement, App, ClickEvent, CursorStyle, Div, ElementId, RenderOnce,
     SharedString, Window,
 };
+use qol_theme::TextStyle;
 
 use qol_config::contract::is_picture_spec;
 
 use crate::kit::kit;
+use crate::kit::Kit;
 use crate::pictures::{self, PictureContext};
-use crate::theme::SettingsPanelPalette;
 
 use super::hint_bar::SettingsHint;
 use super::settings_tile_spinner;
@@ -17,7 +20,6 @@ pub const TILE_HEIGHT: f32 = 116.0;
 
 const TICK_WIDTH: f32 = 16.0;
 const TICK_HEIGHT: f32 = 12.0;
-const NAME_LINE_HEIGHT: f32 = 1.25;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TileArt {
@@ -31,7 +33,7 @@ pub struct TileLayout {
     pub art_width: f32,
     pub art_height: f32,
     pub gap: f32,
-    pub name_size: f32,
+    pub name_style: TextStyle,
 }
 
 pub fn tile_layout(tile_count: usize) -> TileLayout {
@@ -41,7 +43,7 @@ pub fn tile_layout(tile_count: usize) -> TileLayout {
             art_width: 112.0,
             art_height: 70.0,
             gap: qol_theme::SPACE_INSET,
-            name_size: qol_theme::TEXT_CAPTION,
+            name_style: TextStyle::ListName,
         }
     } else if tile_count <= 8 {
         TileLayout {
@@ -49,7 +51,7 @@ pub fn tile_layout(tile_count: usize) -> TileLayout {
             art_width: 104.0,
             art_height: 65.0,
             gap: qol_theme::SPACE_INSET,
-            name_size: qol_theme::TEXT_CAPTION,
+            name_style: TextStyle::ListName,
         }
     } else {
         TileLayout {
@@ -57,7 +59,7 @@ pub fn tile_layout(tile_count: usize) -> TileLayout {
             art_width: 88.0,
             art_height: 55.0,
             gap: qol_theme::SPACE_SNUG,
-            name_size: qol_theme::TEXT_MICRO,
+            name_style: TextStyle::Detail,
         }
     }
 }
@@ -116,11 +118,11 @@ pub fn choose_step(highlighted: usize, count: usize, per_row: usize, key: &str) 
 
 pub fn choose_hints(count: usize) -> Vec<SettingsHint> {
     let movement = if count > tile_layout(count).per_row {
-        SettingsHint::new("\u{2190}\u{2192}\u{2191}\u{2193}", "move")
+        SettingsHint::new(Key::ARROWS, "move")
     } else {
-        SettingsHint::new("\u{2190}\u{2192}", "move")
+        SettingsHint::new(Key::LEFT_RIGHT, "move")
     };
-    vec![SettingsHint::new("\u{21b5}", "choose"), movement]
+    vec![SettingsHint::new(Key::ENTER, "choose"), movement]
 }
 
 pub fn settings_tile_rows(per_row: usize, tiles: Vec<AnyElement>) -> Vec<Div> {
@@ -163,7 +165,7 @@ pub struct SettingsTile {
     art: TileArt,
     layout: TileLayout,
     context: PictureContext,
-    palette: SettingsPanelPalette,
+    kit: Kit,
     highlighted: bool,
     ticked: bool,
     on_click: Option<ClickHandler>,
@@ -176,7 +178,7 @@ impl SettingsTile {
         art: TileArt,
         layout: TileLayout,
         context: PictureContext,
-        palette: SettingsPanelPalette,
+        kit: Kit,
     ) -> Self {
         Self {
             id: id.into(),
@@ -185,7 +187,7 @@ impl SettingsTile {
             art,
             layout,
             context,
-            palette,
+            kit,
             highlighted: false,
             ticked: false,
             on_click: None,
@@ -226,13 +228,13 @@ impl RenderOnce for SettingsTile {
             art,
             layout,
             context,
-            palette,
+            kit,
             highlighted,
             ticked,
             on_click,
         } = self;
-        let ground = palette.grounds.pane;
-        let band = palette.grounds.band;
+        let ground = kit.grounds.pane;
+        let band = kit.grounds.band;
         let waiting = matches!(art, TileArt::Waiting);
         let scale = window.scale_factor();
 
@@ -256,7 +258,7 @@ impl RenderOnce for SettingsTile {
             shared.washes.hairline_strong.packed()
         };
         tile = tile
-            .border(px(1.0))
+            .border(px(qol_theme::LINE))
             .border_color(rgba(border_color))
             .when(highlighted, |tile| tile.bg(rgb(band.bg)));
 
@@ -279,7 +281,7 @@ impl RenderOnce for SettingsTile {
                     None => art_box,
                 }
             }
-            TileArt::Waiting => art_box.child(settings_tile_spinner(id, palette)),
+            TileArt::Waiting => art_box.child(settings_tile_spinner(id, kit)),
         };
 
         let name_color = if waiting {
@@ -292,9 +294,8 @@ impl RenderOnce for SettingsTile {
         let name = div()
             .w_full()
             .text_center()
+            .text(layout.name_style)
             .line_clamp(2)
-            .line_height(gpui::relative(NAME_LINE_HEIGHT))
-            .text_size(px(layout.name_size))
             .text_color(rgb(name_color))
             .child(name);
 
@@ -303,8 +304,7 @@ impl RenderOnce for SettingsTile {
             div()
                 .w_full()
                 .text_center()
-                .line_clamp(1)
-                .text_size(px(qol_theme::TEXT_NANO))
+                .text(TextStyle::Detail)
                 .text_color(rgb(color))
                 .child(detail)
         });
@@ -349,6 +349,8 @@ mod tests {
     use super::{
         choose_hints, choose_step, tile_arts, tile_grid_gap, tile_layout, TileArt, TileLayout,
     };
+    use crate::key::Key;
+    use qol_theme::TextStyle;
 
     #[test]
     fn tile_layout_steps_with_the_option_count() {
@@ -360,7 +362,7 @@ mod tests {
                     art_width: 112.0,
                     art_height: 70.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -370,7 +372,7 @@ mod tests {
                     art_width: 112.0,
                     art_height: 70.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -380,7 +382,7 @@ mod tests {
                     art_width: 104.0,
                     art_height: 65.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -390,7 +392,7 @@ mod tests {
                     art_width: 104.0,
                     art_height: 65.0,
                     gap: qol_theme::SPACE_INSET,
-                    name_size: qol_theme::TEXT_CAPTION,
+                    name_style: TextStyle::ListName,
                 },
             ),
             (
@@ -400,7 +402,7 @@ mod tests {
                     art_width: 88.0,
                     art_height: 55.0,
                     gap: qol_theme::SPACE_SNUG,
-                    name_size: qol_theme::TEXT_MICRO,
+                    name_style: TextStyle::Detail,
                 },
             ),
             (
@@ -410,7 +412,7 @@ mod tests {
                     art_width: 88.0,
                     art_height: 55.0,
                     gap: qol_theme::SPACE_SNUG,
-                    name_size: qol_theme::TEXT_MICRO,
+                    name_style: TextStyle::Detail,
                 },
             ),
         ];
@@ -490,16 +492,16 @@ mod tests {
     fn choose_hints_follow_the_tile_grid() {
         let three = choose_hints(3);
         assert_eq!(three.len(), 2);
-        assert_eq!(three[0].key, "\u{21b5}");
+        assert_eq!(three[0].key, Some(Key::ENTER));
         assert_eq!(three[0].label, "choose");
-        assert_eq!(three[1].key, "\u{2190}\u{2192}");
+        assert_eq!(three[1].key, Some(Key::LEFT_RIGHT));
         assert_eq!(three[1].label, "move");
 
         let ten = choose_hints(10);
         assert_eq!(ten.len(), 2);
-        assert_eq!(ten[0].key, "\u{21b5}");
+        assert_eq!(ten[0].key, Some(Key::ENTER));
         assert_eq!(ten[0].label, "choose");
-        assert_eq!(ten[1].key, "\u{2190}\u{2192}\u{2191}\u{2193}");
+        assert_eq!(ten[1].key, Some(Key::ARROWS));
         assert_eq!(ten[1].label, "move");
     }
 }

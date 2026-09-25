@@ -11,8 +11,7 @@
     gap: var(--space-1-5);
     padding: var(--space-3) var(--space-5);
     border-bottom: var(--border-w-1) solid var(--border-subtle);
-    border-left: var(--border-w-3) solid transparent;
-    transition: background var(--transition), border-left-color var(--transition);
+    transition: background var(--transition);
     box-sizing: border-box;
     cursor: pointer;
 }
@@ -33,17 +32,10 @@
 }
 
 .list-row[data-accent="success"],
-.table-list-row[data-accent="success"]     { border-left-color: var(--success); }
 .list-row[data-accent="danger"],
-.table-list-row[data-accent="danger"]      { border-left-color: var(--danger); }
 .list-row[data-accent="warning"],
-.table-list-row[data-accent="warning"]     { border-left-color: var(--warning); }
 .list-row[data-accent="accent"],
-.table-list-row[data-accent="accent"]      { border-left-color: var(--accent); }
 .list-row[data-accent="muted"],
-.table-list-row[data-accent="muted"]       { border-left-color: var(--text-faint); }
-.list-row[data-accent="danger-soft"]       { border-left-color: rgba(var(--danger-rgb), 0.35); }
-.list-row[data-accent="accent-soft"]       { border-left-color: rgba(var(--accent-rgb), 0.28); }
 
 .list-group-cards {
     background: none;
@@ -58,8 +50,7 @@
     background: var(--surface-row);
     border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
-    border-left: var(--border-w-3) solid transparent;
-    box-shadow: var(--elevation-crisp-1);
+    box-shadow: var(--qol-shadow-raised);
 }
 
 .list-group-cards > .list-row:last-child {
@@ -119,7 +110,9 @@
     clip-path: circle(50% at 50% 50%);
     opacity: 0.24;
     filter: grayscale(1) brightness(0.9);
-    box-shadow: 0 0 0 1px var(--layer-paper-10);
+    box-shadow: none;
+    outline: var(--qol-line) solid var(--layer-paper-10);
+    outline-offset: 0;
     pointer-events: none;
     transition: opacity var(--transition), filter var(--transition);
 }
@@ -127,7 +120,9 @@
 .list-row[data-accent="success"] .list-row-action-icon {
     opacity: 0.9;
     filter: none;
-    box-shadow: 0 0 0 1px var(--layer-paper-16), 0 0 10px var(--accent-glow-faint);
+    box-shadow: none;
+    outline: var(--qol-line) solid var(--layer-paper-16);
+    outline-offset: 0;
 }
 
 .list-row-header {
@@ -189,7 +184,7 @@
     background: var(--surface-row);
     border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
-    box-shadow: var(--elevation-crisp-2);
+    box-shadow: var(--qol-shadow-float);
 }
 
 .dev-plugin-row-actions > .btn {

@@ -4,8 +4,9 @@ use gpui::{
     SharedString, Window,
 };
 
-use crate::kit::kit;
-use crate::theme::{SettingsGround, SettingsPanelPalette};
+use crate::kit::Chip;
+use crate::kit::Kit;
+use crate::theme::Ground;
 
 use super::{ground_bg, ground_border, ground_text, RowGround};
 
@@ -18,7 +19,7 @@ pub struct SettingsModifierChip {
     on: bool,
     cursor: bool,
     row: RowGround,
-    palette: SettingsPanelPalette,
+    kit: Kit,
     on_click: Option<ClickHandler>,
 }
 
@@ -29,7 +30,7 @@ impl SettingsModifierChip {
         on: bool,
         cursor: bool,
         row: RowGround,
-        palette: SettingsPanelPalette,
+        kit: Kit,
     ) -> Self {
         Self {
             id: id.into(),
@@ -37,7 +38,7 @@ impl SettingsModifierChip {
             on,
             cursor,
             row,
-            palette,
+            kit,
             on_click: None,
         }
     }
@@ -51,7 +52,7 @@ impl SettingsModifierChip {
     }
 }
 
-fn chip_border(on: bool, cursor: bool, ground: SettingsGround) -> Rgba {
+fn chip_border(on: bool, cursor: bool, ground: Ground) -> Rgba {
     if cursor {
         rgb(ground.ink)
     } else if on {
@@ -69,21 +70,21 @@ impl RenderOnce for SettingsModifierChip {
             on,
             cursor,
             row,
-            palette,
+            kit,
             on_click,
         } = self;
-        let ground = row.rest(palette);
-        let hover = row.hover(palette);
-        let text = |ground: SettingsGround| rgb(if on { ground.ink } else { ground.faint });
-        let fill = |ground: SettingsGround| {
+        let ground = row.rest(kit);
+        let hover = row.hover(kit);
+        let text = |ground: Ground| rgb(if on { ground.ink } else { ground.faint });
+        let fill = |ground: Ground| {
             if on {
                 rgba(ground.well.packed())
             } else {
-                rgba(palette.transparent_rgba)
+                rgba(0)
             }
         };
-        let border = |ground: SettingsGround| chip_border(on, cursor, ground);
-        let chip = kit().keycap(label).id(id);
+        let border = |ground: Ground| chip_border(on, cursor, ground);
+        let chip = kit.chip(Chip::KeyText(label), ground).id(id);
         let chip = ground_bg(chip, fill(ground), hover.map(fill));
         let chip = ground_text(chip, text(ground), hover.map(text));
         let chip = ground_border(chip, border(ground), hover.map(border));

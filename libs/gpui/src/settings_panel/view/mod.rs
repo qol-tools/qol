@@ -3,6 +3,8 @@ mod display_layout_card;
 mod list_card;
 mod structured_list_editor;
 
+use crate::key::Key;
+use crate::kit::Chip;
 use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -12,9 +14,14 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::components::{
+    floating_card, rail_scrim_layer, settings_band_bar, settings_card, settings_filter_field,
+    settings_filter_overlay,
+};
+use super::components::{
     number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
-    rail_caption_height, settings_action_affordance, settings_action_spinner, settings_label_group,
-    settings_page, settings_query_spinner, settings_value_text, ChoiceArt, RowGround,
+    rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
+    settings_action_spinner, settings_error_line, settings_label_group, settings_page,
+    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, RowGround,
     SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
     SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
@@ -34,22 +41,18 @@ use super::{
 };
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
-use crate::gamepad::{gamepad_panel, GamepadPalette};
+use crate::gamepad::gamepad_panel;
+use crate::kit::Kit;
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
-use crate::theme::{settings_panel_runtime, SettingsPanelPalette};
 
 type SampledQueryResults =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
-/// How long the rail selection must hold still before its source starts polling.
-const QUERY_SETTLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(140);
-/// How long a runtime query may take before its row admits it is waiting.
-const QUERY_LOADING_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,8 +69,7 @@ fn focus_level(source_menu: bool, sources: usize) -> PanelFocus {
     }
 }
 
-const RAIL_TRANSITION: std::time::Duration = std::time::Duration::from_millis(180);
-const RAIL_SECTION_OPACITY: f32 = 0.55;
+const RAIL_SECTION_OPACITY: f32 = qol_theme::OPACITY_REST;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TransitionAction {
@@ -110,7 +112,7 @@ fn transition_policy(in_flight: bool, state_changed: bool) -> Option<TransitionA
 }
 
 fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    started.is_some_and(|started| now.duration_since(started) < RAIL_TRANSITION)
+    started.is_some_and(|started| now.duration_since(started) < qol_theme::Motion::SETTLE.duration)
 }
 
 /// Collapses the states of every query a row depends on into the one the row
@@ -119,8 +121,6 @@ fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Ins
 /// never flash an indicator.
 fn rollup_query_state<'a>(
     states: impl Iterator<Item = Option<&'a RowQueryState>>,
-    grace: std::time::Duration,
-    now: std::time::Instant,
 ) -> RowQueryState {
     let mut rolled = RowQueryState::Idle;
     for state in states {
@@ -128,9 +128,7 @@ fn rollup_query_state<'a>(
             Some(RowQueryState::Unavailable(message)) => {
                 return RowQueryState::Unavailable(message.clone());
             }
-            Some(RowQueryState::Loading { since })
-                if now.saturating_duration_since(*since) >= grace =>
-            {
+            Some(RowQueryState::Loading { since }) => {
                 rolled = RowQueryState::Loading { since: *since };
             }
             Some(RowQueryState::Ready) if rolled == RowQueryState::Idle => {
@@ -253,8 +251,7 @@ pub(super) struct SettingsPanelView {
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     poll_visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
     dismisser: SurfaceDismisser,
-    palette: SettingsPanelPalette,
-    kit: crate::kit::Kit,
+    kit: Kit,
     streams: Vec<super::stream::StreamClient>,
     focus_handle: FocusHandle,
     nav_guard: PhantomNavGuard,
@@ -409,7 +406,6 @@ impl SettingsPanelView {
             sampler_stop: None,
             poll_visible: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dismisser: dismisser.clone(),
-            palette: settings_panel_runtime(),
             kit: crate::kit::kit(),
             focus_handle: cx.focus_handle(),
             nav_guard: PhantomNavGuard::new(),
@@ -932,7 +928,7 @@ impl SettingsPanelView {
             async move {
                 async_cx
                     .background_executor()
-                    .timer(QUERY_SETTLE_DEBOUNCE)
+                    .timer(qol_theme::SETTLE_INPUT)
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if this.source_settle_generation == generation {
@@ -1019,7 +1015,6 @@ impl SettingsPanelView {
                 .entry((source, query.clone()))
                 .or_insert(RowQueryState::Loading { since });
         }
-        self.notify_after_loading_grace(cx);
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
         let apply_tick = queries
@@ -1156,23 +1151,6 @@ impl SettingsPanelView {
                 false
             }
         }
-    }
-
-    /// A query that never answers produces no sample and therefore no redraw,
-    /// so nothing would ever reveal that the row is waiting. One timer past the
-    /// grace period gives the indicator a chance to appear.
-    fn notify_after_loading_grace(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                async_cx
-                    .background_executor()
-                    .timer(QUERY_LOADING_GRACE)
-                    .await;
-                let _ = this.update(&mut async_cx, |_, cx| cx.notify());
-            }
-        })
-        .detach();
     }
 
     fn pump_frame_paced_samples(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -1725,6 +1703,9 @@ impl SettingsPanelView {
             index,
             self.stack.len() - 1
         );
+        if index != self.level().selected {
+            self.commit_edit(cx);
+        }
         self.level_mut().selected = index;
         self.activate(window, cx);
         cx.notify();
@@ -2148,14 +2129,22 @@ impl SettingsPanelView {
 
     fn stream_hex(&self) -> String {
         let Some(source) = self.source_for(self.level().selected) else {
-            return format!("{:06x}", self.palette.live_color_fallback);
+            return format!(
+                "{:06x}",
+                qol_theme::DARK_TRAY_INTERNAL.config_live_color_fallback
+            );
         };
         source
             .values
             .get("live_color_hex")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
-            .unwrap_or_else(|| format!("{:06x}", self.palette.live_color_fallback))
+            .unwrap_or_else(|| {
+                format!(
+                    "{:06x}",
+                    qol_theme::DARK_TRAY_INTERNAL.config_live_color_fallback
+                )
+            })
     }
 
     fn dispatch_live_number(
@@ -2573,9 +2562,9 @@ impl SettingsPanelView {
 
     fn wheel_style(&self) -> WheelStyle {
         WheelStyle {
-            bg: self.palette.surface_raised,
-            border: self.palette.row_border_selected,
-            thumb_border: self.palette.section_text,
+            bg: self.kit.grounds.menu.bg,
+            border: self.kit.grounds.pane.mark,
+            thumb_border: self.kit.grounds.pane.ink,
         }
     }
 
@@ -2591,11 +2580,11 @@ impl SettingsPanelView {
     }
 
     fn paint_selection<E: Styled>(&self, row: E) -> E {
-        super::components::paint_rail_selection(row, self.palette, self.rail_source_level())
+        super::components::paint_rail_selection(row, self.kit, self.rail_source_level())
     }
 
     fn paint_body_selection<E: Styled + ParentElement>(&self, row: E) -> E {
-        paint_settings_selection(row, self.palette)
+        paint_settings_selection(row, self.kit)
     }
 
     /// The freshness of a row's value: unavailable wins over loading, and a row
@@ -2606,8 +2595,6 @@ impl SettingsPanelView {
             row_query_names(row)
                 .into_iter()
                 .map(|query| self.query_states.get(&(row.source, query.to_string()))),
-            QUERY_LOADING_GRACE,
-            std::time::Instant::now(),
         )
     }
 
@@ -2629,7 +2616,7 @@ impl SettingsPanelView {
             RowQueryState::Loading { .. } => Some(cell().child(settings_query_spinner(
                 ("settings-query-spinner", index),
                 row,
-                self.palette,
+                self.kit,
             ))),
             RowQueryState::Unavailable(_)
                 if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
@@ -2671,18 +2658,18 @@ impl SettingsPanelView {
             }
             RowControl::Action { .. } => return self.render_action_value(index, row),
             RowControl::TextList(values) => {
-                return self
-                    .kit
-                    .count_chip(values.len(), plural(values.len(), "item"));
+                return self.kit.chip(
+                    Chip::Count(values.len(), plural(values.len(), "item").into()),
+                    row.rest(self.kit),
+                );
             }
             RowControl::Unsupported { reason, .. } => {
-                return div()
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(match row {
-                        RowGround::Pane => self.palette.grounds.pane.faint,
-                        RowGround::Band => self.palette.grounds.band.soft,
-                    }))
-                    .child(format!("Unsupported: {reason}"));
+                return settings_value_text(
+                    format!("Unsupported: {reason}"),
+                    SettingsValueTone::Muted,
+                    row,
+                    self.kit,
+                );
             }
             RowControl::Text(_)
             | RowControl::Color(_)
@@ -2707,26 +2694,20 @@ impl SettingsPanelView {
             return cell.child(StatusIndicator::new(
                 ("settings-status", index),
                 self.display_value(index),
-                rgb(status_tone_color(self.palette, tone)),
+                rgb(status_tone_color(self.kit, tone)),
             ));
         }
         if self.action_is_busy(index) {
             cell = cell.child(settings_action_spinner(
                 ("settings-action-spinner", index),
-                self.palette,
+                self.kit,
             ));
         }
         if let Some(color) = self.swatch_color(index) {
-            cell = cell.child(
-                div()
-                    .w_3()
-                    .h_3()
-                    .rounded(px(qol_theme::RADIUS_TIGHT))
-                    .bg(rgb(color)),
-            );
+            cell = cell.child(settings_swatch(color));
         }
         if let Some(accent) = self.option_accent(index) {
-            cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
+            cell = cell.child(settings_accent_dot(accent));
         }
         cell.flex_none()
             .min_w(px(value_cell_width(&self.level().rows[index].control)))
@@ -2737,7 +2718,7 @@ impl SettingsPanelView {
                     self.display_value(index),
                     self.value_tone(index),
                     row,
-                    self.palette,
+                    self.kit,
                 )
                 .flex_shrink()
                 .min_w_0(),
@@ -2748,12 +2729,12 @@ impl SettingsPanelView {
         StatusIndicator::new(
             ("settings-unavailable", index),
             "unavailable",
-            rgb(self.palette.status_muted),
+            rgb(self.kit.grounds.pane.faint),
         )
     }
 
     fn render_toggle_value(&self, active: bool, row: RowGround) -> Div {
-        div().child(SettingsToggle::new(active, row, self.palette))
+        div().child(SettingsToggle::new(active, row, self.kit))
     }
 
     fn render_select_value(&self, index: usize, row: RowGround) -> Div {
@@ -2777,7 +2758,7 @@ impl SettingsPanelView {
             art,
             row,
             context,
-            self.palette,
+            self.kit,
         ))
     }
 
@@ -2838,7 +2819,7 @@ impl SettingsPanelView {
             track,
             interact,
             row,
-            self.palette,
+            self.kit,
         )
     }
 
@@ -2849,7 +2830,7 @@ impl SettingsPanelView {
             self.level().rows[index].variant.as_deref(),
             self.action_is_busy(index),
             row,
-            self.palette,
+            self.kit,
         )
     }
 
@@ -2932,10 +2913,10 @@ impl SettingsPanelView {
             label,
             row.description.clone().map(SharedString::from),
             ground,
-            self.palette,
+            self.kit,
         );
         let value_cell = self.render_value_cell(index, ground, cx);
-        let mut line = SettingsRow::setting(("settings-row", index), self.palette)
+        let mut line = SettingsRow::setting(("settings-row", index), self.kit)
             .selected(selected, self.body_has_focus())
             .child(label_group)
             .child(self.row_bounds_canvas(index));
@@ -2959,13 +2940,7 @@ impl SettingsPanelView {
             _ => None,
         };
         if let Some(error) = error {
-            container = container.child(
-                div()
-                    .px(px(qol_theme::SPACE_INSET))
-                    .text_size(px(qol_theme::TEXT_CAPTION))
-                    .text_color(rgb(self.palette.state_off))
-                    .child(error.clone()),
-            );
+            container = container.child(settings_error_line(error.clone(), self.kit));
         }
         container
     }
@@ -2976,28 +2951,10 @@ impl SettingsPanelView {
             return div().id(("settings-gamepad-empty", index));
         };
         let selected = index == self.level().selected;
-        let palette = GamepadPalette {
-            surface: self.palette.window_bg,
-            raised: self.palette.surface_raised,
-            border: self.palette.panel_border,
-            text: self.palette.section_text,
-            text_muted: self.palette.label_text,
-            accent: self.palette.row_border_selected,
-            info: self.palette.status_info,
-            success: self.palette.status_success,
-            warning: self.palette.status_warning,
-            danger: self.palette.status_danger,
-        };
         div()
             .id(("settings-gamepad", index))
             .h(px(super::PANEL_GAMEPAD_HEIGHT))
-            .rounded(px(qol_theme::RADIUS_CARD))
-            .border_1()
-            .border_color(if selected {
-                rgb(self.palette.row_border_selected)
-            } else {
-                rgba(self.palette.transparent_rgba)
-            })
+            .map(|card| settings_card(card, selected, self.kit))
             .cursor(CursorStyle::PointingHand)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {
@@ -3014,7 +2971,7 @@ impl SettingsPanelView {
                 monitor,
                 &row.label,
                 row.description.as_deref(),
-                palette,
+                self.kit,
             ))
     }
 
@@ -3036,19 +2993,7 @@ impl SettingsPanelView {
             .ml(px(-qol_theme::SPACE_INSET))
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
             .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
-            .child(
-                div()
-                    .truncate()
-                    .min_w_0()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .when(active, |label| label.font_weight(FontWeight::SEMIBOLD))
-                    .text_color(rgb(if active {
-                        self.palette.rail_active_text
-                    } else {
-                        self.palette.rail_text_muted
-                    }))
-                    .child(label),
-            )
+            .child(rail_item_label(label, active, self.kit))
             .cursor(CursorStyle::PointingHand);
         if active {
             item = self.paint_selection(item);
@@ -3117,7 +3062,7 @@ impl SettingsPanelView {
 
     fn render_rail_dot(&self) -> Div {
         let halo = self.kit.washes.halo_attention.packed();
-        self.kit.status_dot(self.palette.status_warning, halo)
+        self.kit.status_dot(self.kit.palette.warning, halo)
     }
 
     fn render_list(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -3132,14 +3077,13 @@ impl SettingsPanelView {
             return div().id(("settings-list", index));
         };
         let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
-        let rest = ground.rest(self.palette);
         let mut header_status = div().flex().items_center().gap(px(qol_theme::SPACE_INSET));
         if *runtime_active {
             header_status = header_status.child(
                 StatusIndicator::new(
                     ("settings-list-activity", index),
                     active_label.as_deref().unwrap_or("Live").to_string(),
-                    rgb(self.palette.state_on),
+                    rgb(self.kit.palette.success),
                 )
                 .pulse(),
             );
@@ -3148,7 +3092,7 @@ impl SettingsPanelView {
             self.display_value(index),
             self.value_tone(index),
             ground,
-            self.palette,
+            self.kit,
         ));
         let mut container = div()
             .id(("settings-list", index))
@@ -3174,7 +3118,7 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
-            .rounded(px(qol_theme::RADIUS_CARD));
+            .map(|card| settings_card(card, false, self.kit));
         if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
@@ -3187,34 +3131,16 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap(px(qol_theme::SPACE_CELL))
-                .text_size(px(qol_theme::TEXT_BODY))
-                .child(
-                    div()
-                        .flex()
-                        .min_w_0()
-                        .flex_1()
-                        .flex_col()
-                        .child(
-                            div()
-                                .truncate()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(rest.ink))
-                                .child(if filter.trim().is_empty() {
-                                    row.label.clone()
-                                } else {
-                                    filter.clone()
-                                }),
-                        )
-                        .when_some(row.description.clone(), |group, description| {
-                            group.child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(qol_theme::TEXT_CAPTION))
-                                    .text_color(rgb(rest.soft))
-                                    .child(description),
-                            )
-                        }),
-                )
+                .child(settings_label_group(
+                    if filter.trim().is_empty() {
+                        row.label.clone()
+                    } else {
+                        filter.clone()
+                    },
+                    row.description.clone().map(Into::into),
+                    ground,
+                    self.kit,
+                ))
                 .child(header_status),
         );
         container.child(self.row_bounds_canvas(index))
@@ -3231,7 +3157,7 @@ impl SettingsPanelView {
             loading,
             row_body_height(row, true),
             list_header_height(row),
-            self.palette,
+            self.kit,
         )
     }
 
@@ -3251,7 +3177,6 @@ impl SettingsPanelView {
         cx: &mut Context<Self>,
     ) -> Div {
         let ground = RowGround::of(index == self.level().selected, self.body_has_focus());
-        let rest = ground.rest(self.palette);
         let mut container = div()
             .flex()
             .flex_col()
@@ -3263,7 +3188,7 @@ impl SettingsPanelView {
             .overflow_hidden()
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
-            .rounded(px(qol_theme::RADIUS_CARD));
+            .map(|card| settings_card(card, false, self.kit));
         if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
@@ -3286,35 +3211,17 @@ impl SettingsPanelView {
                 .h(px(list_header_height(row)))
                 .justify_between()
                 .gap(px(qol_theme::SPACE_CELL))
-                .text_size(px(qol_theme::TEXT_BODY))
-                .child(
-                    div()
-                        .flex()
-                        .min_w_0()
-                        .flex_1()
-                        .flex_col()
-                        .child(
-                            div()
-                                .truncate()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(rest.ink))
-                                .child(row.label.clone()),
-                        )
-                        .when_some(row.description.clone(), |group, description| {
-                            group.child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(qol_theme::TEXT_CAPTION))
-                                    .text_color(rgb(rest.soft))
-                                    .child(description),
-                            )
-                        }),
-                )
+                .child(settings_label_group(
+                    row.label.clone(),
+                    row.description.clone().map(Into::into),
+                    ground,
+                    self.kit,
+                ))
                 .child(settings_value_text(
                     value,
                     self.value_tone(index),
                     ground,
-                    self.palette,
+                    self.kit,
                 )),
         );
         container.child(self.row_bounds_canvas(index))
@@ -3342,7 +3249,6 @@ impl Render for SettingsPanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(debug_assertions)]
         let build_started = std::time::Instant::now();
-        self.palette = settings_panel_runtime();
         self.kit = crate::kit::kit();
         self.poll_visible.store(
             window.is_window_active(),
@@ -3413,7 +3319,8 @@ impl Render for SettingsPanelView {
             rail.len(),
             build_started.elapsed().as_micros()
         );
-        div()
+        self.kit
+            .window()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
@@ -3427,15 +3334,8 @@ impl Render for SettingsPanelView {
                     );
                 }),
             )
-            .size_full()
-            .relative()
-            .overflow_hidden()
             .flex()
             .flex_col()
-            .rounded_none()
-            .shadow(crate::kit::float_shadow(self.palette.section_text))
-            .bg(rgb(self.palette.window_bg))
-            .text_color(rgb(self.palette.section_text))
             .child(self.render_band(cx))
             .child(self.render_content(
                 cx,
@@ -3528,21 +3428,12 @@ impl SettingsPanelView {
                 .child(body)
                 .when(front, |frame| frame.child(frame_bounds))
                 .when(front && !has_custom_view, |frame| {
-                    frame.child(crate::scrollbar::overflow_fade(
-                        self.stack[level_index].body_scroll.handle().clone(),
-                        children,
-                        crate::scrollbar::OverflowFadeStyle {
-                            surface_rgb: self.palette.window_bg,
-                            ink_rgba: crate::kit::alpha(self.palette.section_text, 0xc8),
-                            wash_rgba: crate::kit::alpha(self.palette.section_text, 0x1f),
+                    frame.child(self.kit.scroll_cue(
+                        crate::scrollbar::ScrollSource::Handle {
+                            handle: self.stack[level_index].body_scroll.handle().clone(),
+                            children,
                         },
-                    ))
-                })
-                .when(front && !has_custom_view, |frame| {
-                    frame.child(crate::scrollbar::seam_track(
-                        self.stack[level_index].body_scroll.handle().clone(),
-                        crate::kit::alpha(self.palette.panel_border, 0x48),
-                        crate::kit::alpha(self.palette.section_text, 0x8c),
+                        self.kit.grounds.pane,
                     ))
                 })
                 .when(self.filter_open && front && !has_custom_view, |frame| {
@@ -3592,7 +3483,7 @@ impl SettingsPanelView {
         } else {
             deck::slide(self.deck_transition.step, self.deck_motion, depth, width)
         };
-        let deck_ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_out_quint());
+        let deck_ease = || crate::motion::animation(qol_theme::Motion::SETTLE);
         if !self.rail_is_open() {
             if depth == 0 && drawer.is_none() {
                 let card = match slide {
@@ -3620,7 +3511,7 @@ impl SettingsPanelView {
         let step = self.rail_transition.step;
         let snapped = self.rail_transition.snapped
             || !transition_in_flight(self.rail_transition.started, std::time::Instant::now());
-        let ease = || Animation::new(RAIL_TRANSITION).with_easing(ease_in_out);
+        let ease = || crate::motion::animation(qol_theme::Motion::SETTLE);
         let rail_column = div()
             .id("settings-section-rail")
             .flex_none()
@@ -3642,10 +3533,7 @@ impl SettingsPanelView {
             .w(px(super::PANEL_RAIL_WIDTH))
             .p(px(qol_theme::SPACE_INSET))
             .children(rail_dots);
-        let scrim = div()
-            .absolute()
-            .inset_0()
-            .bg(crate::kit::rail_scrim(self.palette.window_bg));
+        let scrim = rail_scrim_layer(self.kit);
         let custom_breadcrumbs = if self.current_source_is_custom() {
             self.custom_view()
                 .map(|custom| custom.breadcrumb_labels(cx).len())
@@ -3674,7 +3562,7 @@ impl SettingsPanelView {
                 .child(scrim.opacity(reached))
                 .with_animation(
                     ("settings-rail-depth", self.deck_transition.step),
-                    Animation::new(deck::TRANSITION).with_easing(ease_out_quint()),
+                    crate::motion::animation(qol_theme::Motion::SETTLE),
                     move |rail, delta| {
                         let rest = from + (rest - from) * delta;
                         rail.opacity(1.0 - (1.0 - rest) * reached)
@@ -3690,36 +3578,16 @@ impl SettingsPanelView {
         };
         let card_layer = match depth {
             0 if drawer.is_none() => {
-                let card = card
-                    .absolute()
-                    .right_0()
-                    .top_0()
-                    .bottom_0()
-                    .bg(rgb(self.palette.window_bg))
-                    .border_t(px(1.))
-                    .border_r(px(1.))
-                    .border_b(px(1.))
-                    .border_color(self.hairline())
-                    .shadow(crate::kit::float_shadow(self.palette.section_text))
-                    .occlude();
-                let accent = crate::kit::accent_left_edge(
-                    qol_theme::RADIUS_CARD,
-                    deck::CARD_ACCENT,
-                    self.palette.row_border_selected,
-                );
+                let card = deck::card_edges(
+                    card.absolute().right_0().top_0().bottom_0(),
+                    self.kit,
+                    self.hairline(),
+                )
+                .map(|card| floating_card(card, self.kit));
                 if snapped {
                     let reached = progress(1.0);
                     let base = super::PANEL_RAIL_WIDTH - RAIL_CARD_OVERLAP * reached;
-                    let card = if custom_breadcrumbs > 0 {
-                        card
-                    } else {
-                        card.child(
-                            accent
-                                .rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                                .border_l(px(deck::CARD_ACCENT * reached)),
-                        )
-                    }
-                    .rounded_l(px(qol_theme::RADIUS_CARD * reached));
+                    let card = card.rounded_l(px(qol_theme::RADIUS_CARD * reached));
                     match slide {
                         Some(slide) => card
                             .with_animation(
@@ -3735,19 +3603,6 @@ impl SettingsPanelView {
                         None => card.left(px(base)).into_any_element(),
                     }
                 } else {
-                    let card = if custom_breadcrumbs > 0 {
-                        card
-                    } else {
-                        card.child(accent.with_animation(
-                            ("settings-card-accent", step),
-                            ease(),
-                            move |edge, delta| {
-                                let reached = progress(delta);
-                                edge.rounded_l(px(qol_theme::RADIUS_CARD * reached))
-                                    .border_l(px(deck::CARD_ACCENT * reached))
-                            },
-                        ))
-                    };
                     card.with_animation(
                         ("settings-card-slide", step),
                         ease(),
@@ -3803,7 +3658,7 @@ impl SettingsPanelView {
             let _ = view.update(cx, |this, cx| this.back_to(level, window, cx));
         });
         deck::render(
-            self.palette,
+            self.kit,
             card,
             deck::DeckFrame {
                 depth,
@@ -3822,80 +3677,22 @@ impl SettingsPanelView {
 
     fn render_band(&self, cx: &App) -> Div {
         let trail = self.trail(cx);
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(qol_theme::SPACE_GUTTER))
-            .h(px(super::PANEL_BAND_HEIGHT))
-            .px(px(qol_theme::SPACE_GUTTER))
-            .border_b(px(1.))
-            .border_color(self.hairline())
-            .bg(rgb(self.palette.rail_bg))
+        settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit)
             .panel_drag_area()
-            .child(super::components::settings_crumb_trail(trail, self.palette))
+            .child(super::components::settings_crumb_trail(trail, self.kit))
     }
 
     fn render_filter_field(&self) -> Div {
-        let empty = self.filter.is_empty();
-        let text = if empty {
-            "Filter settings".to_string()
-        } else {
-            self.filter.clone()
-        };
-        let field = div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(qol_theme::SPACE_INSET))
-            .h(px(super::PANEL_FILTER_HEIGHT))
-            .px(px(qol_theme::SPACE_PAD))
-            .rounded(px(qol_theme::RADIUS_WELL))
-            .bg(rgba(self.kit.washes.fill_resting.packed()))
-            .border(px(1.))
-            .border_color(self.hairline())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(qol_theme::TEXT_BODY))
-                    .text_color(rgb(if empty {
-                        self.palette.status_muted
-                    } else {
-                        self.palette.section_text
-                    }))
-                    .child(text),
-            );
-        if self.filter_open {
-            return field
-                .bg(rgb(self.palette.window_bg))
-                .border_color(rgb(self.palette.row_border_selected))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(1.5))
-                        .h(px(16.))
-                        .bg(rgb(self.palette.row_border_selected)),
-                );
-        }
-        field.child(self.kit.keycap("/"))
+        settings_filter_field(
+            &self.filter,
+            super::PANEL_FILTER_HEIGHT,
+            self.filter_open,
+            self.kit,
+        )
     }
 
     fn render_filter_overlay(&self) -> Div {
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .px(px(qol_theme::SPACE_PAD))
-            .pt(px(qol_theme::SPACE_CELL))
-            .pb(px(qol_theme::SPACE_INSET))
-            .bg(rgb(self.palette.window_bg))
-            .child(self.render_filter_field())
+        settings_filter_overlay(self.kit).child(self.render_filter_field())
     }
 
     fn body_groups(&self) -> Vec<(String, Option<String>, Vec<usize>)> {
@@ -3994,7 +3791,7 @@ impl SettingsPanelView {
         let header = SettingsGroupHeader::new(
             title.to_string(),
             detail.map(|detail| SharedString::from(detail.to_string())),
-            self.palette,
+            self.kit,
         )
         .current(here);
         match list_card::list_card_activity(self.level(), &self.root().rows) {
@@ -4034,12 +3831,12 @@ impl SettingsPanelView {
     }
 
     fn render_hint_bar(&self, cx: &App) -> impl IntoElement {
-        let bar = SettingsHintBar::new(self.palette);
+        let bar = SettingsHintBar::new(self.kit);
         if self.current_source_is_custom() && self.body_has_focus() {
             if let Some(hints) = self.custom_view().and_then(|custom| custom.hints(cx)) {
                 let mut right = hints.right;
                 if right.is_empty() {
-                    right.push(SettingsHint::new("esc", "back"));
+                    right.push(SettingsHint::new(Key::ESC, "back"));
                 }
                 let mut bar = bar.left(hints.left).right(right);
                 if let Some(question) = hints.question {
@@ -4048,44 +3845,46 @@ impl SettingsPanelView {
                 return bar;
             }
             let mut left = vec![
-                SettingsHint::new("\u{2191}\u{2193}", "move"),
-                SettingsHint::new("\u{21b5}", "open"),
-                SettingsHint::new("A", "add"),
-                SettingsHint::new("\u{232b}", "delete"),
+                SettingsHint::new(Key::UP_DOWN, "move"),
+                SettingsHint::new(Key::ENTER, "open"),
+                SettingsHint::new(Key::letter('a'), "add"),
+                SettingsHint::new(Key::BACKSPACE, "delete"),
             ];
             if self.custom_tool_is_shortcuts() {
-                left.push(SettingsHint::new("R", "run"));
+                left.push(SettingsHint::new(Key::letter('r'), "run"));
             }
-            return bar.left(left).right(vec![SettingsHint::new("esc", "back")]);
+            return bar
+                .left(left)
+                .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
         if self.level().choose.is_some() && !self.filter_open {
             return bar
                 .left(self.choose_hints())
-                .right(vec![SettingsHint::new("esc", "back")]);
+                .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
         if (self.level().entries.is_some() || self.level().form.is_some()) && !self.filter_open {
             return self.card_hint_bar(bar);
         }
         let mut left = Vec::new();
         if let Some(label) = self.enter_hint() {
-            left.push(SettingsHint::new("\u{21b5}", label));
+            left.push(SettingsHint::new(Key::ENTER, label));
         }
         if let Some(state) = self.level().display_layout.as_ref() {
             if let Some(label) =
                 display_layout_card::arrows_hint(self.level().selected, state.editing())
             {
-                left.push(SettingsHint::new("\u{2190}\u{2192}", label));
+                left.push(SettingsHint::new(Key::LEFT_RIGHT, label));
             }
         }
-        left.push(SettingsHint::new("\u{2191}\u{2193}", "move"));
+        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         let mut right = Vec::new();
         if self.filtering() {
-            left.push(SettingsHint::new("esc", "back to plugins"));
+            left.push(SettingsHint::new(Key::ESC, "back to plugins"));
         } else if self.stack.len() == 1 {
-            left.push(SettingsHint::new("type", "search every plugin"));
-            right.push(SettingsHint::new("esc", "close"));
+            left.push(SettingsHint::new(Key::TYPE, "search every plugin"));
+            right.push(SettingsHint::new(Key::ESC, "close"));
         } else {
-            right.push(SettingsHint::new("esc", "back"));
+            right.push(SettingsHint::new(Key::ESC, "back"));
         }
         bar.left(left).right(right)
     }
@@ -4098,7 +3897,7 @@ impl SettingsPanelView {
     }
 
     fn render_failure_bar(&self, message: String) -> impl IntoElement {
-        SettingsFeedback::new(message, self.palette.status_danger, true)
+        SettingsFeedback::new(message, true)
     }
 
     fn resize_canvas(&mut self) -> impl IntoElement {
@@ -4518,13 +4317,13 @@ fn binary_state_tone(active: bool) -> SettingsValueTone {
     }
 }
 
-fn status_tone_color(palette: SettingsPanelPalette, tone: StatusTone) -> u32 {
+fn status_tone_color(kit: Kit, tone: StatusTone) -> u32 {
     match tone {
-        StatusTone::Accent => palette.status_accent,
-        StatusTone::Success => palette.status_success,
-        StatusTone::Danger => palette.status_danger,
-        StatusTone::Warning => palette.status_warning,
-        StatusTone::Muted => palette.status_muted,
+        StatusTone::Accent => kit.palette.accent_ink,
+        StatusTone::Success => kit.palette.success,
+        StatusTone::Danger => kit.palette.danger,
+        StatusTone::Warning => kit.palette.warning,
+        StatusTone::Muted => kit.grounds.pane.faint,
     }
 }
 
@@ -6915,43 +6714,17 @@ default = "visible"
 #[cfg(test)]
 mod query_state_tests {
     use super::{rollup_query_state, RowQueryState};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
-    const GRACE: Duration = Duration::from_millis(300);
-
-    fn rollup(states: &[Option<RowQueryState>], now: Instant) -> RowQueryState {
-        rollup_query_state(states.iter().map(Option::as_ref), GRACE, now)
-    }
-
-    /// A healthy plugin answers well inside the grace period, so its rows must
-    /// never flash a spinner on the way to their value.
-    #[test]
-    fn a_query_inside_its_grace_period_shows_no_indicator() {
-        let now = Instant::now();
-        let fresh = RowQueryState::Loading { since: now };
-        assert_eq!(rollup(&[Some(fresh)], now), RowQueryState::Idle);
-    }
-
-    /// Past the grace period the row has to admit it is waiting, otherwise a
-    /// wedged daemon is indistinguishable from a working one.
-    #[test]
-    fn a_query_past_its_grace_period_reports_loading() {
-        let now = Instant::now();
-        let stale = RowQueryState::Loading {
-            since: now - GRACE - Duration::from_millis(1),
-        };
-        assert!(matches!(
-            rollup(&[Some(stale)], now),
-            RowQueryState::Loading { .. }
-        ));
+    fn rollup(states: &[Option<RowQueryState>]) -> RowQueryState {
+        rollup_query_state(states.iter().map(Option::as_ref))
     }
 
     /// A row backed by several queries is only as good as its worst one.
     #[test]
     fn the_worst_query_decides_what_the_row_shows() {
-        let now = Instant::now();
         let waiting = RowQueryState::Loading {
-            since: now - GRACE * 2,
+            since: Instant::now(),
         };
         let cases = [
             (
@@ -6970,7 +6743,7 @@ mod query_state_tests {
             (vec![None, None], "idle"),
         ];
         for (states, expected) in cases {
-            let actual = match rollup(&states, now) {
+            let actual = match rollup(&states) {
                 RowQueryState::Idle => "idle",
                 RowQueryState::Loading { .. } => "loading",
                 RowQueryState::Ready => "ready",

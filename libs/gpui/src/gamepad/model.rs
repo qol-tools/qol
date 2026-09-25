@@ -1,3 +1,4 @@
+use crate::icon::Icon;
 use serde::Deserialize;
 
 const INPUT_DEADZONE: f32 = 0.08;
@@ -454,6 +455,12 @@ impl GamepadConnection {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ButtonMark {
+    Text(&'static str),
+    Icon(Icon),
+}
+
 impl ControllerProfile {
     pub fn label(self) -> &'static str {
         match self {
@@ -464,11 +471,17 @@ impl ControllerProfile {
         }
     }
 
-    pub fn face_labels(self) -> [&'static str; 4] {
+    pub fn face_labels(self) -> [ButtonMark; 4] {
+        use ButtonMark::{Icon as I, Text as T};
         match self {
-            Self::Xbox | Self::GuliKit => ["A", "B", "X", "Y"],
-            Self::PlayStation => ["×", "○", "□", "△"],
-            Self::Nintendo => ["B", "A", "Y", "X"],
+            Self::Xbox | Self::GuliKit => [T("A"), T("B"), T("X"), T("Y")],
+            Self::PlayStation => [
+                I(Icon::Close),
+                I(Icon::Ring),
+                I(Icon::Square),
+                I(Icon::Triangle),
+            ],
+            Self::Nintendo => [T("B"), T("A"), T("Y"), T("X")],
         }
     }
 
@@ -505,7 +518,7 @@ impl ControllerProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControllerProfile, GamepadMonitor, MonitorStatus, SignalTone};
+    use super::{ButtonMark, ControllerProfile, GamepadMonitor, MonitorStatus, SignalTone};
 
     fn payload(name: &str, signal: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
@@ -619,7 +632,10 @@ mod tests {
     fn gulikit_profile_carries_web_parity_presentation() {
         let profile = ControllerProfile::GuliKit;
         assert_eq!(profile.label(), "GuliKit KingKong 2 Pro");
-        assert_eq!(profile.face_labels(), ["A", "B", "X", "Y"]);
+        assert_eq!(
+            profile.face_labels(),
+            ["A", "B", "X", "Y"].map(ButtonMark::Text)
+        );
         assert_eq!(profile.shoulder_labels(), ["L", "R"]);
         assert_eq!(profile.trigger_labels(), ["ZL", "ZR"]);
         assert!(!profile.symmetric_sticks());

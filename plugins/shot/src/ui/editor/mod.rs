@@ -1,3 +1,5 @@
+use qol_gpui::Icon;
+use qol_gpui::Key;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -18,7 +20,7 @@ use crate::capture::screenshot::CaptureFileReady;
 use crate::config::CopyCommand;
 use crate::ui::controls::{copy_actions, SurfaceControl};
 use crate::ui::pinned::{PinnedContent, PinnedDismiss};
-use crate::ui::preview::{current_palette, thumbnail_size};
+use crate::ui::preview::thumbnail_size;
 use crate::ui::shortcuts::shot_action_for_keystroke;
 
 mod render;
@@ -98,14 +100,14 @@ impl EditorControl {
         }
     }
 
-    fn glyph(self) -> &'static str {
+    fn icon(self) -> Option<Icon> {
         match self {
-            Self::Color => "",
-            Self::Undo => "↶",
-            Self::Redo => "↷",
-            Self::Action(action) => action.glyph(),
-            Self::Save => "✓",
-            Self::Pin => SurfaceControl::Pin.glyph(),
+            Self::Color => None,
+            Self::Undo => Some(Icon::Undo),
+            Self::Redo => Some(Icon::Redo),
+            Self::Action(action) => Some(SurfaceControl::Action(action).icon()),
+            Self::Save => Some(Icon::Tick),
+            Self::Pin => Some(SurfaceControl::Pin.icon()),
         }
     }
 }
@@ -243,7 +245,7 @@ enum EditorCommand {
 
 #[derive(Clone, Copy)]
 pub(crate) struct EditorHint {
-    pub(crate) key: &'static str,
+    pub(crate) key: Key,
     pub(crate) label: &'static str,
     pub(crate) priority: u8,
     pub(crate) pinned: bool,
@@ -257,7 +259,7 @@ pub(crate) struct EditorKeyRow {
 pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "\u{23CE}",
+            key: Key::ENTER,
             label: "activate",
             priority: 3,
             pinned: false,
@@ -270,7 +272,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "\u{2190}\u{2192}",
+            key: Key::LEFT_RIGHT,
             label: "move",
             priority: 2,
             pinned: false,
@@ -285,7 +287,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "H",
+            key: Key::letter('h'),
             label: "hue",
             priority: 2,
             pinned: false,
@@ -294,7 +296,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "W",
+            key: Key::letter('w'),
             label: "width",
             priority: 2,
             pinned: false,
@@ -303,7 +305,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "U",
+            key: Key::letter('u'),
             label: "undo",
             priority: 1,
             pinned: false,
@@ -312,7 +314,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "S",
+            key: Key::letter('s'),
             label: "save",
             priority: 1,
             pinned: false,
@@ -321,7 +323,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "I",
+            key: Key::letter('i'),
             label: "pin",
             priority: 1,
             pinned: false,
@@ -330,7 +332,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "drag",
+            key: Key::DRAG,
             label: "draw",
             priority: 0,
             pinned: false,
@@ -339,7 +341,7 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
     },
     EditorKeyRow {
         hint: Some(EditorHint {
-            key: "esc",
+            key: Key::ESC,
             label: "close",
             priority: 0,
             pinned: true,
@@ -468,7 +470,7 @@ impl EditorView {
             layout,
             history: UndoHistory::new(),
             active_stroke: None,
-            pen_color: current_palette().state_off,
+            pen_color: qol_gpui::kit::kit().palette.danger,
             pen_width: PenWidth::Medium,
             controls: editor_controls(default_copy_action),
             default_copy_action,
@@ -682,13 +684,13 @@ impl EditorView {
         let wheel = ColorWheel::open(&format!("#{:06x}", self.pen_color));
         let preview_parent = cx.weak_entity();
         let commit_parent = preview_parent.clone();
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         let Some(popup) = ColorWheelPopup::open(
             wheel,
             WheelStyle {
-                bg: palette.action_bg,
-                border: palette.action_border_selected,
-                thumb_border: palette.action_glyph,
+                bg: kit.grounds.menu.bg,
+                border: kit.palette.accent,
+                thumb_border: kit.grounds.pane.ink,
             },
             anchor,
             window,

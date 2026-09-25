@@ -16,7 +16,7 @@ pub struct StateDefinition {
     pub priority: u8,
     pub attention: bool,
     pub idle: bool,
-    pub colors: fn(&qol_gpui::theme::CliSessionsPalette) -> (u32, u32),
+    pub colors: fn(&qol_gpui::kit::Kit) -> (u32, u32),
 }
 
 impl StateDefinition {
@@ -25,7 +25,7 @@ impl StateDefinition {
         priority: u8,
         attention: bool,
         idle: bool,
-        colors: fn(&qol_gpui::theme::CliSessionsPalette) -> (u32, u32),
+        colors: fn(&qol_gpui::kit::Kit) -> (u32, u32),
     ) -> Self {
         Self {
             label,
@@ -51,33 +51,33 @@ impl Status {
 
     pub fn definition(self) -> StateDefinition {
         match self {
-            Self::NeedsYou => StateDefinition::new("needs you", 0, true, false, |p| {
-                (p.needs_you, p.needs_you_tint_rgba)
+            Self::NeedsYou => StateDefinition::new("needs you", 0, true, false, |k| {
+                (k.palette.danger, k.washes.halo_invalid.packed())
             }),
-            Self::YourTurn => StateDefinition::new("your turn", 1, true, false, |p| {
-                (p.your_turn, p.your_turn_tint_rgba)
+            Self::YourTurn => StateDefinition::new("your turn", 1, true, false, |k| {
+                (k.palette.warning, k.washes.halo_attention.packed())
             }),
-            Self::Working => StateDefinition::new("working", 4, false, false, |p| {
-                (p.working, p.working_tint_rgba)
+            Self::Working => StateDefinition::new("working", 4, false, false, |k| {
+                (k.palette.success, k.washes.halo_success.packed())
             }),
             Self::Coordinating => {
-                StateDefinition::new("coordinating agents", 3, false, false, |p| {
-                    (p.bridged, p.bridged_tint_rgba)
+                StateDefinition::new("coordinating agents", 3, false, false, |k| {
+                    (k.palette.info, info_halo(k))
                 })
             }
             Self::AwaitingReview => {
-                StateDefinition::new("awaiting agent review", 2, false, false, |p| {
-                    (p.bridged, p.bridged_tint_rgba)
+                StateDefinition::new("awaiting agent review", 2, false, false, |k| {
+                    (k.palette.info, info_halo(k))
                 })
             }
-            Self::Service => StateDefinition::new("live", 5, false, false, |p| {
-                (p.service, p.service_tint_rgba)
-            }),
-            Self::Acknowledged => StateDefinition::new("acknowledged", 7, false, true, |p| {
-                (p.unknown, p.transparent_rgba)
+            Self::Service => {
+                StateDefinition::new("live", 5, false, false, |k| (k.palette.info, info_halo(k)))
+            }
+            Self::Acknowledged => StateDefinition::new("acknowledged", 7, false, true, |k| {
+                (k.grounds.pane.faint, 0)
             }),
             Self::Unknown => {
-                StateDefinition::new("idle", 6, false, true, |p| (p.unknown, p.transparent_rgba))
+                StateDefinition::new("idle", 6, false, true, |k| (k.grounds.pane.faint, 0))
             }
         }
     }
@@ -107,4 +107,8 @@ pub fn bridge_status(status: Status, bridged: bool, driving: bool) -> Status {
         return Status::AwaitingReview;
     }
     status
+}
+
+fn info_halo(kit: &qol_gpui::kit::Kit) -> u32 {
+    qol_gpui::theme::translucent(kit.palette.info, qol_gpui::theme::Alpha::Halo)
 }

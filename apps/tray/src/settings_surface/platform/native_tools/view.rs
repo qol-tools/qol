@@ -1,3 +1,5 @@
+use qol_gpui::key::Key;
+use qol_gpui::kit::Chip;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -16,13 +18,12 @@ use qol_gpui::settings_panel::components::{
     SettingsTextField, SettingsTile, SettingsToggle, TileArt,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, wrapping_visible_row, CustomHints,
+    adjacent_visible_row, escape_step, intent, settings_list, wrapping_visible_row, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
-use qol_gpui::theme::settings_panel_runtime;
 
 use crate::hotkeys::HotkeyBinding;
 use crate::shortcuts::model::Shortcut;
@@ -872,16 +873,16 @@ impl NativeToolsView {
             return settings_busy_message(
                 "native-tools-loading",
                 "Loading shortcuts and hotkeys",
-                settings_panel_runtime(),
+                qol_gpui::kit::kit(),
             )
             .into_any_element();
         }
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let width = self.body_width();
         let on_sliver = Self::sliver_click(cx);
         if let Some(choose) = self.editor.as_ref().and_then(|state| state.choose) {
             let deck = deck::render(
-                palette,
+                kit,
                 self.page(self.render_choose_page(choose, cx)),
                 deck::DeckFrame {
                     depth: CHOOSE_DEPTH,
@@ -902,7 +903,7 @@ impl NativeToolsView {
                 )
             });
             let deck = deck::render(
-                palette,
+                kit,
                 self.page(editor),
                 deck::DeckFrame {
                     depth: EDITOR_DEPTH,
@@ -921,7 +922,7 @@ impl NativeToolsView {
         };
         match leaving {
             Some(card) => deck_shell(deck::reveal(
-                palette,
+                kit,
                 self.page(self.render_list(cx)),
                 self.page(card),
                 deck::exit(self.editor_step, EDITOR_DEPTH, width),
@@ -998,7 +999,7 @@ impl NativeToolsView {
     }
 
     fn render_message(&self, message: &str, danger: bool) -> AnyElement {
-        settings_message(message.to_string(), danger, settings_panel_runtime()).into_any_element()
+        settings_message(message.to_string(), danger, qol_gpui::kit::kit()).into_any_element()
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1012,7 +1013,7 @@ impl NativeToolsView {
                 SettingsGroupHeader::new(
                     self.list_title(),
                     Some(self.list_detail().into()),
-                    settings_panel_runtime(),
+                    qol_gpui::kit::kit(),
                 )
                 .current(self.body_focused),
             )
@@ -1036,13 +1037,8 @@ impl NativeToolsView {
 
     fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
         let total = self.list_len();
-        let mut list = div()
+        let mut list = settings_list()
             .id("native-tools-list")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(qol_theme::SPACE_TIGHT))
             .on_scroll_wheel(
                 cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let rows = wheel_rows(&event.delta, ROW_HEIGHT);
@@ -1055,7 +1051,8 @@ impl NativeToolsView {
                     cx.notify();
                 }),
             );
-        for index in self.list().visible_range(total) {
+        let range = self.list().visible_range(total);
+        for index in range.clone() {
             list = list.child(match index.checked_sub(1) {
                 None => self.render_add_row(cx),
                 Some(item) => match self.tool {
@@ -1067,6 +1064,14 @@ impl NativeToolsView {
         if self.item_count() == 0 {
             list = list.child(self.render_message(self.empty_message(), false));
         }
+        list = list.child(qol_gpui::kit::kit().scroll_cue(
+            qol_gpui::scrollbar::ScrollSource::Window {
+                first: range.start,
+                shown: range.len(),
+                total,
+            },
+            qol_gpui::kit::kit().grounds.pane,
+        ));
         list.into_any_element()
     }
 
@@ -1078,25 +1083,24 @@ impl NativeToolsView {
     }
 
     fn render_add_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let label = match self.tool {
             ToolKind::Shortcuts => "Add shortcut",
             ToolKind::Hotkeys => "Add hotkey",
         };
-        SettingsRow::add("native-tools-add", palette)
+        SettingsRow::add("native-tools-add", kit)
             .selected(self.list().selected == 0, self.body_focused)
             .on_click(cx.listener(|this, _, _, cx| {
                 this.set_selected_index(0);
                 this.open_add();
                 cx.notify();
             }))
-            .child(settings_label(format!("+ {label}"), palette))
+            .child(settings_label(format!("+ {label}"), kit))
             .child(bounds_recorder(Rc::clone(&self.list_bounds), 0))
             .into_any_element()
     }
 
     fn render_shortcut_row(&self, item: usize, cx: &mut Context<Self>) -> AnyElement {
-        let palette = settings_panel_runtime();
         let kit = qol_gpui::kit::kit();
         let Some(shortcut) = self.shortcuts.get(item) else {
             return div().into_any_element();
@@ -1108,7 +1112,7 @@ impl NativeToolsView {
         } else {
             shortcut.action.kind().to_string()
         };
-        SettingsRow::setting(("native-shortcut-row", item), palette)
+        SettingsRow::setting(("native-shortcut-row", item), kit)
             .selected(selected, self.body_focused)
             .dimmed(!shortcut.enabled)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1120,7 +1124,7 @@ impl NativeToolsView {
                 shortcut.name.clone(),
                 Some(shortcut_summary(shortcut).into()),
                 row,
-                palette,
+                kit,
             ))
             .child(settings_value_group().child(kit.value(kind)))
             .child(bounds_recorder(Rc::clone(&self.list_bounds), item + 1))
@@ -1128,7 +1132,7 @@ impl NativeToolsView {
     }
 
     fn render_hotkey_row(&self, item: usize, cx: &mut Context<Self>) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let Some(hotkey) = self.hotkeys.get(item) else {
             return div().into_any_element();
         };
@@ -1142,7 +1146,7 @@ impl NativeToolsView {
             .and_then(|plugin| self.current_action(plugin, &hotkey.action))
             .map(|action| action.label.clone())
             .unwrap_or_else(|| hotkey.action.clone());
-        SettingsRow::setting(("native-hotkey-row", item), palette)
+        SettingsRow::setting(("native-hotkey-row", item), kit)
             .selected(selected, self.body_focused)
             .dimmed(!hotkey.enabled)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1154,7 +1158,7 @@ impl NativeToolsView {
                 plugin_name,
                 Some(action.into()),
                 row,
-                palette,
+                kit,
             ))
             .child(
                 settings_value_group()
@@ -1164,7 +1168,7 @@ impl NativeToolsView {
                         false,
                         false,
                         row,
-                        palette,
+                        kit,
                     )),
             )
             .child(bounds_recorder(Rc::clone(&self.list_bounds), item + 1))
@@ -1178,8 +1182,12 @@ impl NativeToolsView {
             .find(|error| error.key == key)?;
         let kit = qol_gpui::kit::kit();
         Some(kit.chip(
-            failure.error.clone(),
-            settings_panel_runtime().status_warning,
+            Chip::Status {
+                tone: qol_gpui::kit::kit().palette.warning,
+                halo: kit.washes.halo_attention.packed(),
+                text: failure.error.clone().into(),
+            },
+            kit.grounds.pane,
         ))
     }
 
@@ -1349,20 +1357,20 @@ impl NativeToolsView {
                 SettingsGroupHeader::new(
                     crumb.to_owned(),
                     Some(sub_header.into()),
-                    settings_panel_runtime(),
+                    qol_gpui::kit::kit(),
                 )
                 .current(self.body_focused),
             )
     }
 
     fn read_only_field(&self, index: usize, label: &'static str, value: &str) -> AnyElement {
-        let palette = settings_panel_runtime();
-        SettingsRow::rule(("native-tools-readonly", index), palette)
-            .child(settings_label(label, palette))
+        let kit = qol_gpui::kit::kit();
+        SettingsRow::rule(("native-tools-readonly", index), kit)
+            .child(settings_label(label, kit))
             .child(settings_description(
                 value.to_string(),
                 RowGround::of(false, self.body_focused),
-                palette,
+                kit,
             ))
             .into_any_element()
     }
@@ -1383,17 +1391,17 @@ impl NativeToolsView {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let row = RowGround::of(selected, self.body_focused);
-        SettingsRow::rule(("native-tools-boolean", index), palette)
+        SettingsRow::rule(("native-tools-boolean", index), kit)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_editor_field(index);
                 this.activate_editor_field(cx);
                 cx.notify();
             }))
-            .child(settings_label(label, palette))
-            .child(SettingsToggle::new(value, row, palette))
+            .child(settings_label(label, kit))
+            .child(SettingsToggle::new(value, row, kit))
             .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
@@ -1406,26 +1414,26 @@ impl NativeToolsView {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let row = RowGround::of(selected, self.body_focused);
         let context = PictureContext::for_accent(
             qol_theme::runtime_theme().mode,
             qol_theme::runtime_accent_key(),
         );
-        SettingsRow::rule(("native-tools-select", index), palette)
+        SettingsRow::rule(("native-tools-select", index), kit)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_editor_field(index);
                 this.activate_editor_field(cx);
                 cx.notify();
             }))
-            .child(settings_label(label, palette))
+            .child(settings_label(label, kit))
             .child(SettingsChoiceValue::new(
                 value.to_string(),
                 ChoiceArt::Picture(self.select_art(index, value)),
                 row,
                 context,
-                palette,
+                kit,
             ))
             .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
@@ -1439,28 +1447,28 @@ impl NativeToolsView {
             placeholder,
             selected,
         } = spec;
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let row = RowGround::of(selected, self.body_focused);
         let field = if selected {
-            SettingsTextField::live(self.editor_text.clone(), row, palette)
+            SettingsTextField::live(self.editor_text.clone(), row, kit)
         } else {
-            SettingsTextField::new(value.to_owned(), value.is_empty(), false, row, palette)
+            SettingsTextField::new(value.to_owned(), value.is_empty(), false, row, kit)
                 .placeholder(placeholder)
         };
-        SettingsRow::rule(("native-tools-text", index), palette)
+        SettingsRow::rule(("native-tools-text", index), kit)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_editor_field(index);
                 cx.notify();
             }))
-            .child(settings_label(label, palette))
+            .child(settings_label(label, kit))
             .child(field)
             .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
 
     fn capture_field(&self, draft: &HotkeyDraft, cx: &mut Context<Self>) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let selected = draft.selected == 3;
         let row = RowGround::of(selected, self.body_focused);
         let display = if draft.recording {
@@ -1470,20 +1478,20 @@ impl NativeToolsView {
         } else {
             draft.key.clone()
         };
-        SettingsRow::rule("native-tools-capture", palette)
+        SettingsRow::rule("native-tools-capture", kit)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(|this, _, _, cx| {
                 this.select_editor_field(3);
                 this.start_capture(cx);
                 cx.notify();
             }))
-            .child(settings_label("Shortcut", palette))
+            .child(settings_label("Shortcut", kit))
             .child(SettingsKeyCombination::new(
                 display,
                 selected,
                 draft.recording,
                 row,
-                palette,
+                kit,
             ))
             .child(bounds_recorder(Rc::clone(&self.field_bounds), 3))
             .into_any_element()
@@ -1791,21 +1799,21 @@ impl NativeToolsView {
             return CustomHints {
                 question: None,
                 left: Vec::new(),
-                right: vec![SettingsHint::new("esc", "cancel")],
+                right: vec![SettingsHint::new(Key::ESC, "cancel")],
             };
         }
         let mut left = vec![
-            SettingsHint::new("\u{21b5}", self.field_hint_label(selected)),
-            SettingsHint::new("\u{2191}\u{2193}", "move"),
+            SettingsHint::new(Key::ENTER, self.field_hint_label(selected)),
+            SettingsHint::new(Key::UP_DOWN, "move"),
         ];
         if self.selected_field_is_text(selected) {
-            left.push(SettingsHint::new("type", "edit"));
+            left.push(SettingsHint::new(Key::TYPE, "edit"));
         }
         CustomHints {
             question: None,
             left,
             right: vec![SettingsHint::new(
-                "esc",
+                Key::ESC,
                 if self.editor_changed() {
                     "back, asks to save"
                 } else {
@@ -1840,7 +1848,7 @@ impl NativeToolsView {
     }
 
     fn render_choose_page(&self, choose: ToolChoose, cx: &mut Context<Self>) -> AnyElement {
-        let palette = settings_panel_runtime();
+        let kit = qol_gpui::kit::kit();
         let options = self.choose_options(choose.select);
         let arts = choose_arts(&options);
         let layout = tile_layout(arts.len());
@@ -1858,7 +1866,7 @@ impl NativeToolsView {
                     art,
                     layout,
                     context,
-                    palette,
+                    kit,
                 )
                 .highlighted(index == choose.highlighted && self.body_focused)
                 .ticked(saved == Some(index))
@@ -1879,7 +1887,7 @@ impl NativeToolsView {
                 SettingsGroupHeader::new(
                     choose_label(choose.select),
                     Some(choose_sub_header(choose.select).into()),
-                    palette,
+                    kit,
                 )
                 .current(self.body_focused),
             );
@@ -1936,22 +1944,22 @@ impl CustomSettingsBreadcrumbs for NativeToolsView {
             return Some(CustomHints {
                 question: question.map(|question| self.editor_question_text(question).into()),
                 left: vec![SettingsHint::busy("saving")],
-                right: vec![SettingsHint::new("esc", "back")],
+                right: vec![SettingsHint::new(Key::ESC, "back")],
             });
         }
         if let Some(question) = question {
             let left = match question {
                 EditorQuestion::Save => {
-                    vec![SettingsHint::new("\u{21b5}", "save").tone(HintTone::Save)]
+                    vec![SettingsHint::new(Key::ENTER, "save").tone(HintTone::Save)]
                 }
                 EditorQuestion::Blocked { .. } => {
-                    vec![SettingsHint::new("\u{21b5}", "fill it in")]
+                    vec![SettingsHint::new(Key::ENTER, "fill it in")]
                 }
             };
             return Some(CustomHints {
                 question: Some(self.editor_question_text(question).into()),
                 left,
-                right: vec![SettingsHint::new("esc", "discard").tone(HintTone::Discard)],
+                right: vec![SettingsHint::new(Key::ESC, "discard").tone(HintTone::Discard)],
             });
         }
         Some(self.field_hints())

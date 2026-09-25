@@ -1,11 +1,12 @@
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, AnyElement, App, ClickEvent, ElementId, RenderOnce, Window};
+use gpui::{div, px, rgb, AnyElement, App, ClickEvent, ElementId, RenderOnce, Window};
 
 use crate::kit::kit;
-use crate::theme::SettingsPanelPalette;
+use crate::kit::Kit;
 
 use super::{
-    paint_settings_attention, paint_settings_selection, DIMMED_OPACITY, SETTINGS_ROW_GROUP,
+    attention_dot, paint_settings_attention, paint_settings_selection, DIMMED_OPACITY,
+    SETTINGS_ROW_GROUP,
 };
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -20,7 +21,7 @@ enum RowKind {
 #[derive(IntoElement)]
 pub struct SettingsRow {
     id: ElementId,
-    palette: SettingsPanelPalette,
+    kit: Kit,
     kind: RowKind,
     selected: bool,
     focused: bool,
@@ -31,22 +32,22 @@ pub struct SettingsRow {
 }
 
 impl SettingsRow {
-    pub fn setting(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Self {
-        Self::new(id, palette, RowKind::Setting)
+    pub fn setting(id: impl Into<ElementId>, kit: Kit) -> Self {
+        Self::new(id, kit, RowKind::Setting)
     }
 
-    pub fn rule(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Self {
-        Self::new(id, palette, RowKind::Rule)
+    pub fn rule(id: impl Into<ElementId>, kit: Kit) -> Self {
+        Self::new(id, kit, RowKind::Rule)
     }
 
-    pub fn add(id: impl Into<ElementId>, palette: SettingsPanelPalette) -> Self {
-        Self::new(id, palette, RowKind::Add)
+    pub fn add(id: impl Into<ElementId>, kit: Kit) -> Self {
+        Self::new(id, kit, RowKind::Add)
     }
 
-    fn new(id: impl Into<ElementId>, palette: SettingsPanelPalette, kind: RowKind) -> Self {
+    fn new(id: impl Into<ElementId>, kit: Kit, kind: RowKind) -> Self {
         Self {
             id: id.into(),
-            palette,
+            kit,
             kind,
             selected: false,
             focused: true,
@@ -95,6 +96,7 @@ impl SettingsRow {
 impl RenderOnce for SettingsRow {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let shared = kit();
+        let attention = self.attention && !(self.selected && self.focused);
         let height = match self.kind {
             RowKind::Setting => qol_theme::HEIGHT_SETTING_ROW,
             RowKind::Rule | RowKind::Add => qol_theme::HEIGHT_RULE_ROW,
@@ -113,6 +115,7 @@ impl RenderOnce for SettingsRow {
             .px(px(qol_theme::SPACE_INSET))
             .py(px(qol_theme::SPACE_TIGHT))
             .rounded_none()
+            .when(attention, |row| row.child(attention_dot(self.kit)))
             .children(self.children);
         if self.kind == RowKind::Rule {
             row = row.rounded(px(qol_theme::RADIUS_CONTROL));
@@ -121,19 +124,21 @@ impl RenderOnce for SettingsRow {
             row = row.opacity(DIMMED_OPACITY);
         }
         if self.selected && self.focused {
-            row = paint_settings_selection(row, self.palette);
-        } else if self.attention {
-            row = paint_settings_attention(row, self.palette);
+            row = paint_settings_selection(row, self.kit);
+        } else if attention {
+            row = paint_settings_attention(row, self.kit);
         }
         if let Some(on_click) = self.on_click {
-            let hover_fill = if self.selected && self.focused {
-                rgb(self.palette.grounds.band_hover.bg)
+            let ground = if self.selected && self.focused {
+                self.kit.grounds.band
             } else {
-                rgba(shared.washes.fill_hover.packed())
+                self.kit.grounds.pane
             };
-            row = row
-                .cursor(gpui::CursorStyle::PointingHand)
-                .hover(move |style| style.bg(hover_fill))
+            row = shared
+                .pointable(
+                    row.cursor(gpui::CursorStyle::PointingHand),
+                    rgb(ground.lift),
+                )
                 .on_click(move |event, window, cx| on_click(event, window, cx));
         }
         row

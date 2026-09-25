@@ -1,17 +1,19 @@
-use gpui::prelude::FluentBuilder as _;
+use crate::kit::{kit, Chip, Kit};
+use crate::text::TextStyled;
 use gpui::*;
+use qol_theme::{translucent, Alpha, TextStyle};
 
 use super::diagram::controller_diagram;
 use super::model::{ConnectionBadge, GamepadButton, MonitorStatus, SignalTone};
-use super::{ControllerSnapshot, GamepadMonitor, GamepadPalette};
+use super::{ControllerSnapshot, GamepadMonitor};
 
 pub fn gamepad_panel(
     monitor: &GamepadMonitor,
     label: &str,
     description: Option<&str>,
-    palette: GamepadPalette,
+    kit: Kit,
 ) -> Div {
-    let status = status_badge(monitor.status, palette);
+    let status = status_badge(monitor.status, kit);
     let header = div()
         .flex()
         .flex_row()
@@ -27,23 +29,21 @@ pub fn gamepad_panel(
                 .gap(px(qol_theme::SPACE_TIGHT))
                 .child(
                     div()
-                        .text_size(px(qol_theme::TEXT_BODY))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette.text))
+                        .text(TextStyle::Name)
+                        .text_color(rgb(kit.grounds.pane.ink))
                         .child(label.to_string()),
                 )
                 .children(description.map(|description| {
                     div()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_CAPTION))
-                        .text_color(rgb(palette.text_muted))
+                        .text(TextStyle::Detail)
+                        .text_color(rgb(kit.grounds.pane.faint))
                         .child(description.to_string())
                 })),
         )
         .child(status);
     let content = match monitor.selected() {
-        Some(controller) => controller_content(controller, monitor, palette),
-        None => waiting_content(monitor, palette),
+        Some(controller) => controller_content(controller, monitor, kit),
+        None => waiting_content(monitor, kit),
     };
     div()
         .flex()
@@ -54,49 +54,41 @@ pub fn gamepad_panel(
         .p(px(qol_theme::SPACE_CELL))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(palette.accent, 0x42)))
-        .bg(rgba(alpha(palette.surface, 0xe8)))
+        .border_color(rgba(translucent(kit.grounds.pane.mark, Alpha::Edge)))
+        .bg(rgb(kit.grounds.pane.bg))
         .child(header)
         .child(content)
 }
 
-fn controller_content(
-    controller: &ControllerSnapshot,
-    monitor: &GamepadMonitor,
-    palette: GamepadPalette,
-) -> Div {
+fn controller_content(controller: &ControllerSnapshot, monitor: &GamepadMonitor, kit: Kit) -> Div {
     div()
         .flex()
         .min_h_0()
         .flex_1()
         .flex_col()
         .gap(px(qol_theme::SPACE_INSET))
-        .child(device_header(controller, monitor, palette))
+        .child(device_header(controller, monitor, kit))
         .child(
             div()
                 .flex()
                 .flex_none()
                 .justify_center()
                 .overflow_hidden()
-                .child(controller_diagram(controller, palette)),
+                .child(controller_diagram(controller, kit)),
         )
         .children(controller.profile().device_note().map(|note| {
             div()
                 .px(px(qol_theme::SPACE_INSET))
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .text_color(rgb(palette.text_muted))
+                .text(TextStyle::Detail)
+                .text_color(rgb(kit.grounds.pane.faint))
                 .child(note)
         }))
-        .child(active_inputs(controller, palette))
-        .child(axis_readout(controller, palette))
-        .child(button_readout(controller, palette))
+        .child(active_inputs(controller, kit))
+        .child(axis_readout(controller, kit))
+        .child(button_readout(controller))
 }
 
-fn device_header(
-    controller: &ControllerSnapshot,
-    monitor: &GamepadMonitor,
-    palette: GamepadPalette,
-) -> Div {
+fn device_header(controller: &ControllerSnapshot, monitor: &GamepadMonitor, kit: Kit) -> Div {
     let selector = if monitor.controllers.len() > 1 {
         format!(
             "{} of {} · Enter to switch",
@@ -112,13 +104,13 @@ fn device_header(
         .items_center()
         .gap(px(qol_theme::SPACE_INSET));
     if let Some(connection) = controller.connection_badge() {
-        metadata = metadata.child(connection_badge(connection, palette));
+        metadata = metadata.child(connection_badge(connection, kit));
     }
     metadata = metadata
-        .child(metadata_chip(controller.profile().label(), palette))
-        .child(metadata_chip(&controller.hardware_id(), palette));
+        .child(metadata_chip(controller.profile().label()))
+        .child(metadata_chip(&controller.hardware_id()));
     if let Some(source) = &monitor.source {
-        metadata = metadata.child(metadata_chip(source, palette));
+        metadata = metadata.child(metadata_chip(source));
     }
     div()
         .flex()
@@ -130,8 +122,8 @@ fn device_header(
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(palette.accent, 0x2e)))
-        .bg(rgba(alpha(palette.accent, 0x0d)))
+        .border_color(rgba(translucent(kit.grounds.pane.mark, Alpha::Halo)))
+        .bg(rgba(translucent(kit.grounds.pane.mark, Alpha::Trace)))
         .child(
             div()
                 .flex()
@@ -139,10 +131,8 @@ fn device_header(
                 .flex_col()
                 .child(
                     div()
-                        .truncate()
-                        .text_size(px(qol_theme::TEXT_BODY))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette.text))
+                        .text(TextStyle::Name)
+                        .text_color(rgb(kit.grounds.pane.ink))
                         .child(controller.name.clone()),
                 )
                 .child(metadata),
@@ -150,14 +140,14 @@ fn device_header(
         .child(
             div()
                 .flex_none()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .text_color(rgb(palette.text_muted))
+                .text(TextStyle::Detail)
+                .text_color(rgb(kit.grounds.pane.faint))
                 .child(selector),
         )
 }
 
-fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div {
-    let tone = tone_color(connection.tone, palette);
+fn connection_badge(connection: ConnectionBadge, kit: Kit) -> Div {
+    let tone = tone_color(connection.tone, kit);
     let bars = connection.level.map(|level| {
         div()
             .flex()
@@ -172,48 +162,28 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
                     .bg(if bar <= level {
                         rgb(tone)
                     } else {
-                        rgba(alpha(palette.text_muted, 0x38))
+                        rgba(translucent(kit.grounds.pane.faint, Alpha::Edge))
                     })
             }))
     });
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(qol_theme::SPACE_TIGHT))
-        .px(px(qol_theme::SPACE_INSET))
-        .py(px(qol_theme::SPACE_STACK))
-        .rounded_none()
-        .border_1()
-        .border_color(rgba(alpha(tone, 0x58)))
-        .bg(rgba(alpha(tone, 0x12)))
-        .children(bars)
-        .child(
-            div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .text_color(rgb(palette.text_muted))
-                .child(connection.transport),
-        )
-        .child(
-            div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(tone))
-                .child(connection.detail),
-        )
+    kit.chip(
+        Chip::Status {
+            tone,
+            halo: translucent(tone, Alpha::Halo),
+            text: connection.transport.into(),
+        },
+        kit.grounds.pane,
+    )
+    .children(bars)
+    .child(connection.detail)
 }
 
-fn metadata_chip(label: &str, palette: GamepadPalette) -> Div {
-    div()
-        .px(px(qol_theme::SPACE_TIGHT))
-        .rounded_none()
-        .bg(rgba(alpha(palette.raised, 0xc8)))
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .text_color(rgb(palette.text_muted))
-        .child(label.to_string())
+fn metadata_chip(label: &str) -> Div {
+    let kit = kit();
+    kit.chip(Chip::Tag(label.to_string().into()), kit.grounds.pane)
 }
 
-fn active_inputs(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
+fn active_inputs(controller: &ControllerSnapshot, kit: Kit) -> Div {
     let active = controller.active_inputs();
     let label = if active.is_empty() {
         "Waiting for movement".into()
@@ -228,30 +198,27 @@ fn active_inputs(controller: &ControllerSnapshot, palette: GamepadPalette) -> Di
         .px(px(qol_theme::SPACE_INSET))
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
-        .bg(rgba(alpha(palette.raised, 0x9a)))
+        .bg(rgba(translucent(kit.grounds.menu.bg, Alpha::Strong)))
         .child(
             div()
                 .flex_none()
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette.text_muted))
+                .text(TextStyle::Label)
+                .text_color(rgb(kit.grounds.pane.faint))
                 .child("ACTIVE INPUTS"),
         )
         .child(
             div()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text(TextStyle::ListName)
                 .text_color(rgb(if active.is_empty() {
-                    palette.text_muted
+                    kit.grounds.pane.faint
                 } else {
-                    palette.accent
+                    kit.grounds.pane.mark
                 }))
                 .child(label),
         )
 }
 
-fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
+fn axis_readout(controller: &ControllerSnapshot, kit: Kit) -> Div {
     div()
         .flex()
         .w_full()
@@ -269,8 +236,8 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                 .child(
                     div()
                         .w(px(46.0))
-                        .text_size(px(qol_theme::TEXT_MICRO))
-                        .text_color(rgb(palette.text_muted))
+                        .text(TextStyle::Detail)
+                        .text_color(rgb(kit.grounds.pane.faint))
                         .child(axis.name.clone()),
                 )
                 .child(
@@ -280,7 +247,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                         .min_w(px(70.0))
                         .flex_1()
                         .rounded_none()
-                        .bg(rgba(alpha(palette.text_muted, 0x2c)))
+                        .bg(rgba(translucent(kit.grounds.pane.faint, Alpha::Halo)))
                         .child(
                             div()
                                 .absolute()
@@ -291,9 +258,9 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                                 .h(px(9.0))
                                 .rounded_none()
                                 .bg(rgb(if axis.value.abs() > 0.08 {
-                                    palette.accent
+                                    kit.grounds.pane.mark
                                 } else {
-                                    palette.text_muted
+                                    kit.grounds.pane.faint
                                 })),
                         ),
                 )
@@ -301,72 +268,35 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                     div()
                         .w(px(36.0))
                         .text_right()
-                        .text_size(px(qol_theme::TEXT_MICRO))
-                        .text_color(rgb(palette.text))
+                        .text(TextStyle::Detail)
+                        .text_color(rgb(kit.grounds.pane.ink))
                         .child(format!("{:+.2}", axis.value)),
                 )
         }))
 }
 
-fn button_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div {
+fn button_readout(controller: &ControllerSnapshot) -> Div {
     div()
         .flex()
         .w_full()
         .flex_wrap()
         .content_start()
         .gap(px(qol_theme::SPACE_TIGHT))
-        .children(
-            controller
-                .buttons
-                .iter()
-                .map(|button| button_chip(button, palette)),
-        )
+        .children(controller.buttons.iter().map(button_chip))
 }
 
-fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
+fn button_chip(button: &GamepadButton) -> Div {
     let active = button.pressed || button.value > 0.05;
-    div()
-        .flex()
+    let kit = kit();
+    let ground = if active {
+        kit.grounds.band
+    } else {
+        kit.grounds.pane
+    };
+    kit.chip(Chip::Tag(short_button_name(&button.name).into()), ground)
         .w(px(89.0))
-        .h(px(22.0))
-        .items_center()
         .justify_between()
-        .px(px(qol_theme::SPACE_TIGHT))
-        .rounded_none()
-        .border_1()
-        .border_color(if active {
-            rgb(palette.accent)
-        } else {
-            rgba(alpha(palette.border, 0x80))
-        })
-        .bg(if active {
-            rgba(alpha(palette.accent, 0x38))
-        } else {
-            rgba(alpha(palette.raised, 0x9a))
-        })
-        .when(active, |chip| chip.shadow(glow(palette.accent)))
-        .child(
-            div()
-                .truncate()
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .text_color(rgb(if active {
-                    palette.text
-                } else {
-                    palette.text_muted
-                }))
-                .child(short_button_name(&button.name)),
-        )
-        .child(
-            div()
-                .flex_none()
-                .text_size(px(qol_theme::TEXT_MICRO))
-                .text_color(rgb(if active {
-                    palette.accent
-                } else {
-                    palette.text_muted
-                }))
-                .child(format!("{:.2}", button.value)),
-        )
+        .child(format!("{:.2}", button.value))
 }
 
 fn short_button_name(name: &str) -> String {
@@ -375,11 +305,11 @@ fn short_button_name(name: &str) -> String {
         .replace("D-pad ", "D ")
 }
 
-fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
+fn waiting_content(monitor: &GamepadMonitor, kit: Kit) -> Div {
     let color = if monitor.status == MonitorStatus::Unavailable {
-        palette.danger
+        kit.palette.danger
     } else {
-        palette.accent
+        kit.grounds.pane.mark
     };
     div()
         .flex()
@@ -391,16 +321,16 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
         .gap(px(qol_theme::SPACE_CELL))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(color, 0x42)))
-        .bg(rgba(alpha(color, 0x0b)))
+        .border_color(rgba(translucent(color, Alpha::Edge)))
+        .bg(rgba(translucent(color, Alpha::Trace)))
         .child(
             div()
                 .relative()
                 .w(px(72.0))
                 .h(px(72.0))
                 .rounded_none()
-                .border_2()
-                .border_color(rgba(alpha(color, 0x76)))
+                .border_1()
+                .border_color(rgba(translucent(color, Alpha::Veil)))
                 .child(
                     div()
                         .absolute()
@@ -409,15 +339,14 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
                         .w(px(34.0))
                         .h(px(34.0))
                         .rounded_none()
-                        .border_2()
+                        .border_1()
                         .border_color(rgb(color)),
                 ),
         )
         .child(
             div()
-                .text_size(px(qol_theme::TEXT_BODY))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette.text))
+                .text(TextStyle::Name)
+                .text_color(rgb(kit.grounds.pane.ink))
                 .child(if monitor.status == MonitorStatus::Waiting {
                     "Wake a controller"
                 } else {
@@ -426,52 +355,35 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
         )
         .child(
             div()
-                .text_size(px(qol_theme::TEXT_CAPTION))
-                .text_color(rgb(palette.text_muted))
+                .text(TextStyle::Detail)
+                .text_color(rgb(kit.grounds.pane.faint))
                 .child(monitor.message.clone()),
         )
 }
 
-fn status_badge(status: MonitorStatus, palette: GamepadPalette) -> Div {
-    let (label, color) = match status {
-        MonitorStatus::Ready => ("LIVE", palette.success),
-        MonitorStatus::Waiting => ("WAITING", palette.warning),
-        MonitorStatus::Unavailable => ("OFFLINE", palette.danger),
+fn status_badge(status: MonitorStatus, kit: Kit) -> Div {
+    let (label, tone) = match status {
+        MonitorStatus::Ready => ("live", kit.palette.success),
+        MonitorStatus::Waiting => ("waiting", kit.palette.warning),
+        MonitorStatus::Unavailable => ("offline", kit.palette.danger),
     };
-    div()
-        .flex_none()
-        .px(px(qol_theme::SPACE_INSET))
-        .py(px(qol_theme::SPACE_TIGHT))
-        .rounded_none()
-        .border_1()
-        .border_color(rgba(alpha(color, 0x70)))
-        .bg(rgba(alpha(color, 0x18)))
-        .text_size(px(qol_theme::TEXT_MICRO))
-        .font_weight(FontWeight::BOLD)
-        .text_color(rgb(color))
-        .child(label)
+    kit.chip(
+        Chip::Status {
+            tone,
+            halo: translucent(tone, Alpha::Halo),
+            text: label.into(),
+        },
+        kit.grounds.pane,
+    )
 }
 
-fn tone_color(tone: SignalTone, palette: GamepadPalette) -> u32 {
+fn tone_color(tone: SignalTone, kit: Kit) -> u32 {
     match tone {
-        SignalTone::Success => palette.success,
-        SignalTone::Warning => palette.warning,
-        SignalTone::Danger => palette.danger,
-        SignalTone::Muted => palette.text_muted,
+        SignalTone::Success => kit.palette.success,
+        SignalTone::Warning => kit.palette.warning,
+        SignalTone::Danger => kit.palette.danger,
+        SignalTone::Muted => kit.grounds.pane.faint,
     }
-}
-
-fn glow(color: u32) -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        color: rgba(alpha(color, 0x58)).into(),
-        offset: point(px(0.0), px(0.0)),
-        blur_radius: px(9.0),
-        spread_radius: px(0.0),
-    }]
-}
-
-fn alpha(color: u32, opacity: u8) -> u32 {
-    (color << 8) | u32::from(opacity)
 }
 
 #[cfg(test)]
