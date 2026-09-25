@@ -4,7 +4,7 @@ use gpui::{div, px, rgb, rgba, App, Div, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
 use crate::key::Key;
-use crate::kit::{alpha, kit};
+use crate::kit::kit;
 use crate::theme::SettingsPanelPalette;
 
 use super::settings_action_spinner;
@@ -98,7 +98,10 @@ impl RenderOnce for SettingsHintBar {
         if let Some(question) = self.question {
             let ground = palette.grounds.pane;
             bar = bar
-                .bg(rgba(qol_theme::css_rgba_milli(ground.ink, 70).packed()))
+                .bg(rgba(qol_theme::translucent(
+                    ground.ink,
+                    qol_theme::Alpha::Wash,
+                )))
                 .text_color(rgb(ground.ink))
                 .child(
                     div()
@@ -139,7 +142,7 @@ fn hint_element(hint: SettingsHint, palette: SettingsPanelPalette) -> Div {
             .child(
                 kit()
                     .keycap_inked(key, color)
-                    .border_color(rgba(alpha(color, 0x73))),
+                    .border_color(rgba(qol_theme::translucent(color, qol_theme::Alpha::Veil))),
             )
             .child(div().text_color(rgb(color)).child(hint.label)),
     }

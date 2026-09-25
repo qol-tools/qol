@@ -490,7 +490,7 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &C
                     img(icon)
                         .w(px(icon_px - 2.0))
                         .h(px(icon_px - 2.0))
-                        .opacity(0.8),
+                        .opacity(qol_gpui::theme::OPACITY_REST),
                 );
             match snap.icon_position {
                 PreviewIconPosition::TopLeft => el.child(icon.left(px(inset_px))),

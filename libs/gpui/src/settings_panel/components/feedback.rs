@@ -38,7 +38,7 @@ impl RenderOnce for SettingsFeedback {
             .gap(px(qol_theme::SPACE_CELL))
             .px(px(qol_theme::SPACE_GUTTER))
             .py(px(qol_theme::SPACE_INSET))
-            .border_t(px(1.0))
+            .border_t(px(qol_theme::LINE))
             .border_color(rgba(shared.washes.hairline.packed()))
             .bg(rgb(ground.bg))
             .child(shared.status_dot(self.tone, halo.packed()))

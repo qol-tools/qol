@@ -1,9 +1,9 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, AnyElement, App, BoxShadow, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, rgba, AnyElement, App, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
-use crate::kit::{FOCUS_RING_EDGE, FOCUS_RING_HALO};
+use crate::kit::kit;
 use crate::text_edit::{CaretStyle, TextField, TextFieldElement};
 use crate::theme::SettingsPanelPalette;
 
@@ -172,26 +172,12 @@ impl RenderOnce for SettingsTextField {
             .h(px(qol_theme::HEIGHT_CONTROL))
             .px(px(qol_theme::SPACE_CELL))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .border(px(if focused {
-                FOCUS_RING_EDGE
-            } else if band {
-                1.0
-            } else {
-                0.0
-            }))
-            .border_color(if focused {
-                rgb(ground.ink)
-            } else {
-                rgba(ground.edge.packed())
+            .when(band, |field| {
+                field
+                    .border(px(qol_theme::LINE))
+                    .border_color(rgba(ground.edge.packed()))
             })
-            .when(focused, |field| {
-                field.shadow(vec![BoxShadow {
-                    color: rgba(qol_theme::css_rgba_milli(ground.ink, 160).packed()).into(),
-                    offset: gpui::point(px(0.0), px(0.0)),
-                    blur_radius: px(0.0),
-                    spread_radius: px(FOCUS_RING_HALO),
-                }])
-            })
+            .when(focused, |field| field.shadow(kit().focus_ring(ground)))
             .text(TextStyle::Code)
             .overflow_hidden();
         let field = ground_bg(

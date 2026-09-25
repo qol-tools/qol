@@ -81,7 +81,7 @@ fn header(
         .justify_between()
         .px(px(qol_gpui::theme::SPACE_PAD))
         .bg(rgb(palette.band_bg))
-        .border_b(px(1.0))
+        .border_b(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .child(
             div()

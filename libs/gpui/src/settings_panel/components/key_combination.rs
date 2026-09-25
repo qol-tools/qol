@@ -1,9 +1,9 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, BoxShadow, IntoElement, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, rgba, App, IntoElement, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
-use crate::kit::{FOCUS_RING_EDGE, FOCUS_RING_HALO};
+use crate::kit::kit;
 use crate::theme::SettingsPanelPalette;
 
 use super::{ground_bg, ground_text, RowGround};
@@ -55,20 +55,9 @@ impl RenderOnce for SettingsKeyCombination {
             .h(px(qol_theme::HEIGHT_INLINE))
             .px(px(qol_theme::SPACE_INSET))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .border(px(if editing { FOCUS_RING_EDGE } else { 1.0 }))
-            .border_color(if editing {
-                rgb(ground.ink)
-            } else {
-                rgba(ground.edge.packed())
-            })
-            .when(editing, |combo| {
-                combo.shadow(vec![BoxShadow {
-                    color: rgba(qol_theme::css_rgba_milli(ground.ink, 160).packed()).into(),
-                    offset: gpui::point(px(0.0), px(0.0)),
-                    blur_radius: px(0.0),
-                    spread_radius: px(FOCUS_RING_HALO),
-                }])
-            })
+            .border(px(qol_theme::LINE))
+            .border_color(rgba(ground.edge.packed()))
+            .when(editing, |combo| combo.shadow(kit().focus_ring(ground)))
             .text(TextStyle::Key);
         ground_bg(
             combo,

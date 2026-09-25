@@ -299,7 +299,7 @@ fn gutter_children(lit: bool, fill: f32, dot_y: f32, palette: SystemPalette) -> 
                 .top(px(dot_y - glow_size / 2.0))
                 .size(px(glow_size))
                 .rounded_full()
-                .bg(glow.opacity(0.22 * fill))
+                .bg(glow.opacity(qol_theme::Alpha::Edge.unit() * fill))
                 .into_any_element(),
             div()
                 .absolute()
@@ -318,7 +318,7 @@ fn gutter_children(lit: bool, fill: f32, dot_y: f32, palette: SystemPalette) -> 
             .size(px(DOT_SIZE))
             .rounded_full()
             .bg(rgb(palette.surface_elevated))
-            .border(px(1.5))
+            .border(px(qol_theme::LINE))
             .border_color(rgb(palette.border_subtle))
             .into_any_element()]
     }
@@ -381,7 +381,7 @@ fn node(
         .line_clamp(3)
         .child(item.text.clone());
     if index > here && !item.struck {
-        body = body.opacity(0.72);
+        body = body.opacity(qol_theme::OPACITY_REST);
     }
     if item.struck {
         body = body.line_through();

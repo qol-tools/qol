@@ -21,7 +21,6 @@ pub struct DisplayLayoutTile {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisplayLayoutTileStyle {
     pub border_color: u32,
-    pub border_width: f32,
     pub background: u32,
 }
 
@@ -29,16 +28,15 @@ pub fn display_layout_tile_style(
     tile: &DisplayLayoutTile,
     palette: SettingsPanelPalette,
 ) -> DisplayLayoutTileStyle {
-    let (border_color, border_width) = if tile.conflicted {
-        (palette.state_off, 2.0)
+    let border_color = if tile.conflicted {
+        palette.state_off
     } else if tile.selected {
-        (palette.row_border_selected, 2.0)
+        palette.row_border_selected
     } else {
-        (palette.panel_border, 1.0)
+        palette.panel_border
     };
     DisplayLayoutTileStyle {
         border_color,
-        border_width,
         background: if tile.selected {
             palette.row_bg_selected
         } else {
@@ -71,10 +69,10 @@ pub fn display_layout_ghost(
         .w(px(width))
         .h(px(height))
         .rounded(px(qol_theme::RADIUS_TIGHT))
-        .border(px(2.0))
+        .border(px(qol_theme::LINE))
         .border_color(rgb(palette.row_border_selected))
         .bg(rgb(palette.row_bg_selected))
-        .opacity(0.45)
+        .opacity(qol_theme::OPACITY_REST)
 }
 
 pub fn display_layout_tile(
@@ -91,7 +89,7 @@ pub fn display_layout_tile(
         .w(px(tile.width))
         .h(px(tile.height))
         .rounded(px(qol_theme::RADIUS_TIGHT))
-        .border(px(style.border_width))
+        .border(px(qol_theme::LINE))
         .border_color(rgb(style.border_color))
         .bg(rgb(style.background))
         .overflow_hidden()
@@ -155,37 +153,33 @@ mod tests {
     }
 
     #[test]
-    fn selected_tile_takes_the_accent_border_at_two_pixels() {
+    fn selected_tile_takes_the_accent_border() {
         let palette = palette();
         let style = display_layout_tile_style(&tile(true, false), palette);
         assert_eq!(style.border_color, palette.row_border_selected);
-        assert_eq!(style.border_width, 2.0);
         assert_ne!(style.border_color, palette.panel_border);
     }
 
     #[test]
-    fn unselected_tile_keeps_the_panel_border_at_one_pixel() {
+    fn unselected_tile_keeps_the_panel_border() {
         let palette = palette();
         let style = display_layout_tile_style(&tile(false, false), palette);
         assert_eq!(style.border_color, palette.panel_border);
-        assert_eq!(style.border_width, 1.0);
     }
 
     #[test]
-    fn conflicted_selected_tile_stays_on_danger_at_two_pixels() {
+    fn conflicted_selected_tile_stays_on_danger() {
         let palette = palette();
         let style = display_layout_tile_style(&tile(true, true), palette);
         assert_eq!(style.border_color, palette.state_off);
-        assert_eq!(style.border_width, 2.0);
         assert_ne!(style.border_color, palette.row_border_selected);
     }
 
     #[test]
-    fn conflicted_unselected_tile_stays_on_danger_at_two_pixels() {
+    fn conflicted_unselected_tile_stays_on_danger() {
         let palette = palette();
         let style = display_layout_tile_style(&tile(false, true), palette);
         assert_eq!(style.border_color, palette.state_off);
-        assert_eq!(style.border_width, 2.0);
         assert_eq!(style.background, palette.surface_raised);
     }
 
@@ -203,7 +197,6 @@ mod tests {
         let palette = palette();
         let style = display_layout_tile_style(&tile(false, false), palette);
         assert_eq!(style.border_color, palette.panel_border);
-        assert_eq!(style.border_width, 1.0);
         assert_eq!(style.background, palette.surface_raised);
     }
 }

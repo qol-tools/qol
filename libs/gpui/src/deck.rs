@@ -140,7 +140,7 @@ fn stage() -> Div {
 
 pub(crate) fn card_edges(card: Div, palette: SettingsPanelPalette, hairline: Rgba) -> Div {
     card.bg(rgb(palette.window_bg))
-        .border(px(1.))
+        .border(px(qol_theme::LINE))
         .border_color(hairline)
         .rounded_l(px(qol_theme::RADIUS_CARD))
         .occlude()

@@ -1,8 +1,13 @@
 pub mod css;
+pub mod depth;
 pub mod motion;
 pub mod quiet;
 pub mod text;
 
+pub use depth::{
+    clear, solid, translucent, Alpha, Shadow, ShadowLayer, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
+    OPACITY_DISABLED, OPACITY_REST, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
+};
 pub use motion::{
     Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED,
     WAIT_BEFORE_BUSY,
@@ -1307,6 +1312,7 @@ pub struct Ground {
     pub mark: u32,
     pub on_mark: u32,
     pub lift: u32,
+    pub halo: CssRgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1486,6 +1492,7 @@ fn surface_ground(
         mark,
         on_mark: bg,
         lift: lift(bg, ink),
+        halo: css_rgba_milli(mark, Alpha::Edge.milli()),
     }
 }
 
@@ -1504,6 +1511,7 @@ fn mixed_ground(bg: u32, ink: u32) -> Ground {
         mark: ink,
         on_mark: bg,
         lift: mix_const(bg, ink, GROUND_HOVER_LIFT_MIX),
+        halo: css_rgba_milli(ink, Alpha::Halo.milli()),
     }
 }
 

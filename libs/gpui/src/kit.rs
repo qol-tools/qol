@@ -9,22 +9,15 @@ use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
 use crate::icon::{icon, Icon, IconView};
 use crate::key::Key;
 use crate::text::{cased, TextStyled};
-use qol_theme::TextStyle;
-
-pub const FLOAT_SHADOW_OFFSET: f32 = 2.0;
-pub const FLOAT_SHADOW_ALPHA: u8 = 0x1a;
-
-pub const DISABLED_OPACITY: f32 = 0.4;
+use qol_theme::{
+    clear, translucent, Alpha, Shadow, TextStyle, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
+    OPACITY_DISABLED, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
+};
 
 pub const HEADER_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
 pub const SECTION_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
 pub const GUTTER: f32 = qol_theme::SPACE_GUTTER;
-pub const STATUS_DOT_SIZE: f32 = 7.0;
 pub const ROW_METADATA_WIDTH: f32 = 48.0;
-pub const ROW_BORDER_WIDTH: f32 = 1.0;
-
-pub const FOCUS_RING_EDGE: f32 = 1.5;
-pub const FOCUS_RING_HALO: f32 = 4.0;
 
 #[derive(Clone, Copy)]
 pub enum WindowControlIcon {
@@ -76,8 +69,21 @@ impl Kit {
         }
     }
 
-    pub fn focus_ring(&self) -> Vec<BoxShadow> {
-        focus_ring_from(self.palette.accent, self.washes.accent_halo.packed())
+    pub fn focus_ring(&self, ground: Ground) -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: rgb(ground.mark).into(),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(FOCUS_RING_EDGE),
+            },
+            BoxShadow {
+                color: rgba(ground.halo.packed()).into(),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(FOCUS_RING_HALO),
+            },
+        ]
     }
 
     pub fn header(&self, title: impl Into<SharedString>) -> Div {
@@ -177,7 +183,7 @@ impl Kit {
         let colors = qol_theme::tinted_row_palette(tone, self.palette);
         let row = row
             .relative()
-            .border(px(ROW_BORDER_WIDTH))
+            .border(px(LINE))
             .border_color(rgba(0))
             .bg(rgba(
                 if selected {
@@ -193,11 +199,11 @@ impl Kit {
         row.child(
             div()
                 .absolute()
-                .left(px(leading_width - ROW_BORDER_WIDTH))
-                .right(px(-ROW_BORDER_WIDTH))
-                .top(px(-ROW_BORDER_WIDTH))
-                .bottom(px(-ROW_BORDER_WIDTH))
-                .border(px(ROW_BORDER_WIDTH))
+                .left(px(leading_width - LINE))
+                .right(px(-LINE))
+                .top(px(-LINE))
+                .bottom(px(-LINE))
+                .border(px(LINE))
                 .border_color(rgba(colors.selected_edge.packed())),
         )
     }
@@ -218,7 +224,7 @@ impl Kit {
             .px(px(qol_theme::SPACE_SNUG))
             .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_KEYCAP))
-            .border(px(1.0))
+            .border(px(qol_theme::LINE))
             .border_color(rgba(self.washes.hairline_strong.packed()))
             .text(TextStyle::Key)
             .text_color(rgb(self.palette.text_muted))
@@ -263,14 +269,14 @@ impl Kit {
     pub fn status_dot(&self, tone: u32, halo: u32) -> Div {
         div()
             .flex_none()
-            .size(px(STATUS_DOT_SIZE))
+            .size(px(STATUS_DOT))
             .rounded_full()
             .bg(rgb(tone))
             .shadow(vec![BoxShadow {
                 color: rgba(halo).into(),
                 offset: point(px(0.0), px(0.0)),
                 blur_radius: px(0.0),
-                spread_radius: px(3.0),
+                spread_radius: px(STATUS_DOT_HALO),
             }])
     }
 
@@ -312,7 +318,7 @@ impl Kit {
             .h(px(height))
             .px(px(qol_theme::SPACE_INSET))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .border(px(1.0))
+            .border(px(qol_theme::LINE))
             .border_color(rgba(self.washes.hairline.packed()))
             .bg(rgba(self.washes.fill_resting.packed()))
             .text(TextStyle::Label)
@@ -337,7 +343,7 @@ impl Kit {
             .w_full()
             .h(px(qol_theme::HEIGHT_HINT_BAR))
             .px(px(qol_theme::SPACE_PAD))
-            .border_t(px(1.0))
+            .border_t(px(qol_theme::LINE))
             .border_color(rgba(self.washes.hairline.packed()))
             .bg(rgba(self.washes.fill_hover.packed()))
             .text(TextStyle::Hint)
@@ -381,7 +387,7 @@ impl Kit {
             .px(px(qol_theme::SPACE_SNUG))
             .py(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_TIGHT))
-            .bg(rgba(alpha(tone, 0x33)))
+            .bg(rgba(translucent(tone, Alpha::Halo)))
             .text(TextStyle::Label)
             .text_color(rgb(tone))
             .child(text)
@@ -390,9 +396,9 @@ impl Kit {
     pub fn vertical_identity_tab(&self, text: impl Into<SharedString>, tone: u32) -> Div {
         div()
             .absolute()
-            .left(px(-ROW_BORDER_WIDTH))
-            .top(px(-ROW_BORDER_WIDTH))
-            .bottom(px(-ROW_BORDER_WIDTH))
+            .left(px(-LINE))
+            .top(px(-LINE))
+            .bottom(px(-LINE))
             .w(px(crate::vertical_label::WIDTH))
             .flex()
             .items_center()
@@ -516,7 +522,7 @@ impl Kit {
             .flex()
             .items_center()
             .rounded_full()
-            .bg(rgba(alpha(tone, 0x33)))
+            .bg(rgba(translucent(tone, Alpha::Halo)))
             .text(TextStyle::Label)
             .text_color(rgb(tone))
             .child(text)
@@ -555,7 +561,7 @@ impl Kit {
             .flex()
             .items_center()
             .justify_center()
-            .border(px(1.0))
+            .border(px(qol_theme::LINE))
             .shadow(float_shadow(self.palette.text_primary))
             .text_color(rgb(self.action_ink(state)));
         match state {
@@ -571,7 +577,7 @@ impl Kit {
             ActionCircleState::Disabled => circle
                 .bg(rgb(self.palette.surface_raised))
                 .border_color(rgb(self.palette.border_subtle))
-                .opacity(DISABLED_OPACITY),
+                .opacity(OPACITY_DISABLED),
         }
     }
 
@@ -659,76 +665,36 @@ pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
     count as f32 * size.px() + (count - 1) as f32 * qol_theme::ACTION_CIRCLE_GAP
 }
 
-fn focus_ring_from(accent: u32, halo: u32) -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: rgb(accent).into(),
-            offset: point(px(0.0), px(0.0)),
-            blur_radius: px(0.0),
-            spread_radius: px(FOCUS_RING_EDGE),
-        },
-        BoxShadow {
-            color: rgba(halo).into(),
-            offset: point(px(0.0), px(0.0)),
-            blur_radius: px(0.0),
-            spread_radius: px(FOCUS_RING_HALO),
-        },
-    ]
+pub fn float_shadow(ink: u32) -> Vec<BoxShadow> {
+    shadow(SHADOW_FLOAT, ink)
 }
 
-#[cfg(test)]
-fn focus_ring_for(mode: ThemeMode, palette: SystemPalette) -> Vec<BoxShadow> {
-    Kit::new(mode, palette).focus_ring()
+pub fn raised_shadow(ink: u32) -> Vec<BoxShadow> {
+    shadow(SHADOW_RAISED, ink)
 }
 
-pub fn float_shadow(text_primary: u32) -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x0d)).into(),
-            offset: point(px(0.0), px(1.0)),
-            blur_radius: px(2.0),
+fn shadow(layers: Shadow, ink: u32) -> Vec<BoxShadow> {
+    layers
+        .iter()
+        .map(|layer| BoxShadow {
+            color: rgba(translucent(ink, layer.alpha)).into(),
+            offset: point(px(0.0), px(f32::from(layer.y))),
+            blur_radius: px(f32::from(layer.blur)),
             spread_radius: px(0.0),
-        },
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x14)).into(),
-            offset: point(px(0.0), px(8.0)),
-            blur_radius: px(20.0),
-            spread_radius: px(0.0),
-        },
-    ]
-}
-
-pub fn raised_shadow(text_primary: u32) -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x1a)).into(),
-            offset: point(px(0.0), px(1.0)),
-            blur_radius: px(2.0),
-            spread_radius: px(0.0),
-        },
-        BoxShadow {
-            color: rgba(alpha(text_primary, 0x1a)).into(),
-            offset: point(px(0.0), px(6.0)),
-            blur_radius: px(16.0),
-            spread_radius: px(0.0),
-        },
-    ]
+        })
+        .collect()
 }
 
 pub const RAIL_SCRIM_START: f32 = 0.32;
 pub const RAIL_SCRIM_END: f32 = 0.5;
-pub const RAIL_SCRIM_ALPHA: u8 = 0x66;
+pub const RAIL_SCRIM_ALPHA: Alpha = Alpha::Veil;
 
 pub fn rail_scrim(surface: u32) -> Background {
     linear_gradient(
         90.0,
-        linear_color_stop(rgba(alpha(surface, 0x00)), RAIL_SCRIM_START),
-        linear_color_stop(rgba(alpha(surface, RAIL_SCRIM_ALPHA)), RAIL_SCRIM_END),
+        linear_color_stop(rgba(clear(surface)), RAIL_SCRIM_START),
+        linear_color_stop(rgba(translucent(surface, RAIL_SCRIM_ALPHA)), RAIL_SCRIM_END),
     )
-}
-
-pub fn alpha(color: u32, opacity: u8) -> u32 {
-    (color << 8) | u32::from(opacity)
 }
 
 const TILE_TONES: [u32; 6] = [0x2f7350, 0x3a639b, 0x8a6208, 0x5c626d, 0x2f3238, 0x7a4a8a];
@@ -761,7 +727,7 @@ pub fn kit() -> Kit {
     let kit = Kit::new(theme.mode, theme.system);
     if qol_theme::window_is_quiet() {
         Kit {
-            washes: kit.washes.quiet(),
+            grounds: kit.grounds.quiet(),
             ..kit
         }
     } else {
@@ -781,10 +747,11 @@ pub fn enter_window(look: WindowLook) {
 
 #[cfg(test)]
 mod tests {
+    use super::Kit;
     use super::{
-        action_row_width, focus_ring_for, next_selectable, path_label, rail_scrim,
-        row_circle_state, ActionCircleSize, ActionCircleState, FOCUS_RING_EDGE, FOCUS_RING_HALO,
-        RAIL_SCRIM_ALPHA, RAIL_SCRIM_END, RAIL_SCRIM_START,
+        action_row_width, next_selectable, path_label, rail_scrim, row_circle_state,
+        ActionCircleSize, ActionCircleState, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA,
+        RAIL_SCRIM_END, RAIL_SCRIM_START,
     };
     use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
 
@@ -836,19 +803,33 @@ mod tests {
             (ThemeMode::Light, LIGHT_SYSTEM),
             (ThemeMode::Dark, DARK_SYSTEM),
         ] {
-            let ring = focus_ring_for(mode, palette);
-            assert_eq!(ring.len(), 2);
+            let kit = Kit::new(mode, palette);
+            for (ground, mark) in [
+                (kit.grounds.pane, palette.accent),
+                (kit.grounds.band, palette.text_primary),
+            ] {
+                let ring = kit.focus_ring(ground);
+                assert_eq!(ring.len(), 2);
 
-            let edge = &ring[0];
-            assert_eq!(f32::from(edge.spread_radius), FOCUS_RING_EDGE);
-            assert_eq!(f32::from(edge.blur_radius), 0.0);
-            assert_eq!(edge.color.a, 1.0);
+                let edge = &ring[0];
+                assert_eq!(f32::from(edge.spread_radius), FOCUS_RING_EDGE);
+                assert_eq!(f32::from(edge.blur_radius), 0.0);
+                assert_eq!(edge.color.a, 1.0);
+                assert_eq!(edge.color, gpui::Hsla::from(gpui::rgb(mark)));
 
-            let halo = &ring[1];
-            assert_eq!(f32::from(halo.spread_radius), FOCUS_RING_HALO);
-            assert!(halo.color.a > 0.0 && halo.color.a < 1.0);
-            assert!(halo.spread_radius > edge.spread_radius);
+                let halo = &ring[1];
+                assert_eq!(f32::from(halo.spread_radius), FOCUS_RING_HALO);
+                assert!(halo.color.a > 0.0 && halo.color.a < 1.0);
+                assert!(halo.spread_radius > edge.spread_radius);
+            }
         }
+    }
+
+    #[test]
+    fn a_quiet_window_rings_focus_without_a_halo() {
+        let quiet = Kit::new(ThemeMode::Light, LIGHT_SYSTEM).grounds.quiet();
+        let ring = Kit::new(ThemeMode::Light, LIGHT_SYSTEM).focus_ring(quiet.pane);
+        assert_eq!(ring[1].color.a, 0.0);
     }
 
     #[test]
@@ -858,7 +839,10 @@ mod tests {
         assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_START}")));
         assert!(rendered.contains(&format!("percentage: {RAIL_SCRIM_END}")));
         assert!(rendered.contains("a: 0.0"));
-        assert!(rendered.contains(&format!("a: {}", f32::from(RAIL_SCRIM_ALPHA) / 255.0)));
+        assert!(rendered.contains(&format!(
+            "a: {}",
+            f32::from(RAIL_SCRIM_ALPHA.byte()) / 255.0
+        )));
     }
 
     #[test]

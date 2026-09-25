@@ -279,7 +279,7 @@ impl LauncherView {
                     .top(px(HEADER_HEIGHT))
                     .left_0()
                     .w(px(WINDOW_WIDTH))
-                    .border_b(px(1.0))
+                    .border_b(px(qol_gpui::theme::LINE))
                     .border_color(rgba(kit.washes.hairline.packed()))
                     .bg(super::view::bg_color()),
                 kit.grounds.pane,
@@ -290,7 +290,7 @@ impl LauncherView {
                     .top(px(HEADER_HEIGHT + 4.0))
                     .right(px(8.0))
                     .w(px(280.0))
-                    .border(px(1.0))
+                    .border(px(qol_gpui::theme::LINE))
                     .border_color(rgba(kit.washes.hairline_strong.packed()))
                     .bg(rgb(kit.palette.surface_raised))
                     .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary)),

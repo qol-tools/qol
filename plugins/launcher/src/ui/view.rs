@@ -66,7 +66,7 @@ pub fn search_bar(
         .px(px(qol_gpui::theme::SPACE_PAD))
         .gap(px(10.0))
         .bg(rgb(current_palette().bg))
-        .border_b(px(1.0))
+        .border_b(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .child(qol_gpui::icon::icon(
             qol_gpui::Icon::Prompt,
@@ -149,7 +149,7 @@ pub fn search_bar(
                 .items_center()
                 .gap(px(qol_gpui::theme::SPACE_TIGHT))
                 .rounded(px(RADIUS_TIGHT))
-                .border(px(1.0))
+                .border(px(qol_gpui::theme::LINE))
                 .border_color(rgba(if status.help_open {
                     kit.washes.accent_border.packed()
                 } else {
@@ -385,7 +385,7 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
     let lead = lead_of(&row.raw);
     let mut card = div()
         .rounded(px(RADIUS_CARD))
-        .border(px(1.0))
+        .border(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .bg(rgb(kit.palette.surface_raised))
         .py(px(10.0))
@@ -461,7 +461,7 @@ fn host_tag(kit: &qol_gpui::kit::Kit, host: &str) -> Div {
     div()
         .px(px(5.0))
         .rounded(px(RADIUS_TIGHT))
-        .border(px(1.0))
+        .border(px(qol_gpui::theme::LINE))
         .border_color(rgba(kit.washes.hairline_strong.packed()))
         .text(TextStyle::Code)
         .text_color(rgb(kit.palette.text_muted))

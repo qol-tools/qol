@@ -505,7 +505,7 @@ impl RemoveAppView {
                 .gap(px(10.0))
                 .px(px(qol_gpui::theme::SPACE_PAD))
                 .bg(rgb(kit.grounds.invalid.bg))
-                .border_t(px(1.0))
+                .border_t(px(qol_gpui::theme::LINE))
                 .border_color(rgba(kit.washes.hairline.packed()))
                 .child(kit.status_dot(palette.danger, kit.washes.halo_invalid.packed()))
                 .child(
@@ -568,7 +568,7 @@ impl RemoveAppView {
                     .gap(px(10.0))
                     .px(px(qol_gpui::theme::SPACE_PAD))
                     .rounded(px(qol_gpui::theme::RADIUS_WELL))
-                    .border(px(1.0))
+                    .border(px(qol_gpui::theme::LINE))
                     .border_color(rgba(kit.washes.hairline.packed()))
                     .bg(rgba(kit.washes.fill_hover.packed()))
                     .child(

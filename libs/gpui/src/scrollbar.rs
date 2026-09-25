@@ -88,10 +88,10 @@ impl CueInk {
     fn of(ground: qol_theme::Ground) -> Self {
         Self {
             surface: ground.bg,
-            chevron: crate::kit::alpha(ground.ink, 0xc8),
-            streak: crate::kit::alpha(ground.ink, 0x1f),
+            chevron: qol_theme::translucent(ground.ink, qol_theme::Alpha::Strong),
+            streak: qol_theme::translucent(ground.ink, qol_theme::Alpha::Wash),
             track: ground.edge.packed(),
-            thumb: crate::kit::alpha(ground.ink, 0x8c),
+            thumb: qol_theme::translucent(ground.ink, qol_theme::Alpha::Strong),
         }
     }
 }
@@ -168,8 +168,8 @@ fn paint_overflow_edge(
                 centre_y,
                 centre_y - rise * 0.5,
                 centre_y + rise * 0.5,
-                0xff,
-                0x00,
+                qol_theme::solid(ink.surface),
+                qol_theme::clear(ink.surface),
             )
         }
         OverflowEdge::Bottom => {
@@ -179,8 +179,8 @@ fn paint_overflow_edge(
                 centre_y,
                 centre_y + rise * 0.5,
                 centre_y - rise * 0.5,
-                0x00,
-                0xff,
+                qol_theme::clear(ink.surface),
+                qol_theme::solid(ink.surface),
             )
         }
     };
@@ -191,8 +191,8 @@ fn paint_overflow_edge(
         ),
         linear_gradient(
             180.0,
-            linear_color_stop(rgba(crate::kit::alpha(ink.surface, band_start)), 0.0),
-            linear_color_stop(rgba(crate::kit::alpha(ink.surface, band_end)), 1.0),
+            linear_color_stop(rgba(band_start), 0.0),
+            linear_color_stop(rgba(band_end), 1.0),
         ),
     ));
     let clear = ink.streak & 0xffff_ff00;

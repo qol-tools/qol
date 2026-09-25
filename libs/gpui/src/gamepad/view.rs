@@ -1,7 +1,6 @@
 use crate::text::TextStyled;
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use qol_theme::TextStyle;
+use qol_theme::{translucent, Alpha, TextStyle};
 
 use super::diagram::controller_diagram;
 use super::model::{ConnectionBadge, GamepadButton, MonitorStatus, SignalTone};
@@ -54,8 +53,8 @@ pub fn gamepad_panel(
         .p(px(qol_theme::SPACE_CELL))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(palette.accent, 0x42)))
-        .bg(rgba(alpha(palette.surface, 0xe8)))
+        .border_color(rgba(translucent(palette.accent, Alpha::Edge)))
+        .bg(rgb(palette.surface))
         .child(header)
         .child(content)
 }
@@ -130,8 +129,8 @@ fn device_header(
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(palette.accent, 0x2e)))
-        .bg(rgba(alpha(palette.accent, 0x0d)))
+        .border_color(rgba(translucent(palette.accent, Alpha::Halo)))
+        .bg(rgba(translucent(palette.accent, Alpha::Trace)))
         .child(
             div()
                 .flex()
@@ -170,7 +169,7 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
                     .bg(if bar <= level {
                         rgb(tone)
                     } else {
-                        rgba(alpha(palette.text_muted, 0x38))
+                        rgba(translucent(palette.text_muted, Alpha::Edge))
                     })
             }))
     });
@@ -183,8 +182,8 @@ fn connection_badge(connection: ConnectionBadge, palette: GamepadPalette) -> Div
         .py(px(qol_theme::SPACE_STACK))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(tone, 0x58)))
-        .bg(rgba(alpha(tone, 0x12)))
+        .border_color(rgba(translucent(tone, Alpha::Veil)))
+        .bg(rgba(translucent(tone, Alpha::Wash)))
         .children(bars)
         .child(
             div()
@@ -204,7 +203,7 @@ fn metadata_chip(label: &str, palette: GamepadPalette) -> Div {
     div()
         .px(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
-        .bg(rgba(alpha(palette.raised, 0xc8)))
+        .bg(rgba(translucent(palette.raised, Alpha::Strong)))
         .text(TextStyle::Detail)
         .text_color(rgb(palette.text_muted))
         .child(label.to_string())
@@ -225,7 +224,7 @@ fn active_inputs(controller: &ControllerSnapshot, palette: GamepadPalette) -> Di
         .px(px(qol_theme::SPACE_INSET))
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
-        .bg(rgba(alpha(palette.raised, 0x9a)))
+        .bg(rgba(translucent(palette.raised, Alpha::Strong)))
         .child(
             div()
                 .flex_none()
@@ -274,7 +273,7 @@ fn axis_readout(controller: &ControllerSnapshot, palette: GamepadPalette) -> Div
                         .min_w(px(70.0))
                         .flex_1()
                         .rounded_none()
-                        .bg(rgba(alpha(palette.text_muted, 0x2c)))
+                        .bg(rgba(translucent(palette.text_muted, Alpha::Halo)))
                         .child(
                             div()
                                 .absolute()
@@ -331,14 +330,13 @@ fn button_chip(button: &GamepadButton, palette: GamepadPalette) -> Div {
         .border_color(if active {
             rgb(palette.accent)
         } else {
-            rgba(alpha(palette.border, 0x80))
+            rgba(translucent(palette.border, Alpha::Veil))
         })
         .bg(if active {
-            rgba(alpha(palette.accent, 0x38))
+            rgba(translucent(palette.accent, Alpha::Edge))
         } else {
-            rgba(alpha(palette.raised, 0x9a))
+            rgba(translucent(palette.raised, Alpha::Strong))
         })
-        .when(active, |chip| chip.shadow(glow(palette.accent)))
         .child(
             div()
                 .text(TextStyle::Detail)
@@ -384,16 +382,16 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
         .gap(px(qol_theme::SPACE_CELL))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(color, 0x42)))
-        .bg(rgba(alpha(color, 0x0b)))
+        .border_color(rgba(translucent(color, Alpha::Edge)))
+        .bg(rgba(translucent(color, Alpha::Trace)))
         .child(
             div()
                 .relative()
                 .w(px(72.0))
                 .h(px(72.0))
                 .rounded_none()
-                .border_2()
-                .border_color(rgba(alpha(color, 0x76)))
+                .border_1()
+                .border_color(rgba(translucent(color, Alpha::Veil)))
                 .child(
                     div()
                         .absolute()
@@ -402,7 +400,7 @@ fn waiting_content(monitor: &GamepadMonitor, palette: GamepadPalette) -> Div {
                         .w(px(34.0))
                         .h(px(34.0))
                         .rounded_none()
-                        .border_2()
+                        .border_1()
                         .border_color(rgb(color)),
                 ),
         )
@@ -436,8 +434,8 @@ fn status_badge(status: MonitorStatus, palette: GamepadPalette) -> Div {
         .py(px(qol_theme::SPACE_TIGHT))
         .rounded_none()
         .border_1()
-        .border_color(rgba(alpha(color, 0x70)))
-        .bg(rgba(alpha(color, 0x18)))
+        .border_color(rgba(translucent(color, Alpha::Veil)))
+        .bg(rgba(translucent(color, Alpha::Wash)))
         .text(TextStyle::Label)
         .text_color(rgb(color))
         .child(label)
@@ -450,19 +448,6 @@ fn tone_color(tone: SignalTone, palette: GamepadPalette) -> u32 {
         SignalTone::Danger => palette.danger,
         SignalTone::Muted => palette.text_muted,
     }
-}
-
-fn glow(color: u32) -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        color: rgba(alpha(color, 0x58)).into(),
-        offset: point(px(0.0), px(0.0)),
-        blur_radius: px(9.0),
-        spread_radius: px(0.0),
-    }]
-}
-
-fn alpha(color: u32, opacity: u8) -> u32 {
-    (color << 8) | u32::from(opacity)
 }
 
 #[cfg(test)]

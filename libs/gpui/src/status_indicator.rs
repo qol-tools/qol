@@ -59,7 +59,7 @@ impl RenderOnce for StatusIndicator {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let dot = div()
             .flex_none()
-            .size(px(crate::kit::STATUS_DOT_SIZE))
+            .size(px(qol_theme::STATUS_DOT))
             .rounded_full()
             .bg(self.color);
         let dot: AnyElement = if self.pulsing {

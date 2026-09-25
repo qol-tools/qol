@@ -1,10 +1,11 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-use super::{alpha, glow, scaled, SCALE};
+use super::{scaled, SCALE};
 use crate::gamepad::model::ButtonMark;
 use crate::gamepad::{ControllerProfile, ControllerSnapshot, GamepadAxis, GamepadPalette};
 use crate::icon::{icon, Icon};
+use qol_theme::{translucent, Alpha};
 
 pub(super) fn stick(
     center: (f32, f32),
@@ -25,18 +26,17 @@ pub(super) fn stick(
         .w(scaled(knob))
         .h(scaled(knob))
         .rounded_full()
-        .border_2()
+        .border_1()
         .border_color(if active {
             rgb(palette.accent)
         } else {
-            rgba(alpha(palette.accent, 0x78))
+            rgba(translucent(palette.accent, Alpha::Veil))
         })
         .bg(if active {
-            rgba(alpha(palette.accent, 0x1e))
+            rgba(translucent(palette.accent, Alpha::Wash))
         } else {
             rgb(palette.raised)
         })
-        .when(active, |knob| knob.shadow(glow(palette.accent, 16.0)))
         .flex()
         .items_center()
         .justify_center()
@@ -46,7 +46,7 @@ pub(super) fn stick(
                 .inset(scaled(8.0))
                 .rounded_full()
                 .border_1()
-                .border_color(rgba(alpha(palette.text_muted, 0x58))),
+                .border_color(rgba(translucent(palette.text_muted, Alpha::Veil))),
         )
         .child(
             div()
@@ -71,17 +71,17 @@ pub(super) fn stick(
         .border_color(if active {
             rgb(palette.accent)
         } else {
-            rgba(alpha(palette.accent, 0x78))
+            rgba(translucent(palette.accent, Alpha::Veil))
         })
-        .bg(rgba(alpha(palette.raised, 0xc8)))
+        .bg(rgba(translucent(palette.raised, Alpha::Strong)))
         .when(active, |gate| {
             gate.child(
                 div()
                     .absolute()
                     .inset(px(-5.0))
                     .rounded_full()
-                    .border_2()
-                    .border_color(rgba(alpha(palette.accent, 0x28))),
+                    .border_1()
+                    .border_color(rgba(translucent(palette.accent, Alpha::Halo))),
             )
         })
         .child(
@@ -91,7 +91,7 @@ pub(super) fn stick(
                 .right(scaled(14.0))
                 .top_1_2()
                 .h(px(1.0))
-                .bg(rgba(alpha(palette.text_muted, 0x32))),
+                .bg(rgba(translucent(palette.text_muted, Alpha::Halo))),
         )
         .child(
             div()
@@ -100,7 +100,7 @@ pub(super) fn stick(
                 .bottom(scaled(14.0))
                 .left_1_2()
                 .w(px(1.0))
-                .bg(rgba(alpha(palette.text_muted, 0x32))),
+                .bg(rgba(translucent(palette.text_muted, Alpha::Halo))),
         )
         .child(knob_element)
 }
@@ -130,9 +130,9 @@ pub(super) fn dpad_control(
         .w(scaled(116.0))
         .h(scaled(116.0))
         .rounded_full()
-        .border_2()
-        .border_color(rgba(alpha(palette.accent, 0x78)))
-        .bg(rgba(alpha(palette.raised, 0xc8)))
+        .border_1()
+        .border_color(rgba(translucent(palette.accent, Alpha::Veil)))
+        .bg(rgba(translucent(palette.raised, Alpha::Strong)))
         .child(
             canvas(
                 move |bounds, _, _| dpad_paths(bounds, pressed, palette),
@@ -154,7 +154,7 @@ pub(super) fn dpad_control(
                 .h(scaled(28.0))
                 .rounded_full()
                 .border_1()
-                .border_color(rgba(alpha(palette.text_muted, 0x58)))
+                .border_color(rgba(translucent(palette.text_muted, Alpha::Veil)))
                 .bg(rgb(palette.surface)),
         )
         .children(arrows.into_iter().map(|(index, glyph, dx, dy)| {
@@ -189,7 +189,7 @@ fn dpad_paths(
         layers.push((path, rgb(palette.raised)));
     }
     if let Some(path) = dpad_plus(bounds, PathBuilder::stroke(scaled(2.0))) {
-        layers.push((path, rgba(alpha(palette.accent, 0x78))));
+        layers.push((path, rgba(translucent(palette.accent, Alpha::Veil))));
     }
     for (direction, held) in pressed.iter().enumerate() {
         if !held {
@@ -438,10 +438,10 @@ fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
             if active {
                 rgb(palette.accent)
             } else {
-                rgba(alpha(palette.accent, 0x78))
+                rgba(translucent(palette.accent, Alpha::Veil))
             },
             if active {
-                rgba(alpha(palette.accent, 0x1e))
+                rgba(translucent(palette.accent, Alpha::Wash))
             } else {
                 rgb(palette.raised)
             },
@@ -452,7 +452,7 @@ fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
             },
         ),
         RoundStyle::Marker => (
-            rgba(alpha(palette.text_muted, 0x58)),
+            rgba(translucent(palette.text_muted, Alpha::Veil)),
             rgb(palette.raised),
             palette.text_muted,
         ),
@@ -465,7 +465,7 @@ fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
         .w(scaled(radius * 2.0))
         .h(scaled(radius * 2.0))
         .rounded_full()
-        .when(!dashed, |control| control.border_2().border_color(border))
+        .when(!dashed, |control| control.border_1().border_color(border))
         .bg(bg)
         .when(dashed, |control| {
             control.child(
@@ -481,15 +481,14 @@ fn round_control(control: RoundControl, palette: GamepadPalette) -> Div {
                 .inset_0(),
             )
         })
-        .when(active, |control| control.shadow(glow(tone, 16.0)))
         .when(active, |control| {
             control.child(
                 div()
                     .absolute()
                     .inset(px(-5.0))
                     .rounded_full()
-                    .border_2()
-                    .border_color(rgba(alpha(tone, 0x38))),
+                    .border_1()
+                    .border_color(rgba(translucent(tone, Alpha::Edge))),
             )
         })
         .child({

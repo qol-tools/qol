@@ -31,7 +31,7 @@ const DISMISS_WIDTH: f32 = 44.0;
 const GUTTER: f32 = 8.0;
 const TEXT_PAD: f32 = 16.0;
 const DOT_SLOT_WIDTH: f32 =
-    qol_theme::SPACE_PAD + crate::kit::STATUS_DOT_SIZE + qol_theme::SPACE_CELL - TEXT_PAD;
+    qol_theme::SPACE_PAD + qol_theme::STATUS_DOT + qol_theme::SPACE_CELL - TEXT_PAD;
 const MAX_ROWS_PER_GROUP: usize = 3;
 const MAX_VISIBLE_NON_LIVE_ROWS: usize = 4;
 const HOVER_HOLD_RECHECK: Duration = Duration::from_millis(400);

@@ -258,7 +258,7 @@ impl RenderOnce for SettingsTile {
             shared.washes.hairline_strong.packed()
         };
         tile = tile
-            .border(px(1.0))
+            .border(px(qol_theme::LINE))
             .border_color(rgba(border_color))
             .when(highlighted, |tile| tile.bg(rgb(band.bg)));
 

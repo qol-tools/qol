@@ -1,7 +1,8 @@
 use gpui::*;
 
-use super::{alpha, at, scaled};
+use super::{at, scaled};
 use crate::gamepad::{ControllerSnapshot, GamepadPalette};
+use qol_theme::{translucent, Alpha};
 
 pub(super) fn top_controls_canvas(
     controller: &ControllerSnapshot,
@@ -78,11 +79,11 @@ fn top_control_paths(
             control_b,
             PathBuilder::stroke(scaled(20.0)),
         ) {
-            layers.push((path, rgba(alpha(palette.accent, 0x78))));
+            layers.push((path, rgba(translucent(palette.accent, Alpha::Veil))));
         }
         for end in [start, to] {
             if let Some(path) = round_cap(bounds, end, 10.0) {
-                layers.push((path, rgba(alpha(palette.accent, 0x78))));
+                layers.push((path, rgba(translucent(palette.accent, Alpha::Veil))));
             }
         }
         if let Some(path) = cap_path(
@@ -113,7 +114,7 @@ fn top_control_paths(
             }
         }
         if let Some(path) = lead_path(bounds, lead, PathBuilder::stroke(scaled(2.0))) {
-            layers.push((path, rgba(alpha(palette.text_muted, 0x58))));
+            layers.push((path, rgba(translucent(palette.text_muted, Alpha::Veil))));
         }
     }
     layers
@@ -252,14 +253,14 @@ fn control_chip(spec: ChipSpec, palette: GamepadPalette) -> Div {
         .w(scaled(width))
         .h(scaled(CHIP_HEIGHT))
         .rounded(scaled(9.0))
-        .border_2()
+        .border_1()
         .border_color(if engaged {
             rgb(palette.accent)
         } else {
-            rgba(alpha(palette.text_muted, 0x58))
+            rgba(translucent(palette.text_muted, Alpha::Veil))
         })
         .bg(if engaged {
-            rgba(alpha(palette.accent, 0x1e))
+            rgba(translucent(palette.accent, Alpha::Wash))
         } else {
             rgb(palette.surface)
         })

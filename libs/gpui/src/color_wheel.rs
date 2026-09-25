@@ -351,7 +351,7 @@ impl ColorWheel {
                             .w(px(THUMB_SIZE))
                             .h(px(THUMB_SIZE))
                             .rounded_none()
-                            .border_2()
+                            .border_1()
                             .border_color(rgb(style.thumb_border))
                             .bg(rgb(self.thumb_color())),
                     ),

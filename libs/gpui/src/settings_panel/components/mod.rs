@@ -4,7 +4,7 @@ use gpui::{div, px, rgb, rgba, ElementId, Rgba, SharedString};
 use qol_theme::TextStyle;
 
 use crate::busy::Busy;
-use crate::kit::{alpha, kit};
+use crate::kit::kit;
 use crate::theme::{Ground, SettingsPanelPalette};
 
 mod choice_value;
@@ -41,13 +41,13 @@ pub use tile::{
 };
 pub use toggle::SettingsToggle;
 
-pub const DIMMED_OPACITY: f32 = 0.5;
+pub const DIMMED_OPACITY: f32 = qol_theme::OPACITY_DISABLED;
 const CHOICE_WORD_MAX_WIDTH: f32 = 180.0;
 const CHOICE_PICTURE_WIDTH: f32 = 56.0;
 const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
 const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
 const CHOICE_CHEVRON_HEIGHT: f32 = 14.0;
-const CHOICE_CHEVRON_REST_OPACITY: f32 = 0.4;
+const CHOICE_CHEVRON_REST_OPACITY: f32 = qol_theme::OPACITY_REST;
 const TEXT_FIELD_MIN_WIDTH: f32 = 220.0;
 const FIELD_MAX_WIDTH: f32 = 320.0;
 const TILE_SPINNER_SIZE: f32 = 44.0;
@@ -262,7 +262,13 @@ pub fn settings_action_affordance(
     } else {
         match variant {
             Some("ghost") => (rgb(palette.surface_raised), palette.label_text),
-            Some("danger") => (rgba(alpha(palette.state_off, 0x29)), palette.state_off),
+            Some("danger") => (
+                rgba(qol_theme::translucent(
+                    palette.state_off,
+                    qol_theme::Alpha::Halo,
+                )),
+                palette.state_off,
+            ),
             Some("primary") | None | Some(_) => {
                 (rgb(palette.row_bg_selected), palette.section_text)
             }
@@ -305,7 +311,10 @@ const CRUMB_MAX_WIDTH: f32 = 200.0;
 
 pub fn settings_crumb_trail(trail: Vec<String>, palette: SettingsPanelPalette) -> gpui::Div {
     let last = trail.len().saturating_sub(1);
-    let separator = rgba(crate::kit::alpha(palette.status_muted, 0x70));
+    let separator = rgba(qol_theme::translucent(
+        palette.status_muted,
+        qol_theme::Alpha::Veil,
+    ));
     let mut crumbs = Vec::with_capacity(trail.len() * 2);
     for (index, label) in trail.into_iter().enumerate() {
         if index > 0 {

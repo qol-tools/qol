@@ -80,13 +80,7 @@ pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
 }
 
 pub(super) fn surface_shadow() -> Vec<BoxShadow> {
-    let system = runtime_theme().system;
-    vec![BoxShadow {
-        color: rgba((system.text_primary << 8) | 0x1a).into(),
-        offset: point(px(2.0), px(2.0)),
-        blur_radius: px(0.0),
-        spread_radius: px(0.0),
-    }]
+    qol_gpui::kit::float_shadow(runtime_theme().system.text_primary)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use crate::{css_rgba_milli, SystemPalette, Theme, ThemeMode, WashPalette};
+use crate::{css_rgba_milli, Ground, Grounds, SystemPalette, Theme, ThemeMode};
 
 pub const LIGHT_QUIET_ACCENT: u32 = 0x8e8e99;
 pub const LIGHT_QUIET_ACCENT_INK: u32 = 0x5f5f69;
@@ -33,11 +33,20 @@ impl Theme {
     }
 }
 
-impl WashPalette {
-    pub const fn quiet(self) -> Self {
+impl Grounds {
+    pub fn quiet(self) -> Self {
+        let still = |ground: Ground| Ground {
+            halo: css_rgba_milli(ground.halo.rgb, 0),
+            ..ground
+        };
         Self {
-            accent_halo: css_rgba_milli(self.accent_halo.rgb, 0),
-            ..self
+            pane: still(self.pane),
+            rail: still(self.rail),
+            band: still(self.band),
+            band_hover: still(self.band_hover),
+            menu: still(self.menu),
+            attention: still(self.attention),
+            invalid: still(self.invalid),
         }
     }
 }

@@ -94,7 +94,10 @@ impl ArtifactPreview for ExtensionBadge {
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgba(crate::kit::alpha(tone_color, 51)))
+            .bg(rgba(qol_theme::translucent(
+                tone_color,
+                qol_theme::Alpha::Halo,
+            )))
             .child(
                 div()
                     .text(TextStyle::Label)

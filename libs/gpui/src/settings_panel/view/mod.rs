@@ -65,7 +65,7 @@ fn focus_level(source_menu: bool, sources: usize) -> PanelFocus {
     }
 }
 
-const RAIL_SECTION_OPACITY: f32 = 0.55;
+const RAIL_SECTION_OPACITY: f32 = qol_theme::OPACITY_REST;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TransitionAction {
@@ -3752,7 +3752,7 @@ impl SettingsPanelView {
             .gap(px(qol_theme::SPACE_GUTTER))
             .h(px(super::PANEL_BAND_HEIGHT))
             .px(px(qol_theme::SPACE_GUTTER))
-            .border_b(px(1.))
+            .border_b(px(qol_theme::LINE))
             .border_color(self.hairline())
             .bg(rgb(self.palette.rail_bg))
             .panel_drag_area()
@@ -3776,7 +3776,7 @@ impl SettingsPanelView {
             .px(px(qol_theme::SPACE_PAD))
             .rounded(px(qol_theme::RADIUS_WELL))
             .bg(rgba(self.kit.washes.fill_resting.packed()))
-            .border(px(1.))
+            .border(px(qol_theme::LINE))
             .border_color(self.hairline())
             .child(
                 div()

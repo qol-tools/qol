@@ -2154,7 +2154,7 @@ const LEAF_METHODS: [&str; 9] = [
     ".shadow(",
 ];
 
-const LEAF_STYLING_DEBT: [(&str, &str, usize); 30] = [
+const LEAF_STYLING_DEBT: [(&str, &str, usize); 27] = [
     ("libs/gpui/src/gamepad/diagram/controls.rs", ".bg(", 7),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
@@ -2166,7 +2166,6 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 30] = [
         ".font_weight(",
         2,
     ),
-    ("libs/gpui/src/gamepad/diagram/controls.rs", ".shadow(", 2),
     (
         "libs/gpui/src/gamepad/diagram/controls.rs",
         ".text_color(",
@@ -2179,7 +2178,6 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 30] = [
     ),
     ("libs/gpui/src/gamepad/diagram/mod.rs", ".bg(", 2),
     ("libs/gpui/src/gamepad/diagram/mod.rs", ".rounded(", 2),
-    ("libs/gpui/src/gamepad/diagram/mod.rs", ".shadow(", 1),
     ("libs/gpui/src/gamepad/diagram/top.rs", ".bg(", 1),
     ("libs/gpui/src/gamepad/diagram/top.rs", ".border_color(", 1),
     ("libs/gpui/src/gamepad/diagram/top.rs", ".font_weight(", 1),
@@ -2188,7 +2186,6 @@ const LEAF_STYLING_DEBT: [(&str, &str, usize); 30] = [
     ("libs/gpui/src/gamepad/diagram/top.rs", ".text_size(", 1),
     ("libs/gpui/src/gamepad/view.rs", ".bg(", 11),
     ("libs/gpui/src/gamepad/view.rs", ".border_color(", 8),
-    ("libs/gpui/src/gamepad/view.rs", ".shadow(", 1),
     ("libs/gpui/src/gamepad/view.rs", ".text_color(", 17),
     (
         "libs/gpui/src/settings_panel/view/display_layout_card.rs",
@@ -3070,8 +3067,99 @@ fn a_quiet_window_greys_only_the_accent_and_the_running_green() {
                 ..quiet.system
             };
             assert_eq!(untouched, theme.system, "{}", preset.key);
-            let washes = qol_theme::WashPalette::for_mode(mode, quiet.system).quiet();
-            assert_eq!(washes.accent_halo.alpha_milli, 0, "{}", preset.key);
+            let grounds = qol_theme::Grounds::from_theme(mode, quiet.system).quiet();
+            assert_eq!(grounds.pane.halo.alpha_milli, 0, "{}", preset.key);
+            assert_eq!(grounds.band.halo.alpha_milli, 0, "{}", preset.key);
         }
     }
+}
+
+const DEPTH_OWNERS: [&str; 1] = ["libs/gpui/src/kit.rs"];
+
+fn literal_opacity_problem(argument: &str) -> bool {
+    let trimmed = argument.trim();
+    let number: String = trimmed
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if number.is_empty() {
+        return false;
+    }
+    let rest = trimmed[number.len()..].trim_start();
+    let value: f32 = number.parse().unwrap_or(0.0);
+    if rest.is_empty() {
+        return value != 0.0 && value != 1.0;
+    }
+    rest.starts_with('*')
+}
+
+#[test]
+fn every_shadow_alpha_opacity_and_line_comes_from_the_theme() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        let owner = DEPTH_OWNERS.contains(&relative.as_str());
+        for (needle, what) in [
+            ("css_rgba_milli(", "a hand see-through strength"),
+            ("<< 8) |", "a hand alpha byte"),
+            ("fn alpha(", "its own alpha helper"),
+            ("fn glow(", "a glow"),
+            (".border_2()", "a 2 px line"),
+            (".border_4()", "a 4 px line"),
+            (".border_8()", "an 8 px line"),
+        ] {
+            if body.contains(needle) {
+                problems.push(format!("{relative} has {what} ({needle})"));
+            }
+        }
+        if !owner && body.contains("BoxShadow {") {
+            problems.push(format!("{relative} builds its own shadow"));
+        }
+        for side in ["", "_t", "_b", "_l", "_r", "_x", "_y"] {
+            let needle = format!(".border{side}(px(");
+            for (at, _) in body.match_indices(&needle) {
+                let next = body[at + needle.len()..].chars().next().unwrap_or(' ');
+                if next.is_ascii_digit() {
+                    problems.push(format!(
+                        "{relative} sets a line width by hand ({needle}{next}..)"
+                    ));
+                }
+            }
+        }
+        for (at, _) in body.match_indices(".opacity(") {
+            let argument = body[at + ".opacity(".len()..]
+                .split(')')
+                .next()
+                .unwrap_or_default();
+            if literal_opacity_problem(argument) {
+                problems.push(format!("{relative} dims by hand (.opacity({argument}))"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "Shadows are SHADOW_FLOAT or SHADOW_RAISED through the kit, see-through colours take an Alpha, dimming is OPACITY_DISABLED or OPACITY_REST, and a line is LINE.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn the_depth_ladders_hold_their_approved_values() {
+    let percents: Vec<u16> = qol_theme::Alpha::ALL.iter().map(|a| a.percent()).collect();
+    assert_eq!(percents, [5, 9, 16, 24, 40, 70]);
+    assert_eq!(qol_theme::OPACITY_DISABLED, 0.4);
+    assert_eq!(qol_theme::OPACITY_REST, 0.6);
+    assert_eq!(qol_theme::LINE, 1.0);
+    assert_eq!(qol_theme::FOCUS_RING_EDGE, 1.5);
+    assert_eq!(qol_theme::STATUS_DOT, 7.0);
+    let layers = |shadow: qol_theme::Shadow| {
+        shadow
+            .iter()
+            .map(|layer| (layer.y, layer.blur, layer.alpha.percent()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(layers(qol_theme::SHADOW_FLOAT), [(1, 2, 5), (8, 20, 9)]);
+    assert_eq!(layers(qol_theme::SHADOW_RAISED), [(1, 2, 9), (6, 16, 9)]);
 }

@@ -115,7 +115,7 @@ pub(in crate::settings_panel) fn number_field(
         .h(px(qol_theme::HEIGHT_INLINE))
         .px(px(qol_theme::SPACE_INSET))
         .rounded(px(qol_theme::RADIUS_CONTROL))
-        .border(px(1.0))
+        .border(px(qol_theme::LINE))
         .border_color(rgba(ground.edge.packed()))
         .child(
             ground_text(div().text(TextStyle::Value), rgb(text), text_hover.map(rgb))

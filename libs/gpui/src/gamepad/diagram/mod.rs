@@ -1,5 +1,6 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use qol_theme::{translucent, Alpha};
 
 use super::{ControllerProfile, ControllerSnapshot, GamepadPalette};
 
@@ -72,28 +73,28 @@ fn body_canvas(palette: GamepadPalette) -> impl IntoElement {
 fn body_paths(bounds: Bounds<Pixels>, palette: GamepadPalette) -> Vec<(Path<Pixels>, Rgba)> {
     let mut layers = Vec::new();
     if let Some(path) = body_path(bounds, PathBuilder::stroke(scaled(10.0))) {
-        layers.push((path, rgba(alpha(palette.accent, 0x16))));
+        layers.push((path, rgba(translucent(palette.accent, Alpha::Wash))));
     }
     if let Some(path) = body_path(bounds, PathBuilder::fill()) {
         layers.push((path, rgb(palette.surface)));
     }
     if let Some(path) = body_path(bounds, PathBuilder::stroke(scaled(2.0))) {
-        layers.push((path, rgba(alpha(palette.accent, 0x78))));
+        layers.push((path, rgba(translucent(palette.accent, Alpha::Veil))));
     }
     for left in [true, false] {
         if let Some(path) = grip_path(bounds, left, PathBuilder::fill()) {
-            layers.push((path, rgba(alpha(palette.raised, 0xc8))));
+            layers.push((path, rgba(translucent(palette.raised, Alpha::Strong))));
         }
     }
     if let Some(path) = crown_path(bounds, PathBuilder::fill()) {
-        layers.push((path, rgba(alpha(palette.accent, 0x12))));
+        layers.push((path, rgba(translucent(palette.accent, Alpha::Wash))));
     }
     if let Some(path) = crown_path(bounds, PathBuilder::stroke(scaled(1.5))) {
-        layers.push((path, rgba(alpha(palette.accent, 0x48))));
+        layers.push((path, rgba(translucent(palette.accent, Alpha::Edge))));
     }
     for left in [true, false] {
         if let Some(path) = seam_path(bounds, left, PathBuilder::stroke(scaled(1.2))) {
-            layers.push((path, rgba(alpha(palette.accent, 0x30))));
+            layers.push((path, rgba(translucent(palette.accent, Alpha::Halo))));
         }
     }
     layers
@@ -247,16 +248,15 @@ fn port(active: bool, palette: GamepadPalette) -> Div {
         .bg(if active {
             rgb(palette.accent)
         } else {
-            rgba(alpha(palette.text_muted, 0x58))
+            rgba(translucent(palette.text_muted, Alpha::Veil))
         })
-        .when(active, |port| port.shadow(glow(palette.accent, 10.0)))
         .when(active, |port| {
             port.child(
                 div()
                     .absolute()
                     .inset(px(-4.0))
                     .rounded(scaled(5.0))
-                    .bg(rgba(alpha(palette.accent, 0x28))),
+                    .bg(rgba(translucent(palette.accent, Alpha::Halo))),
             )
         })
 }
@@ -284,19 +284,6 @@ fn at(bounds: Bounds<Pixels>, x: f32, y: f32) -> Point<Pixels> {
 
 fn scaled(value: f32) -> Pixels {
     px(value * SCALE)
-}
-
-fn glow(color: u32, blur: f32) -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        color: rgba(alpha(color, 0x78)).into(),
-        offset: point(px(0.0), px(0.0)),
-        blur_radius: px(blur),
-        spread_radius: px(1.0),
-    }]
-}
-
-fn alpha(color: u32, opacity: u8) -> u32 {
-    (color << 8) | u32::from(opacity)
 }
 
 #[cfg(test)]
