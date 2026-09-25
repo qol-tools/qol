@@ -14,7 +14,7 @@ default = true
 
 [field.excluded_apps]
 type = "string_array"
-label = "Excluded Apps"
+label = "Excluded apps"
 description = "Bundle IDs where non-global remaps should be ignored."
 section = "general"
 card_description = "Apps where remaps stay off."
@@ -37,12 +37,12 @@ default = [
 ]
 
 [section.char_rules]
-label = "Character Rules"
+label = "Character rules"
 description = "Translate modifier combinations directly into emitted characters."
 
 [field.char_rules]
 type = "object_array"
-label = "Character Rules"
+label = "Character rules"
 section = "char_rules"
 card_description = "Shortcuts that type a character."
 item_label = "character rule"
@@ -55,12 +55,12 @@ to_char = "string"
 global = "boolean"
 
 [section.key_rules]
-label = "Key Rules"
+label = "Key rules"
 description = "Translate keys or key groups into other modifier or key combinations."
 
 [field.key_rules]
 type = "object_array"
-label = "Key Rules"
+label = "Key rules"
 section = "key_rules"
 card_description = "Keys that become other keys."
 item_label = "key rule"
@@ -85,12 +85,12 @@ item_label = "key"
 card_description = "Keys this rule translates."
 
 [section.mouse_rules]
-label = "Mouse Rules"
+label = "Mouse rules"
 description = "Apply modifier remaps to mouse button clicks."
 
 [field.mouse_rules]
 type = "object_array"
-label = "Mouse Rules"
+label = "Mouse rules"
 section = "mouse_rules"
 card_description = "Modifier remaps for mouse clicks."
 item_label = "mouse rule"
@@ -105,12 +105,12 @@ to_mods = "string_array"
 global = "boolean"
 
 [section.scroll_rules]
-label = "Scroll Rules"
+label = "Scroll rules"
 description = "Apply modifier remaps to scroll gestures."
 
 [field.scroll_rules]
 type = "object_array"
-label = "Scroll Rules"
+label = "Scroll rules"
 section = "scroll_rules"
 card_description = "Modifier remaps for scrolling."
 item_label = "scroll rule"

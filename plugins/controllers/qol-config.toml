@@ -12,12 +12,12 @@ label = "Status"
 section = "controllers"
 query = "controllers_snapshot"
 value_from = "state"
-label_map = { none = "No Controllers Detected", ok = "Controllers ready", optional_fix = "Optional fix available", not_responding = "Controller not responding", fixing = "Fixing controller" }
+label_map = { none = "No controllers detected", ok = "Controllers ready", optional_fix = "Optional fix available", not_responding = "Controller not responding", fixing = "Fixing controller" }
 tone_map = { ok = "success", optional_fix = "warning", not_responding = "danger", fixing = "warning" }
 
 [field.detected_pads]
 type = "list"
-label = "Connected Controllers"
+label = "Connected controllers"
 section = "controllers"
 query = "controllers_snapshot"
 row_label = "{name}"
@@ -39,7 +39,7 @@ when = "reclaimable"
 
 [field.input_test]
 type = "gamepad"
-label = "Controller Input"
+label = "Controller input"
 description = "Press a controller button, then move every stick, trigger, D-pad direction, and face button."
 section = "controllers"
 query = "controller_input"

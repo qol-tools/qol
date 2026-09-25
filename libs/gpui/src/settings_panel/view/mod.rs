@@ -12,11 +12,11 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use super::components::{
-    number_field, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
-    settings_action_affordance, settings_action_spinner, settings_label_group, settings_page,
-    settings_query_spinner, settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue,
-    SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
-    SettingsToggle, SettingsValueTone, SliderStyle,
+    number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
+    rail_caption_height, settings_action_affordance, settings_action_spinner, settings_label_group,
+    settings_page, settings_query_spinner, settings_value_text, ChoiceArt, RowGround,
+    SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
+    SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
@@ -2634,17 +2634,7 @@ impl SettingsPanelView {
             RowQueryState::Unavailable(_)
                 if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
             {
-                Some(
-                    cell().child(
-                        div()
-                            .text_size(px(qol_theme::TEXT_CAPTION))
-                            .text_color(rgb(match row {
-                                RowGround::Pane => self.palette.grounds.pane.faint,
-                                RowGround::Band => self.palette.grounds.band.soft,
-                            }))
-                            .child("unavailable"),
-                    ),
-                )
+                Some(cell().child(self.unavailable_indicator(index)))
             }
             RowQueryState::Idle | RowQueryState::Ready | RowQueryState::Unavailable(_) => None,
         }
@@ -2708,6 +2698,11 @@ impl SettingsPanelView {
             .flex_row()
             .items_center()
             .gap(px(qol_theme::SPACE_INSET));
+        if let RowControl::List { error: Some(_), .. } | RowControl::Status { error: Some(_), .. } =
+            self.level().rows[index].control
+        {
+            return cell.child(self.unavailable_indicator(index));
+        }
         if let RowControl::Status { tone, .. } = self.level().rows[index].control {
             return cell.child(StatusIndicator::new(
                 ("settings-status", index),
@@ -2734,9 +2729,10 @@ impl SettingsPanelView {
             cell = cell.child(div().w_2().h_2().rounded_full().bg(rgb(accent)));
         }
         cell.flex_none()
-            .w(px(value_cell_width(&self.level().rows[index].control)))
+            .min_w(px(value_cell_width(&self.level().rows[index].control)))
+            .max_w(relative(VALUE_CELL_MAX_FRACTION))
             .justify_end()
-            .child(
+            .child(one_line(
                 settings_value_text(
                     self.display_value(index),
                     self.value_tone(index),
@@ -2744,9 +2740,16 @@ impl SettingsPanelView {
                     self.palette,
                 )
                 .flex_shrink()
-                .min_w_0()
-                .truncate(),
-            )
+                .min_w_0(),
+            ))
+    }
+
+    fn unavailable_indicator(&self, index: usize) -> StatusIndicator {
+        StatusIndicator::new(
+            ("settings-unavailable", index),
+            "unavailable",
+            rgb(self.palette.status_muted),
+        )
     }
 
     fn render_toggle_value(&self, active: bool, row: RowGround) -> Div {
@@ -3066,12 +3069,13 @@ impl SettingsPanelView {
     }
 
     fn render_rail_plugin_caption(&self, quiet: bool) -> impl IntoElement {
-        let plugins = self
-            .panel
-            .sources
-            .iter()
-            .filter(|source| source.group == PanelSourceGroup::Plugin)
-            .count();
+        let plugins = self.panel.installed_plugins.unwrap_or_else(|| {
+            self.panel
+                .sources
+                .iter()
+                .filter(|source| source.group == PanelSourceGroup::Plugin)
+                .count()
+        });
         let detail = match plugins {
             1 => "1 installed".to_string(),
             count => format!("{count} installed"),
@@ -4970,6 +4974,8 @@ fn header_is_redundant(title: &str, labels: &[&str]) -> bool {
     }
     title.trim().to_lowercase() == labels[0].trim().to_lowercase()
 }
+
+const VALUE_CELL_MAX_FRACTION: f32 = 0.5;
 
 fn value_cell_width(control: &RowControl) -> f32 {
     match control {

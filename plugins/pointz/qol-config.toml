@@ -25,14 +25,14 @@ value_from = "pin"
 
 [field.command_port]
 type = "status"
-label = "Command Port"
+label = "Command port"
 query = "connection_info"
 value_from = "command_port"
 span = 1
 
 [field.discovery_port]
 type = "status"
-label = "Discovery Port"
+label = "Discovery port"
 query = "connection_info"
 value_from = "discovery_port"
 span = 1
@@ -46,7 +46,7 @@ span = 1
 
 [field.ip]
 type = "status"
-label = "IP Address"
+label = "IP address"
 query = "connection_info"
 value_from = "ip"
 span = 1

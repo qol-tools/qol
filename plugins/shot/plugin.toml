@@ -1,7 +1,7 @@
 [plugin]
 id = "qol-shot"
 uid = "e8208e3e-58b3-4f8c-ad4b-ddbecafa3375"
-name = "QoL Shot"
+name = "Shot"
 description = "Capture screenshots and record screen regions"
 version = "1.70.0"
 author = "KMRH47"
@@ -45,7 +45,7 @@ doctor = true
 permissions = ["screen-capture"]
 
 [menu]
-label = "QoL Shot"
+label = "Shot"
 items = [
     { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
 ]

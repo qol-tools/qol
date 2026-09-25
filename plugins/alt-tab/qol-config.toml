@@ -9,14 +9,14 @@ actions = ["open", "open-reverse"]
 
 [field.action_mode]
 type = "select"
-label = "Action Mode"
+label = "Action mode"
 section = "behavior"
 default = "hold_to_switch"
 card_description = "What letting go of the hotkey does."
 options = ["hold_to_switch", "sticky"]
 
 [field.action_mode.option_labels]
-hold_to_switch = "Hold To Switch"
+hold_to_switch = "Hold to switch"
 sticky = "Sticky"
 
 [field.action_mode.option_pictures]
@@ -25,15 +25,15 @@ sticky = "sticky"
 
 [field.open_behavior]
 type = "select"
-label = "Open Behavior"
+label = "Open behavior"
 section = "behavior"
 default = "cycle_once"
 card_description = "What opening the switcher does."
 options = ["cycle_once", "show_only"]
 
 [field.open_behavior.option_labels]
-cycle_once = "Cycle Once"
-show_only = "Show Only"
+cycle_once = "Cycle once"
+show_only = "Show only"
 
 [field.open_behavior.option_pictures]
 cycle_once = "cycle-once"
@@ -41,7 +41,7 @@ show_only = "show-only"
 
 [field.reset_selection_on_open]
 type = "boolean"
-label = "Reset Selection On Open"
+label = "Reset selection on open"
 section = "behavior"
 default = true
 
@@ -52,8 +52,8 @@ actions = ["open", "open-reverse"]
 
 [field.switchable_panels]
 type = "object_array"
-label = "Switchable Panels"
-description = "Overrides for always-on-top panels, which the picker hides by default. Add an app with the toggle on to make it switchable, or add one qol already includes with the toggle off to hide it again."
+label = "Switchable panels"
+description = "Always-on-top panels the picker may list. It hides them unless you add them here."
 section = "windows"
 card_description = "Panels the picker may switch to."
 item_label = "switchable panel"
@@ -63,6 +63,20 @@ default = []
 app = "string"
 switchable = "boolean"
 
+[field.display_show_minimized]
+type = "boolean"
+config_key = "display.show_minimized"
+label = "Show minimized windows"
+section = "windows"
+default = true
+
+[field.display_show_hotkey_hints]
+type = "boolean"
+config_key = "display.show_hotkey_hints"
+label = "Show hotkey hints"
+section = "windows"
+default = true
+
 [section.layout]
 label = "Layout"
 description = "Display tuning for the window picker."
@@ -71,7 +85,7 @@ actions = ["open", "open-reverse"]
 [field.display_card_scale]
 type = "number"
 config_key = "display.card_scale"
-label = "Card Size"
+label = "Card size"
 description = "Scale multiplier for window cards and previews. 1.0 is the compact legacy size."
 section = "layout"
 default = 1.5
@@ -90,7 +104,7 @@ default = true
 [field.display_card_padding]
 type = "number"
 config_key = "display.card_padding"
-label = "Card Padding"
+label = "Card padding"
 description = "Inner padding around each card preview and title."
 section = "layout"
 default = 4
@@ -101,7 +115,7 @@ step = 1
 [field.display_icon_position]
 type = "select"
 config_key = "display.icon_position"
-label = "Preview Icon Position"
+label = "Preview icon position"
 description = "Where the app icon appears over each window preview."
 section = "layout"
 default = "top_right"
@@ -109,8 +123,8 @@ card_description = "Where the app icon sits."
 options = ["top_right", "top_left"]
 
 [field.display_icon_position.option_labels]
-top_right = "Top Right"
-top_left = "Top Left"
+top_right = "Top right"
+top_left = "Top left"
 
 [field.display_icon_position.option_pictures]
 top_right = "icon-corner:right"
@@ -119,65 +133,24 @@ top_left = "icon-corner:left"
 [field.display_max_columns]
 type = "number"
 config_key = "display.max_columns"
-label = "Max Columns"
+label = "Max columns"
 section = "layout"
 default = 6
 min = 2
 max = 10
 step = 1
 
-[field.display_show_hotkey_hints]
-type = "boolean"
-config_key = "display.show_hotkey_hints"
-label = "Show Hotkey Hints"
-section = "layout"
-default = true
-
-[field.display_show_minimized]
-type = "boolean"
-config_key = "display.show_minimized"
-label = "Show Minimized Windows"
-section = "layout"
-default = true
-
 [field.display_transparent_background]
 type = "boolean"
 config_key = "display.transparent_background"
-label = "Transparent Background"
+label = "Transparent background"
 section = "layout"
 default = false
-
-[field.display_show_debug_overlay]
-type = "boolean"
-config_key = "display.show_debug_overlay"
-label = "Show Debug Overlay"
-section = "layout"
-default = false
-
-[field.display_ghost_opacity]
-type = "number"
-config_key = "display.ghost_opacity"
-label = "Ghost Opacity (debug)"
-description = "Opacity of the hidden picker window in debug builds. 0 = invisible."
-section = "layout"
-default = 0.0
-min = 0.0
-max = 1.0
-step = 0.05
-
-[field.display_ghost_debug_color]
-type = "color"
-config_key = "display.ghost_debug_color"
-label = "Ghost Color (debug)"
-description = "Background hex color of the hidden picker window in debug builds."
-section = "layout"
-placeholder = "ff0000"
-default = "ff0000"
 
 [field.display_card_background_color]
 type = "color"
 config_key = "display.card_background_color"
-label = "Card Background Color"
+label = "Card background color"
 description = "Base color for picker cards; the panel, hover, and selected colors derive from this."
 section = "layout"
 default = "#202322"
@@ -185,7 +158,7 @@ default = "#202322"
 [field.display_card_background_brightness]
 type = "number"
 config_key = "display.card_background_brightness"
-label = "Card Background Brightness"
+label = "Card background brightness"
 description = "Brightness multiplier for the picker card color. Lower values keep saturated colors subdued."
 section = "layout"
 default = 1.0
@@ -196,7 +169,7 @@ step = 0.05
 [field.display_card_background_opacity]
 type = "number"
 config_key = "display.card_background_opacity"
-label = "Card Background Opacity"
+label = "Card background opacity"
 section = "layout"
 default = 0.85
 min = 0.0
@@ -206,7 +179,7 @@ step = 0.05
 [field.display_unselected_card_opacity]
 type = "number"
 config_key = "display.unselected_card_opacity"
-label = "Other Windows Opacity"
+label = "Other windows opacity"
 description = "How solid the windows you have not picked look. 1 is fully solid."
 section = "layout"
 default = 0.85
@@ -222,7 +195,7 @@ actions = ["open", "open-reverse"]
 [field.label_size]
 type = "select"
 config_key = "label.size"
-label = "Label Size"
+label = "Label size"
 description = "Text size relative to the card size."
 section = "labels"
 default = "medium"
@@ -242,7 +215,7 @@ large = "aa:30"
 [field.label_show_app_name]
 type = "boolean"
 config_key = "label.show_app_name"
-label = "Show App Name"
+label = "Show app name"
 description = "Prefix the window title with the app name and a separator when both labels are visible."
 section = "labels"
 default = false
@@ -250,6 +223,38 @@ default = false
 [field.label_show_window_title]
 type = "boolean"
 config_key = "label.show_window_title"
-label = "Show Window Title"
+label = "Show window title"
 section = "labels"
 default = true
+
+[section.debug]
+label = "Debug"
+description = "Only for tracking down picker problems."
+actions = ["open", "open-reverse"]
+
+[field.display_show_debug_overlay]
+type = "boolean"
+config_key = "display.show_debug_overlay"
+label = "Show debug overlay"
+section = "debug"
+default = false
+
+[field.display_ghost_opacity]
+type = "number"
+config_key = "display.ghost_opacity"
+label = "Ghost opacity"
+description = "Opacity of the hidden picker window in debug builds. 0 = invisible."
+section = "debug"
+default = 0.0
+min = 0.0
+max = 1.0
+step = 0.05
+
+[field.display_ghost_debug_color]
+type = "color"
+config_key = "display.ghost_debug_color"
+label = "Ghost color"
+description = "Background hex color of the hidden picker window in debug builds."
+section = "debug"
+placeholder = "ff0000"
+default = "ff0000"

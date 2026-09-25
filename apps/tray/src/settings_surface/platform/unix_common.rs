@@ -818,7 +818,9 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
         runtimes.push(SettingsRuntime::empty());
     }
     let mut eligible = Vec::new();
-    for resolved in resolved_plugins()? {
+    let resolved = resolved_plugins()?;
+    let installed_plugins = resolved.len();
+    for resolved in resolved {
         let manifest = match crate::plugins::manifest::PluginManifest::read_from_dir(&resolved.path)
         {
             Ok(manifest) => manifest,
@@ -860,6 +862,7 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
                 query: "attention".to_string(),
             }),
             version: Some(format!("Version {}", crate::updates::current_version()).into()),
+            installed_plugins: Some(installed_plugins),
         },
         runtimes,
     ))

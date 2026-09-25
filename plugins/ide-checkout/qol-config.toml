@@ -9,7 +9,7 @@ description = "Shared runtime defaults for checkout and execution."
 [field.temp_dir]
 type = "string"
 config_key = "tempDir"
-label = "Temp Directory"
+label = "Temp directory"
 section = "general"
 default = "/tmp/qol-ide-checkout"
 

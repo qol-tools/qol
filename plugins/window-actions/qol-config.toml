@@ -9,15 +9,15 @@ actions = ["center"]
 
 [field.center_mode]
 type = "select"
-label = "Center Size Mode"
+label = "Center size mode"
 section = "center"
 default = "pixels"
 card_description = "How big a centered window gets."
 options = ["pixels", "percent"]
 
 [field.center_mode.option_labels]
-pixels = "Fixed Size"
-percent = "Relative Size"
+pixels = "Fixed size"
+percent = "Relative size"
 
 [field.center_mode.option_pictures]
 pixels = "fixed-size"
@@ -25,7 +25,7 @@ percent = "relative-size"
 
 [field.center_width_px]
 type = "number"
-label = "Centered Width"
+label = "Centered width"
 section = "center"
 default = 1152
 min = 320
@@ -37,7 +37,7 @@ equals = "pixels"
 
 [field.center_height_px]
 type = "number"
-label = "Centered Height"
+label = "Centered height"
 section = "center"
 default = 892
 min = 240
@@ -49,7 +49,7 @@ equals = "pixels"
 
 [field.center_width_percent]
 type = "number"
-label = "Centered Width"
+label = "Centered width"
 section = "center"
 default = 0.64
 min = 0.1
@@ -62,7 +62,7 @@ equals = "percent"
 
 [field.center_height_percent]
 type = "number"
-label = "Centered Height"
+label = "Centered height"
 section = "center"
 default = 0.79
 min = 0.1
@@ -80,7 +80,7 @@ actions = ["snap-left", "snap-right", "snap-bottom"]
 
 [field.snap_fraction]
 type = "number"
-label = "Snap Fraction"
+label = "Snap fraction"
 section = "snap"
 default = 0.5
 min = 0.1
@@ -88,13 +88,13 @@ max = 1.0
 step = 0.05
 
 [section.monitor_move]
-label = "Monitor Move"
+label = "Monitor move"
 description = "Behavior applied after moving a window between monitors."
 actions = ["move-monitor-left", "move-monitor-right"]
 
 [field.reveal_taskbar_after_move]
 type = "boolean"
-label = "Reveal Taskbar After Move"
+label = "Reveal taskbar after move"
 section = "monitor_move"
 default = true
 
@@ -105,7 +105,7 @@ actions = ["glide-left", "glide-right", "glide-up", "glide-down"]
 
 [field.glide_speed_px_per_second]
 type = "number"
-label = "Glide Speed"
+label = "Glide speed"
 section = "glide"
 default = 1200
 min = 100
@@ -113,6 +113,6 @@ max = 4000
 step = 100
 
 [section.window_state]
-label = "Window State"
+label = "Window state"
 description = "Direct window state actions without additional configuration."
 actions = ["maximize", "minimize", "restore"]
