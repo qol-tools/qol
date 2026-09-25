@@ -72,7 +72,6 @@ pub const RADIUS_KEYCAP: f32 = RADIUS_TIGHT;
 pub const RADIUS_THUMB: f32 = 3.0;
 pub const ACTION_CIRCLE_SIZE: f32 = 46.0;
 pub const ACTION_CIRCLE_GAP: f32 = 14.0;
-pub const RADIUS_WINDOW: f32 = 12.0;
 
 pub const TEXT_KEYCAP: f32 = TEXT_MICRO;
 

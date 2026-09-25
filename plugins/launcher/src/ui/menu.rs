@@ -280,7 +280,6 @@ impl LauncherView {
                 .top(px(HEADER_HEIGHT + 4.0))
                 .right(px(8.0))
                 .w(px(280.0))
-                .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
                 .border(px(1.0))
                 .border_color(rgba(kit.washes.hairline_strong.packed()))
                 .bg(rgb(kit.palette.surface_raised))

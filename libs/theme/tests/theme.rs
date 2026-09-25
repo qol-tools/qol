@@ -2743,3 +2743,35 @@ fn every_hover_is_the_kit_pointable_lift() {
         problems.join("\n")
     );
 }
+
+fn builder_around(lines: &[String], at: usize) -> String {
+    let start = (0..=at)
+        .rev()
+        .find(|&index| lines[index].contains("div()"))
+        .unwrap_or(at);
+    let end = (at..lines.len())
+        .find(|&index| lines[index].contains(".child") || lines[index].ends_with(';'))
+        .unwrap_or(at);
+    lines[start..=end].join("")
+}
+
+#[test]
+fn every_window_is_square() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let lines: Vec<String> = contents.lines().map(compact_line).collect();
+        for (index, line) in lines.iter().enumerate() {
+            if line.contains(".size_full()") && builder_around(&lines, index).contains(".rounded(")
+            {
+                problems.push(format!("{relative}:{} rounds a window", index + 1));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A window has no corner radius; only what sits inside it is rounded.\n{}",
+        problems.join("\n")
+    );
+}

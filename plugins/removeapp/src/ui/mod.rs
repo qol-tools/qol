@@ -856,7 +856,6 @@ impl Render for RemoveAppView {
             .size_full()
             .flex()
             .flex_col()
-            .rounded(px(qol_gpui::theme::RADIUS_WINDOW))
             .overflow_hidden()
             .bg(rgb(palette.panel_bg))
             .text_color(rgb(palette.text_primary))
