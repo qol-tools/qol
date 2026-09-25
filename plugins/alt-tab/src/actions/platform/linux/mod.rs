@@ -343,6 +343,10 @@ fn send_to_root(
     cookie.check().is_ok() && conn.flush().is_ok()
 }
 
+pub fn destroyed_windows() -> Option<futures::channel::mpsc::UnboundedReceiver<u32>> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,8 +415,4 @@ mod tests {
     fn close_window_payload_uses_ewmh_field_order() {
         assert_eq!(close_window_payload(42), [42, 2, 0, 0, 0]);
     }
-}
-
-pub fn destroyed_windows() -> Option<futures::channel::mpsc::UnboundedReceiver<u32>> {
-    None
 }
