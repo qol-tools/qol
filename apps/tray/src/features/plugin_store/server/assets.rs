@@ -15,6 +15,23 @@ struct QolConfigAssets;
 
 const QOL_CONFIG_ASSET_PREFIX: &str = "libs/config/js/";
 
+const FONT_ASSET_PREFIX: &str = "libs/gpui/assets/fonts/";
+
+const FONT_ASSETS: [(&str, &[u8]); 3] = [
+    (
+        "IBMPlexMono-Regular.ttf",
+        include_bytes!("../../../../../../libs/gpui/assets/fonts/IBMPlexMono-Regular.ttf"),
+    ),
+    (
+        "IBMPlexMono-Medium.ttf",
+        include_bytes!("../../../../../../libs/gpui/assets/fonts/IBMPlexMono-Medium.ttf"),
+    ),
+    (
+        "IBMPlexMono-SemiBold.ttf",
+        include_bytes!("../../../../../../libs/gpui/assets/fonts/IBMPlexMono-SemiBold.ttf"),
+    ),
+];
+
 pub(super) const AUTH_FRAGMENT_KEY_PLACEHOLDER: &str =
     "window.__QOL_AUTH_FRAGMENT_KEY__ = null; /* QOL_AUTH_FRAGMENT_KEY_INJECT */";
 
@@ -64,6 +81,7 @@ fn mime_for_path(path: &str) -> &'static str {
         (".png", "image/png"),
         (".svg", "image/svg+xml"),
         (".wasm", "application/wasm"),
+        (".ttf", "font/ttf"),
     ];
     MIME_MAP
         .iter()
@@ -80,6 +98,14 @@ pub(super) fn index_html_for_test() -> String {
 
 fn serve_embedded_file(path: &str) -> impl IntoResponse {
     let mime = mime_for_path(path);
+    if let Some(font) = embedded_font(path) {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, mime)],
+            font.to_vec(),
+        )
+            .into_response();
+    }
 
     match embedded_file(path) {
         Some(content) => (
@@ -92,6 +118,14 @@ fn serve_embedded_file(path: &str) -> impl IntoResponse {
     }
 }
 
+fn embedded_font(path: &str) -> Option<&'static [u8]> {
+    let name = path.strip_prefix(FONT_ASSET_PREFIX)?;
+    FONT_ASSETS
+        .iter()
+        .find(|(font, _)| *font == name)
+        .map(|(_, bytes)| *bytes)
+}
+
 fn embedded_file(path: &str) -> Option<rust_embed::EmbeddedFile> {
     if let Some(config_path) = path.strip_prefix(QOL_CONFIG_ASSET_PREFIX) {
         return QolConfigAssets::get(config_path);
@@ -101,7 +135,7 @@ fn embedded_file(path: &str) -> Option<rust_embed::EmbeddedFile> {
 
 #[cfg(test)]
 mod tests {
-    use super::{embedded_file, QolConfigAssets, UiAssets, QOL_CONFIG_ASSET_PREFIX};
+    use super::{embedded_file, embedded_font, QolConfigAssets, UiAssets, QOL_CONFIG_ASSET_PREFIX};
 
     #[test]
     fn embedded_ui_does_not_depend_on_remote_assets() {
@@ -125,6 +159,18 @@ mod tests {
             .expect("shared qol-config asset embedded");
         let source = String::from_utf8_lossy(&asset.data);
         assert!(source.contains("export function prettyLabel"));
+    }
+
+    #[test]
+    fn the_theme_mono_font_resolves_through_the_ui_server() {
+        for weight in ["Regular", "Medium", "SemiBold"] {
+            let font = embedded_font(&format!("libs/gpui/assets/fonts/IBMPlexMono-{weight}.ttf"))
+                .expect("mono face served");
+            assert!(font.len() > 1000);
+        }
+        let css = UiAssets::get("styles/theme-tokens.css").expect("theme tokens embedded");
+        let css = String::from_utf8_lossy(&css.data);
+        assert!(css.contains("../../../../libs/gpui/assets/fonts/IBMPlexMono-Regular.ttf"));
     }
 
     #[test]

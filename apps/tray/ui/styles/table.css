@@ -25,10 +25,9 @@
 .table-list-row {
     background: transparent;
     border-bottom: var(--border-w-1) solid var(--border-subtle);
-    border-left: var(--border-w-3) solid transparent;
     box-sizing: border-box;
     cursor: pointer;
-    transition: background var(--transition), border-left-color var(--transition);
+    transition: background var(--transition);
 }
 
 .table-grid {
@@ -72,6 +71,3 @@
 .table-list-row.selected,
 .table-list-row[data-selected="true"] { background: var(--bg-selected); }
 
-.table-list-row[data-status="linked"] { border-left-color: var(--success); }
-.table-list-row[data-status="local"] { border-left-color: var(--warning); }
-.table-list-row[data-status="installed"] { border-left-color: var(--accent); }

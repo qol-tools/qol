@@ -10,7 +10,7 @@
     background: var(--surface-row);
     border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
-    box-shadow: var(--elevation-crisp-1);
+    box-shadow: var(--qol-shadow-raised);
     overflow: visible;
     transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
     cursor: pointer;
@@ -18,17 +18,17 @@
 
 .card[data-selected="true"] {
     border-color: rgba(var(--accent-rgb), 0.85);
-    box-shadow: var(--selected-ring), var(--selected-glow), var(--elevation-crisp-1);
+    box-shadow: var(--qol-focus-ring), var(--qol-shadow-raised);
     transform: translateY(-1px);
     z-index: var(--z-selected);
 }
 
 .card:hover:not([data-selected="true"]) {
     border-color: var(--line);
-    box-shadow: var(--elevation-crisp-2);
+    box-shadow: var(--qol-shadow-float);
 }
 
 .card-grid--zoom .card:hover:not([data-selected="true"]) {
     transform: scale(var(--card-hover-scale));
-    box-shadow: var(--elevation-crisp-2);
+    box-shadow: var(--qol-shadow-float);
 }

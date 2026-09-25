@@ -30,7 +30,7 @@
     font: inherit;
     color: inherit;
     opacity: calc(var(--coverage-opacity) * (1 - var(--hide)));
-    transition: --hide 240ms ease-out;
+    transition: --hide var(--qol-motion-travel) ease-out;
 }
 
 .peripheral-slot:disabled {
@@ -96,7 +96,7 @@
     background: var(--surface-row);
     border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-lg);
-    box-shadow: var(--elevation-crisp-1);
+    box-shadow: var(--qol-shadow-raised);
 }
 
 .peripheral-mini-content {

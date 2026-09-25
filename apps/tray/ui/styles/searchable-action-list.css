@@ -31,7 +31,7 @@
 
 .searchable-action-list-status-dot {
     display: inline-block;
-    font-size: 0.65em;
+    font-size: var(--qol-text-label-size);
 }
 
 .searchable-action-list-status[data-pulse="true"] .searchable-action-list-status-dot {
@@ -72,14 +72,14 @@
     border: var(--border-w-1) solid var(--line-soft);
     border-radius: var(--radius-md);
     background: linear-gradient(180deg, var(--layer-paper-05), transparent), var(--surface-inset);
-    box-shadow: inset 0 1px 3px var(--layer-ink-35);
+    box-shadow: none;
     transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
 }
 
 .searchable-action-list-search:focus-within {
     border-color: rgba(var(--accent-rgb), 0.72);
     background: rgba(var(--accent-rgb), 0.04);
-    box-shadow: inset 0 1px 3px var(--layer-ink-35), 0 0 0 3px rgba(var(--accent-rgb), 0.1);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .searchable-action-list-search-mark {
@@ -127,10 +127,9 @@
     width: 100%;
     min-height: var(--size-row-sm);
     border: var(--border-w-1) solid var(--line-soft);
-    border-left: var(--border-w-3) solid transparent;
     border-radius: var(--radius-md);
     background: linear-gradient(105deg, rgba(var(--accent-rgb), 0.035), transparent 52%), var(--surface-row);
-    box-shadow: var(--elevation-crisp-1);
+    box-shadow: var(--qol-shadow-raised);
     overflow: visible;
     transition: border-color var(--transition), background var(--transition), box-shadow var(--transition), transform var(--transition);
 }
@@ -144,7 +143,7 @@
 .searchable-action-list-results > .list-row[data-selected="true"] {
     border-color: rgba(var(--accent-rgb), 0.7);
     background: linear-gradient(105deg, rgba(var(--accent-rgb), 0.13), transparent 65%), var(--surface-row);
-    box-shadow: var(--selected-ring), var(--selected-glow), var(--elevation-crisp-1);
+    box-shadow: var(--qol-focus-ring), var(--qol-shadow-raised);
 }
 
 .searchable-action-list-results .list-row-content {
@@ -203,7 +202,6 @@
 
 .searchable-action-list-results .list-row-action {
     width: calc(var(--size-action-col-md) + var(--size-control-sm));
-    border-left-color: rgba(var(--accent-rgb), 0.16);
     border-top-right-radius: var(--radius-md);
     border-bottom-right-radius: var(--radius-md);
     background: rgba(var(--accent-rgb), 0.025);
@@ -216,9 +214,6 @@
     width: 100%;
 }
 
-.searchable-action-list-actions .action-menu {
-    border-left: var(--border-w-1) solid rgba(var(--accent-rgb), 0.14);
-}
 
 .searchable-action-list-actions .action-menu-trigger {
     height: 100%;
@@ -310,7 +305,6 @@
     min-height: var(--size-control-md);
     border: none;
     border-bottom: var(--border-w-1) solid var(--line-soft);
-    border-left: var(--border-w-3) solid transparent;
     border-radius: 0;
     background: transparent;
     box-shadow: none;
@@ -334,7 +328,7 @@
 
 .searchable-action-list[data-layout="compact"] .searchable-action-list-results > .list-row[data-selected="true"] {
     background: rgba(var(--accent-rgb), 0.1);
-    box-shadow: inset 0 0 0 var(--border-w-1) rgba(var(--accent-rgb), 0.4);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .searchable-action-list[data-layout="compact"] .list-row-content {

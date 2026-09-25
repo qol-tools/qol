@@ -45,7 +45,7 @@ body {
 }
 
 .config-nav-header h1 {
-    font-size: 1.15rem;
+    font-size: var(--qol-text-heading-size);
     font-weight: var(--fw-heavy);
     color: var(--cfg-heading);
     letter-spacing: var(--ls-tight);
@@ -53,7 +53,7 @@ body {
 
 .config-nav-header p {
     color: var(--cfg-text-faint);
-    font-size: 0.82rem;
+    font-size: var(--qol-text-list-name-size);
     margin-top: 0.3rem;
     line-height: var(--lh-md);
 }
@@ -74,7 +74,7 @@ body {
     border: none;
     border-radius: var(--radius-sm);
     color: var(--cfg-text-bright);
-    font-size: 0.92rem;
+    font-size: var(--qol-text-value-size);
     font-weight: var(--fw-medium);
     cursor: pointer;
     transition: background var(--dur-sm);
@@ -113,7 +113,7 @@ body {
 
 .hero h1 {
     letter-spacing: var(--ls-tight);
-    font-size: 2.2rem;
+    font-size: var(--qol-text-masthead-size);
     font-weight: var(--fw-heavy);
 }
 
@@ -178,7 +178,7 @@ body {
 .card h2 {
     margin: 0 0 0.15rem;
     color: var(--cfg-heading);
-    font-size: 1.18rem;
+    font-size: var(--qol-text-heading-size);
     font-weight: var(--fw-heavy);
     text-transform: none;
     letter-spacing: var(--ls-tight);
@@ -195,7 +195,7 @@ body {
 .card > p {
     margin: 0 0 0.75rem;
     color: var(--cfg-text-subtle);
-    font-size: 0.85rem;
+    font-size: var(--qol-text-list-name-size);
     line-height: var(--lh-md);
 }
 
@@ -253,7 +253,7 @@ body {
 .config-subsection h3 {
     margin: 0 0 0.8rem;
     color: var(--cfg-text-strong);
-    font-size: 0.95rem;
+    font-size: var(--qol-text-value-size);
     font-weight: var(--fw-semibold);
     text-transform: none;
     letter-spacing: var(--ls-sm);
@@ -264,11 +264,11 @@ body {
 }
 
 .section-title-compact {
-    font-size: 0.9em;
+    font-size: var(--qol-text-value-size);
 }
 
 .section-title-tight {
-    font-size: 0.82em;
+    font-size: var(--qol-text-list-name-size);
 }
 
 .toggle-row {
@@ -291,12 +291,12 @@ body {
 
 .toggle-row strong {
     color: var(--cfg-text-strong);
-    font-size: 0.92rem;
+    font-size: var(--qol-text-value-size);
 }
 
 .field-label {
     color: var(--cfg-text-bright);
-    font-size: 0.88rem;
+    font-size: var(--qol-text-list-name-size);
     font-weight: var(--fw-medium);
     margin-bottom: 0.45rem;
     min-width: 0;
@@ -313,11 +313,11 @@ body {
 }
 
 .field-label-compact {
-    font-size: 0.8rem;
+    font-size: var(--qol-text-detail-size);
 }
 
 .field-label-tight {
-    font-size: 0.75rem;
+    font-size: var(--qol-text-detail-size);
 }
 
 .variant-selector {
@@ -341,7 +341,7 @@ body {
 
 .variant-selector-label {
     color: var(--cfg-text-bright);
-    font-size: 0.88rem;
+    font-size: var(--qol-text-list-name-size);
     font-weight: var(--fw-medium);
     text-transform: none;
     letter-spacing: var(--ls-tight);
@@ -382,7 +382,7 @@ body {
 .variant-content-branch.active {
     display: grid;
     position: relative;
-    animation: slide-in 0.25s ease-out;
+    animation: slide-in var(--qol-motion-travel) ease-out;
 }
 
 .variant-content-branch:not(.active) {
@@ -398,19 +398,19 @@ body {
 }
 
 .variant-selector-compact .variant-option {
-    font-size: 0.78rem;
+    font-size: var(--qol-text-detail-size);
     padding: 0.68rem 0.92rem;
 }
 
 .variant-selector-tight .variant-option {
-    font-size: 0.74rem;
+    font-size: var(--qol-text-label-size);
     padding: 0.62rem 0.82rem;
 }
 
 .field-help,
 .toggle-help {
     color: var(--cfg-text-faint);
-    font-size: 0.78rem;
+    font-size: var(--qol-text-detail-size);
     line-height: var(--lh-md);
 }
 
@@ -421,7 +421,7 @@ body {
 .section-copy {
     margin: 0;
     color: var(--cfg-text-subtle);
-    font-size: 0.84rem;
+    font-size: var(--qol-text-list-name-size);
     line-height: var(--lh-lg);
     max-width: 42rem;
 }
@@ -437,7 +437,7 @@ select.field-select {
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: inherit;
-    font-size: 0.86rem;
+    font-size: var(--qol-text-list-name-size);
 }
 
 .text-input {
@@ -473,7 +473,9 @@ select.field-select {
 select.field-select:focus {
     outline: none;
     border-color: var(--cfg-accent);
-    box-shadow: 0 0 0 1px var(--focus-ring);
+    box-shadow: none;
+    outline: var(--qol-line) solid var(--focus-ring);
+    outline-offset: 0;
 }
 
 .number-input:hover {
@@ -483,7 +485,9 @@ select.field-select:focus {
     background-position: right 0.45rem center;
     background-repeat: no-repeat;
     background-size: 0.55rem 0.8rem;
-    box-shadow: 0 0 0 1px var(--line);
+    box-shadow: none;
+    outline: var(--qol-line) solid var(--line);
+    outline-offset: 0;
 }
 
 .number-input::-webkit-outer-spin-button,
@@ -519,7 +523,7 @@ select.field-select:focus {
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: var(--font-data);
-    font-size: 0.85rem;
+    font-size: var(--qol-text-list-name-size);
 }
 
 .string-list {
@@ -537,7 +541,7 @@ select.field-select:focus {
     background: var(--cfg-chip-bg);
     border: var(--border-w-1) solid var(--cfg-chip-border);
     border-radius: var(--radius-lg);
-    font-size: 0.84rem;
+    font-size: var(--qol-text-list-name-size);
     color: var(--cfg-text-strong);
 }
 
@@ -596,7 +600,7 @@ select.field-select:focus {
 .field-group-number .field-label {
     max-width: none;
     margin-bottom: 0;
-    font-size: 0.86rem;
+    font-size: var(--qol-text-list-name-size);
     line-height: var(--lh-normal);
     color: var(--cfg-text-strong);
     font-weight: var(--fw-medium);
@@ -608,7 +612,7 @@ select.field-select:focus {
 
 .field-group-number .field-help {
     max-width: none;
-    font-size: 0.7rem;
+    font-size: var(--qol-text-label-size);
     text-align: left;
 }
 
@@ -619,7 +623,7 @@ select.field-select:focus {
     background: transparent;
     border: 0;
     border-radius: 0;
-    font-size: 1rem;
+    font-size: var(--qol-text-value-size);
     font-weight: var(--fw-semibold);
     text-align: center;
     box-shadow: none;
@@ -648,7 +652,7 @@ select.field-select:focus {
 
 .save-status {
     color: var(--cfg-success);
-    font-size: 0.78rem;
+    font-size: var(--qol-text-detail-size);
     min-height: 1em;
     padding: 0.5rem 1rem;
     margin-top: auto;
@@ -667,7 +671,7 @@ select.field-select:focus {
     color: var(--cfg-text-subtle);
     padding: 3rem;
     text-align: center;
-    font-size: 1.1rem;
+    font-size: var(--qol-text-heading-size);
 }
 
 .slider-row {
@@ -685,7 +689,7 @@ select.field-select:focus {
     min-width: 3.5em;
     text-align: right;
     font-family: var(--font-data);
-    font-size: 0.85rem;
+    font-size: var(--qol-text-list-name-size);
     color: var(--cfg-text-bright);
 }
 
@@ -695,7 +699,7 @@ select.field-select:focus {
     }
 
     .hero h1 {
-        font-size: 2rem;
+        font-size: var(--qol-text-masthead-size);
     }
 
     .add-rule-row {

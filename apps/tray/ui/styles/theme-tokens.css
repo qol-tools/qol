@@ -135,19 +135,16 @@
     --focus-ring-width: 2px;
     --focus-ring-offset: -2px;
 
-    --elevation-3: 0 8px 20px var(--layer-ink-28), 0 18px 44px rgba(var(--ink-rgb), 0.3);
 
     --progress-track-bg: rgba(var(--ink-rgb, 0, 0, 0), 0.46);
-    --progress-track-inset: inset 0 0 0 1px rgba(var(--paper-rgb, 255, 255, 255), 0.26), inset 0 2px 6px rgba(var(--ink-rgb, 0, 0, 0), 0.35);
     --progress-fill-start: rgba(var(--accent-rgb), 0.26);
     --progress-fill-end: rgba(var(--accent-rgb), 0.5);
     --progress-fill-outline: 1px solid rgba(var(--paper-rgb, 255, 255, 255), 0.16);
-    --progress-fill-glow: inset 0 0 0 1px rgba(var(--paper-rgb, 255, 255, 255), 0.08);
     --progress-fill-stripe-a: rgba(var(--paper-rgb, 255, 255, 255), 0.24);
     --progress-fill-stripe-b: rgba(var(--paper-rgb, 255, 255, 255), 0.08);
-    --progress-transition-fast: 120ms linear;
-    --progress-transition-medium: 220ms linear;
-    --dev-build-overlay-fade: 420ms;
+    --progress-transition-fast: var(--qol-motion-quick) linear;
+    --progress-transition-medium: var(--qol-motion-settle) linear;
+    --dev-build-overlay-fade: var(--qol-motion-travel);
     --dev-build-overlay-copy-scale-out: 0.96;
     --dev-build-overlay-complete-sweep-ease: ease-out;
     --dev-build-overlay-complete-sweep-start: -28%;
@@ -167,21 +164,21 @@
     --radius-2xl: 16px;
     --radius-pill: 999px;
 
-    --border-w-1: 1px;
-    --border-w-2: 2px;
-    --border-w-3: 3px;
-    --space-1: 0.25rem;
-    --space-1-1: 0.1rem;
-    --space-1-5: 0.375rem;
-    --space-2: 0.5rem;
-    --space-2-5: 0.625rem;
-    --space-3: 0.75rem;
-    --space-3-5: 0.875rem;
-    --space-4: 1rem;
-    --space-5: 1.25rem;
-    --space-6: 1.5rem;
-    --space-7: 2rem;
-    --space-8: 3rem;
+    --border-w-1: var(--qol-line);
+    --border-w-2: var(--qol-line);
+    --border-w-3: var(--qol-line);
+    --space-1: var(--qol-space-tight);
+    --space-1-1: var(--qol-space-stack);
+    --space-1-5: var(--qol-space-snug);
+    --space-2: var(--qol-space-inset);
+    --space-2-5: var(--qol-space-inset);
+    --space-3: var(--qol-space-cell);
+    --space-3-5: var(--qol-space-cell);
+    --space-4: var(--qol-space-pad);
+    --space-5: var(--qol-space-gutter);
+    --space-6: calc(2 * var(--qol-space-cell));
+    --space-7: calc(2 * var(--qol-space-pad));
+    --space-8: calc(3 * var(--qol-space-pad));
     --pad-btn: 0.6rem 1.2rem;
     --pad-btn-sm: 0.4rem 0.8rem;
     --pad-tag: 0.18rem 0.34rem;
@@ -250,29 +247,29 @@
     --z-fx: 200;
 
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', Roboto, sans-serif;
-    --font-mono: 'SF Mono', Monaco, 'Courier New', monospace;
+    --font-mono: var(--qol-font-mono);
     --fw-medium: 500;
     --fw-semibold: 600;
     --fw-heavy: 650;
     --fw-bold: 700;
-    --fs-caption-2: 0.62rem;
-    --fs-caption-1-minus: 0.67rem;
-    --fs-caption-1-plus: 0.68rem;
-    --fs-caption: 0.69rem;
-    --fs-caption-1: 0.7rem;
-    --fs-caption-md: 0.72rem;
-    --fs-caption-lg: 0.74rem;
-    --fs-xs: 0.75rem;
-    --fs-sm: 0.8rem;
-    --fs-sm-minus: 0.81rem;
-    --fs-sm-plus: 0.82rem;
-    --fs-md-minus: 0.85rem;
-    --fs-md: 0.9rem;
-    --fs-base: 1rem;
-    --fs-lg: 1.1rem;
-    --fs-xl: 1.2rem;
-    --fs-xl-plus: 1.25rem;
-    --fs-display: 1.3rem;
+    --fs-caption-2: var(--qol-text-label-size);
+    --fs-caption-1-minus: var(--qol-text-label-size);
+    --fs-caption-1-plus: var(--qol-text-label-size);
+    --fs-caption: var(--qol-text-label-size);
+    --fs-caption-1: var(--qol-text-label-size);
+    --fs-caption-md: var(--qol-text-label-size);
+    --fs-caption-lg: var(--qol-text-label-size);
+    --fs-xs: var(--qol-text-detail-size);
+    --fs-sm: var(--qol-text-detail-size);
+    --fs-sm-minus: var(--qol-text-detail-size);
+    --fs-sm-plus: var(--qol-text-list-name-size);
+    --fs-md-minus: var(--qol-text-list-name-size);
+    --fs-md: var(--qol-text-value-size);
+    --fs-base: var(--qol-text-value-size);
+    --fs-lg: var(--qol-text-heading-size);
+    --fs-xl: var(--qol-text-heading-size);
+    --fs-xl-plus: var(--qol-text-heading-size);
+    --fs-display: var(--qol-text-heading-size);
     --lh-tight: 1;
     --lh-snug: 1.15;
     --lh-normal: 1.2;
@@ -290,26 +287,18 @@
     --ls-2xl: 0.08em;
     --ls-3xl: 0.11em;
 
-    --dur-xs: 0.08s;
-    --dur-sm: 0.12s;
-    --dur-fast: 0.15s;
-    --dur-slow: 0.3s;
-    --dur-base: 0.2s;
-    --dur-spin: 0.8s;
+    --dur-xs: var(--qol-motion-quick);
+    --dur-sm: var(--qol-motion-quick);
+    --dur-fast: var(--qol-motion-quick);
+    --dur-slow: var(--qol-motion-travel);
+    --dur-base: var(--qol-motion-settle);
+    --dur-spin: var(--qol-motion-loop);
     --transition: var(--dur-base);
 
     --layer-ink-50: rgba(var(--ink-rgb), 0.5);
-    --card-top-highlight: inset 0 1px 0 var(--layer-paper-08);
-    --elevation-crisp-1: var(--card-top-highlight), 0 1px 2px var(--layer-ink-50), 0 4px 14px var(--layer-ink-35);
-    --elevation-crisp-2: var(--card-top-highlight), 0 1px 2px var(--layer-ink-50), 0 8px 24px var(--layer-ink-45);
-    --selected-ring: 0 0 0 var(--border-w-1) rgba(var(--accent-rgb), 0.85), 0 0 0 4px rgba(var(--accent-rgb), 0.16);
-    --selected-glow: 0 0 22px rgba(var(--accent-rgb), 0.22);
     --selected-edge: linear-gradient(180deg, var(--accent), rgba(var(--accent-rgb), 0.55));
     --btn-primary-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.24) 0%, rgba(var(--accent-rgb), 0.12) 100%), var(--surface-raised);
     --btn-success-bg: linear-gradient(180deg, var(--green-300) 0%, var(--success) 52%, var(--green-700) 100%);
-    --btn-raise-shadow: inset 0 1px 0 var(--layer-paper-28), inset 0 -1px 0 var(--layer-ink-22), 0 1px 2px var(--layer-ink-45);
-    --btn-primary-glow: 0 0 14px rgba(var(--accent-rgb), 0.3);
-    --btn-success-glow: 0 0 14px rgba(var(--success-rgb), 0.3);
 
     --tui-bg-desktop: var(--qol-tray-tui-bg-desktop);
     --tui-bg-panel: var(--qol-tray-tui-bg-panel);
@@ -338,11 +327,9 @@
     --frame-texture: var(--qol-identity-frame-texture);
     --frame-bg: var(--qol-identity-frame-bg);
     --frame-radius: var(--qol-identity-frame-radius);
-    --frame-shadow: var(--qol-identity-frame-shadow);
     --crt-band-display: var(--qol-identity-crt-band-display);
     --card-border: var(--qol-identity-card-border);
     --card-bg: var(--qol-identity-card-bg);
-    --card-shadow: var(--qol-identity-card-shadow);
     --cover-bg: var(--qol-identity-cover-bg);
     --cover-texture: var(--qol-identity-cover-texture);
     --cover-scrim: var(--qol-identity-cover-scrim);
@@ -352,12 +339,9 @@
     --ghost-btn-radius: var(--qol-identity-ghost-btn-radius);
     --hint-bg: var(--qol-identity-hint-bg);
     --hint-border: var(--qol-identity-hint-border);
-    --hint-shadow: var(--qol-identity-hint-shadow);
     --panel-bg: var(--qol-identity-panel-bg);
     --panel-border: var(--qol-identity-panel-border);
     --panel-radius: var(--qol-identity-panel-radius);
-    --panel-shadow: var(--qol-identity-panel-shadow);
-    --heading-size: var(--qol-identity-heading-size);
     --heading-weight: var(--qol-identity-heading-weight);
     --heading-border: var(--qol-identity-heading-border);
     --heading-bg: var(--qol-identity-heading-bg);
@@ -373,4 +357,22 @@
         opacity: 1;
         transform: translateY(0);
     }
+}
+
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-weight: 400;
+    src: url("../../../../libs/gpui/assets/fonts/IBMPlexMono-Regular.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-weight: 500;
+    src: url("../../../../libs/gpui/assets/fonts/IBMPlexMono-Medium.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-weight: 600;
+    src: url("../../../../libs/gpui/assets/fonts/IBMPlexMono-SemiBold.ttf") format("truetype");
 }

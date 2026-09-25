@@ -18,7 +18,7 @@
     border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
     padding: var(--space-7);
-    box-shadow: var(--elevation-crisp-2);
+    box-shadow: var(--qol-shadow-float);
 }
 
 .confirm-modal-content {

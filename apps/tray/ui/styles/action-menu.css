@@ -50,13 +50,13 @@
     border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-md);
     background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.06), transparent 45%), var(--panel-bg);
-    box-shadow: var(--elevation-crisp-2);
+    box-shadow: var(--qol-shadow-float);
     outline: none;
 }
 
 .action-menu-list:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.16), var(--elevation-crisp-2);
+    box-shadow: var(--qol-focus-ring), var(--qol-shadow-float);
 }
 
 .action-menu-item {

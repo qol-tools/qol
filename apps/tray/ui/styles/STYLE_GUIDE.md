@@ -113,7 +113,8 @@ From outermost in, each layer has exactly one treatment. Do not mix treatments a
 
 ## Selection
 
-- Selected = accent left-border (rows) or accent ring (`--selected-ring`) + warm-amber fill from `--bg-selected`. The fill must be accent-warm, never blue.
+- Selected = the accent ring (`--qol-focus-ring`) + warm-amber fill from `--bg-selected`. The fill must be accent-warm, never blue. Never a coloured side line.
+- Text sizes, animation times and shadows come from the generated `--qol-*` tokens (the native text styles, Motion, `--qol-shadow-float`, `--qol-shadow-raised`, `--qol-focus-ring`); a theme test rejects a literal.
 - `[data-selected-surface][data-selected="true"]{border-color:var(--accent)}` is the global selection language. Reuse it; never invent per-view selection styling.
 
 ## TUI Token Inventory

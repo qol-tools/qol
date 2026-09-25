@@ -33,7 +33,7 @@
 
 .meta-chip-label {
     color: var(--text-secondary);
-    font-size: 0.7rem;
+    font-size: var(--qol-text-label-size);
     font-weight: var(--fw-semibold);
     letter-spacing: var(--ls-tight);
     text-transform: none;
@@ -47,7 +47,7 @@
     border: var(--border-w-1) solid var(--state-info-border-soft);
     border-radius: var(--radius-pill);
     color: var(--state-info-text);
-    font-size: 0.72rem;
+    font-size: var(--qol-text-label-size);
     white-space: nowrap;
 }
 
@@ -63,7 +63,7 @@
     color: var(--text-muted);
     border-radius: 0;
     padding: 0.64rem 0.92rem;
-    font-size: 0.8rem;
+    font-size: var(--qol-text-detail-size);
     font-family: inherit;
     font-weight: var(--fw-semibold);
     line-height: var(--lh-normal);
@@ -80,12 +80,12 @@
 }
 
 .segmented-control__option:hover:not(.is-active) {
-    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.3);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .segmented-control__option:focus-visible {
     outline: none;
-    box-shadow: inset 0 0 0 2px var(--accent);
+    box-shadow: var(--qol-focus-ring);
     background: rgba(var(--accent-rgb), 0.15);
     color: var(--text-primary);
 }
@@ -116,7 +116,7 @@
     border-left: var(--border-w-1) solid var(--line-soft);
     border-radius: 0;
     color: var(--text-default);
-    font-size: 0.68rem;
+    font-size: var(--qol-text-label-size);
     font-weight: var(--fw-bold);
     letter-spacing: var(--ls-lg);
 }
@@ -128,7 +128,7 @@
     border: var(--border-w-1) solid var(--cfg-accent-border);
     border-radius: var(--radius-chip);
     color: var(--cfg-text-bright);
-    font-size: 0.75rem;
+    font-size: var(--qol-text-detail-size);
     font-family: var(--font-data);
 }
 
@@ -139,7 +139,7 @@
     border: var(--border-w-1) solid var(--cfg-muted-border-soft);
     border-radius: var(--radius-chip);
     color: var(--cfg-text-subtle);
-    font-size: 0.75rem;
+    font-size: var(--qol-text-detail-size);
     font-family: var(--font-data);
     cursor: pointer;
     user-select: none;
@@ -165,13 +165,13 @@
     border-radius: var(--radius-sm);
     color: var(--cfg-text-strong);
     font-family: var(--font-data);
-    font-size: 0.8rem;
+    font-size: var(--qol-text-detail-size);
 }
 
 .key-label {
     color: var(--cfg-text-strong);
     font-family: var(--font-data);
-    font-size: 0.85rem;
+    font-size: var(--qol-text-list-name-size);
     padding: 0.15rem 0.4rem;
     background: var(--cfg-muted-bg);
     border-radius: var(--radius-sm);
@@ -179,13 +179,13 @@
 
 .key-label-hint {
     color: var(--cfg-text-faint);
-    font-size: 0.8rem;
+    font-size: var(--qol-text-detail-size);
     font-style: italic;
 }
 
 .char-output {
     color: var(--cfg-success);
-    font-size: 1rem;
+    font-size: var(--qol-text-value-size);
 }
 
 .global-badge {
@@ -194,7 +194,7 @@
     border: var(--border-w-1) solid var(--cfg-success-border);
     border-radius: var(--radius-sm);
     color: var(--cfg-success);
-    font-size: 0.7rem;
+    font-size: var(--qol-text-label-size);
     font-family: var(--font-ui);
     text-transform: var(--case-label);
 }
@@ -234,7 +234,7 @@
 
 .arrow {
     color: var(--cfg-accent);
-    font-size: 0.9rem;
+    font-size: var(--qol-text-value-size);
     flex-shrink: 0;
 }
 
@@ -284,7 +284,7 @@
     border-radius: var(--radius-md);
     color: var(--cfg-text-strong);
     font-family: var(--font-data);
-    font-size: 0.8rem;
+    font-size: var(--qol-text-detail-size);
 }
 
 .key-input:focus {
@@ -303,7 +303,7 @@
     align-items: center;
     gap: 0.3rem;
     color: var(--cfg-text-subtle);
-    font-size: 0.8rem;
+    font-size: var(--qol-text-detail-size);
     cursor: pointer;
     user-select: none;
 }
@@ -314,7 +314,7 @@
 
 .empty-state {
     color: var(--cfg-text-faint);
-    font-size: 0.85rem;
+    font-size: var(--qol-text-list-name-size);
     font-style: italic;
     padding: 0.5rem 0;
 }

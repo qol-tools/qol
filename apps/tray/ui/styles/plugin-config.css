@@ -9,7 +9,7 @@
 .config-detail-content > .section-copy {
     margin: 0 0 0.3rem;
     color: var(--text-secondary);
-    font-size: 0.84rem;
+    font-size: var(--qol-text-list-name-size);
     line-height: var(--lh-lg);
 }
 
@@ -95,14 +95,14 @@
     border-color: rgba(var(--accent-rgb), 0.26);
     background: rgba(var(--accent-rgb), 0.035);
     outline-color: transparent;
-    animation: plugin-config-selection-pulse 1.6s ease-in-out infinite;
+    animation: plugin-config-selection-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 .variant-selector[data-selection-surface]:focus-within {
     border-color: var(--accent);
     background: rgba(var(--accent-rgb), 0.03);
     outline-color: transparent;
-    animation: plugin-config-selection-pulse 1.6s ease-in-out infinite;
+    animation: plugin-config-selection-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 .config-section > .variant-panel {
@@ -128,20 +128,18 @@
 .toggle-row.is-selected {
     border-color: rgba(var(--accent-rgb), 0.28);
     background: rgba(var(--accent-rgb), 0.09);
-    box-shadow:
-        0 0 0 2px rgba(var(--accent-rgb), 0.12),
-        0 0 0 3px rgba(var(--warning-rgb), 0.08);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .toggle-row:focus-within {
     border-color: var(--accent);
     background: rgba(var(--accent-rgb), 0.08);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.16);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .toggle-row strong {
     color: var(--plugin-config-title-color);
-    font-size: 0.92rem;
+    font-size: var(--qol-text-value-size);
 }
 
 .toggle-label-group {
@@ -155,7 +153,7 @@
     height: 22px;
     border-radius: var(--radius-sm);
     background: rgba(var(--accent-rgb), 0.14);
-    box-shadow: inset 0 1px 2px var(--layer-ink-35);
+    box-shadow: none;
     position: relative;
     flex-shrink: 0;
     transition: background var(--dur-fast);
@@ -163,7 +161,7 @@
 
 .toggle-track.on {
     background: var(--accent);
-    box-shadow: inset 0 1px 2px var(--layer-ink-35), 0 0 8px var(--accent-glow-soft);
+    box-shadow: none;
 }
 
 .toggle-thumb {
@@ -184,12 +182,12 @@
 .toggle-row:focus-visible {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.2);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .field-label {
     color: var(--plugin-config-label-color);
-    font-size: 0.88rem;
+    font-size: var(--qol-text-list-name-size);
     font-weight: var(--fw-medium);
     margin-bottom: 0.5rem;
     line-height: var(--lh-sm);
@@ -202,13 +200,13 @@
     gap: 0.25rem;
 }
 
-.field-label-compact { font-size: 0.8rem; }
-.field-label-tight { font-size: 0.75rem; }
+.field-label-compact { font-size: var(--qol-text-detail-size); }
+.field-label-tight { font-size: var(--qol-text-detail-size); }
 
 .field-help,
 .toggle-help {
     color: var(--plugin-config-help-color);
-    font-size: 0.78rem;
+    font-size: var(--qol-text-detail-size);
     line-height: var(--lh-md);
 }
 
@@ -256,9 +254,7 @@
 .field-group.is-selected {
     border-color: rgba(var(--accent-rgb), 0.26);
     background: rgba(var(--accent-rgb), 0.035);
-    box-shadow:
-        0 0 0 2px rgba(var(--accent-rgb), 0.1),
-        0 0 0 3px rgba(var(--warning-rgb), 0.07);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .field-group:focus-within {
@@ -271,7 +267,7 @@
 .field-group:has(> .custom-select:focus-within) {
     border-color: var(--accent);
     background: rgba(var(--accent-rgb), 0.03);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .status-chip {
@@ -327,21 +323,19 @@
     border-color: rgba(var(--warning-rgb), 0.48);
     outline: none;
     background: rgba(var(--accent-rgb), 0.06);
-    box-shadow:
-        inset 0 -2px 0 0 rgba(var(--warning-rgb), 0.9),
-        0 8px 14px -12px rgba(var(--warning-rgb), 0.32);
-    animation: plugin-config-underline-pulse 1.6s ease-in-out infinite;
+    box-shadow: var(--qol-shadow-float);
+    animation: plugin-config-underline-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 .number-value {
-    font-size: 1.05rem;
+    font-size: var(--qol-text-value-size);
     font-weight: var(--fw-heavy);
     color: var(--accent);
     letter-spacing: -0.02em;
 }
 
 .number-unit {
-    font-size: 0.72rem;
+    font-size: var(--qol-text-label-size);
     font-weight: var(--fw-medium);
     color: var(--plugin-config-muted-color);
     margin-left: 0.1rem;
@@ -354,7 +348,7 @@
     border: none;
     border-bottom: var(--border-w-2) solid var(--accent);
     color: var(--accent);
-    font-size: 1.05rem;
+    font-size: var(--qol-text-value-size);
     font-weight: var(--fw-heavy);
     font-family: inherit;
     text-align: center;
@@ -365,10 +359,8 @@
 .number-edit:focus-visible {
     background: rgba(var(--accent-rgb), 0.06);
     border-bottom-color: rgba(var(--warning-rgb), 0.9);
-    box-shadow:
-        inset 0 -2px 0 0 rgba(var(--warning-rgb), 0.9),
-        0 8px 14px -12px rgba(var(--warning-rgb), 0.32);
-    animation: plugin-config-underline-pulse 1.6s ease-in-out infinite;
+    box-shadow: var(--qol-shadow-float);
+    animation: plugin-config-underline-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 .text-input {
@@ -379,7 +371,7 @@
     border-radius: var(--radius-md);
     color: var(--plugin-config-value-color);
     font-family: inherit;
-    font-size: 0.88rem;
+    font-size: var(--qol-text-list-name-size);
 }
 
 .text-input::placeholder { color: var(--text-faint); }
@@ -387,8 +379,8 @@
 .text-input:focus-visible {
     border-color: rgba(var(--warning-rgb), 0.42);
     background: rgba(var(--accent-rgb), 0.1);
-    box-shadow: 0 0 12px rgba(var(--warning-rgb), 0.08);
-    animation: plugin-config-edge-pulse 1.6s ease-in-out infinite;
+    box-shadow: none;
+    animation: plugin-config-edge-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 .custom-select {
@@ -410,7 +402,7 @@
 
 .custom-select-arrow {
     color: var(--text-faint);
-    font-size: 0.72rem;
+    font-size: var(--qol-text-label-size);
 }
 
 .custom-select-popover {
@@ -434,7 +426,7 @@
     background: var(--panel-bg);
     border: var(--border-w-1) solid var(--line);
     border-radius: var(--radius-sm);
-    box-shadow: var(--elevation-crisp-2);
+    box-shadow: var(--qol-shadow-float);
     padding: 4px;
     outline: none;
 }
@@ -453,18 +445,16 @@
             rgba(var(--warning-rgb), 0.2) 0%,
             rgba(var(--warning-rgb), 0.1) 16%,
             rgba(var(--accent-rgb), 0.08) 100%);
-    box-shadow:
-        inset 0 0 0 1px rgba(var(--warning-rgb), 0.34),
-        inset 0 0 0 2px rgba(var(--warning-rgb), 0.1),
-        0 0 14px rgba(var(--warning-rgb), 0.16);
+    box-shadow: none;
+    outline: var(--qol-line) solid rgba(var(--warning-rgb), 0.1);
+    outline-offset: calc(-1 * var(--qol-line));
     pointer-events: none;
     z-index: var(--z-1);
     opacity: 0;
     transform-origin: left top;
     will-change: transform, opacity;
-    transition:
-        transform 220ms cubic-bezier(0.16, 0.84, 0.24, 1),
-        opacity 140ms ease;
+    transition: transform var(--qol-motion-settle) cubic-bezier(0.16, 0.84, 0.24, 1),
+        opacity var(--qol-motion-quick) ease;
 }
 
 .field-group.selection-wedge-pseudo.selection-wedge-visible:has(.custom-select-list)::after {
@@ -473,13 +463,13 @@
 
 .custom-select-list:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.16), var(--elevation-crisp-2);
+    box-shadow: var(--qol-focus-ring), var(--qol-shadow-float);
 }
 
 .custom-select-option {
     position: relative;
     padding: 0.45rem 0.7rem;
-    font-size: 0.88rem;
+    font-size: var(--qol-text-list-name-size);
     font-family: var(--font-ui);
     color: var(--text-secondary);
     border-radius: var(--radius-xs);
@@ -491,7 +481,9 @@
 
 .custom-select-option.highlighted {
     color: var(--accent);
-    box-shadow: inset 0 0 0 1px rgba(var(--warning-rgb), 0.22);
+    box-shadow: none;
+    outline: var(--qol-line) solid rgba(var(--warning-rgb), 0.22);
+    outline-offset: calc(-1 * var(--qol-line));
 }
 
 .custom-select-option.selected {
@@ -507,18 +499,12 @@
     0%,
     100% {
         animation-timing-function: steps(5);
-        box-shadow:
-            0 0 0 2px rgba(var(--accent-rgb), 0.08),
-            0 0 0 3px rgba(var(--warning-rgb), 0.05),
-            0 0 10px rgba(var(--warning-rgb), 0.03);
+        box-shadow: var(--qol-focus-ring);
     }
 
     50% {
         animation-timing-function: steps(5);
-        box-shadow:
-            0 0 0 2px rgba(var(--accent-rgb), 0.12),
-            0 0 0 3px rgba(var(--warning-rgb), 0.11),
-            0 0 14px rgba(var(--warning-rgb), 0.08);
+        box-shadow: var(--qol-focus-ring);
     }
 }
 
@@ -537,7 +523,7 @@
     background: rgba(var(--accent-rgb), 0.07);
     border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.18);
     border-radius: var(--radius-md);
-    font-size: 0.86rem;
+    font-size: var(--qol-text-list-name-size);
     color: var(--plugin-config-value-color);
 }
 
@@ -547,8 +533,8 @@
 .string-item:has(.btn-remove:focus-visible) {
     border-color: rgba(var(--warning-rgb), 0.42);
     background: rgba(var(--accent-rgb), 0.1);
-    box-shadow: 0 0 12px rgba(var(--warning-rgb), 0.08);
-    animation: plugin-config-edge-pulse 1.6s ease-in-out infinite;
+    box-shadow: none;
+    animation: plugin-config-edge-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 .add-row {
@@ -567,19 +553,19 @@
 .btn-add:focus-visible {
     outline: none;
     border-radius: var(--radius-md);
-    box-shadow: 0 0 12px rgba(var(--warning-rgb), 0.08);
+    box-shadow: none;
 }
 
 .btn-remove:focus-visible {
     opacity: 1;
     background: rgba(var(--accent-rgb), 0.1);
     color: var(--text-primary);
-    animation: plugin-config-edge-pulse 1.6s ease-in-out infinite;
+    animation: plugin-config-edge-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 .btn-add:focus-visible {
     border-color: rgba(var(--warning-rgb), 0.42);
-    animation: plugin-config-edge-pulse 1.6s ease-in-out infinite;
+    animation: plugin-config-edge-pulse var(--qol-motion-loop) ease-in-out infinite;
 }
 
 @keyframes plugin-config-edge-pulse {
@@ -587,13 +573,13 @@
     100% {
         animation-timing-function: steps(5);
         border-color: rgba(var(--accent-rgb), 0.28);
-        box-shadow: 0 0 8px rgba(var(--warning-rgb), 0.03);
+        box-shadow: none;
     }
 
     50% {
         animation-timing-function: steps(5);
         border-color: rgba(var(--warning-rgb), 0.42);
-        box-shadow: 0 0 12px rgba(var(--warning-rgb), 0.08);
+        box-shadow: none;
     }
 }
 
@@ -602,23 +588,19 @@
     100% {
         animation-timing-function: steps(5);
         border-color: rgba(var(--accent-rgb), 0.24);
-        box-shadow:
-            inset 0 -2px 0 0 rgba(var(--accent-rgb), 0.85),
-            0 8px 12px -12px rgba(var(--warning-rgb), 0.12);
+        box-shadow: var(--qol-shadow-float);
     }
 
     50% {
         animation-timing-function: steps(5);
         border-color: rgba(var(--warning-rgb), 0.48);
-        box-shadow:
-            inset 0 -2px 0 0 rgba(var(--warning-rgb), 0.92),
-            0 8px 14px -12px rgba(var(--warning-rgb), 0.32);
+        box-shadow: var(--qol-shadow-float);
     }
 }
 
 .field-empty {
     color: var(--text-faint);
-    font-size: 0.85rem;
+    font-size: var(--qol-text-list-name-size);
     font-style: italic;
     padding: 0.6rem 0;
 }
@@ -649,7 +631,7 @@
 }
 
 .variant-content-branch .field-group { width: 100%; justify-self: stretch; }
-.variant-content-branch.active { display: grid; position: relative; animation: slide-in 0.25s ease-out; }
+.variant-content-branch.active { display: grid; position: relative; animation: slide-in var(--qol-motion-travel) ease-out; }
 .variant-content-branch:not(.active) { display: none; }
 
 .variant-content-branch > .toggle-row,
@@ -690,19 +672,19 @@
 
 .variant-selector-label {
     color: var(--plugin-config-label-color);
-    font-size: 0.88rem;
+    font-size: var(--qol-text-list-name-size);
     font-weight: var(--fw-medium);
 }
 
 .variant-option {
     padding: 0.7rem 1.1rem;
-    font-size: 0.86rem;
+    font-size: var(--qol-text-list-name-size);
 }
 
 .variant-option:focus-visible {
     outline: none;
     background: rgba(var(--accent-rgb), 0.2);
-    box-shadow: inset 0 0 0 2px var(--accent);
+    box-shadow: var(--qol-focus-ring);
 }
 
 .variant-option.is-active {
@@ -712,11 +694,13 @@
 
 .variant-option.is-active:focus-visible {
     outline: none;
-    box-shadow: inset 0 0 0 2px rgba(var(--paper-rgb), 0.3);
+    box-shadow: none;
+    outline: var(--qol-line) solid rgba(var(--paper-rgb), 0.3);
+    outline-offset: calc(-1 * var(--qol-line));
 }
 
-.variant-selector-compact .variant-option { font-size: 0.78rem; padding: 0.68rem 0.95rem; }
-.variant-selector-tight .variant-option { font-size: 0.74rem; padding: 0.62rem 0.85rem; }
+.variant-selector-compact .variant-option { font-size: var(--qol-text-detail-size); padding: 0.68rem 0.95rem; }
+.variant-selector-tight .variant-option { font-size: var(--qol-text-label-size); padding: 0.62rem 0.85rem; }
 
 .hue-wheel-container {
     display: flex;
@@ -729,7 +713,7 @@
 
 .hue-disc {
     border-radius: 50%;
-    box-shadow: 0 8px 32px rgba(var(--ink-rgb), 0.4), 0 0 0 1px rgba(var(--paper-rgb), 0.05);
+    box-shadow: var(--qol-shadow-float);
     cursor: crosshair;
     touch-action: none;
 }
@@ -744,7 +728,7 @@
 }
 
 .hue-slider-label {
-    font-size: 0.75rem;
+    font-size: var(--qol-text-detail-size);
     color: var(--text-muted);
     text-transform: var(--case-label);
     letter-spacing: var(--ls-xl);
@@ -752,7 +736,7 @@
 }
 
 .hue-slider-value {
-    font-size: 0.75rem;
+    font-size: var(--qol-text-detail-size);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
 }
@@ -761,7 +745,9 @@
     height: 32px;
     border-radius: var(--radius-2xl);
     position: relative;
-    box-shadow: inset 0 2px 4px rgba(var(--ink-rgb), 0.5), 0 0 0 1px rgba(var(--paper-rgb), 0.05);
+    box-shadow: none;
+    outline: var(--qol-line) solid rgba(var(--paper-rgb), 0.05);
+    outline-offset: 0;
     cursor: pointer;
     touch-action: none;
 }
@@ -773,13 +759,13 @@
     height: 24px;
     border-radius: 50%;
     background: var(--qol-config-field-thumb-bg);
-    box-shadow: 0 2px 6px rgba(var(--ink-rgb), 0.4);
+    box-shadow: var(--qol-shadow-raised);
     transform: translate(-50%, -50%);
     pointer-events: none;
 }
 
 .field-color-label {
-    font-size: 0.85rem;
+    font-size: var(--qol-text-list-name-size);
     font-weight: var(--fw-medium);
     color: var(--text-primary);
     margin-bottom: 4px;
@@ -1032,7 +1018,7 @@
 
 .gamepad-signal-bars i[data-active="true"] {
     background: var(--gamepad-signal-color);
-    box-shadow: 0 0 0.35rem color-mix(in srgb, var(--gamepad-signal-color) 60%, transparent);
+    box-shadow: none;
 }
 
 .gamepad-signal-history {
@@ -1116,12 +1102,12 @@
         rgba(var(--danger-rgb), 0.68) 0 2px,
         rgba(var(--danger-rgb), 0.12) 2px 4px
     );
-    box-shadow: 0 0 0.35rem rgba(var(--danger-rgb), 0.2);
+    box-shadow: none;
 }
 
 .gamepad-signal-history-track i:last-child[data-state="reading"] {
     opacity: 1;
-    box-shadow: 0 0 0.45rem currentColor;
+    box-shadow: none;
 }
 
 .gamepad-compatibility-note {
@@ -1226,7 +1212,7 @@
 
 .gamepad-rumble-actions .btn.is-active {
     border-color: var(--accent);
-    box-shadow: 0 0 0.55rem rgba(var(--accent-rgb), 0.2);
+    box-shadow: none;
 }
 
 .gamepad-rumble-safety {
@@ -1243,7 +1229,7 @@
 .gamepad-vector text {
     fill: var(--text-muted);
     font-family: var(--font-sans);
-    font-size: 12px;
+    font-size: var(--qol-text-detail-size);
     font-weight: var(--fw-heavy);
     pointer-events: none;
     user-select: none;
@@ -1284,14 +1270,14 @@
     fill: var(--bg-elevated);
     stroke: rgba(var(--accent-rgb), 0.32);
     stroke-width: 2;
-    transition: fill 30ms linear, stroke 30ms linear, filter 30ms linear;
+    transition: none;
 }
 
 .gamepad-vector-pressure {
     fill: var(--accent);
     opacity: calc(0.03 + var(--input-value) * 0.72);
     pointer-events: none;
-    transition: opacity 30ms linear;
+    transition: none;
 }
 
 .gamepad-vector-top-controls text {
@@ -1301,7 +1287,7 @@
 .gamepad-vector-value {
     fill: var(--text-primary) !important;
     font-family: var(--font-data) !important;
-    font-size: 10px !important;
+    font-size: var(--qol-text-label-size) !important;
     font-weight: var(--fw-semibold) !important;
 }
 
@@ -1317,7 +1303,7 @@
 
 .gamepad-vector-port {
     fill: rgba(var(--accent-rgb), 0.14);
-    transition: fill 30ms linear, filter 30ms linear;
+    transition: none;
 }
 
 .gamepad-vector-port[data-active="true"] {
@@ -1347,7 +1333,7 @@
 
 .gamepad-vector-stick-knob text {
     fill: var(--text-muted);
-    font-size: 11px;
+    font-size: var(--qol-text-label-size);
 }
 
 .gamepad-vector-stick[data-active="true"] .gamepad-vector-stick-knob circle:first-child {
@@ -1373,12 +1359,12 @@
 
 .gamepad-vector-dpad-input path {
     fill: transparent;
-    transition: fill 30ms linear, filter 30ms linear;
+    transition: none;
 }
 
 .gamepad-vector-dpad-input text {
     fill: var(--text-faint);
-    font-size: 9px;
+    font-size: var(--qol-text-label-size);
 }
 
 .gamepad-vector-dpad-input[data-active="true"] path {
@@ -1398,7 +1384,7 @@
 
 .gamepad-vector-home text {
     fill: var(--text-faint);
-    font-size: 16px;
+    font-size: var(--qol-text-value-size);
 }
 
 .gamepad-vector-center-button > rect:not(.gamepad-vector-control),
@@ -1418,7 +1404,7 @@
 .gamepad-vector-round-button text,
 .gamepad-vector-pill-button text {
     fill: var(--text-faint);
-    font-size: 9px;
+    font-size: var(--qol-text-label-size);
 }
 
 .gamepad-vector-round-button[data-active="true"] text,
@@ -1436,7 +1422,7 @@
 .gamepad-vector-device-control text {
     fill: var(--text-faint);
     font-family: var(--font-data);
-    font-size: 8px;
+    font-size: var(--qol-text-label-size);
     font-weight: var(--fw-medium);
     opacity: 0.9;
 }
@@ -1445,7 +1431,7 @@
 .gamepad-vector-auxiliary-overflow {
     fill: var(--text-faint) !important;
     font-family: var(--font-data) !important;
-    font-size: 8px !important;
+    font-size: var(--qol-text-label-size) !important;
     font-weight: var(--fw-medium) !important;
     letter-spacing: 0.08em;
 }
@@ -1459,7 +1445,7 @@
 .gamepad-vector-auxiliary text {
     fill: var(--warning);
     font-family: var(--font-data);
-    font-size: 8px;
+    font-size: var(--qol-text-label-size);
 }
 
 .gamepad-vector-auxiliary[data-active="true"] .gamepad-vector-control {
@@ -1483,7 +1469,7 @@
 
 .gamepad-vector-face text {
     fill: currentColor;
-    font-size: 15px;
+    font-size: var(--qol-text-value-size);
 }
 
 .gamepad-vector-face[data-active="true"] .gamepad-vector-control {
@@ -1569,7 +1555,7 @@
     height: 0.72rem;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 0.55rem rgba(var(--accent-rgb), 0.52);
+    box-shadow: none;
     transform: translate(-50%, -50%);
 }
 
@@ -1594,7 +1580,7 @@
     border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.1);
     border-radius: var(--radius-xs);
     color: var(--text-faint);
-    font-size: 0.64rem;
+    font-size: var(--qol-text-label-size);
 }
 
 .gamepad-button-chip output {
@@ -1636,7 +1622,7 @@
     margin-bottom: var(--space-2);
     border: var(--border-w-1) solid rgba(var(--accent-rgb), 0.18);
     border-radius: 50%;
-    animation: gamepad-orbit 2.4s linear infinite;
+    animation: gamepad-orbit var(--qol-motion-loop) linear infinite;
 }
 
 .gamepad-waiting-orbit span {
@@ -1647,7 +1633,7 @@
     height: 0.55rem;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 0.9rem rgba(var(--accent-rgb), 0.65);
+    box-shadow: none;
 }
 
 .gamepad-waiting-orbit span:nth-child(1) { transform: translate(-50%, -50%) translateY(-2rem); }

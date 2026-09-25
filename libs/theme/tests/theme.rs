@@ -1191,9 +1191,7 @@ fn tray_css_emits_identity_tokens_per_theme() {
     assert!(midnight.contains("--qol-identity-frame-bg: var(--surface-elevated);"));
     assert!(midnight.contains("--qol-identity-cover-scrim: var(--qol-system-surface-raised);"));
     assert!(midnight.contains("--qol-identity-frame-radius: var(--radius-xl);"));
-    assert!(midnight.contains(
-        "--qol-identity-frame-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07);"
-    ));
+    assert!(midnight.contains("--qol-identity-frame-shadow: var(--qol-shadow-float);"));
     assert_eq!(
         css.matches(":root[data-qol-theme=").count(),
         1,
@@ -3162,4 +3160,114 @@ fn the_depth_ladders_hold_their_approved_values() {
     };
     assert_eq!(layers(qol_theme::SHADOW_FLOAT), [(1, 2, 5), (8, 20, 9)]);
     assert_eq!(layers(qol_theme::SHADOW_RAISED), [(1, 2, 9), (6, 16, 9)]);
+}
+
+fn css_declarations(css: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for chunk in css.split(['{', '}', ';']) {
+        let Some((property, value)) = chunk.split_once(':') else {
+            continue;
+        };
+        let property = property.trim();
+        if property.is_empty() || property.contains(char::is_whitespace) {
+            continue;
+        }
+        found.push((property.to_string(), value.trim().to_string()));
+    }
+    found
+}
+
+fn has_literal_time(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    for (at, _) in value.match_indices(['s']) {
+        let mut start = at;
+        if at > 0 && bytes[at - 1] == b'm' {
+            start -= 1;
+        }
+        let digits = value[..start]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .count();
+        let boundary = value[..start - digits]
+            .chars()
+            .last()
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-');
+        let after = value[at + 1..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        if digits > 0 && boundary && after {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn the_web_settings_page_takes_sizes_times_and_shadows_from_the_theme() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let styles = workspace.join("apps/tray/ui/styles");
+    let tokens = fs::read_to_string(styles.join("theme-tokens.css")).expect("read tokens");
+    let mut problems = Vec::new();
+    for (name, value) in css_declarations(&tokens) {
+        if (name.starts_with("--fs-") || name.starts_with("--dur-"))
+            && !value.starts_with("var(--qol-")
+        {
+            problems.push(format!("theme-tokens.css {name}: {value}"));
+        }
+    }
+    let mut files: Vec<_> = fs::read_dir(&styles)
+        .expect("read styles")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "css"))
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name != "generated-theme-tokens.css")
+        })
+        .collect();
+    files.sort();
+    for path in files {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let css = fs::read_to_string(&path).expect("read css");
+        for (property, value) in css_declarations(&css) {
+            let value = value.replace('\n', " ");
+            let bad = match property.as_str() {
+                "font-size" => {
+                    !(value.starts_with("var(--qol-")
+                        || value.starts_with("var(--fs-")
+                        || value == "0"
+                        || value == "inherit")
+                }
+                "transition" | "animation" | "transition-duration" | "animation-duration" => {
+                    has_literal_time(&value)
+                }
+                "box-shadow" => {
+                    !(value == "none"
+                        || value
+                            .split(", ")
+                            .all(|layer| layer.starts_with("var(--qol-")))
+                }
+                "border-left-color" => true,
+                "border-left" => {
+                    ["accent", "success", "danger", "warning"]
+                        .iter()
+                        .any(|hue| {
+                            value.contains(&format!("var(--{hue}"))
+                                || value.contains(&format!("--{hue}-rgb"))
+                        })
+                        && !value.starts_with("14px")
+                }
+                _ => false,
+            };
+            if bad {
+                problems.push(format!("{name} {property}: {value}"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "The web settings page sets text sizes, times and shadows through the generated --qol-* tokens and never draws a coloured side line.\n{}",
+        problems.join("\n")
+    );
 }

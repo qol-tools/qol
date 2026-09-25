@@ -50,7 +50,7 @@
     --qol-identity-crt-band-display: block;
     --qol-identity-card-border: var(--border-w-1) solid var(--tui-line-soft);
     --qol-identity-card-bg: linear-gradient(180deg, rgba(var(--accent-rgb), 0.05), transparent 55%), var(--tui-bg-card);
-    --qol-identity-card-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.08), 0 6px 18px var(--layer-ink-45);
+    --qol-identity-card-shadow: var(--qol-shadow-float);
     --qol-identity-cover-bg: var(--tui-screen-bg);
     --qol-identity-cover-texture: var(--tui-scanline);
     --qol-identity-cover-scrim: var(--ink-overlay-strong);
@@ -65,7 +65,7 @@
     --qol-identity-panel-border: var(--border-w-1) solid var(--tui-line);
     --qol-identity-panel-radius: var(--radius-md);
     --qol-identity-panel-shadow: none;
-    --qol-identity-heading-size: var(--fs-xl-plus);
+    --qol-identity-heading-size: var(--qol-text-heading-size);
     --qol-identity-heading-weight: var(--fw-bold);
     --qol-identity-heading-border: var(--border-w-3) double var(--tui-line);
     --qol-identity-heading-bg: var(--tui-sign-bg);
@@ -131,6 +131,139 @@
     --qol-accent-blue-hover: #68b0ff;
     --qol-accent-violet-rgb: 138, 147, 247;
     --qol-accent-violet-hover: #a5afff;
+    --qol-font-mono: "IBM Plex Mono", monospace;
+    --qol-text-masthead-size: 34px;
+    --qol-text-masthead-weight: 600;
+    --qol-text-masthead-line-height: 1;
+    --qol-text-heading-size: 20px;
+    --qol-text-heading-weight: 600;
+    --qol-text-heading-line-height: 1.15;
+    --qol-text-colophon-size: 11.5px;
+    --qol-text-colophon-weight: 600;
+    --qol-text-colophon-line-height: 1.2;
+    --qol-text-name-size: 15px;
+    --qol-text-name-weight: 500;
+    --qol-text-name-line-height: 1.25;
+    --qol-text-list-name-size: 13.5px;
+    --qol-text-list-name-weight: 500;
+    --qol-text-list-name-line-height: 1.25;
+    --qol-text-value-size: 15px;
+    --qol-text-value-weight: 400;
+    --qol-text-value-line-height: 1.25;
+    --qol-text-detail-size: 12.5px;
+    --qol-text-detail-weight: 400;
+    --qol-text-detail-line-height: 1.25;
+    --qol-text-hint-size: 12.5px;
+    --qol-text-hint-weight: 400;
+    --qol-text-hint-line-height: 1;
+    --qol-text-key-size: 12.5px;
+    --qol-text-key-weight: 400;
+    --qol-text-key-line-height: 1;
+    --qol-text-code-size: 13.5px;
+    --qol-text-code-weight: 400;
+    --qol-text-code-line-height: 1.25;
+    --qol-text-label-size: 11.5px;
+    --qol-text-label-weight: 600;
+    --qol-text-label-line-height: 1.2;
+    --qol-space-stack: 2px;
+    --qol-space-tight: 4px;
+    --qol-space-snug: 6px;
+    --qol-space-inset: 8px;
+    --qol-space-cell: 12px;
+    --qol-space-pad: 16px;
+    --qol-space-gutter: 20px;
+    --qol-radius-tight: 4px;
+    --qol-radius-control: 6px;
+    --qol-radius-card: 9px;
+    --qol-radius-well: 11px;
+    --qol-motion-quick: 140ms;
+    --qol-motion-settle: 180ms;
+    --qol-motion-travel: 260ms;
+    --qol-motion-fade: 1000ms;
+    --qol-curve-settle: cubic-bezier(0.22, 1, 0.36, 1);
+    --qol-curve-travel: cubic-bezier(0.45, 0, 0.55, 1);
+    --qol-motion-loop: 1200ms;
+    --qol-wait-before-busy: 300ms;
+    --qol-alpha-trace: 0.05;
+    --qol-alpha-wash: 0.09;
+    --qol-alpha-halo: 0.16;
+    --qol-alpha-edge: 0.24;
+    --qol-alpha-veil: 0.4;
+    --qol-alpha-strong: 0.7;
+    --qol-opacity-disabled: 0.4;
+    --qol-opacity-rest: 0.6;
+    --qol-line: 1px;
+    --qol-status-dot: 7px;
+    --qol-shadow-float: 0 1px 2px rgba(var(--qol-system-ink-rgb), var(--qol-alpha-trace)), 0 8px 20px rgba(var(--qol-system-ink-rgb), var(--qol-alpha-wash));
+    --qol-shadow-raised: 0 1px 2px rgba(var(--qol-system-ink-rgb), var(--qol-alpha-wash)), 0 6px 16px rgba(var(--qol-system-ink-rgb), var(--qol-alpha-wash));
+    --qol-focus-ring: 0 0 0 1.5px rgb(var(--qol-system-accent-rgb)), 0 0 0 4px rgba(var(--qol-system-accent-rgb), var(--qol-alpha-edge));
+}
+.qol-text-masthead {
+    font-family: inherit;
+    font-size: var(--qol-text-masthead-size);
+    font-weight: var(--qol-text-masthead-weight);
+    line-height: var(--qol-text-masthead-line-height);
+}
+.qol-text-heading {
+    font-family: inherit;
+    font-size: var(--qol-text-heading-size);
+    font-weight: var(--qol-text-heading-weight);
+    line-height: var(--qol-text-heading-line-height);
+}
+.qol-text-colophon {
+    font-family: inherit;
+    font-size: var(--qol-text-colophon-size);
+    font-weight: var(--qol-text-colophon-weight);
+    line-height: var(--qol-text-colophon-line-height);
+}
+.qol-text-name {
+    font-family: inherit;
+    font-size: var(--qol-text-name-size);
+    font-weight: var(--qol-text-name-weight);
+    line-height: var(--qol-text-name-line-height);
+}
+.qol-text-list-name {
+    font-family: inherit;
+    font-size: var(--qol-text-list-name-size);
+    font-weight: var(--qol-text-list-name-weight);
+    line-height: var(--qol-text-list-name-line-height);
+}
+.qol-text-value {
+    font-family: inherit;
+    font-size: var(--qol-text-value-size);
+    font-weight: var(--qol-text-value-weight);
+    line-height: var(--qol-text-value-line-height);
+}
+.qol-text-detail {
+    font-family: inherit;
+    font-size: var(--qol-text-detail-size);
+    font-weight: var(--qol-text-detail-weight);
+    line-height: var(--qol-text-detail-line-height);
+}
+.qol-text-hint {
+    font-family: inherit;
+    font-size: var(--qol-text-hint-size);
+    font-weight: var(--qol-text-hint-weight);
+    line-height: var(--qol-text-hint-line-height);
+}
+.qol-text-key {
+    font-family: var(--qol-font-mono);
+    font-size: var(--qol-text-key-size);
+    font-weight: var(--qol-text-key-weight);
+    line-height: var(--qol-text-key-line-height);
+}
+.qol-text-code {
+    font-family: var(--qol-font-mono);
+    font-size: var(--qol-text-code-size);
+    font-weight: var(--qol-text-code-weight);
+    line-height: var(--qol-text-code-line-height);
+}
+.qol-text-label {
+    font-family: inherit;
+    font-size: var(--qol-text-label-size);
+    font-weight: var(--qol-text-label-weight);
+    line-height: var(--qol-text-label-line-height);
+    text-transform: uppercase;
 }
 :root[data-qol-theme="midnight"] {
     --qol-system-surface-canvas: #090b19;
@@ -172,11 +305,10 @@
     --qol-identity-frame-texture: linear-gradient(180deg, rgba(var(--paper-rgb), 0.035), rgba(var(--paper-rgb), 0.015));
     --qol-identity-frame-bg: var(--surface-elevated);
     --qol-identity-frame-radius: var(--radius-xl);
-    --qol-identity-frame-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(var(--paper-rgb), 0.07);
+    --qol-identity-frame-shadow: var(--qol-shadow-float);
     --qol-identity-crt-band-display: none;
     --qol-identity-card-border: none;
     --qol-identity-card-bg: var(--qol-system-surface-raised);
-    --qol-identity-card-shadow: 0 14px 36px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
     --qol-identity-cover-bg: transparent;
     --qol-identity-cover-texture: none;
     --qol-identity-cover-scrim: var(--qol-system-surface-raised);
@@ -186,12 +318,11 @@
     --qol-identity-ghost-btn-radius: 10px;
     --qol-identity-hint-bg: var(--qol-system-surface-raised);
     --qol-identity-hint-border: 1px solid rgba(var(--accent-rgb), 0.25);
-    --qol-identity-hint-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    --qol-identity-hint-shadow: var(--qol-shadow-float);
     --qol-identity-panel-bg: var(--qol-system-surface-raised);
     --qol-identity-panel-border: none;
     --qol-identity-panel-radius: 16px;
-    --qol-identity-panel-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
-    --qol-identity-heading-size: 1.55rem;
+    --qol-identity-panel-shadow: var(--qol-shadow-float);
     --qol-identity-heading-weight: 700;
     --qol-identity-heading-border: none;
     --qol-identity-heading-bg: transparent;
