@@ -21,9 +21,7 @@ use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window
 use qol_gpui::kit::{action_row_width, kit, row_circle_state, wrap_index, ActionCircleSize};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
 use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
-use qol_gpui::theme::{
-    runtime_theme, shot_preview_runtime, ShotPreviewPalette, ACTION_CIRCLE_GAP, RADIUS_THUMB,
-};
+use qol_gpui::theme::{runtime_theme, ACTION_CIRCLE_GAP, RADIUS_THUMB};
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, sync_cursor_window_layout,
     target_monitor_key, ActiveWindows, CursorWindowPlacement, MonitorKey, ResolvedCursorPlacement,
@@ -49,7 +47,6 @@ pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
 static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
-static CURRENT_PALETTE: LazyLock<ShotPreviewPalette> = LazyLock::new(shot_preview_runtime);
 #[cfg(target_os = "linux")]
 static PIN_TRANSITIONS: LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -73,10 +70,6 @@ pub(crate) fn complete_pin_transition(title: &str, succeeded: bool) {
     if let Some(sender) = sender {
         let _ = sender.send(succeeded);
     }
-}
-
-pub(crate) fn current_palette() -> &'static ShotPreviewPalette {
-    &CURRENT_PALETTE
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1490,9 +1483,9 @@ impl Render for PreviewView {
         qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         self.ensure_dismiss_tracking(window, cx);
         self.schedule_reveal_after_present(window, cx);
-        let palette = current_palette();
+        let kit = kit();
 
-        let mut root = qol_gpui::kit::kit()
+        let mut root = kit
             .window()
             .text(TextStyle::Value)
             .id("shot-preview")
@@ -1521,7 +1514,6 @@ impl Render for PreviewView {
         }
 
         let system = runtime_theme().system;
-        let kit = kit();
         let controls = controls(ControlSurface::Preview, self.default_copy_action);
         let (thumb_w, thumb_h) = self.thumb;
         let (win_w, _) = window_dims(thumb_w, thumb_h, controls.len());
@@ -1544,7 +1536,7 @@ impl Render for PreviewView {
                     .overflow_hidden()
                     .rounded(px(RADIUS_THUMB))
                     .border_1()
-                    .border_color(rgb(palette.thumb_border))
+                    .border_color(rgb(kit.palette.border_subtle))
                     .child(self.thumbnail(thumb_w, thumb_h)),
             )
             .child(
@@ -1556,7 +1548,7 @@ impl Render for PreviewView {
                     .flex()
                     .justify_center()
                     .text(TextStyle::Detail)
-                    .text_color(rgb(palette.label_text))
+                    .text_color(rgb(kit.grounds.pane.soft))
                     .child(label),
             )
             .child(

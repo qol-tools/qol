@@ -19,7 +19,7 @@ use crate::ui::controls::{
     control_count, control_for_keystroke, controls, copy_actions, ControlSurface, SurfaceControl,
 };
 use crate::ui::preview::{
-    current_palette, live_topology, MonitorTopology, WarmWindowKey, WarmWindowPool, PREVIEW_APP_ID,
+    live_topology, MonitorTopology, WarmWindowKey, WarmWindowPool, PREVIEW_APP_ID,
 };
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
@@ -1271,7 +1271,7 @@ impl Render for PinnedView {
                 self.title
             );
         }
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         if let Some((canvas, image)) = self.canvas_drag_rects() {
             let mut picture_frame = div()
                 .absolute()
@@ -1279,12 +1279,12 @@ impl Render for PinnedView {
                 .top(px(image.y - canvas.y))
                 .w(px(image.w))
                 .h(px(image.h))
-                .bg(rgb(palette.window_bg))
+                .bg(rgb(kit.grounds.pane.bg))
                 .child(self.picture());
             if self.border {
                 picture_frame = picture_frame
                     .border_1()
-                    .border_color(rgb(palette.thumb_border));
+                    .border_color(rgb(kit.palette.border_subtle));
             }
             return div()
                 .text(TextStyle::Value)
@@ -1309,7 +1309,7 @@ impl Render for PinnedView {
             self.hovered,
             window.is_window_hovered(),
         );
-        let mut root = kit()
+        let mut root = kit
             .window()
             .text(TextStyle::Value)
             .id("shot-pin")
@@ -1338,7 +1338,7 @@ impl Render for PinnedView {
             .child(self.picture());
 
         if self.border {
-            root = root.border_1().border_color(rgb(palette.thumb_border));
+            root = root.border_1().border_color(rgb(kit.palette.border_subtle));
         }
 
         if show_controls {

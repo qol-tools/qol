@@ -5,7 +5,7 @@ use qol_gpui::theme::TextStyle;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, LazyLock};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use crate::capture::frozen_frame::FrozenFrame;
@@ -13,7 +13,7 @@ use crate::capture::geometry::rect_label;
 use crate::capture::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
 use qol_gpui::placement::{intersect_bounds, monitor_at_point, project_bounds, MonitorPlacement};
-use qol_gpui::theme::{runtime_theme, shot_selector_runtime, ShotSelectorPalette};
+use qol_gpui::theme::runtime_theme;
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
 use qol_gpui::window_options::PopupWindowOptions;
 
@@ -29,12 +29,6 @@ const CHIP_TOP: f32 = qol_gpui::theme::SPACE_CELL;
 const SELECTOR_STATE_POLL_MS: u64 = 16;
 const MIN_DRAG_DISTANCE_PX: f64 = 6.0;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
-static CURRENT_PALETTE: LazyLock<ShotSelectorPalette> = LazyLock::new(shot_selector_runtime);
-
-fn current_palette() -> &'static ShotSelectorPalette {
-    &CURRENT_PALETTE
-}
-
 pub type RectMapper = Rc<dyn Fn(Rect) -> Option<Rect>>;
 
 pub trait ActiveBounds {
@@ -1242,14 +1236,17 @@ fn trace_selection_release(source: &'static str, raw: Option<Rect>, mapped: Opti
 }
 
 fn backdrop_segment(bounds: Bounds<Pixels>) -> Div {
-    let palette = current_palette();
+    let kit = qol_gpui::kit::kit();
     div()
         .absolute()
         .left(bounds.origin.x)
         .top(bounds.origin.y)
         .w(bounds.size.width)
         .h(bounds.size.height)
-        .bg(rgba(palette.backdrop_rgba))
+        .bg(rgba(qol_gpui::theme::translucent(
+            kit.palette.info,
+            qol_gpui::theme::Alpha::Halo,
+        )))
 }
 
 pub(crate) fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
@@ -1322,7 +1319,7 @@ fn selection_bounds_in_window(
 }
 
 fn chip_element(bounds: Bounds<Pixels>, text: String, level: Level) -> Div {
-    let palette = current_palette();
+    let kit = qol_gpui::kit::kit();
     let (border, foreground) = chip_colors(level);
     div()
         .absolute()
@@ -1331,26 +1328,23 @@ fn chip_element(bounds: Bounds<Pixels>, text: String, level: Level) -> Div {
         .w(bounds.size.width)
         .h(bounds.size.height)
         .border_1()
-        .border_color(rgba(border))
-        .bg(rgba(palette.panel_bg_rgba))
+        .border_color(rgb(border))
+        .bg(rgb(kit.grounds.pane.bg))
         .flex()
         .items_center()
         .justify_center()
         .text_center()
         .text(TextStyle::Name)
-        .text_color(rgba(foreground))
+        .text_color(rgb(foreground))
         .child(SharedString::from(text))
 }
 
 fn chip_colors(level: Level) -> (u32, u32) {
-    let palette = current_palette();
+    let kit = qol_gpui::kit::kit();
     match level {
-        Level::Ok => (palette.chip_ok_border_rgba, palette.chip_ok_text_rgba),
-        Level::Low => (palette.chip_low_border_rgba, palette.chip_low_text_rgba),
-        Level::Critical => (
-            palette.chip_critical_border_rgba,
-            palette.chip_critical_text_rgba,
-        ),
+        Level::Ok => (kit.palette.border_subtle, kit.grounds.pane.ink),
+        Level::Low => (kit.palette.warning, kit.palette.warning_ink),
+        Level::Critical => (kit.palette.danger, kit.palette.danger),
     }
 }
 

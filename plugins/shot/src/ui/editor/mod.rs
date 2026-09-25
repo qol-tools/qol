@@ -20,7 +20,7 @@ use crate::capture::screenshot::CaptureFileReady;
 use crate::config::CopyCommand;
 use crate::ui::controls::{copy_actions, SurfaceControl};
 use crate::ui::pinned::{PinnedContent, PinnedDismiss};
-use crate::ui::preview::{current_palette, thumbnail_size};
+use crate::ui::preview::thumbnail_size;
 use crate::ui::shortcuts::shot_action_for_keystroke;
 
 mod render;
@@ -470,7 +470,7 @@ impl EditorView {
             layout,
             history: UndoHistory::new(),
             active_stroke: None,
-            pen_color: current_palette().state_off,
+            pen_color: qol_gpui::kit::kit().palette.danger,
             pen_width: PenWidth::Medium,
             controls: editor_controls(default_copy_action),
             default_copy_action,
@@ -684,13 +684,13 @@ impl EditorView {
         let wheel = ColorWheel::open(&format!("#{:06x}", self.pen_color));
         let preview_parent = cx.weak_entity();
         let commit_parent = preview_parent.clone();
-        let palette = current_palette();
+        let kit = qol_gpui::kit::kit();
         let Some(popup) = ColorWheelPopup::open(
             wheel,
             WheelStyle {
-                bg: palette.action_bg,
-                border: palette.action_border_selected,
-                thumb_border: palette.action_glyph,
+                bg: kit.grounds.menu.bg,
+                border: kit.palette.accent,
+                thumb_border: kit.grounds.pane.ink,
             },
             anchor,
             window,

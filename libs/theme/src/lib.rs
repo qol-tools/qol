@@ -1038,8 +1038,6 @@ pub const DARK_TRAY_INTERNAL: TrayInternalPalette = TrayInternalPalette {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentPalettes {
     pub launcher: LauncherPalette,
-    pub shot_selector: ShotSelectorPalette,
-    pub shot_preview: ShotPreviewPalette,
     pub settings_panel: SettingsPanelPalette,
     pub alt_tab_preview_plane: AltTabPreviewPlanePalette,
     pub picker_surface: PickerSurfacePalette,
@@ -1049,84 +1047,9 @@ impl ComponentPalettes {
     pub fn new(mode: ThemeMode, reference: ReferencePalette, system: SystemPalette) -> Self {
         Self {
             launcher: LauncherPalette::from_system(system),
-            shot_selector: ShotSelectorPalette::from_theme(reference, system),
-            shot_preview: ShotPreviewPalette::from_system(system),
             settings_panel: SettingsPanelPalette::from_theme(mode, system),
             alt_tab_preview_plane: AltTabPreviewPlanePalette::from_theme(reference, system),
             picker_surface: PickerSurfacePalette::themed(system, None, 1.0),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShotSelectorPalette {
-    pub backdrop_rgba: u32,
-    pub panel_bg_rgba: u32,
-    pub panel_border_rgba: u32,
-    pub text_primary: u32,
-    pub text_subtitle_rgba: u32,
-    pub label_text_rgba: u32,
-    pub selection_outer: u32,
-    pub selection_inner: u32,
-    pub chip_ok_border_rgba: u32,
-    pub chip_ok_text_rgba: u32,
-    pub chip_low_border_rgba: u32,
-    pub chip_low_text_rgba: u32,
-    pub chip_critical_border_rgba: u32,
-    pub chip_critical_text_rgba: u32,
-}
-
-impl ShotSelectorPalette {
-    pub fn from_theme(reference: ReferencePalette, system: SystemPalette) -> Self {
-        Self {
-            backdrop_rgba: with_alpha(system.info, 0x24),
-            panel_bg_rgba: with_alpha(reference.black, 0xc7),
-            panel_border_rgba: with_alpha(reference.white, 0xdb),
-            text_primary: reference.white,
-            text_subtitle_rgba: with_alpha(reference.white, 0xc7),
-            label_text_rgba: with_alpha(reference.white, 0xf5),
-            selection_outer: reference.white,
-            selection_inner: system.danger,
-            chip_ok_border_rgba: with_alpha(reference.white, 0xdb),
-            chip_ok_text_rgba: with_alpha(reference.white, 0xff),
-            chip_low_border_rgba: with_alpha(system.warning, 0xff),
-            chip_low_text_rgba: with_alpha(mix_rgb(system.warning, reference.white, 0.35), 0xff),
-            chip_critical_border_rgba: with_alpha(system.danger, 0xff),
-            chip_critical_text_rgba: with_alpha(
-                mix_rgb(system.danger, reference.white, 0.35),
-                0xff,
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShotPreviewPalette {
-    pub window_bg: u32,
-    pub thumb_border: u32,
-    pub label_text: u32,
-    pub action_glyph: u32,
-    pub action_bg: u32,
-    pub action_bg_selected: u32,
-    pub action_border: u32,
-    pub action_border_selected: u32,
-    pub state_on: u32,
-    pub state_off: u32,
-}
-
-impl ShotPreviewPalette {
-    pub fn from_system(system: SystemPalette) -> Self {
-        Self {
-            window_bg: system.surface_elevated,
-            thumb_border: system.border_subtle,
-            label_text: system.text_secondary,
-            action_glyph: system.text_primary,
-            action_bg: system.surface_raised,
-            action_bg_selected: mix_rgb(system.surface_raised, system.accent, 0.28),
-            action_border: system.border_subtle,
-            action_border_selected: system.accent,
-            state_on: system.success,
-            state_off: system.danger,
         }
     }
 }
@@ -1634,14 +1557,6 @@ impl PickerSurfacePalette {
 
 pub fn launcher_runtime() -> LauncherPalette {
     runtime_theme().components.launcher
-}
-
-pub fn shot_selector_runtime() -> ShotSelectorPalette {
-    runtime_theme().components.shot_selector
-}
-
-pub fn shot_preview_runtime() -> ShotPreviewPalette {
-    runtime_theme().components.shot_preview
 }
 
 pub fn settings_panel_runtime() -> SettingsPanelPalette {

@@ -71,22 +71,6 @@ fn launcher_palette_derives_from_system_roles() {
 }
 
 #[test]
-fn shot_preview_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.shot_preview;
-    assert_eq!(palette.window_bg, DARK_SYSTEM.surface_elevated);
-    assert_eq!(palette.thumb_border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.label_text, DARK_SYSTEM.text_secondary);
-    assert_eq!(palette.action_glyph, DARK_SYSTEM.text_primary);
-    assert_eq!(palette.action_bg, DARK_SYSTEM.surface_raised);
-    assert_eq!(
-        palette.action_bg_selected,
-        mix_rgb(DARK_SYSTEM.surface_raised, DARK_SYSTEM.accent, 0.28)
-    );
-    assert_eq!(palette.action_border, DARK_SYSTEM.border_subtle);
-    assert_eq!(palette.action_border_selected, DARK_SYSTEM.accent);
-}
-
-#[test]
 fn settings_panel_palette_derives_status_tones_from_system_roles() {
     let palette = dark_theme().components.settings_panel;
     assert_eq!(palette.status_accent, DARK_SYSTEM.accent_ink);
@@ -149,61 +133,6 @@ fn alt_tab_cinnamon_js_emits_clutter_color_strings() {
             "    cardSelectedBg: \"rgba(232, 216, 178, 210)\",\n",
             "    cardSelectedBorder: \"rgba(137, 101, 14, 255)\",\n",
             "};\n",
-        )
-    );
-}
-
-#[test]
-fn shot_selector_palette_derives_from_system_roles() {
-    let palette = dark_theme().components.shot_selector;
-    assert_eq!(palette.backdrop_rgba, with_alpha(DARK_SYSTEM.info, 0x24));
-    assert_eq!(
-        palette.panel_bg_rgba,
-        with_alpha(DARK_REFERENCE.black, 0xc7)
-    );
-    assert_eq!(
-        palette.panel_border_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xdb)
-    );
-    assert_eq!(palette.text_primary, DARK_REFERENCE.white);
-    assert_eq!(
-        palette.text_subtitle_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xc7)
-    );
-    assert_eq!(
-        palette.label_text_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xf5)
-    );
-    assert_eq!(palette.selection_outer, DARK_REFERENCE.white);
-    assert_eq!(palette.selection_inner, DARK_SYSTEM.danger);
-    assert_eq!(
-        palette.chip_ok_border_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xdb)
-    );
-    assert_eq!(
-        palette.chip_ok_text_rgba,
-        with_alpha(DARK_REFERENCE.white, 0xff)
-    );
-    assert_eq!(
-        palette.chip_low_border_rgba,
-        with_alpha(DARK_SYSTEM.warning, 0xff)
-    );
-    assert_eq!(
-        palette.chip_low_text_rgba,
-        with_alpha(
-            mix_rgb(DARK_SYSTEM.warning, DARK_REFERENCE.white, 0.35),
-            0xff
-        )
-    );
-    assert_eq!(
-        palette.chip_critical_border_rgba,
-        with_alpha(DARK_SYSTEM.danger, 0xff)
-    );
-    assert_eq!(
-        palette.chip_critical_text_rgba,
-        with_alpha(
-            mix_rgb(DARK_SYSTEM.danger, DARK_REFERENCE.white, 0.35),
-            0xff
         )
     );
 }

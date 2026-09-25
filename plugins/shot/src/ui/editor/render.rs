@@ -37,7 +37,7 @@ impl EditorView {
             .h(px(self.layout.image.1))
             .overflow_hidden()
             .border_1()
-            .border_color(rgb(current_palette().thumb_border))
+            .border_color(rgb(qol_gpui::kit::kit().palette.border_subtle))
             .cursor(CursorStyle::Crosshair)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_stroke))
             .on_mouse_move(cx.listener(Self::extend_stroke))
@@ -112,7 +112,6 @@ impl EditorView {
     }
 
     fn render_label(&self) -> AnyElement {
-        let palette = current_palette();
         let kit = qol_gpui::kit::kit();
         if let Some(error) = self.output_error.clone() {
             return div()
@@ -124,7 +123,7 @@ impl EditorView {
             return qol_gpui::Busy::new(
                 "shot-editor-pending",
                 output.pending_message(),
-                rgb(palette.label_text),
+                rgb(kit.grounds.pane.soft),
             )
             .into_any_element();
         }
@@ -134,7 +133,7 @@ impl EditorView {
             .map(|control| control.label())
             .unwrap_or_default();
         div()
-            .text_color(rgb(palette.label_text))
+            .text_color(rgb(kit.grounds.pane.soft))
             .child(label)
             .into_any_element()
     }
