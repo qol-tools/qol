@@ -56,7 +56,7 @@ pub(crate) fn markup(
 }
 
 pub(crate) fn is_tile(spec: &str) -> bool {
-    matches!(split_spec(spec).0, "swatch" | "letters" | "empty")
+    matches!(split_spec(spec).0, "swatch" | "letters" | "empty" | "aa")
 }
 
 pub(crate) fn tone_for(spec: &str, tone: Tone) -> Tone {
@@ -395,6 +395,13 @@ mod tests {
         let rest = markup("empty", Tone::Rest, 56.0, 35.0, &context).unwrap();
         assert!(rest.contains(" opacity=\".7\""));
         assert!(is_tile("empty"));
+    }
+
+    #[test]
+    fn type_size_pictures_keep_their_size_in_the_row() {
+        for spec in ["aa:15", "aa:22", "aa:30"] {
+            assert!(is_tile(spec), "{spec}");
+        }
     }
 
     #[test]
