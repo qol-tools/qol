@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
-#[cfg(debug_assertions)]
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::TextStyle;
+#[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::*;
