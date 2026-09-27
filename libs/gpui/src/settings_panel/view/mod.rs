@@ -1703,6 +1703,9 @@ impl SettingsPanelView {
             index,
             self.stack.len() - 1
         );
+        if index != self.level().selected {
+            self.commit_edit(cx);
+        }
         self.level_mut().selected = index;
         self.activate(window, cx);
         cx.notify();

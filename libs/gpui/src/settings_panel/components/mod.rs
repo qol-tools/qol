@@ -123,8 +123,10 @@ fn masthead_rule() -> gpui::Div {
 pub fn paint_settings_selection<E: Styled>(row: E, kit: Kit) -> E {
     row.relative()
         .w_auto()
-        .mx(px(-qol_theme::SPACE_PAD))
-        .px(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
+        .ml(px(-qol_theme::SPACE_PAD))
+        .mr(px(-(qol_theme::SPACE_PAD - qol_theme::SPACE_INSET)))
+        .pl(px(qol_theme::SPACE_PAD + qol_theme::SPACE_INSET))
+        .pr(px(qol_theme::SPACE_PAD))
         .rounded_none()
         .bg(rgb(kit.grounds.band.bg))
 }
@@ -349,8 +351,7 @@ pub fn rail_caption(
         .flex_none()
         .relative()
         .flex()
-        .flex_col()
-        .justify_center()
+        .items_center()
         .w_full()
         .h(px(rail_caption_height()))
         .px(px(qol_theme::SPACE_CELL))
