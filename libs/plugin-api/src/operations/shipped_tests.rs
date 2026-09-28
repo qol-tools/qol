@@ -1,5 +1,29 @@
 use super::*;
+use qol_config::contract::PeerReplay;
 use std::path::Path;
+
+type Exposed = (String, OperationKind, String, PeerReplay);
+
+const SHIPPED_PEER_OPERATIONS: &[(&str, OperationKind, &str, PeerReplay)] = &[
+    (
+        "qol-bluetooth",
+        OperationKind::Query,
+        "handoff_state",
+        PeerReplay::Idempotent,
+    ),
+    (
+        "qol-bluetooth",
+        OperationKind::Action,
+        "release_for_handoff",
+        PeerReplay::Never,
+    ),
+    (
+        "qol-bluetooth",
+        OperationKind::Action,
+        "resume_reconnect",
+        PeerReplay::Idempotent,
+    ),
+];
 
 #[test]
 fn every_shipped_plugin_preserves_its_declared_agent_tools() {
@@ -24,12 +48,18 @@ fn every_shipped_plugin_preserves_its_declared_agent_tools() {
         "{}: empty plugin corpus",
         root.display()
     );
+    let mut exposed = Vec::new();
     for path in manifests {
-        assert_shipped_catalog(&path);
+        exposed.extend(assert_shipped_catalog(&path));
     }
+    let expected: Vec<Exposed> = SHIPPED_PEER_OPERATIONS
+        .iter()
+        .map(|&(plugin, kind, name, replay)| (plugin.into(), kind, name.into(), replay))
+        .collect();
+    assert_eq!(exposed, expected, "shipped peer exposure");
 }
 
-fn assert_shipped_catalog(path: &Path) {
+fn assert_shipped_catalog(path: &Path) -> Vec<Exposed> {
     let manifest = PluginManifest::load_and_validate(path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let plugin_id = manifest.plugin.id.clone().unwrap_or_else(|| {
@@ -52,20 +82,28 @@ fn assert_shipped_catalog(path: &Path) {
     };
     let catalog = OperationCatalog::derive(&plugin_id, &manifest, runtime.as_ref())
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    assert!(
-        catalog.iter().all(|operation| operation.peer.is_none()),
-        "{}: shipped peer exposure must remain disabled",
-        path.display()
-    );
+    let exposed = catalog
+        .iter()
+        .filter_map(|operation| {
+            let peer = operation.peer.as_ref()?;
+            Some((
+                plugin_id.to_string(),
+                operation.key.kind,
+                operation.key.name.clone(),
+                peer.replay,
+            ))
+        })
+        .collect();
     let Some(runtime) = runtime else {
         assert!(
             catalog.iter().all(|operation| !operation.agent_tool),
             "{}",
             path.display()
         );
-        return;
+        return exposed;
     };
     assert_agent_tools(path, &plugin_id, &manifest, &catalog, &runtime);
+    exposed
 }
 
 fn assert_agent_tools(
