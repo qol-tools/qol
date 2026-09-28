@@ -378,6 +378,7 @@ impl LauncherView {
             return;
         }
         eprintln!("[controller] launch succeeded, closing after the cue");
+        self.yield_focus();
         if is_app {
             self.store.record_launch(&name);
         }
@@ -416,6 +417,7 @@ impl LauncherView {
         match qol_apps::desktop_integration::reveal_in_file_manager(path) {
             Ok(()) => {
                 trace::open_folder(source, "ok", "");
+                self.yield_focus();
                 let home = std::env::var_os("HOME").map(PathBuf::from);
                 self.show_cue(
                     Cue::OpeningFolder {
@@ -432,6 +434,10 @@ impl LauncherView {
                 cx.notify();
             }
         }
+    }
+
+    fn yield_focus(&self) {
+        qol_gpui::popup_window::release_input(&self.window_title);
     }
 
     pub(super) fn open_website(
