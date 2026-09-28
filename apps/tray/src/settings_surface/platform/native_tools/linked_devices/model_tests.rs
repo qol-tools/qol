@@ -25,7 +25,6 @@ fn snapshot() -> Snapshot {
                 status: AuthorityStatus::Ready,
                 peer_count: 0,
                 grant_count: 0,
-                tombstone_count: 0,
             }),
         },
         peers: Vec::new(),

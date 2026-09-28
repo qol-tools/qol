@@ -28,7 +28,6 @@ fn malformed_snapshots_are_rejected_without_repair_or_identity_replacement() {
         "empty_name",
         "too_many_peers",
         "too_many_grants",
-        "too_many_tombstones",
         "oversized_key",
         "unknown_operation_field",
         "unknown_operation_kind",
@@ -69,7 +68,6 @@ fn malformed_snapshots_are_rejected_without_repair_or_identity_replacement() {
 
 fn corrupt(case: &str, value: &mut Value) {
     let peer = value["peers"][0].clone();
-    let stored_pin = peer["pin"].clone();
     match case {
         "duplicate_peer" => value["peers"].as_array_mut().unwrap().push(peer),
         "duplicate_grant" => value["peers"][0]["grants"]
@@ -110,7 +108,6 @@ fn corrupt(case: &str, value: &mut Value) {
         "too_many_grants" => {
             value["peers"][0]["grants"] = json!(vec![peer["grants"][0].clone(); 129])
         }
-        "too_many_tombstones" => value["tombstones"] = json!(vec![stored_pin; 4097]),
         "oversized_key" => value["identity"]["key"] = json!(vec![0_u8; 4097]),
         "unknown_operation_field" => value["peers"][0]["grants"][0]["other"] = json!(true),
         "unknown_operation_kind" => value["peers"][0]["grants"][0]["kind"] = json!("admin"),
@@ -127,8 +124,7 @@ fn a_device_blocked_by_an_older_unlink_can_link_again() {
     value["tombstones"] = json!([{"peer_id": blocked.peer_id(), "spki": blocked.spki_der()}]);
     write_wire(&root, &value);
     let reopened = PeerAuthority::open_persistent(&root, now()).unwrap();
-    assert!(reopened.projection().unwrap().tombstones.is_empty());
-    assert_eq!(wire(&root)["tombstones"], json!([]));
+    assert!(wire(&root).get("tombstones").is_none());
     reopened
         .insert_link(revision(&reopened), blocked.clone(), "again".into())
         .unwrap();

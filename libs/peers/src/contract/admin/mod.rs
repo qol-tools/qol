@@ -23,7 +23,6 @@ mod tests;
 
 pub const PEERS_PER_PAGE: usize = 16;
 pub const GRANTS_PER_PAGE: usize = 16;
-pub const TOMBSTONES_PER_PAGE: usize = 128;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -46,9 +45,6 @@ pub enum Request {
     },
     Grants {
         peer_id: PeerId,
-        cursor: PageCursor,
-    },
-    Tombstones {
         cursor: PageCursor,
     },
     StartSession {
@@ -89,8 +85,7 @@ impl Request {
             | Self::Network
             | Self::Sessions { .. }
             | Self::Peers { .. }
-            | Self::Grants { .. }
-            | Self::Tombstones { .. } => false,
+            | Self::Grants { .. } => false,
             Self::Enable
             | Self::StartSession { .. }
             | Self::CreatePersistent { .. }
@@ -135,7 +130,6 @@ pub struct AuthoritySummary {
     pub status: AuthorityStatus,
     pub peer_count: u32,
     pub grant_count: u32,
-    pub tombstone_count: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -206,9 +200,6 @@ pub enum Response {
     Grants {
         peer_id: PeerId,
         page: Page<OperationKey>,
-    },
-    Tombstones {
-        page: Page<PeerId>,
     },
     PointzStatus {
         status: PointzStatus,

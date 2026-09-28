@@ -42,9 +42,6 @@ fn linked_pin(inner: &Inner, peer: PeerId) -> Result<&PeerPin, AuthorityError> {
     if peer == inner.state.identity.pin().peer_id() {
         return Err(AuthorityError::LocalPeer);
     }
-    if inner.state.is_revoked(peer) {
-        return Err(AuthorityError::Revoked);
-    }
     inner
         .state
         .peer(peer)

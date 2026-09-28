@@ -36,9 +36,6 @@ impl PeerAuthority {
             if peer == inner.state.identity.pin().peer_id() {
                 return Err(AuthorityError::LocalPeer.into());
             }
-            if inner.state.is_revoked(peer) {
-                return Err(EnrollmentError::Rejected(EnrollmentRejection::Revoked));
-            }
             inner.state.identity.clone()
         };
         NearbyClientConfig::new(&identity, peer).map_err(|_| EnrollmentError::Transport)
@@ -120,9 +117,6 @@ impl PeerAuthority {
             .filter(|entry| entry.deadline > now)
             .filter_map(|entry| {
                 let bound = entry.nearby.as_ref()?;
-                if inner.state.is_revoked(bound.pin.peer_id()) {
-                    return None;
-                }
                 Some(InboundNearby {
                     peer_id: bound.pin.peer_id(),
                     name: bound.name.clone(),

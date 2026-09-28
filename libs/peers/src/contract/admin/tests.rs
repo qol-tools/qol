@@ -39,7 +39,6 @@ fn authority_errors_have_one_strict_sanitized_wire_representation() {
         AuthorityError::DuplicateGrant,
         AuthorityError::DuplicatePeer,
         AuthorityError::UnknownPeer,
-        AuthorityError::Revoked,
         AuthorityError::LocalPeer,
         AuthorityError::AlreadyExists,
         AuthorityError::MissingStore,

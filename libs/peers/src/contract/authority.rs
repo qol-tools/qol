@@ -98,5 +98,4 @@ pub struct AuthorityProjection {
     pub revision: StoreRevision,
     pub status: AuthorityStatus,
     pub peers: Vec<PeerProjection>,
-    pub tombstones: Vec<PeerId>,
 }

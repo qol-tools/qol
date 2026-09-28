@@ -29,7 +29,7 @@ export function isMutation(request) {
     if (request.operation === 'pointz') {
         return !['status', 'devices'].includes(request.request.action);
     }
-    return !['status', 'network', 'sessions', 'peers', 'grants', 'tombstones'].includes(request.operation);
+    return !['status', 'network', 'sessions', 'peers', 'grants'].includes(request.operation);
 }
 
 async function post(route, body, signal, mutation) {

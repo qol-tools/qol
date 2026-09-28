@@ -748,9 +748,6 @@ fn failure_detail(error: EnrollmentFailure) -> &'static str {
         EnrollmentFailure::Rejected(
             EnrollmentRejection::Cancelled | EnrollmentRejection::InvalidInvitation,
         ) => "It declined, or its request ended",
-        EnrollmentFailure::Rejected(EnrollmentRejection::Revoked) => {
-            "This device revoked it before, so it cannot link again"
-        }
         EnrollmentFailure::Rejected(EnrollmentRejection::Capacity)
         | EnrollmentFailure::Capacity => "It is busy with other requests. Retry in a moment.",
         EnrollmentFailure::Abandoned => "Cancelled here",

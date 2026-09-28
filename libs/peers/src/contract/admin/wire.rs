@@ -24,9 +24,6 @@ pub(super) enum Request {
         peer_id: PeerId,
         cursor: PageCursor,
     },
-    Tombstones {
-        cursor: PageCursor,
-    },
     StartSession {
         name: String,
     },
@@ -66,7 +63,6 @@ impl From<Request> for super::Request {
             Request::Sessions { cursor } => Self::Sessions { cursor },
             Request::Peers { cursor } => Self::Peers { cursor },
             Request::Grants { peer_id, cursor } => Self::Grants { peer_id, cursor },
-            Request::Tombstones { cursor } => Self::Tombstones { cursor },
             Request::StartSession { name } => Self::StartSession { name },
             Request::CreatePersistent { name } => Self::CreatePersistent { name },
             Request::OpenPersistent {} => Self::OpenPersistent,

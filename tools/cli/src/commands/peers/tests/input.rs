@@ -13,7 +13,6 @@ fn convenience_parser_builds_canonical_actions() {
         (vec!["status"], Action::Direct(Request::Status)),
         (vec!["list"], Action::Pages(Pages::Peers)),
         (vec!["grants", PEER], Action::Pages(Pages::Grants(peer()))),
-        (vec!["tombstones"], Action::Pages(Pages::Tombstones)),
         (
             vec!["session", "name with spaces"],
             Action::Start(Request::StartSession {

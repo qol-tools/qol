@@ -80,7 +80,6 @@ impl State {
                 || !self
                     .peer(receipt.joiner)
                     .is_some_and(|peer| peer.pin == inbound.pin)
-                || self.is_revoked(receipt.joiner)
                 || !transactions.insert(receipt.transaction)
                 || !invitations.insert(receipt.invitation)
             {
@@ -91,7 +90,6 @@ impl State {
         for join in &self.outbound {
             validate_name(&join.name)?;
             if join.pin.peer_id() == local
-                || self.is_revoked(join.pin.peer_id())
                 || !transactions.insert(join.transaction)
                 || !invitations.insert(join.invitation)
                 || (!matches!(join.state, OutboundEnrollmentState::Abandoned {})

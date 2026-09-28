@@ -41,9 +41,6 @@ impl PeerAuthority {
                 .filter(|entry| entry.deadline > now && entry.nearby.is_none())
                 .filter_map(|entry| {
                     let reserved = entry.reservation.as_ref()?;
-                    if inner.state.is_revoked(reserved.pin.peer_id()) {
-                        return None;
-                    }
                     Some(PendingEnrollment {
                         key: EnrollmentRequestKey {
                             invitation: entry.id,
@@ -82,9 +79,6 @@ impl PeerAuthority {
         key: EnrollmentRequestKey,
         grants: Vec<qol_conventions::operations::OperationKey>,
     ) -> Result<EnrollmentReceipt, EnrollmentError> {
-        if inner.state.is_revoked(key.peer) {
-            return Err(EnrollmentError::Rejected(EnrollmentRejection::Revoked));
-        }
         if let Some(stored) = inner
             .state
             .receipts

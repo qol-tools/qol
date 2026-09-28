@@ -17,7 +17,7 @@ use super::enrollment::{InboundReceipt, OutboundJoin, MAX_OUTBOUND, MAX_RECEIPTS
 use super::{
     state::{
         LinkedPeer, PointzDeviceRecord, PointzState, State, MAX_GRANTS, MAX_PEERS,
-        MAX_SNAPSHOT_BYTES, MAX_TOMBSTONES,
+        MAX_SNAPSHOT_BYTES,
     },
     AuthorityError,
 };
@@ -38,7 +38,8 @@ struct Snapshot {
     identity: StoredIdentity,
     name: String,
     peers: Bounded<StoredPeer, MAX_PEERS>,
-    tombstones: Bounded<StoredPin, MAX_TOMBSTONES>,
+    #[serde(default, skip_serializing)]
+    tombstones: Option<serde::de::IgnoredAny>,
     receipts: Bounded<StoredReceipt, MAX_RECEIPTS>,
     outbound: Bounded<StoredOutbound, MAX_OUTBOUND>,
     #[serde(default)]
@@ -317,7 +318,6 @@ pub(super) fn decode(bytes: &[u8], now: SystemTime) -> Result<(State, bool), Aut
                 })
             })
             .collect::<Result<_, AuthorityError>>()?,
-        tombstones: Vec::new(),
     };
     if migrating {
         state.synchronize_operations()?;
@@ -334,10 +334,7 @@ pub(super) fn decode(bytes: &[u8], now: SystemTime) -> Result<(State, bool), Aut
     {
         return Err(AuthorityError::InvalidSnapshot);
     }
-    Ok((
-        state,
-        renewed || migrating || !snapshot.tombstones.0.is_empty(),
-    ))
+    Ok((state, renewed || migrating || snapshot.tombstones.is_some()))
 }
 
 pub(super) fn encode(state: &State) -> Result<Zeroizing<Vec<u8>>, AuthorityError> {
@@ -365,7 +362,7 @@ pub(super) fn encode(state: &State) -> Result<Zeroizing<Vec<u8>>, AuthorityError
                 })
                 .collect(),
         ),
-        tombstones: Bounded(state.tombstones.iter().map(StoredPin::from_pin).collect()),
+        tombstones: None,
         receipts: Bounded(
             state
                 .receipts

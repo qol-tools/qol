@@ -62,10 +62,6 @@ impl PeerHostHandle {
                     cursor,
                 )
             }
-            Request::Tombstones { cursor } => {
-                let active = host.authority()?;
-                projection::tombstones(active.authority.projection()?, active.activation_id, cursor)
-            }
             Request::StartSession { name } => {
                 host.start(|_| PeerAuthority::session(name, SystemTime::now()).map_err(Error::from))
             }
@@ -255,7 +251,6 @@ pub(super) fn operation_name(request: &Request) -> &'static str {
         Request::Sessions { .. } => "sessions",
         Request::Peers { .. } => "peers",
         Request::Grants { .. } => "grants",
-        Request::Tombstones { .. } => "tombstones",
         Request::StartSession { .. } => "start_session",
         Request::CreatePersistent { .. } => "create_persistent",
         Request::OpenPersistent => "open_persistent",
@@ -352,7 +347,6 @@ pub(super) fn trace_outcome(operation: &str, result: &Result<Response, Error>) {
             | Response::Sessions { .. }
             | Response::Peers { .. }
             | Response::Grants { .. }
-            | Response::Tombstones { .. }
             | Response::PointzStatus { .. }
             | Response::PointzDevices { .. }
             | Response::PointzPairing { .. }

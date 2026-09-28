@@ -19,7 +19,6 @@ use super::AuthorityError;
 pub(super) const MAX_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
 pub(super) const MAX_PEERS: usize = 256;
 pub(super) const MAX_GRANTS: usize = 128;
-pub(super) const MAX_TOMBSTONES: usize = 4096;
 const MAX_OPERATION_BYTES: usize = 256;
 const MAX_UID_BYTES: usize = 256;
 
@@ -66,7 +65,6 @@ pub(super) struct State {
     pub name: String,
     pub revision: StoreRevision,
     pub peers: Vec<LinkedPeer>,
-    pub tombstones: Vec<PeerPin>,
     pub receipts: Vec<super::enrollment::InboundReceipt>,
     pub outbound: Vec<super::enrollment::OutboundJoin>,
     pub operations: Vec<super::operations::LinkOperations>,
@@ -78,22 +76,13 @@ impl State {
         self.peers.iter().find(|peer| peer.pin.peer_id() == id)
     }
 
-    pub fn is_revoked(&self, id: PeerId) -> bool {
-        self.tombstones.iter().any(|pin| pin.peer_id() == id)
-    }
-
     pub fn validate(&self) -> Result<(), AuthorityError> {
         validate_name(&self.name)?;
-        if self.peers.len() > MAX_PEERS || self.tombstones.len() > MAX_TOMBSTONES {
+        if self.peers.len() > MAX_PEERS {
             return Err(AuthorityError::Capacity);
         }
         let mut identities = HashSet::new();
         identities.insert(self.identity.pin().peer_id());
-        for pin in &self.tombstones {
-            if !identities.insert(pin.peer_id()) {
-                return Err(AuthorityError::InvalidSnapshot);
-            }
-        }
         for peer in &self.peers {
             if !identities.insert(peer.pin.peer_id()) {
                 return Err(AuthorityError::InvalidSnapshot);

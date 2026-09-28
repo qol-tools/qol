@@ -66,7 +66,6 @@ fn restart_preserves_identity_grants_names_revision_and_a_relinkable_unlink() {
     assert_eq!(reopened.local_pin().unwrap(), local_pin);
     assert!(!reopened.is_trusted(&remote));
     assert!(!reopened.has_grant(remote.peer_id(), &grant("replacement")));
-    assert!(reopened.projection().unwrap().tombstones.is_empty());
     reopened
         .insert_link(revision(&reopened), remote.clone(), "again".into())
         .unwrap();

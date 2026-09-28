@@ -83,7 +83,7 @@ fn every_response_variant_and_confirmation_reject_extra_fields_and_duplicate_key
         (
             "rejected",
             ResponseOutcome::Rejected {
-                reason: EnrollmentRejection::Revoked,
+                reason: EnrollmentRejection::Conflict,
             },
         ),
     ] {
@@ -94,7 +94,7 @@ fn every_response_variant_and_confirmation_reject_extra_fields_and_duplicate_key
             ResponseOutcome::Pending {} | ResponseOutcome::Unknown {}
         ) {
             assert_eq!(fixture, format!(r#"{{"kind":"{kind}"}}"#));
-            for extra in [r#""receipt":null"#, r#""reason":"revoked""#] {
+            for extra in [r#""receipt":null"#, r#""reason":"conflict""#] {
                 let invalid = format!("{{{extra},{}", &fixture[1..]);
                 assert!(
                     serde_json::from_str::<ResponseOutcome>(&invalid).is_err(),

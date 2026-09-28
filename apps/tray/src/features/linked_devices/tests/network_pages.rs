@@ -11,7 +11,7 @@ use super::*;
 fn session_pages_derive_names_and_reject_each_stale_generation_of_the_view() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peers = super::persistent::populated(&root, 17, 0);
+    let peers = super::persistent::populated(&root, 17);
     let authority = PeerAuthority::open_persistent(&root, std::time::SystemTime::now()).unwrap();
     let projection = authority.projection().unwrap();
     let activation = ActivationId::from_bytes([1; 16]);

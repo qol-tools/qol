@@ -26,8 +26,6 @@ pub enum AuthorityError {
     DuplicatePeer,
     #[error("peer is not linked")]
     UnknownPeer,
-    #[error("revoked identity requires a new locally approved relinking transition")]
-    Revoked,
     #[error("local identity cannot be linked as a remote peer")]
     LocalPeer,
     #[error("authority root already exists; opening and creation are separate operations")]
@@ -73,7 +71,6 @@ enum AuthorityErrorWire {
     DuplicateGrant {},
     DuplicatePeer {},
     UnknownPeer {},
-    Revoked {},
     LocalPeer {},
     AlreadyExists {},
     MissingStore {},
@@ -104,7 +101,6 @@ impl From<AuthorityErrorWire> for AuthorityError {
             AuthorityErrorWire::DuplicateGrant {} => Self::DuplicateGrant,
             AuthorityErrorWire::DuplicatePeer {} => Self::DuplicatePeer,
             AuthorityErrorWire::UnknownPeer {} => Self::UnknownPeer,
-            AuthorityErrorWire::Revoked {} => Self::Revoked,
             AuthorityErrorWire::LocalPeer {} => Self::LocalPeer,
             AuthorityErrorWire::AlreadyExists {} => Self::AlreadyExists,
             AuthorityErrorWire::MissingStore {} => Self::MissingStore,

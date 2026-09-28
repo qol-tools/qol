@@ -604,7 +604,6 @@ async fn disconnect_after_reservation_never_reports_completion() {
                             | EnrollmentError::Authority(AuthorityError::Faulted),
                         ..
                     })
-                    | Ok(EnrollmentOutcome::Rejected(EnrollmentRejection::Revoked))
             ),
             "revoke={revoke}"
         );
@@ -641,7 +640,6 @@ async fn malformed_duplicate_and_over_capacity_enrollment_snapshots_fail_closed(
         "receipt_pin",
         "receipt_id",
         "receipt_missing_peer",
-        "receipt_revoked",
         "receipt_capacity",
         "receipt_name",
         "receipt_lifetime",
@@ -650,7 +648,6 @@ async fn malformed_duplicate_and_over_capacity_enrollment_snapshots_fail_closed(
         "outbound_tx",
         "outbound_capacity",
         "outbound_lifetime",
-        "outbound_revoked",
         "outbound_missing_receipt",
         "missing_field",
         "duplicate_field",
@@ -678,10 +675,6 @@ async fn malformed_duplicate_and_over_capacity_enrollment_snapshots_fail_closed(
                     value["receipts"][0]["receipt"]["joiner"].clone()
             }
             "receipt_missing_peer" => value["peers"] = serde_json::json!([]),
-            "receipt_revoked" => {
-                value["tombstones"] = serde_json::json!([receipt["pin"]]);
-                value["peers"] = serde_json::json!([]);
-            }
             "receipt_capacity" => value["receipts"] = serde_json::json!(vec![receipt; 257]),
             "receipt_name" => {
                 value["receipts"][0]["receipt"]["joiner_name"] = serde_json::json!("x".repeat(257))
@@ -697,10 +690,6 @@ async fn malformed_duplicate_and_over_capacity_enrollment_snapshots_fail_closed(
             "outbound_capacity" => value["outbound"] = serde_json::json!(vec![join; 257]),
             "outbound_lifetime" => {
                 value["outbound"][0]["local_lifetime"] = serde_json::json!("session")
-            }
-            "outbound_revoked" => {
-                value["tombstones"] = serde_json::json!([join["pin"]]);
-                value["peers"] = serde_json::json!([]);
             }
             "outbound_missing_receipt" => {
                 value["outbound"][0]["state"]["receipt"] = serde_json::Value::Null

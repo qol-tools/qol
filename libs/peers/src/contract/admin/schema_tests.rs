@@ -93,7 +93,6 @@ fn every_request_rejects_unknown_and_duplicate_fields_recursively() {
         json!({"operation": "sessions", "cursor": session_cursor()}),
         json!({"operation": "peers", "cursor": cursor()}),
         json!({"operation": "grants", "cursor": cursor(), "peer_id": PEER}),
-        json!({"operation": "tombstones", "cursor": cursor()}),
         json!({"operation": "start_session", "name": "local"}),
         json!({"operation": "create_persistent", "name": "local"}),
         json!({"operation": "open_persistent"}),
@@ -118,7 +117,7 @@ fn every_lifecycle_and_response_rejects_unknown_and_duplicate_fields_recursively
     let authority = json!({
         "peer_id": PEER, "activation_id": ACTIVATION, "name": "local",
         "lifetime": "persistent", "revision": "0", "status": "ready",
-        "peer_count": 1, "grant_count": 1, "tombstone_count": 1
+        "peer_count": 1, "grant_count": 1
     });
     for (result, item) in [
         (
@@ -126,7 +125,6 @@ fn every_lifecycle_and_response_rejects_unknown_and_duplicate_fields_recursively
             json!({"peer_id": PEER, "name": "remote", "grant_count": 1}),
         ),
         ("grants", operation()),
-        ("tombstones", json!(PEER)),
     ] {
         let mut response = json!({"result": result, "page": {
             "cursor": cursor(), "total": 2, "items": [item], "next": cursor()
@@ -155,7 +153,6 @@ fn every_error_is_strict_when_direct_or_nested_in_lifecycles_and_replies() {
         "duplicate_grant",
         "duplicate_peer",
         "unknown_peer",
-        "revoked",
         "local_peer",
         "already_exists",
         "missing_store",
@@ -279,7 +276,7 @@ fn activation_stamps_are_required_by_mutations_cursors_summaries_and_changed_rep
     .is_err());
     assert!(serde_json::from_value::<AuthoritySummary>(json!({
         "peer_id": PEER, "name": "local", "lifetime": "session", "revision": "0",
-        "status": "ready", "peer_count": 0, "grant_count": 0, "tombstone_count": 0
+        "status": "ready", "peer_count": 0, "grant_count": 0
     }))
     .is_err());
 }
@@ -389,7 +386,7 @@ fn enrollment_requests_responses_and_attempt_states_are_strict_and_redacted() {
         json!("abandoned"),
         json!("transport"),
         json!("protocol"),
-        json!({"rejected":"revoked"}),
+        json!({"rejected":"conflict"}),
     ] {
         strict::<Error>(json!({"code":"enrollment","error":error}));
     }

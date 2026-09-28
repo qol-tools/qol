@@ -1,6 +1,6 @@
 use qol_peers::admin::{
     ActivationId, AuthoritySummary, Error, Page, PageCursor, PeerSummary, Response,
-    GRANTS_PER_PAGE, PEERS_PER_PAGE, TOMBSTONES_PER_PAGE,
+    GRANTS_PER_PAGE, PEERS_PER_PAGE,
 };
 use qol_peers::{AuthorityError, AuthorityProjection, PeerId};
 
@@ -21,7 +21,6 @@ pub(super) fn summary(
             .iter()
             .map(|peer| peer.grants.len() as u32)
             .sum(),
-        tombstone_count: projection.tombstones.len() as u32,
     }
 }
 
@@ -52,9 +51,6 @@ pub(super) fn grants(
     cursor: PageCursor,
 ) -> Result<Response, Error> {
     validate_cursor(&projection, activation_id, cursor)?;
-    if projection.tombstones.contains(&peer_id) {
-        return Err(AuthorityError::Revoked.into());
-    }
     let peer = projection
         .peers
         .into_iter()
@@ -63,17 +59,6 @@ pub(super) fn grants(
     Ok(Response::Grants {
         peer_id,
         page: page(peer.grants, cursor, GRANTS_PER_PAGE)?,
-    })
-}
-
-pub(super) fn tombstones(
-    projection: AuthorityProjection,
-    activation_id: ActivationId,
-    cursor: PageCursor,
-) -> Result<Response, Error> {
-    validate_cursor(&projection, activation_id, cursor)?;
-    Ok(Response::Tombstones {
-        page: page(projection.tombstones, cursor, TOMBSTONES_PER_PAGE)?,
     })
 }
 

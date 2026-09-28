@@ -29,7 +29,6 @@ fn authority() -> AuthoritySummary {
         status: AuthorityStatus::Ready,
         peer_count: 2,
         grant_count: 2,
-        tombstone_count: 2,
     }
 }
 

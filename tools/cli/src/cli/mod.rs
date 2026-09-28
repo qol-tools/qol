@@ -115,7 +115,6 @@ mod tests {
             "status",
             "list",
             "grants",
-            "tombstones",
             "session",
             "create",
             "open",

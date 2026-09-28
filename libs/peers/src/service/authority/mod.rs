@@ -99,7 +99,6 @@ impl PeerAuthority {
             name,
             revision: StoreRevision::INITIAL,
             peers: Vec::new(),
-            tombstones: Vec::new(),
             receipts: Vec::new(),
             outbound: Vec::new(),
             operations: Vec::new(),
@@ -149,7 +148,6 @@ impl PeerAuthority {
                     grants: peer.grants.clone(),
                 })
                 .collect(),
-            tombstones: state.tombstones.iter().map(PeerPin::peer_id).collect(),
         })
     }
 
@@ -174,7 +172,6 @@ impl PeerAuthority {
         };
         inner.status == AuthorityStatus::Ready
             && validate_grant(grant).is_ok()
-            && !inner.state.is_revoked(peer)
             && inner
                 .state
                 .peer(peer)
@@ -201,9 +198,6 @@ impl PeerAuthority {
     ) -> Result<StoreRevision, AuthorityError> {
         self.mutate(expected, |state| {
             validate_grants(&grants)?;
-            if state.is_revoked(peer) {
-                return Err(AuthorityError::Revoked);
-            }
             let linked = state
                 .peers
                 .iter_mut()
@@ -238,9 +232,6 @@ impl PeerAuthority {
             let peer = pin.peer_id();
             if peer == state.identity.pin().peer_id() {
                 return Err(AuthorityError::LocalPeer);
-            }
-            if state.is_revoked(peer) {
-                return Err(AuthorityError::Revoked);
             }
             if state.peer(peer).is_some() {
                 return Err(AuthorityError::DuplicatePeer);
@@ -333,7 +324,6 @@ impl TrustPolicy for PeerAuthority {
             return false;
         };
         inner.status == AuthorityStatus::Ready
-            && !inner.state.is_revoked(pin.peer_id())
             && inner
                 .state
                 .peer(pin.peer_id())

@@ -1,6 +1,4 @@
-use qol_peers::admin::{
-    ActivationId, PageCursor, GRANTS_PER_PAGE, PEERS_PER_PAGE, TOMBSTONES_PER_PAGE,
-};
+use qol_peers::admin::{ActivationId, PageCursor, GRANTS_PER_PAGE, PEERS_PER_PAGE};
 use qol_peers::{AuthorityProjection, AuthorityStatus, PeerId, PeerProjection};
 use qol_plugin_api::operations::{OperationKey, OperationKind};
 
@@ -41,7 +39,6 @@ fn maximum_projection() -> AuthorityProjection {
                 grants: grants.clone(),
             })
             .collect(),
-        tombstones: (257..4353).map(identity).collect(),
     }
 }
 
@@ -60,14 +57,7 @@ fn maximum_projection_pages_preserve_all_items_and_bound_serialized_replies() {
         offset: 0,
     };
     let summary = projection::summary(projection.clone(), activation_id);
-    assert_eq!(
-        (
-            summary.peer_count,
-            summary.grant_count,
-            summary.tombstone_count
-        ),
-        (256, 32768, 4096)
-    );
+    assert_eq!((summary.peer_count, summary.grant_count), (256, 32768));
     assert_bounded(&Response::Status {
         status: Status {
             lifecycle: Lifecycle::Active,
@@ -77,7 +67,6 @@ fn maximum_projection_pages_preserve_all_items_and_bound_serialized_replies() {
     for (count, page_size, kind) in [
         (256, PEERS_PER_PAGE, "peers"),
         (128, GRANTS_PER_PAGE, "grants"),
-        (4096, TOMBSTONES_PER_PAGE, "tombstones"),
     ] {
         let mut next = Some(cursor);
         let mut observed = 0;
@@ -90,7 +79,6 @@ fn maximum_projection_pages_preserve_all_items_and_bound_serialized_replies() {
                     projection.peers[0].peer_id,
                     cursor,
                 ),
-                "tombstones" => projection::tombstones(projection.clone(), activation_id, cursor),
                 _ => unreachable!(),
             }
             .unwrap();
@@ -98,7 +86,6 @@ fn maximum_projection_pages_preserve_all_items_and_bound_serialized_replies() {
             let (length, total, following) = match reply {
                 Response::Peers { page } => (page.items.len(), page.total, page.next),
                 Response::Grants { page, .. } => (page.items.len(), page.total, page.next),
-                Response::Tombstones { page } => (page.items.len(), page.total, page.next),
                 _ => panic!("page required"),
             };
             assert!(length <= page_size, "{kind}");
@@ -150,7 +137,7 @@ fn cursors_reject_changed_identity_revision_and_out_of_range_offsets() {
 fn real_store_pages_are_complete_and_old_cursors_fail_after_a_mutation() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peers = super::persistent::populated(&root, 17, 129);
+    let peers = super::persistent::populated(&root, 17);
     let host = host_at(&root, false);
     let shared = attach(&host);
     let view = authority(&shared);
@@ -193,11 +180,6 @@ fn real_store_pages_are_complete_and_old_cursors_fail_after_a_mutation() {
             .len(),
         128
     );
-    let Response::Tombstones { page } = shared.peer_admin(Request::Tombstones { cursor }) else {
-        panic!("tombstones page");
-    };
-    assert_eq!(page.total, 0);
-    assert_eq!(page.next, None);
     shared.peer_admin(Request::Rename {
         expected: view.expected(),
         name: "new".into(),

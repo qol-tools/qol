@@ -98,7 +98,7 @@ impl Owner {
             view.status.enrollment_listener = ListenerStatus::Listening { port }
         });
         loop {
-            if authority.check_enrollment_remote(None).is_err() {
+            if authority.check_enrollment_ready().is_err() {
                 return Err(NetworkFailure::Authority);
             }
             tokio::select! {
@@ -162,13 +162,12 @@ async fn receive(authority: PeerAuthority, stream: TcpStream) -> Result<(), Enro
     let config = authority.enrollment_server_config()?;
     let connection = tokio::select! {
         biased;
-        () = invalidated(&authority, None) => return Err(EnrollmentError::Transport),
+        () = invalidated(&authority) => return Err(EnrollmentError::Transport),
         result = timeout(IO_DEADLINE, config.accept(stream)) => result.map_err(|_| EnrollmentError::Transport)?.map_err(|_| EnrollmentError::Transport)?,
     };
-    let peer = connection.remote_identity().peer_id();
     tokio::select! {
         biased;
-        () = invalidated(&authority, Some(peer)) => Err(EnrollmentError::Transport),
+        () = invalidated(&authority) => Err(EnrollmentError::Transport),
         result = serve(&authority, connection, local) => result,
     }
 }
@@ -234,10 +233,10 @@ async fn exchange(
     authority.recover_enrollment(connection, transaction).await
 }
 
-async fn invalidated(authority: &PeerAuthority, peer: Option<PeerId>) {
+async fn invalidated(authority: &PeerAuthority) {
     let mut changes = authority.watch_changes();
     loop {
-        if authority.check_enrollment_remote(peer).is_err() || changes.changed().await.is_err() {
+        if authority.check_enrollment_ready().is_err() || changes.changed().await.is_err() {
             return;
         }
     }

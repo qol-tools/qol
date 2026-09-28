@@ -196,9 +196,7 @@ async fn watch_authority(
 
 fn authority_error(error: AuthorityError) -> SessionError {
     match error {
-        AuthorityError::UnknownPeer | AuthorityError::Revoked | AuthorityError::LocalPeer => {
-            SessionError::Untrusted
-        }
+        AuthorityError::UnknownPeer | AuthorityError::LocalPeer => SessionError::Untrusted,
         AuthorityError::Faulted
         | AuthorityError::StaleRevision { .. }
         | AuthorityError::RevisionExhausted

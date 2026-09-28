@@ -84,7 +84,6 @@ pub enum EnrollmentRejection {
     Expired,
     Cancelled,
     Conflict,
-    Revoked,
     Capacity,
     Unavailable,
     UnknownTransaction,

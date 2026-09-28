@@ -54,7 +54,6 @@ fn reject_old_activation(shared: &SharedState, old: &AuthoritySummary, peer_id: 
     for request in [
         Request::Peers { cursor },
         Request::Grants { peer_id, cursor },
-        Request::Tombstones { cursor },
     ] {
         assert_eq!(
             shared.peer_admin(request),
@@ -123,7 +122,7 @@ fn delayed_mutations_cannot_cross_session_replacement_at_the_same_revision() {
 fn persistent_reopen_invalidates_stamps_and_pages_without_changing_identity_or_revision() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peer_id = super::persistent::populated(&root, 1, 0)[0];
+    let peer_id = super::persistent::populated(&root, 1)[0];
     let host = host_at(&root, false);
     let shared = attach(&host);
     let old = authority(&shared);
@@ -147,7 +146,6 @@ fn persistent_reopen_invalidates_stamps_and_pages_without_changing_identity_or_r
     for request in [
         Request::Peers { cursor },
         Request::Grants { peer_id, cursor },
-        Request::Tombstones { cursor },
     ] {
         assert!(!matches!(
             shared.peer_admin(request),
@@ -174,7 +172,6 @@ fn persistent_reopen_invalidates_stamps_and_pages_without_changing_identity_or_r
         assert_eq!(activation_id, current.activation_id);
     }
     assert_eq!(authority(&shared).peer_count, 0);
-    assert_eq!(authority(&shared).tombstone_count, 0);
 }
 
 #[test]
@@ -220,7 +217,7 @@ fn randomness_failure_precedes_every_explicit_constructor_and_creates_no_storage
 fn randomness_failure_during_startup_does_not_acquire_the_existing_writer() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    super::persistent::populated(&root, 0, 0);
+    super::persistent::populated(&root, 0);
     let snapshot = std::fs::read(root.join("state.json")).unwrap();
     let host = PeerHostHandle::new(
         Ok(root.clone()),

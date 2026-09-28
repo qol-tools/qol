@@ -7,7 +7,6 @@ pub(super) enum Pages {
     Peers,
     Outbound,
     Grants(PeerId),
-    Tombstones,
     Phones,
 }
 
@@ -19,7 +18,6 @@ impl Pages {
             },
             Self::Peers => Request::Peers { cursor },
             Self::Grants(peer_id) => Request::Grants { peer_id, cursor },
-            Self::Tombstones => Request::Tombstones { cursor },
             Self::Phones => Request::Pointz {
                 request: qol_peers::admin::PointzRequest::Devices { cursor },
             },
@@ -42,7 +40,6 @@ impl Pages {
             {
                 validate(page, cursor, total)
             }
-            (Self::Tombstones, Response::Tombstones { page }) => validate(page, cursor, total),
             (Self::Phones, Response::PointzDevices { page }) => validate(page, cursor, total),
             _ => bail!("peer administration returned an unexpected page response"),
         }

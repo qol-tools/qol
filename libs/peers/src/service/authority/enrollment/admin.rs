@@ -9,15 +9,8 @@ use crate::service::{PeerAuthority, PeerPin};
 use crate::StoreRevision;
 
 impl PeerAuthority {
-    pub(in crate::service) fn check_enrollment_remote(
-        &self,
-        peer: Option<crate::PeerId>,
-    ) -> Result<(), EnrollmentError> {
-        let inner = self.lock()?;
-        inner.ensure_ready()?;
-        if peer.is_some_and(|peer| inner.state.is_revoked(peer)) {
-            return Err(EnrollmentError::Rejected(EnrollmentRejection::Revoked));
-        }
+    pub(in crate::service) fn check_enrollment_ready(&self) -> Result<(), EnrollmentError> {
+        self.lock()?.ensure_ready()?;
         Ok(())
     }
 

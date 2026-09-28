@@ -85,7 +85,6 @@ fn session_lifecycle_exact_grants_and_revocation_share_one_state() {
     assert_eq!(projection.lifetime, AuthorityLifetime::Session);
     assert_eq!(projection.status, AuthorityStatus::Ready);
     assert!(projection.peers.is_empty());
-    assert!(projection.tombstones.is_empty());
     let wire = serde_json::to_value(&projection).unwrap();
     assert_eq!(wire["revision"], "3");
     assert!(wire.get("identity").is_none());

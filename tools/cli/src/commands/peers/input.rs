@@ -56,7 +56,6 @@ pub(super) fn parse(args: &[&str], stdin: &mut impl Read) -> Result<Action> {
         ["status"] => Action::Direct(Request::Status),
         ["list"] => Action::Pages(Pages::Peers),
         ["grants", peer] => Action::Pages(Pages::Grants(parse_peer(peer)?)),
-        ["tombstones"] => Action::Pages(Pages::Tombstones),
         ["session", name] => Action::Start(Request::StartSession {
             name: name.to_string(),
         }),

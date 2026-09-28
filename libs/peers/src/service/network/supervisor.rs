@@ -298,7 +298,6 @@ impl Supervisor {
             .trusted
             .iter()
             .copied()
-            .chain(projection.tombstones)
             .chain([projection.peer_id])
             .collect();
         if self.nearby.retain(&self.ignored) {

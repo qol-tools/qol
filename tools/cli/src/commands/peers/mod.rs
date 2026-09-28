@@ -14,7 +14,7 @@ use qol_runtime::PlatformStateClient;
 use input::Action;
 
 const OUTPUT: &str = "Canonical qol-peers admin::Response values: one JSON object per line by default, or a JSON array with --json. Typed Error responses are canonical JSON on stderr and exit nonzero. Failed pagination emits no partial snapshot.";
-const DETAILS: &str = "Uses the existing local tray runtime without starting it. Convenience mutations read Status once, then submit once; stale authority stamps and unknown outcomes are never retried. list, grants and tombstones follow one snapshot. request dispatches one canonical admin::Request from bounded stdin; set-grants reads a canonical OperationKey array. prepare and redeem read the raw invitation document from bounded stdin, never arguments. Only invite exports a secret. A queued attempt is not a bilateral link; inspect pending, approve explicitly, then inspect attempt. Help works offline.";
+const DETAILS: &str = "Uses the existing local tray runtime without starting it. Convenience mutations read Status once, then submit once; stale authority stamps and unknown outcomes are never retried. list and grants follow one snapshot. request dispatches one canonical admin::Request from bounded stdin; set-grants reads a canonical OperationKey array. prepare and redeem read the raw invitation document from bounded stdin, never arguments. Only invite exports a secret. A queued attempt is not a bilateral link; inspect pending, approve explicitly, then inspect attempt. Help works offline.";
 
 type Runner = fn(Option<&str>, &[String]) -> Result<Vec<Response>>;
 
@@ -26,7 +26,7 @@ fn command_with_runner(run: Runner) -> Command {
     let mut command = handlers(
         Command::new("peers")
             .about("Inspect and control the local peer authority.")
-            .usage("qol peers <status|list|grants|tombstones|session|create|open|stop|rename|revoke|set-grants|network|invite|cancel-invitation|pending|approve|reject|prepare|redeem|recover|abandon|resume|outbound|attempt|request|pointz|invoke|outcome|reconcile|cancel|requests> [--json]")
+            .usage("qol peers <status|list|grants|session|create|open|stop|rename|revoke|set-grants|network|invite|cancel-invitation|pending|approve|reject|prepare|redeem|recover|abandon|resume|outbound|attempt|request|pointz|invoke|outcome|reconcile|cancel|requests> [--json]")
             .detail(DETAILS),
         None,
         run,
@@ -96,7 +96,6 @@ fn command_with_runner(run: Runner) -> Command {
         ),
         ("list", "", "Read all peer pages from one fresh snapshot."),
         ("grants", " PEER", "Read all grant pages for one peer."),
-        ("tombstones", "", "Read all tombstone pages."),
         (
             "session",
             " NAME",

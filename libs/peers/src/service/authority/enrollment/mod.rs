@@ -164,9 +164,6 @@ fn check_remote(inner: &Inner, pin: &PeerPin) -> Result<(), EnrollmentError> {
     if pin == inner.state.identity.pin() {
         return Err(super::AuthorityError::LocalPeer.into());
     }
-    if inner.state.is_revoked(pin.peer_id()) {
-        return Err(EnrollmentError::Rejected(EnrollmentRejection::Revoked));
-    }
     Ok(())
 }
 

@@ -234,7 +234,7 @@ impl State {
     }
 
     pub(super) fn operation_link(&self, peer: PeerId) -> Result<&LinkOperations, Failure> {
-        if self.peer(peer).is_none() || self.is_revoked(peer) {
+        if self.peer(peer).is_none() {
             return Err(Failure::Untrusted);
         }
         self.operations

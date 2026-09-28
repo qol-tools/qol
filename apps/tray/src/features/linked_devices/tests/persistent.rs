@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::*;
 
-pub(super) fn populated(root: &Path, peers: usize, tombstones: usize) -> Vec<PeerId> {
+pub(super) fn populated(root: &Path, peers: usize) -> Vec<PeerId> {
     let authority =
         PeerAuthority::create_persistent(root, "local".into(), SystemTime::now()).unwrap();
     drop(authority);
@@ -34,13 +34,6 @@ pub(super) fn populated(root: &Path, peers: usize, tombstones: usize) -> Vec<Pee
         ids.push(pin.peer_id());
         json!({"pin": {"peer_id": pin.peer_id(), "spki": pin.spki_der()}, "name": "\\\"".repeat(128), "grants": grants})
     }).collect::<Vec<_>>());
-    snapshot["tombstones"] = json!((0..tombstones)
-        .map(|_| {
-            let identity = Identity::generate(SystemTime::now()).unwrap();
-            let pin = identity.pin();
-            json!({"peer_id": pin.peer_id(), "spki": pin.spki_der()})
-        })
-        .collect::<Vec<_>>());
     snapshot["version"] = json!(3);
     snapshot.as_object_mut().unwrap().remove("operations");
     fs::write(path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
@@ -52,7 +45,7 @@ pub(super) fn populated(root: &Path, peers: usize, tombstones: usize) -> Vec<Pee
 fn editing_grants_preserves_selected_unavailable_permissions_but_cannot_add_unknown_ones() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peer_id = populated(&root, 1, 0)[0];
+    let peer_id = populated(&root, 1)[0];
     let host = host_at(&root, false);
     let shared = attach(&host);
     let expected = authority(&shared).expected();
@@ -111,7 +104,7 @@ fn editing_grants_preserves_selected_unavailable_permissions_but_cannot_add_unkn
 fn populated_fixture_commits_migration_before_reopen_and_preserves_link_epochs() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let ids = populated(&root, 2, 1);
+    let ids = populated(&root, 2);
     let path = root.join("state.json");
     let completed = fs::read(&path).unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&completed).unwrap();
@@ -120,7 +113,6 @@ fn populated_fixture_commits_migration_before_reopen_and_preserves_link_epochs()
     let original = authority.projection().unwrap();
     assert_eq!(original.revision, StoreRevision::new(1));
     assert_eq!(original.peers.len(), ids.len());
-    assert!(original.tombstones.is_empty());
     for id in &ids {
         assert_eq!(
             original
@@ -196,7 +188,7 @@ fn absent_incomplete_and_corrupt_roots_have_distinct_outcomes_without_repair() {
 fn persistent_reopen_preserves_identity_grants_and_excludes_a_competing_writer() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peers = populated(&root, 1, 0);
+    let peers = populated(&root, 1);
     let host = host_at(&root, false);
     let shared = attach(&host);
     let initial = authority(&shared);
@@ -245,7 +237,7 @@ fn promotion_opens_only_after_predecessor_shutdown_and_never_retries() {
     for release_first in [false, true] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("peers");
-        populated(&root, 0, 0);
+        populated(&root, 0);
         let predecessor = host_at(&root, false);
         let initial = authority(&attach(&predecessor));
         let shadow = host_at(&root, true);
@@ -275,7 +267,7 @@ fn promotion_opens_only_after_predecessor_shutdown_and_never_retries() {
 fn faulted_authority_remains_visible_and_rejects_mutations_until_stop_and_reopen() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peer = populated(&root, 1, 0)[0];
+    let peer = populated(&root, 1)[0];
     let host = host_at(&root, false);
     let shared = attach(&host);
     fs::set_permissions(root.join("state.json"), fs::Permissions::from_mode(0o644)).unwrap();
@@ -320,7 +312,7 @@ fn faulted_authority_remains_visible_and_rejects_mutations_until_stop_and_reopen
 fn unlinking_and_stale_revisions_are_observed_through_the_shared_route() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peer = populated(&root, 1, 0)[0];
+    let peer = populated(&root, 1)[0];
     let host = host_at(&root, false);
     let shared = attach(&host);
     let initial = authority(&shared);
@@ -333,7 +325,6 @@ fn unlinking_and_stale_revisions_are_observed_through_the_shared_route() {
         Response::Changed { .. }
     ));
     assert_eq!(authority(&shared).peer_count, 0);
-    assert_eq!(authority(&shared).tombstone_count, 0);
     assert_eq!(
         shared.peer_admin(Request::Rename {
             expected,
@@ -380,7 +371,7 @@ fn profile_selection_does_not_change_authority_root_or_snapshot() {
     let base = crate::paths::base_data_dir().unwrap();
     fs::create_dir_all(&base).unwrap();
     let root = base.join("peers");
-    populated(&root, 1, 0);
+    populated(&root, 1);
     let host = host_at(&root, false);
     let shared = attach(&host);
     let initial = authority(&shared);
@@ -400,7 +391,7 @@ fn profile_selection_does_not_change_authority_root_or_snapshot() {
 fn grant_replacement_uses_current_exact_exposure_and_allows_clear_after_plugin_removal() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peer = populated(&root, 1, 0)[0];
+    let peer = populated(&root, 1)[0];
     let plugin_root = temporary.path().join("plugin");
     fs::create_dir(&plugin_root).unwrap();
     fs::write(plugin_root.join("plugin-bin"), "fixture").unwrap();
@@ -532,7 +523,7 @@ fn assert_reopened(reopened: &AuthoritySummary, previous: &AuthoritySummary) {
 fn reducing_grants_preserves_unavailable_operations_but_cannot_add_another() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
-    let peer = populated(&root, 1, 0)[0];
+    let peer = populated(&root, 1)[0];
     let host = host_at(&root, false);
     let shared = attach(&host);
     let expected = authority(&shared).expected();

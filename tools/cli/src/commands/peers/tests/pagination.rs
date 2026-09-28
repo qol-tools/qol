@@ -65,21 +65,6 @@ fn every_projection_follows_only_returned_cursors_from_fresh_status() {
                 },
             ],
         ),
-        (
-            Pages::Tombstones,
-            [
-                Response::Tombstones {
-                    page: page(peer(), 0),
-                },
-                Response::Tombstones {
-                    page: page(peer(), 1),
-                },
-            ],
-            [
-                Request::Tombstones { cursor: cursor(0) },
-                Request::Tombstones { cursor: cursor(1) },
-            ],
-        ),
     ];
     for (kind, replies, requests) in cases {
         let mut client =
@@ -214,7 +199,7 @@ fn rejects_wrong_page_kind_wrong_peer_and_premature_end() {
 
 #[test]
 fn empty_projection_preserves_its_single_canonical_page() {
-    let response = Response::Tombstones {
+    let response = Response::Peers {
         page: Page {
             cursor: cursor(0),
             total: 0,
@@ -224,7 +209,7 @@ fn empty_projection_preserves_its_single_canonical_page() {
     };
     let mut client = FakeClient::new([Ok(status()), Ok(response.clone())]);
     assert_eq!(
-        execute(Action::Pages(Pages::Tombstones), &mut |r| client.call(r)).unwrap(),
+        execute(Action::Pages(Pages::Peers), &mut |r| client.call(r)).unwrap(),
         [response]
     );
     assert_eq!(client.requests.len(), 2);

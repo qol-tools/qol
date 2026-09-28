@@ -20,9 +20,7 @@ use tokio::time::Instant;
 impl From<AuthorityError> for Failure {
     fn from(error: AuthorityError) -> Self {
         match error {
-            AuthorityError::UnknownPeer | AuthorityError::Revoked | AuthorityError::LocalPeer => {
-                Self::Untrusted
-            }
+            AuthorityError::UnknownPeer | AuthorityError::LocalPeer => Self::Untrusted,
             AuthorityError::Capacity => Self::Capacity,
             _ => Self::Storage,
         }
