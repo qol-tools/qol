@@ -77,17 +77,21 @@ fn nearby(fixture: &Fixture) -> Vec<NearbyDevice> {
     }
 }
 
-async fn until<T>(mut probe: impl FnMut() -> Option<T>) -> T {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Some(value) = probe() {
-                return value;
+#[track_caller]
+fn until<T>(mut probe: impl FnMut() -> Option<T>) -> impl std::future::Future<Output = T> {
+    let caller = std::panic::Location::caller();
+    async move {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(value) = probe() {
+                    return value;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("condition within ten seconds")
+        })
+        .await
+        .unwrap_or_else(|_| panic!("condition at {caller} within ten seconds"))
+    }
 }
 
 fn peer_id(fixture: &Fixture) -> PeerId {
