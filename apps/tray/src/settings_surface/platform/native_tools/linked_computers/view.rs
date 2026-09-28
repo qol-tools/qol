@@ -26,6 +26,7 @@ use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
 use qol_peers::admin::{Request, Response};
 use qol_peers::enrollment::ExportedInvitation;
+use qol_peers::PeerId;
 use qol_runtime::local_http::Method;
 use qol_runtime::PlatformStateClient;
 
@@ -44,6 +45,7 @@ pub(super) struct LinkedComputersView {
     snapshot: Option<Snapshot>,
     catalog: Option<Vec<CatalogOperation>>,
     withheld: Vec<crate::plugins::PluginId>,
+    open: Option<(PeerId, usize)>,
     stopped: bool,
     enabling: bool,
     source: Option<(ExportedInvitation, InvitationInfo)>,
@@ -73,6 +75,7 @@ impl LinkedComputersView {
             snapshot: None,
             catalog: None,
             withheld: Vec::new(),
+            open: None,
             stopped: false,
             enabling: false,
             source: None,
@@ -244,13 +247,31 @@ impl LinkedComputersView {
         next
     }
 
-    fn rows(&self) -> Vec<Row> {
-        model::rows(
+    fn card(&self) -> Option<(String, Vec<Row>)> {
+        let (peer_id, _) = self.open?;
+        model::card(
             self.snapshot.as_ref(),
             self.catalog.as_deref(),
+            &self.withheld,
+            peer_id,
+        )
+    }
+
+    fn close_card(&mut self) {
+        if let Some((_, selected)) = self.open.take() {
+            self.selected = selected;
+            self.list.selected = selected;
+        }
+    }
+
+    fn rows(&self) -> Vec<Row> {
+        if let Some((_, rows)) = self.card() {
+            return rows;
+        }
+        model::rows(
+            self.snapshot.as_ref(),
             self.source.as_ref(),
             self.invitation.as_ref(),
-            &self.withheld,
         )
     }
 
@@ -292,6 +313,11 @@ impl LinkedComputersView {
                     None => self.withheld.push(plugin),
                 }
             }
+            Action::Open(peer_id) => {
+                self.open = Some((peer_id, self.selected));
+                self.selected = 0;
+                self.list.reset();
+            }
             Action::Paste => self.paste(cx),
             Action::Copy => {
                 if let Some(Response::Invitation { document, .. }) = &self.invitation {
@@ -302,7 +328,12 @@ impl LinkedComputersView {
                     ));
                 }
             }
-            Action::Send(request) => self.work(Some(request), cx),
+            Action::Send(request) => {
+                if matches!(request, Request::Nearby { .. } | Request::Revoke { .. }) {
+                    self.close_card();
+                }
+                self.work(Some(request), cx)
+            }
         }
         cx.notify();
     }
@@ -414,8 +445,12 @@ impl LinkedComputersView {
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match escape_step(0, false, true) {
-            EscapeStep::CloseFilter | EscapeStep::PopCard => {}
+        match escape_step(usize::from(self.open.is_some()), false, true) {
+            EscapeStep::CloseFilter => {}
+            EscapeStep::PopCard => {
+                self.close_card();
+                cx.notify();
+            }
             EscapeStep::AscendRail | EscapeStep::Dismiss => {
                 self.suspend(cx);
                 (self.on_back)(window, cx);
@@ -593,7 +628,10 @@ impl LinkedComputersView {
 
 impl CustomSettingsBreadcrumbs for LinkedComputersView {
     fn settings_breadcrumbs(&self) -> Vec<SettingsDestination> {
-        Vec::new()
+        self.card()
+            .and_then(|(title, _)| SettingsDestination::new(title).ok())
+            .into_iter()
+            .collect()
     }
 
     fn settings_hints(&self) -> Option<CustomHints> {
@@ -654,6 +692,9 @@ impl Render for LinkedComputersView {
             self.poll(cx);
         }
         self.start_polling(cx);
+        if self.open.is_some() && self.card().is_none() {
+            self.close_card();
+        }
         let rows = self.rows();
         self.sync_selection(&rows);
         let busy = self.pending && focused && window.is_window_active() && !self.refresh_on_focus;

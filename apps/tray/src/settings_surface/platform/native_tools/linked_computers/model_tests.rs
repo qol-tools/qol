@@ -1,4 +1,4 @@
-use super::{rows, Action, Control};
+use super::{card, rows, Action, Control};
 use crate::features::linked_computers::settings::{InvitationInfo, Snapshot};
 use qol_peers::admin::{
     ActivationId, AuthoritySummary, EnrollmentRequest, Lifecycle, PeerSummary, Request, Status,
@@ -63,7 +63,9 @@ fn confirmed_grant_removal_freezes_peer_and_stamp_and_retains_other_hidden_grant
         grant_count: 2,
     });
     snapshot.grants.push((peer_id, grants.clone()));
-    let requests: Vec<_> = rows(Some(&snapshot), None, None, None, &[])
+    let requests: Vec<_> = card(Some(&snapshot), None, &[], peer_id)
+        .unwrap()
+        .1
         .into_iter()
         .filter(|row| row.verb == Some("remove"))
         .filter_map(|row| match row.action {
@@ -118,7 +120,7 @@ fn recovery_uses_the_original_transaction_and_only_its_matching_invitation_endpo
                 endpoints: endpoints.clone(),
             },
         );
-        let requests: Vec<_> = rows(Some(&snapshot), None, Some(&source), None, &[])
+        let requests: Vec<_> = rows(Some(&snapshot), Some(&source), None)
             .into_iter()
             .filter_map(|row| match row.action {
                 Some(Action::Send(Request::Enrollment { request })) => Some(request),
@@ -150,7 +152,7 @@ fn unavailable_views_have_no_mutating_controls_and_connection_labels_require_ses
         name: "remote".into(),
         grant_count: 0,
     });
-    assert!(rows(Some(&snapshot), None, None, None, &[])
+    assert!(rows(Some(&snapshot), None, None)
         .iter()
         .any(|row| row.detail.contains("Not connected at last refresh")));
     let nonce = "AAAAAAAAAAAAAAAAAAAAAA".parse().unwrap();
@@ -162,16 +164,15 @@ fn unavailable_views_have_no_mutating_controls_and_connection_labels_require_ses
             remote: nonce,
         },
     });
-    assert!(rows(Some(&snapshot), None, None, None, &[])
-        .iter()
-        .any(|row| row
-            .detail
-            .contains("Authenticated connection at last refresh")));
+    assert!(rows(Some(&snapshot), None, None).iter().any(|row| row
+        .detail
+        .contains("Authenticated connection at last refresh")));
     for lifecycle in [Lifecycle::Stopping, Lifecycle::Standby] {
         snapshot.status.lifecycle = lifecycle;
-        assert!(!rows(Some(&snapshot), None, None, None, &[])
+        assert!(!rows(Some(&snapshot), None, None)
             .iter()
             .any(|row| matches!(row.action, Some(Action::Send(_)))));
+        assert!(card(Some(&snapshot), None, &[], peer_id).is_none());
     }
 }
 
@@ -207,7 +208,9 @@ fn permission_additions_preserve_unavailable_grants_and_freeze_the_displayed_aut
             description: key.name.clone(),
         })
         .collect();
-    let presented = rows(Some(&snapshot), Some(&catalog), None, None, &[]);
+    let presented = card(Some(&snapshot), Some(&catalog), &[], peer_id)
+        .unwrap()
+        .1;
     let requests: Vec<_> = presented
         .into_iter()
         .filter(|row| row.control == Control::Toggle(false))
@@ -227,7 +230,7 @@ fn permission_additions_preserve_unavailable_grants_and_freeze_the_displayed_aut
     );
     assert_eq!(snapshot.grants[0].1, keys[..2]);
     for catalog in [None, Some([].as_slice())] {
-        let presented = rows(Some(&snapshot), catalog, None, None, &[]);
+        let presented = card(Some(&snapshot), catalog, &[], peer_id).unwrap().1;
         assert!(!presented
             .iter()
             .any(|row| matches!(row.control, Control::Toggle(_))
@@ -286,7 +289,7 @@ fn phone_removal_uses_the_displayed_stamp_and_legacy_pointz_offers_no_controls()
         paired_at_ms: 1,
     });
 
-    let shown = rows(Some(&snapshot), Some(&[]), None, None, &[]);
+    let shown = rows(Some(&snapshot), None, None);
 
     assert!(shown
         .iter()
@@ -311,7 +314,7 @@ fn phone_removal_uses_the_displayed_stamp_and_legacy_pointz_offers_no_controls()
     );
 
     snapshot.pointz.as_mut().unwrap().plugin = PointzPlugin::Legacy;
-    let legacy = rows(Some(&snapshot), Some(&[]), None, None, &[]);
+    let legacy = rows(Some(&snapshot), None, None);
     assert!(!legacy.iter().any(|row| row.label == "Remove phone"));
     assert!(legacy.iter().any(|row| row.label == "PointZ"));
 }
@@ -321,7 +324,7 @@ fn linking_that_is_off_offers_to_turn_it_on() {
     let mut snapshot = snapshot();
     snapshot.status.authority = None;
     snapshot.status.lifecycle = Lifecycle::Inactive;
-    let shown = rows(Some(&snapshot), None, None, None, &[]);
+    let shown = rows(Some(&snapshot), None, None);
     let row = shown.iter().find(|row| row.label == "Linking").unwrap();
     assert!(matches!(row.action, Some(Action::Send(Request::Enable))));
     assert_eq!(row.control, Control::Toggle(false));
@@ -355,7 +358,7 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
         name: "Desk".into(),
         link: None,
     });
-    let shown = rows(Some(&snapshot), Some(&catalog), None, None, &[]);
+    let shown = rows(Some(&snapshot), None, None);
     let desk = shown.iter().find(|row| row.label == "Desk").unwrap();
     assert!(matches!(
         &desk.action,
@@ -370,13 +373,29 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
         state: NearbyState::Confirm {},
     });
     let withheld = [PluginId::new("qol-media")];
-    let shown = rows(Some(&snapshot), Some(&catalog), None, None, &withheld);
+    let shown = rows(Some(&snapshot), None, None);
     let desk = shown
         .iter()
         .find(|row| row.label == "Desk \u{b7} 042 917")
         .unwrap();
-    assert_eq!(desk.control, Control::Chip);
-    let Some(Action::Send(request)) = &desk.action else {
+    assert!(matches!(desk.action, Some(Action::Open(id)) if id == peer_id));
+    assert!(matches!(
+        &desk.remove,
+        Some((
+            "decline",
+            Action::Send(Request::Nearby {
+                request: NearbyRequest::Decline { .. }
+            })
+        ))
+    ));
+    assert!(!shown
+        .iter()
+        .any(|row| matches!(row.action, Some(Action::Toggle(_)))));
+    let (title, opened) = card(Some(&snapshot), Some(&catalog), &withheld, peer_id).unwrap();
+    assert_eq!(title, "Desk");
+    let link = &opened[0];
+    assert_eq!(link.control, Control::Chip);
+    let Some(Action::Send(request)) = &link.action else {
         panic!("a shown code must be confirmable");
     };
     assert_eq!(
@@ -389,7 +408,7 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
             },
         }
     );
-    let toggles: Vec<_> = shown
+    let toggles: Vec<_> = opened
         .iter()
         .filter(|row| matches!(row.action, Some(Action::Toggle(_))))
         .map(|row| (row.label.as_str(), row.control.clone()))
@@ -402,13 +421,10 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
         ]
     );
     assert!(matches!(
-        &desk.remove,
-        Some((
-            "decline",
-            Action::Send(Request::Nearby {
-                request: NearbyRequest::Decline { .. }
-            })
-        ))
+        &opened.last().unwrap().action,
+        Some(Action::Send(Request::Nearby {
+            request: NearbyRequest::Decline { .. }
+        }))
     ));
     let headers: Vec<_> = shown
         .iter()
@@ -422,7 +438,7 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
 
 #[test]
 fn every_group_opens_with_a_header_and_headers_carry_no_action() {
-    let shown = rows(Some(&snapshot()), Some(&[]), None, None, &[]);
+    let shown = rows(Some(&snapshot()), None, None);
     assert!(shown[0].header);
     assert!(shown
         .iter()
@@ -442,4 +458,41 @@ fn every_group_opens_with_a_header_and_headers_carry_no_action() {
             "other networks"
         ]
     );
+}
+
+#[test]
+fn a_linked_computer_is_one_row_whose_card_holds_its_permissions() {
+    use crate::features::linked_computers::settings::CatalogOperation;
+    let mut snapshot = snapshot();
+    let peer_id = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        .parse()
+        .unwrap();
+    snapshot.peers.push(PeerSummary {
+        peer_id,
+        name: "remote".into(),
+        grant_count: 0,
+    });
+    let catalog = [CatalogOperation {
+        key: OperationKey::new(
+            crate::plugins::manifest::PluginUid::new("qol-bluetooth"),
+            OperationKind::Action,
+            "take_over",
+        ),
+        plugin_id: crate::plugins::PluginId::new("qol-bluetooth"),
+        description: "Moves devices".into(),
+    }];
+    let shown = rows(Some(&snapshot), None, None);
+    assert!(!shown
+        .iter()
+        .any(|row| matches!(row.control, Control::Toggle(_)) && row.label != "Linking"));
+    let remote = shown.iter().find(|row| row.label == "remote").unwrap();
+    assert!(matches!(remote.action, Some(Action::Open(id)) if id == peer_id));
+    assert!(matches!(
+        remote.remove,
+        Some(("unlink", Action::Send(Request::Revoke { .. })))
+    ));
+    let (title, opened) = card(Some(&snapshot), Some(&catalog), &[], peer_id).unwrap();
+    assert_eq!(title, "remote");
+    let labels: Vec<_> = opened.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(labels, ["Can use Bluetooth", "Unlink"]);
 }
