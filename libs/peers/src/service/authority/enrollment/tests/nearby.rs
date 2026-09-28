@@ -219,3 +219,37 @@ async fn a_stale_join_toward_the_joiner_does_not_block_linking_nearby() {
         .collect();
     assert_eq!(states, vec![(stale, OutboundEnrollmentState::Abandoned {})]);
 }
+
+#[tokio::test]
+async fn a_new_nearby_link_replaces_an_abandoned_redemption() {
+    let inviter = session("Laptop");
+    let joiner = session("Desk");
+    let first = nearby(&inviter, &joiner).await.0.unwrap();
+    let abandoned = joiner
+        .prepare_nearby_join(revision(&joiner), &first.invitation)
+        .unwrap();
+    let reserved = async {
+        let mut events = inviter.watch_enrollment();
+        while !inviter.inbound_nearby().unwrap()[0].redeemed {
+            events.changed().await.unwrap();
+        }
+    };
+    tokio::select! {
+        _ = redeem(&inviter, &joiner, &first, abandoned) => panic!("redeemed without approval"),
+        () = reserved => {},
+    }
+    joiner.abandon_join(revision(&joiner), abandoned).unwrap();
+    let offer = nearby(&inviter, &joiner).await.0.unwrap();
+    let peer = joiner.local_pin().unwrap().peer_id();
+    inviter
+        .confirm_nearby(revision(&inviter), peer, Vec::new())
+        .unwrap();
+    let transaction = joiner
+        .prepare_nearby_join(revision(&joiner), &offer.invitation)
+        .unwrap();
+    let outcome = redeem(&inviter, &joiner, &offer, transaction).await;
+    assert!(
+        matches!(outcome, EnrollmentOutcome::Completed(_)),
+        "{outcome:?}"
+    );
+}

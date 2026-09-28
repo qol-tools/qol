@@ -80,11 +80,10 @@ impl PeerAuthority {
                 return Err(EnrollmentError::Rejected(EnrollmentRejection::Conflict));
             }
             inner.invitations.retain(|entry| {
-                entry.reservation.is_some()
-                    || entry
-                        .nearby
-                        .as_ref()
-                        .is_none_or(|bound| bound.pin != binding.pin)
+                entry
+                    .nearby
+                    .as_ref()
+                    .is_none_or(|bound| bound.pin != binding.pin)
             });
         }
         let invitation = Invitation::create(

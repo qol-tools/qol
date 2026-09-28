@@ -211,12 +211,9 @@ fn request_rows(
                 );
             }
             NearbyState::WaitingForPeer {} => rows.push(
-                Row::new(
-                    label,
-                    format!("Now choose Link on {}", computer.name),
-                    Some(decline),
-                )
-                .chip("cancel"),
+                Row::new(label, format!("Now choose Link on {}", computer.name), None)
+                    .value("waiting", SettingsValueTone::Muted)
+                    .remove("cancel", decline),
             ),
             NearbyState::Connecting {} | NearbyState::Failed { .. } => {}
         }
