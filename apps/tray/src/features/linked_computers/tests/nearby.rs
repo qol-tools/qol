@@ -193,6 +193,26 @@ fn code(fixture: &Fixture, peer: PeerId) -> Option<qol_peers::admin::LinkCode> {
         .and_then(|link| link.code)
 }
 
+fn connected(fixture: &Fixture, peer: PeerId) -> bool {
+    fixture
+        .owner
+        .handle
+        .inner
+        .lock()
+        .unwrap()
+        .authority()
+        .unwrap()
+        .network
+        .as_ref()
+        .is_some_and(|network| {
+            network
+                .snapshot()
+                .sessions
+                .iter()
+                .any(|session| session.remote_peer == peer)
+        })
+}
+
 fn linked(fixture: &Fixture, peer: PeerId) -> bool {
     fixture
         .owner
@@ -252,6 +272,7 @@ async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
         Response::Changed { .. }
     ));
     until(|| (linked(&laptop, desk_id) && linked(&desk, laptop_id)).then_some(())).await;
+    until(|| (connected(&laptop, desk_id) && connected(&desk, laptop_id)).then_some(())).await;
     assert!(nearby(&laptop).is_empty());
     until(|| nearby(&desk).is_empty().then_some(())).await;
     laptop.close().await;

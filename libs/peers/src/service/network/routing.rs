@@ -15,6 +15,7 @@ const MAX_HINTS: usize = 8;
 #[derive(Default)]
 pub(super) struct Routes {
     pub peers: BTreeMap<PeerId, Route>,
+    seen: BTreeMap<String, (PeerId, Vec<SocketAddrV4>)>,
 }
 
 pub(super) struct Route {
@@ -27,6 +28,11 @@ pub(super) struct Route {
 impl Routes {
     pub fn retain(&mut self, trusted: &BTreeSet<PeerId>) {
         self.peers.retain(|peer, _| trusted.contains(peer));
+        for (source, (peer, endpoints)) in &self.seen {
+            if trusted.contains(peer) {
+                hint(&mut self.peers, source, *peer, endpoints);
+            }
+        }
     }
 
     pub fn resolved(
@@ -38,7 +44,7 @@ impl Routes {
         loopback: bool,
     ) {
         self.removed(&source);
-        if !trusted.contains(&peer) || source.len() > 255 {
+        if source.len() > 255 {
             return;
         }
         let endpoints: Vec<_> = endpoints
@@ -46,40 +52,57 @@ impl Routes {
             .filter(|address| valid(*address, loopback))
             .take(MAX_HINTS)
             .collect();
-        if endpoints.is_empty()
-            || (!self.peers.contains_key(&peer) && self.peers.len() >= MAX_PEERS)
-        {
+        if endpoints.is_empty() {
             return;
         }
-        let route = self.peers.entry(peer).or_insert_with(|| Route {
-            hints: Vec::new(),
-            failures: 0,
-            next: Instant::now(),
-            dialing: false,
-        });
-        for endpoint in endpoints {
-            if route.hints.len() >= MAX_HINTS {
-                break;
-            }
-            if !route
-                .hints
-                .iter()
-                .any(|hint| hint.1 == endpoint && hint.0 == source)
-            {
-                route.hints.push((source.clone(), endpoint));
-            }
+        if trusted.contains(&peer) {
+            hint(&mut self.peers, &source, peer, &endpoints);
+        }
+        if self.seen.len() < MAX_PEERS {
+            self.seen.insert(source, (peer, endpoints));
         }
     }
 
     pub fn removed(&mut self, source: &str) {
+        self.seen.remove(source);
         for route in self.peers.values_mut() {
             route.hints.retain(|hint| hint.0 != source);
         }
     }
 
     pub fn clear_hints(&mut self) {
+        self.seen.clear();
         for route in self.peers.values_mut() {
             route.hints.clear();
+        }
+    }
+}
+
+fn hint(
+    peers: &mut BTreeMap<PeerId, Route>,
+    source: &str,
+    peer: PeerId,
+    endpoints: &[SocketAddrV4],
+) {
+    if !peers.contains_key(&peer) && peers.len() >= MAX_PEERS {
+        return;
+    }
+    let route = peers.entry(peer).or_insert_with(|| Route {
+        hints: Vec::new(),
+        failures: 0,
+        next: Instant::now(),
+        dialing: false,
+    });
+    for endpoint in endpoints {
+        if route.hints.len() >= MAX_HINTS {
+            break;
+        }
+        if !route
+            .hints
+            .iter()
+            .any(|hint| hint.1 == *endpoint && hint.0 == source)
+        {
+            route.hints.push((source.to_owned(), *endpoint));
         }
     }
 }

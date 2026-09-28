@@ -57,6 +57,19 @@ async fn source_replacement_and_removal_preserve_other_sources() {
 }
 
 #[test]
+fn a_computer_seen_before_it_was_linked_is_dialed_once_linked() {
+    let mut routes = Routes::default();
+    let endpoint = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 1234);
+    routes.resolved("a".into(), peer(1), vec![endpoint], &BTreeSet::new(), true);
+    assert!(routes.peers.is_empty());
+    routes.retain(&BTreeSet::from([peer(1)]));
+    assert_eq!(routes.peers[&peer(1)].endpoint(), Some(endpoint));
+    routes.removed("a");
+    routes.retain(&BTreeSet::from([peer(1)]));
+    assert_eq!(routes.peers[&peer(1)].endpoint(), None);
+}
+
+#[test]
 fn endpoints_reject_unroutable_destinations_and_gate_loopback() {
     for (ip, port, loopback, accepted) in [
         ([0, 0, 0, 0], 80, false, false),
