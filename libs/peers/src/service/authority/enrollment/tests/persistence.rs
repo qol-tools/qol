@@ -140,10 +140,7 @@ async fn restart_preserves_abandoned_history_beside_new_join_and_committed_link(
     drop(joiner);
     let joiner = PeerAuthority::open_persistent(&root, now()).unwrap();
     assert!(joiner.outbound_enrollments().unwrap().is_empty());
-    assert_eq!(
-        joiner.projection().unwrap().tombstones,
-        vec![invitation.inviter_pin().peer_id()]
-    );
+    assert!(joiner.projection().unwrap().peers.is_empty());
 }
 
 #[tokio::test]
@@ -487,7 +484,7 @@ async fn faults_and_revocation_after_reservation_are_observed_before_success() {
             approve_then_invalidate(&inviter, revoke)
         );
         let expected = if revoke {
-            EnrollmentOutcome::Rejected(EnrollmentRejection::Revoked)
+            EnrollmentOutcome::Rejected(EnrollmentRejection::Cancelled)
         } else {
             EnrollmentOutcome::Unknown {
                 transaction,
@@ -511,7 +508,7 @@ async fn faults_and_revocation_after_reservation_are_observed_before_success() {
                 assert!(matches!(
                     response.outcome,
                     ResponseOutcome::Rejected {
-                        reason: EnrollmentRejection::Revoked
+                        reason: EnrollmentRejection::Cancelled
                     }
                 ));
                 break;
@@ -535,10 +532,6 @@ async fn faults_and_revocation_after_reservation_are_observed_before_success() {
             let reopened = PeerAuthority::open_persistent(&root, now()).unwrap();
             assert!(reopened.projection().unwrap().peers.is_empty());
             assert!(reopened.inner.lock().unwrap().state.receipts.is_empty());
-            assert_eq!(
-                reopened.projection().unwrap().tombstones,
-                vec![joiner.local_pin().unwrap().peer_id()]
-            );
             continue;
         }
         let projection = inviter.projection().unwrap();

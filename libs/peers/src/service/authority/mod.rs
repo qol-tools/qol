@@ -20,7 +20,7 @@ use qol_conventions::operations::OperationKey;
 
 use super::{Identity, NormalServerConfig, PeerPin, TrustPolicy};
 use crate::{AuthorityProjection, AuthorityStatus, PeerId, PeerProjection, StoreRevision};
-use state::{validate_grant, validate_grants, validate_name, State, MAX_TOMBSTONES};
+use state::{validate_grant, validate_grants, validate_name, State};
 use storage::Storage;
 
 #[cfg(test)]
@@ -219,26 +219,11 @@ impl PeerAuthority {
         expected: StoreRevision,
         peer: PeerId,
     ) -> Result<StoreRevision, AuthorityError> {
-        self.mutate(expected, |state| {
-            if state.is_revoked(peer) {
-                return Err(AuthorityError::Revoked);
-            }
-            if state.tombstones.len() == MAX_TOMBSTONES {
-                return Err(AuthorityError::Capacity);
-            }
-            let index = state
-                .peers
-                .iter()
-                .position(|entry| entry.pin.peer_id() == peer)
-                .ok_or(AuthorityError::UnknownPeer)?;
-            let removed = state.peers.remove(index);
-            state.tombstones.push(removed.pin);
-            state
-                .receipts
-                .retain(|receipt| receipt.pin.peer_id() != peer);
-            state.outbound.retain(|join| join.pin.peer_id() != peer);
-            Ok(())
-        })
+        self.mutate(expected, |state| forget(state, peer))
+    }
+
+    pub(in crate::service) fn unlinked_by(&self, peer: PeerId) -> Result<(), AuthorityError> {
+        self.mutate_current(|state| forget(state, peer)).map(|_| ())
     }
 
     #[cfg(test)]
@@ -371,4 +356,18 @@ fn next_revision(revision: StoreRevision) -> Result<StoreRevision, AuthorityErro
         .checked_add(1)
         .map(StoreRevision::new)
         .ok_or(AuthorityError::RevisionExhausted)
+}
+
+fn forget(state: &mut State, peer: PeerId) -> Result<(), AuthorityError> {
+    let index = state
+        .peers
+        .iter()
+        .position(|entry| entry.pin.peer_id() == peer)
+        .ok_or(AuthorityError::UnknownPeer)?;
+    state.peers.remove(index);
+    state
+        .receipts
+        .retain(|receipt| receipt.pin.peer_id() != peer);
+    state.outbound.retain(|join| join.pin.peer_id() != peer);
+    Ok(())
 }

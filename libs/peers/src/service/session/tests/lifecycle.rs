@@ -54,7 +54,7 @@ async fn idle_peer_receives_only_periodic_heartbeats_and_expires_at_45_seconds()
 }
 
 #[tokio::test(start_paused = true)]
-async fn revoke_and_fault_interrupt_idle_sessions_and_release_both_ends() {
+async fn unlink_and_fault_interrupt_idle_sessions_and_release_both_ends() {
     for fault in [false, true] {
         let fixture = Fixture::new();
         let (left, right) = fixture.sessions(4096).await;
@@ -75,9 +75,15 @@ async fn revoke_and_fault_interrupt_idle_sessions_and_release_both_ends() {
             SessionError::Untrusted
         };
         assert_eq!(left, SessionOutcome::Closed(expected), "fault {fault}");
+        let (remote, still_linked) = if fault {
+            (SessionError::Transport, 1)
+        } else {
+            (SessionError::Untrusted, 0)
+        };
+        assert_eq!(right, SessionOutcome::Closed(remote), "fault {fault}");
         assert_eq!(
-            right,
-            SessionOutcome::Closed(SessionError::Transport),
+            fixture.right.projection().unwrap().peers.len(),
+            still_linked,
             "fault {fault}"
         );
         assert_eq!(fixture.drops.load(Ordering::SeqCst), 2, "fault {fault}");

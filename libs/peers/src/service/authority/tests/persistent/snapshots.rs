@@ -1,5 +1,7 @@
 use std::fs;
 
+use crate::service::TrustPolicy;
+
 use serde_json::{json, Value};
 
 use super::{
@@ -12,8 +14,6 @@ fn malformed_snapshots_are_rejected_without_repair_or_identity_replacement() {
     let cases = [
         "duplicate_peer",
         "duplicate_grant",
-        "duplicate_tombstone",
-        "active_tombstone",
         "missing_pin",
         "mismatched_peer_id",
         "mismatched_local_id",
@@ -76,11 +76,6 @@ fn corrupt(case: &str, value: &mut Value) {
             .as_array_mut()
             .unwrap()
             .push(peer["grants"][0].clone()),
-        "duplicate_tombstone" => {
-            value["peers"] = json!([]);
-            value["tombstones"] = json!([stored_pin, stored_pin]);
-        }
-        "active_tombstone" => value["tombstones"] = json!([stored_pin]),
         "missing_pin" => {
             value["peers"][0].as_object_mut().unwrap().remove("pin");
         }
@@ -121,6 +116,23 @@ fn corrupt(case: &str, value: &mut Value) {
         "unknown_operation_kind" => value["peers"][0]["grants"][0]["kind"] = json!("admin"),
         other => panic!("unknown fixture {other}"),
     }
+}
+
+#[test]
+fn a_computer_blocked_by_an_older_unlink_can_link_again() {
+    let (_temporary, root, authority) = persistent();
+    drop(authority);
+    let mut value = wire(&root);
+    let blocked = pin(1);
+    value["tombstones"] = json!([{"peer_id": blocked.peer_id(), "spki": blocked.spki_der()}]);
+    write_wire(&root, &value);
+    let reopened = PeerAuthority::open_persistent(&root, now()).unwrap();
+    assert!(reopened.projection().unwrap().tombstones.is_empty());
+    assert_eq!(wire(&root)["tombstones"], json!([]));
+    reopened
+        .insert_link(revision(&reopened), blocked.clone(), "again".into())
+        .unwrap();
+    assert!(reopened.is_trusted(&blocked));
 }
 
 #[test]

@@ -48,6 +48,11 @@ pub(super) enum Message {
         sender_nonce: SessionNonce,
         recipient_nonce: SessionNonce,
     },
+    Unlinked {
+        version: Version,
+        sender_nonce: SessionNonce,
+        recipient_nonce: SessionNonce,
+    },
 }
 
 impl std::fmt::Debug for Message {
@@ -55,6 +60,7 @@ impl std::fmt::Debug for Message {
         formatter.write_str(match self {
             Self::Hello { .. } => "Hello",
             Self::Heartbeat { .. } => "Heartbeat",
+            Self::Unlinked { .. } => "Unlinked",
             Self::OperationEpoch { .. } => "OperationEpoch",
             Self::Operation { .. } => "Operation(redacted)",
         })

@@ -278,11 +278,7 @@ fn inbound_commit_can_coexist_with_abandoned_history_and_revocation_cleans_both(
     local.revoke(revision(&local), receipt.joiner).unwrap();
     assert!(local.outbound_enrollments().unwrap().is_empty());
     assert!(local.inner.lock().unwrap().state.receipts.is_empty());
-    assert_eq!(local.projection().unwrap().tombstones, vec![receipt.joiner]);
-    assert_eq!(
-        local.prepare_join(revision(&local), &invitation),
-        Err(EnrollmentError::Rejected(EnrollmentRejection::Revoked))
-    );
+    assert!(local.projection().unwrap().peers.is_empty());
     assert_eq!(
         local.resume_join(revision(&local), original),
         Err(EnrollmentError::Rejected(

@@ -77,10 +77,9 @@ fn failed_commit_denies_all_trust_and_grants_until_durable_reconciliation() {
             before.revision.value() + u64::from(committed)
         );
         if committed {
-            assert_eq!(
-                reopened.insert_link(revision(&reopened), pin(1), "revived".into()),
-                Err(AuthorityError::Revoked)
-            );
+            reopened
+                .insert_link(revision(&reopened), pin(1), "revived".into())
+                .unwrap();
         }
     }
 }

@@ -386,7 +386,7 @@ async fn lost_approval_reply_reconciles_original_transaction_without_token() {
 }
 
 #[tokio::test]
-async fn revoked_receipt_cannot_recover_or_reinsert_a_link() {
+async fn unlinked_receipt_cannot_recover_or_reinsert_a_link() {
     let inviter = authority("inviter");
     let joiner = authority("joiner");
     let transaction = enrolled(&inviter, &joiner).await;
@@ -398,14 +398,8 @@ async fn revoked_receipt_cannot_recover_or_reinsert_a_link() {
         joiner.recover_enrollment(client, transaction),
         inviter.serve_enrollment(server)
     );
-    assert_eq!(
-        joined.unwrap(),
-        EnrollmentOutcome::Rejected(EnrollmentRejection::Revoked)
-    );
-    assert_eq!(
-        accepted.unwrap(),
-        EnrollmentOutcome::Rejected(EnrollmentRejection::Revoked)
-    );
+    assert!(!matches!(joined.unwrap(), EnrollmentOutcome::Completed(_)));
+    assert!(!matches!(accepted, Ok(EnrollmentOutcome::Completed(_))));
     assert!(inviter.projection().unwrap().peers.is_empty());
     assert!(!inviter.is_trusted(&joiner.local_pin().unwrap()));
 }

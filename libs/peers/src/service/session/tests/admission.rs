@@ -86,7 +86,7 @@ fn outbound_config_uses_only_current_authority_links() {
     revoke(&fixture.left, &fixture.right);
     assert_eq!(
         fixture.left.normal_client_config(remote).err(),
-        Some(AuthorityError::Revoked)
+        Some(AuthorityError::UnknownPeer)
     );
     fixture.left.fault_for_session_test();
     assert_eq!(

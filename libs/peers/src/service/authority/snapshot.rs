@@ -317,12 +317,7 @@ pub(super) fn decode(bytes: &[u8], now: SystemTime) -> Result<(State, bool), Aut
                 })
             })
             .collect::<Result<_, AuthorityError>>()?,
-        tombstones: snapshot
-            .tombstones
-            .0
-            .into_iter()
-            .map(StoredPin::into_pin)
-            .collect::<Result<_, _>>()?,
+        tombstones: Vec::new(),
     };
     if migrating {
         state.synchronize_operations()?;
@@ -339,7 +334,10 @@ pub(super) fn decode(bytes: &[u8], now: SystemTime) -> Result<(State, bool), Aut
     {
         return Err(AuthorityError::InvalidSnapshot);
     }
-    Ok((state, renewed || migrating))
+    Ok((
+        state,
+        renewed || migrating || !snapshot.tombstones.0.is_empty(),
+    ))
 }
 
 pub(super) fn encode(state: &State) -> Result<Zeroizing<Vec<u8>>, AuthorityError> {

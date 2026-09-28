@@ -74,8 +74,15 @@ fn linked_revoked_local_and_unclaimed_computers_are_not_listed() {
         &ignored,
         false
     ));
-    assert!(nearby.retain(&BTreeSet::from([peer(4)])));
+    assert!(nearby.retain(&BTreeSet::from([peer(1), peer(4)])));
     assert!(nearby.claims().is_empty());
+    assert!(nearby.retain(&BTreeSet::new()));
+    let names: BTreeSet<_> = nearby
+        .claims()
+        .into_iter()
+        .map(|claim| claim.name)
+        .collect();
+    assert_eq!(names, BTreeSet::from(["Desk".into(), "Linked".into()]));
 }
 
 #[test]

@@ -280,6 +280,45 @@ async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
 }
 
 #[tokio::test]
+async fn unlinking_forgets_the_link_on_both_computers_and_they_can_link_again() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (laptop, desk) = pair(temporary.path()).await;
+    let laptop_id = peer_id(&laptop);
+    let desk_id = peer_id(&desk);
+    until(|| {
+        nearby(&desk)
+            .iter()
+            .any(|computer| computer.peer_id == laptop_id)
+            .then_some(())
+    })
+    .await;
+    link(&desk, laptop_id);
+    until(|| code(&desk, laptop_id)).await;
+    until(|| code(&laptop, desk_id)).await;
+    confirm(&laptop, desk_id);
+    confirm(&desk, laptop_id);
+    until(|| (connected(&laptop, desk_id) && connected(&desk, laptop_id)).then_some(())).await;
+    let unlinked = laptop.shared.peer_admin(Request::Revoke {
+        expected: laptop.expected(),
+        peer_id: desk_id,
+    });
+    assert!(matches!(unlinked, Response::Changed { .. }), "{unlinked:?}");
+    until(|| (!linked(&desk, laptop_id)).then_some(())).await;
+    until(|| {
+        (nearby(&laptop)
+            .iter()
+            .any(|computer| computer.peer_id == desk_id)
+            && nearby(&desk)
+                .iter()
+                .any(|computer| computer.peer_id == laptop_id))
+        .then_some(())
+    })
+    .await;
+    laptop.close().await;
+    desk.close().await;
+}
+
+#[tokio::test]
 async fn two_computers_that_both_click_link_agree_on_one_code_and_link() {
     let temporary = tempfile::tempdir().unwrap();
     let (laptop, desk) = pair(temporary.path()).await;

@@ -78,18 +78,14 @@ fn session_lifecycle_exact_grants_and_revocation_share_one_state() {
     assert!(!observer.is_trusted(remote.pin()));
     assert!(!observer.has_grant(id, &grant("run")));
     assert_eq!(
-        authority.insert_link(third, remote.pin().clone(), "return".into()),
-        Err(AuthorityError::Revoked)
-    );
-    assert_eq!(
         authority.set_grants(third, id, vec![grant("run")]),
-        Err(AuthorityError::Revoked)
+        Err(AuthorityError::UnknownPeer)
     );
     let projection = authority.projection().unwrap();
     assert_eq!(projection.lifetime, AuthorityLifetime::Session);
     assert_eq!(projection.status, AuthorityStatus::Ready);
     assert!(projection.peers.is_empty());
-    assert_eq!(projection.tombstones, vec![id]);
+    assert!(projection.tombstones.is_empty());
     let wire = serde_json::to_value(&projection).unwrap();
     assert_eq!(wire["revision"], "3");
     assert!(wire.get("identity").is_none());

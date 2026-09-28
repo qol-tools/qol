@@ -120,7 +120,7 @@ fn populated_fixture_commits_migration_before_reopen_and_preserves_link_epochs()
     let original = authority.projection().unwrap();
     assert_eq!(original.revision, StoreRevision::new(1));
     assert_eq!(original.peers.len(), ids.len());
-    assert_eq!(original.tombstones.len(), 1);
+    assert!(original.tombstones.is_empty());
     for id in &ids {
         assert_eq!(
             original
@@ -317,7 +317,7 @@ fn faulted_authority_remains_visible_and_rejects_mutations_until_stop_and_reopen
 }
 
 #[test]
-fn revocation_and_stale_revisions_are_observed_through_the_shared_route() {
+fn unlinking_and_stale_revisions_are_observed_through_the_shared_route() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("peers");
     let peer = populated(&root, 1, 0)[0];
@@ -333,7 +333,7 @@ fn revocation_and_stale_revisions_are_observed_through_the_shared_route() {
         Response::Changed { .. }
     ));
     assert_eq!(authority(&shared).peer_count, 0);
-    assert_eq!(authority(&shared).tombstone_count, 1);
+    assert_eq!(authority(&shared).tombstone_count, 0);
     assert_eq!(
         shared.peer_admin(Request::Rename {
             expected,
@@ -354,7 +354,7 @@ fn revocation_and_stale_revisions_are_observed_through_the_shared_route() {
             grants: vec![]
         }),
         Response::Error {
-            error: AuthorityError::Revoked.into()
+            error: AuthorityError::UnknownPeer.into()
         }
     );
     assert_eq!(
@@ -368,7 +368,7 @@ fn revocation_and_stale_revisions_are_observed_through_the_shared_route() {
             }
         }),
         Response::Error {
-            error: AuthorityError::Revoked.into()
+            error: AuthorityError::UnknownPeer.into()
         }
     );
 }

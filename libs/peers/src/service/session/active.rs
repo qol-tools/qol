@@ -23,6 +23,7 @@ const HEARTBEAT_PERIOD: Duration = Duration::from_secs(15);
 const IDLE_LIMIT: Duration = Duration::from_secs(45);
 const RATE_WINDOW: Duration = Duration::from_secs(60);
 const RATE_LIMIT: usize = 64;
+const UNLINK_DEADLINE: Duration = Duration::from_secs(1);
 
 pub(super) async fn run<S: AsyncRead + AsyncWrite + Unpin>(
     session: NormalSession<S>,
@@ -45,13 +46,29 @@ pub(super) async fn run<S: AsyncRead + AsyncWrite + Unpin>(
     let pin = connection.remote_identity().pin().clone();
     let changes = authority.watch_changes();
     let (mut reader, mut writer) = split(connection);
-    tokio::select! {
+    let outcome = tokio::select! {
         biased;
         () = cancellation => SessionOutcome::Cancelled,
         error = watch_authority(&authority, &pin, changes) => SessionOutcome::Closed(error),
         error = receive(&mut reader, &authority, &pin, authenticated, opened, hub.as_deref()) => SessionOutcome::Closed(error),
         error = send(&mut writer, &authority, &pin, authenticated.generation, opened, io) => SessionOutcome::Closed(error),
+    };
+    if matches!(
+        authority.normal_session_identity(&pin),
+        Err(crate::AuthorityError::UnknownPeer)
+    ) {
+        let unlinked = Message::Unlinked {
+            version: Version,
+            sender_nonce: authenticated.generation.local,
+            recipient_nonce: authenticated.generation.remote,
+        };
+        let _ = tokio::time::timeout(
+            UNLINK_DEADLINE,
+            write_json(&mut writer, &unlinked, FrameLimit::Normal),
+        )
+        .await;
     }
+    outcome
 }
 
 async fn receive<R: AsyncRead + Unpin>(
@@ -81,7 +98,10 @@ async fn receive<R: AsyncRead + Unpin>(
             return authority_error(error);
         }
         let now = Instant::now();
-        if matches!(message, Message::Hello { .. } | Message::Heartbeat { .. }) && !rate.admit(now)
+        if matches!(
+            message,
+            Message::Hello { .. } | Message::Heartbeat { .. } | Message::Unlinked { .. }
+        ) && !rate.admit(now)
         {
             return SessionError::RateExceeded;
         }
@@ -134,6 +154,19 @@ async fn receive<R: AsyncRead + Unpin>(
                 if hub.receive(session, message).is_err() {
                     return SessionError::Protocol;
                 }
+            }
+            Message::Unlinked {
+                sender_nonce,
+                recipient_nonce,
+                ..
+            } => {
+                if sender_nonce != generation.remote || recipient_nonce != generation.local {
+                    return SessionError::Generation;
+                }
+                if let Err(error) = authority.unlinked_by(pin.peer_id()) {
+                    return authority_error(error);
+                }
+                return SessionError::Untrusted;
             }
             Message::Hello { .. } => return SessionError::Protocol,
         }

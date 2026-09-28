@@ -18,6 +18,7 @@ pub struct NearbyClaim {
 #[derive(Default)]
 pub(super) struct Nearby {
     sources: BTreeMap<String, NearbyClaim>,
+    hidden: BTreeMap<String, NearbyClaim>,
 }
 
 impl Nearby {
@@ -31,14 +32,11 @@ impl Nearby {
         loopback: bool,
     ) -> bool {
         let removed = self.sources.remove(&source).is_some();
+        self.hidden.remove(&source);
         let Some(claim) = claim else {
             return removed;
         };
-        if ignored.contains(&peer)
-            || source.len() > 255
-            || (!self.sources.values().any(|entry| entry.peer_id == peer)
-                && self.peers().len() >= MAX_NEARBY)
-        {
+        if source.len() > 255 {
             return removed;
         }
         let endpoints: Vec<_> = endpoints
@@ -51,32 +49,59 @@ impl Nearby {
         if endpoints.is_empty() {
             return removed;
         }
-        self.sources.insert(
-            source,
-            NearbyClaim {
-                peer_id: peer,
-                name: claim.name,
-                endpoints,
-            },
-        );
+        let claim = NearbyClaim {
+            peer_id: peer,
+            name: claim.name,
+            endpoints,
+        };
+        if ignored.contains(&peer) {
+            if self.hidden.len() < MAX_NEARBY {
+                self.hidden.insert(source, claim);
+            }
+            return removed;
+        }
+        if !self.admits(peer) {
+            return removed;
+        }
+        self.sources.insert(source, claim);
         true
     }
 
     pub fn removed(&mut self, source: &str) -> bool {
+        self.hidden.remove(source);
         self.sources.remove(source).is_some()
     }
 
     pub fn clear(&mut self) -> bool {
         let changed = !self.sources.is_empty();
         self.sources.clear();
+        self.hidden.clear();
         changed
     }
 
     pub fn retain(&mut self, ignored: &BTreeSet<PeerId>) -> bool {
-        let before = self.sources.len();
-        self.sources
-            .retain(|_, claim| !ignored.contains(&claim.peer_id));
-        before != self.sources.len()
+        let mut changed = false;
+        for (source, claim) in std::mem::take(&mut self.sources) {
+            if ignored.contains(&claim.peer_id) {
+                changed = true;
+                self.hidden.insert(source, claim);
+            } else {
+                self.sources.insert(source, claim);
+            }
+        }
+        for (source, claim) in std::mem::take(&mut self.hidden) {
+            if ignored.contains(&claim.peer_id) {
+                self.hidden.insert(source, claim);
+            } else if self.admits(claim.peer_id) {
+                changed = true;
+                self.sources.insert(source, claim);
+            }
+        }
+        changed
+    }
+
+    fn admits(&self, peer: PeerId) -> bool {
+        self.sources.values().any(|entry| entry.peer_id == peer) || self.peers().len() < MAX_NEARBY
     }
 
     pub fn claims(&self) -> Vec<NearbyClaim> {

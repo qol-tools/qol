@@ -26,7 +26,7 @@ fn write_wire(root: &std::path::Path, value: &serde_json::Value) {
 }
 
 #[test]
-fn restart_preserves_identity_grants_names_revision_and_irreversible_revocation() {
+fn restart_preserves_identity_grants_names_revision_and_a_relinkable_unlink() {
     let (_temporary, root, authority) = persistent();
     let local_pin = authority.local_pin().unwrap();
     let remote = pin(1);
@@ -66,14 +66,11 @@ fn restart_preserves_identity_grants_names_revision_and_irreversible_revocation(
     assert_eq!(reopened.local_pin().unwrap(), local_pin);
     assert!(!reopened.is_trusted(&remote));
     assert!(!reopened.has_grant(remote.peer_id(), &grant("replacement")));
-    assert_eq!(
-        reopened.insert_link(revision(&reopened), remote.clone(), "again".into()),
-        Err(AuthorityError::Revoked)
-    );
-    assert_eq!(
-        reopened.projection().unwrap().tombstones,
-        vec![remote.peer_id()]
-    );
+    assert!(reopened.projection().unwrap().tombstones.is_empty());
+    reopened
+        .insert_link(revision(&reopened), remote.clone(), "again".into())
+        .unwrap();
+    assert!(reopened.is_trusted(&remote));
 }
 
 #[test]
@@ -152,69 +149,39 @@ fn expired_local_certificate_renews_same_key_and_commits_before_returning() {
 }
 
 #[test]
-fn revision_overflow_and_tombstone_capacity_leave_durable_state_unchanged() {
-    for exhausted in ["revision", "tombstones"] {
-        let (_temporary, root, authority) = persistent();
-        let remote = pin(1);
-        authority
-            .insert_link(revision(&authority), remote.clone(), "remote".into())
-            .unwrap();
-        authority
-            .set_grants(revision(&authority), remote.peer_id(), vec![grant("run")])
-            .unwrap();
-        drop(authority);
-        let mut value = wire(&root);
-        if exhausted == "revision" {
-            value["revision"] = u64::MAX.to_string().into();
-        }
-        if exhausted == "tombstones" {
-            value["tombstones"] = serde_json::Value::Array(
-                (2..4098)
-                    .map(|index| {
-                        let pin = pin(index);
-                        serde_json::json!({"peer_id": pin.peer_id(), "spki": pin.spki_der()})
-                    })
-                    .collect(),
-            );
-        }
-        write_wire(&root, &value);
-        let bytes = fs::read(root.join("state.json")).unwrap();
-        let authority = PeerAuthority::open_persistent(&root, now()).unwrap();
-        let expected = if exhausted == "revision" {
-            AuthorityError::RevisionExhausted
-        } else {
-            AuthorityError::Capacity
-        };
-        assert_eq!(
-            authority.revoke(revision(&authority), remote.peer_id()),
-            Err(expected),
-            "{exhausted}"
-        );
-        assert!(authority.is_trusted(&remote), "{exhausted}");
-        assert!(
-            authority.has_grant(remote.peer_id(), &grant("run")),
-            "{exhausted}"
-        );
-        let before = authority.projection().unwrap();
-        if exhausted == "revision" {
-            assert_eq!(
-                authority.rename(StoreRevision::new(u64::MAX), "overflow".into()),
-                Err(expected)
-            );
-        }
-        assert_eq!(
-            fs::read(root.join("state.json")).unwrap(),
-            bytes,
-            "{exhausted}"
-        );
-        drop(authority);
-        assert_eq!(
-            PeerAuthority::open_persistent(&root, now())
-                .unwrap()
-                .projection()
-                .unwrap(),
-            before,
-            "{exhausted}"
-        );
-    }
+fn revision_overflow_leaves_durable_state_unchanged() {
+    let (_temporary, root, authority) = persistent();
+    let remote = pin(1);
+    authority
+        .insert_link(revision(&authority), remote.clone(), "remote".into())
+        .unwrap();
+    authority
+        .set_grants(revision(&authority), remote.peer_id(), vec![grant("run")])
+        .unwrap();
+    drop(authority);
+    let mut value = wire(&root);
+    value["revision"] = u64::MAX.to_string().into();
+    write_wire(&root, &value);
+    let bytes = fs::read(root.join("state.json")).unwrap();
+    let authority = PeerAuthority::open_persistent(&root, now()).unwrap();
+    assert_eq!(
+        authority.revoke(revision(&authority), remote.peer_id()),
+        Err(AuthorityError::RevisionExhausted)
+    );
+    assert!(authority.is_trusted(&remote));
+    assert!(authority.has_grant(remote.peer_id(), &grant("run")));
+    let before = authority.projection().unwrap();
+    assert_eq!(
+        authority.rename(StoreRevision::new(u64::MAX), "overflow".into()),
+        Err(AuthorityError::RevisionExhausted)
+    );
+    assert_eq!(fs::read(root.join("state.json")).unwrap(), bytes);
+    drop(authority);
+    assert_eq!(
+        PeerAuthority::open_persistent(&root, now())
+            .unwrap()
+            .projection()
+            .unwrap(),
+        before
+    );
 }

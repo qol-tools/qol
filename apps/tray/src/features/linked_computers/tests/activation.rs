@@ -174,7 +174,7 @@ fn persistent_reopen_invalidates_stamps_and_pages_without_changing_identity_or_r
         assert_eq!(activation_id, current.activation_id);
     }
     assert_eq!(authority(&shared).peer_count, 0);
-    assert_eq!(authority(&shared).tombstone_count, 1);
+    assert_eq!(authority(&shared).tombstone_count, 0);
 }
 
 #[test]
