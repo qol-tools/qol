@@ -15,6 +15,7 @@ workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.13"
+qol-bluetooth-control.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true

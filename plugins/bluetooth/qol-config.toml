@@ -62,6 +62,13 @@ when = "can_connect"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
+action = "take_over"
+label = "Move here"
+description = "Asks the linked computer that has the device to let go, then connects it here."
+when = "can_take_over"
+input = { address = "{address}" }
+
+[[field.devices.row_actions]]
 action = "reclaim_device"
 label = "Take back"
 description = "Moves the audio from the other device to this computer."

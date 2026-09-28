@@ -251,6 +251,10 @@ enum DaemonAction {
     Settings,
     HostFixes,
     ApplyHostFix,
+    HandoffState,
+    ReleaseForHandoff,
+    ResumeReconnect,
+    TakeOver,
 }
 
 impl TryFrom<&str> for DaemonAction {
@@ -282,6 +286,10 @@ impl TryFrom<&str> for DaemonAction {
             "settings" => Ok(Self::Settings),
             "host_fixes" => Ok(Self::HostFixes),
             "apply_host_fix" => Ok(Self::ApplyHostFix),
+            "handoff_state" => Ok(Self::HandoffState),
+            "release_for_handoff" => Ok(Self::ReleaseForHandoff),
+            "resume_reconnect" => Ok(Self::ResumeReconnect),
+            "take_over" => Ok(Self::TakeOver),
             unknown => Err(format!("unknown Bluetooth action: {unknown}")),
         }
     }
@@ -1454,7 +1462,46 @@ fn dispatch_daemon_action(
             }
             Err(message) => ReadResult::Error(message),
         },
+        DaemonAction::HandoffState => handoff_result(request, |address| {
+            list_devices().map(|devices| crate::handoff::state(address, &devices))
+        }),
+        DaemonAction::ReleaseForHandoff => handoff_result(request, |address| {
+            crate::handoff::release(address, list_devices, disconnect_device, std::thread::sleep)
+        }),
+        DaemonAction::ResumeReconnect => handoff_result(request, crate::handoff::resume),
+        DaemonAction::TakeOver => match request_address(request) {
+            Ok(address) => match begin_device_action(address, "Moving here") {
+                Ok(()) => {
+                    spawn_take_over(address);
+                    ReadResult::Handled
+                }
+                Err(error) => ReadResult::Error(error.to_string()),
+            },
+            Err(error) => ReadResult::Error(error),
+        },
     }
+}
+
+fn handoff_result(
+    request: &DaemonRequest,
+    operation: impl FnOnce(&str) -> Result<serde_json::Value>,
+) -> ReadResult<DaemonCommand> {
+    match request_address(request) {
+        Ok(address) => match operation(&address.to_string()) {
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
+        },
+        Err(error) => ReadResult::Error(error),
+    }
+}
+
+fn spawn_take_over(address: Address) {
+    let power_on_adapter = crate::config::load().power_on_adapter;
+    std::mem::drop(std::thread::spawn(move || {
+        let result = crate::handoff::run_take_over(&address.to_string(), power_on_adapter);
+        send_notification("Bluetooth", &crate::handoff::message(&result));
+        finish_device_action(address, "move here", &result);
+    }));
 }
 
 fn host_fix_id(request: &DaemonRequest) -> std::result::Result<String, String> {
@@ -1796,6 +1843,7 @@ async fn daemon_loop(
                     continue;
                 }
                 if let DaemonCommand::Connect(address) = command {
+                    crate::handoff::release_for_user(&address.to_string());
                     let cached = discovery_state()
                         .ok()
                         .and_then(|state| state.device(&address.to_string()));
@@ -1846,6 +1894,9 @@ async fn daemon_loop(
                 } else {
                     ReconnectSelection::Managed
                 };
+                for address in &config.managed_devices {
+                    crate::handoff::release_for_user(address);
+                }
                 operations.reconnect(adapter.clone(), config.clone(), selection);
             }
             event = adapter_events.next() => {

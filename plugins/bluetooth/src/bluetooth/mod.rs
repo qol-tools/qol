@@ -2,20 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 pub mod retry;
 
 pub fn normalize_address(value: &str) -> Result<String> {
-    let parts = value.trim().split(':').collect::<Vec<_>>();
-    if parts.len() != 6
-        || parts
-            .iter()
-            .any(|part| part.len() != 2 || !part.chars().all(|char| char.is_ascii_hexdigit()))
-    {
-        bail!("invalid Bluetooth address `{value}`; expected AA:BB:CC:DD:EE:FF");
-    }
-    Ok(parts.join(":").to_ascii_uppercase())
+    Ok(qol_bluetooth_control::normalize_address(value)?)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -325,6 +317,7 @@ pub fn devices_payload(
                 "can_pair": !device.paired,
                 "can_reclaim": capabilities.audio_reclaim && ready && audio,
                 "can_remove": device.paired || device.trusted,
+                "can_take_over": device.paired && audio && !ready,
                 "can_trust": capabilities.separate_trust_flag && device.paired && !device.trusted,
                 "can_untrust": capabilities.separate_trust_flag && device.trusted,
                 "connected": device.connected,
@@ -473,6 +466,7 @@ mod tests {
                         "can_pair": false,
                         "can_reclaim": false,
                         "can_remove": true,
+                        "can_take_over": false,
                         "can_trust": false,
                         "can_untrust": true,
                         "connected": true,
@@ -500,6 +494,7 @@ mod tests {
                         "can_pair": false,
                         "can_reclaim": false,
                         "can_remove": true,
+                        "can_take_over": false,
                         "can_trust": false,
                         "can_untrust": true,
                         "connected": false,
@@ -527,6 +522,7 @@ mod tests {
                         "can_pair": true,
                         "can_reclaim": false,
                         "can_remove": false,
+                        "can_take_over": false,
                         "can_trust": false,
                         "can_untrust": false,
                         "connected": false,

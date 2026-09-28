@@ -2,6 +2,7 @@ pub mod audio_claim;
 pub mod bluetooth;
 pub mod cli;
 pub mod config;
+mod handoff;
 pub mod hostfix;
 pub mod platform;
 mod settings;

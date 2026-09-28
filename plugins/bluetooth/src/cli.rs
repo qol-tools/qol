@@ -29,6 +29,9 @@ fn app() -> HeadlessApp {
         .command(connect_command())
         .command(disconnect_command())
         .command(reclaim_command())
+        .command(take_over_command())
+        .command(release_for_handoff_command())
+        .command(resume_reconnect_command())
         .command(remove_command())
         .command(reconnect_command())
         .command(reconnect_trusted_command())
@@ -240,6 +243,53 @@ fn reclaim_command() -> Command {
                 "address": address,
                 "reclaimed": true,
             }))
+        })
+}
+
+fn take_over_command() -> Command {
+    Command::new("take-over")
+        .about(
+            "Ask the linked computer that has a Bluetooth device to let go, then connect it here.",
+        )
+        .usage(format!("{PLUGIN_ID} take-over AA:BB:CC:DD:EE:FF"))
+        .output("Where the device came from and whether its audio is ready here.")
+        .exit_behavior("Exits non-zero when the device could not be moved here.")
+        .run_plain_text(|context| {
+            let address = one_address("take-over", context.args())?;
+            let config = crate::config::load();
+            let result = crate::handoff::run_take_over(&address, config.power_on_adapter);
+            let message = crate::handoff::message(&result);
+            result?;
+            Ok(PlainTextOutput::text(message))
+        })
+}
+
+fn release_for_handoff_command() -> Command {
+    Command::new("release-for-handoff")
+        .about("Let go of a Bluetooth device and keep it from reconnecting here until resumed.")
+        .usage(format!("{PLUGIN_ID} release-for-handoff AA:BB:CC:DD:EE:FF"))
+        .output("Whether the device was released and was connected before.")
+        .exit_behavior("Exits non-zero when the device is still connected after five seconds.")
+        .run_json(|context| {
+            let address = one_address("release-for-handoff", context.args())?;
+            crate::handoff::release(
+                &address,
+                platform::list_devices,
+                platform::disconnect_device,
+                std::thread::sleep,
+            )
+        })
+}
+
+fn resume_reconnect_command() -> Command {
+    Command::new("resume-reconnect")
+        .about("Allow a Bluetooth device released for a linked computer to reconnect here again.")
+        .usage(format!("{PLUGIN_ID} resume-reconnect AA:BB:CC:DD:EE:FF"))
+        .output("Whether a handoff hold was released.")
+        .exit_behavior("Exits non-zero when the hold store cannot be updated.")
+        .run_json(|context| {
+            let address = one_address("resume-reconnect", context.args())?;
+            crate::handoff::resume(&address)
         })
 }
 

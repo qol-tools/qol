@@ -66,6 +66,18 @@ args = ["remove"]
 label = "Apply Bluetooth Host Fix"
 args = ["apply_host_fix"]
 
+[action.take_over]
+label = "Move Bluetooth Device Here"
+args = ["take-over"]
+
+[action.release_for_handoff]
+label = "Release Bluetooth Device For A Linked Computer"
+args = ["release-for-handoff"]
+
+[action.resume_reconnect]
+label = "Resume Bluetooth Reconnect After Handoff"
+args = ["resume-reconnect"]
+
 [action.settings]
 label = "Settings"
 kind = "settings"
