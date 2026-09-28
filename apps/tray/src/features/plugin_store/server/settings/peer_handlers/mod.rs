@@ -71,7 +71,7 @@ pub(super) async fn admin(request: HttpRequest) -> Response {
 async fn admin_at(request: HttpRequest, client: PlatformStateClient) -> Response {
     let request: Request = match parse(request).await {
         Ok(request) => request,
-        Err(response) => return response,
+        Err(error) => return no_store(error.into_response()),
     };
     let mutation = request.is_mutation();
     let result = tokio::task::spawn_blocking(move || client.peer_admin(request)).await;
@@ -86,7 +86,7 @@ async fn admin_at(request: HttpRequest, client: PlatformStateClient) -> Response
 pub(super) async fn invitation(request: HttpRequest) -> Response {
     let document = match parse::<qol_peers::enrollment::ExportedInvitation>(request).await {
         Ok(document) => document,
-        Err(response) => return response,
+        Err(error) => return no_store(error.into_response()),
     };
     match invitation_info(&document) {
         Ok(info) => no_store(Json(info).into_response()),
@@ -94,14 +94,11 @@ pub(super) async fn invitation(request: HttpRequest) -> Response {
     }
 }
 
-async fn parse<T: DeserializeOwned>(request: HttpRequest) -> Result<T, Response> {
+async fn parse<T: DeserializeOwned>(request: HttpRequest) -> Result<T, (StatusCode, &'static str)> {
     let body = to_bytes(request.into_body(), MAX_MESSAGE_BYTES)
         .await
-        .map_err(|_| {
-            no_store((StatusCode::PAYLOAD_TOO_LARGE, "Peer request too large").into_response())
-        })?;
-    serde_json::from_slice(&body)
-        .map_err(|_| no_store((StatusCode::BAD_REQUEST, "Invalid peer request").into_response()))
+        .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "Peer request too large"))?;
+    serde_json::from_slice(&body).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid peer request"))
 }
 
 fn failure(error: Failure) -> Response {

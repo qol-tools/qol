@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
@@ -48,8 +48,8 @@ pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
 static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "linux")]
-static PIN_TRANSITIONS: LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PIN_TRANSITIONS: std::sync::LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(target_os = "linux")]
 fn register_pin_transition(title: &str) -> oneshot::Receiver<bool> {
