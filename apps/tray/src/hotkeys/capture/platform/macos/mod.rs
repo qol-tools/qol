@@ -14,7 +14,7 @@ use qol_hotkeys::grammar::{Key, Modifier as Mod};
 use qol_hotkeys::macos_keycode;
 use qol_runtime::event_tap_trace::{TraceSink, QUEUE_DEPTH};
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -219,23 +219,26 @@ fn run_tap(
                 }
                 return CallbackResult::Drop;
             }
-            if matches!(event_type, CGEventType::KeyDown) && is_auto_repeat(event) {
-                return CallbackResult::Keep;
-            }
+            let repeat = matches!(event_type, CGEventType::KeyDown) && is_auto_repeat(event);
             static SEEN: AtomicBool = AtomicBool::new(false);
             if !SEEN.swap(true, Ordering::Relaxed) {
                 log::error!("macOS hotkey tap received its first key event");
             }
             let observed = observed_combo(event);
-            let fired = match matcher.write() {
-                Ok(mut guard) => guard.match_event(event_type, &observed),
-                Err(poisoned) => poisoned.into_inner().match_event(event_type, &observed),
+            let outcome = match matcher.write() {
+                Ok(mut guard) => guard.match_event(event_type, &observed, repeat),
+                Err(poisoned) => poisoned
+                    .into_inner()
+                    .match_event(event_type, &observed, repeat),
             };
-            let Some((binding, phase)) = fired else {
-                return CallbackResult::Keep;
-            };
-            let _ = fire_tx.send(CaptureEvent { binding, phase });
-            CallbackResult::Drop
+            if let Some((binding, phase)) = outcome.fired {
+                let _ = fire_tx.send(CaptureEvent { binding, phase });
+            }
+            if outcome.swallow {
+                CallbackResult::Drop
+            } else {
+                CallbackResult::Keep
+            }
         },
     );
 
@@ -274,6 +277,13 @@ fn run_tap(
 struct MacBindingMatcher {
     bindings: Vec<(MacCombo, Binding)>,
     active_continuous: HashMap<u16, Binding>,
+    swallowed_keys: HashSet<u16>,
+}
+
+#[derive(Debug, Default)]
+struct TapOutcome {
+    swallow: bool,
+    fired: Option<(Binding, Phase)>,
 }
 
 impl MacBindingMatcher {
@@ -288,6 +298,7 @@ impl MacBindingMatcher {
                 .filter_map(|binding| parse_mac_combo(&binding).map(|combo| (combo, binding)))
                 .collect(),
             active_continuous: HashMap::new(),
+            swallowed_keys: HashSet::new(),
         }
     }
 
@@ -315,18 +326,36 @@ impl MacBindingMatcher {
         &mut self,
         event_type: CGEventType,
         observed: &MacCombo,
-    ) -> Option<(Binding, Phase)> {
+        repeat: bool,
+    ) -> TapOutcome {
+        if repeat {
+            return TapOutcome {
+                swallow: self.swallowed_keys.contains(&observed.key),
+                fired: None,
+            };
+        }
         if matches!(event_type, CGEventType::KeyUp) {
-            return self
+            let fired = self
                 .active_continuous
                 .remove(&observed.key)
                 .map(|binding| (binding, Phase::STOP));
+            return TapOutcome {
+                swallow: self.swallowed_keys.remove(&observed.key) || fired.is_some(),
+                fired,
+            };
         }
-        let binding = self.match_combo(observed)?.clone();
+        let Some(binding) = self.match_combo(observed).cloned() else {
+            self.swallowed_keys.remove(&observed.key);
+            return TapOutcome::default();
+        };
+        self.swallowed_keys.insert(observed.key);
         if binding.continuous {
             self.active_continuous.insert(observed.key, binding.clone());
         }
-        Some((binding, Phase::START))
+        TapOutcome {
+            swallow: true,
+            fired: Some((binding, Phase::START)),
+        }
     }
 }
 
@@ -637,15 +666,41 @@ mod tests {
         let mut matcher =
             MacBindingMatcher::new(vec![continuous_binding_for("Super+R", "first", "open")]);
         let observed = combo_for("Super+R");
-        let started = matcher.match_event(CGEventType::KeyDown, &observed);
+        let started = matcher.match_event(CGEventType::KeyDown, &observed, false);
 
         let stopped = matcher.reload(Vec::new());
 
-        assert_eq!(started.map(|(_, phase)| phase), Some(Phase::START));
+        assert_eq!(started.fired.map(|(_, phase)| phase), Some(Phase::START));
         assert_eq!(stopped.len(), 1);
         assert_eq!(stopped[0].phase, Phase::STOP);
         assert_eq!(stopped[0].binding.plugin_uid.as_str(), "first");
         assert_eq!(stopped[0].binding.action, "open");
+    }
+
+    #[test]
+    fn a_held_hotkey_fires_once_and_keeps_its_repeats_and_release_from_the_app() {
+        let mut matcher = MacBindingMatcher::new(vec![binding("Super+R")]);
+        let observed = combo_for("Super+R");
+
+        let press = matcher.match_event(CGEventType::KeyDown, &observed, false);
+        let repeat = matcher.match_event(CGEventType::KeyDown, &observed, true);
+        let release = matcher.match_event(CGEventType::KeyUp, &observed, false);
+
+        assert!(press.swallow && press.fired.is_some());
+        assert!(repeat.swallow && repeat.fired.is_none());
+        assert!(release.swallow && release.fired.is_none());
+    }
+
+    #[test]
+    fn repeats_of_an_unbound_key_reach_the_app() {
+        let mut matcher = MacBindingMatcher::new(vec![binding("Super+R")]);
+        let observed = combo_for("Super+T");
+
+        matcher.match_event(CGEventType::KeyDown, &observed, false);
+        let repeat = matcher.match_event(CGEventType::KeyDown, &observed, true);
+        let release = matcher.match_event(CGEventType::KeyUp, &observed, false);
+
+        assert!(!repeat.swallow && !release.swallow);
     }
 
     #[test]
