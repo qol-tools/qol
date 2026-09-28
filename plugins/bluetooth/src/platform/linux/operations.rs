@@ -175,7 +175,7 @@ pub(super) fn complete(
             trace_manual_failure(&error, selection, "reconnect")
         }
         Completion::Remove(address, result) => {
-            finish_device_action(address, "Remove", &result);
+            finish_device_action("Remove", &result);
             if result.is_ok() {
                 retries.remove(&address);
                 subscribed.remove(&address);
