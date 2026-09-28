@@ -472,7 +472,7 @@ fn retire_legacy(data: &Path) {
     }
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     let name: String = gethostname::gethostname()
         .to_string_lossy()
         .chars()

@@ -6,7 +6,7 @@ mod pointz;
 mod projection;
 pub(crate) mod settings;
 
-pub(crate) use pointz::{is_legacy_pointz, legacy_pointz_allowed};
+pub(crate) use pointz::{hostname, is_legacy_pointz, legacy_pointz_allowed};
 
 #[cfg(test)]
 pub(crate) mod tests;

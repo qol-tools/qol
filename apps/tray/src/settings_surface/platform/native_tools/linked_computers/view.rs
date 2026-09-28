@@ -1,22 +1,26 @@
 use super::super::data::{request_json, REQUEST_TIMEOUT};
-use super::model::{self, Action, Row};
+use super::model::{self, Action, Row, NAME_RULE};
 use crate::features::linked_computers::settings::{
     self, CatalogOperation, Failure, InvitationInfo, Snapshot,
 };
 use gpui::prelude::*;
 use gpui::{
-    div, AnyElement, App, AsyncApp, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent,
-    Render, WeakEntity, Window,
+    AnyElement, App, AsyncApp, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent,
+    Render, ScrollWheelEvent, WeakEntity, Window,
 };
+use qol_gpui::key::Key;
 use qol_gpui::kit::kit;
-use qol_gpui::scroll_list::SelectionScroll;
-use qol_gpui::scrollbar::{ScrollSource, OVERFLOW_FADE_HEIGHT};
+use qol_gpui::scroll_list::{wheel_rows, ScrollList};
+use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
-    settings_busy_message, settings_label, settings_label_group, settings_page, RowGround,
-    SettingsTextField,
+    settings_label_group, settings_page, settings_value_group, RowGround, SettingsFeedback,
+    SettingsHint, SettingsTextField,
 };
 use qol_gpui::settings_panel::{
-    CustomPanelCallback, CustomSettingsBreadcrumbs, SettingsDestination, SettingsRow,
+    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_busy_message,
+    settings_list, settings_value_text, CustomHints, CustomPanelCallback,
+    CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
+    SettingsRow,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
@@ -24,6 +28,9 @@ use qol_peers::admin::{Request, Response};
 use qol_peers::enrollment::ExportedInvitation;
 use qol_runtime::local_http::Method;
 use qol_runtime::PlatformStateClient;
+
+const MAX_VISIBLE: usize = 9;
+const DANGER_VERBS: [&str; 4] = ["stop", "revoke", "remove", "abandon"];
 
 enum Editing {
     None,
@@ -40,17 +47,18 @@ pub(super) struct LinkedComputersView {
     snapshot: Option<Snapshot>,
     catalog: Option<Vec<CatalogOperation>>,
     name: String,
+    name_edited: bool,
     source: Option<(ExportedInvitation, InvitationInfo)>,
     invitation: Option<Response>,
     pending: bool,
     selected: usize,
+    list: ScrollList,
     sequence: u64,
-    message: String,
+    notice: Option<(String, bool)>,
     editing: Editing,
     field: TextField,
     subscriptions: Vec<gpui::Subscription>,
     refresh_on_focus: bool,
-    scroll: SelectionScroll,
 }
 
 impl LinkedComputersView {
@@ -64,18 +72,19 @@ impl LinkedComputersView {
             on_back,
             snapshot: None,
             catalog: None,
-            name: String::new(),
+            name: crate::features::linked_computers::hostname(),
+            name_edited: false,
             source: None,
             invitation: None,
             pending: false,
-            selected: 0,
+            selected: 1,
+            list: ScrollList::new(MAX_VISIBLE),
             sequence: 0,
-            message: "Refresh reads core. Pairing grants no operations.".into(),
+            notice: None,
             editing: Editing::None,
             field: TextField::new(),
             subscriptions: Vec::new(),
             refresh_on_focus: true,
-            scroll: SelectionScroll::new(),
         }
     }
 
@@ -97,7 +106,7 @@ impl LinkedComputersView {
         let sequence = self.sequence;
         self.snapshot = None;
         self.catalog = None;
-        self.message = "Reading or updating core".into();
+        self.notice = None;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         std::thread::spawn(move || {
             let client = PlatformStateClient::from_env();
@@ -132,8 +141,10 @@ impl LinkedComputersView {
                             view.apply(response, snapshot);
                         }
                         Err(_) => {
-                            view.message =
-                                "Result unknown. Refresh core before another change.".into()
+                            view.notice = Some((
+                                "Result unknown. Refresh before another change.".into(),
+                                true,
+                            ))
                         }
                     }
                     cx.notify();
@@ -154,17 +165,24 @@ impl LinkedComputersView {
         }
         match snapshot {
             Ok(snapshot) => {
-                if self.name.is_empty() {
-                    if let Some(authority) = &snapshot.status.authority { self.name = authority.name.clone(); }
+                if !self.name_edited {
+                    if let Some(authority) = &snapshot.status.authority {
+                        self.name = authority.name.clone();
+                    }
                 }
                 self.snapshot = Some(snapshot);
-                self.message = "State read from core. Refresh for current connections and pairing progress.".into();
             }
-            Err(error) => self.message = match error {
-                Failure::OutcomeUnknown => "Result unknown. Refresh core, then recover the original transaction. Never prepare a replacement.".into(),
-                Failure::Authority(error) => format!("Core refused the request: {error}. Refresh before changing anything."),
-                Failure::Transport(_) | Failure::Inconsistent => "Current state unavailable. Refresh core; previous connection labels are no longer current.".into(),
-            },
+            Err(error) => {
+                self.notice = Some((
+                    match error {
+                        Failure::OutcomeUnknown => "Result unknown. Refresh, then recover the original transaction. Never prepare a replacement.".into(),
+                        Failure::Authority(qol_peers::admin::Error::Authority { error: qol_peers::AuthorityError::InvalidName }) => NAME_RULE.into(),
+                        Failure::Authority(error) => format!("Linking refused the change: {error}. Refresh before changing anything."),
+                        Failure::Transport(_) | Failure::Inconsistent => "Linking state is unavailable. Refresh to read it again.".into(),
+                    },
+                    true,
+                ))
+            }
         }
     }
 
@@ -204,8 +222,13 @@ impl LinkedComputersView {
             Action::Copy => {
                 if let Some(Response::Invitation { document, .. }) = &self.invitation {
                     cx.write_to_clipboard(ClipboardItem::new_string(document.expose().to_owned()));
+                    self.notice = Some((
+                        "Invitation copied. Paste it on the other computer.".into(),
+                        false,
+                    ));
                 }
             }
+            Action::Explain(text) => self.notice = Some((text.into(), true)),
             Action::Send(request, Some(word)) => {
                 self.field.clear();
                 self.editing = Editing::Confirm { request, word };
@@ -217,86 +240,154 @@ impl LinkedComputersView {
 
     fn paste(&mut self, cx: &mut Context<Self>) {
         self.source = None;
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
+            self.notice = Some((
+                "The clipboard is empty. Copy the invitation on the other computer first.".into(),
+                true,
+            ));
             return;
         };
+        let Some(text) = item.text() else {
+            self.notice = Some((
+                "The clipboard holds something other than text, so there is no invitation to read."
+                    .into(),
+                true,
+            ));
+            return;
+        };
+        if text.trim().is_empty() {
+            self.notice = Some((
+                "The clipboard is empty. Copy the invitation on the other computer first.".into(),
+                true,
+            ));
+            return;
+        }
         let document = ExportedInvitation::from_owned(zeroize::Zeroizing::new(text));
         let result = document.ok().and_then(|document| {
             settings::invitation_info(&document)
                 .ok()
                 .map(|info| (document, info))
         });
-        match result {
+        self.notice = Some(match result {
             Some(source) => {
                 self.source = Some(source);
-                self.message =
-                    "Invitation read. Prepare once, or recover its original outgoing transaction."
-                        .into();
+                (
+                    "Invitation read. Prepare the link once, or recover its original request."
+                        .into(),
+                    false,
+                )
             }
-            None => self.message = "Invalid invitation code. Nothing was submitted.".into(),
-        }
+            None => (
+                "The clipboard text is not a linked computers invitation. Nothing was sent.".into(),
+                true,
+            ),
+        });
     }
 
     fn finish_edit(&mut self, cx: &mut Context<Self>) {
         match std::mem::replace(&mut self.editing, Editing::None) {
-            Editing::Name => self.name = self.field.text().trim().to_owned(),
+            Editing::Name => {
+                self.name = self.field.text().trim().to_owned();
+                self.name_edited = true;
+                self.notice =
+                    (!qol_peers::is_valid_name(&self.name)).then(|| (NAME_RULE.into(), true));
+            }
             Editing::Confirm { request, word } => {
                 if self.field.text().trim().eq_ignore_ascii_case(word) {
                     self.work(Some(request), cx);
                     return;
                 }
-                self.message = format!("Type {word} to confirm, or Escape to cancel.");
+                self.notice = Some((
+                    format!("Type {word} to confirm, or Escape to cancel."),
+                    true,
+                ));
                 self.editing = Editing::Confirm { request, word };
             }
             Editing::None => {}
         }
     }
 
+    fn navigable(rows: &[Row]) -> Vec<usize> {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, row)| !row.header)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn move_selection(&mut self, direction: isize) {
+        let rows = self.rows();
+        let navigable = Self::navigable(&rows);
+        if navigable.is_empty() {
+            return;
+        }
+        self.selected = adjacent_visible_row(&navigable, self.selected, direction);
+        self.list.selected = self.selected;
+        self.list.sync(rows.len());
+    }
+
+    fn sync_selection(&mut self, rows: &[Row]) {
+        let navigable = Self::navigable(rows);
+        self.selected = navigable
+            .iter()
+            .copied()
+            .find(|index| *index >= self.selected)
+            .or_else(|| navigable.last().copied())
+            .unwrap_or(0);
+        self.list.selected = self.selected;
+        self.list.sync(rows.len());
+    }
+
+    fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match escape_step(0, false, true) {
+            EscapeStep::CloseFilter | EscapeStep::PopCard => {}
+            EscapeStep::AscendRail | EscapeStep::Dismiss => {
+                self.suspend(cx);
+                (self.on_back)(window, cx);
+            }
+        }
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let key = event.keystroke.key.as_str();
-        if matches!(key, "escape" | "esc") {
-            if matches!(self.editing, Editing::None) {
-                self.suspend(cx);
-                (self.on_back)(window, cx);
-                return;
+        let editing = !matches!(self.editing, Editing::None);
+        match intent(key, event.keystroke.key_char.as_deref(), editing) {
+            Some(Intent::CancelEdit) => {
+                self.editing = Editing::None;
+                self.field.clear();
             }
-            self.editing = Editing::None;
-            self.field.clear();
-            cx.notify();
-            return;
-        }
-        if !matches!(self.editing, Editing::None) {
-            if matches!(key, "enter" | "return") {
-                self.finish_edit(cx);
-            }
-            if !matches!(key, "enter" | "return") {
+            Some(Intent::CommitEdit) => self.finish_edit(cx),
+            _ if editing => {
                 let mut next = self.field.clone();
                 text_edit::apply_edit_key(&mut next, &event.keystroke, || {
                     cx.read_from_clipboard().and_then(|item| item.text())
                 });
-                if next.text().len() <= 128 {
+                if next.text().len() <= qol_peers::MAX_NAME_BYTES {
                     self.field = next;
                 }
             }
-            cx.notify();
-            return;
-        }
-        let rows = self.rows();
-        if key == "tab" && event.keystroke.modifiers.shift {
-            self.selected = self.selected.saturating_sub(1);
-            cx.notify();
-            return;
-        }
-        match key {
-            "up" => self.selected = self.selected.saturating_sub(1),
-            "down" | "tab" => self.selected = (self.selected + 1).min(rows.len().saturating_sub(1)),
-            "enter" | "return" | "space" => {
-                if let Some(action) = rows.get(self.selected).and_then(|row| row.action.clone()) {
+            Some(Intent::Close) => {
+                self.escape(window, cx);
+                return;
+            }
+            Some(Intent::Up) => self.move_selection(-1),
+            Some(Intent::Down) => self.move_selection(1),
+            Some(Intent::Tab) => self.move_selection(if event.keystroke.modifiers.shift {
+                -1
+            } else {
+                1
+            }),
+            Some(Intent::Activate) => {
+                if let Some(action) = self
+                    .rows()
+                    .get(self.selected)
+                    .and_then(|row| row.action.clone())
+                {
                     self.activate(action, cx);
                 }
             }
-            _ => {}
+            _ => return,
         }
         cx.notify();
     }
@@ -304,36 +395,155 @@ impl LinkedComputersView {
     fn render_row(
         &self,
         index: usize,
-        row: Row,
+        row: &Row,
+        current_group: bool,
         focused: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let ground = RowGround::of(self.selected == index, focused);
-        SettingsRow::setting(("linked-computer-row", index), kit())
-            .selected(self.selected == index, focused)
+        let kit = kit();
+        if row.header {
+            return SettingsGroupHeader::new(
+                row.label.clone(),
+                Some(row.detail.clone().into()),
+                kit,
+            )
+            .current(current_group && focused)
+            .into_any_element();
+        }
+        let selected = self.selected == index;
+        let ground = RowGround::of(selected, focused);
+        let editing_name = selected && matches!(self.editing, Editing::Name);
+        let action = row.action.clone();
+        let mut values = settings_value_group();
+        if editing_name {
+            values = values.child(SettingsTextField::live(self.field.clone(), ground, kit));
+        } else {
+            values = values.children(
+                row.value
+                    .clone()
+                    .map(|(text, tone)| settings_value_text(text, tone, ground, kit)),
+            );
+            values = values.children(row.verb.map(|verb| {
+                settings_action_affordance(
+                    ("linked-computers-action", index),
+                    verb,
+                    DANGER_VERBS.contains(&verb).then_some("danger"),
+                    selected && self.pending,
+                    ground,
+                    kit,
+                )
+            }));
+        }
+        SettingsRow::setting(("linked-computers-row", index), kit)
+            .selected(selected, focused)
+            .dimmed(row.action.is_none())
             .on_click(cx.listener(move |view, _, _, cx| {
                 if !matches!(view.editing, Editing::None) {
                     return;
                 }
                 view.selected = index;
-                if let Some(action) = row.action.clone() {
+                if let Some(action) = action.clone() {
                     view.activate(action, cx);
                 }
                 cx.notify();
             }))
             .child(settings_label_group(
-                row.label,
-                Some(row.detail.into()),
+                row.label.clone(),
+                Some(row.detail.clone().into()),
                 ground,
-                kit(),
+                kit,
             ))
+            .child(values)
             .into_any_element()
+    }
+
+    fn render_confirm(&self, word: &str, focused: bool) -> AnyElement {
+        let kit = kit();
+        let ground = RowGround::of(true, focused);
+        SettingsRow::setting("linked-computers-confirm", kit)
+            .selected(true, focused)
+            .child(settings_label_group(
+                format!("Type {word} to confirm"),
+                Some("Enter confirms. Escape cancels.".into()),
+                ground,
+                kit,
+            ))
+            .child(settings_value_group().child(SettingsTextField::live(
+                self.field.clone(),
+                ground,
+                kit,
+            )))
+            .into_any_element()
+    }
+
+    fn render_list(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> AnyElement {
+        let total = rows.len();
+        let cursor_group = rows
+            .get(..=self.selected.min(total.saturating_sub(1)))
+            .and_then(|seen| seen.iter().rposition(|row| row.header));
+        let range = self.list.visible_range(total);
+        let mut list = settings_list()
+            .id("linked-computers-list")
+            .on_scroll_wheel(
+                cx.listener(|view: &mut Self, event: &ScrollWheelEvent, _, cx| {
+                    let steps = wheel_rows(&event.delta, qol_theme::HEIGHT_SETTING_ROW);
+                    for _ in 0..steps.unsigned_abs() {
+                        view.move_selection(steps.signum());
+                    }
+                    cx.notify();
+                }),
+            );
+        for index in range.clone() {
+            list = list.child(self.render_row(
+                index,
+                &rows[index],
+                cursor_group == Some(index),
+                focused,
+                cx,
+            ));
+        }
+        list.child(kit().scroll_cue(
+            ScrollSource::Window {
+                first: range.start,
+                shown: range.len(),
+                total,
+            },
+            kit().grounds.pane,
+        ))
+        .into_any_element()
     }
 }
 
 impl CustomSettingsBreadcrumbs for LinkedComputersView {
     fn settings_breadcrumbs(&self) -> Vec<SettingsDestination> {
         Vec::new()
+    }
+
+    fn settings_hints(&self) -> Option<CustomHints> {
+        if !matches!(self.editing, Editing::None) {
+            let commit = match self.editing {
+                Editing::Name => "save",
+                _ => "confirm",
+            };
+            return Some(CustomHints {
+                question: None,
+                left: vec![
+                    SettingsHint::new(Key::ENTER, commit),
+                    SettingsHint::new(Key::TYPE, "edit"),
+                ],
+                right: vec![SettingsHint::new(Key::ESC, "cancel")],
+            });
+        }
+        let mut left = Vec::new();
+        if let Some(verb) = self.rows().get(self.selected).and_then(|row| row.verb) {
+            left.push(SettingsHint::new(Key::ENTER, verb));
+        }
+        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
+        Some(CustomHints {
+            question: None,
+            left,
+            right: Vec::new(),
+        })
     }
 }
 
@@ -361,63 +571,25 @@ impl Render for LinkedComputersView {
             self.work(None, cx);
         }
         let rows = self.rows();
-        self.selected = self.selected.min(rows.len().saturating_sub(1));
-        let children = rows.len() + 1 + usize::from(!matches!(self.editing, Editing::None)) * 2;
-        let selected_child = if matches!(self.editing, Editing::None) {
-            self.selected + 1
-        } else {
-            2
-        };
-        self.scroll
-            .follow(Some(selected_child), None, gpui::px(OVERFLOW_FADE_HEIGHT));
+        self.sync_selection(&rows);
         let busy = self.pending && focused && window.is_window_active() && !self.refresh_on_focus;
-        let message = if busy {
-            settings_busy_message("linked-computers-loading", self.message.clone(), kit())
-        } else {
-            settings_label(self.message.clone(), kit())
-        };
-        let mut page = settings_page().child(message);
-        if !matches!(self.editing, Editing::None) {
-            let label = match &self.editing {
-                Editing::Name => "Computer name".to_string(),
-                Editing::Confirm { word, .. } => {
-                    format!("Type {word}, then Enter. Escape cancels.")
-                }
-                Editing::None => String::new(),
-            };
-            page = page
-                .child(settings_label(label, kit()))
-                .child(SettingsTextField::live(
-                    self.field.clone(),
-                    RowGround::of(true, focused),
-                    kit(),
-                ));
+        let mut page = settings_page();
+        if let Some((message, danger)) = &self.notice {
+            page = page.child(SettingsFeedback::new(message.clone(), *danger));
         }
-        page = page.children(
-            rows.into_iter()
-                .enumerate()
-                .map(|(index, row)| self.render_row(index, row, focused, cx)),
-        );
-        div()
-            .id("linked-computers-body")
+        if let Editing::Confirm { word, .. } = &self.editing {
+            page = page.child(self.render_confirm(word, focused));
+        }
+        page = page.child(self.render_list(&rows, focused, cx));
+        if busy && self.snapshot.is_none() {
+            page = page.child(settings_busy_message(
+                "linked-computers-loading",
+                "Reading linking state",
+                kit(),
+            ));
+        }
+        page.id("linked-computers-body")
             .track_focus(&self.focus)
-            .relative()
-            .size_full()
-            .min_h_0()
-            .flex()
-            .flex_col()
             .on_key_down(cx.listener(Self::on_key))
-            .child(
-                page.id("linked-computers-scroll")
-                    .overflow_y_scroll()
-                    .track_scroll(self.scroll.handle()),
-            )
-            .child(kit().scroll_cue(
-                ScrollSource::Handle {
-                    handle: self.scroll.handle().clone(),
-                    children,
-                },
-                kit().grounds.pane,
-            ))
     }
 }

@@ -312,3 +312,47 @@ fn phone_removal_uses_the_displayed_stamp_and_legacy_pointz_offers_no_controls()
     assert!(!legacy.iter().any(|row| row.label == "Remove phone"));
     assert!(legacy.iter().any(|row| row.label == "PointZ"));
 }
+
+#[test]
+fn an_invalid_name_explains_the_rule_instead_of_sending_it_to_core() {
+    let mut snapshot = snapshot();
+    snapshot.status.authority = None;
+    snapshot.status.lifecycle = Lifecycle::Inactive;
+    for name in ["", " padded", "line\nbreak", &"x".repeat(257)] {
+        let shown = rows(Some(&snapshot), None, name, None, None);
+        for label in ["Use this session", "Create persistent links"] {
+            let row = shown.iter().find(|row| row.label == label).unwrap();
+            assert!(
+                matches!(row.action, Some(Action::Explain(super::NAME_RULE))),
+                "{label} with {name:?}"
+            );
+        }
+    }
+    let shown = rows(Some(&snapshot), None, "desk", None, None);
+    assert!(shown
+        .iter()
+        .any(|row| row.label == "Create persistent links"
+            && matches!(
+                row.action,
+                Some(Action::Send(
+                    Request::CreatePersistent { .. },
+                    Some("persist")
+                ))
+            )));
+}
+
+#[test]
+fn every_group_opens_with_a_header_and_headers_carry_no_action() {
+    let shown = rows(Some(&snapshot()), Some(&[]), "local", None, None);
+    assert!(shown[0].header);
+    assert!(shown
+        .iter()
+        .filter(|row| row.header)
+        .all(|row| row.action.is_none() && !row.detail.is_empty()));
+    let titles: Vec<_> = shown
+        .iter()
+        .filter(|row| row.header)
+        .map(|row| row.label.as_str())
+        .collect();
+    assert_eq!(titles, ["this computer", "invitations", "linked computers"]);
+}
