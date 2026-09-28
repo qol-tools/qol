@@ -1,6 +1,6 @@
 # Linked computers: architecture and sources of truth
 
-Status: Core peer service, CLI, native/web linked-computer settings and the PointZ cutover are implemented in the linked-computers worktree and exercised in isolated tests on Linux and macOS. Bluetooth handoff and guest/multi-PC/hardware verification remain unfinished. This is a branch checkpoint; nothing from this implementation is installed or released.
+Status: Core peer service, CLI, native/web linked-computer settings, the PointZ cutover and earbud handoff are implemented in the linked-computers worktree and exercised in isolated tests. Guest, multi-PC and hardware verification remain unfinished. This is a branch checkpoint; nothing from this implementation is installed or released.
 
 [Open the interactive architecture page](../../apps/tray/diagram/linked-computers.html)
 for the connection model, searchable ownership map, and illustrative Bluetooth
@@ -22,10 +22,10 @@ illustration of the intended result. It is not a working handoff control.
 | Link two computers | No reusable core computer-linking service | Core identity, explicit pairing, encrypted sessions and headless controls exist; links persist on Linux and macOS | Pairing and restart recovery pass in isolated generated-TLS fixtures on both systems; real-PC and guest verification remain |
 | Permit a remote plugin action | No common authenticated peer request path | Core checks the canonical operation and exact grant, dispatches once, and saves the result | Real local clients, TLS, catalog, executor and fixture daemon pass together; duplicate and lost-reply cases pass |
 | Recover after a lost reply | No shared remote request history | CLI/API can query or cancel the original request without invoking a replacement | Sender restart, daemon reply loss and recovery pass in tests; a handler acknowledgement is not device success |
-| Use earbuds from the desktop | Phone and laptop occupy both slots | Earbud behavior is unchanged; desktop handoff is not implemented | Shared Bluetooth/Controllers mutation ownership, reconnect holds, device verification and the handoff control remain |
+| Use earbuds from the desktop | Phone and laptop occupy both slots | "Move here" asks the linked computer that has the earbuds to let go, connects them here and checks audio. Bluetooth and Controllers share reconnect holds, so neither undoes the other | The workflow, holds and hold-aware reconnect pass tests with fake computers and a temporary hold store; real earbuds between two computers remain |
 | Share PointZ trust with core | PointZ owns its own pairing and key registry | Core owns the PointZ seed, paired phones, pairing window and UDP ports; PointZ only executes input | One-time import, legacy-daemon exclusion, removal and a simulated phone pairing over UDP pass in tests; the Flutter client on a real phone remains |
 | Manage linked computers in settings | No linked-computers settings screen | Native and web controls use the same core authority for pairing, revocation, names and explicit operation grants | Catalog, permission and uncertain-result recovery checks pass; guest interaction verification remains |
-| Deliver the complete feature | No feature delivery | Branch checkpoint with the core service, PointZ cutover, CLI, settings and architecture viewer; full handoff remains unfinished | Strict lint and the peer, host and PointZ suites pass on Linux and macOS; Bluetooth integration and guest/multi-PC/hardware verification remain |
+| Deliver the complete feature | No feature delivery | Branch checkpoint with the core service, PointZ cutover, CLI, settings, earbud handoff and architecture viewer | Strict lint and the peer, host, PointZ and Bluetooth suites pass; guest, multi-PC and hardware verification remain |
 
 ## High-level design
 
@@ -156,6 +156,7 @@ flowchart LR
 | Whether a peer is reachable | Core's authenticated session state | UI and plugins receive snapshots and events; last-seen records do not imply an active connection |
 | What an installed plugin can do | Its existing manifest/runtime contract and platform implementation | Core derives available peer operations from these definitions and current local availability |
 | Whether an earbud link and audio transport exist | The local Bluetooth stack, interpreted by the Bluetooth plugin | Remote values carry origin and freshness; core forwards observations |
+| Whether QoL may reconnect a peripheral automatically | [qol-bluetooth-control](../../libs/bluetooth-control/src/holds.rs) reconnect holds | Automatic reconnect skips a held address; a connect the user starts releases the hold |
 | Whether a handoff succeeded | Bluetooth's verified operation outcome | A transport acknowledgement alone never marks a handoff complete |
 
 Each computer is authoritative for its own permissions and local device state.
@@ -240,18 +241,24 @@ Bluetooth coordinates the domain workflow through core:
    actual link/audio readiness before reporting success.
 4. Reconcile a failed or interrupted handoff and show the verified outcome.
 
-Handoff operation state and any temporary reconnect hold belong to Bluetooth.
-The hold has an operation owner, expiry, and restart recovery. Local CLI and
-daemon actions honor the same claim. Core delivers requests without learning
-about audio profiles, multipoint limits, or vendor-specific commands.
+The handoff workflow and its outcome belong to Bluetooth. Reconnect holds live
+in a shared store so every plugin process honors them: each hold has an owner,
+an expiry and a file that survives a daemon restart. A connect or reconnect the
+user starts, from the daemon or the command line, releases the hold. Core
+delivers requests without learning about audio profiles, multipoint limits, or
+vendor-specific commands.
 
-The Controllers plugin also reads and disconnects Bluetooth devices today.
-Shared peripheral identity, connection operations, and mutation claims therefore
-need one neutral Bluetooth-control owner used by both plugins. No such shared
-crate exists in the inspected tree; `libs/bluetooth-control` is the proposed
-boundary. Controllers retains its HID/input and driver-fix policy; Bluetooth
-retains its reconnection and handoff policy. QoL coordinates its own writers
-there while continuing to observe changes made by the OS and other applications.
+The Controllers plugin also disconnects Bluetooth devices.
+[qol-bluetooth-control](../../libs/bluetooth-control/src/lib.rs) is the neutral
+owner both plugins use for peripheral identity and reconnect holds; Controllers
+holds a stuck controller for 30 seconds before it disconnects it. Connection
+operations stay in each plugin's platform adapter, because the shared identity
+and holds are what keep one writer from undoing another. Controllers retains its
+HID/input and driver-fix policy; Bluetooth retains its reconnection and handoff
+policy. QoL coordinates its own writers there while continuing to observe
+changes made by the OS and other applications. The
+[handoff contract](2026-09-28-bluetooth-handoff-v1.md) owns the operations,
+the workflow and its evidence.
 
 Remote observations do not establish global ownership of the earbuds: an
 unmanaged phone may also be connected. Device identifiers that cannot be matched
@@ -294,7 +301,7 @@ general inter-computer trust.
 
 This is a source index for the design. Membership comes from Cargo metadata and
 plugin manifests; this document is not a second runtime registry. The audit
-covers all 18 workspace plugins, 39 shared crates, the tray application, both
+covers all 18 workspace plugins, 40 shared crates, the tray application, both
 workspace tools, and the associated browser/build surfaces in this worktree.
 Proposed owners are explicitly marked. Existing gaps follow the tables.
 
@@ -314,7 +321,7 @@ Proposed owners are explicitly marked. Existing gaps follow the tables.
 | OS availability and permissions | [qol-platform](../../libs/platform/src/lib.rs) and the owning domain's platform adapter | Supported operations and meaningful unsupported results |
 | Host ownership mode and restoration | [Residency](../../libs/host-fixes/src/residency.rs), policy ownership, and [host-session journals](../../libs/host-session/src/lib.rs) | Cleanup/recovery; peer requests cannot create another residency decision |
 | Provider authentication | [Core auth](../../apps/tray/src/features/auth/mod.rs) and its [GitHub credential provider](../../apps/tray/src/features/github_auth/mod.rs) | Provider-scoped operations; these credentials do not establish computer trust |
-| Computer identity, peer grants, and reachability | [qol-peers](../../libs/peers/src/lib.rs) owns the core peer store, authenticated sessions and request outcomes. [Linked computers host](../../apps/tray/src/features/linked_computers/mod.rs) supervises its lifetime | CLI, native/web settings and the remote dispatcher use this owner; settings derive operation choices from the canonical catalog. PointZ phones use the same owner; Bluetooth handoff remains a pending consumer |
+| Computer identity, peer grants, and reachability | [qol-peers](../../libs/peers/src/lib.rs) owns the core peer store, authenticated sessions and request outcomes. [Linked computers host](../../apps/tray/src/features/linked_computers/mod.rs) supervises its lifetime | CLI, native/web settings and the remote dispatcher use this owner; settings derive operation choices from the canonical catalog. PointZ phones and Bluetooth handoff use the same owner |
 | Real device/application state | OS, device, or application, accessed through its owning domain facade | Plugin observations and verified operation results |
 | QoL visual rules | [qol-theme](../../libs/theme/src/lib.rs), consumed by [qol-gpui](../../libs/gpui/src/lib.rs) and browser surfaces | Native appearance and generated styles; a visual cache owns no domain state |
 | Executable identity | [Shared identity schema](../../libs/conventions/src/artifact/mod.rs), [build emitter](../../libs/build-identity/src/lib.rs), and [artifact verifier](../../libs/artifact/src/lib.rs) | Install/run verification; file names and timestamps cannot replace identity checks |
@@ -333,9 +340,9 @@ remote access.
 | Plugin | Domain responsibility retained by the plugin | Shared facts / dependency boundary |
 | --- | --- | --- |
 | [Alt Tab](../../plugins/alt-tab/plugin.toml) | Picker state, selection, preview policy, window activation | OS window observations; `qol-windowing`, `qol-apps`, `qol-app-icon`, shared GPUI |
-| [Bluetooth](../../plugins/bluetooth/plugin.toml) | Selected devices, reconnect policy, audio readiness, handoff workflow | OS Bluetooth stack and `qol-audio`; proposed shared Bluetooth-control operations and claims |
+| [Bluetooth](../../plugins/bluetooth/plugin.toml) | Selected devices, reconnect policy, audio readiness, handoff workflow | OS Bluetooth stack and `qol-audio`; `qol-bluetooth-control` for peripheral identity and reconnect holds; core peer operations for handoff |
 | [CLI Sessions](../../plugins/cli-sessions/plugin.toml) | Session dashboard and attention policy | `qol-terminal-sessions` owns reusable live terminal identity and operations |
-| [Controllers](../../plugins/controllers/plugin.toml) | Controller profiles, input observations, driver fixes, reclaim policy | HID/OS facts and `qol-host-fixes`; shared Bluetooth-control boundary required for connection mutations |
+| [Controllers](../../plugins/controllers/plugin.toml) | Controller profiles, input observations, driver fixes, reclaim policy | HID/OS facts and `qol-host-fixes`; `qol-bluetooth-control` reconnect holds before it disconnects a controller |
 | [IDE Checkout](../../plugins/ide-checkout/plugin.toml) | Checkout/open workflow and browser-facing domain contract | Git/filesystem results and configured applications; its loopback browser adapter does not establish LAN peer trust |
 | [Key Remap](../../plugins/keyremap/plugin.toml) | Remapping rules and native interception | Shared `qol-hotkeys` grammar and OS input facts; core still owns global activation bindings |
 | [Launcher](../../plugins/launcher/plugin.toml) | Search providers, ranking policy, launch flow | `qol-apps`, `qol-search`, `qol-frecency`; discovered entries are projections of providers |
@@ -363,6 +370,7 @@ not make that crate the owner of each consumer's preferences or observed state.
 | [qol-apps](../../libs/apps/src/lib.rs) | App bundles, desktop entries, desktop integration |
 | [qol-artifact](../../libs/artifact/src/lib.rs) | Inspect and verify artifact identity |
 | [qol-audio](../../libs/audio/src/lib.rs) | Audio device, output, volume, control, and attempt primitives |
+| [qol-bluetooth-control](../../libs/bluetooth-control/src/lib.rs) | Bluetooth peripheral identity and reconnect holds shared by Bluetooth and Controllers |
 | [qol-build-identity](../../libs/build-identity/src/lib.rs) | Emit executable identity from build inputs |
 | [qol-cinnamon](../../libs/cinnamon/src/lib.rs) | Cinnamon session integration primitives |
 | [qol-color](../../libs/color/src/lib.rs) | Color parsing and numeric transformations |
@@ -398,9 +406,8 @@ not make that crate the owner of each consumer's preferences or observed state.
 | [peers](../../libs/peers/src/lib.rs) | Core identity, peer trust/grants, enrollment, authenticated sessions and durable request outcomes; the host owns its service lifetime |
 | [workspace-hack](../../libs/workspace-hack/Cargo.toml) | Dependency feature unification for builds; no product state |
 
-The proposed Bluetooth-control boundary is still an addition to this map.
-The core peer service has real headless consumers in the worktree, including
-PointZ, whose own registry and sockets are gone.
+The core peer service has real headless consumers in the worktree: PointZ,
+whose own registry and sockets are gone, and Bluetooth handoff.
 
 ### Applications, tooling, and generated surfaces
 
@@ -423,9 +430,9 @@ PointZ, whose own registry and sockets are gone.
 1. **Peer authority:** moved into core with the single-writer migration described
    above. A phone running the Flutter client still needs a hardware check.
 2. **Bluetooth coordination:** [Controllers](../../plugins/controllers/src/platform/linux.rs)
-   and [Bluetooth](../../plugins/bluetooth/src/platform/linux.rs) currently have
-   separate connection paths. The shared Bluetooth-control owner must coordinate
-   their mutations before cross-computer handoff is treated as reliable.
+   and [Bluetooth](../../plugins/bluetooth/src/platform/linux.rs) share reconnect
+   holds, so neither plugin's automatic reconnect undoes the other's disconnect.
+   Real earbuds moving between two computers still need a hardware check.
 3. **Plugin integration:** the validated operation catalog and peer exposure
    metadata now serve MCP and the remote dispatcher. Shipped domain workflows
    still need explicit exposure and integration with their actual state owners.

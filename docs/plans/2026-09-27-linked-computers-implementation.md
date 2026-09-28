@@ -12,16 +12,16 @@ The settings controls use the same authority for names, pairing, revocation and
 explicit grants. Operation choices derive from the canonical installed catalog;
 unavailable declarations and uncertain mutation outcomes remain visible. The
 architecture viewer derives its status and ownership tables from the design,
-covering all 18 plugins, 39 shared crates and 84 ownership entries.
+covering all 18 plugins, 40 shared crates and 85 ownership entries.
 
 The user requested committing and pushing the completed checkpoint before more
 feature work. Delivery stays on the paired `linked-computers` worktree branches.
-PointZ compatibility and authority migration, shared Bluetooth/Controllers
-mutation ownership, earbud handoff, and guest/multi-PC/hardware verification
-remain required for the complete feature. No implementation has been installed
-or released, and the viewer's handoff walkthrough remains illustrative.
+PointZ authority migration, shared Bluetooth/Controllers reconnect holds and
+earbud handoff are implemented. Guest, multi-PC and hardware verification remain
+required for the complete feature. No implementation has been installed or
+released, and the viewer's handoff walkthrough remains illustrative.
 
-The [reviewed design](../specs/2026-09-27-linked-computers-design.md) owns the architecture and acceptance criteria. This checkpoint preserves the work in progress; complete feature acceptance still includes the core peer service, PointZ cutover and Bluetooth workflow.
+The [reviewed design](../specs/2026-09-27-linked-computers-design.md) owns the architecture and acceptance criteria. This checkpoint preserves the work in progress; complete feature acceptance still includes guest, multi-PC and hardware verification.
 
 ## Delivery sequence
 
@@ -280,6 +280,19 @@ The peer, host, PointZ and CLI suites pass on macOS, including a simulated phone
 pairing over real UDP; the Flutter client on a real phone remains to be checked.
 The pull request's CI also exposed theme-guard failures in main's launcher
 changes, which belong to the launcher work rather than this feature.
+
+The [handoff contract](../specs/2026-09-28-bluetooth-handoff-v1.md) then added
+"Move here" for paired earbuds. The new `qol-bluetooth-control` library owns the
+normalized address and the reconnect holds that Bluetooth and Controllers share.
+Bluetooth exposes `handoff_state`, `release_for_handoff` and `resume_reconnect`
+to linked computers; release places a hold, disconnects and proves the link is
+down before it answers. Automatic reconnect skips held addresses on Linux and
+macOS, and any connect the user starts releases the hold. Controllers holds a
+stuck controller for 30 seconds before it disconnects it. The workflow tests
+cover a verified move, nobody holding the earbuds, a refused or unknown release,
+and a failed local connect that tells the other computer to reconnect. Real
+earbuds between two computers, and the guest workflow that records pairing and
+handoff in `report.json`, remain.
 
 Use the existing `qol check` node for affected builds, formatting, lint, tests, and source guards. Extend the existing guest tooling with one reproducible linked-computers workflow once the actual integration steps are established. Its inputs are guest identities and fixtures; its output is `report.json` containing source/artifact identities, commands, request traces, observed state, and failed or unsupported steps. Dynamic process arguments use argv arrays.
 

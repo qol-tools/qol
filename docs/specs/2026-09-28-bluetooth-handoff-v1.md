@@ -39,8 +39,9 @@ An unreadable file holds nothing and is replaced on the next write. At most 64
 holds exist; expired holds are pruned on every write.
 
 - Automatic reconnect in the Bluetooth daemon skips an address while it is held.
-- An explicit connect or reconnect that the user starts on that computer
-  releases every hold for the address first, because the user asked for it.
+- An explicit connect or reconnect that the user starts on that computer,
+  from settings or the command line, releases every hold for the address
+  first, because the user asked for it.
 - A handoff hold expires after 12 hours as a safety net. `resume_reconnect`
   releases it earlier.
 - Controllers places a 30 second hold before it disconnects a stuck controller,
@@ -87,7 +88,9 @@ release it cannot prove.
 - Workflow with fake remote and local sides: success, nobody holds them,
   refused or unknown release, local connect failure followed by resume, and a
   peer that cannot be reached.
-- The automatic reconnect selection skips held addresses on Linux and macOS.
-- Controllers places its hold before disconnecting.
+- Controllers places its hold before disconnecting and releases it when the
+  disconnect fails.
 
-Real earbuds between two real computers are checked on hardware.
+The automatic reconnect loops on Linux and macOS check the hold before every
+attempt. They drive the real Bluetooth stack, so they are checked on hardware
+together with real earbuds moving between two computers.
