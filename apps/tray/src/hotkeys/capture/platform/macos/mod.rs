@@ -1,4 +1,4 @@
-use super::super::binding::{Binding, CaptureEvent, Phase};
+use super::super::binding::{Binding, CaptureEvent, Phase, HEARTBEAT_INTERVAL};
 use super::super::{OnFire, RebuildBindings};
 use anyhow::{bail, Result};
 use core_foundation::base::TCFType;
@@ -18,7 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod layout;
 mod recorder;
@@ -276,7 +276,7 @@ fn run_tap(
 #[derive(Debug)]
 struct MacBindingMatcher {
     bindings: Vec<(MacCombo, Binding)>,
-    active_continuous: HashMap<u16, Binding>,
+    active_continuous: HashMap<u16, (Binding, Instant)>,
     swallowed_keys: HashSet<u16>,
 }
 
@@ -315,7 +315,7 @@ impl MacBindingMatcher {
             .collect();
         self.active_continuous
             .drain()
-            .map(|(_, binding)| CaptureEvent {
+            .map(|(_, (binding, _))| CaptureEvent {
                 binding,
                 phase: Phase::STOP,
             })
@@ -331,14 +331,14 @@ impl MacBindingMatcher {
         if repeat {
             return TapOutcome {
                 swallow: self.swallowed_keys.contains(&observed.key),
-                fired: None,
+                fired: self.heartbeat(observed.key),
             };
         }
         if matches!(event_type, CGEventType::KeyUp) {
             let fired = self
                 .active_continuous
                 .remove(&observed.key)
-                .map(|binding| (binding, Phase::STOP));
+                .map(|(binding, _)| (binding, Phase::STOP));
             return TapOutcome {
                 swallow: self.swallowed_keys.remove(&observed.key) || fired.is_some(),
                 fired,
@@ -350,12 +350,22 @@ impl MacBindingMatcher {
         };
         self.swallowed_keys.insert(observed.key);
         if binding.continuous {
-            self.active_continuous.insert(observed.key, binding.clone());
+            self.active_continuous
+                .insert(observed.key, (binding.clone(), Instant::now()));
         }
         TapOutcome {
             swallow: true,
             fired: Some((binding, Phase::START)),
         }
+    }
+
+    fn heartbeat(&mut self, key: u16) -> Option<(Binding, Phase)> {
+        let (binding, last_heartbeat) = self.active_continuous.get_mut(&key)?;
+        if last_heartbeat.elapsed() < HEARTBEAT_INTERVAL {
+            return None;
+        }
+        *last_heartbeat = Instant::now();
+        Some((binding.clone(), Phase::HEARTBEAT))
     }
 }
 
@@ -689,6 +699,27 @@ mod tests {
         assert!(press.swallow && press.fired.is_some());
         assert!(repeat.swallow && repeat.fired.is_none());
         assert!(release.swallow && release.fired.is_none());
+    }
+
+    #[test]
+    fn a_held_continuous_hotkey_keeps_the_action_going_until_release() {
+        let mut matcher =
+            MacBindingMatcher::new(vec![continuous_binding_for("Super+R", "first", "up")]);
+        let observed = combo_for("Super+R");
+
+        let press = matcher.match_event(CGEventType::KeyDown, &observed, false);
+        let early = matcher.match_event(CGEventType::KeyDown, &observed, true);
+        if let Some((_, last_heartbeat)) = matcher.active_continuous.get_mut(&observed.key) {
+            *last_heartbeat = Instant::now() - HEARTBEAT_INTERVAL;
+        }
+        let repeat = matcher.match_event(CGEventType::KeyDown, &observed, true);
+        let release = matcher.match_event(CGEventType::KeyUp, &observed, false);
+
+        let phase = |outcome: TapOutcome| outcome.fired.map(|(_, phase)| phase);
+        assert_eq!(phase(press), Some(Phase::START));
+        assert_eq!(phase(early), None);
+        assert_eq!(phase(repeat), Some(Phase::HEARTBEAT));
+        assert_eq!(phase(release), Some(Phase::STOP));
     }
 
     #[test]

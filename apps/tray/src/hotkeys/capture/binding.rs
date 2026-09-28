@@ -1,6 +1,9 @@
 use crate::plugins::PluginUid;
 use qol_hotkeys::grammar::{self, Key, Modifier};
 use std::collections::BTreeSet;
+use std::time::Duration;
+
+pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Combo {

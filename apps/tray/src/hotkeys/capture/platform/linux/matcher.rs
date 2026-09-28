@@ -1,12 +1,10 @@
-use super::super::super::binding::{Binding, CaptureEvent, Phase};
+use super::super::super::binding::{Binding, CaptureEvent, Phase, HEARTBEAT_INTERVAL};
 #[cfg(debug_assertions)]
 use super::evdev_backend::keycode_name;
 use qol_hotkeys::evdev;
 use qol_hotkeys::grammar::Modifier;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::time::{Duration, Instant};
-
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
+use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CaptureDecision {
