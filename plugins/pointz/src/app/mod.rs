@@ -1,13 +1,9 @@
 pub(crate) mod daemon;
+pub(crate) mod pairing;
 
-use crate::command::CommandService;
-use crate::discovery::DiscoveryService;
 use crate::input::InputHandler;
-use crate::security::CommandGate;
-use std::sync::Arc;
 
-#[tokio::main]
-pub(crate) async fn run() {
+pub(crate) fn run() {
     env_logger::init();
 
     log::info!("Starting PointZerver (headless mode)...");
@@ -23,14 +19,6 @@ pub(crate) async fn run() {
         log::debug!("Binary built: {}", dt);
     }
 
-    let security = match CommandGate::load() {
-        Ok(security) => Arc::new(security),
-        Err(error) => {
-            log::error!("Failed to initialize PointZ security: {}", error);
-            return;
-        }
-    };
-
     let (tx, rx) = std::sync::mpsc::channel();
     if !daemon::start_listener(tx) {
         if daemon::send_action("settings") {
@@ -41,25 +29,6 @@ pub(crate) async fn run() {
 
     eprintln!("[pointz] daemon started");
 
-    let daemon_security = Arc::clone(&security);
-    std::thread::spawn(move || {
-        for cmd in rx {
-            match cmd {
-                daemon::Command::Settings => {
-                    crate::qol::open_settings();
-                }
-                daemon::Command::BeginPairing => {
-                    daemon_security.begin_pairing();
-                }
-                daemon::Command::Kill => {
-                    eprintln!("[pointz] kill received, shutting down");
-                    daemon::cleanup();
-                    std::process::exit(0);
-                }
-            }
-        }
-    });
-
     let input_handler = match InputHandler::new() {
         Ok(handler) => handler,
         Err(error) => {
@@ -69,34 +38,28 @@ pub(crate) async fn run() {
         }
     };
 
-    let discovery_service = match DiscoveryService::new(Arc::clone(&security)).await {
-        Ok(service) => service,
-        Err(error) => {
-            log::error!("Failed to create discovery service: {}", error);
-            daemon::cleanup();
-            return;
+    log::info!("PointZerver ready - qol-tray owns discovery, pairing and command authentication");
+
+    for command in rx {
+        match command {
+            daemon::Command::Settings => crate::qol::open_settings(),
+            daemon::Command::BeginPairing => pairing::begin(),
+            daemon::Command::Input(input) => {
+                match serde_json::from_value::<crate::command::Command>(input) {
+                    Ok(command) => {
+                        if let Err(error) = input_handler.handle_command(command) {
+                            log::warn!("Rejected command: {error}");
+                        }
+                    }
+                    Err(error) => log::warn!("Ignored malformed command: {error}"),
+                }
+            }
+            daemon::Command::Kill => {
+                eprintln!("[pointz] kill received, shutting down");
+                daemon::cleanup();
+                std::process::exit(0);
+            }
         }
-    };
-
-    let command_service = match CommandService::new(input_handler, security) {
-        Ok(service) => service,
-        Err(error) => {
-            log::error!("Failed to create command service: {}", error);
-            daemon::cleanup();
-            return;
-        }
-    };
-
-    tokio::spawn(async move {
-        if let Err(error) = discovery_service.run().await {
-            log::error!("Discovery loop error: {}", error);
-        }
-    });
-
-    log::info!("PointZerver ready - discovery and command services running");
-
-    if let Err(error) = command_service.run().await {
-        log::error!("Command service error: {}", error);
     }
 
     daemon::cleanup();

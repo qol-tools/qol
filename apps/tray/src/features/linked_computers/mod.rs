@@ -2,8 +2,11 @@ mod administration;
 mod enrollment;
 mod network;
 mod operations;
+mod pointz;
 mod projection;
 pub(crate) mod settings;
+
+pub(crate) use pointz::{is_legacy_pointz, legacy_pointz_allowed};
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -41,6 +44,7 @@ struct Host {
     state: State,
     activation: fn() -> Result<ActivationId, Error>,
     network: Option<network::NetworkLauncher>,
+    pointz: Option<pointz::PointzLauncher>,
     driver: Option<tokio::task::JoinHandle<()>>,
     observer: Option<tokio::task::JoinHandle<Result<(), Error>>>,
     shutting_down: bool,
@@ -54,6 +58,7 @@ struct ActiveAuthority {
     network_complete: bool,
     network_failure: Option<NetworkFailure>,
     cleanup_failed: bool,
+    pointz: pointz::PointzSlot,
 }
 
 enum State {
@@ -73,14 +78,21 @@ impl LinkedComputers {
         let root = crate::paths::base_data_dir()
             .map(|base| base.join("peers"))
             .map_err(|_| Error::RootUnavailable);
-        Self::start_at(
+        let owner = Self::start_at(
             root,
             plugins,
             crate::dev_generation::is_shadow(),
             shutdown,
             Some(NetworkOptions::default()),
         )
-        .await
+        .await;
+        owner.handle.attach_pointz(
+            tokio::runtime::Handle::current(),
+            pointz::PointzHostOptions::default(),
+        );
+        let reconciling = owner.handle.clone();
+        let _ = tokio::task::spawn_blocking(move || reconciling.reconcile_pointz()).await;
+        owner
     }
 
     async fn start_at(
@@ -160,6 +172,7 @@ impl PeerHostHandle {
                 state,
                 activation: activation_id,
                 network: None,
+                pointz: None,
                 driver: None,
                 observer: None,
                 shutting_down: false,
@@ -284,6 +297,7 @@ impl ActiveAuthority {
             network_complete: true,
             network_failure: None,
             cleanup_failed: false,
+            pointz: pointz::PointzSlot::default(),
         }
     }
 

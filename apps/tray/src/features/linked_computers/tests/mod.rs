@@ -6,6 +6,8 @@ mod network_pages;
 mod pagination;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod persistent;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod pointz;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};

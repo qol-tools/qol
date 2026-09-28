@@ -50,6 +50,12 @@ pub enum AuthorityError {
     Storage,
     #[error("authority TLS configuration failed")]
     Transport,
+    #[error("PointZ trust has not been set up on this computer")]
+    PointzAbsent,
+    #[error("PointZ trust was already imported")]
+    PointzMigrated,
+    #[error("PointZ device is not paired")]
+    UnknownDevice,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +85,9 @@ enum AuthorityErrorWire {
     UnsupportedPlatform {},
     Storage {},
     Transport {},
+    PointzAbsent {},
+    PointzMigrated {},
+    UnknownDevice {},
 }
 
 impl From<AuthorityErrorWire> for AuthorityError {
@@ -107,6 +116,9 @@ impl From<AuthorityErrorWire> for AuthorityError {
             AuthorityErrorWire::UnsupportedPlatform {} => Self::UnsupportedPlatform,
             AuthorityErrorWire::Storage {} => Self::Storage,
             AuthorityErrorWire::Transport {} => Self::Transport,
+            AuthorityErrorWire::PointzAbsent {} => Self::PointzAbsent,
+            AuthorityErrorWire::PointzMigrated {} => Self::PointzMigrated,
+            AuthorityErrorWire::UnknownDevice {} => Self::UnknownDevice,
         }
     }
 }

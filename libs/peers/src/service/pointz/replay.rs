@@ -3,13 +3,13 @@ use std::collections::{HashSet, VecDeque};
 const CAPACITY: usize = 4096;
 
 #[derive(Default)]
-pub struct ReplayWindow {
+pub(crate) struct ReplayWindow {
     order: VecDeque<[u8; 32]>,
     seen: HashSet<[u8; 32]>,
 }
 
 impl ReplayWindow {
-    pub fn insert(&mut self, device_id: &[u8; 16], nonce: &[u8; 16]) -> bool {
+    pub(crate) fn insert(&mut self, device_id: &[u8; 16], nonce: &[u8; 16]) -> bool {
         let mut key = [0u8; 32];
         key[..16].copy_from_slice(device_id);
         key[16..].copy_from_slice(nonce);

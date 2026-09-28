@@ -209,3 +209,35 @@ fn enrollment_stdin_is_bounded_redacted_and_never_accepted_as_an_argument() {
     let mut input = io::repeat(b'x');
     assert!(parse(&["prepare"], &mut input).is_err());
 }
+
+#[test]
+fn pointz_commands_map_to_canonical_requests() {
+    use qol_peers::admin::PointzRequest;
+    let device: qol_peers::pointz::PointzDeviceId = "AQEBAQEBAQEBAQEBAQEBAQ".parse().unwrap();
+    let pointz = |request| Action::Direct(Request::Pointz { request });
+    let cases = [
+        (vec!["pointz", "status"], pointz(PointzRequest::Status {})),
+        (vec!["pointz", "devices"], Action::Pages(Pages::Phones)),
+        (
+            vec!["pointz", "pair"],
+            pointz(PointzRequest::BeginPairing {}),
+        ),
+        (
+            vec!["pointz", "cancel"],
+            pointz(PointzRequest::CancelPairing {}),
+        ),
+        (
+            vec!["pointz", "remove", "AQEBAQEBAQEBAQEBAQEBAQ"],
+            Action::Mutation(Mutation::RemovePhone(device)),
+        ),
+    ];
+    for (args, expected) in cases {
+        assert_eq!(
+            parse(&args, &mut io::empty()).unwrap(),
+            expected,
+            "{args:?}"
+        );
+    }
+    assert!(parse(&["pointz", "remove", "short"], &mut io::empty()).is_err());
+    assert!(parse(&["pointz"], &mut io::empty()).is_err());
+}

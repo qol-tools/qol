@@ -1,6 +1,6 @@
 # Linked computers: architecture and sources of truth
 
-Status: Core peer service, CLI, and native/web linked-computer settings are implemented in the linked-computers worktree and exercised in isolated tests. Bluetooth handoff, PointZ cutover, and guest/multi-PC/hardware verification remain unfinished. This is a branch checkpoint; nothing from this implementation is installed or released.
+Status: Core peer service, CLI, native/web linked-computer settings and the PointZ cutover are implemented in the linked-computers worktree and exercised in isolated tests on Linux and macOS. Bluetooth handoff and guest/multi-PC/hardware verification remain unfinished. This is a branch checkpoint; nothing from this implementation is installed or released.
 
 [Open the interactive architecture page](../../apps/tray/diagram/linked-computers.html)
 for the connection model, searchable ownership map, and illustrative Bluetooth
@@ -19,13 +19,13 @@ illustration of the intended result. It is not a working handoff control.
 
 | Capability | Before this work | Current worktree | Verification and remaining work |
 | --- | --- | --- | --- |
-| Link two computers | No reusable core computer-linking service | Core identity, explicit pairing, encrypted sessions and headless controls exist | Pairing and restart recovery pass in isolated generated-TLS fixtures; real-PC and guest verification remain |
+| Link two computers | No reusable core computer-linking service | Core identity, explicit pairing, encrypted sessions and headless controls exist; links persist on Linux and macOS | Pairing and restart recovery pass in isolated generated-TLS fixtures on both systems; real-PC and guest verification remain |
 | Permit a remote plugin action | No common authenticated peer request path | Core checks the canonical operation and exact grant, dispatches once, and saves the result | Real local clients, TLS, catalog, executor and fixture daemon pass together; duplicate and lost-reply cases pass |
 | Recover after a lost reply | No shared remote request history | CLI/API can query or cancel the original request without invoking a replacement | Sender restart, daemon reply loss and recovery pass in tests; a handler acknowledgement is not device success |
 | Use earbuds from the desktop | Phone and laptop occupy both slots | Earbud behavior is unchanged; desktop handoff is not implemented | Shared Bluetooth/Controllers mutation ownership, reconnect holds, device verification and the handoff control remain |
-| Share PointZ trust with core | PointZ owns its own pairing and key registry | PointZ has not yet migrated | Core import, old-writer exclusion, compatibility adapter and phone-client verification remain |
+| Share PointZ trust with core | PointZ owns its own pairing and key registry | Core owns the PointZ seed, paired phones, pairing window and UDP ports; PointZ only executes input | One-time import, legacy-daemon exclusion, removal and a simulated phone pairing over UDP pass in tests; the Flutter client on a real phone remains |
 | Manage linked computers in settings | No linked-computers settings screen | Native and web controls use the same core authority for pairing, revocation, names and explicit operation grants | Catalog, permission and uncertain-result recovery checks pass; guest interaction verification remains |
-| Deliver the complete feature | No feature delivery | Branch checkpoint with the core service, CLI, settings and architecture viewer; full handoff remains unfinished | Linux build, strict lint, formatting, 7,684 Rust tests and 622 UI tests pass; PointZ, Bluetooth integration and guest/multi-PC/hardware verification remain |
+| Deliver the complete feature | No feature delivery | Branch checkpoint with the core service, PointZ cutover, CLI, settings and architecture viewer; full handoff remains unfinished | Strict lint and the peer, host and PointZ suites pass on Linux and macOS; Bluetooth integration and guest/multi-PC/hardware verification remain |
 
 ## High-level design
 
@@ -102,9 +102,10 @@ The source audit found these boundaries:
 | Bluetooth device operations and observations | [Bluetooth runtime contract](../../plugins/bluetooth/qol-runtime.toml) and its platform implementations |
 
 The baseline audit found no shared computer-linking service. The worktree now
-contains the core peer service, host integration, CLI and native/web settings. PointZ's security gate
-still returns a PointZ command and owns plugin-specific storage; its consumer
-migration remains necessary before the complete feature can ship.
+contains the core peer service, host integration, CLI and native/web settings.
+PointZ trust moved into core as described in the
+[PointZ migration contract](2026-09-28-peer-pointz-migration-v1.md); the plugin
+keeps command decoding and input execution.
 
 The tray socket handles `RuntimeRequest`. The broker library's existence does
 not establish that the running host authenticates processes or routes events
@@ -313,7 +314,7 @@ Proposed owners are explicitly marked. Existing gaps follow the tables.
 | OS availability and permissions | [qol-platform](../../libs/platform/src/lib.rs) and the owning domain's platform adapter | Supported operations and meaningful unsupported results |
 | Host ownership mode and restoration | [Residency](../../libs/host-fixes/src/residency.rs), policy ownership, and [host-session journals](../../libs/host-session/src/lib.rs) | Cleanup/recovery; peer requests cannot create another residency decision |
 | Provider authentication | [Core auth](../../apps/tray/src/features/auth/mod.rs) and its [GitHub credential provider](../../apps/tray/src/features/github_auth/mod.rs) | Provider-scoped operations; these credentials do not establish computer trust |
-| Computer identity, peer grants, and reachability | [qol-peers](../../libs/peers/src/lib.rs) owns the core peer store, authenticated sessions and request outcomes. [Linked computers host](../../apps/tray/src/features/linked_computers/mod.rs) supervises its lifetime | CLI, native/web settings and the remote dispatcher use this owner; settings derive operation choices from the canonical catalog. PointZ and Bluetooth handoff remain pending consumers |
+| Computer identity, peer grants, and reachability | [qol-peers](../../libs/peers/src/lib.rs) owns the core peer store, authenticated sessions and request outcomes. [Linked computers host](../../apps/tray/src/features/linked_computers/mod.rs) supervises its lifetime | CLI, native/web settings and the remote dispatcher use this owner; settings derive operation choices from the canonical catalog. PointZ phones use the same owner; Bluetooth handoff remains a pending consumer |
 | Real device/application state | OS, device, or application, accessed through its owning domain facade | Plugin observations and verified operation results |
 | QoL visual rules | [qol-theme](../../libs/theme/src/lib.rs), consumed by [qol-gpui](../../libs/gpui/src/lib.rs) and browser surfaces | Native appearance and generated styles; a visual cache owns no domain state |
 | Executable identity | [Shared identity schema](../../libs/conventions/src/artifact/mod.rs), [build emitter](../../libs/build-identity/src/lib.rs), and [artifact verifier](../../libs/artifact/src/lib.rs) | Install/run verification; file names and timestamps cannot replace identity checks |
@@ -342,7 +343,7 @@ remote access.
 | [Memory](../../plugins/memory/plugin.toml) | Ingestion, evidence, memory store, retrieval, feedback | `qol-agent-homes` resolves source homes; transcripts and retrieval results are not peer identities |
 | [Display / Monitor](../../plugins/monitor/plugin.toml) | Desired layout, brightness, color/night policy | `qol-windowing` display identity and OS observations; existing host ownership journals |
 | [OS Themes](../../plugins/os-themes/plugin.toml) | Host theme/cursor settings and effects | OS observations and host restoration; QoL's own visual tokens remain in `qol-theme` |
-| [PointZ](../../plugins/pointz/plugin.toml) | Mobile gestures and input command interpretation/execution | Still owns legacy discovery, identity, pairing and keys; its migration to core remains required |
+| [PointZ](../../plugins/pointz/plugin.toml) | Mobile gestures and input command interpretation/execution | Core owns its discovery, identity, pairing, keys and command authentication; verified commands arrive through its daemon socket |
 | [Remove App](../../plugins/removeapp/plugin.toml) | Removal planning, selected cleanup, verified results | Installed applications and filesystem/package-manager facts; shared app/process/native UI primitives |
 | [Shot](../../plugins/shot/plugin.toml) | Capture/recording lifecycle and produced artifacts | OS capture facts, `qol-audio` devices, common process ownership and GPUI |
 | [Sound](../../plugins/sound/plugin.toml) | Output selection and volume interaction policy | `qol-audio` owns common device, volume, and default-output operations over the OS audio service |
@@ -398,8 +399,8 @@ not make that crate the owner of each consumer's preferences or observed state.
 | [workspace-hack](../../libs/workspace-hack/Cargo.toml) | Dependency feature unification for builds; no product state |
 
 The proposed Bluetooth-control boundary is still an addition to this map.
-The core peer service has real headless consumers in the worktree; PointZ's
-replaced authority still needs removal before the complete delivery.
+The core peer service has real headless consumers in the worktree, including
+PointZ, whose own registry and sockets are gone.
 
 ### Applications, tooling, and generated surfaces
 
@@ -419,8 +420,8 @@ replaced authority still needs removal before the complete delivery.
 
 ## Gaps that the implementation must close
 
-1. **Peer authority:** PointZ currently owns it locally. Move that authority into
-   core with the single-writer migration described above.
+1. **Peer authority:** moved into core with the single-writer migration described
+   above. A phone running the Flutter client still needs a hardware check.
 2. **Bluetooth coordination:** [Controllers](../../plugins/controllers/src/platform/linux.rs)
    and [Bluetooth](../../plugins/bluetooth/src/platform/linux.rs) currently have
    separate connection paths. The shared Bluetooth-control owner must coordinate

@@ -340,7 +340,7 @@ fn operation_v3_migration_preserves_authority_and_initializes_link_epochs_once()
         epoch
     );
     let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert_eq!(stored["version"], 4);
+    assert_eq!(stored["version"], 5);
 }
 
 #[test]

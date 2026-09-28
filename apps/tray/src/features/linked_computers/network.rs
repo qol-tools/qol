@@ -123,6 +123,9 @@ impl Host {
     }
 
     pub(super) fn begin_stop(&mut self) {
+        if let State::Active(active) | State::Stopping(active) = &mut self.state {
+            super::pointz::stop_adapter(active);
+        }
         let previous = std::mem::replace(&mut self.state, State::Inactive);
         match previous {
             State::Active(active) | State::Stopping(active)

@@ -1,7 +1,7 @@
 mod contract;
 
 pub use contract::session;
-pub use contract::{admin, enrollment, AuthorityError};
+pub use contract::{admin, enrollment, pointz, AuthorityError};
 
 pub use contract::{
     AuthorityLifetime, AuthorityProjection, AuthorityStatus, PeerId, PeerIdError, PeerProjection,

@@ -216,7 +216,10 @@ fn authority_error(error: AuthorityError) -> SessionError {
         | AuthorityError::Identity
         | AuthorityError::UnsupportedPlatform
         | AuthorityError::Storage
-        | AuthorityError::Transport => SessionError::AuthorityUnavailable,
+        | AuthorityError::Transport
+        | AuthorityError::PointzAbsent
+        | AuthorityError::PointzMigrated
+        | AuthorityError::UnknownDevice => SessionError::AuthorityUnavailable,
     }
 }
 

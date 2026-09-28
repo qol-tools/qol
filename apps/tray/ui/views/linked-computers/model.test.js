@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadSnapshot, withoutGrant, permissionChanges, stamp, failureMessage } from './model.js';
+import { loadSnapshot, withoutGrant, permissionChanges, stamp, failureMessage, phoneRemoval, phonesMustPairAgain } from './model.js';
 
 const authority = { peer_id: 'local', activation_id: 'activation', revision: '9007199254740993', status: 'ready' };
 const expected = stamp(authority);
@@ -16,9 +16,13 @@ function replies(overrides = {}) {
         outbound: { result: 'outbound_enrollments', page },
         network: { result: 'network', network: { authority: expected, network_revision: '4' } },
         sessions: { result: 'sessions', page: { ...page, cursor: { ...cursor, network_revision: '4' } } },
+        pointz_status: { result: 'pointz_status', status: { plugin: 'absent', authority: expected, migration: null,
+            server_id: null, device_count: 0, pairing: { open: false, code: null, seconds_remaining: 0 }, transport: { state: 'stopped' } } },
         ...overrides,
     };
-    return async request => byOperation[request.request?.action || request.operation];
+    return async request => request.operation === 'pointz'
+        ? byOperation[`pointz_${request.request.action}`]
+        : byOperation[request.request?.action || request.operation];
 }
 
 test('coherent reads keep decimal revisions as opaque strings', async () => {
@@ -147,4 +151,23 @@ test('refusal messages expose unsupported persistence and bound diagnostics with
         assert.ok(message.length < 256);
         assert.ok(!message.includes('private-fixture'));
     }
+});
+
+test('paired phones load from one snapshot and removal carries the displayed stamp', async () => {
+    const migration = { source: 'legacy', imported: 1, dropped: 1, seed_replaced: false, devices_unreadable: false };
+    const phone = { device_id: 'AQEBAQEBAQEBAQEBAQEBAQ', name: 'Pixel', paired_at_ms: 1 };
+    const pointzStatus = { plugin: 'compatible', authority: expected, migration, server_id: 'server', device_count: 1,
+        pairing: { open: false, code: null, seconds_remaining: 0 }, transport: { state: 'running', dropped: 0 } };
+    const snapshot = await loadSnapshot(replies({
+        pointz_status: { result: 'pointz_status', status: pointzStatus },
+        pointz_devices: { result: 'pointz_devices', page: { cursor, total: 1, items: [phone], next: null } },
+    }));
+    assert.deepEqual(snapshot.phones, [phone]);
+    assert.ok(phonesMustPairAgain(snapshot.pointz.migration));
+    assert.deepEqual(phoneRemoval(snapshot, phone), {
+        operation: 'pointz', request: { action: 'remove', expected, device_id: phone.device_id },
+    });
+    await assert.rejects(loadSnapshot(replies({
+        pointz_status: { result: 'pointz_status', status: { ...pointzStatus, authority: { ...expected, revision: '1' } } },
+    })), error => error.kind === 'inconsistent');
 });

@@ -1,6 +1,9 @@
 use crate::features::linked_computers::settings::{CatalogOperation, InvitationInfo, Snapshot};
-use qol_peers::admin::{EnrollmentRequest, Lifecycle, Request};
+use qol_peers::admin::{
+    EnrollmentRequest, ExpectedAuthority, Lifecycle, PointzRequest, PointzStatus, Request,
+};
 use qol_peers::enrollment::{ExportedInvitation, OutboundEnrollmentState};
+use qol_peers::pointz::{PointzDevice, PointzPlugin, PointzTransport};
 
 #[cfg(test)]
 #[path = "model_tests.rs"]
@@ -327,6 +330,9 @@ pub(super) fn rows(
             }
         }
     }
+    if let Some(pointz) = &snapshot.pointz {
+        rows.extend(phone_rows(pointz, &snapshot.phones, expected));
+    }
     if catalog.is_none() {
         rows.push(Row::new(
             "Permission catalog unavailable",
@@ -339,6 +345,67 @@ pub(super) fn rows(
             "No available peer operations",
             "Existing permissions are retained.",
             None,
+        ));
+    }
+    rows
+}
+
+fn phone_rows(
+    status: &PointzStatus,
+    phones: &[PointzDevice],
+    expected: ExpectedAuthority,
+) -> Vec<Row> {
+    let mut rows = Vec::new();
+    match status.plugin {
+        PointzPlugin::Absent => return rows,
+        PointzPlugin::Legacy => {
+            rows.push(Row::new(
+                "PointZ",
+                "Keeps its own phone pairing until PointZ is updated",
+                None,
+            ));
+            return rows;
+        }
+        PointzPlugin::Compatible => {}
+    }
+    if status
+        .migration
+        .is_some_and(|migration| migration.phones_must_pair_again())
+    {
+        rows.push(Row::new(
+            "Some phones must pair again",
+            "Not every PointZ pairing could move into linked computers",
+            None,
+        ));
+    }
+    if matches!(
+        status.transport,
+        PointzTransport::PortBusy { .. } | PointzTransport::Failed { .. }
+    ) {
+        rows.push(Row::new(
+            "PointZ is not listening",
+            "Another program may be using its network ports",
+            None,
+        ));
+    }
+    if phones.is_empty() {
+        rows.push(Row::new(
+            "No paired phones",
+            "Pair a phone from PointZ settings",
+            None,
+        ));
+    }
+    for phone in phones {
+        rows.push(send(
+            "Remove phone",
+            &phone.name,
+            Request::Pointz {
+                request: PointzRequest::Remove {
+                    expected,
+                    device_id: phone.device_id,
+                },
+            },
+            Some("remove-phone"),
         ));
     }
     rows

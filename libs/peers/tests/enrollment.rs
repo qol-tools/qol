@@ -551,7 +551,7 @@ mod persistent {
             assert!(!snapshot.contains("\"secret\""));
             assert_eq!(
                 serde_json::from_str::<Value>(&snapshot).unwrap()["version"],
-                4
+                5
             );
         }
         drop((inviter, joiner, invitation));

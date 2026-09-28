@@ -268,6 +268,19 @@ implementation-status table. This makes the tested core work visible while
 keeping unfinished PointZ/Bluetooth/UI/device work explicit. It is a status
 viewer, not a replacement for implementing or verifying the handoff.
 
+The next rounds made the checkpoint usable on macOS and moved PointZ trust
+into core. The persistent store now anchors its private directory with
+`F_GETPATH` on macOS and keeps the same lock, permission and inode checks, so
+links survive a tray restart on the Mac; every persistent-store test now runs on
+macOS as well. The [PointZ migration contract](../specs/2026-09-28-peer-pointz-migration-v1.md)
+moved the seed, paired phones, pairing window, UDP ports and command checks into
+core. Snapshot version 5 carries them, legacy files are imported once, an old
+PointZ cannot start after the move, and the plugin keeps only input execution.
+The peer, host, PointZ and CLI suites pass on macOS, including a simulated phone
+pairing over real UDP; the Flutter client on a real phone remains to be checked.
+The pull request's CI also exposed theme-guard failures in main's launcher
+changes, which belong to the launcher work rather than this feature.
+
 Use the existing `qol check` node for affected builds, formatting, lint, tests, and source guards. Extend the existing guest tooling with one reproducible linked-computers workflow once the actual integration steps are established. Its inputs are guest identities and fixtures; its output is `report.json` containing source/artifact identities, commands, request traces, observed state, and failed or unsupported steps. Dynamic process arguments use argv arrays.
 
 Tests target authorization and state transitions: default denial, contract ambiguity, revocation, competing writers, migration interruption, stale generations, request deduplication, and failed handoff reconciliation. No test may use the host's real trust store or Bluetooth connections.

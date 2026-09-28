@@ -2,12 +2,10 @@ mod app;
 mod cli;
 mod command;
 mod config;
-mod discovery;
 mod doctor;
 mod input;
 mod network;
 mod qol;
-mod security;
 
 fn main() -> std::process::ExitCode {
     cli::exit_code(std::env::args().skip(1))
@@ -15,12 +13,12 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use qol_plugin_api::manifest::{PluginManifest, PortProtocol};
+    use qol_plugin_api::manifest::{PeerTrust, PluginManifest};
 
     qol_plugin_api::assert_plugin_toml_valid!();
 
     #[test]
-    fn manifest_preserves_runtime_actions_endpoints_and_enables_doctor() {
+    fn manifest_hands_pairing_and_ports_to_core_and_enables_doctor() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
         let daemon = manifest
@@ -29,6 +27,7 @@ mod tests {
             .expect("PointZ daemon must be declared");
 
         assert!(manifest.capabilities.doctor);
+        assert_eq!(manifest.capabilities.peer_trust, Some(PeerTrust::PointzV1));
         assert_eq!(
             manifest.catalog_runtime_args("settings"),
             Some(vec!["--action".to_string(), "settings".to_string()])
@@ -38,16 +37,6 @@ mod tests {
             daemon.socket.as_deref(),
             Some(crate::config::ServerConfig::DAEMON_SOCKET)
         );
-        assert_eq!(daemon.extra_ports.len(), 2);
-        assert!(daemon.extra_ports.iter().any(|port| {
-            port.name == "discovery"
-                && port.port == crate::config::ServerConfig::DISCOVERY_PORT
-                && port.protocol == PortProtocol::Udp
-        }));
-        assert!(daemon.extra_ports.iter().any(|port| {
-            port.name == "command"
-                && port.port == crate::config::ServerConfig::COMMAND_PORT
-                && port.protocol == PortProtocol::Udp
-        }));
+        assert!(daemon.extra_ports.is_empty());
     }
 }

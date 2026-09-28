@@ -166,7 +166,7 @@ async fn abandoned_unknown_remote_commit_survives_restart_and_recovers_only_afte
     );
     let snapshot: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("state.json")).unwrap()).unwrap();
-    assert_eq!(snapshot["version"], 4);
+    assert_eq!(snapshot["version"], 5);
     assert_eq!(
         snapshot["outbound"][0]["state"],
         serde_json::json!({"kind":"abandoned"})

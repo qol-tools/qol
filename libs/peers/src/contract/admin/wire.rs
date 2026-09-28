@@ -46,6 +46,9 @@ pub(super) enum Request {
         expected: ExpectedAuthority,
         peer_id: PeerId,
     },
+    Pointz {
+        request: super::PointzRequest,
+    },
 }
 
 impl From<Request> for super::Request {
@@ -73,6 +76,7 @@ impl From<Request> for super::Request {
                 grants,
             },
             Request::Revoke { expected, peer_id } => Self::Revoke { expected, peer_id },
+            Request::Pointz { request } => Self::Pointz { request },
         }
     }
 }
@@ -119,6 +123,7 @@ pub(super) enum Error {
     InvalidCursor {},
     GrantUnavailable {},
     ReplyTooLarge {},
+    PointzUnavailable {},
 }
 
 impl From<Error> for super::Error {
@@ -139,6 +144,7 @@ impl From<Error> for super::Error {
             Error::InvalidCursor {} => Self::InvalidCursor,
             Error::GrantUnavailable {} => Self::GrantUnavailable,
             Error::ReplyTooLarge {} => Self::ReplyTooLarge,
+            Error::PointzUnavailable {} => Self::PointzUnavailable,
         }
     }
 }

@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -7,7 +6,7 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const COMMAND_VERSION: u8 = 2;
+const COMMAND_VERSION: u8 = 2;
 
 #[derive(Deserialize, Serialize)]
 struct Envelope {
@@ -19,32 +18,30 @@ struct Envelope {
     mac: String,
 }
 
-pub struct ParsedCommand {
-    pub device_id: [u8; 16],
-    pub sent_at_ms: u64,
-    pub nonce: [u8; 16],
+pub(crate) struct ParsedCommand {
+    pub(crate) device_id: [u8; 16],
+    pub(crate) sent_at_ms: u64,
+    pub(crate) nonce: [u8; 16],
     payload: Vec<u8>,
     mac: [u8; 32],
 }
 
-pub fn parse(packet: &[u8]) -> Result<ParsedCommand> {
-    let envelope: Envelope = serde_json::from_slice(packet)?;
+pub(crate) fn parse(packet: &[u8]) -> Option<ParsedCommand> {
+    let envelope: Envelope = serde_json::from_slice(packet).ok()?;
     if envelope.version != COMMAND_VERSION {
-        anyhow::bail!("unsupported PointZ command version");
+        return None;
     }
-    Ok(ParsedCommand {
-        device_id: decode_array::<16>(&envelope.device_id, "device id")?,
+    Some(ParsedCommand {
+        device_id: decode_array::<16>(&envelope.device_id)?,
         sent_at_ms: envelope.sent_at_ms,
-        nonce: decode_array::<16>(&envelope.nonce, "nonce")?,
-        payload: URL_SAFE_NO_PAD
-            .decode(&envelope.payload)
-            .context("command payload is not valid base64url")?,
-        mac: decode_array::<32>(&envelope.mac, "MAC")?,
+        nonce: decode_array::<16>(&envelope.nonce)?,
+        payload: URL_SAFE_NO_PAD.decode(&envelope.payload).ok()?,
+        mac: decode_array::<32>(&envelope.mac)?,
     })
 }
 
 impl ParsedCommand {
-    pub fn verify(&self, key: &[u8; 32]) -> Result<&[u8]> {
+    pub(crate) fn verify(&self, key: &[u8; 32]) -> Option<&[u8]> {
         let mut verifier =
             HmacSha256::new_from_slice(key).expect("HMAC accepts a 32-byte device key");
         update_mac(
@@ -54,20 +51,13 @@ impl ParsedCommand {
             &self.nonce,
             &self.payload,
         );
-        verifier
-            .verify_slice(&self.mac)
-            .map_err(|_| anyhow::anyhow!("command authentication failed"))?;
-        Ok(&self.payload)
+        verifier.verify_slice(&self.mac).ok()?;
+        Some(&self.payload)
     }
 }
 
-fn decode_array<const N: usize>(encoded: &str, label: &str) -> Result<[u8; N]> {
-    let decoded = URL_SAFE_NO_PAD
-        .decode(encoded)
-        .with_context(|| format!("command {label} is not valid base64url"))?;
-    decoded
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("command {label} has the wrong length"))
+fn decode_array<const N: usize>(encoded: &str) -> Option<[u8; N]> {
+    URL_SAFE_NO_PAD.decode(encoded).ok()?.try_into().ok()
 }
 
 fn update_mac(
@@ -85,7 +75,7 @@ fn update_mac(
 }
 
 #[cfg(test)]
-pub fn seal(
+pub(crate) fn seal(
     payload: &[u8],
     key: &[u8; 32],
     device_id: [u8; 16],
@@ -137,7 +127,7 @@ mod tests {
 
         let parsed = parse(&packet).unwrap();
 
-        assert!(parsed.verify(&[8; 32]).is_err());
+        assert!(parsed.verify(&[8; 32]).is_none());
     }
 
     #[test]
@@ -152,8 +142,8 @@ mod tests {
         let last = packet.len() - 2;
         packet[last] = if packet[last] == b'a' { b'b' } else { b'a' };
 
-        if let Ok(parsed) = parse(&packet) {
-            assert!(parsed.verify(&KEY).is_err());
+        if let Some(parsed) = parse(&packet) {
+            assert!(parsed.verify(&KEY).is_none());
         }
     }
 
@@ -161,6 +151,6 @@ mod tests {
     fn a_v1_envelope_is_rejected() {
         let packet = br#"{"version":1,"sent_at_ms":1,"nonce":"AAAAAAAAAAAAAAAAAAAAAA","payload":"e30","mac":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#;
 
-        assert!(parse(packet).is_err());
+        assert!(parse(packet).is_none());
     }
 }

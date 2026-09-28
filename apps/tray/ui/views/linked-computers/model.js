@@ -1,4 +1,9 @@
 export const enrollment = (action, fields = {}) => ({ operation: 'enrollment', request: { action, ...fields } });
+export const pointz = (action, fields = {}) => ({ operation: 'pointz', request: { action, ...fields } });
+export const phoneRemoval = (snapshot, phone) => structuredClone(pointz('remove',
+    { expected: stamp(snapshot.status.authority), device_id: phone.device_id }));
+export const phonesMustPairAgain = migration => Boolean(migration
+    && (migration.seed_replaced || migration.devices_unreadable || migration.dropped > 0));
 export const stamp = authority => ({ authority_id: authority.peer_id, activation_id: authority.activation_id, revision: authority.revision });
 export const sameStamp = (a, b) => a?.authority_id === b?.authority_id && a?.activation_id === b?.activation_id && a?.revision === b?.revision;
 export const operationId = key => JSON.stringify([key.identity?.scope, key.identity?.value, key.kind, key.name]);
@@ -46,7 +51,7 @@ async function pages(request, makeRequest, expected, result, networkRevision) {
 export async function loadSnapshot(request) {
     const first = await request({ operation: 'status' });
     if (first.result !== 'status') inconsistent();
-    const snapshot = { status: first.status, peers: [], sessions: [], pending: [], outbound: [], grants: {}, attempts: {} };
+    const snapshot = { status: first.status, peers: [], sessions: [], pending: [], outbound: [], grants: {}, attempts: {}, pointz: null, phones: [] };
     if (!first.status.authority || first.status.lifecycle.state !== 'active'
         || first.status.authority.status !== 'ready') return snapshot;
     const expected = stamp(first.status.authority);
@@ -72,6 +77,12 @@ export async function loadSnapshot(request) {
     if (network.result !== 'network' || !sameStamp(network.network.authority, expected)) inconsistent();
     snapshot.network = network.network;
     snapshot.sessions = await pages(request, cursor => ({ operation: 'sessions', cursor }), expected, 'sessions', network.network.network_revision);
+    const phones = await request(pointz('status'));
+    if (phones.result !== 'pointz_status' || !sameStamp(phones.status.authority, expected)) inconsistent();
+    snapshot.pointz = phones.status;
+    if (phones.status.migration) {
+        snapshot.phones = await pages(request, cursor => pointz('devices', { cursor }), expected, 'pointz_devices');
+    }
     const endNetwork = await request({ operation: 'network' });
     const last = await request({ operation: 'status' });
     if (last.result !== 'status' || JSON.stringify(last.status) !== JSON.stringify(first.status)

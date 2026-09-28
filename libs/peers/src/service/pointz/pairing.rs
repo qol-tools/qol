@@ -12,7 +12,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const WINDOW_SECS: u64 = 60;
+pub(crate) const WINDOW_SECS: u64 = 60;
 const MAX_ATTEMPTS: u32 = 3;
 const MAX_PENDING: usize = 16;
 
@@ -20,6 +20,7 @@ const AUTH_INFO: &[u8] = b"pointz-pair-auth-v1";
 const WRAP_INFO: &[u8] = b"pointz-pair-wrap-v1";
 const CLIENT_CONFIRM: &[u8] = b"pointz-confirm-client";
 const SERVER_CONFIRM: &[u8] = b"pointz-confirm-server";
+const UNAVAILABLE: &str = "unavailable";
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -63,7 +64,7 @@ struct Pending {
     name: String,
 }
 
-pub struct PairingSession {
+pub(crate) struct PairingSession {
     pin: String,
     secret: StaticSecret,
     server_pub: [u8; 32],
@@ -73,7 +74,7 @@ pub struct PairingSession {
     pending: HashMap<[u8; 16], Pending>,
 }
 
-pub enum HandleOutcome {
+pub(crate) enum HandleOutcome {
     Reply(Vec<u8>),
     Paired {
         device_id: [u8; 16],
@@ -86,29 +87,37 @@ pub enum HandleOutcome {
 }
 
 impl PairingSession {
-    pub fn open() -> Self {
-        let secret = StaticSecret::from(random_bytes::<32>());
+    pub(crate) fn open() -> Option<Self> {
+        let secret = StaticSecret::from(random_bytes::<32>()?);
         let server_pub = PublicKey::from(&secret).to_bytes();
-        Self {
-            pin: generate_pin(),
+        Some(Self {
+            pin: generate_pin()?,
             secret,
             server_pub,
-            salt: random_bytes::<16>(),
+            salt: random_bytes::<16>()?,
             opened_at: Instant::now(),
             attempts_left: MAX_ATTEMPTS,
             pending: HashMap::new(),
-        }
+        })
     }
 
-    pub fn pin(&self) -> &str {
+    pub(crate) fn pin(&self) -> &str {
         &self.pin
     }
 
-    pub fn is_expired(&self) -> bool {
+    pub(crate) fn is_expired(&self) -> bool {
         self.opened_at.elapsed() >= Duration::from_secs(WINDOW_SECS)
     }
 
-    pub fn handle(&mut self, server_id: &str, datagram: &[u8]) -> HandleOutcome {
+    pub(crate) fn seconds_remaining(&self) -> u32 {
+        Duration::from_secs(WINDOW_SECS)
+            .saturating_sub(self.opened_at.elapsed())
+            .as_secs()
+            .try_into()
+            .unwrap_or(u32::MAX)
+    }
+
+    pub(crate) fn handle(&mut self, server_id: &str, datagram: &[u8]) -> HandleOutcome {
         let Ok(request) = serde_json::from_slice::<WireRequest>(datagram) else {
             return HandleOutcome::Ignore;
         };
@@ -189,9 +198,12 @@ impl PairingSession {
                 HandleOutcome::Reply(reply)
             };
         }
-        let device_key = random_bytes::<32>();
         let aad = confirm_aad(&device_id, server_id);
-        let (wrap_nonce, sealed) = seal(&pending.k_wrap, &device_key, &aad);
+        let Some((device_key, (wrap_nonce, sealed))) = random_bytes::<32>()
+            .and_then(|device_key| Some((device_key, seal(&pending.k_wrap, &device_key, &aad)?)))
+        else {
+            return HandleOutcome::Reply(error(UNAVAILABLE, self.attempts_left));
+        };
         let reply = to_bytes(&WireResponse::Granted {
             server_confirm: URL_SAFE_NO_PAD.encode(confirm_tag(&pending.k_auth, SERVER_CONFIRM)),
             wrap_nonce: URL_SAFE_NO_PAD.encode(wrap_nonce),
@@ -257,8 +269,8 @@ fn confirm_aad(device_id: &[u8; 16], server_id: &str) -> Vec<u8> {
     aad
 }
 
-fn seal(k_wrap: &[u8; 32], device_key: &[u8; 32], aad: &[u8]) -> ([u8; 12], Vec<u8>) {
-    let nonce_bytes = random_bytes::<12>();
+fn seal(k_wrap: &[u8; 32], device_key: &[u8; 32], aad: &[u8]) -> Option<([u8; 12], Vec<u8>)> {
+    let nonce_bytes = random_bytes::<12>()?;
     let cipher = ChaCha20Poly1305::new_from_slice(k_wrap).expect("ChaCha20Poly1305 32-byte key");
     let sealed = cipher
         .encrypt(
@@ -268,23 +280,21 @@ fn seal(k_wrap: &[u8; 32], device_key: &[u8; 32], aad: &[u8]) -> ([u8; 12], Vec<
                 aad,
             },
         )
-        .expect("AEAD sealing never fails for a bounded plaintext");
-    (nonce_bytes, sealed)
+        .ok()?;
+    Some((nonce_bytes, sealed))
 }
 
-fn generate_pin() -> String {
+fn generate_pin() -> Option<String> {
     loop {
-        let value = u32::from_le_bytes(random_bytes::<4>());
+        let value = u32::from_le_bytes(random_bytes::<4>()?);
         if value < 4_294_000_000 {
-            return format!("{:06}", value % 1_000_000);
+            return Some(format!("{:06}", value % 1_000_000));
         }
     }
 }
 
-fn random_bytes<const N: usize>() -> [u8; N] {
-    let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes).expect("the OS RNG is available");
-    bytes
+fn random_bytes<const N: usize>() -> Option<[u8; N]> {
+    crate::service::enrollment::random::<N>().ok()
 }
 
 fn decode16(encoded: &str) -> Option<[u8; 16]> {
@@ -299,6 +309,10 @@ fn to_bytes(response: &WireResponse) -> Vec<u8> {
     serde_json::to_vec(response).expect("pairing responses always serialize")
 }
 
+pub(crate) fn unavailable() -> Vec<u8> {
+    error(UNAVAILABLE, 0)
+}
+
 fn error(reason: &str, attempts_left: u32) -> Vec<u8> {
     to_bytes(&WireResponse::Denied {
         reason,
@@ -311,35 +325,37 @@ fn reason_closed() -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_client {
     use super::*;
 
-    const SERVER_ID: &str = "test-server-id01";
-    const DEVICE: [u8; 16] = [4; 16];
-
-    struct TestClient {
+    pub(crate) struct TestClient {
         secret: StaticSecret,
         public: [u8; 32],
+        device: [u8; 16],
     }
 
     impl TestClient {
-        fn new() -> Self {
-            let secret = StaticSecret::from(random_bytes::<32>());
+        pub(crate) fn new(device: [u8; 16]) -> Self {
+            let secret = StaticSecret::from(random_bytes::<32>().unwrap());
             let public = PublicKey::from(&secret).to_bytes();
-            Self { secret, public }
+            Self {
+                secret,
+                public,
+                device,
+            }
         }
 
-        fn hello(&self) -> Vec<u8> {
+        pub(crate) fn hello(&self) -> Vec<u8> {
             serde_json::to_vec(&serde_json::json!({
                 "type": "PairHello",
-                "device_id": URL_SAFE_NO_PAD.encode(DEVICE),
+                "device_id": URL_SAFE_NO_PAD.encode(self.device),
                 "client_pub": URL_SAFE_NO_PAD.encode(self.public),
                 "name": "TestPhone",
             }))
             .unwrap()
         }
 
-        fn keys(&self, offer: &serde_json::Value, pin: &str) -> ([u8; 32], [u8; 32]) {
+        pub(crate) fn keys(&self, offer: &serde_json::Value, pin: &str) -> ([u8; 32], [u8; 32]) {
             let server_pub = decode32(offer["server_pub"].as_str().unwrap()).unwrap();
             let salt: [u8; 16] = URL_SAFE_NO_PAD
                 .decode(offer["salt"].as_str().unwrap())
@@ -353,19 +369,59 @@ mod tests {
                 &server_pub,
                 &salt,
                 pin,
-                &DEVICE,
+                &self.device,
             )
         }
 
-        fn confirm(&self, k_auth: &[u8; 32]) -> Vec<u8> {
+        pub(crate) fn confirm(&self, k_auth: &[u8; 32]) -> Vec<u8> {
             serde_json::to_vec(&serde_json::json!({
                 "type": "PairConfirm",
-                "device_id": URL_SAFE_NO_PAD.encode(DEVICE),
+                "device_id": URL_SAFE_NO_PAD.encode(self.device),
                 "client_confirm": URL_SAFE_NO_PAD.encode(confirm_tag(k_auth, CLIENT_CONFIRM)),
             }))
             .unwrap()
         }
+
+        pub(crate) fn open_key(
+            &self,
+            result: &serde_json::Value,
+            k_auth: &[u8; 32],
+            k_wrap: &[u8; 32],
+            server_id: &str,
+        ) -> Option<[u8; 32]> {
+            let server_confirm = decode32(result["server_confirm"].as_str()?)?;
+            if !confirm_matches(k_auth, SERVER_CONFIRM, &server_confirm) {
+                return None;
+            }
+            let nonce: [u8; 12] = URL_SAFE_NO_PAD
+                .decode(result["wrap_nonce"].as_str()?)
+                .ok()?
+                .try_into()
+                .ok()?;
+            let sealed = URL_SAFE_NO_PAD.decode(result["sealed"].as_str()?).ok()?;
+            let cipher = ChaCha20Poly1305::new_from_slice(k_wrap).ok()?;
+            cipher
+                .decrypt(
+                    Nonce::from_slice(&nonce),
+                    Payload {
+                        msg: &sealed,
+                        aad: &confirm_aad(&self.device, server_id),
+                    },
+                )
+                .ok()?
+                .try_into()
+                .ok()
+        }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_client::TestClient;
+    use super::*;
+
+    const SERVER_ID: &str = "test-server-id01";
+    const DEVICE: [u8; 16] = [4; 16];
 
     fn reply_json(outcome: &HandleOutcome) -> serde_json::Value {
         let bytes = match outcome {
@@ -379,9 +435,9 @@ mod tests {
 
     #[test]
     fn a_correct_pin_pairs_and_delivers_a_decryptable_device_key() {
-        let mut session = PairingSession::open();
+        let mut session = PairingSession::open().unwrap();
         let pin = session.pin().to_string();
-        let client = TestClient::new();
+        let client = TestClient::new(DEVICE);
 
         let offer = reply_json(&session.handle(SERVER_ID, &client.hello()));
         let (k_auth, k_wrap) = client.keys(&offer, &pin);
@@ -398,38 +454,18 @@ mod tests {
         };
         assert_eq!(device_id, DEVICE);
         let result: serde_json::Value = serde_json::from_slice(&reply).unwrap();
-        assert!(confirm_matches(
-            &k_auth,
-            SERVER_CONFIRM,
-            &decode32(result["server_confirm"].as_str().unwrap()).unwrap(),
-        ));
-        let nonce: [u8; 12] = URL_SAFE_NO_PAD
-            .decode(result["wrap_nonce"].as_str().unwrap())
-            .unwrap()
-            .try_into()
-            .unwrap();
-        let sealed = URL_SAFE_NO_PAD
-            .decode(result["sealed"].as_str().unwrap())
-            .unwrap();
-        let cipher = ChaCha20Poly1305::new_from_slice(&k_wrap).unwrap();
-        let opened = cipher
-            .decrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: &sealed,
-                    aad: &confirm_aad(&DEVICE, SERVER_ID),
-                },
-            )
-            .unwrap();
-        assert_eq!(opened, device_key);
+        assert_eq!(
+            client.open_key(&result, &k_auth, &k_wrap, SERVER_ID),
+            Some(device_key)
+        );
     }
 
     #[test]
     fn a_wrong_pin_is_rejected_and_closes_after_three_attempts() {
-        let mut session = PairingSession::open();
+        let mut session = PairingSession::open().unwrap();
         let real_pin = session.pin().to_string();
         let wrong_pin = format!("{:06}", (real_pin.parse::<u32>().unwrap() + 1) % 1_000_000);
-        let client = TestClient::new();
+        let client = TestClient::new(DEVICE);
         let offer = reply_json(&session.handle(SERVER_ID, &client.hello()));
         let (bad_auth, _) = client.keys(&offer, &wrong_pin);
 
@@ -446,8 +482,8 @@ mod tests {
 
     #[test]
     fn a_man_in_the_middle_without_the_pin_cannot_complete_confirmation() {
-        let mut session = PairingSession::open();
-        let client = TestClient::new();
+        let mut session = PairingSession::open().unwrap();
+        let client = TestClient::new(DEVICE);
         let offer = reply_json(&session.handle(SERVER_ID, &client.hello()));
         let (guessed_auth, _) = client.keys(&offer, "000000");
 
@@ -462,8 +498,8 @@ mod tests {
 
     #[test]
     fn a_confirm_without_a_prior_hello_is_refused_without_spending_an_attempt() {
-        let mut session = PairingSession::open();
-        let client = TestClient::new();
+        let mut session = PairingSession::open().unwrap();
+        let client = TestClient::new(DEVICE);
 
         let outcome = session.handle(SERVER_ID, &client.confirm(&[0; 32]));
 
@@ -473,7 +509,7 @@ mod tests {
 
     #[test]
     fn a_non_pairing_datagram_is_ignored() {
-        let mut session = PairingSession::open();
+        let mut session = PairingSession::open().unwrap();
 
         assert!(matches!(
             session.handle(SERVER_ID, b"DISCOVER"),

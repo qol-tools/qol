@@ -34,6 +34,8 @@ fn snapshot() -> Snapshot {
         pending: Vec::new(),
         outbound: Vec::new(),
         attempts: Vec::new(),
+        pointz: None,
+        phones: Vec::new(),
     }
 }
 
@@ -248,4 +250,65 @@ fn permission_additions_preserve_unavailable_grants_and_freeze_the_displayed_aut
             catalog.is_some()
         );
     }
+}
+
+#[test]
+fn phone_removal_uses_the_displayed_stamp_and_legacy_pointz_offers_no_controls() {
+    use qol_peers::admin::{PointzRequest, PointzStatus};
+    use qol_peers::pointz::{
+        PointzDevice, PointzDeviceId, PointzImport, PointzImportSource, PointzPairing,
+        PointzPlugin, PointzTransport,
+    };
+
+    let mut snapshot = snapshot();
+    let expected = snapshot.status.authority.as_ref().unwrap().expected();
+    let device_id = PointzDeviceId::from_bytes([4; 16]);
+    snapshot.pointz = Some(PointzStatus {
+        plugin: PointzPlugin::Compatible,
+        authority: Some(expected),
+        migration: Some(PointzImport {
+            source: PointzImportSource::Legacy,
+            imported: 1,
+            dropped: 1,
+            seed_replaced: false,
+            devices_unreadable: false,
+        }),
+        server_id: Some("server".into()),
+        device_count: 1,
+        pairing: PointzPairing::CLOSED,
+        transport: PointzTransport::Running { dropped: 0 },
+    });
+    snapshot.phones.push(PointzDevice {
+        device_id,
+        name: "Pixel".into(),
+        paired_at_ms: 1,
+    });
+
+    let shown = rows(Some(&snapshot), Some(&[]), "local", None, None);
+
+    assert!(shown
+        .iter()
+        .any(|row| row.label == "Some phones must pair again"));
+    let remove = shown
+        .iter()
+        .find(|row| row.label == "Remove phone")
+        .expect("paired phone must be removable");
+    assert_eq!(remove.detail, "Pixel");
+    let Some(Action::Send(request, Some("remove-phone"))) = &remove.action else {
+        panic!("removal must be confirmed");
+    };
+    assert_eq!(
+        *request,
+        Request::Pointz {
+            request: PointzRequest::Remove {
+                expected,
+                device_id,
+            },
+        }
+    );
+
+    snapshot.pointz.as_mut().unwrap().plugin = PointzPlugin::Legacy;
+    let legacy = rows(Some(&snapshot), Some(&[]), "local", None, None);
+    assert!(!legacy.iter().any(|row| row.label == "Remove phone"));
+    assert!(legacy.iter().any(|row| row.label == "PointZ"));
 }

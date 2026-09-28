@@ -2,7 +2,9 @@ mod activation;
 mod enrollment;
 pub use enrollment::{AttemptState, EnrollmentFailure, EnrollmentRequest};
 mod network;
+mod pointz;
 pub use network::{NetworkRevision, NetworkSummary, SessionCursor, SessionPage, SessionSummary};
+pub use pointz::{PointzRequest, PointzStatus};
 mod wire;
 
 pub use activation::{ActivationId, ActivationIdError};
@@ -66,12 +68,16 @@ pub enum Request {
         expected: ExpectedAuthority,
         peer_id: PeerId,
     },
+    Pointz {
+        request: PointzRequest,
+    },
 }
 
 impl Request {
     pub fn is_mutation(&self) -> bool {
         match self {
             Self::Enrollment { request } => request.is_mutation(),
+            Self::Pointz { request } => request.is_mutation(),
             Self::Status
             | Self::Network
             | Self::Sessions { .. }
@@ -192,6 +198,15 @@ pub enum Response {
     Tombstones {
         page: Page<PeerId>,
     },
+    PointzStatus {
+        status: PointzStatus,
+    },
+    PointzDevices {
+        page: Page<crate::pointz::PointzDevice>,
+    },
+    PointzPairing {
+        pairing: crate::pointz::PointzPairing,
+    },
     Changed {
         authority_id: PeerId,
         activation_id: ActivationId,
@@ -236,6 +251,8 @@ pub enum Error {
     GrantUnavailable,
     #[error("peer administration reply exceeds the local message boundary")]
     ReplyTooLarge,
+    #[error("PointZ with core trust support is not installed and enabled")]
+    PointzUnavailable,
 }
 
 impl From<AuthorityError> for Error {

@@ -115,7 +115,7 @@ fn populated_fixture_commits_migration_before_reopen_and_preserves_link_epochs()
     let path = root.join("state.json");
     let completed = fs::read(&path).unwrap();
     let stored: serde_json::Value = serde_json::from_slice(&completed).unwrap();
-    assert_eq!(stored["version"], 4);
+    assert_eq!(stored["version"], 5);
     let authority = PeerAuthority::open_persistent(&root, SystemTime::now()).unwrap();
     let original = authority.projection().unwrap();
     assert_eq!(original.revision, StoreRevision::new(1));

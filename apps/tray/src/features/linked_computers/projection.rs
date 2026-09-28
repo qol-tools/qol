@@ -77,6 +77,18 @@ pub(super) fn tombstones(
     })
 }
 
+pub(super) fn pointz_devices(
+    projection: AuthorityProjection,
+    activation_id: ActivationId,
+    devices: Vec<qol_peers::pointz::PointzDevice>,
+    cursor: PageCursor,
+) -> Result<Response, Error> {
+    validate_cursor(&projection, activation_id, cursor)?;
+    Ok(Response::PointzDevices {
+        page: page(devices, cursor, PEERS_PER_PAGE)?,
+    })
+}
+
 fn validate_cursor(
     projection: &AuthorityProjection,
     activation_id: ActivationId,

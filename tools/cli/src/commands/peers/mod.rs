@@ -26,7 +26,7 @@ fn command_with_runner(run: Runner) -> Command {
     let mut command = handlers(
         Command::new("peers")
             .about("Inspect and control the local peer authority.")
-            .usage("qol peers <status|list|grants|tombstones|session|create|open|stop|rename|revoke|set-grants|network|invite|cancel-invitation|pending|approve|reject|prepare|redeem|recover|abandon|resume|outbound|attempt|request|invoke|outcome|reconcile|cancel|requests> [--json]")
+            .usage("qol peers <status|list|grants|tombstones|session|create|open|stop|rename|revoke|set-grants|network|invite|cancel-invitation|pending|approve|reject|prepare|redeem|recover|abandon|resume|outbound|attempt|request|pointz|invoke|outcome|reconcile|cancel|requests> [--json]")
             .detail(DETAILS),
         None,
         run,
@@ -132,6 +132,11 @@ fn command_with_runner(run: Runner) -> Command {
             "request",
             "",
             "Dispatch one canonical admin::Request JSON document from stdin.",
+        ),
+        (
+            "pointz",
+            " <status|devices|pair|cancel|remove DEVICE>",
+            "Inspect paired PointZ phones, open or cancel a pairing window, or remove a phone.",
         ),
     ] {
         command = command.subcommand(handlers(

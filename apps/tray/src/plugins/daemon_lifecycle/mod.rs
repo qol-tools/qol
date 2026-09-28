@@ -59,6 +59,14 @@ pub(super) fn start_daemon_with_context(
     let Some(daemon_config) = spawn::enabled_daemon(plugin).cloned() else {
         return Ok(None);
     };
+    if crate::features::linked_computers::is_legacy_pointz(&plugin.manifest)
+        && !crate::features::linked_computers::legacy_pointz_allowed()
+    {
+        anyhow::bail!(
+            "{} must be updated: phone pairing now belongs to linked computers",
+            plugin.manifest.plugin.name
+        );
+    }
 
     reap_daemon_if_exited(plugin);
     if let Some(pid) = plugin.daemon_pid() {

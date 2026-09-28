@@ -1,8 +1,9 @@
 use qol_peers::admin::{
-    EnrollmentRequest, ExpectedAuthority, Page, PageCursor, PeerSummary, Request, Response,
-    SessionCursor, SessionSummary, Status,
+    EnrollmentRequest, ExpectedAuthority, Page, PageCursor, PeerSummary, PointzRequest,
+    PointzStatus, Request, Response, SessionCursor, SessionSummary, Status,
 };
 use qol_peers::enrollment::{OutboundEnrollment, PendingEnrollment};
+use qol_peers::pointz::PointzDevice;
 use qol_peers::PeerId;
 use qol_plugin_api::operations::OperationKey;
 use qol_runtime::PlatformStateClient;
@@ -20,6 +21,8 @@ pub(crate) struct Snapshot {
         qol_peers::enrollment::TransactionId,
         qol_peers::admin::AttemptState,
     )>,
+    pub pointz: Option<PointzStatus>,
+    pub phones: Vec<PointzDevice>,
 }
 
 pub(crate) fn load(client: &PlatformStateClient) -> Result<Snapshot, Failure> {
@@ -40,6 +43,8 @@ fn load_with(
         pending: Vec::new(),
         outbound: Vec::new(),
         attempts: Vec::new(),
+        pointz: None,
+        phones: Vec::new(),
     };
     let Some(authority) = &snapshot.status.authority else {
         return Ok(snapshot);
@@ -105,6 +110,26 @@ fn load_with(
         snapshot.attempts.push((transaction, state));
     }
     snapshot.sessions = sessions(&mut read, expected)?;
+    let Response::PointzStatus { status: pointz } = read(Request::Pointz {
+        request: PointzRequest::Status {},
+    })?
+    else {
+        return Err(Failure::Inconsistent);
+    };
+    if pointz.authority != Some(expected) {
+        return Err(Failure::Inconsistent);
+    }
+    if pointz.migration.is_some() {
+        snapshot.phones = pages(expected, |cursor| {
+            match read(Request::Pointz {
+                request: PointzRequest::Devices { cursor },
+            })? {
+                Response::PointzDevices { page } => Ok(page),
+                _ => Err(Failure::Inconsistent),
+            }
+        })?;
+    }
+    snapshot.pointz = Some(pointz);
     let Response::Status { status } = read(Request::Status)? else {
         return Err(Failure::Inconsistent);
     };

@@ -8,7 +8,7 @@ mod pin;
 pub mod session;
 mod tls;
 
-pub use authority::{AuthorityError, PeerAuthority};
+pub use authority::{AuthorityError, PeerAuthority, WeakPeerAuthority};
 pub use certificate::{validate_certificate, MAX_CERTIFICATE_BYTES};
 pub use error::{CertificateError, PeerError};
 pub use identity::{Identity, SecretKeyBytes};
@@ -19,5 +19,6 @@ pub use tls::{
 };
 
 pub mod network;
+pub mod pointz;
 
 pub use authority::operations::{body_digest, decode_body};

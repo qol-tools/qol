@@ -332,8 +332,16 @@ pub struct Capabilities {
     pub doctor: bool,
     #[serde(default)]
     pub permissions: Vec<Permission>,
+    #[serde(default)]
+    pub peer_trust: Option<PeerTrust>,
     #[serde(flatten)]
     pub extras: HashMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PeerTrust {
+    #[serde(rename = "pointz-v1")]
+    PointzV1,
 }
 
 fn collect_legacy_menu_executable_actions(items: &[MenuItem], actions: &mut Vec<DeclaredAction>) {

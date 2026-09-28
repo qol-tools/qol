@@ -25,6 +25,10 @@ impl PeerHostHandle {
         };
         let mut host = self.inner.lock().map_err(|_| Error::HostUnavailable)?;
         match request {
+            Request::Pointz { request } => {
+                drop(host);
+                self.pointz_request(request)
+            }
             Request::Enrollment { request } => {
                 super::enrollment::dispatch(host.authority()?, request)
             }
@@ -207,6 +211,7 @@ pub(super) fn operation_name(request: &Request) -> &'static str {
         Request::Rename { .. } => "rename",
         Request::SetGrants { .. } => "set_grants",
         Request::Revoke { .. } => "revoke",
+        Request::Pointz { request } => request.action_name(),
     }
 }
 
@@ -295,6 +300,9 @@ pub(super) fn trace_outcome(operation: &str, result: &Result<Response, Error>) {
             | Response::Peers { .. }
             | Response::Grants { .. }
             | Response::Tombstones { .. }
+            | Response::PointzStatus { .. }
+            | Response::PointzDevices { .. }
+            | Response::PointzPairing { .. }
             | Response::Error { .. },
         ) => {
             qol_runtime::probe!(

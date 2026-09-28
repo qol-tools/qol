@@ -2,6 +2,7 @@ pub mod admin;
 mod authority;
 mod authority_error;
 pub mod enrollment;
+pub mod pointz;
 pub mod session;
 
 pub use authority_error::AuthorityError;

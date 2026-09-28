@@ -26,6 +26,9 @@ export function isMutation(request) {
     if (request.operation === 'enrollment') {
         return !['pending', 'outbound', 'attempt'].includes(request.request.action);
     }
+    if (request.operation === 'pointz') {
+        return !['status', 'devices'].includes(request.request.action);
+    }
     return !['status', 'network', 'sessions', 'peers', 'grants', 'tombstones'].includes(request.operation);
 }
 

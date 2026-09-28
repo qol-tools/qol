@@ -15,14 +15,19 @@ use zeroize::Zeroizing;
 
 use super::enrollment::{InboundReceipt, OutboundJoin, MAX_OUTBOUND, MAX_RECEIPTS};
 use super::{
-    state::{LinkedPeer, State, MAX_GRANTS, MAX_PEERS, MAX_SNAPSHOT_BYTES, MAX_TOMBSTONES},
+    state::{
+        LinkedPeer, PointzDeviceRecord, PointzState, State, MAX_GRANTS, MAX_PEERS,
+        MAX_SNAPSHOT_BYTES, MAX_TOMBSTONES,
+    },
     AuthorityError,
 };
 use crate::enrollment::{EnrollmentReceipt, InvitationId, OutboundEnrollmentState, TransactionId};
+use crate::pointz::{PointzDeviceId, PointzImport};
+use crate::service::pointz::{Seed, MAX_DEVICES};
 use crate::service::{Identity, PeerPin, SecretKeyBytes, MAX_CERTIFICATE_BYTES};
 use crate::{AuthorityLifetime, PeerId, StoreRevision};
 
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const MAX_SECRET_BYTES: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
@@ -38,6 +43,25 @@ struct Snapshot {
     outbound: Bounded<StoredOutbound, MAX_OUTBOUND>,
     #[serde(default)]
     operations: Option<Bounded<super::operations::LinkOperations, 512>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pointz: Option<StoredPointz>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPointz {
+    seed: Secret,
+    devices: Bounded<StoredPointzDevice, MAX_DEVICES>,
+    import: PointzImport,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPointzDevice {
+    device_id: PointzDeviceId,
+    key: Secret,
+    name: String,
+    paired_at_ms: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -143,6 +167,62 @@ impl<'de> Deserialize<'de> for Secret {
     }
 }
 
+impl Secret {
+    fn exact<const N: usize>(self) -> Result<Zeroizing<[u8; N]>, AuthorityError> {
+        if self.0.len() != N {
+            return Err(AuthorityError::InvalidSnapshot);
+        }
+        let mut bytes = Zeroizing::new([0; N]);
+        bytes.copy_from_slice(&self.0);
+        Ok(bytes)
+    }
+
+    fn copy(bytes: &[u8]) -> Self {
+        Self(Zeroizing::new(bytes.to_vec()))
+    }
+}
+
+impl StoredPointz {
+    fn from_state(state: &PointzState) -> Self {
+        Self {
+            seed: Secret::copy(state.seed.expose()),
+            devices: Bounded(
+                state
+                    .devices
+                    .iter()
+                    .map(|device| StoredPointzDevice {
+                        device_id: device.id,
+                        key: Secret::copy(device.key.as_slice()),
+                        name: device.name.clone(),
+                        paired_at_ms: device.paired_at_ms,
+                    })
+                    .collect(),
+            ),
+            import: state.import,
+        }
+    }
+
+    fn into_state(self) -> Result<PointzState, AuthorityError> {
+        Ok(PointzState {
+            seed: Seed::from_bytes(*self.seed.exact::<32>()?),
+            devices: self
+                .devices
+                .0
+                .into_iter()
+                .map(|device| {
+                    Ok(PointzDeviceRecord {
+                        id: device.device_id,
+                        key: device.key.exact::<32>()?,
+                        name: device.name,
+                        paired_at_ms: device.paired_at_ms,
+                    })
+                })
+                .collect::<Result<_, AuthorityError>>()?,
+            import: self.import,
+        })
+    }
+}
+
 impl StoredPin {
     fn from_pin(pin: &PeerPin) -> Self {
         Self {
@@ -167,8 +247,11 @@ pub(super) fn decode(bytes: &[u8], now: SystemTime) -> Result<(State, bool), Aut
     }
     let snapshot: Snapshot =
         serde_json::from_slice(bytes).map_err(|_| AuthorityError::InvalidSnapshot)?;
-    if !matches!(snapshot.version, 3 | VERSION) {
+    if !matches!(snapshot.version, 3 | 4 | VERSION) {
         return Err(AuthorityError::UnsupportedVersion);
+    }
+    if snapshot.version < VERSION && snapshot.pointz.is_some() {
+        return Err(AuthorityError::InvalidSnapshot);
     }
     let (identity, renewed) = Identity::restore_or_renew(
         snapshot.identity.certificate.0,
@@ -187,6 +270,7 @@ pub(super) fn decode(bytes: &[u8], now: SystemTime) -> Result<(State, bool), Aut
         return Err(AuthorityError::InvalidSnapshot);
     }
     let mut state = State {
+        pointz: snapshot.pointz.map(StoredPointz::into_state).transpose()?,
         operations: snapshot
             .operations
             .map(|stored| stored.0)
@@ -264,6 +348,7 @@ pub(super) fn encode(state: &State) -> Result<Zeroizing<Vec<u8>>, AuthorityError
     let snapshot = Snapshot {
         version: VERSION,
         operations: Some(Bounded(state.operations.clone())),
+        pointz: state.pointz.as_ref().map(StoredPointz::from_state),
         revision: state.revision,
         identity: StoredIdentity {
             peer_id: state.identity.pin().peer_id(),

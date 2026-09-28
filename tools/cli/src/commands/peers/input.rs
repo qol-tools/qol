@@ -2,7 +2,8 @@ use std::io::Read;
 
 use anyhow::{anyhow, bail, Result};
 use qol_conventions::operations::OperationKey;
-use qol_peers::admin::{ExpectedAuthority, Request};
+use qol_peers::admin::{ExpectedAuthority, PointzRequest, Request};
+use qol_peers::pointz::PointzDeviceId;
 use qol_peers::PeerId;
 use qol_runtime::local_ipc::MAX_MESSAGE_BYTES;
 use serde::de::DeserializeOwned;
@@ -25,6 +26,7 @@ pub(super) enum Mutation {
     Rename(String),
     Revoke(PeerId),
     SetGrants(PeerId, Vec<OperationKey>),
+    RemovePhone(PointzDeviceId),
 }
 
 impl Mutation {
@@ -38,6 +40,12 @@ impl Mutation {
                 expected,
                 peer_id,
                 grants,
+            },
+            Self::RemovePhone(device_id) => Request::Pointz {
+                request: PointzRequest::Remove {
+                    expected,
+                    device_id,
+                },
             },
         }
     }
@@ -63,8 +71,21 @@ pub(super) fn parse(args: &[&str], stdin: &mut impl Read) -> Result<Action> {
             Action::Mutation(Mutation::SetGrants(parse_peer(peer)?, read_json(stdin)?))
         }
         ["request"] => Action::Direct(read_json(stdin)?),
+        ["pointz", "status"] => Action::Direct(pointz(PointzRequest::Status {})),
+        ["pointz", "devices"] => Action::Pages(Pages::Phones),
+        ["pointz", "pair"] => Action::Direct(pointz(PointzRequest::BeginPairing {})),
+        ["pointz", "cancel"] => Action::Direct(pointz(PointzRequest::CancelPairing {})),
+        ["pointz", "remove", device] => Action::Mutation(Mutation::RemovePhone(
+            device
+                .parse()
+                .map_err(|_| anyhow!("invalid canonical PointZ device identifier"))?,
+        )),
         _ => return super::enrollment::parse(args, stdin),
     })
+}
+
+fn pointz(request: PointzRequest) -> Request {
+    Request::Pointz { request }
 }
 
 fn parse_peer(value: &str) -> Result<PeerId> {

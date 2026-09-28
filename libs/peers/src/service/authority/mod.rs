@@ -2,6 +2,7 @@ mod connection;
 mod enrollment;
 mod error;
 pub mod operations;
+mod pointz;
 mod snapshot;
 mod state;
 mod storage;
@@ -31,6 +32,21 @@ pub use error::AuthorityError;
 pub struct PeerAuthority {
     inner: Arc<Mutex<Inner>>,
     changes: tokio::sync::watch::Sender<()>,
+}
+
+#[derive(Clone)]
+pub struct WeakPeerAuthority {
+    inner: std::sync::Weak<Mutex<Inner>>,
+    changes: tokio::sync::watch::Sender<()>,
+}
+
+impl WeakPeerAuthority {
+    pub fn upgrade(&self) -> Option<PeerAuthority> {
+        Some(PeerAuthority {
+            inner: self.inner.upgrade()?,
+            changes: self.changes.clone(),
+        })
+    }
 }
 
 struct Inner {
@@ -86,6 +102,7 @@ impl PeerAuthority {
             receipts: Vec::new(),
             outbound: Vec::new(),
             operations: Vec::new(),
+            pointz: None,
         };
         state.validate()?;
         storage.commit(&state)?;
@@ -103,6 +120,13 @@ impl PeerAuthority {
                 operation_deadlines: Default::default(),
             })),
             changes: tokio::sync::watch::channel(()).0,
+        }
+    }
+
+    pub fn downgrade(&self) -> WeakPeerAuthority {
+        WeakPeerAuthority {
+            inner: Arc::downgrade(&self.inner),
+            changes: self.changes.clone(),
         }
     }
 
@@ -261,6 +285,17 @@ impl PeerAuthority {
             });
         }
         next_revision(expected)?;
+        let mut candidate = inner.state.clone();
+        edit(&mut candidate)?;
+        self.publish(&mut inner, candidate)
+    }
+
+    fn mutate_current(
+        &self,
+        edit: impl FnOnce(&mut State) -> Result<(), AuthorityError>,
+    ) -> Result<StoreRevision, AuthorityError> {
+        let mut inner = self.lock()?;
+        inner.ensure_ready()?;
         let mut candidate = inner.state.clone();
         edit(&mut candidate)?;
         self.publish(&mut inner, candidate)
