@@ -1,5 +1,5 @@
 use super::super::data::{request_json, REQUEST_TIMEOUT};
-use super::model::{self, Action, Row, NAME_RULE};
+use super::model::{self, Action, Control, Row, NAME_RULE};
 use crate::features::linked_computers::settings::{
     self, CatalogOperation, Failure, InvitationInfo, Snapshot,
 };
@@ -14,13 +14,13 @@ use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
     settings_label_group, settings_page, settings_value_group, RowGround, SettingsFeedback,
-    SettingsHint, SettingsTextField,
+    SettingsHint, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_busy_message,
-    settings_list, settings_value_text, CustomHints, CustomPanelCallback,
+    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
+    settings_busy_message, settings_list, settings_value_text, CustomHints, CustomPanelCallback,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
-    SettingsRow,
+    SettingsRow, SettingsValueTone,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
@@ -30,16 +30,12 @@ use qol_runtime::local_http::Method;
 use qol_runtime::PlatformStateClient;
 
 const MAX_VISIBLE: usize = 9;
-const DANGER_VERBS: [&str; 5] = ["stop", "revoke", "remove", "abandon", "decline"];
+const DANGER_VERBS: [&str; 5] = ["unlink", "remove", "abandon", "decline", "reject"];
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
 
 enum Editing {
     None,
     Name,
-    Confirm {
-        request: Request,
-        word: &'static str,
-    },
 }
 
 pub(super) struct LinkedComputersView {
@@ -114,8 +110,6 @@ impl LinkedComputersView {
         self.pending = true;
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
-        self.snapshot = None;
-        self.catalog = None;
         self.notice = None;
         let receiver = load(request);
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -308,11 +302,7 @@ impl LinkedComputersView {
                     ));
                 }
             }
-            Action::Send(request, Some(word)) => {
-                self.field.clear();
-                self.editing = Editing::Confirm { request, word };
-            }
-            Action::Send(request, None) => self.work(Some(request), cx),
+            Action::Send(request) => self.work(Some(request), cx),
         }
         cx.notify();
     }
@@ -387,17 +377,6 @@ impl LinkedComputersView {
                 if let Some(expected) = expected {
                     self.work(Some(Request::Rename { expected, name }), cx);
                 }
-            }
-            Editing::Confirm { request, word } => {
-                if self.field.text().trim().eq_ignore_ascii_case(word) {
-                    self.work(Some(request), cx);
-                    return;
-                }
-                self.notice = Some((
-                    format!("Type {word} to confirm, or Escape to cancel."),
-                    true,
-                ));
-                self.editing = Editing::Confirm { request, word };
             }
             Editing::None => {}
         }
@@ -510,26 +489,37 @@ impl LinkedComputersView {
         let ground = RowGround::of(selected, focused);
         let editing_name = selected && matches!(self.editing, Editing::Name);
         let action = row.action.clone();
+        let busy = selected && self.pending;
         let mut values = settings_value_group();
-        if editing_name {
-            values = values.child(SettingsTextField::live(self.field.clone(), ground, kit));
-        } else {
-            values = values.children(
-                row.value
-                    .clone()
-                    .map(|(text, tone)| settings_value_text(text, tone, ground, kit)),
-            );
-            values = values.children(row.verb.map(|verb| {
+        if busy && row.control != Control::Chip {
+            values = values.child(settings_action_spinner(
+                ("linked-computers-spinner", index),
+                kit,
+            ));
+        }
+        values = match &row.control {
+            _ if editing_name => values.child(settings_value_text(
+                format!("{}_", self.field.text()),
+                SettingsValueTone::Normal,
+                ground,
+                kit,
+            )),
+            Control::Value(text, tone) => {
+                values.child(settings_value_text(text.clone(), *tone, ground, kit))
+            }
+            Control::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
+            Control::Chip => values.children(row.verb.map(|verb| {
                 settings_action_affordance(
                     ("linked-computers-action", index),
                     verb,
                     DANGER_VERBS.contains(&verb).then_some("danger"),
-                    selected && self.pending,
+                    busy,
                     ground,
                     kit,
                 )
-            }));
-        }
+            })),
+            Control::None => values,
+        };
         SettingsRow::setting(("linked-computers-row", index), kit)
             .selected(selected, focused)
             .on_click(cx.listener(move |view, _, _, cx| {
@@ -549,25 +539,6 @@ impl LinkedComputersView {
                 kit,
             ))
             .child(values)
-            .into_any_element()
-    }
-
-    fn render_confirm(&self, word: &str, focused: bool) -> AnyElement {
-        let kit = kit();
-        let ground = RowGround::of(true, focused);
-        SettingsRow::setting("linked-computers-confirm", kit)
-            .selected(true, focused)
-            .child(settings_label_group(
-                format!("Type {word} to confirm"),
-                Some("Enter confirms. Escape cancels.".into()),
-                ground,
-                kit,
-            ))
-            .child(settings_value_group().child(SettingsTextField::live(
-                self.field.clone(),
-                ground,
-                kit,
-            )))
             .into_any_element()
     }
 
@@ -616,14 +587,10 @@ impl CustomSettingsBreadcrumbs for LinkedComputersView {
 
     fn settings_hints(&self) -> Option<CustomHints> {
         if !matches!(self.editing, Editing::None) {
-            let commit = match self.editing {
-                Editing::Name => "save",
-                _ => "confirm",
-            };
             return Some(CustomHints {
                 question: None,
                 left: vec![
-                    SettingsHint::new(Key::ENTER, commit),
+                    SettingsHint::new(Key::ENTER, "save"),
                     SettingsHint::new(Key::TYPE, "edit"),
                 ],
                 right: vec![SettingsHint::new(Key::ESC, "cancel")],
@@ -675,9 +642,6 @@ impl Render for LinkedComputersView {
         let mut page = settings_page();
         if let Some((message, danger)) = &self.notice {
             page = page.child(SettingsFeedback::new(message.clone(), *danger));
-        }
-        if let Editing::Confirm { word, .. } = &self.editing {
-            page = page.child(self.render_confirm(word, focused));
         }
         page = page.child(self.render_list(&rows, focused, cx));
         if busy && self.snapshot.is_none() {

@@ -1,4 +1,4 @@
-use super::{rows, Action};
+use super::{rows, Action, Control};
 use crate::features::linked_computers::settings::{InvitationInfo, Snapshot};
 use qol_peers::admin::{
     ActivationId, AuthoritySummary, EnrollmentRequest, Lifecycle, PeerSummary, Request, Status,
@@ -65,10 +65,9 @@ fn confirmed_grant_removal_freezes_peer_and_stamp_and_retains_other_hidden_grant
     snapshot.grants.push((peer_id, grants.clone()));
     let requests: Vec<_> = rows(Some(&snapshot), None, None, None, &[])
         .into_iter()
+        .filter(|row| row.verb == Some("remove"))
         .filter_map(|row| match row.action {
-            Some(Action::Send(request @ Request::SetGrants { .. }, Some("remove"))) => {
-                Some(request)
-            }
+            Some(Action::Send(request @ Request::SetGrants { .. })) => Some(request),
             _ => None,
         })
         .collect();
@@ -122,7 +121,7 @@ fn recovery_uses_the_original_transaction_and_only_its_matching_invitation_endpo
         let requests: Vec<_> = rows(Some(&snapshot), None, Some(&source), None, &[])
             .into_iter()
             .filter_map(|row| match row.action {
-                Some(Action::Send(Request::Enrollment { request }, _)) => Some(request),
+                Some(Action::Send(Request::Enrollment { request })) => Some(request),
                 _ => None,
             })
             .collect();
@@ -172,7 +171,7 @@ fn unavailable_views_have_no_mutating_controls_and_connection_labels_require_ses
         snapshot.status.lifecycle = lifecycle;
         assert!(!rows(Some(&snapshot), None, None, None, &[])
             .iter()
-            .any(|row| matches!(row.action, Some(Action::Send(..)))));
+            .any(|row| matches!(row.action, Some(Action::Send(_)))));
     }
 }
 
@@ -211,9 +210,9 @@ fn permission_additions_preserve_unavailable_grants_and_freeze_the_displayed_aut
     let presented = rows(Some(&snapshot), Some(&catalog), None, None, &[]);
     let requests: Vec<_> = presented
         .into_iter()
-        .filter(|row| row.verb == Some("add"))
+        .filter(|row| row.control == Control::Toggle(false))
         .filter_map(|row| match row.action {
-            Some(Action::Send(request @ Request::SetGrants { .. }, None)) => Some(request),
+            Some(Action::Send(request @ Request::SetGrants { .. })) => Some(request),
             _ => None,
         })
         .collect();
@@ -229,11 +228,14 @@ fn permission_additions_preserve_unavailable_grants_and_freeze_the_displayed_aut
     assert_eq!(snapshot.grants[0].1, keys[..2]);
     for catalog in [None, Some([].as_slice())] {
         let presented = rows(Some(&snapshot), catalog, None, None, &[]);
-        assert!(!presented.iter().any(|row| row.verb == Some("add")));
+        assert!(!presented
+            .iter()
+            .any(|row| matches!(row.control, Control::Toggle(_))
+                && matches!(row.action, Some(Action::Send(Request::SetGrants { .. })))));
         assert_eq!(
             presented
                 .iter()
-                .filter(|row| matches!(row.action, Some(Action::Send(_, Some("remove")))))
+                .filter(|row| row.verb == Some("remove"))
                 .count(),
             2
         );
@@ -294,8 +296,9 @@ fn phone_removal_uses_the_displayed_stamp_and_legacy_pointz_offers_no_controls()
         .find(|row| row.label == "Remove phone")
         .expect("paired phone must be removable");
     assert_eq!(remove.detail, "Pixel");
-    let Some(Action::Send(request, Some("remove-phone"))) = &remove.action else {
-        panic!("removal must be confirmed");
+    assert_eq!(remove.verb, Some("remove"));
+    let Some(Action::Send(request)) = &remove.action else {
+        panic!("a paired phone must be removable");
     };
     assert_eq!(
         *request,
@@ -320,11 +323,8 @@ fn linking_that_is_off_offers_to_turn_it_on() {
     snapshot.status.lifecycle = Lifecycle::Inactive;
     let shown = rows(Some(&snapshot), None, None, None, &[]);
     let row = shown.iter().find(|row| row.label == "Linking").unwrap();
-    assert!(matches!(
-        row.action,
-        Some(Action::Send(Request::Enable, None))
-    ));
-    assert_eq!(row.verb, Some("turn on"));
+    assert!(matches!(row.action, Some(Action::Send(Request::Enable))));
+    assert_eq!(row.control, Control::Toggle(false));
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
     let desk = shown.iter().find(|row| row.label == "Desk").unwrap();
     assert!(matches!(
         &desk.action,
-        Some(Action::Send(Request::Nearby { request: NearbyRequest::Link { peer_id: id, .. } }, None)) if *id == peer_id
+        Some(Action::Send(Request::Nearby { request: NearbyRequest::Link { peer_id: id, .. } })) if *id == peer_id
     ));
     assert!(!shown
         .iter()
@@ -372,8 +372,8 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
     let withheld = [PluginId::new("qol-media")];
     let shown = rows(Some(&snapshot), Some(&catalog), None, None, &withheld);
     let desk = shown.iter().find(|row| row.label == "Desk").unwrap();
-    assert_eq!(desk.value.as_ref().unwrap().0, "042 917");
-    let Some(Action::Send(request, None)) = &desk.action else {
+    assert!(matches!(&desk.control, Control::Value(code, _) if code == "042 917"));
+    let Some(Action::Send(request)) = &desk.action else {
         panic!("a shown code must be confirmable");
     };
     assert_eq!(
@@ -389,24 +389,21 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
     let toggles: Vec<_> = shown
         .iter()
         .filter(|row| matches!(row.action, Some(Action::Toggle(_))))
-        .map(|row| (row.label.as_str(), row.value.as_ref().unwrap().0.as_str()))
+        .map(|row| (row.label.as_str(), row.control.clone()))
         .collect();
     assert_eq!(
         toggles,
         [
-            ("Let it use Bluetooth", "allowed"),
-            ("Let it use Media", "not allowed")
+            ("Let it use Bluetooth", Control::Toggle(true)),
+            ("Let it use Media", Control::Toggle(false))
         ]
     );
     assert!(shown.iter().any(|row| row.label == "Decline"
         && matches!(
             row.action,
-            Some(Action::Send(
-                Request::Nearby {
-                    request: NearbyRequest::Decline { .. }
-                },
-                None
-            ))
+            Some(Action::Send(Request::Nearby {
+                request: NearbyRequest::Decline { .. }
+            }))
         )));
 }
 

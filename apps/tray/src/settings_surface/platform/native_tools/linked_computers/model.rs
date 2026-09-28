@@ -8,6 +8,7 @@ use qol_peers::admin::{
 use qol_peers::enrollment::{EnrollmentRejection, ExportedInvitation, OutboundEnrollmentState};
 use qol_peers::pointz::{PointzDevice, PointzPlugin, PointzTransport};
 use qol_peers::{AuthorityLifetime, AuthorityStatus};
+use qol_plugin_api::operations::OperationKey;
 
 #[cfg(test)]
 #[path = "model_tests.rs"]
@@ -23,13 +24,21 @@ pub(super) enum Action {
     Paste,
     Copy,
     Toggle(PluginId),
-    Send(Request, Option<&'static str>),
+    Send(Request),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Control {
+    None,
+    Value(String, SettingsValueTone),
+    Toggle(bool),
+    Chip,
 }
 
 pub(super) struct Row {
     pub label: String,
     pub detail: String,
-    pub value: Option<(String, SettingsValueTone)>,
+    pub control: Control,
     pub verb: Option<&'static str>,
     pub action: Option<Action>,
     pub header: bool,
@@ -40,7 +49,7 @@ impl Row {
         Self {
             label: label.into(),
             detail: detail.into(),
-            value: None,
+            control: Control::None,
             verb: None,
             action,
             header: false,
@@ -55,7 +64,19 @@ impl Row {
     }
 
     fn value(mut self, text: impl Into<String>, tone: SettingsValueTone) -> Self {
-        self.value = Some((text.into(), tone));
+        self.control = Control::Value(text.into(), tone);
+        self
+    }
+
+    fn toggle(mut self, on: bool) -> Self {
+        self.control = Control::Toggle(on);
+        self.verb = Some(if on { "turn off" } else { "turn on" });
+        self
+    }
+
+    fn chip(mut self, verb: &'static str) -> Self {
+        self.control = Control::Chip;
+        self.verb = Some(verb);
         self
     }
 
@@ -78,58 +99,51 @@ pub(super) fn rows(
     )];
     let Some(snapshot) = snapshot else {
         rows.push(
-            Row::new("Refresh", "Read linking state again", Some(Action::Refresh)).verb("refresh"),
+            Row::new("Refresh", "Read linking state again", Some(Action::Refresh)).chip("refresh"),
         );
         return rows;
     };
     let Some(authority) = &snapshot.status.authority else {
-        let off = matches!(
-            snapshot.status.lifecycle,
-            Lifecycle::Inactive | Lifecycle::Unavailable { .. }
-        );
-        let mut row = Row::new(
-            "Linking",
-            match snapshot.status.lifecycle {
-                Lifecycle::Unavailable { error } => format!("Linking could not start: {error}"),
-                _ => "Links this computer to your other computers".into(),
-            },
-            off.then(|| Action::Send(Request::Enable, None)),
-        )
-        .value(
-            lifecycle_label(&snapshot.status.lifecycle),
-            SettingsValueTone::Muted,
-        );
-        if off {
-            row = row.verb("turn on");
-        }
+        let detail = match snapshot.status.lifecycle {
+            Lifecycle::Unavailable { error } => format!("Linking could not start: {error}"),
+            _ => "Links this computer to your other computers".into(),
+        };
+        let row = match snapshot.status.lifecycle {
+            Lifecycle::Inactive => {
+                Row::new("Linking", detail, Some(Action::Send(Request::Enable))).toggle(false)
+            }
+            ref lifecycle => Row::new("Linking", detail, None)
+                .value(lifecycle_label(lifecycle), SettingsValueTone::Muted),
+        };
         rows.push(row);
         return rows;
     };
     let expected = authority.expected();
     let ready = matches!(snapshot.status.lifecycle, Lifecycle::Active)
         && authority.status == AuthorityStatus::Ready;
-    rows.push(
-        Row::new(
-            "Computer name",
-            "Shown to the computers you link",
-            ready.then_some(Action::Name),
-        )
-        .value(authority.name.clone(), SettingsValueTone::Normal)
-        .verb("rename"),
-    );
-    let mut linking = Row::new("Linking", lifetime_detail(authority.lifetime), None).value(
-        linking_label(&snapshot.status.lifecycle, authority),
-        if ready {
-            SettingsValueTone::Success
-        } else {
-            SettingsValueTone::Attention
-        },
-    );
+    let mut name = Row::new(
+        "Computer name",
+        "Shown to the computers you link",
+        ready.then_some(Action::Name),
+    )
+    .value(authority.name.clone(), SettingsValueTone::Normal);
     if ready {
-        linking.action = Some(Action::Send(Request::Stop { expected }, Some("stop")));
-        linking = linking.verb("stop");
+        name = name.verb("rename");
     }
-    rows.push(linking);
+    rows.push(name);
+    rows.push(if ready {
+        Row::new(
+            "Linking",
+            lifetime_detail(authority.lifetime),
+            Some(Action::Send(Request::Stop { expected })),
+        )
+        .toggle(true)
+    } else {
+        Row::new("Linking", lifetime_detail(authority.lifetime), None).value(
+            linking_label(&snapshot.status.lifecycle, authority),
+            SettingsValueTone::Attention,
+        )
+    });
     if !ready {
         return rows;
     }
@@ -166,28 +180,25 @@ fn nearby_rows(
         .collect();
     let mut confirming = false;
     for computer in &snapshot.nearby {
-        let link = |peer_id| Request::Nearby {
-            request: NearbyRequest::Link { expected, peer_id },
-        };
-        let decline = Request::Nearby {
+        let link = Action::Send(Request::Nearby {
+            request: NearbyRequest::Link {
+                expected,
+                peer_id: computer.peer_id,
+            },
+        });
+        let decline = Action::Send(Request::Nearby {
             request: NearbyRequest::Decline {
                 expected,
                 peer_id: computer.peer_id,
             },
-        };
+        });
         let Some(state) = &computer.link else {
             rows.push(
-                send(
-                    &computer.name,
-                    "On this network, not linked",
-                    link(computer.peer_id),
-                    None,
-                )
-                .verb("link"),
+                Row::new(&computer.name, "On this network, not linked", Some(link)).chip("link"),
             );
             continue;
         };
-        let code = state.code.map(|code| code.to_string());
+        let code = state.code.map(|code| code.to_string()).unwrap_or_default();
         match state.state {
             NearbyState::Connecting {} => rows.push(
                 Row::new(&computer.name, "Asking it for a code", None)
@@ -196,54 +207,44 @@ fn nearby_rows(
             NearbyState::Confirm {} => {
                 confirming = true;
                 rows.push(
-                    send(
+                    Row::new(
                         &computer.name,
-                        &format!("Link if {} shows this code too", computer.name),
-                        Request::Nearby {
+                        format!("Link if {} shows this code too", computer.name),
+                        Some(Action::Send(Request::Nearby {
                             request: NearbyRequest::Confirm {
                                 expected,
                                 peer_id: computer.peer_id,
                                 grants: grants.clone(),
                             },
-                        },
-                        None,
+                        })),
                     )
-                    .value(code.unwrap_or_default(), SettingsValueTone::Attention)
+                    .value(code, SettingsValueTone::Attention)
                     .verb("link"),
                 );
                 rows.push(
-                    send(
+                    Row::new(
                         "Decline",
-                        &format!(
+                        format!(
                             "The codes differ, or you did not ask to link {}",
                             computer.name
                         ),
-                        decline,
-                        None,
+                        Some(decline),
                     )
-                    .verb("decline"),
+                    .chip("decline"),
                 );
             }
             NearbyState::WaitingForPeer {} => rows.push(
-                send(
+                Row::new(
                     &computer.name,
-                    &format!("Now choose Link on {}", computer.name),
-                    decline,
-                    None,
+                    format!("Now choose Link on {}", computer.name),
+                    Some(decline),
                 )
-                .value(code.unwrap_or_default(), SettingsValueTone::Normal)
+                .value(code, SettingsValueTone::Normal)
                 .verb("cancel"),
             ),
-            NearbyState::Failed { error } => rows.push(
-                send(
-                    &computer.name,
-                    failure_detail(error),
-                    link(computer.peer_id),
-                    None,
-                )
-                .value("not linked", SettingsValueTone::Danger)
-                .verb("retry"),
-            ),
+            NearbyState::Failed { error } => {
+                rows.push(Row::new(&computer.name, failure_detail(error), Some(link)).chip("retry"))
+            }
         }
     }
     if confirming {
@@ -252,7 +253,7 @@ fn nearby_rows(
     rows
 }
 
-fn new_link_permissions(catalog: Option<&[CatalogOperation]>, withheld: &[PluginId]) -> Vec<Row> {
+fn plugins(catalog: Option<&[CatalogOperation]>) -> Vec<&CatalogOperation> {
     let mut plugins: Vec<&CatalogOperation> = Vec::new();
     for operation in catalog.into_iter().flatten() {
         if !plugins
@@ -263,23 +264,18 @@ fn new_link_permissions(catalog: Option<&[CatalogOperation]>, withheld: &[Plugin
         }
     }
     plugins
+}
+
+fn new_link_permissions(catalog: Option<&[CatalogOperation]>, withheld: &[PluginId]) -> Vec<Row> {
+    plugins(catalog)
         .into_iter()
         .map(|operation| {
-            let allowed = !withheld.contains(&operation.plugin_id);
             Row::new(
                 format!("Let it use {}", plugin_label(&operation.plugin_id)),
                 operation.description.clone(),
                 Some(Action::Toggle(operation.plugin_id.clone())),
             )
-            .value(
-                if allowed { "allowed" } else { "not allowed" },
-                if allowed {
-                    SettingsValueTone::Success
-                } else {
-                    SettingsValueTone::Muted
-                },
-            )
-            .verb("change")
+            .toggle(!withheld.contains(&operation.plugin_id))
         })
         .collect()
 }
@@ -313,71 +309,79 @@ fn linked_rows(
                 } else {
                     "Not connected at last refresh"
                 },
-                None,
-            )
-            .value(
-                if connected {
-                    "connected"
-                } else {
-                    "not connected"
-                },
-                if connected {
-                    SettingsValueTone::Success
-                } else {
-                    SettingsValueTone::Muted
-                },
-            ),
-        );
-        rows.push(
-            send(
-                "Revoke link",
-                &peer.name,
-                Request::Revoke {
+                Some(Action::Send(Request::Revoke {
                     expected,
                     peer_id: peer.peer_id,
-                },
-                Some("revoke"),
+                })),
             )
-            .verb("revoke"),
+            .chip("unlink"),
         );
-        if let Some((_, grants)) = snapshot.grants.iter().find(|(id, _)| *id == peer.peer_id) {
-            for grant in grants {
-                rows.push(
-                    send(
-                        "Remove permission",
-                        &format!("{} \u{b7} {}", peer.name, grant_label(grant, catalog)),
-                        Request::SetGrants {
-                            expected,
-                            peer_id: peer.peer_id,
-                            grants: grants.iter().filter(|key| *key != grant).cloned().collect(),
-                        },
-                        Some("remove"),
-                    )
-                    .value("allowed", SettingsValueTone::Success)
-                    .verb("remove"),
+        let granted = snapshot
+            .grants
+            .iter()
+            .find(|(id, _)| *id == peer.peer_id)
+            .map(|(_, grants)| grants.as_slice())
+            .unwrap_or_default();
+        let set = |grants: Vec<OperationKey>| {
+            Some(Action::Send(Request::SetGrants {
+                expected,
+                peer_id: peer.peer_id,
+                grants,
+            }))
+        };
+        for plugin in plugins(catalog) {
+            let owned: Vec<_> = catalog
+                .into_iter()
+                .flatten()
+                .filter(|operation| operation.plugin_id == plugin.plugin_id)
+                .map(|operation| &operation.key)
+                .collect();
+            let allowed = owned.iter().all(|key| granted.contains(key));
+            let updated = if allowed {
+                granted
+                    .iter()
+                    .filter(|key| !owned.contains(key))
+                    .cloned()
+                    .collect()
+            } else {
+                let mut updated = granted.to_vec();
+                updated.extend(
+                    owned
+                        .into_iter()
+                        .filter(|key| !granted.contains(key))
+                        .cloned(),
                 );
+                updated
+            };
+            rows.push(
+                Row::new(
+                    format!("{} can use {}", peer.name, plugin_label(&plugin.plugin_id)),
+                    plugin.description.clone(),
+                    set(updated),
+                )
+                .toggle(allowed),
+            );
+        }
+        for grant in granted {
+            if catalog
+                .into_iter()
+                .flatten()
+                .any(|operation| operation.key == *grant)
+            {
+                continue;
             }
-            for operation in catalog.into_iter().flatten() {
-                if grants.contains(&operation.key) {
-                    continue;
-                }
-                let mut updated = grants.clone();
-                updated.push(operation.key.clone());
-                rows.push(
-                    send(
-                        "Add permission",
-                        &format!("{} \u{b7} {}", peer.name, operation.description),
-                        Request::SetGrants {
-                            expected,
-                            peer_id: peer.peer_id,
-                            grants: updated,
-                        },
-                        None,
-                    )
-                    .value("not allowed", SettingsValueTone::Muted)
-                    .verb("add"),
-                );
-            }
+            rows.push(
+                Row::new(
+                    format!("{} can use {}", peer.name, grant_label(grant)),
+                    "Its plugin is not installed here",
+                    set(granted
+                        .iter()
+                        .filter(|key| *key != grant)
+                        .cloned()
+                        .collect()),
+                )
+                .chip("remove"),
+            );
         }
     }
     if catalog.is_none() {
@@ -420,8 +424,7 @@ fn invitation_rows(
                     "Paste it on the other computer within two minutes",
                     Some(Action::Copy),
                 )
-                .value("ready", SettingsValueTone::Success)
-                .verb("copy"),
+                .chip("copy"),
             );
             rows.push(
                 enroll(
@@ -431,9 +434,8 @@ fn invitation_rows(
                         expected,
                         invitation: *invitation,
                     },
-                    None,
                 )
-                .verb("cancel"),
+                .chip("cancel"),
             );
         }
         _ => rows.push(
@@ -444,9 +446,8 @@ fn invitation_rows(
                     expected,
                     addresses: Vec::new(),
                 },
-                None,
             )
-            .verb("create"),
+            .chip("create"),
         ),
     }
     rows.push(
@@ -455,7 +456,7 @@ fn invitation_rows(
             "Link using an invitation copied on the other computer",
             Some(Action::Paste),
         )
-        .verb("paste"),
+        .chip("paste"),
     );
     for pending in &snapshot.pending {
         let detail = format!(
@@ -471,9 +472,8 @@ fn invitation_rows(
                     expected,
                     key: pending.key,
                 },
-                None,
             )
-            .verb("approve"),
+            .chip("approve"),
         );
         rows.push(
             enroll(
@@ -483,9 +483,8 @@ fn invitation_rows(
                     expected,
                     key: pending.key,
                 },
-                None,
             )
-            .verb("reject"),
+            .chip("reject"),
         );
     }
     for item in &snapshot.outbound {
@@ -534,9 +533,8 @@ fn outbound_rows(
                     transaction,
                     endpoints: info.endpoints.clone(),
                 },
-                None,
             )
-            .verb("recover"),
+            .chip("recover"),
         );
     }
     rows.push(
@@ -547,9 +545,8 @@ fn outbound_rows(
                 expected,
                 transaction,
             },
-            Some("abandon"),
         )
-        .verb("abandon"),
+        .chip("abandon"),
     );
     rows
 }
@@ -624,9 +621,8 @@ fn phone_rows(
                         device_id: phone.device_id,
                     },
                 },
-                Some("remove-phone"),
             )
-            .verb("remove"),
+            .chip("remove"),
         );
     }
     rows
@@ -665,16 +661,8 @@ fn plugin_label(plugin: &PluginId) -> String {
         .unwrap_or_default()
 }
 
-fn grant_label(
-    grant: &qol_plugin_api::operations::OperationKey,
-    catalog: Option<&[CatalogOperation]>,
-) -> String {
-    catalog
-        .into_iter()
-        .flatten()
-        .find(|operation| operation.key == *grant)
-        .map(|operation| operation.description.clone())
-        .unwrap_or_else(|| format!("{} {}", grant.kind.as_str(), grant.name))
+fn grant_label(grant: &OperationKey) -> String {
+    format!("{} {}", grant.kind.as_str(), grant.name)
 }
 
 fn lifecycle_label(lifecycle: &Lifecycle) -> &'static str {
@@ -712,15 +700,10 @@ fn linking_label(lifecycle: &Lifecycle, authority: &AuthoritySummary) -> String 
     }
 }
 
-fn send(label: &str, detail: &str, request: Request, confirm: Option<&'static str>) -> Row {
-    Row::new(label, detail, Some(Action::Send(request, confirm)))
+fn send(label: &str, detail: &str, request: Request) -> Row {
+    Row::new(label, detail, Some(Action::Send(request)))
 }
 
-fn enroll(
-    label: &str,
-    detail: &str,
-    request: EnrollmentRequest,
-    confirm: Option<&'static str>,
-) -> Row {
-    send(label, detail, Request::Enrollment { request }, confirm)
+fn enroll(label: &str, detail: &str, request: EnrollmentRequest) -> Row {
+    send(label, detail, Request::Enrollment { request })
 }
