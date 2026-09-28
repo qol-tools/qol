@@ -325,6 +325,36 @@ fn process_tree_terminates_only_its_child_in_the_callers_group() {
     let prepared = guard.prepare_command(command).unwrap();
     let child = prepared.spawn().unwrap();
     let child_pid = child.id();
+    let observation = guard.observe_residual();
+    assert_eq!(guard.containment_backend(), "linux_cgroup_v2");
+    assert!(guard.membership_observation_supported());
+    assert_eq!(
+        observation.leader.pid,
+        qol_process::Observation::Value(child_pid)
+    );
+    assert_eq!(
+        observation.creator.pid,
+        qol_process::Observation::Value(std::process::id())
+    );
+    assert!(matches!(
+        observation.scope,
+        qol_process::Observation::Value(_)
+    ));
+    assert!(observation
+        .members
+        .iter()
+        .all(|member| member.pid == child_pid));
+    if !observation.incomplete {
+        assert!(observation
+            .members
+            .iter()
+            .any(|member| member.pid == child_pid));
+        assert_eq!(
+            observation.root_populated_before,
+            qol_process::Observation::Value(true)
+        );
+    }
+    assert!(!guard.tree_has_exited().unwrap());
 
     let waiter = std::thread::spawn(move || {
         let mut child = child;

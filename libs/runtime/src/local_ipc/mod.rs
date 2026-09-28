@@ -2,6 +2,8 @@ use std::io::{self, BufRead, ErrorKind};
 use std::path::Path;
 
 mod platform;
+mod secret;
+pub use secret::{encode_secret_json, read_secret_line, SecretMessageError, SecretReader};
 
 pub use platform::{LocalListener, LocalStream};
 

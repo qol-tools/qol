@@ -1,0 +1,251 @@
+use super::{rows, Action};
+use crate::features::linked_computers::settings::{InvitationInfo, Snapshot};
+use qol_peers::admin::{
+    ActivationId, AuthoritySummary, EnrollmentRequest, Lifecycle, PeerSummary, Request, Status,
+};
+use qol_peers::enrollment::{
+    EnrollmentRequestKey, ExportedInvitation, OutboundEnrollment, OutboundEnrollmentState,
+};
+use qol_peers::{AuthorityLifetime, AuthorityStatus, StoreRevision};
+use qol_plugin_api::operations::{OperationKey, OperationKind};
+
+fn snapshot() -> Snapshot {
+    let peer_id = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        .parse()
+        .unwrap();
+    Snapshot {
+        status: Status {
+            lifecycle: Lifecycle::Active,
+            authority: Some(AuthoritySummary {
+                peer_id,
+                activation_id: ActivationId::from_bytes([1; 16]),
+                name: "local".into(),
+                lifetime: AuthorityLifetime::Session,
+                revision: StoreRevision::new(3),
+                status: AuthorityStatus::Ready,
+                peer_count: 0,
+                grant_count: 0,
+                tombstone_count: 0,
+            }),
+        },
+        peers: Vec::new(),
+        sessions: Vec::new(),
+        grants: Vec::new(),
+        pending: Vec::new(),
+        outbound: Vec::new(),
+        attempts: Vec::new(),
+    }
+}
+
+#[test]
+fn confirmed_grant_removal_freezes_peer_and_stamp_and_retains_other_hidden_grants() {
+    let mut snapshot = snapshot();
+    let peer_id = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        .parse()
+        .unwrap();
+    let expected = snapshot.status.authority.as_ref().unwrap().expected();
+    let grants: Vec<_> = ["hidden", "removed"]
+        .into_iter()
+        .map(|name| {
+            OperationKey::new(
+                crate::plugins::manifest::PluginUid::new("unavailable"),
+                OperationKind::Action,
+                name,
+            )
+        })
+        .collect();
+    snapshot.peers.push(PeerSummary {
+        peer_id,
+        name: "remote".into(),
+        grant_count: 2,
+    });
+    snapshot.grants.push((peer_id, grants.clone()));
+    let requests: Vec<_> = rows(Some(&snapshot), None, "local", None, None)
+        .into_iter()
+        .filter_map(|row| match row.action {
+            Some(Action::Send(request @ Request::SetGrants { .. }, Some("remove"))) => {
+                Some(request)
+            }
+            _ => None,
+        })
+        .collect();
+    snapshot.status.authority.as_mut().unwrap().activation_id = ActivationId::from_bytes([2; 16]);
+    assert_eq!(
+        requests,
+        vec![
+            Request::SetGrants {
+                expected,
+                peer_id,
+                grants: vec![grants[1].clone()]
+            },
+            Request::SetGrants {
+                expected,
+                peer_id,
+                grants: vec![grants[0].clone()]
+            },
+        ]
+    );
+    assert_eq!(snapshot.grants[0].1, grants);
+}
+
+#[test]
+fn recovery_uses_the_original_transaction_and_only_its_matching_invitation_endpoints() {
+    let mut snapshot = snapshot();
+    let expected = snapshot.status.authority.as_ref().unwrap().expected();
+    let peer = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        .parse()
+        .unwrap();
+    let invitation = "AQEBAQEBAQEBAQEBAQEBAQ".parse().unwrap();
+    let transaction = "AgICAgICAgICAgICAgICAg".parse().unwrap();
+    snapshot.outbound.push(OutboundEnrollment {
+        key: EnrollmentRequestKey {
+            invitation,
+            transaction,
+            peer,
+        },
+        state: OutboundEnrollmentState::Pending {},
+    });
+    for matches in [false, true] {
+        let endpoints = vec!["192.168.1.4:1234".parse().unwrap()];
+        let source = (
+            ExportedInvitation::from_owned(zeroize::Zeroizing::new("qol-link:fixture".into()))
+                .unwrap(),
+            InvitationInfo {
+                invitation,
+                peer: if matches { peer } else { expected.authority_id },
+                endpoints: endpoints.clone(),
+            },
+        );
+        let requests: Vec<_> = rows(Some(&snapshot), None, "local", Some(&source), None)
+            .into_iter()
+            .filter_map(|row| match row.action {
+                Some(Action::Send(Request::Enrollment { request }, _)) => Some(request),
+                _ => None,
+            })
+            .collect();
+        assert!(!requests
+            .iter()
+            .any(|request| matches!(request, EnrollmentRequest::Prepare { .. })));
+        assert_eq!(
+            requests.contains(&EnrollmentRequest::Recover {
+                expected,
+                transaction,
+                endpoints
+            }),
+            matches
+        );
+    }
+}
+
+#[test]
+fn unavailable_views_have_no_mutating_controls_and_connection_labels_require_sessions() {
+    let mut snapshot = snapshot();
+    let peer_id = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        .parse()
+        .unwrap();
+    snapshot.peers.push(PeerSummary {
+        peer_id,
+        name: "remote".into(),
+        grant_count: 0,
+    });
+    assert!(rows(Some(&snapshot), None, "local", None, None)
+        .iter()
+        .any(|row| row.detail.contains("Not connected at last refresh")));
+    let nonce = "AAAAAAAAAAAAAAAAAAAAAA".parse().unwrap();
+    snapshot.sessions.push(qol_peers::admin::SessionSummary {
+        peer_id,
+        name: "remote".into(),
+        generation: qol_peers::session::SessionGeneration {
+            local: nonce,
+            remote: nonce,
+        },
+    });
+    assert!(rows(Some(&snapshot), None, "local", None, None)
+        .iter()
+        .any(|row| row
+            .detail
+            .contains("Authenticated connection at last refresh")));
+    for lifecycle in [Lifecycle::Stopping, Lifecycle::Standby] {
+        snapshot.status.lifecycle = lifecycle;
+        assert!(!rows(Some(&snapshot), None, "local", None, None)
+            .iter()
+            .any(|row| matches!(row.action, Some(Action::Send(..)))));
+    }
+}
+
+#[test]
+fn permission_additions_preserve_unavailable_grants_and_freeze_the_displayed_authority() {
+    use crate::features::linked_computers::settings::CatalogOperation;
+    let mut snapshot = snapshot();
+    let peer_id = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        .parse()
+        .unwrap();
+    let expected = snapshot.status.authority.as_ref().unwrap().expected();
+    let keys: Vec<_> = ["hidden", "granted", "new"]
+        .into_iter()
+        .map(|name| {
+            OperationKey::new(
+                crate::plugins::manifest::PluginUid::new("fixture"),
+                OperationKind::Action,
+                name,
+            )
+        })
+        .collect();
+    snapshot.peers.push(PeerSummary {
+        peer_id,
+        name: "remote".into(),
+        grant_count: 2,
+    });
+    snapshot.grants.push((peer_id, keys[..2].to_vec()));
+    let catalog: Vec<_> = keys[1..]
+        .iter()
+        .map(|key| CatalogOperation {
+            key: key.clone(),
+            plugin_id: crate::plugins::PluginId::new("fixture"),
+            description: key.name.clone(),
+        })
+        .collect();
+    let presented = rows(Some(&snapshot), Some(&catalog), "local", None, None);
+    let requests: Vec<_> = presented
+        .into_iter()
+        .filter_map(|row| match row.action {
+            Some(Action::Send(request @ Request::SetGrants { .. }, Some("add"))) => Some(request),
+            _ => None,
+        })
+        .collect();
+    snapshot.status.authority.as_mut().unwrap().activation_id = ActivationId::from_bytes([2; 16]);
+    assert_eq!(
+        requests,
+        vec![Request::SetGrants {
+            expected,
+            peer_id,
+            grants: keys.clone()
+        }]
+    );
+    assert_eq!(snapshot.grants[0].1, keys[..2]);
+    for catalog in [None, Some([].as_slice())] {
+        let presented = rows(Some(&snapshot), catalog, "local", None, None);
+        assert!(!presented
+            .iter()
+            .any(|row| matches!(row.action, Some(Action::Send(_, Some("add"))))));
+        assert_eq!(
+            presented
+                .iter()
+                .filter(|row| matches!(row.action, Some(Action::Send(_, Some("remove")))))
+                .count(),
+            2
+        );
+        assert_eq!(
+            presented
+                .iter()
+                .any(|row| row.label == "Permission catalog unavailable"),
+            catalog.is_none()
+        );
+        assert_eq!(
+            presented
+                .iter()
+                .any(|row| row.label == "No available peer operations"),
+            catalog.is_some()
+        );
+    }
+}

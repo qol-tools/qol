@@ -17,12 +17,20 @@ pub(super) fn spawn_daemon(
     daemon_config: &DaemonConfig,
     daemon_listener: Option<&super::DaemonListener>,
     runtime_config: Option<&mut crate::plugins::config::RuntimeConfigContext>,
-) -> Result<(Child, u64, Option<String>)> {
+    instance_token: &str,
+) -> Result<(
+    Child,
+    u64,
+    Option<String>,
+    Option<qol_artifact::InspectedArtifact>,
+)> {
     let profile_guard = materialize_runtime_config_with_context(plugin, runtime_config)?;
     let consumed_generation = profile_guard.generation();
     let daemon_path = daemon_path(plugin, daemon_config)?;
     let spawn_fingerprint = qol_dev_build::read_fingerprint_sidecar(&daemon_path);
+    let artifact = qol_artifact::inspect_path(&daemon_path).ok();
     let mut command = daemon_command(plugin, daemon_config, &daemon_path, daemon_listener);
+    command.env(qol_conventions::ENV_DAEMON_INSTANCE, instance_token);
     #[cfg(feature = "dev")]
     let relay_patterns = configure_log_relay(plugin, &mut command);
     #[cfg(not(feature = "dev"))]
@@ -38,7 +46,7 @@ pub(super) fn spawn_daemon(
             commit.as_deref(),
             child.stderr.take(),
         );
-        Ok((child, consumed_generation, spawn_fingerprint))
+        Ok((child, consumed_generation, spawn_fingerprint, artifact))
     }
     #[cfg(feature = "dev")]
     {
@@ -49,7 +57,7 @@ pub(super) fn spawn_daemon(
             child.stderr.take(),
             relay_patterns,
         );
-        Ok((child, consumed_generation, spawn_fingerprint))
+        Ok((child, consumed_generation, spawn_fingerprint, artifact))
     }
 }
 

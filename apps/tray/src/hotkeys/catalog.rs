@@ -257,6 +257,7 @@ mod tests {
                 checked: false,
                 picture: None,
                 hotkey: true,
+                peer: None,
             },
         );
 
@@ -279,6 +280,7 @@ mod tests {
                 checked: false,
                 picture: None,
                 hotkey: true,
+                peer: None,
             },
         );
         plugin.manifest.actions.insert(
@@ -292,6 +294,7 @@ mod tests {
                 checked: false,
                 picture: None,
                 hotkey: false,
+                peer: None,
             },
         );
 

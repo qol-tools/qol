@@ -117,6 +117,18 @@ impl Drop for CurrentProcessTreeGuard {
 }
 
 impl ProcessTreeGuard {
+    pub(crate) fn containment_backend(&self) -> &'static str {
+        "windows_job_object"
+    }
+
+    pub(crate) fn membership_observation_supported(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn observe_residual(&self) -> crate::ProcessTreeObservation {
+        crate::ProcessTreeObservation::unsupported()
+    }
+
     pub(crate) fn prepare_command(&self, command: &mut Command) -> io::Result<PreparedSpawn> {
         if self.prepared.swap(true, Ordering::AcqRel) {
             return Err(io::Error::new(

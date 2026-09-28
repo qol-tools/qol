@@ -1,4 +1,5 @@
 mod data;
+mod linked_computers;
 mod model;
 mod updates;
 mod view;
@@ -24,6 +25,10 @@ pub(super) fn factories(target: CoreTool) -> Vec<(String, CustomPanelFactory)> {
             factory(ToolKind::Hotkeys, target == CoreTool::AddHotkey),
         ),
         (CoreTool::Updates.wire_id().to_string(), updates::factory()),
+        (
+            CoreTool::LinkedComputers.wire_id().to_string(),
+            linked_computers::factory(),
+        ),
     ]
 }
 

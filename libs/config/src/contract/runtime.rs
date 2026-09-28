@@ -1,3 +1,6 @@
+pub use qol_conventions::operations::is_valid_runable_name;
+
+use super::peer::{PeerExposure, PeerReplay};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -31,6 +34,8 @@ pub struct ActionSpec {
     pub agent_tool: bool,
     #[serde(default)]
     pub tool_description: Option<String>,
+    #[serde(default)]
+    pub peer: Option<PeerExposure>,
 }
 
 impl ActionSpec {
@@ -52,6 +57,8 @@ pub struct QuerySpec {
     pub tool_description: Option<String>,
     #[serde(default)]
     pub input: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub peer: Option<PeerExposure>,
 }
 
 impl QuerySpec {
@@ -73,6 +80,8 @@ pub struct StreamSpec {
     pub throttle_ms: u64,
     #[serde(default)]
     pub initial_query: Option<String>,
+    #[serde(default)]
+    pub peer: Option<PeerExposure>,
 }
 
 fn deserialize_throttle_ms<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
@@ -80,25 +89,14 @@ fn deserialize_throttle_ms<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64
     Ok(raw.clamp(STREAM_THROTTLE_MIN, STREAM_THROTTLE_MAX))
 }
 
-pub fn is_valid_runable_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return false,
-    };
-    if !first.is_ascii_lowercase() {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-fn validate_runtime_spec(spec: &RuntimeSpec) -> Result<(), ParseRuntimeSpecError> {
+pub fn validate_runtime_spec(spec: &RuntimeSpec) -> Result<(), ParseRuntimeSpecError> {
     let mut all_names = IndexMap::<&str, &str>::new();
     validate_names(&spec.actions, "action", &mut all_names)?;
     validate_names(&spec.queries, "query", &mut all_names)?;
     validate_names(&spec.streams, "stream", &mut all_names)?;
     validate_initial_queries(spec)?;
-    validate_agent_tools(spec)
+    validate_agent_tools(spec)?;
+    validate_peer_exposure(spec)
 }
 
 fn validate_names<'a, V>(
@@ -156,6 +154,29 @@ fn validate_agent_tools(spec: &RuntimeSpec) -> Result<(), ParseRuntimeSpecError>
         )?;
     }
     Ok(())
+}
+
+fn validate_peer_exposure(spec: &RuntimeSpec) -> Result<(), ParseRuntimeSpecError> {
+    for (name, query) in &spec.queries {
+        validate_read_peer_exposure("query", name, query.peer.as_ref())?;
+    }
+    Ok(())
+}
+
+fn validate_read_peer_exposure(
+    kind: &str,
+    name: &str,
+    peer: Option<&PeerExposure>,
+) -> Result<(), ParseRuntimeSpecError> {
+    let Some(peer) = peer else {
+        return Ok(());
+    };
+    if peer.replay == PeerReplay::Idempotent {
+        return Ok(());
+    }
+    Err(ParseRuntimeSpecError::Validation(format!(
+        "peer-exposed {kind} {name} is a read and must declare replay = \"idempotent\""
+    )))
 }
 
 fn validate_agent_tool_entry(
@@ -461,6 +482,106 @@ poll_interval_ms = 2000
         assert!(!query.agent_tool, "agent_tool defaults to false");
         assert!(query.tool_description.is_none(), "no tool_description");
         assert!(query.input.is_none(), "no input");
+    }
+
+    #[test]
+    fn parses_peer_exposure_on_actions_and_reads() {
+        let input = r#"
+schema_version = 1
+
+[action.reconnect]
+description = "Reconnect devices"
+peer = { replay = "idempotent" }
+
+[action.restart]
+description = "Restart the daemon"
+peer = { replay = "never" }
+
+[query.devices]
+description = "Device inventory"
+poll_interval_ms = 1000
+peer = { replay = "idempotent" }
+
+[stream.live]
+description = "Live state"
+throttle_ms = 100
+peer = { replay = "idempotent" }
+"#;
+        let spec = parse_runtime_spec_str(input).expect("parse");
+        assert_eq!(
+            spec.actions["reconnect"].peer,
+            Some(PeerExposure {
+                replay: PeerReplay::Idempotent,
+            })
+        );
+        assert_eq!(
+            spec.actions["restart"].peer,
+            Some(PeerExposure {
+                replay: PeerReplay::Never,
+            })
+        );
+        assert_eq!(
+            spec.queries["devices"].peer,
+            Some(PeerExposure {
+                replay: PeerReplay::Idempotent,
+            })
+        );
+        assert_eq!(
+            spec.streams["live"].peer,
+            Some(PeerExposure {
+                replay: PeerReplay::Idempotent,
+            })
+        );
+    }
+
+    #[test]
+    fn defaults_peer_exposure_to_absent() {
+        let input = r#"
+schema_version = 1
+
+[action.reconnect]
+description = "Reconnect devices"
+
+[query.devices]
+description = "Device inventory"
+poll_interval_ms = 1000
+
+[stream.live]
+description = "Live state"
+throttle_ms = 100
+"#;
+        let spec = parse_runtime_spec_str(input).expect("parse");
+        assert_eq!(spec.actions["reconnect"].peer, None);
+        assert_eq!(spec.queries["devices"].peer, None);
+        assert_eq!(spec.streams["live"].peer, None);
+    }
+
+    #[test]
+    fn rejects_action_peer_exposure_without_replay() {
+        let input = r#"
+schema_version = 1
+
+[action.reconnect]
+description = "Reconnect devices"
+peer = {}
+"#;
+        assert!(
+            parse_runtime_spec_str(input).is_err(),
+            "an exposed action must state its replay contract"
+        );
+    }
+
+    #[test]
+    fn queries_require_idempotency_but_mutating_streams_do_not() {
+        for (kind, fields, allowed) in [
+            ("query", "poll_interval_ms = 1000", false),
+            ("stream", "throttle_ms = 100", true),
+        ] {
+            let source = format!(
+                "schema_version = 1\n[{kind}.live]\ndescription = \"Live\"\n{fields}\npeer = {{ replay = \"never\" }}\n"
+            );
+            assert_eq!(parse_runtime_spec_str(&source).is_ok(), allowed, "{kind}");
+        }
     }
 
     #[test]

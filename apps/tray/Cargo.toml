@@ -44,6 +44,8 @@ linux_evdev = ["dep:evdev"]
 embedded-ui = ["rust-embed/debug-embed"]
 
 [dependencies]
+zeroize = "1"
+qol-peers = { workspace = true, features = ["service"] }
 qol-agent-homes.workspace = true
 qol-build-identity.workspace = true
 qol-color.workspace = true

@@ -1,4 +1,5 @@
 export const VIEW_LABELS = {
+    'linked-computers': 'Linked computers',
     plugins: 'Plugins',
     store: 'Plugin Store',
     hotkeys: 'Hotkeys',

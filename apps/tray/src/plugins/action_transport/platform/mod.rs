@@ -53,3 +53,10 @@ pub(super) fn dispatch_action(
 pub(super) fn can_connect(endpoint: &Path) -> bool {
     Platform::can_connect(endpoint)
 }
+
+#[cfg(unix)]
+pub(super) use unix::dispatch_payload;
+#[cfg(not(unix))]
+pub(super) fn dispatch_payload(_: &Path, _: &[u8], _: Duration) -> DaemonActionDispatch {
+    DaemonActionDispatch::NotSent
+}

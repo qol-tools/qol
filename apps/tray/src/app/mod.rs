@@ -140,11 +140,16 @@ pub(crate) fn run() -> Result<()> {
 
     log::info!("Starting QoL Tray daemon...");
 
+    let peer_runtime = Arc::new(Mutex::new(None));
+    let starting_peers = peer_runtime.clone();
+
     #[cfg(feature = "dev")]
-    let outcome = tray::platform::run_app(move || app_init(core_log_controls));
+    let outcome = tray::platform::run_app(move || app_init(core_log_controls, starting_peers));
 
     #[cfg(not(feature = "dev"))]
-    let outcome = tray::platform::run_app(app_init);
+    let outcome = tray::platform::run_app(move || app_init(starting_peers));
+
+    let peer_shutdown = stop_peer_runtime(&peer_runtime);
 
     qol_tray::features::gpu_driver_sync::stop_watch();
 
@@ -152,7 +157,29 @@ pub(crate) fn run() -> Result<()> {
     if owns_host_surface {
         log_binding_restore("shutdown", hotkeys::restore_desktop_bindings_on_exit());
     }
-    outcome
+    outcome.and(peer_shutdown)
+}
+
+struct PeerRuntime {
+    handle: features::linked_computers::PeerHostHandle,
+    thread: std::thread::JoinHandle<std::result::Result<(), qol_peers::admin::Error>>,
+    exit: tokio::sync::oneshot::Sender<()>,
+}
+
+fn stop_peer_runtime(owner: &Mutex<Option<PeerRuntime>>) -> Result<()> {
+    let runtime = owner
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    if let Some(runtime) = runtime {
+        runtime.handle.shutdown();
+        let _ = runtime.exit.send(());
+        runtime
+            .thread
+            .join()
+            .map_err(|_| anyhow::anyhow!("Peer runtime owner panicked"))??;
+    }
+    Ok(())
 }
 
 fn log_binding_restore(phase: &str, summary: hotkeys::RestoreSummary) {
@@ -348,22 +375,27 @@ struct InitResult {
     feature_registry: Arc<FeatureRegistry>,
     events: Arc<qol_tray::daemon::EventBus>,
     post_pull_task: Option<tokio::task::JoinHandle<()>>,
+    linked_computers: features::linked_computers::LinkedComputers,
 }
 
 #[cfg(feature = "dev")]
 fn app_init(
     core_log_controls: qol_tray::logging::CoreControlsHandle,
+    peers: Arc<Mutex<Option<PeerRuntime>>>,
 ) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
-    app_init_inner(core_log_controls)
+    app_init_inner(core_log_controls, peers)
 }
 
 #[cfg(not(feature = "dev"))]
-fn app_init() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
-    app_init_inner()
+fn app_init(
+    peers: Arc<Mutex<Option<PeerRuntime>>>,
+) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
+    app_init_inner(peers)
 }
 
 fn app_init_inner(
     #[cfg(feature = "dev")] core_log_controls: qol_tray::logging::CoreControlsHandle,
+    peers: Arc<Mutex<Option<PeerRuntime>>>,
 ) -> Result<(TrayManager, Arc<Mutex<PluginManager>>)> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -372,8 +404,19 @@ fn app_init_inner(
         #[cfg(feature = "dev")]
         core_log_controls,
     ))?;
-    std::thread::spawn(move || {
-        rt.block_on(std::future::pending::<()>());
+    let handle = init.linked_computers.handle();
+    let (exit, exited) = tokio::sync::oneshot::channel();
+    let thread = std::thread::spawn(move || {
+        rt.block_on(async move {
+            let result = init.linked_computers.closed().await;
+            let _ = exited.await;
+            result
+        })
+    });
+    *peers.lock().unwrap_or_else(|error| error.into_inner()) = Some(PeerRuntime {
+        handle,
+        thread,
+        exit,
     });
     let tray = TrayManager::new(
         init.feature_registry,
@@ -422,6 +465,15 @@ async fn async_init_inner(
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
+    let linked_computers = features::linked_computers::LinkedComputers::start(
+        plugin_manager.clone(),
+        shutdown_tx.subscribe(),
+    )
+    .await;
+    if !state_server.attach_peers(linked_computers.handle()) {
+        linked_computers.handle().shutdown();
+        log::error!("Peer administration unavailable: shared runtime handle was not installed");
+    }
     {
         let startup_info = build_startup_info(&plugin_manager);
         qol_tray::logging::file_logger::log_startup(&startup_info);
@@ -444,7 +496,7 @@ async fn async_init_inner(
     let (health_tx, health_rx) = qol_tray::plugins::daemon_health::channel();
     #[cfg(not(feature = "dev"))]
     drop(health_rx);
-    let ui_port = features::plugin_store::Plugins::start_server(
+    let ui_port = match features::plugin_store::Plugins::start_server(
         plugin_manager.clone(),
         &daemon,
         shutdown_tx.clone(),
@@ -454,7 +506,11 @@ async fn async_init_inner(
         #[cfg(feature = "dev")]
         core_log_controls,
     )
-    .await?;
+    .await
+    {
+        Ok(port) => port,
+        Err(error) => return Err(close_failed_peer_startup(linked_computers, error).await),
+    };
     if !shadow_generation && !rolling_restart {
         run_startup_doctor();
     }
@@ -484,12 +540,16 @@ async fn async_init_inner(
     } else {
         None
     };
-    let post_pull_task = start_local_daemons_before_launch_pull(
+    let post_pull_task = match start_local_daemons_before_launch_pull(
         plugin_manager.clone(),
         launch_pull_factory,
         shutdown_tx.subscribe(),
     )
-    .await?;
+    .await
+    {
+        Ok(task) => task,
+        Err(error) => return Err(close_failed_peer_startup(linked_computers, error).await),
+    };
     if shadow_generation {
         log::info!("Shadow dev generation: deferring hotkey capture until promotion");
     } else {
@@ -521,7 +581,19 @@ async fn async_init_inner(
         feature_registry,
         events: daemon.events.clone(),
         post_pull_task,
+        linked_computers,
     })
+}
+
+async fn close_failed_peer_startup(
+    owner: features::linked_computers::LinkedComputers,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    owner.handle().shutdown();
+    match owner.closed().await {
+        Ok(()) => error,
+        Err(cleanup) => error.context(format!("Peer startup cleanup failed: {cleanup}")),
+    }
 }
 
 async fn finished_update_available(update_check: Option<tokio::task::JoinHandle<bool>>) -> bool {

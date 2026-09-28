@@ -86,6 +86,98 @@ mod tests {
     use super::*;
 
     #[test]
+    fn peer_help_is_offline_and_equivalent_in_supported_positions() {
+        let mut outputs = Vec::new();
+        for values in [
+            vec!["help", "peers"],
+            vec!["peers", "help"],
+            vec!["peers", "--help"],
+            vec!["peers", "-h"],
+        ] {
+            let args = parse_cli(values.iter().copied().map(OsString::from).collect());
+            let execution = contract_execution(&args).unwrap().unwrap();
+            assert_eq!(
+                execution.exit_code,
+                qol_headless::EXIT_SUCCESS,
+                "{values:?}"
+            );
+            assert!(execution.stderr.is_empty(), "{values:?}");
+            assert!(execution.stdout.contains("Supports --json."), "{values:?}");
+            assert!(
+                execution.stdout.contains("Help works offline."),
+                "{values:?}"
+            );
+            assert!(execution.stdout.contains("JSON array"), "{values:?}");
+            outputs.push(execution.stdout);
+        }
+        assert!(outputs.windows(2).all(|pair| pair[0] == pair[1]));
+        for name in [
+            "status",
+            "list",
+            "grants",
+            "tombstones",
+            "session",
+            "create",
+            "open",
+            "stop",
+            "rename",
+            "revoke",
+            "set-grants",
+            "network",
+            "invite",
+            "cancel-invitation",
+            "pending",
+            "approve",
+            "reject",
+            "prepare",
+            "redeem",
+            "recover",
+            "abandon",
+            "resume",
+            "outbound",
+            "attempt",
+            "request",
+            "invoke",
+            "outcome",
+            "reconcile",
+            "cancel",
+            "requests",
+        ] {
+            let args = parse_cli(
+                ["peers", name, "help"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+            );
+            let execution = contract_execution(&args).unwrap().unwrap();
+            assert_eq!(execution.exit_code, qol_headless::EXIT_SUCCESS, "{name}");
+            assert!(
+                execution.stdout.contains(&format!("qol peers {name}")),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn peer_argument_errors_are_nonzero_without_payload_echo() {
+        for values in [
+            vec!["peers", "request", "secret-canary"],
+            vec!["peers", "--json", "request", "secret-canary"],
+            vec!["peers", "grants", "secret-canary"],
+        ] {
+            let args = parse_cli(values.iter().copied().map(OsString::from).collect());
+            let execution = contract_execution(&args).unwrap().unwrap();
+            assert_ne!(
+                execution.exit_code,
+                qol_headless::EXIT_SUCCESS,
+                "{values:?}"
+            );
+            assert!(execution.stdout.is_empty(), "{values:?}");
+            assert!(!execution.stderr.contains("secret-canary"), "{values:?}");
+        }
+    }
+
+    #[test]
     fn parses_verbose_flag_before_command() {
         let args = parse_cli(vec!["--verbose".into(), "install".into()]);
         assert!(args.verbose);

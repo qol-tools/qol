@@ -1,4 +1,7 @@
 mod core_config;
+mod peer_handlers;
+#[cfg(test)]
+pub(super) use peer_handlers::{routes as peer_routes, CatalogState as PeerCatalogState};
 mod hotkey_handlers;
 mod http_json;
 mod media_apps_handlers;
@@ -36,6 +39,7 @@ pub(super) use plugin_config_handlers::set_plugin_config;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .merge(peer_handlers::routes())
         .route("/cover/{id}", get(serve_cover))
         .route("/icon/{bundle_id}", get(serve_icon))
         .route("/apps", get(list_apps))

@@ -102,7 +102,7 @@ impl ConnectionDispatcher {
 }
 
 struct PreparedConnection {
-    request: String,
+    request: zeroize::Zeroizing<String>,
     writer: UnixStream,
 }
 

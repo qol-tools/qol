@@ -75,6 +75,10 @@ impl Guardian {
         })
     }
 
+    pub(super) fn spawned_pid(&self) -> Option<u32> {
+        self.state.try_lock().ok()?.child.as_ref().map(Child::id)
+    }
+
     pub(super) fn disarm(&self) -> io::Result<()> {
         if !self.is_creator() {
             return Err(io::Error::new(

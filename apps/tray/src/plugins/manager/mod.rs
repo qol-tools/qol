@@ -326,7 +326,7 @@ impl PluginManager {
             .unwrap_or_default()
     }
 
-    fn current_daemon_instance(&self, plugin_id: &str) -> Option<DaemonInstance> {
+    pub(crate) fn current_daemon_instance(&self, plugin_id: &str) -> Option<DaemonInstance> {
         let plugin = self.plugins.get(plugin_id)?;
         let pid = plugin.daemon_pid()?;
         let incarnation = crate::plugins::daemon_lifecycle::current_daemon_incarnation(plugin_id)?;
@@ -353,6 +353,20 @@ impl PluginManager {
     #[cfg(test)]
     pub(crate) fn insert_plugin_for_test(&mut self, plugin: Plugin) {
         self.plugins.insert(plugin.id.clone(), plugin);
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn operation_plugin_mut_for_test(&mut self, id: &str) -> &mut Plugin {
+        self.plugins.get_mut(id).unwrap()
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn operation_replace_daemon_for_test(
+        &mut self,
+        id: &str,
+        child: Option<std::process::Child>,
+    ) -> Option<std::process::Child> {
+        std::mem::replace(&mut self.plugins.get_mut(id).unwrap().daemon_process, child)
     }
 
     pub fn shutdown(&mut self) {

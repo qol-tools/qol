@@ -32,27 +32,42 @@ pub(super) fn queue_self_recompile(
 }
 
 pub(super) fn restart_prebuilt(state: &AppState) -> Result<(), &'static str> {
-    if !state.runtime.try_mark_restart_pending() {
-        return Err("Restart already pending");
-    }
+    let mut pending = super::restart::PendingRestart::begin(
+        state.runtime.clone(),
+        state.daemon.events.clone(),
+        "Rolling dev restart",
+    )?;
     let Some(binary) = state.restart.resolve_restart_binary() else {
-        state.runtime.clear_restart_pending();
+        pending.fail("Restart binary not found".to_string());
         return Err("Restart binary not found");
     };
     let restart = state.restart.clone();
-    let runtime = state.runtime.clone();
-    std::env::set_var(qol_conventions::ENV_DEV_ROLLING_RESTART, "1");
+    let plugin_manager = state.plugin_manager.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-        if let Err(error) = restart.exec_restart(&binary) {
-            log::error!(
-                "Rolling dev restart exec failed for {}: {}",
-                binary.display(),
-                error
-            );
-            runtime.clear_restart_pending();
-            std::process::exit(1);
-        }
+        let _ = pending
+            .run(
+                super::restart::cleanup_before_restart(plugin_manager),
+                || {
+                    let previous = std::env::var_os(qol_conventions::ENV_DEV_ROLLING_RESTART);
+                    std::env::set_var(qol_conventions::ENV_DEV_ROLLING_RESTART, "1");
+                    if let Err(error) = restart.exec_restart(&binary) {
+                        match previous {
+                            Some(value) => {
+                                std::env::set_var(qol_conventions::ENV_DEV_ROLLING_RESTART, value)
+                            }
+                            None => std::env::remove_var(qol_conventions::ENV_DEV_ROLLING_RESTART),
+                        }
+                        return Err(format!(
+                            "Rolling dev restart exec failed for {}: {}",
+                            binary.display(),
+                            error
+                        ));
+                    }
+                    std::process::exit(0);
+                },
+            )
+            .await;
     });
     Ok(())
 }

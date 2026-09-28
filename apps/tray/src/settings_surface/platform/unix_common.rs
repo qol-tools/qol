@@ -807,6 +807,7 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
         (super::super::CoreTool::Shortcuts, "Shortcuts"),
         (super::super::CoreTool::Hotkeys, "Hotkeys"),
         (super::super::CoreTool::Updates, "Updates"),
+        (super::super::CoreTool::LinkedComputers, "Linked computers"),
     ] {
         sources.push(PanelSource {
             plugin_id: tool.wire_id().to_string(),

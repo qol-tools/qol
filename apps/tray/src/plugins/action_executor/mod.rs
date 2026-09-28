@@ -1,3 +1,4 @@
+pub(crate) mod remote;
 use super::manager::PluginManager;
 use crate::plugins::action_transport::DaemonActionDispatch;
 use crate::plugins::daemon_health::{probe_daemon_readiness_with_timeout, DaemonReadiness};
@@ -302,10 +303,7 @@ pub fn dispatch_query_with_input(
     if matches!(&initial_dispatch, DaemonActionDispatch::Handled { .. }) {
         return query_dispatch_result(initial_dispatch, plugin_id, query_name);
     }
-    if let DaemonReadiness::NotReady { phase, detail } = query_daemon_socket_ready(&socket_path) {
-        return Err(ActionExecutionError::DaemonNotReady { phase, detail });
-    }
-    if !matches!(&initial_dispatch, DaemonActionDispatch::Unavailable) {
+    if !matches!(&initial_dispatch, DaemonActionDispatch::NotSent) {
         return query_dispatch_result(initial_dispatch, plugin_id, query_name);
     }
 
@@ -347,11 +345,17 @@ fn query_dispatch_result(
 ) -> Result<serde_json::Value, ActionExecutionError> {
     match dispatch {
         DaemonActionDispatch::Handled { payload } => Ok(payload.unwrap_or(serde_json::Value::Null)),
+        DaemonActionDispatch::OutcomeUnknown => Err(ActionExecutionError::ActionRejected(
+            "daemon outcome unknown; no reissue".into(),
+        )),
+        DaemonActionDispatch::NotReady { phase, detail } => {
+            Err(ActionExecutionError::DaemonNotReady { phase, detail })
+        }
         DaemonActionDispatch::Fallback => Err(ActionExecutionError::ActionRejected(format!(
             "query {query_name} rejected by {plugin_id} daemon"
         ))),
         DaemonActionDispatch::Error(message) => Err(ActionExecutionError::ActionRejected(message)),
-        DaemonActionDispatch::Unavailable => Err(ActionExecutionError::ActionRejected(format!(
+        DaemonActionDispatch::NotSent => Err(ActionExecutionError::ActionRejected(format!(
             "daemon unavailable for {plugin_id}"
         ))),
     }
@@ -379,7 +383,9 @@ fn dispatch_outcome(dispatch: &DaemonActionDispatch) -> &'static str {
     match dispatch {
         DaemonActionDispatch::Handled { .. } => "handled",
         DaemonActionDispatch::Fallback => "fallback",
-        DaemonActionDispatch::Unavailable => "unavailable",
+        DaemonActionDispatch::NotSent => "not_sent",
+        DaemonActionDispatch::OutcomeUnknown => "outcome_unknown",
+        DaemonActionDispatch::NotReady { .. } => "not_ready",
         DaemonActionDispatch::Error(_) => "error",
     }
 }

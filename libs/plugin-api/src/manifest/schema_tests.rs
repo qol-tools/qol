@@ -189,6 +189,41 @@ fn parse_action_catalog_entries() {
 }
 
 #[test]
+fn parse_action_catalog_peer_exposure() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        uid = "uid-test"
+        name = "Catalog"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [action.reconnect]
+        label = "Reconnect"
+        peer = { replay = "idempotent" }
+
+        [action.restart]
+        label = "Restart"
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+    assert_eq!(
+        manifest.actions["reconnect"].peer,
+        Some(qol_config::contract::PeerExposure {
+            replay: qol_config::contract::PeerReplay::Idempotent,
+        })
+    );
+    assert!(manifest.actions["restart"].peer.is_none());
+    manifest
+        .validate()
+        .expect("peer on a run action with a uid validates");
+}
+
+#[test]
 fn parse_action_picture_and_default() {
     let toml = r#"
         [plugin]

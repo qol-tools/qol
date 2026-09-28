@@ -123,8 +123,19 @@ fn daemon_failure_reason(
     dispatch: &DaemonActionDispatch,
 ) -> Result<&'static str, ActionExecutionError> {
     match dispatch {
-        DaemonActionDispatch::Fallback => Ok("daemon rejected action"),
-        DaemonActionDispatch::Unavailable => Ok("daemon unavailable for"),
+        DaemonActionDispatch::Fallback => Err(ActionExecutionError::ActionRejected(
+            "daemon returned fallback after dispatch; no reissue".into(),
+        )),
+        DaemonActionDispatch::OutcomeUnknown => Err(ActionExecutionError::ActionRejected(
+            "daemon outcome unknown; no reissue".into(),
+        )),
+        DaemonActionDispatch::NotReady { phase, detail } => {
+            Err(ActionExecutionError::DaemonNotReady {
+                phase: *phase,
+                detail: detail.clone(),
+            })
+        }
+        DaemonActionDispatch::NotSent => Ok("daemon unavailable for"),
         DaemonActionDispatch::Error(message) => daemon_dispatch_error(resolved, message),
         DaemonActionDispatch::Handled { .. } => unreachable!(),
     }

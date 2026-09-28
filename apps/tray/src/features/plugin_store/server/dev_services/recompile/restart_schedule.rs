@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::super::super::dev_runtime::DevRuntimeService;
-use super::super::super::restart::RestartPort;
+use super::super::super::restart::{cleanup_before_restart, PendingRestart, RestartPort};
 
 const RESTART_IDLE_POLL_MS: u64 = 250;
 
@@ -15,43 +15,36 @@ pub(super) fn schedule_self_restart_after_idle(
     worktree_branch: Option<String>,
     events: Arc<crate::daemon::EventBus>,
 ) {
-    if !runtime.try_mark_restart_pending() {
+    let Ok(mut pending) = PendingRestart::begin(runtime.clone(), events, "Self recompile restart")
+    else {
         return;
-    }
+    };
 
     tokio::spawn(async move {
         wait_for_restart_idle(runtime.as_ref()).await;
-        let Some(restart_binary) = resolve_restart_binary(
-            runtime.as_ref(),
-            restart.as_ref(),
-            Some(repo_root.as_path()),
-        ) else {
-            events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
-                message: "Restart binary not found after build".to_string(),
-            });
+        let Some(restart_binary) =
+            resolve_restart_binary(restart.as_ref(), Some(repo_root.as_path()))
+        else {
+            pending.fail("Restart binary not found after build".to_string());
             return;
         };
         let staging_root = crate::paths::default_workspace_root().unwrap_or(repo_root.clone());
         let staged = match restart.stage_restart_binary(&staging_root, &restart_binary) {
             Ok(staged) => staged,
             Err(message) => {
-                events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
-                    message: message.clone(),
-                });
-                log::error!("Self recompile runtime staging failed: {message}");
-                runtime.clear_restart_pending();
+                pending.fail(format!("Self recompile runtime staging failed: {message}"));
                 return;
             }
         };
         exec_restart_after_cleanup(
             plugin_manager,
-            runtime.as_ref(),
+            pending,
             restart.as_ref(),
             &staging_root,
             &staged,
             worktree_branch.as_deref(),
-            events.as_ref(),
-        );
+        )
+        .await;
     });
 }
 
@@ -72,21 +65,13 @@ fn restart_idle(runtime: &DevRuntimeService) -> bool {
 }
 
 fn resolve_restart_binary(
-    runtime: &DevRuntimeService,
     restart: &dyn RestartPort,
     worktree_path: Option<&Path>,
 ) -> Option<PathBuf> {
-    let binary = worktree_path
+    worktree_path
         .map(|wt| restart.binary_at(wt))
         .filter(|p| p.is_file())
-        .or_else(|| restart.resolve_restart_binary());
-
-    if binary.is_none() {
-        log::error!("Self recompile completed but restart binary could not be resolved");
-        runtime.clear_restart_pending();
-    }
-
-    binary
+        .or_else(|| restart.resolve_restart_binary())
 }
 
 pub(super) fn resolve_branch_from_path(worktree_path: &Path) -> Option<String> {
@@ -97,24 +82,27 @@ pub(super) fn resolve_branch_from_path(worktree_path: &Path) -> Option<String> {
         .map(|w| w.branch)
 }
 
-fn exec_restart_after_cleanup(
+async fn exec_restart_after_cleanup(
     plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
-    runtime: &DevRuntimeService,
+    pending: PendingRestart,
     restart: &dyn RestartPort,
     staging_root: &Path,
     staged: &qol_dev_build::tray::StagedRuntimeGeneration,
     worktree_branch: Option<&str>,
-    events: &crate::daemon::EventBus,
 ) {
-    if let Err(message) = cleanup_before_restart(&plugin_manager) {
-        log::error!("Self recompile cleanup failed: {}", message);
-        events.send(crate::daemon::DaemonEvent::SelfRecompileFailed {
-            message: message.clone(),
-        });
-        runtime.clear_restart_pending();
-        return;
-    }
+    let _ = pending
+        .run(cleanup_before_restart(plugin_manager), || {
+            exec_staged_restart(restart, staging_root, staged, worktree_branch)
+        })
+        .await;
+}
 
+fn exec_staged_restart(
+    restart: &dyn RestartPort,
+    staging_root: &Path,
+    staged: &qol_dev_build::tray::StagedRuntimeGeneration,
+    worktree_branch: Option<&str>,
+) -> Result<(), String> {
     if let Ok(config_dir) = crate::paths::shared_config_dir() {
         let env = crate::installer::boot_environment::default_boot_environment();
         let lister = crate::dev::boot_contract::GitWorktreeLister;
@@ -141,61 +129,12 @@ fn exec_restart_after_cleanup(
     if let Err(error) = qol_dev_build::tray::prune_runtime_generations(staging_root, &protected) {
         log::warn!("Self recompile runtime prune failed: {error}");
     }
-    if let Err(error) = restart.exec_restart(staged.executable()) {
-        log::error!(
+    restart.exec_restart(staged.executable()).map_err(|error| {
+        format!(
             "Self recompile exec restart failed for {}: {}",
             staged.executable().display(),
             error
-        );
-        runtime.clear_restart_pending();
-        std::process::exit(1);
-    }
+        )
+    })?;
     std::process::exit(0);
-}
-
-fn cleanup_before_restart(
-    plugin_manager: &Arc<Mutex<crate::plugins::PluginManager>>,
-) -> Result<(), String> {
-    shutdown_plugin_manager(plugin_manager);
-    verify_plugin_process_leaks()
-}
-
-fn shutdown_plugin_manager(plugin_manager: &Arc<Mutex<crate::plugins::PluginManager>>) {
-    let mut manager = plugin_manager.lock().unwrap_or_else(|poisoned| {
-        log::error!(
-            "Plugin manager lock poisoned during self restart: {}",
-            poisoned
-        );
-        poisoned.into_inner()
-    });
-    manager.shutdown();
-}
-
-fn verify_plugin_process_leaks() -> Result<(), String> {
-    let report = crate::doctor::fix_single("plugin_process_leaks");
-    if !report.failures.is_empty() {
-        return Err(format!(
-            "plugin process leak cleanup failed: {}",
-            report.failures.join("; ")
-        ));
-    }
-    if report.after.has_warnings() || report.after.has_errors() || report.after.has_crashes() {
-        return Err(format_plugin_leak_report(&report.after));
-    }
-    if report.applied > 0 {
-        log::warn!(
-            "Self recompile applied {} plugin process leak cleanup fix(es) before restart",
-            report.applied
-        );
-    }
-    Ok(())
-}
-
-fn format_plugin_leak_report(report: &crate::doctor::Report) -> String {
-    report
-        .outcomes()
-        .filter(|outcome| !matches!(outcome.status, crate::doctor::OutcomeStatus::Ok))
-        .map(|outcome| outcome.message.clone())
-        .collect::<Vec<_>>()
-        .join("; ")
 }

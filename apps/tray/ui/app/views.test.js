@@ -4,6 +4,7 @@ import { getViewLabel, resolveViewLabel } from './view-labels.js';
 
 test('getViewLabel returns declared text for known top-level id', () => {
     assert.deepEqual(getViewLabel('plugins'), { text: 'Plugins', animation: null });
+    assert.deepEqual(getViewLabel('linked-computers'), { text: 'Linked computers', animation: null });
 });
 
 test('getViewLabel preserves animation field for object entries', () => {

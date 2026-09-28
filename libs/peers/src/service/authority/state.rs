@@ -1,0 +1,119 @@
+use std::{collections::HashSet, sync::Arc};
+
+use qol_conventions::{
+    operations::{
+        is_valid_action_id, is_valid_runable_name, OperationIdentity, OperationKey, OperationKind,
+    },
+    plugin_id::is_valid_plugin_uid,
+};
+
+use crate::service::{Identity, PeerPin};
+use crate::{PeerId, StoreRevision};
+
+use super::AuthorityError;
+
+pub(super) const MAX_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
+pub(super) const MAX_PEERS: usize = 256;
+pub(super) const MAX_GRANTS: usize = 128;
+pub(super) const MAX_TOMBSTONES: usize = 4096;
+const MAX_NAME_BYTES: usize = 256;
+const MAX_OPERATION_BYTES: usize = 256;
+const MAX_UID_BYTES: usize = 256;
+
+#[derive(Clone)]
+pub(super) struct LinkedPeer {
+    pub pin: PeerPin,
+    pub name: String,
+    pub grants: Vec<OperationKey>,
+}
+
+#[derive(Clone)]
+pub(super) struct State {
+    pub identity: Arc<Identity>,
+    pub name: String,
+    pub revision: StoreRevision,
+    pub peers: Vec<LinkedPeer>,
+    pub tombstones: Vec<PeerPin>,
+    pub receipts: Vec<super::enrollment::InboundReceipt>,
+    pub outbound: Vec<super::enrollment::OutboundJoin>,
+    pub operations: Vec<super::operations::LinkOperations>,
+}
+
+impl State {
+    pub fn peer(&self, id: PeerId) -> Option<&LinkedPeer> {
+        self.peers.iter().find(|peer| peer.pin.peer_id() == id)
+    }
+
+    pub fn is_revoked(&self, id: PeerId) -> bool {
+        self.tombstones.iter().any(|pin| pin.peer_id() == id)
+    }
+
+    pub fn validate(&self) -> Result<(), AuthorityError> {
+        validate_name(&self.name)?;
+        if self.peers.len() > MAX_PEERS || self.tombstones.len() > MAX_TOMBSTONES {
+            return Err(AuthorityError::Capacity);
+        }
+        let mut identities = HashSet::new();
+        identities.insert(self.identity.pin().peer_id());
+        for pin in &self.tombstones {
+            if !identities.insert(pin.peer_id()) {
+                return Err(AuthorityError::InvalidSnapshot);
+            }
+        }
+        for peer in &self.peers {
+            if !identities.insert(peer.pin.peer_id()) {
+                return Err(AuthorityError::InvalidSnapshot);
+            }
+            validate_name(&peer.name)?;
+            validate_grants(&peer.grants)?;
+        }
+        self.validate_operations()?;
+        self.validate_enrollment()
+    }
+}
+
+pub(super) fn validate_name(name: &str) -> Result<(), AuthorityError> {
+    if name.is_empty()
+        || name.len() > MAX_NAME_BYTES
+        || name.trim() != name
+        || name.chars().any(char::is_control)
+    {
+        return Err(AuthorityError::InvalidName);
+    }
+    Ok(())
+}
+
+pub(super) fn validate_grants(grants: &[OperationKey]) -> Result<(), AuthorityError> {
+    if grants.len() > MAX_GRANTS {
+        return Err(AuthorityError::Capacity);
+    }
+    let mut unique = HashSet::new();
+    for grant in grants {
+        validate_grant(grant)?;
+        if !unique.insert(grant) {
+            return Err(AuthorityError::DuplicateGrant);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_grant(grant: &OperationKey) -> Result<(), AuthorityError> {
+    let OperationIdentity::Stable(uid) = &grant.identity else {
+        return Err(AuthorityError::InvalidGrant);
+    };
+    if uid.as_str().len() > MAX_UID_BYTES
+        || !is_valid_plugin_uid(uid.as_str())
+        || uid.as_str().contains('*')
+        || grant.name.len() > MAX_OPERATION_BYTES
+    {
+        return Err(AuthorityError::InvalidGrant);
+    }
+    let valid = match grant.kind {
+        OperationKind::Action => is_valid_action_id(&grant.name),
+        OperationKind::Query | OperationKind::Stream => is_valid_runable_name(&grant.name),
+    };
+    if !valid {
+        return Err(AuthorityError::InvalidGrant);
+    }
+    Ok(())
+}

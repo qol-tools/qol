@@ -112,3 +112,39 @@ pub fn inherited_port_fd(_name: &str) -> Option<i32> {
 pub fn inherited_primary_port_fd() -> Option<i32> {
     None
 }
+
+#[derive(Clone)]
+pub struct DaemonBoundary;
+
+impl DaemonBoundary {
+    pub fn from_environment() -> Self {
+        Self
+    }
+    pub fn with_instance(_: String) -> io::Result<Self> {
+        Err(unsupported())
+    }
+}
+
+#[derive(Clone)]
+pub struct ReadinessGate;
+
+impl ReadinessGate {
+    pub fn starting() -> Self {
+        Self
+    }
+    pub fn set_phase(&self, _: qol_runtime::protocol::ReadinessPhase, _: Option<String>) {}
+    pub fn mark_ready(&self) {}
+}
+
+pub fn run_stateful_request_listener_with_boundary<S, F>(
+    _: &DaemonConfig,
+    _: Option<&ReadinessGate>,
+    _: DaemonBoundary,
+    _: S,
+    _: F,
+) -> io::Result<()>
+where
+    F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
+{
+    Err(unsupported())
+}
