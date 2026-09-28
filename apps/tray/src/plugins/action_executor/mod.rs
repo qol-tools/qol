@@ -185,6 +185,19 @@ pub fn try_execute_action_with_input(
     try_execute_action_with_input_result(plugin_manager, plugin_id, action_id, input).map(drop)
 }
 
+pub(crate) fn core_tool_for_action(action_id: &str) -> Option<crate::settings_surface::CoreTool> {
+    use crate::settings_surface::CoreTool;
+    match action_id {
+        "shortcuts" => Some(CoreTool::Shortcuts),
+        "shortcuts-add" => Some(CoreTool::AddShortcut),
+        "hotkeys" => Some(CoreTool::Hotkeys),
+        "hotkeys-add" => Some(CoreTool::AddHotkey),
+        "updates" => Some(CoreTool::Updates),
+        "linked-computers" => Some(CoreTool::LinkedComputers),
+        _ => None,
+    }
+}
+
 pub fn try_execute_action_with_input_result(
     plugin_manager: &Arc<Mutex<PluginManager>>,
     plugin_id: &str,
@@ -194,22 +207,7 @@ pub fn try_execute_action_with_input_result(
     if plugin_id == qol_conventions::CORE_PANEL_ID {
         let requested = match action_id {
             "settings" => Some(crate::settings_surface::request(plugin_id)),
-            "shortcuts" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::Shortcuts,
-            )),
-            "shortcuts-add" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::AddShortcut,
-            )),
-            "hotkeys" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::Hotkeys,
-            )),
-            "hotkeys-add" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::AddHotkey,
-            )),
-            "updates" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::Updates,
-            )),
-            _ => None,
+            _ => core_tool_for_action(action_id).map(crate::settings_surface::request_core_tool),
         };
         if let Some(requested) = requested {
             return match requested {
