@@ -198,6 +198,10 @@ pub fn hotkeys_path() -> Result<PathBuf> {
     active_scope_store().map(|s| s.hotkeys_path())
 }
 
+pub fn core_hotkeys_path() -> Result<PathBuf> {
+    active_scope_store().map(|s| s.core_hotkeys_path())
+}
+
 pub fn shortcuts_path() -> Result<PathBuf> {
     active_scope_store().map(|s| s.shortcuts_path())
 }
@@ -393,6 +397,7 @@ mod tests {
 
     #[test]
     fn default_test_runtime_never_targets_the_resident_host() {
+        let _env = crate::test_support::env_lock().blocking_lock();
         let runtime = runtime_dir();
         assert_ne!(Some(runtime.clone()), qol_config::runtime_dir());
         assert_eq!(runtime, runtime_dir());
