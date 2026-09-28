@@ -21,7 +21,7 @@ use crate::bluetooth::{
     adapter_options, connection_ready, devices_payload, managed_device_options, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, AdapterHealth, AdapterInfo, BackendCapabilities, DeviceActionState,
-    DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
+    DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
     ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
@@ -554,13 +554,17 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
         "kill" => ReadResult::Command(DaemonCommand::Kill),
         "enable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
         "disable_adapter" => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
-        "pair_device" => device_daemon_command(request, DaemonCommand::Pair, "Pairing"),
-        "connect_device" => device_daemon_command(request, DaemonCommand::Connect, "Connecting"),
+        "pair_device" => device_daemon_command(request, DaemonCommand::Pair, DeviceIntent::Pair),
+        "connect_device" => {
+            device_daemon_command(request, DaemonCommand::Connect, DeviceIntent::Connect)
+        }
         "disconnect_device" => {
-            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting")
+            device_daemon_command(request, DaemonCommand::Disconnect, DeviceIntent::Disconnect)
         }
         "reclaim_device" => reclaim_command(request),
-        "remove_device" => device_daemon_command(request, DaemonCommand::Remove, "Removing"),
+        "remove_device" => {
+            device_daemon_command(request, DaemonCommand::Remove, DeviceIntent::Remove)
+        }
         "trust_device" | "untrust_device" => ReadResult::Error(TRUST_UNSUPPORTED.into()),
         "start_search" => ReadResult::Command(DaemonCommand::StartSearch),
         "stop_search" => match mark_search_stopped() {
@@ -604,10 +608,10 @@ fn snapshot_result(payload: Result<serde_json::Value>) -> ReadResult<DaemonComma
 fn device_daemon_command(
     request: &DaemonRequest,
     command: fn(String) -> DaemonCommand,
-    pending_status: &str,
+    intent: DeviceIntent,
 ) -> ReadResult<DaemonCommand> {
     match request_address(request) {
-        Ok(address) => match begin_device_action(&address, pending_status) {
+        Ok(address) => match begin_device_action(&address, intent) {
             Ok(()) => ReadResult::Command(command(address)),
             Err(error) => ReadResult::Error(error.to_string()),
         },
@@ -667,7 +671,7 @@ fn set_device_action_state(action: Option<DeviceActionState>) {
     }
 }
 
-fn begin_device_action(address: &str, status: &str) -> Result<()> {
+fn begin_device_action(address: &str, intent: DeviceIntent) -> Result<()> {
     let mut state = DEVICE_ACTION_STATE
         .write()
         .map_err(|_| anyhow!("Bluetooth device action state is unavailable"))?;
@@ -676,7 +680,8 @@ fn begin_device_action(address: &str, status: &str) -> Result<()> {
     }
     *state = Some(DeviceActionState {
         address: address.to_string(),
-        status: status.to_string(),
+        intent,
+        status: intent.pending_status().to_string(),
         pending: true,
     });
     Ok(())
@@ -687,11 +692,13 @@ fn finish_device_action(address: &str, label: &str, result: &Result<()>) {
         Ok(()) => set_device_action_state(None),
         Err(error) => {
             eprintln!("Bluetooth {label} failed for {address}: {error:#}");
-            set_device_action_state(Some(DeviceActionState {
-                address: address.to_string(),
-                status: format!("{error:#}"),
-                pending: false,
-            }));
+            let Ok(mut state) = DEVICE_ACTION_STATE.write() else {
+                return;
+            };
+            if let Some(action) = state.as_mut() {
+                action.status = format!("{error:#}");
+                action.pending = false;
+            }
         }
     }
 }

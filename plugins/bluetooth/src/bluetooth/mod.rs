@@ -58,8 +58,41 @@ pub struct AdapterInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceActionState {
     pub address: String,
+    pub intent: DeviceIntent,
     pub status: String,
     pub pending: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceIntent {
+    Pair,
+    Connect,
+    Disconnect,
+    Remove,
+    Trust(bool),
+}
+
+impl DeviceIntent {
+    pub fn pending_status(self) -> &'static str {
+        match self {
+            Self::Pair => "Pairing",
+            Self::Connect => "Connecting",
+            Self::Disconnect => "Disconnecting",
+            Self::Remove => "Removing",
+            Self::Trust(true) => "Trusting",
+            Self::Trust(false) => "Removing trust",
+        }
+    }
+
+    fn reached_by(self, device: &DeviceInfo) -> bool {
+        match self {
+            Self::Pair => device.paired,
+            Self::Connect => device.connected,
+            Self::Disconnect => !device.connected,
+            Self::Remove => !device.paired && !device.trusted,
+            Self::Trust(trusted) => device.trusted == trusted,
+        }
+    }
 }
 
 const AUDIO_MAJOR_CLASS: u32 = 0x0400;
@@ -235,7 +268,10 @@ pub fn devices_payload(
         .map(|device| {
             let ready = connection_ready(device);
             let audio = is_audio_device(device);
-            let device_action = action.filter(|action| action.address == device.address);
+            let device_action = action.filter(|action| {
+                action.address == device.address
+                    && (action.pending || !action.intent.reached_by(device))
+            });
             let action_pending = device_action.is_some_and(|action| action.pending);
             let device_status = if ready {
                 "Connected"
@@ -583,6 +619,7 @@ mod tests {
         discovery.record("AA:BB:CC:DD:EE:03");
         let action = DeviceActionState {
             address: "AA:BB:CC:DD:EE:03".into(),
+            intent: DeviceIntent::Connect,
             status: "Connecting".into(),
             pending: true,
         };
@@ -593,6 +630,32 @@ mod tests {
         assert_eq!(item["can_connect"], false);
         assert_eq!(item["can_pair"], true);
         assert_eq!(item["can_remove"], false);
+    }
+
+    #[test]
+    fn devices_payload_drops_a_failure_once_the_device_reached_what_the_action_wanted() {
+        let devices = [device("03", "mybuds", true, true, true, None)];
+        let failed = |intent| DeviceActionState {
+            address: "AA:BB:CC:DD:EE:03".into(),
+            intent,
+            status: "the device rejected the connection".into(),
+            pending: false,
+        };
+        let badge = |intent| {
+            let action = failed(intent);
+            let payload = devices_payload(
+                &devices,
+                &[],
+                &DiscoveryState::default(),
+                Some(&action),
+                TRUST_CAPABLE,
+            );
+            payload["items"][0]["badge"].clone()
+        };
+
+        assert_eq!(badge(DeviceIntent::Connect), "Connected");
+        assert_eq!(badge(DeviceIntent::Pair), "Connected");
+        assert_eq!(badge(DeviceIntent::Disconnect), "Needs attention");
     }
 
     #[test]

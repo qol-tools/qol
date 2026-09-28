@@ -31,8 +31,8 @@ use crate::bluetooth::{
     devices_payload, has_audio_class, is_audio_device, managed_device_options, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, supports_audio_sink, AdapterHealth, AdapterInfo, BackendCapabilities,
-    DeviceActionState, DeviceInfo, DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport,
-    ReconnectSelection,
+    DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, ReconnectFailure,
+    ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 use crate::hostfix::BluetoothHostFixes;
@@ -1381,26 +1381,28 @@ fn dispatch_daemon_action(
         DaemonAction::Kill => ReadResult::Command(DaemonCommand::Kill),
         DaemonAction::EnableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(true)),
         DaemonAction::DisableAdapter => ReadResult::Command(DaemonCommand::SetAdapterPower(false)),
-        DaemonAction::PairDevice => device_daemon_command(request, DaemonCommand::Pair, "Pairing"),
+        DaemonAction::PairDevice => {
+            device_daemon_command(request, DaemonCommand::Pair, DeviceIntent::Pair)
+        }
         DaemonAction::TrustDevice => device_daemon_command(
             request,
             |address| DaemonCommand::Trust(address, true),
-            "Trusting",
+            DeviceIntent::Trust(true),
         ),
         DaemonAction::UntrustDevice => device_daemon_command(
             request,
             |address| DaemonCommand::Trust(address, false),
-            "Removing trust",
+            DeviceIntent::Trust(false),
         ),
         DaemonAction::ConnectDevice => {
-            device_daemon_command(request, DaemonCommand::Connect, "Connecting")
+            device_daemon_command(request, DaemonCommand::Connect, DeviceIntent::Connect)
         }
         DaemonAction::DisconnectDevice => {
-            device_daemon_command(request, DaemonCommand::Disconnect, "Disconnecting")
+            device_daemon_command(request, DaemonCommand::Disconnect, DeviceIntent::Disconnect)
         }
         DaemonAction::ReclaimDevice => reclaim_daemon_result(request),
         DaemonAction::RemoveDevice => {
-            device_daemon_command(request, DaemonCommand::Remove, "Removing")
+            device_daemon_command(request, DaemonCommand::Remove, DeviceIntent::Remove)
         }
         DaemonAction::StartSearch => match mark_search_requested() {
             Ok(()) => ReadResult::Command(DaemonCommand::StartSearch),
@@ -1489,10 +1491,10 @@ fn notify_adopted_managers() {
 fn device_daemon_command(
     request: &DaemonRequest,
     command: fn(Address) -> DaemonCommand,
-    pending_status: &str,
+    intent: DeviceIntent,
 ) -> ReadResult<DaemonCommand> {
     match request_address(request) {
-        Ok(address) => match begin_device_action(address, pending_status) {
+        Ok(address) => match begin_device_action(address, intent) {
             Ok(()) => ReadResult::Command(command(address)),
             Err(error) => ReadResult::Error(error.to_string()),
         },
@@ -2032,7 +2034,7 @@ async fn run_explicit_device_action(
     }
 }
 
-fn begin_device_action(address: Address, status: &str) -> Result<()> {
+fn begin_device_action(address: Address, intent: DeviceIntent) -> Result<()> {
     let mut state = DEVICE_ACTION_STATE
         .write()
         .map_err(|_| anyhow!("Bluetooth device action state is unavailable"))?;
@@ -2041,7 +2043,8 @@ fn begin_device_action(address: Address, status: &str) -> Result<()> {
     }
     *state = Some(DeviceActionState {
         address: address.to_string(),
-        status: status.into(),
+        intent,
+        status: intent.pending_status().into(),
         pending: true,
     });
     Ok(())
@@ -2049,11 +2052,15 @@ fn begin_device_action(address: Address, status: &str) -> Result<()> {
 
 fn finish_device_action<T>(address: Address, label: &str, result: &Result<T>) {
     if let Err(error) = result {
-        set_device_action_state(Some(DeviceActionState {
-            address: address.to_string(),
-            status: format!("{label} failed: {error:#}"),
-            pending: false,
-        }));
+        match DEVICE_ACTION_STATE.write() {
+            Ok(mut state) => {
+                if let Some(action) = state.as_mut() {
+                    action.status = format!("{label} failed: {error:#}");
+                    action.pending = false;
+                }
+            }
+            Err(_) => eprintln!("Bluetooth device action state is unavailable"),
+        }
         return;
     }
     set_device_action_state(None);
@@ -3028,9 +3035,9 @@ mod tests {
         register_adoption_retry, running_sink_except, runtime, set_device_action_state,
         source_in_use, source_index_matching, tolerated_profile_connect, transient_connect_error,
         watch_action, Address, AdoptionDecision, AdoptionRetries, AudioAdoption, AudioRepairGuard,
-        ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout, Duration,
-        ErrorKind, Instant, ReadResult, Result, RetryState, WatchAction, ADOPTION_RETRY_WINDOW,
-        ADOPT_TRIGGER_RETRY, DEVICE_ACTION_STATE, PROFILE_CONNECT_TIMEOUT,
+        ConnectionFlightGuard, DaemonAction, DaemonCommand, DeviceActionTimeout, DeviceIntent,
+        Duration, ErrorKind, Instant, ReadResult, Result, RetryState, WatchAction,
+        ADOPTION_RETRY_WINDOW, ADOPT_TRIGGER_RETRY, DEVICE_ACTION_STATE, PROFILE_CONNECT_TIMEOUT,
     };
     use qol_audio::control::{Card, Sink, Source, SourceOutput};
     use qol_audio::devices::{AudioDevice, Identity, Kind, State};
@@ -3155,7 +3162,7 @@ mod tests {
     #[test]
     fn explicit_device_action_deadline_clears_the_pending_state_with_an_error() {
         let address = parse_address("AA:BB:CC:DD:EE:FF").unwrap();
-        begin_device_action(address, "Connecting").unwrap();
+        begin_device_action(address, DeviceIntent::Connect).unwrap();
         let result = runtime().unwrap().block_on(complete_device_action_within(
             "Connect",
             Duration::ZERO,
