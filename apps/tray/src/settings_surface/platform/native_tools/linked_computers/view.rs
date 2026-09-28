@@ -160,7 +160,7 @@ impl LinkedComputersView {
                 let result = receiver.await;
                 let _ = this.update(&mut cx, |view, cx| {
                     view.polling = false;
-                    if view.sequence != sequence || view.pending || view.refresh_on_focus {
+                    if view.sequence != sequence || view.pending {
                         return;
                     }
                     if let Ok((_, Ok(snapshot), catalog)) = result {
@@ -187,11 +187,7 @@ impl LinkedComputersView {
                 loop {
                     cx.background_executor().timer(POLL_INTERVAL).await;
                     let alive = this.update(&mut cx, |view, cx| {
-                        if !view.refresh_on_focus
-                            && !view.pending
-                            && !view.polling
-                            && matches!(view.editing, Editing::None)
-                        {
+                        if !view.pending && !view.polling && matches!(view.editing, Editing::None) {
                             view.poll(cx);
                         }
                     });
@@ -267,8 +263,6 @@ impl LinkedComputersView {
     fn suspend(&mut self, cx: &mut Context<Self>) {
         self.sequence = self.sequence.wrapping_add(1);
         self.refresh_on_focus = true;
-        self.snapshot = None;
-        self.catalog = None;
         self.source = None;
         self.invitation = None;
         self.editing = Editing::None;
@@ -668,8 +662,11 @@ impl Render for LinkedComputersView {
                 }));
         }
         let focused = self.focus.is_focused(window);
-        if focused && window.is_window_active() && self.refresh_on_focus && !self.pending {
+        if self.sequence == 0 && !self.pending {
             self.work(None, cx);
+        } else if focused && window.is_window_active() && self.refresh_on_focus && !self.pending {
+            self.refresh_on_focus = false;
+            self.poll(cx);
         }
         self.start_polling(cx);
         let rows = self.rows();
