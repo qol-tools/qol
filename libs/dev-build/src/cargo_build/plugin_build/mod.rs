@@ -99,7 +99,20 @@ fn spawn_build(root: &Path, path: &Path) -> Result<CargoChild, String> {
         command.arg("--features").arg(flag);
     }
     crate::configure_dev_cargo(&mut command);
+    apply_identity(root, &mut command);
     spawn_piped(command).map_err(|error| error.to_string())
+}
+
+fn apply_identity(root: &Path, command: &mut Command) {
+    match qol_build_identity::BuildIdentityEnvironment::development_scoped(
+        root,
+        &qol_build_identity::PLUGIN_BUILD_SCOPE_PATHS,
+    ) {
+        Ok(identity) => identity.apply_to(command),
+        Err(error) => {
+            log::warn!("[dev-build] event=plugin_identity outcome=unresolved error={error}")
+        }
+    }
 }
 
 pub(super) fn build_cargo_plugins_with_progress(
@@ -291,6 +304,7 @@ fn build_cargo_plugin_batch_with_progress(
         command.arg("--features").arg(flag);
     }
     crate::configure_dev_cargo(&mut command);
+    apply_identity(root, &mut command);
     let CargoChild {
         mut child,
         stdout,
