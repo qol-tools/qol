@@ -883,18 +883,18 @@ impl LauncherView {
             }
             shot => {
                 let size = sizing::app_card(look.strength);
-                let details = match shot {
-                    Shot::App(path) => self.details.app(path),
+                let face = match shot {
+                    Shot::App(path) => self.face(path),
                     _ => None,
                 };
                 let summary = match shot {
                     Shot::Other(summary) => summary.as_deref(),
-                    _ => details.and_then(|details| details.description.as_deref()),
+                    _ => face.and_then(|face| face.description.as_deref()),
                 };
                 let card = view::app_card(view::AppCard {
                     name: &shown.name,
                     summary,
-                    art: details.and_then(|details| details.icon.as_deref()),
+                    art: face.and_then(|face| face.icon.as_deref()),
                     chosen: look.chosen,
                     lit: look.lit,
                     cue: look.cue,
@@ -932,12 +932,14 @@ impl LauncherView {
                 FILES_PANEL_MIN,
             ),
             _ => {
-                let details = plan.entry.and_then(|entry| self.details.app(&entry.path));
+                let path = plan.entry.map(|entry| entry.path.as_path());
                 let panel = about::panel(
                     About {
                         name,
-                        icon: details.and_then(|details| details.icon.as_deref()),
-                        about: details.map(|details| &details.about),
+                        icon: path
+                            .and_then(|path| self.face(path))
+                            .and_then(|face| face.icon.as_deref()),
+                        about: path.and_then(|path| self.details.app(path)),
                         home,
                         copied: copied_item(feedback, name) == Some(PanelItem::CopyPath),
                         fill,

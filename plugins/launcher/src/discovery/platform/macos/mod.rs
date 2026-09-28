@@ -4,7 +4,7 @@ mod spotlight;
 
 use std::path::{Path, PathBuf};
 
-use super::super::details::{AppAbout, AppDetails, Package};
+use super::super::details::{AppAbout, AppFace, Package};
 use super::super::AppEntry;
 use super::AppRoot;
 
@@ -31,7 +31,17 @@ pub fn file_watch_roots() -> Vec<PathBuf> {
     ]
 }
 
-pub fn app_details(entry: &AppEntry) -> AppDetails {
+pub fn app_face(entry: &AppEntry) -> AppFace {
+    let category = qol_apps::read_macos_bundle_facts(&entry.path).category;
+    AppFace {
+        icon: icon::icon_path(&entry.path),
+        description: cask::owner_of(&entry.path)
+            .and_then(|cask| cask.summary)
+            .or_else(|| category.as_deref().and_then(kind)),
+    }
+}
+
+pub fn app_about(entry: &AppEntry) -> AppAbout {
     let bundle = qol_apps::read_macos_bundle_facts(&entry.path);
     let cask = cask::owner_of(&entry.path);
     let indexed = spotlight::facts(&entry.path);
@@ -49,29 +59,21 @@ pub fn app_details(entry: &AppEntry) -> AppDetails {
                 .and_then(|cask| cask.installed)
                 .or(indexed.added),
         });
-    let (summary, website) = cask
-        .as_ref()
-        .map(|cask| (cask.summary.clone(), cask.website.clone()))
-        .unwrap_or_default();
-    AppDetails {
-        icon: icon::icon_path(&entry.path),
-        description: summary.or_else(|| kind.clone()),
-        about: AppAbout {
-            binary: bundle
-                .executable
-                .map(|name| entry.path.join("Contents/MacOS").join(name))
-                .filter(|binary| binary.is_file()),
-            kind,
-            source: if cask.is_some() {
-                Some("Homebrew")
-            } else {
-                source_of(&entry.path)
-            },
-            package,
-            developer: bundle.copyright.as_deref().and_then(owner),
-            website,
-            ..AppAbout::default()
+    AppAbout {
+        binary: bundle
+            .executable
+            .map(|name| entry.path.join("Contents/MacOS").join(name))
+            .filter(|binary| binary.is_file()),
+        kind,
+        source: if cask.is_some() {
+            Some("Homebrew")
+        } else {
+            source_of(&entry.path)
         },
+        package,
+        developer: bundle.copyright.as_deref().and_then(owner),
+        website: cask.and_then(|cask| cask.website),
+        ..AppAbout::default()
     }
 }
 

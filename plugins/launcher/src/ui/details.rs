@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use gpui::{AppContext as _, AsyncApp, Context, WeakEntity};
 
 use super::LauncherView;
-use crate::discovery::details::{self, AppDetails, FileDetails};
+use crate::discovery::details::{self, AppAbout, FileDetails};
 use crate::discovery::AppEntry;
 
 pub(super) enum Want {
@@ -14,20 +14,20 @@ pub(super) enum Want {
 }
 
 enum Found {
-    App(PathBuf, Box<AppDetails>),
+    App(PathBuf, Box<AppAbout>),
     File(PathBuf, FileDetails),
 }
 
 #[derive(Default)]
 pub(super) struct DetailCache {
-    apps: HashMap<PathBuf, AppDetails>,
+    apps: HashMap<PathBuf, AppAbout>,
     files: HashMap<PathBuf, FileDetails>,
     loading_apps: HashSet<PathBuf>,
     loading_files: HashSet<PathBuf>,
 }
 
 impl DetailCache {
-    pub(super) fn app(&self, path: &Path) -> Option<&AppDetails> {
+    pub(super) fn app(&self, path: &Path) -> Option<&AppAbout> {
         self.apps.get(path)
     }
 
@@ -76,7 +76,7 @@ fn resolve(wants: Vec<Want>) -> Vec<Found> {
         .into_iter()
         .map(|want| match want {
             Want::App(entry) => {
-                let details = details::app_details(&entry);
+                let details = details::app_about(&entry);
                 Found::App(entry.path, Box::new(details))
             }
             Want::File(path) => {

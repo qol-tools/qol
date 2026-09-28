@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::super::details::AppDetails;
+use super::super::details::{AppAbout, AppFace};
 use super::super::AppEntry;
 use super::AppRoot;
 
@@ -29,8 +29,12 @@ pub fn file_watch_roots() -> Vec<PathBuf> {
     ]
 }
 
-pub fn app_details(_entry: &AppEntry) -> AppDetails {
-    AppDetails::default()
+pub fn app_face(_entry: &AppEntry) -> AppFace {
+    AppFace::default()
+}
+
+pub fn app_about(_entry: &AppEntry) -> AppAbout {
+    AppAbout::default()
 }
 
 pub fn file_icon(_path: &Path) -> Option<PathBuf> {

@@ -19,6 +19,7 @@ use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::PlatformStateClient;
 use qol_watch::{WatchNotice, WatchRoot};
 
+use details::AppFace;
 use platform::AppRoot;
 
 enum WatchSignal {
@@ -35,6 +36,7 @@ pub struct FileEntry {
 
 pub struct PreloadedEntries {
     pub app_entries: Arc<Vec<AppEntry>>,
+    pub app_faces: Arc<HashMap<PathBuf, AppFace>>,
     pub file_entries: Arc<Vec<FileEntry>>,
     pub flow_entries: Arc<Vec<FlowEntry>>,
 }
@@ -43,6 +45,7 @@ impl PreloadedEntries {
     pub fn empty() -> Self {
         Self {
             app_entries: Arc::new(Vec::new()),
+            app_faces: Arc::new(HashMap::new()),
             file_entries: Arc::new(Vec::new()),
             flow_entries: Arc::new(Vec::new()),
         }
@@ -130,12 +133,32 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Default)]
 struct AppCache {
     by_root: HashMap<PathBuf, Vec<AppEntry>>,
+    faces: HashMap<PathBuf, AppFace>,
 }
 
 impl AppCache {
     fn rescan(&mut self, root: &AppRoot) {
-        self.by_root
-            .insert(root.path.clone(), platform::scan_root(root));
+        let entries = platform::scan_root(root);
+        for entry in &entries {
+            self.faces.remove(&entry.path);
+        }
+        self.by_root.insert(root.path.clone(), entries);
+    }
+
+    fn fill_faces(&mut self) -> bool {
+        let missing: Vec<&AppEntry> = self
+            .by_root
+            .values()
+            .flatten()
+            .filter(|entry| !self.faces.contains_key(&entry.path))
+            .collect();
+        let found: Vec<(PathBuf, AppFace)> = missing
+            .into_iter()
+            .map(|entry| (entry.path.clone(), details::app_face(entry)))
+            .collect();
+        let filled = !found.is_empty();
+        self.faces.extend(found);
+        filled
     }
 
     fn rescan_all(&mut self, roots: &[AppRoot]) {
@@ -158,19 +181,27 @@ impl AppCache {
 
 fn publish(
     entries: &SharedEntries,
+    published: &std::sync::mpsc::Sender<Arc<PreloadedEntries>>,
     cache: &AppCache,
     file_entries: &Arc<Vec<FileEntry>>,
     flow_entries: &Arc<Vec<FlowEntry>>,
 ) {
+    let apps = cache.snapshot();
+    let faces = apps
+        .iter()
+        .filter_map(|entry| Some((entry.path.clone(), cache.faces.get(&entry.path)?.clone())))
+        .collect();
     let fresh = Arc::new(PreloadedEntries {
-        app_entries: Arc::new(cache.snapshot()),
+        app_entries: Arc::new(apps),
+        app_faces: Arc::new(faces),
         file_entries: file_entries.clone(),
         flow_entries: flow_entries.clone(),
     });
     if let Ok(mut guard) = entries.lock() {
-        guard.entries = fresh;
+        guard.entries = fresh.clone();
         guard.loaded_once = true;
     }
+    let _ = published.send(fresh);
 }
 
 fn is_app_relevant(path: &Path) -> bool {
@@ -212,7 +243,10 @@ fn spawn_host_subscriber(tx: std::sync::mpsc::Sender<WatchSignal>) {
     });
 }
 
-pub(crate) fn start(entries: SharedEntries) {
+pub(crate) fn start(
+    entries: SharedEntries,
+    published: std::sync::mpsc::Sender<Arc<PreloadedEntries>>,
+) {
     std::thread::spawn(move || {
         let roots = platform::app_roots();
         let file_roots = configured_file_roots();
@@ -220,11 +254,14 @@ pub(crate) fn start(entries: SharedEntries) {
         cache.rescan_all(&roots);
         let mut file_entries = Arc::new(load_file_entries_from_roots(&file_roots));
         let mut flow_entries = Arc::new(load_flow_entries());
-        publish(&entries, &cache, &file_entries, &flow_entries);
+        publish(&entries, &published, &cache, &file_entries, &flow_entries);
         eprintln!(
             "[launcher] index: initial load complete ({} roots)",
             roots.len()
         );
+        if cache.fill_faces() {
+            publish(&entries, &published, &cache, &file_entries, &flow_entries);
+        }
 
         if roots.is_empty() && file_roots.iter().all(|root| !root.is_dir()) {
             eprintln!("[launcher] index: no watch roots, exiting watcher thread");
@@ -314,7 +351,7 @@ pub(crate) fn start(entries: SharedEntries) {
                             root.path.display()
                         );
                     } else if flows_changed {
-                        publish(&entries, &cache, &file_entries, &flow_entries);
+                        publish(&entries, &published, &cache, &file_entries, &flow_entries);
                     } else {
                         eprintln!(
                             "[launcher] index: host hint {} matches no root, ignoring",
@@ -347,6 +384,7 @@ pub(crate) fn start(entries: SharedEntries) {
                     .join(", ")
             );
             let mut publish_needed = !dirty_now.is_empty();
+            cache.fill_faces();
             if !dirty_files.is_empty() {
                 let changed_count = dirty_files.len();
                 let refreshed = file_scan::refresh_files(&file_entries, &file_roots, &dirty_files);
@@ -375,7 +413,7 @@ pub(crate) fn start(entries: SharedEntries) {
                 );
             }
             if publish_needed {
-                publish(&entries, &cache, &file_entries, &flow_entries);
+                publish(&entries, &published, &cache, &file_entries, &flow_entries);
             }
         }
     });

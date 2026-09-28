@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use gpui::*;
 
+use crate::discovery::details::AppFace;
 use crate::discovery::entry_store::{BeforeTyping, EntryStore};
 use crate::discovery::{PreloadedEntries, SharedEntries};
 
@@ -185,6 +186,10 @@ impl LauncherView {
         {
             self.last_render_trace = None;
         }
+    }
+
+    pub(super) fn face(&self, path: &std::path::Path) -> Option<&AppFace> {
+        self.last_entries_snapshot.app_faces.get(path)
     }
 
     pub(crate) fn sync_entries_from_shared(&mut self) -> bool {

@@ -23,10 +23,9 @@ const MONTHS: [&str; 12] = [
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AppDetails {
+pub struct AppFace {
     pub icon: Option<PathBuf>,
     pub description: Option<String>,
-    pub about: AppAbout,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -81,8 +80,12 @@ pub struct FileDetails {
     pub facts: Vec<Fact>,
 }
 
-pub fn app_details(entry: &AppEntry) -> AppDetails {
-    super::platform::app_details(entry)
+pub fn app_face(entry: &AppEntry) -> AppFace {
+    super::platform::app_face(entry)
+}
+
+pub fn app_about(entry: &AppEntry) -> AppAbout {
+    super::platform::app_about(entry)
 }
 
 pub fn file_details(path: &Path, now: SystemTime) -> FileDetails {

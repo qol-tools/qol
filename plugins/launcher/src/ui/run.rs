@@ -6,7 +6,7 @@ use std::time::Duration;
 use gpui::*;
 
 use crate::app;
-use crate::discovery::{self, SharedEntries, SharedEntryState};
+use crate::discovery::{self, PreloadedEntries, SharedEntries, SharedEntryState};
 use crate::monitor::MonitorTracker;
 use qol_gpui::command_loop::LoopFlow;
 
@@ -54,7 +54,9 @@ pub fn run(intent: StartupIntent) {
         spawn_topology_listener(entries.clone(), active.clone(), focus_cache.clone(), cx);
 
         spawn_command_poll(entries.clone(), active.clone(), rx, focus_cache.clone(), cx);
-        discovery::start(entries.clone());
+        let (published, snapshots) = mpsc::channel();
+        qol_gpui::command_loop::spawn_receiver_loop(cx, snapshots, warm_icons);
+        discovery::start(entries.clone(), published);
 
         if show_immediately {
             #[cfg(debug_assertions)]
@@ -153,6 +155,16 @@ fn reload_ghost_debug(active: &Rc<RefCell<ActiveLaunchers>>, cx: &mut App) {
     qol_gpui::ghost::reconcile_active(&keys, |key| {
         qol_gpui::ghost::ghost_window_title(super::LAUNCHER_WINDOW_TITLE, key)
     });
+}
+
+fn warm_icons(cx: &mut App, entries: Arc<PreloadedEntries>) {
+    for icon in entries
+        .app_faces
+        .values()
+        .filter_map(|face| face.icon.clone())
+    {
+        let _ = cx.fetch_asset::<ImgResourceLoader>(&Resource::from(icon));
+    }
 }
 
 async fn wait_for_entries(entries: &SharedEntries, cx: &AsyncApp) {

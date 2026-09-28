@@ -28,16 +28,7 @@ where
     H: FnMut(AsyncApp, Cmd) -> F + 'static,
     F: Future<Output = LoopFlow> + 'static,
 {
-    let (tx, mut async_rx) = mpsc::unbounded();
-    let _ = std::thread::Builder::new()
-        .name("qol-gpui-command-loop".into())
-        .spawn(move || {
-            while let Ok(command) = rx.recv() {
-                if tx.unbounded_send(command).is_err() {
-                    return;
-                }
-            }
-        });
+    let mut async_rx = forward(rx, "qol-gpui-command-loop");
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Some(cmd) = async_rx.next().await {
             if matches!(handler(cx.clone(), cmd).await, LoopFlow::Stop) {
@@ -47,4 +38,35 @@ where
         let _ = cx.update(|app| app.quit());
     })
     .detach();
+}
+
+/// Runs `handler` on the main thread for every message until the sender hangs up.
+pub fn spawn_receiver_loop<T, H>(cx: &mut App, rx: Receiver<T>, mut handler: H)
+where
+    T: Send + 'static,
+    H: FnMut(&mut App, T) + 'static,
+{
+    let mut async_rx = forward(rx, "qol-gpui-receiver-loop");
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while let Some(message) = async_rx.next().await {
+            if cx.update(|app| handler(app, message)).is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
+fn forward<T: Send + 'static>(rx: Receiver<T>, name: &str) -> mpsc::UnboundedReceiver<T> {
+    let (tx, async_rx) = mpsc::unbounded();
+    let _ = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            while let Ok(message) = rx.recv() {
+                if tx.unbounded_send(message).is_err() {
+                    return;
+                }
+            }
+        });
+    async_rx
 }

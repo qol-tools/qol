@@ -18,7 +18,7 @@ use windows as imp;
 
 use std::path::{Path, PathBuf};
 
-use super::details::AppDetails;
+use super::details::{AppAbout, AppFace};
 use super::AppEntry;
 pub use qol_apps::AppRoot;
 
@@ -38,8 +38,12 @@ pub fn file_watch_roots() -> Vec<PathBuf> {
     imp::file_watch_roots()
 }
 
-pub fn app_details(entry: &AppEntry) -> AppDetails {
-    imp::app_details(entry)
+pub fn app_face(entry: &AppEntry) -> AppFace {
+    imp::app_face(entry)
+}
+
+pub fn app_about(entry: &AppEntry) -> AppAbout {
+    imp::app_about(entry)
 }
 
 pub fn file_icon(path: &Path) -> Option<PathBuf> {

@@ -164,7 +164,7 @@ impl LauncherView {
                 _ => None,
             })
             .and_then(|entry| {
-                let binary = self.details.app(&entry.path)?.about.binary.as_ref()?;
+                let binary = self.details.app(&entry.path)?.binary.as_ref()?;
                 Some((binary.display().to_string(), entry.name.clone()))
             });
         let Some((path, name)) = found else {

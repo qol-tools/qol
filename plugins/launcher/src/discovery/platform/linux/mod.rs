@@ -6,7 +6,7 @@ mod recent;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::super::details::{AppAbout, AppDetails};
+use super::super::details::{AppAbout, AppFace};
 use super::super::AppEntry;
 use super::AppRoot;
 
@@ -22,26 +22,39 @@ pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
     qol_apps::desktop::scan_desktop_root(root)
 }
 
-pub fn app_details(entry: &AppEntry) -> AppDetails {
-    let Ok(content) = fs::read_to_string(&entry.path) else {
-        return AppDetails::default();
+pub fn app_face(entry: &AppEntry) -> AppFace {
+    let Some(field) = desktop_fields(entry) else {
+        return AppFace::default();
     };
-    let field = |key: &str| {
+    AppFace {
+        icon: field("Icon=").and_then(|name| icons::icon_path(&name)),
+        description: description(&field),
+    }
+}
+
+pub fn app_about(entry: &AppEntry) -> AppAbout {
+    let Some(field) = desktop_fields(entry) else {
+        return AppAbout::default();
+    };
+    about(
+        entry,
+        description(&field).as_deref(),
+        field("Exec="),
+        field("Categories="),
+    )
+}
+
+fn desktop_fields(entry: &AppEntry) -> Option<impl Fn(&str) -> Option<String>> {
+    let content = fs::read_to_string(&entry.path).ok()?;
+    Some(move |key: &str| {
         qol_apps::desktop::desktop_field(&content, key)
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
-    };
-    let description = field("Comment=").or_else(|| field("GenericName="));
-    AppDetails {
-        icon: field("Icon=").and_then(|name| icons::icon_path(&name)),
-        about: about(
-            entry,
-            description.as_deref(),
-            field("Exec="),
-            field("Categories="),
-        ),
-        description,
-    }
+    })
+}
+
+fn description(field: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    field("Comment=").or_else(|| field("GenericName="))
 }
 
 fn about(
