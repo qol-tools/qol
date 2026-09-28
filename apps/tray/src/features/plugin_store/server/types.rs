@@ -239,6 +239,16 @@ pub(super) struct BuildStateResponse {
     pub(super) progress: HashMap<String, BuildProgressSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) results: Option<Vec<crate::dev::state::BuildResultInfo>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) restart: Option<RestartProgressSnapshot>,
+}
+
+#[cfg(feature = "dev")]
+#[derive(Debug, Clone, Serialize, Default)]
+pub(super) struct RestartProgressSnapshot {
+    pub(super) done: usize,
+    pub(super) total: usize,
+    pub(super) plugin: String,
 }
 
 #[cfg(feature = "dev")]

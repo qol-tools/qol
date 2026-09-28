@@ -7,7 +7,7 @@ use crate::dev;
 
 use super::super::dev_runtime::DevRuntimeService;
 use super::super::helpers::shared_config_dir;
-use super::super::types::AppState;
+use super::super::types::{AppState, RestartProgressSnapshot};
 
 pub(super) fn queue_reload(
     state: &AppState,
@@ -94,6 +94,7 @@ fn run_reload(task: ReloadTask) {
     run_build(&task);
     let plugin_filter = task.plugin_filter.clone();
     reload_plugins(
+        &task.runtime,
         task.plugin_manager,
         task.config,
         task.events,
@@ -140,6 +141,7 @@ fn run_build(task: &ReloadTask) -> crate::dev::BuildRun {
 }
 
 fn reload_plugins(
+    runtime: &DevRuntimeService,
     plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
     config: std::sync::Arc<crate::daemon::ConfigBus>,
     events: std::sync::Arc<crate::daemon::EventBus>,
@@ -166,11 +168,17 @@ fn reload_plugins(
     }
 
     let mut failures = Vec::new();
-    for plugin_id in &reload_ids {
+    for (done, plugin_id) in reload_ids.iter().enumerate() {
+        runtime.set_restart_progress(Some(RestartProgressSnapshot {
+            done,
+            total: reload_ids.len(),
+            plugin: plugin_id.clone(),
+        }));
         if let Err(error) = manager.reload_plugin(plugin_id) {
             failures.push((plugin_id.clone(), error));
         }
     }
+    runtime.set_restart_progress(None);
     drop(manager);
 
     if let Some(plugin_id) = plugin_filter {
@@ -298,6 +306,7 @@ command = "daemon"
 
     fn reload(manager: &Arc<Mutex<crate::plugins::PluginManager>>, plugin_filter: Option<&str>) {
         reload_plugins(
+            &DevRuntimeService::new(),
             Arc::clone(manager),
             Arc::new(crate::daemon::ConfigBus::new()),
             Arc::new(crate::daemon::EventBus::new()),

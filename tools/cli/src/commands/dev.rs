@@ -3,11 +3,11 @@ use crate::commands::dev_bundle::{self, ARTIFACT_ROOT_ENV};
 use crate::dev_console;
 use crate::dev_server::{
     fetch_build_state, fetch_dev_links, post_dev_link, post_reload_plugins,
-    wait_for_health_or_exit, BuildResultSnapshot, DevLink, DevLinkOutcome,
+    wait_for_health_or_exit, BuildResultSnapshot, BuildStateSnapshot, DevLink, DevLinkOutcome,
 };
 use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
-use crate::progress::{print_title, run_status, step_label, PercentProgress, StatusLine, StepKind};
+use crate::progress::{print_title, run_status, step_label, Measure, ProgressLine, StepKind};
 use crate::workspace::{
     cargo_bin_name, cargo_build_command, dev_repo_root, display_name, repo_root,
     scan_buildable_plugins, BuildablePlugin,
@@ -15,7 +15,6 @@ use crate::workspace::{
 use anyhow::{bail, Context, Result};
 use qol_dev_build::adapters::CoreEventSink;
 use qol_dev_build::core::CoreEvent;
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -87,14 +86,15 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
     )?;
     phases.mark("plugins");
     let run_root = dev_run_root(&target.root);
-    let built_binary = build_qol_tray_dev(&target.root, &TRAY_DEV_BINS, verbose)?;
+    let status = ProgressLine::start(verbose);
+    let built_binary = build_qol_tray_dev(&target.root, &TRAY_DEV_BINS, verbose, &status)?;
     phases.mark("tray build");
-    let status = StatusLine::start("staging qol-tray", verbose);
+    status.set("stage", Measure::Unknown, "qol-tray");
     let runtime = qol_dev_build::tray::stage_runtime_generation(&root, &built_binary)
         .map_err(|error| anyhow::anyhow!("tray runtime staging failed: {error}"))?;
     phases.mark("stage");
     apply_marker_update(&plan.marker_update)?;
-    status.set("stopping the running tray");
+    status.set("stop", Measure::Unknown, "running tray");
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
     phases.mark("stop");
     let shutdown_detail = match shutdown_method {
@@ -113,7 +113,7 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
         &runtime.executable().display().to_string(),
         verbose,
     );
-    status.set("starting qol-tray");
+    status.set("start", Measure::Unknown, "qol-tray");
     let mut command = dev_runtime_command(&run_root, &runtime);
     command
         .stdin(Stdio::null())
@@ -191,7 +191,8 @@ fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
         .context("failed to start artifact-backed qol-tray dev process")?;
     let lines = dev_console::spawn_forwarders(&mut child);
     let mut child = dev_console::TrayHandle::Owned(child);
-    let status = StatusLine::start("starting qol-tray", verbose);
+    let status = ProgressLine::start(verbose);
+    status.set("start", Measure::Unknown, "qol-tray");
     let boot = finish_boot(&mut child, &lines, &[], verbose, None, &status);
     drop(status);
     if let Err(error) = boot {
@@ -267,11 +268,11 @@ fn finish_boot(
     buildable: &[BuildablePlugin],
     verbose: bool,
     branch: Option<&str>,
-    status: &StatusLine,
+    status: &ProgressLine,
 ) -> Result<()> {
     wait_for_health_or_exit(child, Some(lines)).context("dev server did not become healthy")?;
     if !buildable.is_empty() {
-        status.set("linking plugins");
+        status.set("link", Measure::Unknown, "plugins");
         register_dev_links(buildable, verbose);
         request_plugin_reload(verbose, branch, status)?;
     }
@@ -398,7 +399,12 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
         reload_linked_plugins(verbose, skip_plugins, plan.target.branch.as_deref())?;
     }
     dev_reload_progress("build", "qol-tray dev");
-    build_qol_tray_dev(&plan.target.root, &TRAY_RELOAD_BINS, verbose)?;
+    build_qol_tray_dev(
+        &plan.target.root,
+        &TRAY_RELOAD_BINS,
+        verbose,
+        &ProgressLine::start(verbose),
+    )?;
     dev_reload_progress("handoff", "successor generation");
     dev_step_label("reload", StepKind::Success, "prebuilt", verbose);
     Ok(())
@@ -621,11 +627,20 @@ pub(crate) fn dev_run_root(root: &Path) -> PathBuf {
     qol_dev_build::tray::artifact_root(root)
 }
 
-fn build_qol_tray_dev(root: &Path, bins: &[&str], verbose: bool) -> Result<PathBuf> {
+fn build_qol_tray_dev(
+    root: &Path,
+    bins: &[&str],
+    verbose: bool,
+    line: &ProgressLine,
+) -> Result<PathBuf> {
     dev_step_label("build", StepKind::Pending, "qol-tray dev", verbose);
-    let bar = PercentProgress::new("qol-tray", verbose);
+    line.set("build", Measure::Percent(0), "qol-tray");
     let result = qol_dev_build::tray::build_tray(root, bins, |percent, phase| {
-        bar.update(percent, &phase);
+        line.set(
+            "build",
+            Measure::Percent(percent),
+            format!("qol-tray: {}", phase.to_lowercase()),
+        );
         dev_step_label(
             "build",
             StepKind::Info,
@@ -633,7 +648,6 @@ fn build_qol_tray_dev(root: &Path, bins: &[&str], verbose: bool) -> Result<PathB
             verbose,
         );
     });
-    bar.finish(result.success);
     if !result.success {
         bail!("{}", result.output);
     }
@@ -878,8 +892,8 @@ fn parse_porcelain_paths(porcelain: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-fn request_plugin_reload(verbose: bool, branch: Option<&str>, status: &StatusLine) -> Result<()> {
-    status.set("checking plugins");
+fn request_plugin_reload(verbose: bool, branch: Option<&str>, status: &ProgressLine) -> Result<()> {
+    status.set("plugins", Measure::Unknown, "checking");
     post_reload_plugins(branch).context("failed to queue plugin rebuild")?;
     dev_step_label("reload", StepKind::Info, "plugins queued", verbose);
     wait_for_dev_links_fresh(status)?;
@@ -887,14 +901,14 @@ fn request_plugin_reload(verbose: bool, branch: Option<&str>, status: &StatusLin
     Ok(())
 }
 
-fn wait_for_dev_links_fresh(status: &StatusLine) -> Result<()> {
+fn wait_for_dev_links_fresh(status: &ProgressLine) -> Result<()> {
     let started = Instant::now();
     let timeout = plugin_reload_timeout();
     if !wait_for_build_to_finish(started, timeout, status)? {
-        status.set("reloading plugins");
+        status.set("plugins", Measure::Unknown, "reloading");
         return wait_for_dev_links_fresh_legacy(started, timeout);
     }
-    status.set("restarting plugins");
+    status.set("plugins", Measure::Unknown, "verifying");
     ensure_dev_links_fresh()
 }
 
@@ -906,7 +920,7 @@ fn plugin_reload_timeout() -> Duration {
 fn wait_for_build_to_finish(
     started: Instant,
     timeout: Duration,
-    status: &StatusLine,
+    status: &ProgressLine,
 ) -> Result<bool> {
     let mut timeout = timeout;
     let mut last_state;
@@ -917,7 +931,8 @@ fn wait_for_build_to_finish(
                 return Ok(true);
             }
             Ok(state) => {
-                status.set(plugin_build_status(&state.progress));
+                let (measure, detail) = plugin_reload_progress(&state);
+                status.set("plugins", measure, detail);
                 timeout = timeout.max(qol_dev_build::linked_plugin_build_timeout(
                     state.progress.len(),
                 ));
@@ -932,8 +947,18 @@ fn wait_for_build_to_finish(
     }
 }
 
-fn plugin_build_status(progress: &HashMap<String, serde_json::Value>) -> String {
-    let done = progress
+fn plugin_reload_progress(state: &BuildStateSnapshot) -> (Measure, String) {
+    if let Some(restart) = &state.restart {
+        return (
+            Measure::Count(restart.done, restart.total),
+            format!("restarting {}", restart.plugin),
+        );
+    }
+    if state.progress.is_empty() {
+        return (Measure::Unknown, "checking".to_string());
+    }
+    let done = state
+        .progress
         .values()
         .filter(|value| {
             matches!(
@@ -942,12 +967,10 @@ fn plugin_build_status(progress: &HashMap<String, serde_json::Value>) -> String 
             )
         })
         .count();
-    let percent_sum: u64 = progress
-        .values()
-        .filter_map(|value| value.get("percent").and_then(serde_json::Value::as_u64))
-        .sum();
-    let percent = percent_sum.checked_div(progress.len() as u64).unwrap_or(0);
-    format!("building plugins {done}/{} {percent}%", progress.len())
+    (
+        Measure::Count(done, state.progress.len()),
+        "building".to_string(),
+    )
 }
 
 fn ensure_build_results_succeeded(results: Option<&[BuildResultSnapshot]>) -> Result<()> {
@@ -1083,20 +1106,26 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn plugin_build_status_counts_finished_plugins_and_averages_percent() {
-        let progress: HashMap<String, serde_json::Value> = [
-            ("a", r#"{"status":"success","percent":100}"#),
-            ("b", r#"{"status":"building","percent":40}"#),
-            ("c", r#"{"status":"queued","percent":0}"#),
-            ("d", r#"{"status":"skipped","percent":100}"#),
-        ]
-        .into_iter()
-        .map(|(id, json)| (id.to_string(), serde_json::from_str(json).unwrap()))
-        .collect();
-        assert_eq!(plugin_build_status(&progress), "building plugins 2/4 60%");
+    fn plugin_reload_progress_reports_restarts_builds_and_idle_checks() {
+        let state = |json: &str| -> BuildStateSnapshot { serde_json::from_str(json).unwrap() };
         assert_eq!(
-            plugin_build_status(&HashMap::new()),
-            "building plugins 0/0 0%"
+            plugin_reload_progress(&state(
+                r#"{"building":true,"restart":{"done":4,"total":12,"plugin":"qol-shot"}}"#
+            )),
+            (Measure::Count(4, 12), "restarting qol-shot".to_string())
+        );
+        assert_eq!(
+            plugin_reload_progress(&state(
+                r#"{"building":true,"progress":{
+                    "a":{"status":"success","percent":100},
+                    "b":{"status":"building","percent":40},
+                    "c":{"status":"skipped","percent":100}}}"#
+            )),
+            (Measure::Count(2, 3), "building".to_string())
+        );
+        assert_eq!(
+            plugin_reload_progress(&state(r#"{"building":true}"#)),
+            (Measure::Unknown, "checking".to_string())
         );
     }
 

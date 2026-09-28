@@ -113,6 +113,15 @@ pub(crate) struct BuildStateSnapshot {
     pub(crate) progress: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub(crate) results: Option<Vec<BuildResultSnapshot>>,
+    #[serde(default)]
+    pub(crate) restart: Option<RestartSnapshot>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct RestartSnapshot {
+    pub(crate) done: usize,
+    pub(crate) total: usize,
+    pub(crate) plugin: String,
 }
 
 #[derive(serde::Deserialize)]

@@ -3,22 +3,24 @@ mod mock;
 mod snapshot;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::daemon::EventBus;
 use crate::dev::adapters::{CoreEventSink, DevRuntimeStateStore};
 
 use super::dev_runtime_state::in_memory_runtime_state;
-use super::types::{BuildStateResponse, MockTargetInfo};
+use super::types::{BuildStateResponse, MockTargetInfo, RestartProgressSnapshot};
 
 pub(super) struct DevRuntimeService {
     state: Arc<dyn DevRuntimeStateStore>,
+    restart: Mutex<Option<RestartProgressSnapshot>>,
 }
 
 impl DevRuntimeService {
     pub(super) fn new() -> Self {
         Self {
             state: in_memory_runtime_state(),
+            restart: Mutex::new(None),
         }
     }
 
@@ -27,7 +29,14 @@ impl DevRuntimeService {
     }
 
     pub(super) fn finish_build(&self) {
+        self.set_restart_progress(None);
         self.state.finish_build();
+    }
+
+    pub(super) fn set_restart_progress(&self, progress: Option<RestartProgressSnapshot>) {
+        if let Ok(mut restart) = self.restart.lock() {
+            *restart = progress;
+        }
     }
 
     pub(super) fn build_in_progress(&self) -> bool {
@@ -59,7 +68,9 @@ impl DevRuntimeService {
     }
 
     pub(super) fn build_state_snapshot(&self) -> BuildStateResponse {
-        snapshot::build_state_snapshot(self.state.as_ref())
+        let mut snapshot = snapshot::build_state_snapshot(self.state.as_ref());
+        snapshot.restart = self.restart.lock().ok().and_then(|restart| restart.clone());
+        snapshot
     }
 
     pub(super) fn list_mock_targets(&self) -> Vec<MockTargetInfo> {

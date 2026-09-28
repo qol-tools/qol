@@ -284,64 +284,50 @@ impl LoopProgress {
     }
 }
 
-// ---------- PercentProgress: bar fed by a reported percent ----------
+// ---------- ProgressLine: one live line for a multi-step wait ----------
 
-pub(crate) struct PercentProgress {
-    label: &'static str,
-    active: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Measure {
+    Percent(u8),
+    Count(usize, usize),
+    Unknown,
 }
 
-impl PercentProgress {
-    pub(crate) fn new(label: &'static str, verbose: bool) -> Self {
-        let active = !verbose && progress_enabled();
-        if active {
-            render_percent_bar(label, 0, "");
-        }
-        Self { label, active }
-    }
-
-    pub(crate) fn update(&self, percent: u8, phase: &str) {
-        if self.active {
-            render_percent_bar(self.label, percent, phase);
-        }
-    }
-
-    pub(crate) fn finish(self, ok: bool) {
-        if !self.active {
-            return;
-        }
-        if ok {
-            eprintln!();
-            return;
-        }
-        clear_progress_line();
-    }
+struct LineState {
+    verb: String,
+    measure: Measure,
+    detail: String,
+    since: Instant,
 }
 
-// ---------- StatusLine: live line naming the step being waited on ----------
-
-pub(crate) struct StatusLine {
-    text: Arc<Mutex<String>>,
+pub(crate) struct ProgressLine {
+    state: Arc<Mutex<LineState>>,
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
-impl StatusLine {
-    pub(crate) fn start(text: &str, verbose: bool) -> Self {
-        let text = Arc::new(Mutex::new(text.to_string()));
+impl ProgressLine {
+    pub(crate) fn start(verbose: bool) -> Self {
+        let state = Arc::new(Mutex::new(LineState {
+            verb: String::new(),
+            measure: Measure::Unknown,
+            detail: String::new(),
+            since: Instant::now(),
+        }));
         let running = Arc::new(AtomicBool::new(true));
         let handle = (!verbose && progress_enabled()).then(|| {
-            let text = Arc::clone(&text);
+            let state = Arc::clone(&state);
             let running = Arc::clone(&running);
             thread::spawn(move || {
-                let started = Instant::now();
+                let mut tick = 0;
                 while running.load(Ordering::Relaxed) {
-                    let current = text.lock().map(|t| t.clone()).unwrap_or_default();
-                    eprint!(
-                        "\r  {current} {}\x1b[K",
-                        dim_stderr(&format_elapsed(started.elapsed()))
-                    );
-                    let _ = std::io::stderr().flush();
+                    if let Ok(line) = state.lock() {
+                        if !line.verb.is_empty() {
+                            eprint!("\r{}\x1b[K", render_line(&line, tick));
+                            let _ = std::io::stderr().flush();
+                        }
+                    }
+                    tick += 1;
                     thread::sleep(PROGRESS_INTERVAL);
                 }
                 eprint!("\r\x1b[K");
@@ -349,26 +335,60 @@ impl StatusLine {
             })
         });
         Self {
-            text,
+            state,
             running,
             handle,
         }
     }
 
-    pub(crate) fn set(&self, text: impl Into<String>) {
-        if let Ok(mut current) = self.text.lock() {
-            *current = text.into();
+    pub(crate) fn set(&self, verb: &str, measure: Measure, detail: impl Into<String>) {
+        let Ok(mut line) = self.state.lock() else {
+            return;
+        };
+        let detail = detail.into();
+        if line.verb != verb || line.detail != detail {
+            line.since = Instant::now();
         }
+        line.verb = verb.to_string();
+        line.measure = measure;
+        line.detail = detail;
     }
 }
 
-impl Drop for StatusLine {
+impl Drop for ProgressLine {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
     }
+}
+
+fn render_line(line: &LineState, tick: usize) -> String {
+    let padded = format!("{:<STEP_LABEL_WIDTH$}", line.verb);
+    format!(
+        "  {}{}",
+        paint_stderr(&padded, COLOR_PENDING),
+        line_text(line.measure, &line.detail, line.since.elapsed(), tick)
+    )
+}
+
+fn line_text(measure: Measure, detail: &str, elapsed: Duration, tick: usize) -> String {
+    let (bar, amount) = match measure {
+        Measure::Percent(percent) => {
+            let percent = usize::from(percent.min(100));
+            (
+                determinate_progress_bar(percent, 100),
+                format!("{percent:>3}%"),
+            )
+        }
+        Measure::Count(done, total) => (
+            determinate_progress_bar(done, total),
+            format!("{}/{total}", done.min(total)),
+        ),
+        Measure::Unknown => (indeterminate_progress_bar(tick), format_elapsed(elapsed)),
+    };
+    format!("{bar} {amount} {detail}")
 }
 
 // ---------- internals ----------
@@ -888,21 +908,6 @@ fn render_loop_bar(label: &str, done: usize, total: usize) -> bool {
     true
 }
 
-fn render_percent_bar(label: &str, percent: u8, phase: &str) {
-    eprint!(
-        "\r  {} {} {}\x1b[K",
-        dim_stderr(label),
-        percent_progress_text(percent),
-        dim_stderr(phase)
-    );
-    let _ = std::io::stderr().flush();
-}
-
-fn percent_progress_text(percent: u8) -> String {
-    let percent = usize::from(percent.min(100));
-    format!("{percent:>3}% {}", determinate_progress_bar(percent, 100))
-}
-
 fn cargo_progress_text(done: usize, total: usize) -> String {
     let done = done.min(total);
     let percent = progress_percent(done, total);
@@ -1094,10 +1099,22 @@ mod tests {
     }
 
     #[test]
-    fn formats_percent_progress_and_caps_at_full() {
-        assert_eq!(percent_progress_text(0), "  0% [------------------]");
-        assert_eq!(percent_progress_text(50), " 50% [#########---------]");
-        assert_eq!(percent_progress_text(250), "100% [##################]");
+    fn progress_line_formats_each_measure_with_the_same_bar() {
+        let elapsed = Duration::from_secs(7);
+        assert_eq!(
+            line_text(Measure::Percent(50), "qol-tray", elapsed, 0),
+            "[#########---------]  50% qol-tray"
+        );
+        assert_eq!(
+            line_text(Measure::Percent(250), "qol-tray", elapsed, 0),
+            "[##################] 100% qol-tray"
+        );
+        assert_eq!(
+            line_text(Measure::Count(3, 12), "restarting qol-shot", elapsed, 0),
+            "[#####-------------] 3/12 restarting qol-shot"
+        );
+        let unknown = line_text(Measure::Unknown, "running tray", elapsed, 0);
+        assert!(unknown.ends_with("] 00:07 running tray"), "{unknown}");
     }
 
     #[test]

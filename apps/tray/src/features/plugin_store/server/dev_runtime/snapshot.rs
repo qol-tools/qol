@@ -16,6 +16,7 @@ pub(super) fn build_state_snapshot(state: &dyn DevRuntimeStateStore) -> BuildSta
         building,
         progress: building_progress(state, building),
         results: build_results(state, building),
+        restart: None,
     }
 }
 
