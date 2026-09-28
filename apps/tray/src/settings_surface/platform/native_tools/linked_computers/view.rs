@@ -30,7 +30,8 @@ use qol_runtime::local_http::Method;
 use qol_runtime::PlatformStateClient;
 
 const MAX_VISIBLE: usize = 9;
-const DANGER_VERBS: [&str; 4] = ["stop", "revoke", "remove", "abandon"];
+const DANGER_VERBS: [&str; 5] = ["stop", "revoke", "remove", "abandon", "decline"];
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
 
 enum Editing {
     None,
@@ -46,11 +47,14 @@ pub(super) struct LinkedComputersView {
     on_back: CustomPanelCallback,
     snapshot: Option<Snapshot>,
     catalog: Option<Vec<CatalogOperation>>,
-    name: String,
-    name_edited: bool,
+    withheld: Vec<crate::plugins::PluginId>,
+    stopped: bool,
+    enabling: bool,
     source: Option<(ExportedInvitation, InvitationInfo)>,
     invitation: Option<Response>,
     pending: bool,
+    polling: bool,
+    poller: bool,
     selected: usize,
     list: ScrollList,
     sequence: u64,
@@ -72,11 +76,14 @@ impl LinkedComputersView {
             on_back,
             snapshot: None,
             catalog: None,
-            name: crate::features::linked_computers::hostname(),
-            name_edited: false,
+            withheld: Vec::new(),
+            stopped: false,
+            enabling: false,
             source: None,
             invitation: None,
             pending: false,
+            polling: false,
+            poller: false,
             selected: 1,
             list: ScrollList::new(MAX_VISIBLE),
             sequence: 0,
@@ -93,6 +100,9 @@ impl LinkedComputersView {
             return;
         }
         self.refresh_on_focus = false;
+        if matches!(&request, Some(Request::Stop { .. })) {
+            self.stopped = true;
+        }
         if matches!(
             &request,
             Some(Request::Enrollment {
@@ -107,24 +117,7 @@ impl LinkedComputersView {
         self.snapshot = None;
         self.catalog = None;
         self.notice = None;
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let client = PlatformStateClient::from_env();
-            let response = request
-                .map(|request| settings::request(&client, request))
-                .transpose();
-            let snapshot = match &response {
-                Ok(_) => settings::load(&client),
-                Err(error) => Err(error.clone()),
-            };
-            let catalog = request_json::<Vec<CatalogOperation>>(
-                Method::Get,
-                "/api/peers/catalog",
-                None,
-                REQUEST_TIMEOUT,
-            );
-            let _ = sender.send((response, snapshot, catalog.ok()));
-        });
+        let receiver = load(request);
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
@@ -138,7 +131,9 @@ impl LinkedComputersView {
                     match result {
                         Ok((response, snapshot, catalog)) => {
                             view.catalog = catalog;
-                            view.apply(response, snapshot);
+                            if let Some(next) = view.apply(response, snapshot) {
+                                view.work(Some(next), cx);
+                            }
                         }
                         Err(_) => {
                             view.notice = Some((
@@ -155,20 +150,92 @@ impl LinkedComputersView {
         cx.notify();
     }
 
+    fn poll(&mut self, cx: &mut Context<Self>) {
+        self.polling = true;
+        let sequence = self.sequence;
+        let receiver = load(None);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                let result = receiver.await;
+                let _ = this.update(&mut cx, |view, cx| {
+                    view.polling = false;
+                    if view.sequence != sequence || view.pending || view.refresh_on_focus {
+                        return;
+                    }
+                    if let Ok((_, Ok(snapshot), catalog)) = result {
+                        view.catalog = catalog.or(view.catalog.take());
+                        if let Some(next) = view.apply(Ok(None), Ok(snapshot)) {
+                            view.work(Some(next), cx);
+                        }
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn start_polling(&mut self, cx: &mut Context<Self>) {
+        if self.poller {
+            return;
+        }
+        self.poller = true;
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                loop {
+                    cx.background_executor().timer(POLL_INTERVAL).await;
+                    let alive = this.update(&mut cx, |view, cx| {
+                        if !view.refresh_on_focus
+                            && !view.pending
+                            && !view.polling
+                            && matches!(view.editing, Editing::None)
+                        {
+                            view.poll(cx);
+                        }
+                    });
+                    if alive.is_err() {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     fn apply(
         &mut self,
         response: Result<Option<Response>, Failure>,
         snapshot: Result<Snapshot, Failure>,
-    ) {
-        if let Ok(Some(response @ Response::Invitation { .. })) = response {
-            self.invitation = Some(response);
+    ) -> Option<Request> {
+        let mut next = None;
+        if let Ok(Some(response @ Response::Invitation { .. })) = &response {
+            self.invitation = Some(response.clone());
+        }
+        if let (Ok(Some(Response::JoinPrepared { transaction, .. })), Some((document, _))) =
+            (&response, &self.source)
+        {
+            if let Ok(current) = &snapshot {
+                if let Some(authority) = &current.status.authority {
+                    next = Some(Request::Enrollment {
+                        request: qol_peers::admin::EnrollmentRequest::Redeem {
+                            expected: authority.expected(),
+                            transaction: *transaction,
+                            document: document.clone(),
+                        },
+                    });
+                }
+            }
         }
         match snapshot {
             Ok(snapshot) => {
-                if !self.name_edited {
-                    if let Some(authority) = &snapshot.status.authority {
-                        self.name = authority.name.clone();
-                    }
+                if snapshot.status.lifecycle == qol_peers::admin::Lifecycle::Inactive
+                    && !self.stopped
+                    && !self.enabling
+                {
+                    self.enabling = true;
+                    next = Some(Request::Enable);
                 }
                 self.snapshot = Some(snapshot);
             }
@@ -184,15 +251,16 @@ impl LinkedComputersView {
                 ))
             }
         }
+        next
     }
 
     fn rows(&self) -> Vec<Row> {
         model::rows(
             self.snapshot.as_ref(),
             self.catalog.as_deref(),
-            &self.name,
             self.source.as_ref(),
             self.invitation.as_ref(),
+            &self.withheld,
         )
     }
 
@@ -215,8 +283,26 @@ impl LinkedComputersView {
         match action {
             Action::Refresh => self.work(None, cx),
             Action::Name => {
-                self.field.set_text(self.name.clone());
+                let name = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.status.authority.as_ref())
+                    .map(|authority| authority.name.clone())
+                    .unwrap_or_default();
+                self.field.set_text(name);
                 self.editing = Editing::Name;
+            }
+            Action::Toggle(plugin) => {
+                match self
+                    .withheld
+                    .iter()
+                    .position(|withheld| *withheld == plugin)
+                {
+                    Some(index) => {
+                        self.withheld.remove(index);
+                    }
+                    None => self.withheld.push(plugin),
+                }
             }
             Action::Paste => self.paste(cx),
             Action::Copy => {
@@ -228,7 +314,6 @@ impl LinkedComputersView {
                     ));
                 }
             }
-            Action::Explain(text) => self.notice = Some((text.into(), true)),
             Action::Send(request, Some(word)) => {
                 self.field.clear();
                 self.editing = Editing::Confirm { request, word };
@@ -268,29 +353,46 @@ impl LinkedComputersView {
                 .ok()
                 .map(|info| (document, info))
         });
-        self.notice = Some(match result {
-            Some(source) => {
-                self.source = Some(source);
-                (
-                    "Invitation read. Prepare the link once, or recover its original request."
-                        .into(),
-                    false,
-                )
-            }
-            None => (
+        let Some(source) = result else {
+            self.notice = Some((
                 "The clipboard text is not a linked computers invitation. Nothing was sent.".into(),
                 true,
-            ),
-        });
+            ));
+            return;
+        };
+        let expected = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.status.authority.as_ref())
+            .map(|authority| authority.expected());
+        let document = source.0.clone();
+        self.source = Some(source);
+        if let Some(expected) = expected {
+            self.work(
+                Some(Request::Enrollment {
+                    request: qol_peers::admin::EnrollmentRequest::Prepare { expected, document },
+                }),
+                cx,
+            );
+        }
     }
 
     fn finish_edit(&mut self, cx: &mut Context<Self>) {
         match std::mem::replace(&mut self.editing, Editing::None) {
             Editing::Name => {
-                self.name = self.field.text().trim().to_owned();
-                self.name_edited = true;
-                self.notice =
-                    (!qol_peers::is_valid_name(&self.name)).then(|| (NAME_RULE.into(), true));
+                let name = self.field.text().trim().to_owned();
+                if !qol_peers::is_valid_name(&name) {
+                    self.notice = Some((NAME_RULE.into(), true));
+                    return;
+                }
+                let expected = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.status.authority.as_ref())
+                    .map(|authority| authority.expected());
+                if let Some(expected) = expected {
+                    self.work(Some(Request::Rename { expected, name }), cx);
+                }
             }
             Editing::Confirm { request, word } => {
                 if self.field.text().trim().eq_ignore_ascii_case(word) {
@@ -569,6 +671,7 @@ impl Render for LinkedComputersView {
         if focused && window.is_window_active() && self.refresh_on_focus && !self.pending {
             self.work(None, cx);
         }
+        self.start_polling(cx);
         let rows = self.rows();
         self.sync_selection(&rows);
         let busy = self.pending && focused && window.is_window_active() && !self.refresh_on_focus;
@@ -591,4 +694,32 @@ impl Render for LinkedComputersView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
     }
+}
+
+type Loaded = (
+    Result<Option<Response>, Failure>,
+    Result<Snapshot, Failure>,
+    Option<Vec<CatalogOperation>>,
+);
+
+fn load(request: Option<Request>) -> tokio::sync::oneshot::Receiver<Loaded> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let client = PlatformStateClient::from_env();
+        let response = request
+            .map(|request| settings::request(&client, request))
+            .transpose();
+        let snapshot = match &response {
+            Ok(_) => settings::load(&client),
+            Err(error) => Err(error.clone()),
+        };
+        let catalog = request_json::<Vec<CatalogOperation>>(
+            Method::Get,
+            "/api/peers/catalog",
+            None,
+            REQUEST_TIMEOUT,
+        );
+        let _ = sender.send((response, snapshot, catalog.ok()));
+    });
+    receiver
 }

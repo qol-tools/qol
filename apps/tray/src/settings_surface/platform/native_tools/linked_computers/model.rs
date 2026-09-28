@@ -1,10 +1,11 @@
 use crate::features::linked_computers::settings::{CatalogOperation, InvitationInfo, Snapshot};
+use crate::plugins::PluginId;
 use qol_gpui::settings_panel::SettingsValueTone;
 use qol_peers::admin::{
-    AuthoritySummary, EnrollmentRequest, ExpectedAuthority, Lifecycle, PointzRequest, PointzStatus,
-    Request,
+    AuthoritySummary, EnrollmentFailure, EnrollmentRequest, ExpectedAuthority, Lifecycle,
+    NearbyRequest, NearbyState, PointzRequest, PointzStatus, Request,
 };
-use qol_peers::enrollment::{ExportedInvitation, OutboundEnrollmentState};
+use qol_peers::enrollment::{EnrollmentRejection, ExportedInvitation, OutboundEnrollmentState};
 use qol_peers::pointz::{PointzDevice, PointzPlugin, PointzTransport};
 use qol_peers::{AuthorityLifetime, AuthorityStatus};
 
@@ -13,7 +14,7 @@ use qol_peers::{AuthorityLifetime, AuthorityStatus};
 mod tests;
 
 pub(super) const NAME_RULE: &str =
-    "Give this computer a name first. It cannot be empty, start or end with a space, or run past 256 bytes.";
+    "A name cannot be empty, start or end with a space, or run past 256 bytes.";
 
 #[derive(Clone)]
 pub(super) enum Action {
@@ -21,7 +22,7 @@ pub(super) enum Action {
     Name,
     Paste,
     Copy,
-    Explain(&'static str),
+    Toggle(PluginId),
     Send(Request, Option<&'static str>),
 }
 
@@ -67,82 +68,41 @@ impl Row {
 pub(super) fn rows(
     snapshot: Option<&Snapshot>,
     catalog: Option<&[CatalogOperation]>,
-    name: &str,
     source: Option<&(ExportedInvitation, InvitationInfo)>,
     invitation: Option<&qol_peers::admin::Response>,
+    withheld: &[PluginId],
 ) -> Vec<Row> {
-    let named = qol_peers::is_valid_name(name);
-    let mut rows = vec![
-        Row::header("this computer", "how other computers see this one"),
-        Row::new(
-            "Computer name",
-            if named {
-                "Shown to the computers you link"
-            } else {
-                NAME_RULE
-            },
-            Some(Action::Name),
-        )
-        .value(
-            if name.is_empty() { "not set" } else { name },
-            if named {
-                SettingsValueTone::Normal
-            } else {
-                SettingsValueTone::Danger
-            },
-        )
-        .verb("edit"),
-        Row::new("Refresh", "Read linking state again", Some(Action::Refresh)).verb("refresh"),
-    ];
+    let mut rows = vec![Row::header(
+        "this computer",
+        "how other computers see this one",
+    )];
     let Some(snapshot) = snapshot else {
+        rows.push(
+            Row::new("Refresh", "Read linking state again", Some(Action::Refresh)).verb("refresh"),
+        );
         return rows;
     };
     let Some(authority) = &snapshot.status.authority else {
-        rows.push(
-            Row::new(
-                "Linking",
-                "Choose how long links belong to this computer",
-                None,
-            )
-            .value(
-                lifecycle_label(&snapshot.status.lifecycle),
-                SettingsValueTone::Muted,
-            ),
-        );
-        if matches!(
+        let off = matches!(
             snapshot.status.lifecycle,
             Lifecycle::Inactive | Lifecycle::Unavailable { .. }
-        ) {
-            rows.push(
-                named_send(
-                    "Use this session",
-                    "Links end when this computer's session stops",
-                    named,
-                    Request::StartSession { name: name.into() },
-                    None,
-                )
-                .verb("start"),
-            );
-            rows.push(
-                named_send(
-                    "Create persistent links",
-                    "Kept on this computer; needs platform support",
-                    named,
-                    Request::CreatePersistent { name: name.into() },
-                    Some("persist"),
-                )
-                .verb("create"),
-            );
-            rows.push(
-                send(
-                    "Open persistent links",
-                    "Use this computer's existing links",
-                    Request::OpenPersistent,
-                    None,
-                )
-                .verb("open"),
-            );
+        );
+        let mut row = Row::new(
+            "Linking",
+            match snapshot.status.lifecycle {
+                Lifecycle::Unavailable { error } => format!("Linking could not start: {error}"),
+                _ => "Links this computer to your other computers".into(),
+            },
+            off.then(|| Action::Send(Request::Enable, None)),
+        )
+        .value(
+            lifecycle_label(&snapshot.status.lifecycle),
+            SettingsValueTone::Muted,
+        );
+        if off {
+            row = row.verb("turn on");
         }
+        rows.push(row);
         return rows;
     };
     let expected = authority.expected();
@@ -150,180 +110,193 @@ pub(super) fn rows(
         && authority.status == AuthorityStatus::Ready;
     rows.push(
         Row::new(
-            "Linking",
-            format!("{} \u{b7} {}", authority.name, authority.peer_id),
-            None,
+            "Computer name",
+            "Shown to the computers you link",
+            ready.then_some(Action::Name),
         )
-        .value(
-            linking_label(&snapshot.status.lifecycle, authority),
-            if ready {
-                SettingsValueTone::Success
-            } else {
-                SettingsValueTone::Attention
-            },
-        ),
-    );
-    if !ready {
-        rows.push(
-            Row::new(
-                "Service unavailable",
-                "Refresh to read it again before changing anything",
-                None,
-            )
-            .value(
-                lifecycle_label(&snapshot.status.lifecycle),
-                SettingsValueTone::Attention,
-            ),
-        );
-        return rows;
-    }
-    rows.push(
-        named_send(
-            "Rename",
-            "Use the name above for this computer",
-            named,
-            Request::Rename {
-                expected,
-                name: name.into(),
-            },
-            None,
-        )
+        .value(authority.name.clone(), SettingsValueTone::Normal)
         .verb("rename"),
     );
-    rows.push(
-        send(
-            "Stop linking",
-            "Stop before changing how long links last",
-            Request::Stop { expected },
-            Some("stop"),
-        )
-        .verb("stop"),
+    let mut linking = Row::new("Linking", lifetime_detail(authority.lifetime), None).value(
+        linking_label(&snapshot.status.lifecycle, authority),
+        if ready {
+            SettingsValueTone::Success
+        } else {
+            SettingsValueTone::Attention
+        },
     );
+    if ready {
+        linking.action = Some(Action::Send(Request::Stop { expected }, Some("stop")));
+        linking = linking.verb("stop");
+    }
+    rows.push(linking);
+    if !ready {
+        return rows;
+    }
 
-    rows.push(Row::header(
-        "invitations",
-        "link another computer to this one",
-    ));
-    rows.push(
-        enroll(
-            "Create invitation",
-            "Make a one-time code for the other computer",
-            EnrollmentRequest::CreateInvitation {
-                expected,
-                addresses: Vec::new(),
-            },
+    rows.extend(nearby_rows(snapshot, catalog, withheld, expected));
+    rows.extend(linked_rows(snapshot, catalog, expected));
+    rows.extend(invitation_rows(snapshot, source, invitation, expected));
+    if let Some(pointz) = &snapshot.pointz {
+        rows.extend(phone_rows(pointz, &snapshot.phones, expected));
+    }
+    rows
+}
+
+fn nearby_rows(
+    snapshot: &Snapshot,
+    catalog: Option<&[CatalogOperation]>,
+    withheld: &[PluginId],
+    expected: ExpectedAuthority,
+) -> Vec<Row> {
+    let mut rows = vec![Row::header("nearby", "computers on this network")];
+    if snapshot.nearby.is_empty() {
+        rows.push(Row::new(
+            "Looking for computers",
+            "Open Linked computers on the other computer. Both need to be on this network.",
             None,
-        )
-        .verb("create"),
-    );
-    if let Some(qol_peers::admin::Response::Invitation {
-        authority,
-        invitation,
-        ..
-    }) = invitation
-    {
-        if authority.authority_id == expected.authority_id
-            && authority.activation_id == expected.activation_id
-        {
+        ));
+        return rows;
+    }
+    let grants: Vec<_> = catalog
+        .into_iter()
+        .flatten()
+        .filter(|operation| !withheld.contains(&operation.plugin_id))
+        .map(|operation| operation.key.clone())
+        .collect();
+    let mut confirming = false;
+    for computer in &snapshot.nearby {
+        let link = |peer_id| Request::Nearby {
+            request: NearbyRequest::Link { expected, peer_id },
+        };
+        let decline = Request::Nearby {
+            request: NearbyRequest::Decline {
+                expected,
+                peer_id: computer.peer_id,
+            },
+        };
+        let Some(state) = &computer.link else {
             rows.push(
-                Row::new(
-                    "Copy invitation",
-                    "Copy only to the computer you mean to link",
-                    Some(Action::Copy),
-                )
-                .value("ready", SettingsValueTone::Success)
-                .verb("copy"),
-            );
-            rows.push(
-                enroll(
-                    "Cancel invitation",
-                    "The code stops working",
-                    EnrollmentRequest::CancelInvitation {
-                        expected,
-                        invitation: *invitation,
-                    },
+                send(
+                    &computer.name,
+                    "On this network, not linked",
+                    link(computer.peer_id),
                     None,
                 )
+                .verb("link"),
+            );
+            continue;
+        };
+        let code = state.code.map(|code| code.to_string());
+        match state.state {
+            NearbyState::Connecting {} => rows.push(
+                Row::new(&computer.name, "Asking it for a code", None)
+                    .value("connecting", SettingsValueTone::Muted),
+            ),
+            NearbyState::Confirm {} => {
+                confirming = true;
+                rows.push(
+                    send(
+                        &computer.name,
+                        &format!("Link if {} shows this code too", computer.name),
+                        Request::Nearby {
+                            request: NearbyRequest::Confirm {
+                                expected,
+                                peer_id: computer.peer_id,
+                                grants: grants.clone(),
+                            },
+                        },
+                        None,
+                    )
+                    .value(code.unwrap_or_default(), SettingsValueTone::Attention)
+                    .verb("link"),
+                );
+                rows.push(
+                    send(
+                        "Decline",
+                        &format!(
+                            "The codes differ, or you did not ask to link {}",
+                            computer.name
+                        ),
+                        decline,
+                        None,
+                    )
+                    .verb("decline"),
+                );
+            }
+            NearbyState::WaitingForPeer {} => rows.push(
+                send(
+                    &computer.name,
+                    &format!("Now choose Link on {}", computer.name),
+                    decline,
+                    None,
+                )
+                .value(code.unwrap_or_default(), SettingsValueTone::Normal)
                 .verb("cancel"),
-            );
-        }
-    }
-    rows.push(
-        Row::new(
-            "Paste invitation",
-            "Read a code copied on the other computer",
-            Some(Action::Paste),
-        )
-        .verb("paste"),
-    );
-    if let Some((document, info)) = source {
-        if !snapshot
-            .outbound
-            .iter()
-            .any(|item| item.key.invitation == info.invitation)
-        {
-            rows.push(
-                enroll(
-                    "Prepare link",
-                    &format!("Invitation from {}", info.peer),
-                    EnrollmentRequest::Prepare {
-                        expected,
-                        document: document.clone(),
-                    },
+            ),
+            NearbyState::Failed { error } => rows.push(
+                send(
+                    &computer.name,
+                    failure_detail(error),
+                    link(computer.peer_id),
                     None,
                 )
-                .verb("prepare"),
-            );
+                .value("not linked", SettingsValueTone::Danger)
+                .verb("retry"),
+            ),
         }
     }
+    if confirming {
+        rows.extend(new_link_permissions(catalog, withheld));
+    }
+    rows
+}
 
-    if !snapshot.pending.is_empty() || !snapshot.outbound.is_empty() {
-        rows.push(Row::header("requests", "links waiting on a decision"));
+fn new_link_permissions(catalog: Option<&[CatalogOperation]>, withheld: &[PluginId]) -> Vec<Row> {
+    let mut plugins: Vec<&CatalogOperation> = Vec::new();
+    for operation in catalog.into_iter().flatten() {
+        if !plugins
+            .iter()
+            .any(|seen| seen.plugin_id == operation.plugin_id)
+        {
+            plugins.push(operation);
+        }
     }
-    for pending in &snapshot.pending {
-        let detail = format!(
-            "{} \u{b7} {} \u{b7} {}",
-            pending.name,
-            pending.key.peer,
-            lifetime_label(pending.remote_lifetime)
-        );
-        rows.push(
-            enroll(
-                "Approve request",
-                &detail,
-                EnrollmentRequest::Approve {
-                    expected,
-                    key: pending.key,
-                },
-                Some("approve"),
+    plugins
+        .into_iter()
+        .map(|operation| {
+            let allowed = !withheld.contains(&operation.plugin_id);
+            Row::new(
+                format!("Let it use {}", plugin_label(&operation.plugin_id)),
+                operation.description.clone(),
+                Some(Action::Toggle(operation.plugin_id.clone())),
             )
-            .verb("approve"),
-        );
-        rows.push(
-            enroll(
-                "Reject request",
-                &detail,
-                EnrollmentRequest::Reject {
-                    expected,
-                    key: pending.key,
+            .value(
+                if allowed { "allowed" } else { "not allowed" },
+                if allowed {
+                    SettingsValueTone::Success
+                } else {
+                    SettingsValueTone::Muted
                 },
-                None,
             )
-            .verb("reject"),
-        );
-    }
-    for item in &snapshot.outbound {
-        rows.extend(outbound_rows(item, snapshot, source, expected));
-    }
+            .verb("change")
+        })
+        .collect()
+}
 
-    rows.push(Row::header(
+fn linked_rows(
+    snapshot: &Snapshot,
+    catalog: Option<&[CatalogOperation]>,
+    expected: ExpectedAuthority,
+) -> Vec<Row> {
+    let mut rows = vec![Row::header(
         "linked computers",
         "computers that can reach this one",
-    ));
+    )];
     if snapshot.peers.is_empty() {
         rows.push(Row::new(
             "No linked computers yet",
-            "Create an invitation to link one",
+            "Link one from the nearby list",
             None,
         ));
     }
@@ -335,15 +308,11 @@ pub(super) fn rows(
         rows.push(
             Row::new(
                 peer.name.clone(),
-                format!(
-                    "{} \u{b7} {} at last refresh",
-                    peer.peer_id,
-                    if connected {
-                        "Authenticated connection"
-                    } else {
-                        "Not connected"
-                    }
-                ),
+                if connected {
+                    "Authenticated connection at last refresh"
+                } else {
+                    "Not connected at last refresh"
+                },
                 None,
             )
             .value(
@@ -376,7 +345,7 @@ pub(super) fn rows(
                 rows.push(
                     send(
                         "Remove permission",
-                        &format!("{} \u{b7} {:?}", peer.name, grant),
+                        &format!("{} \u{b7} {}", peer.name, grant_label(grant, catalog)),
                         Request::SetGrants {
                             expected,
                             peer_id: peer.peer_id,
@@ -397,20 +366,13 @@ pub(super) fn rows(
                 rows.push(
                     send(
                         "Add permission",
-                        &format!(
-                            "{} \u{b7} {} \u{b7} {} ({} {})",
-                            peer.name,
-                            operation.plugin_id,
-                            operation.description,
-                            operation.key.kind.as_str(),
-                            operation.key.name,
-                        ),
+                        &format!("{} \u{b7} {}", peer.name, operation.description),
                         Request::SetGrants {
                             expected,
                             peer_id: peer.peer_id,
                             grants: updated,
                         },
-                        Some("add"),
+                        None,
                     )
                     .value("not allowed", SettingsValueTone::Muted)
                     .verb("add"),
@@ -432,8 +394,110 @@ pub(super) fn rows(
             None,
         ));
     }
-    if let Some(pointz) = &snapshot.pointz {
-        rows.extend(phone_rows(pointz, &snapshot.phones, expected));
+    rows
+}
+
+fn invitation_rows(
+    snapshot: &Snapshot,
+    source: Option<&(ExportedInvitation, InvitationInfo)>,
+    invitation: Option<&qol_peers::admin::Response>,
+    expected: ExpectedAuthority,
+) -> Vec<Row> {
+    let mut rows = vec![Row::header(
+        "other networks",
+        "when the computers cannot see each other",
+    )];
+    let current = invitation.filter(|response| {
+        matches!(response, qol_peers::admin::Response::Invitation { authority, .. }
+            if authority.authority_id == expected.authority_id
+                && authority.activation_id == expected.activation_id)
+    });
+    match current {
+        Some(qol_peers::admin::Response::Invitation { invitation, .. }) => {
+            rows.push(
+                Row::new(
+                    "Copy invitation",
+                    "Paste it on the other computer within two minutes",
+                    Some(Action::Copy),
+                )
+                .value("ready", SettingsValueTone::Success)
+                .verb("copy"),
+            );
+            rows.push(
+                enroll(
+                    "Cancel invitation",
+                    "The invitation stops working",
+                    EnrollmentRequest::CancelInvitation {
+                        expected,
+                        invitation: *invitation,
+                    },
+                    None,
+                )
+                .verb("cancel"),
+            );
+        }
+        _ => rows.push(
+            enroll(
+                "Create invitation",
+                "Make a one-time invitation to paste on the other computer",
+                EnrollmentRequest::CreateInvitation {
+                    expected,
+                    addresses: Vec::new(),
+                },
+                None,
+            )
+            .verb("create"),
+        ),
+    }
+    rows.push(
+        Row::new(
+            "Paste invitation",
+            "Link using an invitation copied on the other computer",
+            Some(Action::Paste),
+        )
+        .verb("paste"),
+    );
+    for pending in &snapshot.pending {
+        let detail = format!(
+            "{} \u{b7} {}",
+            pending.name,
+            lifetime_label(pending.remote_lifetime)
+        );
+        rows.push(
+            enroll(
+                "Approve request",
+                &detail,
+                EnrollmentRequest::Approve {
+                    expected,
+                    key: pending.key,
+                },
+                None,
+            )
+            .verb("approve"),
+        );
+        rows.push(
+            enroll(
+                "Reject request",
+                &detail,
+                EnrollmentRequest::Reject {
+                    expected,
+                    key: pending.key,
+                },
+                None,
+            )
+            .verb("reject"),
+        );
+    }
+    for item in &snapshot.outbound {
+        if !matches!(item.state, OutboundEnrollmentState::Pending {})
+            || snapshot
+                .nearby
+                .iter()
+                .any(|computer| computer.peer_id == item.key.peer && computer.link.is_some())
+        {
+            continue;
+        }
+        rows.extend(outbound_rows(item, snapshot, source, expected));
     }
     rows
 }
@@ -451,77 +515,42 @@ fn outbound_rows(
         .find(|(id, _)| *id == transaction)
         .map(|(_, state)| state);
     let detail = format!(
-        "{} \u{b7} {} \u{b7} {}",
-        item.key.peer,
-        transaction,
+        "Waiting on the other computer \u{b7} {}",
         attempt
             .map(crate::features::linked_computers::settings::attempt_label)
             .unwrap_or("unavailable")
     );
-    let (state, tone) = match item.state {
-        OutboundEnrollmentState::Pending {} => ("pending", SettingsValueTone::Attention),
-        OutboundEnrollmentState::Abandoned {} => ("abandoned", SettingsValueTone::Muted),
-        OutboundEnrollmentState::Committed { .. } => ("linked", SettingsValueTone::Success),
-    };
-    let mut rows = vec![Row::new("Outgoing request", detail.clone(), None).value(state, tone)];
-    if matches!(item.state, OutboundEnrollmentState::Pending {}) {
-        if let Some((document, info)) = source.filter(|(_, info)| {
-            info.invitation == item.key.invitation && info.peer == item.key.peer
-        }) {
-            rows.push(
-                enroll(
-                    "Send prepared request",
-                    &detail,
-                    EnrollmentRequest::Redeem {
-                        expected,
-                        transaction,
-                        document: document.clone(),
-                    },
-                    None,
-                )
-                .verb("send"),
-            );
-            rows.push(
-                enroll(
-                    "Recover original transaction",
-                    &detail,
-                    EnrollmentRequest::Recover {
-                        expected,
-                        transaction,
-                        endpoints: info.endpoints.clone(),
-                    },
-                    None,
-                )
-                .verb("recover"),
-            );
-        }
+    let mut rows = vec![Row::new("Outgoing request", detail.clone(), None)
+        .value("pending", SettingsValueTone::Attention)];
+    if let Some((_, info)) = source
+        .filter(|(_, info)| info.invitation == item.key.invitation && info.peer == item.key.peer)
+    {
         rows.push(
             enroll(
-                "Abandon",
+                "Recover original transaction",
                 &detail,
-                EnrollmentRequest::Abandon {
+                EnrollmentRequest::Recover {
                     expected,
                     transaction,
-                },
-                Some("abandon"),
-            )
-            .verb("abandon"),
-        );
-    }
-    if matches!(item.state, OutboundEnrollmentState::Abandoned {}) {
-        rows.push(
-            enroll(
-                "Resume original transaction",
-                &detail,
-                EnrollmentRequest::Resume {
-                    expected,
-                    transaction,
+                    endpoints: info.endpoints.clone(),
                 },
                 None,
             )
-            .verb("resume"),
+            .verb("recover"),
         );
     }
+    rows.push(
+        enroll(
+            "Abandon",
+            &detail,
+            EnrollmentRequest::Abandon {
+                expected,
+                transaction,
+            },
+            Some("abandon"),
+        )
+        .verb("abandon"),
+    );
     rows
 }
 
@@ -603,6 +632,51 @@ fn phone_rows(
     rows
 }
 
+fn failure_detail(error: EnrollmentFailure) -> &'static str {
+    match error {
+        EnrollmentFailure::Transport | EnrollmentFailure::Unavailable => {
+            "Could not reach it. Check that Linked computers is open there, then retry."
+        }
+        EnrollmentFailure::Rejected(EnrollmentRejection::Expired) => {
+            "The code ran out before both computers chose Link"
+        }
+        EnrollmentFailure::Rejected(
+            EnrollmentRejection::Cancelled | EnrollmentRejection::InvalidInvitation,
+        ) => "It declined, or its request ended",
+        EnrollmentFailure::Rejected(EnrollmentRejection::Revoked) => {
+            "This computer revoked it before, so it cannot link again"
+        }
+        EnrollmentFailure::Rejected(EnrollmentRejection::Capacity)
+        | EnrollmentFailure::Capacity => "It is busy with other requests. Retry in a moment.",
+        EnrollmentFailure::Abandoned => "Cancelled here",
+        _ => "Linking failed. Retry to start again.",
+    }
+}
+
+fn plugin_label(plugin: &PluginId) -> String {
+    let name = plugin
+        .as_str()
+        .strip_prefix("qol-")
+        .unwrap_or(plugin.as_str());
+    let mut characters = name.chars();
+    characters
+        .next()
+        .map(|first| first.to_uppercase().chain(characters).collect())
+        .unwrap_or_default()
+}
+
+fn grant_label(
+    grant: &qol_plugin_api::operations::OperationKey,
+    catalog: Option<&[CatalogOperation]>,
+) -> String {
+    catalog
+        .into_iter()
+        .flatten()
+        .find(|operation| operation.key == *grant)
+        .map(|operation| operation.description.clone())
+        .unwrap_or_else(|| format!("{} {}", grant.kind.as_str(), grant.name))
+}
+
 fn lifecycle_label(lifecycle: &Lifecycle) -> &'static str {
     match lifecycle {
         Lifecycle::Inactive => "off",
@@ -621,32 +695,25 @@ fn lifetime_label(lifetime: AuthorityLifetime) -> &'static str {
     }
 }
 
+fn lifetime_detail(lifetime: AuthorityLifetime) -> &'static str {
+    match lifetime {
+        AuthorityLifetime::Session => "Links end when qol-tray stops on this computer",
+        AuthorityLifetime::Persistent => "Links stay on this computer",
+    }
+}
+
 fn linking_label(lifecycle: &Lifecycle, authority: &AuthoritySummary) -> String {
     if authority.status != AuthorityStatus::Ready {
         return "faulted".into();
     }
-    match (lifecycle, authority.lifetime) {
-        (Lifecycle::Active, AuthorityLifetime::Session) => "on for this session".into(),
-        (Lifecycle::Active, AuthorityLifetime::Persistent) => "on, persistent".into(),
-        (lifecycle, _) => lifecycle_label(lifecycle).into(),
+    match lifecycle {
+        Lifecycle::Active => "on".into(),
+        lifecycle => lifecycle_label(lifecycle).into(),
     }
 }
 
 fn send(label: &str, detail: &str, request: Request, confirm: Option<&'static str>) -> Row {
     Row::new(label, detail, Some(Action::Send(request, confirm)))
-}
-
-fn named_send(
-    label: &str,
-    detail: &str,
-    named: bool,
-    request: Request,
-    confirm: Option<&'static str>,
-) -> Row {
-    if named {
-        return send(label, detail, request, confirm);
-    }
-    Row::new(label, detail, Some(Action::Explain(NAME_RULE)))
 }
 
 fn enroll(

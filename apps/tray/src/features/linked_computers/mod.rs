@@ -3,11 +3,12 @@ mod enrollment;
 mod nearby;
 mod network;
 mod operations;
+mod platform;
 mod pointz;
 mod projection;
 pub(crate) mod settings;
 
-pub(crate) use pointz::{hostname, is_legacy_pointz, legacy_pointz_allowed};
+pub(crate) use pointz::{is_legacy_pointz, legacy_pointz_allowed};
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -62,7 +63,7 @@ impl Default for Defaults {
     fn default() -> Self {
         Self {
             resident: || qol_host_fixes::residency::HostResidency::current().is_resident(),
-            name: pointz::hostname,
+            name: computer_name,
         }
     }
 }
@@ -326,6 +327,10 @@ impl ActiveAuthority {
         }
         Ok(&self.authority)
     }
+}
+
+fn computer_name() -> String {
+    platform::computer_name().map_or_else(pointz::hostname, |name| pointz::readable(&name))
 }
 
 fn activation_id() -> Result<ActivationId, Error> {

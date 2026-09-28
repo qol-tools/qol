@@ -139,6 +139,13 @@ async fn enabling_follows_residency_and_names_the_computer() {
     }
     assert!(temporary.path().join("resident").exists());
     assert!(!temporary.path().join("portable").exists());
+    let before = authority(&resident.shared);
+    resident.shared.peer_admin(Request::Stop {
+        expected: before.expected(),
+    });
+    until(|| (status(&resident.shared).lifecycle == Lifecycle::Inactive).then_some(())).await;
+    resident.shared.peer_admin(Request::Enable);
+    assert_eq!(authority(&resident.shared).peer_id, before.peer_id);
     resident.close().await;
     portable.close().await;
 }

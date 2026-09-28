@@ -177,7 +177,14 @@ impl Host {
         if (self.defaults.resident)() {
             self.start(|host| {
                 let root = host.root.as_ref().map_err(|error| *error)?;
-                PeerAuthority::create_persistent(root, name, SystemTime::now()).map_err(Error::from)
+                match std::fs::symlink_metadata(root) {
+                    Ok(_) => PeerAuthority::open_persistent(root, SystemTime::now()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        PeerAuthority::create_persistent(root, name, SystemTime::now())
+                    }
+                    Err(_) => Err(AuthorityError::Storage),
+                }
+                .map_err(Error::from)
             })
         } else {
             self.start(|_| PeerAuthority::session(name, SystemTime::now()).map_err(Error::from))

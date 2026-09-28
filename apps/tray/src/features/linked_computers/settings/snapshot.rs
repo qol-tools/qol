@@ -23,6 +23,7 @@ pub(crate) struct Snapshot {
     )>,
     pub pointz: Option<PointzStatus>,
     pub phones: Vec<PointzDevice>,
+    pub nearby: Vec<qol_peers::admin::NearbyComputer>,
 }
 
 pub(crate) fn load(client: &PlatformStateClient) -> Result<Snapshot, Failure> {
@@ -45,6 +46,7 @@ fn load_with(
         attempts: Vec::new(),
         pointz: None,
         phones: Vec::new(),
+        nearby: Vec::new(),
     };
     let Some(authority) = &snapshot.status.authority else {
         return Ok(snapshot);
@@ -110,6 +112,19 @@ fn load_with(
         snapshot.attempts.push((transaction, state));
     }
     snapshot.sessions = sessions(&mut read, expected)?;
+    let Response::Nearby {
+        authority,
+        computers,
+    } = read(Request::Nearby {
+        request: qol_peers::admin::NearbyRequest::List {},
+    })?
+    else {
+        return Err(Failure::Inconsistent);
+    };
+    if authority != expected {
+        return Err(Failure::Inconsistent);
+    }
+    snapshot.nearby = computers;
     let Response::PointzStatus { status: pointz } = read(Request::Pointz {
         request: PointzRequest::Status {},
     })?

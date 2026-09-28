@@ -473,8 +473,11 @@ fn retire_legacy(data: &Path) {
 }
 
 pub(crate) fn hostname() -> String {
-    let name: String = gethostname::gethostname()
-        .to_string_lossy()
+    readable(&gethostname::gethostname().to_string_lossy())
+}
+
+pub(super) fn readable(name: &str) -> String {
+    let name: String = name
         .chars()
         .filter(|character| !character.is_control())
         .take(64)
