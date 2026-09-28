@@ -15,7 +15,7 @@ use super::layout::PANEL_WIDTH;
 use super::sizing::FileCardSize;
 use super::state::PanelItem;
 use super::tags;
-use super::view::{card_cast, card_ground, growing, name_text, tile};
+use super::view::{card_cast, card_ground, enter_cue, growing, name_text, tile};
 use super::LauncherView;
 use crate::discovery::details::{FactKind, FactText, FileDetails};
 
@@ -41,6 +41,7 @@ pub struct FileCard<'a> {
     pub path: &'a Path,
     pub details: Option<&'a FileDetails>,
     pub lit: f32,
+    pub cue: f32,
     pub size: FileCardSize,
     pub feedback: Option<&'a Feedback>,
 }
@@ -158,8 +159,10 @@ pub fn file_card(
                         FontWeight::NORMAL,
                         pane.ink,
                     )
-                    .min_w(px(0.0)),
-                ),
+                    .min_w(px(0.0))
+                    .flex_grow(),
+                )
+                .when(card.cue > 0.0, |row| row.child(enter_cue(card.cue))),
         )
         .child(
             div()

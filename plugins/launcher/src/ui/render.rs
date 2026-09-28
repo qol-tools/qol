@@ -505,6 +505,7 @@ struct Look<'a> {
     index: Option<usize>,
     chosen: bool,
     lit: f32,
+    cue: f32,
     strength: f32,
     feedback: Option<&'a Feedback>,
 }
@@ -713,6 +714,9 @@ impl LauncherView {
                 .transitions
                 .current(key, Prop::Strength, now)
                 .unwrap_or(0.0);
+            let cue = self
+                .transitions
+                .value(key, Prop::Cue, 0.0, Motion::QUICK, now);
             if shown <= 0.0 {
                 faded.push(row.key.clone());
                 continue;
@@ -723,6 +727,7 @@ impl LauncherView {
                     index: None,
                     chosen: false,
                     lit,
+                    cue,
                     strength,
                     feedback: None,
                 },
@@ -744,6 +749,13 @@ impl LauncherView {
                 key,
                 Prop::Lit,
                 if plan.chosen && in_results { 1.0 } else { 0.0 },
+                Motion::QUICK,
+                now,
+            );
+            let cue = self.transitions.value(
+                key,
+                Prop::Cue,
+                if plan.chosen && !in_results { 1.0 } else { 0.0 },
                 Motion::QUICK,
                 now,
             );
@@ -790,6 +802,7 @@ impl LauncherView {
                     index: Some(plan.index),
                     chosen: plan.chosen && in_results,
                     lit,
+                    cue,
                     strength,
                     feedback,
                 },
@@ -859,6 +872,7 @@ impl LauncherView {
                         path,
                         details: self.details.file(path),
                         lit: look.lit,
+                        cue: look.cue,
                         size,
                         feedback: look.feedback,
                     },
@@ -883,6 +897,7 @@ impl LauncherView {
                     art: details.and_then(|details| details.icon.as_deref()),
                     chosen: look.chosen,
                     lit: look.lit,
+                    cue: look.cue,
                     size,
                     feedback: look.feedback,
                 });

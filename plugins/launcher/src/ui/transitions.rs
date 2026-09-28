@@ -12,6 +12,7 @@ pub enum Prop {
     Lit,
     Shown,
     Height,
+    Cue,
 }
 
 #[derive(Clone, Copy, Debug)]

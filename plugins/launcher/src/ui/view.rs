@@ -274,6 +274,7 @@ pub struct AppCard<'a> {
     pub art: Option<&'a Path>,
     pub chosen: bool,
     pub lit: f32,
+    pub cue: f32,
     pub size: AppCardSize,
     pub feedback: Option<&'a Feedback>,
 }
@@ -349,6 +350,7 @@ pub fn app_card(card: AppCard<'_>) -> Div {
                     )
                 }),
         )
+        .when(card.cue > 0.0, |row| row.child(enter_cue(card.cue)))
         .when_some(
             mine.and_then(|feedback| feedback.cue.badge().map(|text| (feedback, text))),
             |row, (feedback, text)| {
@@ -395,6 +397,14 @@ where
             move |frame, delta| frame.child(build(by * delta)),
         )
         .into_any_element()
+}
+
+pub fn enter_cue(opacity: f32) -> Div {
+    let kit = qol_gpui::kit::kit();
+    div()
+        .flex_none()
+        .opacity(opacity)
+        .child(kit.keycap_inked(Key::ENTER, kit.grounds.pane.faint))
 }
 
 pub fn card_ground(lit: f32) -> u32 {
