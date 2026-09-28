@@ -1,3 +1,4 @@
+use super::layout::LayoutSymbols;
 use super::MacCombo;
 use crate::daemon::{DaemonEvent, EventBus};
 use core_graphics::event::CGEventType;
@@ -65,7 +66,7 @@ impl RecorderHub {
         let Some(recording) = active.as_ref() else {
             return;
         };
-        match decide(event_type, observed) {
+        match decide(event_type, observed, LayoutSymbols::current()) {
             Decision::Ignore => {}
             Decision::Cancel => {
                 let (session_id, events) = (recording.session_id, recording.events.clone());
@@ -96,7 +97,7 @@ fn tap_alive() -> bool {
     super::TAP_PORT.get().is_some() && !super::TAP_RELEASED.load(Ordering::SeqCst)
 }
 
-fn decide(event_type: CGEventType, observed: &MacCombo) -> Decision {
+fn decide(event_type: CGEventType, observed: &MacCombo, layout: &LayoutSymbols) -> Decision {
     if !matches!(event_type, CGEventType::KeyDown) {
         return Decision::Ignore;
     }
@@ -106,7 +107,7 @@ fn decide(event_type: CGEventType, observed: &MacCombo) -> Decision {
     if observed.key == macos_keycode::ESCAPE {
         return Decision::Cancel;
     }
-    let Some(key) = keycode_to_key(observed.key) else {
+    let Some(key) = keycode_to_key(observed.key, layout) else {
         return Decision::Ignore;
     };
     match grammar::format(&Hotkey {
@@ -118,25 +119,11 @@ fn decide(event_type: CGEventType, observed: &MacCombo) -> Decision {
     }
 }
 
-fn keycode_to_key(code: u16) -> Option<Key> {
+fn keycode_to_key(code: u16, layout: &LayoutSymbols) -> Option<Key> {
     if let Some(key) = grammar::parse_key(macos_keycode::key_name(code)) {
         return Some(key);
     }
-    let symbol = match code {
-        macos_keycode::ANSI_GRAVE => '`',
-        macos_keycode::ANSI_MINUS => '-',
-        macos_keycode::ANSI_EQUAL => '+',
-        macos_keycode::ANSI_LEFT_BRACKET => '[',
-        macos_keycode::ANSI_RIGHT_BRACKET => ']',
-        macos_keycode::ANSI_BACKSLASH => '\\',
-        macos_keycode::ANSI_SEMICOLON => ';',
-        macos_keycode::ANSI_QUOTE => '\'',
-        macos_keycode::ANSI_COMMA => ',',
-        macos_keycode::ANSI_PERIOD => '.',
-        macos_keycode::ANSI_SLASH => '/',
-        _ => return None,
-    };
-    Some(Key::Symbol(symbol))
+    layout.symbol_at(code).and_then(grammar::symbol_key)
 }
 
 fn is_modifier_keycode(code: u16) -> bool {
@@ -269,7 +256,7 @@ mod tests {
         ];
         for (event_type, observed, expected) in cases {
             assert_eq!(
-                decide(event_type, &observed),
+                decide(event_type, &observed, &LayoutSymbols::ansi()),
                 expected,
                 "key: {} mods: {:?} event: {event_type:?}",
                 observed.key,
@@ -305,7 +292,11 @@ mod tests {
             let Some(code) = macos_keycode::key_to_keycode(key) else {
                 continue;
             };
-            assert_eq!(keycode_to_key(code), Some(key), "code: {code}");
+            assert_eq!(
+                keycode_to_key(code, &LayoutSymbols::ansi()),
+                Some(key),
+                "code: {code}"
+            );
         }
     }
 
@@ -326,7 +317,7 @@ mod tests {
         ];
         for (code, symbol) in cases {
             assert_eq!(
-                keycode_to_key(code),
+                keycode_to_key(code, &LayoutSymbols::ansi()),
                 Some(Key::Symbol(symbol)),
                 "code: {code}"
             );
@@ -341,7 +332,8 @@ mod tests {
             (macos_keycode::ANSI_COMMA, "Super+,"),
         ];
         for (code, expected) in cases {
-            let key = keycode_to_key(code).expect("symbol keycode must record");
+            let key =
+                keycode_to_key(code, &LayoutSymbols::ansi()).expect("symbol keycode must record");
             let formatted = grammar::format(&Hotkey {
                 mods: BTreeSet::from([Modifier::Super]),
                 key,

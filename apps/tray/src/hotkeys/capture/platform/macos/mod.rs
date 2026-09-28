@@ -9,7 +9,8 @@ use core_graphics::event::{
     CGEventType, CallbackResult, EventField,
 };
 use crossbeam_channel::Receiver;
-use qol_hotkeys::grammar::Modifier as Mod;
+use layout::LayoutSymbols;
+use qol_hotkeys::grammar::{Key, Modifier as Mod};
 use qol_hotkeys::macos_keycode;
 use qol_runtime::event_tap_trace::{TraceSink, QUEUE_DEPTH};
 use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
@@ -19,6 +20,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
+mod layout;
 mod recorder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -388,7 +390,10 @@ fn marker_mods(bits: u8) -> BTreeSet<Mod> {
 
 fn parse_mac_combo(binding: &Binding) -> Option<MacCombo> {
     let combo = binding.combo.as_ref()?;
-    let key = macos_keycode::key_to_keycode(combo.key)?;
+    let key = match combo.key {
+        Key::Symbol(symbol) => LayoutSymbols::current().keycode_of(symbol)?,
+        key => macos_keycode::key_to_keycode(key)?,
+    };
     Some(MacCombo {
         mods: combo.mods.clone(),
         key,
@@ -478,6 +483,18 @@ mod tests {
         let combo = parse_mac_combo(&binding("Shift+Super+R")).expect("combo");
         assert_eq!(combo.key, 15);
         assert_eq!(combo.mods, BTreeSet::from([Mod::Shift, Mod::Super]));
+    }
+
+    #[test]
+    fn a_symbol_binding_resolves_to_the_key_that_types_it() {
+        for (key, symbol) in [("Super+Plus", '+'), ("Super+-", '-')] {
+            let combo = parse_mac_combo(&binding(key)).expect("symbol bindings must fire");
+            assert_eq!(
+                Some(combo.key),
+                LayoutSymbols::current().keycode_of(symbol),
+                "key: {key}"
+            );
+        }
     }
 
     #[test]
