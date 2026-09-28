@@ -295,7 +295,7 @@ impl RenderOnce for SettingsTile {
             .w_full()
             .text_center()
             .text(layout.name_style)
-            .line_clamp(2)
+            .clamps(2)
             .text_color(rgb(name_color))
             .child(name);
 

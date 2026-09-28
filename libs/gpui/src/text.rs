@@ -101,6 +101,15 @@ pub trait TextStyled: gpui::Styled + Sized {
             .line_clamp = Some(usize::MAX);
         self
     }
+
+    // gpui keeps the style runs it shortened for a narrow "…" measure, so a
+    // later wide measure draws only the first three bytes of the text.
+    fn clamps(mut self, lines: usize) -> Self {
+        let text = self.text_style().get_or_insert_with(Default::default);
+        text.line_clamp = Some(lines);
+        text.text_overflow = None;
+        self
+    }
 }
 
 impl<E: gpui::Styled> TextStyled for E {}
