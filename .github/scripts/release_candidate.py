@@ -246,7 +246,7 @@ def build_commands(
     ]
     for feature in plugin_release_features(root, package):
         command.extend(["--features", feature])
-    return [command]
+    return [command, verify]
 
 
 def write_json(path: str | None, value: dict) -> None:
