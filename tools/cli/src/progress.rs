@@ -295,14 +295,14 @@ impl PercentProgress {
     pub(crate) fn new(label: &'static str, verbose: bool) -> Self {
         let active = !verbose && progress_enabled();
         if active {
-            render_percent_bar(label, 0);
+            render_percent_bar(label, 0, "");
         }
         Self { label, active }
     }
 
-    pub(crate) fn update(&self, percent: u8) {
+    pub(crate) fn update(&self, percent: u8, phase: &str) {
         if self.active {
-            render_percent_bar(self.label, percent);
+            render_percent_bar(self.label, percent, phase);
         }
     }
 
@@ -315,6 +315,59 @@ impl PercentProgress {
             return;
         }
         clear_progress_line();
+    }
+}
+
+// ---------- StatusLine: live line naming the step being waited on ----------
+
+pub(crate) struct StatusLine {
+    text: Arc<Mutex<String>>,
+    running: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl StatusLine {
+    pub(crate) fn start(text: &str, verbose: bool) -> Self {
+        let text = Arc::new(Mutex::new(text.to_string()));
+        let running = Arc::new(AtomicBool::new(true));
+        let handle = (!verbose && progress_enabled()).then(|| {
+            let text = Arc::clone(&text);
+            let running = Arc::clone(&running);
+            thread::spawn(move || {
+                let started = Instant::now();
+                while running.load(Ordering::Relaxed) {
+                    let current = text.lock().map(|t| t.clone()).unwrap_or_default();
+                    eprint!(
+                        "\r  {current} {}\x1b[K",
+                        dim_stderr(&format_elapsed(started.elapsed()))
+                    );
+                    let _ = std::io::stderr().flush();
+                    thread::sleep(PROGRESS_INTERVAL);
+                }
+                eprint!("\r\x1b[K");
+                let _ = std::io::stderr().flush();
+            })
+        });
+        Self {
+            text,
+            running,
+            handle,
+        }
+    }
+
+    pub(crate) fn set(&self, text: impl Into<String>) {
+        if let Ok(mut current) = self.text.lock() {
+            *current = text.into();
+        }
+    }
+}
+
+impl Drop for StatusLine {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -835,11 +888,12 @@ fn render_loop_bar(label: &str, done: usize, total: usize) -> bool {
     true
 }
 
-fn render_percent_bar(label: &str, percent: u8) {
+fn render_percent_bar(label: &str, percent: u8, phase: &str) {
     eprint!(
-        "\r  {} {}",
+        "\r  {} {} {}\x1b[K",
         dim_stderr(label),
-        percent_progress_text(percent)
+        percent_progress_text(percent),
+        dim_stderr(phase)
     );
     let _ = std::io::stderr().flush();
 }
