@@ -208,8 +208,8 @@ fn nearby_rows(
                 confirming = true;
                 rows.push(
                     Row::new(
-                        &computer.name,
-                        format!("Link if {} shows this code too", computer.name),
+                        format!("{} \u{b7} {code}", computer.name),
+                        format!("Link if {} shows the same code", computer.name),
                         Some(Action::Send(Request::Nearby {
                             request: NearbyRequest::Confirm {
                                 expected,
@@ -218,8 +218,7 @@ fn nearby_rows(
                             },
                         })),
                     )
-                    .value(code, SettingsValueTone::Attention)
-                    .verb("link"),
+                    .chip("link"),
                 );
                 rows.push(
                     Row::new(
@@ -235,12 +234,11 @@ fn nearby_rows(
             }
             NearbyState::WaitingForPeer {} => rows.push(
                 Row::new(
-                    &computer.name,
+                    format!("{} \u{b7} {code}", computer.name),
                     format!("Now choose Link on {}", computer.name),
                     Some(decline),
                 )
-                .value(code, SettingsValueTone::Normal)
-                .verb("cancel"),
+                .chip("cancel"),
             ),
             NearbyState::Failed { error } => {
                 rows.push(Row::new(&computer.name, failure_detail(error), Some(link)).chip("retry"))

@@ -371,8 +371,11 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
     });
     let withheld = [PluginId::new("qol-media")];
     let shown = rows(Some(&snapshot), Some(&catalog), None, None, &withheld);
-    let desk = shown.iter().find(|row| row.label == "Desk").unwrap();
-    assert!(matches!(&desk.control, Control::Value(code, _) if code == "042 917"));
+    let desk = shown
+        .iter()
+        .find(|row| row.label == "Desk \u{b7} 042 917")
+        .unwrap();
+    assert_eq!(desk.control, Control::Chip);
     let Some(Action::Send(request)) = &desk.action else {
         panic!("a shown code must be confirmable");
     };
