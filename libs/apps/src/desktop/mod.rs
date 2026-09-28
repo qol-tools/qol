@@ -126,7 +126,7 @@ fn walk_for_desktop(dir: &Path, depth: usize, max_depth: usize, entries: &mut Ve
     }
 }
 
-fn desktop_field(content: &str, prefix: &str) -> Option<String> {
+pub fn desktop_field(content: &str, prefix: &str) -> Option<String> {
     content
         .lines()
         .find(|line| line.starts_with(prefix))

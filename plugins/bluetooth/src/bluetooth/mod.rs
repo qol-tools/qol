@@ -25,6 +25,8 @@ pub struct DeviceInfo {
     pub paired: bool,
     pub trusted: bool,
     pub connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_connected: Option<bool>,
     pub services_resolved: bool,
     pub icon: Option<String>,
     pub class: Option<u32>,
@@ -97,7 +99,9 @@ pub fn connection_ready(device: &DeviceInfo) -> bool {
     if !is_audio_device(device) {
         return true;
     }
-    supports_audio_sink(device)
+    device
+        .audio_connected
+        .unwrap_or_else(|| supports_audio_sink(device))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -252,6 +256,8 @@ pub fn devices_payload(
             let action_failed = device_action.is_some_and(|action| !action.pending);
             let accent = if action_failed {
                 "danger"
+            } else if device.connected && audio && !ready {
+                "warning"
             } else if device.connected {
                 "success"
             } else if device.paired {
@@ -278,7 +284,7 @@ pub fn devices_payload(
                 "audio": audio,
                 "badge": badge,
                 "badge_tone": accent,
-                "can_connect": device.paired && !device.connected,
+                "can_connect": device.paired && !ready,
                 "can_disconnect": device.connected,
                 "can_pair": !device.paired,
                 "can_reclaim": capabilities.audio_reclaim && ready && audio,
@@ -700,6 +706,22 @@ mod tests {
                 true,
             ),
             (
+                "cached A2DP service without a transport",
+                DeviceInfo {
+                    audio_connected: Some(false),
+                    ..audio_device(true, true, &[AUDIO_SINK_UUID])
+                },
+                false,
+            ),
+            (
+                "live audio transport with unresolved services",
+                DeviceInfo {
+                    audio_connected: Some(true),
+                    ..audio_device(true, false, &[AUDIO_SINK_UUID])
+                },
+                true,
+            ),
+            (
                 "disconnected speaker",
                 audio_device(false, true, &[AUDIO_SINK_UUID]),
                 false,
@@ -740,8 +762,11 @@ mod tests {
     }
 
     #[test]
-    fn connected_audio_device_never_exposes_connect_again() {
-        let device = audio_device(true, false, &[AUDIO_SINK_UUID]);
+    fn ready_audio_device_never_exposes_connect_again() {
+        let device = DeviceInfo {
+            audio_connected: Some(true),
+            ..audio_device(true, false, &[AUDIO_SINK_UUID])
+        };
         let payload = devices_payload(
             &[device],
             &[],
@@ -799,6 +824,7 @@ mod tests {
             paired,
             trusted,
             connected,
+            audio_connected: None,
             services_resolved: connected,
             icon: None,
             class: None,

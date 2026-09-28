@@ -7,13 +7,24 @@ use crate::discovery;
 use crate::frecency::{self, FrequencyData};
 use qol_plugin_api::launcher_flows::FlowEntry;
 
-use super::search::{self, EntrySlices, FrecencyConfig, Fuzziness, ResultItem, Scored, SearchMode};
+use super::search::{
+    self, EntrySlices, FrecencyConfig, Fuzziness, MatchKind, ResultItem, ResultSource, Scored,
+    SearchMode,
+};
 #[cfg(debug_assertions)]
 use super::trace::{self, FilterSample};
 
 const HALF_LIFE_DAYS: f64 = 7.0;
 const FREQUENCY_BONUS: i32 = 500;
 const MAX_FILTER_HISTORY: usize = 16;
+const MOST_USED_LIMIT: usize = 8;
+pub const RECENT_LIMIT: usize = 5;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BeforeTyping {
+    pub apps: bool,
+    pub files: bool,
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct FilterKey {
@@ -32,6 +43,8 @@ pub struct EntryStore {
     frecency: FrequencyData,
     frecency_path: PathBuf,
     boosts: HashMap<String, i32>,
+    recent_entries: Vec<discovery::FileEntry>,
+    before_typing: BeforeTyping,
 }
 
 impl EntryStore {
@@ -53,6 +66,30 @@ impl EntryStore {
             frecency,
             frecency_path,
             boosts,
+            recent_entries: Vec::new(),
+            before_typing: BeforeTyping::default(),
+        }
+    }
+
+    pub fn set_before_typing(&mut self, before_typing: BeforeTyping) {
+        if self.before_typing != before_typing {
+            self.before_typing = before_typing;
+            self.invalidate_cache();
+        }
+    }
+
+    pub fn set_recent_files(&mut self, paths: Vec<PathBuf>) {
+        let recent: Vec<discovery::FileEntry> = paths
+            .into_iter()
+            .take(RECENT_LIMIT)
+            .filter_map(|path| {
+                let name = path.file_name()?.to_string_lossy().into_owned();
+                Some(discovery::FileEntry { name, path })
+            })
+            .collect();
+        if self.recent_entries != recent {
+            self.recent_entries = recent;
+            self.invalidate_cache();
         }
     }
 
@@ -189,17 +226,19 @@ impl EntryStore {
 
     pub fn name(&self, scored: &Scored) -> &str {
         match scored.source {
-            search::ResultSource::App => &self.app_entries[scored.index].name,
-            search::ResultSource::File => &self.file_entries[scored.index].name,
-            search::ResultSource::Flow => &self.flow_entries[scored.index].title,
+            ResultSource::App => &self.app_entries[scored.index].name,
+            ResultSource::File => &self.file_entries[scored.index].name,
+            ResultSource::Recent => &self.recent_entries[scored.index].name,
+            ResultSource::Flow => &self.flow_entries[scored.index].title,
         }
     }
 
     pub fn item(&self, scored: &Scored) -> Option<ResultItem<'_>> {
         match scored.source {
-            search::ResultSource::App => self.app_entries.get(scored.index).map(ResultItem::App),
-            search::ResultSource::File => self.file_entries.get(scored.index).map(ResultItem::File),
-            search::ResultSource::Flow => self.flow_entries.get(scored.index).map(ResultItem::Flow),
+            ResultSource::App => self.app_entries.get(scored.index).map(ResultItem::App),
+            ResultSource::File => self.file_entries.get(scored.index).map(ResultItem::File),
+            ResultSource::Recent => self.recent_entries.get(scored.index).map(ResultItem::File),
+            ResultSource::Flow => self.flow_entries.get(scored.index).map(ResultItem::Flow),
         }
     }
 
@@ -219,7 +258,7 @@ impl EntryStore {
         fuzziness: Fuzziness,
     ) -> Option<usize> {
         let scored = self.get(selected)?;
-        if !matches!(scored.source, search::ResultSource::App) {
+        if !matches!(scored.source, ResultSource::App) {
             return None;
         }
         let app_index = scored.index;
@@ -228,8 +267,36 @@ impl EntryStore {
         self.invalidate_cache();
         self.ensure_filtered(query, mode, fuzziness);
         self.cache.iter().position(|result| {
-            matches!(result.source, search::ResultSource::App) && result.index == app_index
+            matches!(result.source, ResultSource::App) && result.index == app_index
         })
+    }
+
+    pub fn step_selected(
+        &mut self,
+        selected: usize,
+        up: bool,
+        query: &str,
+        mode: SearchMode,
+        fuzziness: Fuzziness,
+    ) -> Option<usize> {
+        let score = self.get(selected)?.m.score;
+        let neighbour = if up {
+            self.get(selected.checked_sub(1)?)
+        } else {
+            self.get(selected + 1)
+        }?
+        .m
+        .score;
+        let delta = if up {
+            score - neighbour + 1
+        } else {
+            score - neighbour - 1
+        };
+        self.adjust_selected_boost(selected, delta, query, mode, fuzziness)
+    }
+
+    pub fn boost(&self, name: &str) -> i32 {
+        self.boosts.get(&name.to_lowercase()).copied().unwrap_or(0)
     }
 
     fn adjust_boost(&mut self, name: &str, delta: i32) {
@@ -269,6 +336,9 @@ impl EntryStore {
     }
 
     fn filtered_full(&self, query: &str, mode: SearchMode, fuzziness: Fuzziness) -> Vec<Scored> {
+        if query.trim().is_empty() {
+            return self.before_typing_results(mode);
+        }
         let frecency = self.frecency_config();
         search::filtered(
             EntrySlices {
@@ -281,6 +351,62 @@ impl EntryStore {
             fuzziness,
             Some(&frecency),
         )
+    }
+}
+
+impl EntryStore {
+    fn before_typing_results(&self, mode: SearchMode) -> Vec<Scored> {
+        match mode {
+            SearchMode::Apps if self.before_typing.apps => self.most_used(),
+            SearchMode::Files if self.before_typing.files => (0..self.recent_entries.len())
+                .map(|index| unranked(ResultSource::Recent, index, index as i32, 0))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn most_used(&self) -> Vec<Scored> {
+        let now = now_secs();
+        let mut used: Vec<Scored> = self
+            .app_entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let bonus = frecency::frequency_bonus(
+                    &entry.name.to_lowercase(),
+                    &self.frecency,
+                    now,
+                    HALF_LIFE_DAYS,
+                    FREQUENCY_BONUS,
+                );
+                let boost = self
+                    .boosts
+                    .get(&entry.name.to_lowercase())
+                    .copied()
+                    .unwrap_or(0);
+                (bonus > 0 || boost > 0).then(|| Scored {
+                    manual_boost: boost,
+                    ..unranked(ResultSource::App, index, -(bonus + boost), bonus)
+                })
+            })
+            .collect();
+        used.sort_by_key(|scored| scored.m.score);
+        used.truncate(MOST_USED_LIMIT);
+        used
+    }
+}
+
+fn unranked(source: ResultSource, index: usize, score: i32, frecency_bonus: i32) -> Scored {
+    Scored {
+        source,
+        index,
+        m: crate::FuzzyMatch {
+            score,
+            positions: Vec::new(),
+        },
+        match_kind: MatchKind::Prefix,
+        frecency_bonus,
+        manual_boost: 0,
     }
 }
 
@@ -350,6 +476,8 @@ mod tests {
             frecency: FrequencyData::default(),
             frecency_path: temp.path().join("frequency.json"),
             boosts: HashMap::new(),
+            recent_entries: Vec::new(),
+            before_typing: BeforeTyping::default(),
         };
         store.ensure_filtered("rank", SearchMode::Apps, Fuzziness::Balanced);
         assert_eq!(store.name(&store.results()[0]), "Qol Rank Alpha");
@@ -376,5 +504,66 @@ mod tests {
             assert_eq!(store.get(selected).unwrap().manual_boost, expected_boost);
         }
         assert!(load_boosts(&store.frecency_path).is_empty());
+
+        let raised = store
+            .step_selected(1, true, "rank", SearchMode::Apps, Fuzziness::Balanced)
+            .unwrap();
+        assert_eq!(raised, 0);
+        assert_eq!(store.name(store.get(0).unwrap()), "Qol Rank Alpine");
+        let lowered = store
+            .step_selected(0, false, "rank", SearchMode::Apps, Fuzziness::Balanced)
+            .unwrap();
+        assert_eq!(lowered, 1);
+        assert_eq!(store.name(store.get(1).unwrap()), "Qol Rank Alpine");
+        assert!(store
+            .step_selected(0, true, "rank", SearchMode::Apps, Fuzziness::Balanced)
+            .is_none());
+    }
+
+    #[test]
+    fn boosts_raise_apps_in_the_most_used_list() {
+        let temp = TempDir::new().unwrap();
+        let mut frecency = FrequencyData::default();
+        let now = now_secs();
+        for _ in 0..3 {
+            frecency::record(&mut frecency, "qol rank alpha".to_string(), now);
+        }
+        frecency::record(&mut frecency, "qol rank alpine".to_string(), now);
+        let mut store = EntryStore {
+            app_entries: Arc::new(
+                ["Qol Rank Alpha", "Qol Rank Alpine", "Qol Rank Unused"]
+                    .into_iter()
+                    .map(|name| discovery::AppEntry {
+                        name: name.to_string(),
+                        exec: vec!["/usr/bin/true".to_string()],
+                        path: PathBuf::from(format!("/{name}.desktop")),
+                    })
+                    .collect(),
+            ),
+            file_entries: Arc::new(Vec::new()),
+            flow_entries: Arc::new(Vec::new()),
+            cache: Vec::new(),
+            cache_key: None,
+            filter_history: Vec::new(),
+            frecency,
+            frecency_path: temp.path().join("frequency.json"),
+            boosts: HashMap::new(),
+            recent_entries: Vec::new(),
+            before_typing: BeforeTyping {
+                apps: true,
+                files: false,
+            },
+        };
+        store.ensure_filtered("", SearchMode::Apps, Fuzziness::Balanced);
+        assert_eq!(store.result_count(), 2);
+        assert_eq!(store.name(&store.results()[0]), "Qol Rank Alpha");
+
+        let mut selected = 1;
+        while selected > 0 {
+            selected = store
+                .adjust_selected_boost(selected, 25, "", SearchMode::Apps, Fuzziness::Balanced)
+                .unwrap();
+        }
+        assert_eq!(store.name(&store.results()[0]), "Qol Rank Alpine");
     }
 }

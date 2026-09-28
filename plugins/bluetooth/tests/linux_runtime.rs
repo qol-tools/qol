@@ -10,6 +10,47 @@ use bluez::{wait, Fixture};
 const RESPONSIVE: Duration = Duration::from_secs(1);
 
 #[test]
+fn audio_status_follows_the_live_transport_while_the_bluetooth_link_stays_connected() {
+    let fixture = Fixture::start(false, true, true);
+    {
+        let mut state = fixture.state.lock().unwrap();
+        state.paired = true;
+        state.services_resolved = false;
+    }
+    assert!(wait(
+        || fixture.action("adapter_status")["available"] == true,
+        RESPONSIVE
+    ));
+    for transport in [None, Some("idle"), Some("pending"), Some("active"), None] {
+        fixture.state.lock().unwrap().audio_transport = transport;
+        let snapshot = fixture.action("devices");
+        let item = &snapshot["items"][0];
+        let ready = transport.is_some();
+        assert_eq!(item["connected"], true, "{transport:?}");
+        assert_eq!(item["ready"], ready, "{transport:?}");
+        assert_eq!(item["can_connect"], !ready, "{transport:?}");
+        assert_eq!(item["can_disconnect"], true, "{transport:?}");
+        assert_eq!(
+            item["badge"],
+            if ready {
+                "Connected"
+            } else {
+                "Connected without audio"
+            }
+        );
+        assert_eq!(
+            item["badge_tone"],
+            if ready { "success" } else { "warning" }
+        );
+        assert_eq!(snapshot["ready_count"], usize::from(ready));
+    }
+    fixture.state.lock().unwrap().connected = false;
+    let snapshot = fixture.action("devices");
+    assert_eq!(snapshot["items"][0]["badge"], "Paired");
+    assert_eq!(snapshot["items"][0]["can_disconnect"], false);
+}
+
+#[test]
 fn search_starts_while_automatic_connection_is_waiting_for_bluez() {
     let fixture = Fixture::start(true, false, false);
     assert!(wait(

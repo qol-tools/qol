@@ -1,4 +1,5 @@
-use super::layout::MAX_VISIBLE;
+use super::feedback::Feedback;
+use super::layout::visible_rows;
 use crate::discovery::search::{Fuzziness, SearchMode};
 use crate::flow::{FlowEntry, FlowRow, FlowVerdict};
 use qol_gpui::text_edit::TextField;
@@ -50,6 +51,24 @@ pub struct TrailFocus {
     pub settled: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelItem {
+    Open,
+    OpenFolder,
+    CopyPath,
+    CopyName,
+}
+
+impl PanelItem {
+    pub const ALL: [Self; 4] = [Self::Open, Self::OpenFolder, Self::CopyPath, Self::CopyName];
+
+    pub fn step(self, back: bool) -> Self {
+        let at = Self::ALL.iter().position(|item| *item == self).unwrap_or(0);
+        let len = Self::ALL.len();
+        Self::ALL[(at + if back { len - 1 } else { 1 }) % len]
+    }
+}
+
 pub struct FlowSession {
     pub epoch: u64,
     pub entry: FlowEntry,
@@ -80,8 +99,10 @@ pub struct LauncherState {
     pub last_nav_at: Option<Instant>,
     pub boost_adjusting: bool,
     pub list_focused: bool,
+    pub panel: PanelItem,
     pub launch_error: Option<String>,
     pub flow: Option<FlowSession>,
+    pub feedback: Option<Feedback>,
 }
 
 impl FlowSession {
@@ -96,7 +117,7 @@ impl LauncherState {
             mode: SearchMode::Apps,
             fuzziness: Fuzziness::Balanced,
             query: TextField::new(),
-            scroll_list: qol_gpui::scroll_list::ScrollList::new(MAX_VISIBLE),
+            scroll_list: qol_gpui::scroll_list::ScrollList::new(visible_rows(SearchMode::Apps)),
             previous_selected: None,
             edge_hit: None,
             nav_direction: None,
@@ -105,8 +126,10 @@ impl LauncherState {
             last_nav_at: None,
             boost_adjusting: false,
             list_focused: false,
+            panel: PanelItem::Open,
             launch_error: None,
             flow: None,
+            feedback: None,
         }
     }
 
@@ -205,7 +228,12 @@ impl LauncherState {
     }
 
     pub fn cycle_mode(&mut self, _reverse: bool) {
-        self.mode = self.mode.next();
+        self.set_mode(self.mode.next());
+    }
+
+    pub fn set_mode(&mut self, mode: SearchMode) {
+        self.mode = mode;
+        self.scroll_list.max_visible = visible_rows(mode);
         self.clear_launch_error();
     }
 
@@ -365,9 +393,18 @@ mod tests {
 
         state.cycle_mode(false);
         assert_eq!(state.mode, SearchMode::Files);
+        assert_eq!(state.scroll_list.max_visible, 5);
 
         state.cycle_mode(false);
         assert_eq!(state.mode, SearchMode::Apps);
+    }
+
+    #[test]
+    fn panel_steps_wrap_both_ways() {
+        assert_eq!(PanelItem::Open.step(false), PanelItem::OpenFolder);
+        assert_eq!(PanelItem::CopyName.step(false), PanelItem::Open);
+        assert_eq!(PanelItem::Open.step(true), PanelItem::CopyName);
+        assert_eq!(PanelItem::CopyPath.step(true), PanelItem::OpenFolder);
     }
 
     #[test]

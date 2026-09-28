@@ -18,6 +18,22 @@ item_label = "folder"
 default = []
 placeholder = "/path/to/files"
 
+[field.most_used_apps]
+type = "boolean"
+config_key = "most_used_apps"
+label = "Most used apps before you type"
+description = "Show the apps you open most while the search is empty."
+section = "launcher"
+default = true
+
+[field.recent_files]
+type = "boolean"
+config_key = "recent_files"
+label = "Recent files before you type"
+description = "Show recently opened files while a Files search is empty."
+section = "launcher"
+default = true
+
 [section.appearance]
 label = "Debug"
 description = "Only for tracking down launcher problems."

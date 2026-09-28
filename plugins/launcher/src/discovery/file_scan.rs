@@ -7,7 +7,8 @@ use super::FileEntry;
 const MAX_FILES: usize = 8_000;
 const MAX_DEPTH: usize = 6;
 
-pub(crate) fn scan_files(roots: Vec<PathBuf>) -> Vec<FileEntry> {
+pub(crate) fn scan_files(mut roots: Vec<PathBuf>) -> Vec<FileEntry> {
+    roots.sort_by_key(|root| hidden_root(root));
     let mut files = Vec::new();
     for root in roots {
         if files.len() >= MAX_FILES {
@@ -41,20 +42,32 @@ pub(crate) fn refresh_files(
         .cloned()
         .collect::<Vec<_>>();
 
+    let mut fresh = Vec::new();
     for path in &changed_paths {
-        if files.len() >= MAX_FILES {
+        if fresh.len() >= MAX_FILES {
             break;
         }
         let Some(root) = containing_root(roots, path) else {
             continue;
         };
-        collect_changed_path(root, path, &mut files);
+        collect_changed_path(root, path, &mut fresh);
     }
+    files.append(&mut fresh);
 
     files.sort_by_cached_key(|file| (file.name.to_lowercase(), file.path.clone()));
     files.dedup_by(|left, right| left.path == right.path);
-    files.truncate(MAX_FILES);
+    if files.len() > MAX_FILES {
+        files.sort_by_key(|file| containing_root(roots, &file.path).is_some_and(hidden_root));
+        files.truncate(MAX_FILES);
+        files.sort_by_cached_key(|file| (file.name.to_lowercase(), file.path.clone()));
+    }
     files
+}
+
+fn hidden_root(root: &Path) -> bool {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with('.'))
 }
 
 fn minimal_changed_paths(changed_paths: &HashSet<PathBuf>) -> Vec<PathBuf> {
@@ -212,7 +225,7 @@ fn is_backup_directory_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{minimal_changed_paths, refresh_files, scan_files, FileEntry};
+    use super::{minimal_changed_paths, refresh_files, scan_files, FileEntry, MAX_FILES};
     use crate::discovery::search::{filtered, EntrySlices, Fuzziness, SearchMode};
     use std::collections::HashSet;
     use std::fs;
@@ -267,6 +280,36 @@ mod tests {
         let refreshed = refresh_files(&current, &[root], &changed);
 
         assert!(refreshed.is_empty());
+    }
+
+    #[test]
+    fn a_full_hidden_root_never_crowds_out_user_folders() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join(".config");
+        let videos = temp.path().join("Videos");
+        fs::create_dir(&config).unwrap();
+        fs::create_dir(&videos).unwrap();
+        for index in 0..MAX_FILES {
+            fs::write(config.join(format!("{index}.conf")), "").unwrap();
+        }
+        let clip = videos.join("clip.mp4");
+        fs::write(&clip, "").unwrap();
+
+        let scanned = scan_files(vec![config.clone(), videos.clone()]);
+
+        assert_eq!(scanned.len(), MAX_FILES);
+        assert!(scanned.iter().any(|entry| entry.path == clip));
+
+        let current = (0..MAX_FILES)
+            .map(|index| FileEntry {
+                name: format!("{index}.conf"),
+                path: config.join(format!("{index}.conf")),
+            })
+            .collect::<Vec<_>>();
+        let refreshed = refresh_files(&current, &[config, videos], &HashSet::from([clip.clone()]));
+
+        assert_eq!(refreshed.len(), MAX_FILES);
+        assert!(refreshed.iter().any(|entry| entry.path == clip));
     }
 
     #[test]

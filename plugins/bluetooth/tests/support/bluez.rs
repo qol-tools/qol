@@ -26,7 +26,9 @@ pub struct State {
     pub present: bool,
     pub paired: bool,
     pub connected: bool,
+    pub services_resolved: bool,
     pub audio: bool,
+    pub audio_transport: Option<&'static str>,
     pub stalled: usize,
     pub starts: usize,
     pub stops: usize,
@@ -57,7 +59,7 @@ impl State {
             put!("Paired", self.paired);
             put!("Trusted", true);
             put!("Connected", self.connected);
-            put!("ServicesResolved", self.connected);
+            put!("ServicesResolved", self.services_resolved);
             put!(
                 "Icon",
                 if self.audio {
@@ -92,6 +94,27 @@ impl State {
                 Path::from(DEVICE),
                 HashMap::from([(DEVICE_IFACE.into(), self.properties(DEVICE))]),
             );
+            if let Some(state) = self.audio_transport {
+                let properties: PropMap = HashMap::from([
+                    (
+                        "Device".into(),
+                        Variant(Box::new(Path::from(DEVICE)) as Box<dyn dbus::arg::RefArg>),
+                    ),
+                    (
+                        "UUID".into(),
+                        Variant(Box::new("0000110a-0000-1000-8000-00805f9b34fb".to_string())
+                            as Box<dyn dbus::arg::RefArg>),
+                    ),
+                    (
+                        "State".into(),
+                        Variant(Box::new(state.to_string()) as Box<dyn dbus::arg::RefArg>),
+                    ),
+                ]);
+                objects.insert(
+                    Path::from(format!("{DEVICE}/sep1/fd0")),
+                    HashMap::from([("org.bluez.MediaTransport1".into(), properties)]),
+                );
+            }
         }
         objects
     }
@@ -134,6 +157,7 @@ impl Fixture {
             paired: !audio,
             audio,
             connected,
+            services_resolved: connected,
             ..State::default()
         }));
         let connection = SyncConnection::new_address(&address).unwrap();

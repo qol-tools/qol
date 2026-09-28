@@ -1,14 +1,21 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use gpui::{px, size, AppContext as _, AsyncApp, ClipboardItem, Context, KeyDownEvent, WeakEntity};
 
+use super::feedback::{Copied, Cue, Feedback, Placed};
 use super::input::InputEffect;
 use super::layout::{full_window_height, window_height_for_detail, WINDOW_WIDTH};
 use super::trace;
 use super::LauncherView;
-use crate::discovery::search::ResultItem;
+use crate::discovery::search::{ResultItem, ResultSource, SearchMode};
 
 const DETAIL_SCROLL_STEP: f32 = 54.0;
+
+enum CopyPart {
+    Path,
+    Name,
+}
 
 enum ClipboardShortcut {
     Copy,
@@ -23,7 +30,11 @@ impl LauncherView {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        if self.handle_menu_key(event, window, cx) {
+        if self.state.feedback.as_ref().is_some_and(Feedback::closing) {
+            return;
+        }
+        self.state.feedback = None;
+        if self.handle_menu_key(event, cx) {
             return;
         }
         let key = event.keystroke.key.as_str();
@@ -72,16 +83,13 @@ impl LauncherView {
             InputEffect::QueryChanged | InputEffect::FlowQueryChanged => {
                 self.dispatch_query_change(cx)
             }
-            InputEffect::BoostUp | InputEffect::BoostDown => {
-                let delta = if matches!(effect, InputEffect::BoostUp) {
-                    25
-                } else {
-                    -25
-                };
-                self.adjust_selected_boost(delta, cx);
-            }
-            InputEffect::Launch => self.launch_selected(window, cx),
-            InputEffect::OpenFolder => self.open_selected_folder(window, cx),
+            InputEffect::Tune { narrower, changed } => self.tune(narrower, changed, cx),
+            InputEffect::BoostUp => self.step_selected_rank(true, cx),
+            InputEffect::BoostDown => self.step_selected_rank(false, cx),
+            InputEffect::Launch => self.launch_selected(cx),
+            InputEffect::OpenFolder => self.open_selected_folder(cx),
+            InputEffect::CopyPath => self.copy_chosen_file(CopyPart::Path, cx),
+            InputEffect::CopyName => self.copy_chosen_file(CopyPart::Name, cx),
             InputEffect::Dismiss => self.hide_to_ghost("key", window),
             InputEffect::FlowExit => {
                 self.state.exit_flow();
@@ -106,8 +114,129 @@ impl LauncherView {
         let Some(shortcut) = Self::clipboard_shortcut(key, secondary) else {
             return false;
         };
+        let in_results = self.state.flow.is_none() && self.state.list_focused;
+        if in_results && matches!(shortcut, ClipboardShortcut::Copy) {
+            let copied = match self.state.mode {
+                SearchMode::Files => {
+                    self.copy_chosen_file(CopyPart::Path, cx);
+                    true
+                }
+                SearchMode::Apps => self.copy_chosen_app_path(cx),
+            };
+            if copied {
+                return true;
+            }
+        }
         self.apply_clipboard_shortcut(shortcut, cx);
         true
+    }
+
+    fn copy_chosen_file(&mut self, part: CopyPart, cx: &mut Context<Self>) {
+        let (text, name) = match self
+            .store
+            .get(self.state.scroll_list.selected)
+            .and_then(|scored| self.store.item(scored))
+        {
+            Some(ResultItem::File(entry)) => (
+                match part {
+                    CopyPart::Path => entry.path.display().to_string(),
+                    CopyPart::Name => entry.name.clone(),
+                },
+                entry.name.clone(),
+            ),
+            _ => return,
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        let what = match part {
+            CopyPart::Path => Copied::Path,
+            CopyPart::Name => Copied::Name,
+        };
+        self.show_cue(Cue::Copied { what, name }, Vec::new(), cx);
+    }
+
+    fn copy_chosen_app_path(&mut self, cx: &mut Context<Self>) -> bool {
+        let found = self
+            .store
+            .get(self.state.scroll_list.selected)
+            .and_then(|scored| self.store.item(scored))
+            .and_then(|item| match item {
+                ResultItem::App(entry) => Some(entry),
+                _ => None,
+            })
+            .and_then(|entry| {
+                let binary = self.details.app(&entry.path)?.about.binary.as_ref()?;
+                Some((binary.display().to_string(), entry.name.clone()))
+            });
+        let Some((path, name)) = found else {
+            return false;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(path));
+        self.show_cue(
+            Cue::Copied {
+                what: Copied::Path,
+                name,
+            },
+            Vec::new(),
+            cx,
+        );
+        true
+    }
+
+    pub(super) fn show_cue(&mut self, cue: Cue, before: Vec<Placed>, cx: &mut Context<Self>) {
+        let feedback = Feedback::new(cue, before);
+        if let Some(delay) = feedback.cue.closes_after() {
+            self.close_after(feedback.seq, delay, dismiss_reason(&feedback.cue), cx);
+        }
+        self.state.feedback = Some(feedback);
+        cx.notify();
+    }
+
+    fn close_after(
+        &mut self,
+        seq: u64,
+        delay: Duration,
+        from: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                async_cx.background_executor().timer(delay).await;
+                this.update(&mut async_cx, |view, cx| {
+                    let current = view
+                        .state
+                        .feedback
+                        .as_ref()
+                        .is_some_and(|feedback| feedback.seq == seq);
+                    if current && view.is_showing {
+                        view.request_dismiss(from);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn tune(&mut self, narrower: bool, changed: bool, cx: &mut Context<Self>) {
+        let cue = if changed {
+            self.dispatch_query_change(cx);
+            self.store.ensure_filtered(
+                self.state.query.text(),
+                self.state.mode,
+                self.state.fuzziness,
+            );
+            Cue::Level {
+                level: self.state.fuzziness,
+                count: self.store.result_count(),
+            }
+        } else if narrower {
+            Cue::Strictest
+        } else {
+            Cue::Loosest
+        };
+        self.show_cue(cue, Vec::new(), cx);
     }
 
     fn clipboard_shortcut(key: &str, secondary: bool) -> Option<ClipboardShortcut> {
@@ -170,22 +299,39 @@ impl LauncherView {
         }
     }
 
-    pub(super) fn adjust_selected_boost(&mut self, delta: i32, cx: &mut Context<Self>) {
-        if let Some(selected) = self.store.adjust_selected_boost(
-            self.state.scroll_list.selected,
-            delta,
-            self.state.query.text(),
-            self.state.mode,
-            self.state.fuzziness,
-        ) {
+    pub(super) fn step_selected_rank(&mut self, up: bool, cx: &mut Context<Self>) {
+        let selected = self.state.scroll_list.selected;
+        let Some(scored) = self.store.get(selected) else {
+            return;
+        };
+        let name = self.store.name(scored).to_owned();
+        let cue = if !matches!(scored.source, ResultSource::App) {
+            Cue::NoRank { name }
+        } else if up && selected == 0 {
+            Cue::AlreadyTop { name }
+        } else if !up && self.store.boost(&name) == 0 {
+            Cue::NotRaised { name }
+        } else {
+            let before = self.last_layout.clone();
+            let Some(place) = self.store.step_selected(
+                selected,
+                up,
+                self.state.query.text(),
+                self.state.mode,
+                self.state.fuzziness,
+            ) else {
+                return;
+            };
             self.state.boost_adjusting = true;
-            self.state.scroll_list.selected = selected;
+            self.state.scroll_list.selected = place;
             self.state.sync_result_window(self.store.result_count());
-            cx.notify();
-        }
+            self.show_cue(Cue::Moved { name, up, place }, before, cx);
+            return;
+        };
+        self.show_cue(cue, Vec::new(), cx);
     }
 
-    pub(super) fn launch_selected(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+    pub(super) fn launch_selected(&mut self, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         let started = std::time::Instant::now();
         #[cfg(not(debug_assertions))]
@@ -231,18 +377,14 @@ impl LauncherView {
             cx.notify();
             return;
         }
-        eprintln!("[controller] launch succeeded, hiding window");
+        eprintln!("[controller] launch succeeded, closing after the cue");
         if is_app {
             self.store.record_launch(&name);
         }
-        self.hide_to_ghost("launch", window);
+        self.show_cue(Cue::Opening { name }, Vec::new(), cx);
     }
 
-    pub(super) fn open_selected_folder(
-        &mut self,
-        window: &mut gpui::Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn open_selected_folder(&mut self, cx: &mut Context<Self>) {
         self.store.ensure_filtered(
             self.state.query.text(),
             self.state.mode,
@@ -256,6 +398,14 @@ impl LauncherView {
         let Some((path, source)) = path else {
             return;
         };
+        self.reveal(&path, source, cx);
+    }
+
+    pub(super) fn reveal_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self.reveal(path, "app_binary", cx);
+    }
+
+    fn reveal(&mut self, path: &Path, source: &'static str, cx: &mut Context<Self>) {
         if !path.exists() {
             trace::open_folder(source, "missing", "");
             self.state
@@ -263,15 +413,38 @@ impl LauncherView {
             cx.notify();
             return;
         }
-        match qol_apps::desktop_integration::reveal_in_file_manager(&path) {
+        match qol_apps::desktop_integration::reveal_in_file_manager(path) {
             Ok(()) => {
                 trace::open_folder(source, "ok", "");
-                self.hide_to_ghost("open_folder", window);
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                self.show_cue(
+                    Cue::OpeningFolder {
+                        folder: folder_label(path, home.as_deref()),
+                    },
+                    Vec::new(),
+                    cx,
+                );
             }
             Err(error) => {
                 trace::open_folder(source, "error", &error.to_string());
                 self.state
                     .set_launch_error(format!("Could not open containing folder: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn open_website(
+        &mut self,
+        url: &str,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        match qol_apps::desktop_integration::open_with_default_app(url) {
+            Ok(()) => self.hide_to_ghost("website", window),
+            Err(error) => {
+                self.state
+                    .set_launch_error(format!("Could not open {url}: {error}"));
                 cx.notify();
             }
         }
@@ -495,6 +668,23 @@ impl LauncherView {
     }
 }
 
+fn dismiss_reason(cue: &Cue) -> &'static str {
+    match cue {
+        Cue::Opening { .. } => "launch",
+        Cue::OpeningFolder { .. } => "open_folder",
+        _ => "copy",
+    }
+}
+
+fn folder_label(path: &Path, home: Option<&Path>) -> String {
+    let dir = path.parent().unwrap_or(path);
+    match home.and_then(|home| dir.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => dir.display().to_string(),
+    }
+}
+
 fn reveal_target(item: ResultItem<'_>) -> Option<(PathBuf, &'static str)> {
     match item {
         ResultItem::App(entry) => Some((entry.path.clone(), "app")),
@@ -505,11 +695,25 @@ fn reveal_target(item: ResultItem<'_>) -> Option<(PathBuf, &'static str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::reveal_target;
+    use super::{folder_label, reveal_target};
     use crate::discovery::search::ResultItem;
     use crate::discovery::FileEntry;
     use qol_apps::AppEntry;
     use std::path::PathBuf;
+
+    #[test]
+    fn folder_labels_name_the_containing_folder() {
+        let home = PathBuf::from("/home/qol");
+        assert_eq!(
+            folder_label(&home.join("Documents/notes.md"), Some(&home)),
+            "~/Documents"
+        );
+        assert_eq!(folder_label(&home.join("todo.txt"), Some(&home)), "~");
+        assert_eq!(
+            folder_label(std::path::Path::new("/usr/bin/xed"), Some(&home)),
+            "/usr/bin"
+        );
+    }
 
     #[test]
     fn folder_action_reveals_both_app_entries_and_files() {

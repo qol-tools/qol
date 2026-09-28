@@ -1,3 +1,5 @@
+mod content;
+pub mod details;
 pub mod entry_store;
 mod file_cache;
 mod file_scan;
@@ -12,9 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use qol_apps::AppEntry;
-use qol_gpui::protocol::{RuntimeEvent, RuntimeEventKind};
-use qol_gpui::PlatformStateClient;
 use qol_plugin_api::launcher_flows::{self, FlowEntry};
+use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
+use qol_runtime::PlatformStateClient;
 use qol_watch::{WatchNotice, WatchRoot};
 
 use platform::AppRoot;
@@ -78,6 +80,10 @@ pub(crate) fn paths() -> DiscoveryPaths {
         file_roots: configured_file_roots(),
         cache: file_cache::cache_path(),
     }
+}
+
+pub fn recent_files() -> Vec<PathBuf> {
+    platform::recent_files(entry_store::RECENT_LIMIT)
 }
 
 pub fn load_file_entries() -> Vec<FileEntry> {

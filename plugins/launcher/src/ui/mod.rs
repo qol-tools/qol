@@ -1,5 +1,9 @@
+mod about;
 mod click_away;
 mod controller;
+mod details;
+mod feedback;
+mod files;
 mod input;
 pub(crate) mod keepalive;
 mod layout;
@@ -7,8 +11,11 @@ mod menu;
 mod platform;
 mod render;
 pub mod run;
+mod sizing;
 mod state;
+mod tags;
 mod trace;
+mod transitions;
 mod view;
 mod window_host;
 
@@ -17,7 +24,7 @@ use std::time::Duration;
 
 use gpui::*;
 
-use crate::discovery::entry_store::EntryStore;
+use crate::discovery::entry_store::{BeforeTyping, EntryStore};
 use crate::discovery::{PreloadedEntries, SharedEntries};
 
 use menu::MenuKind;
@@ -41,7 +48,12 @@ pub(crate) struct LauncherView {
     pub(super) menu_scroll: ScrollHandle,
     menu_kind: Option<MenuKind>,
     pub(super) menu_selected: usize,
-    pub(super) held: Modifiers,
+    details: details::DetailCache,
+    last_layout: Vec<feedback::Placed>,
+    transitions: transitions::Transitions,
+    frame: Option<render::Frame>,
+    leaving: Vec<render::Shown>,
+    recent_stale: bool,
     trail_decay_task_running: bool,
     entry_watch_running: bool,
     pub(super) dismiss_requested: bool,
@@ -57,6 +69,14 @@ pub(crate) struct LauncherView {
     last_render_trace: Option<trace::RenderSignature>,
 }
 
+fn before_typing() -> BeforeTyping {
+    let config = crate::config::load_launcher_config();
+    BeforeTyping {
+        apps: config.most_used_apps,
+        files: config.recent_files,
+    }
+}
+
 impl LauncherView {
     pub(crate) fn new(title: String, shared: SharedEntries, cx: &mut Context<Self>) -> Self {
         let entries = shared
@@ -65,13 +85,15 @@ impl LauncherView {
             .unwrap_or_else(|_| Arc::new(PreloadedEntries::empty()));
         let mut blur_guard = qol_gpui::ghost::BlurGuard::new();
         blur_guard.arm(Duration::from_millis(BLUR_GUARD_MS));
+        let mut store = EntryStore::new(
+            entries.app_entries.clone(),
+            entries.file_entries.clone(),
+            entries.flow_entries.clone(),
+        );
+        store.set_before_typing(before_typing());
         Self {
             state: LauncherState::new(),
-            store: EntryStore::new(
-                entries.app_entries.clone(),
-                entries.file_entries.clone(),
-                entries.flow_entries.clone(),
-            ),
+            store,
             shared_entries: shared,
             last_entries_snapshot: entries,
             focus_handle: cx.focus_handle(),
@@ -80,7 +102,12 @@ impl LauncherView {
             menu_scroll: ScrollHandle::new(),
             menu_kind: None,
             menu_selected: 0,
-            held: Modifiers::default(),
+            details: details::DetailCache::default(),
+            last_layout: Vec::new(),
+            transitions: transitions::Transitions::default(),
+            frame: None,
+            leaving: Vec::new(),
+            recent_stale: true,
             trail_decay_task_running: false,
             entry_watch_running: false,
             dismiss_requested: false,
@@ -101,9 +128,11 @@ impl LauncherView {
         self.is_showing = showing;
         self.showing_flag
             .store(showing, std::sync::atomic::Ordering::Relaxed);
+        self.transitions.clear();
+        self.frame = None;
+        self.leaving.clear();
         if !showing {
             self.menu_kind = None;
-            self.held = Modifiers::default();
             self.stop_click_away_monitor();
         }
     }
@@ -141,6 +170,9 @@ impl LauncherView {
             );
         }
         self.state = LauncherState::new();
+        self.store.set_before_typing(before_typing());
+        self.details.forget_files();
+        self.recent_stale = true;
         self.menu_kind = None;
         self.menu_selected = 0;
         self.menu_scroll = ScrollHandle::new();
@@ -171,6 +203,13 @@ impl LauncherView {
             fresh.flow_entries.clone(),
         );
         true
+    }
+
+    fn refresh_recent_files(&mut self, cx: &mut Context<Self>) {
+        if self.recent_stale {
+            self.recent_stale = false;
+            self.load_recent_files(cx);
+        }
     }
 
     fn ensure_click_away_monitor(&mut self, cx: &mut Context<Self>) {

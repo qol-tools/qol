@@ -7,7 +7,7 @@ use crate::discovery::SharedEntries;
 use crate::monitor::{self, MonitorTracker};
 use crate::open_window_with_focus;
 
-use super::layout::{full_window_height, window_height_for_rows, WINDOW_WIDTH};
+use super::layout::{full_window_height, header_window_height, WINDOW_WIDTH};
 use super::{trace, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
 
 use qol_gpui::popup_window;
@@ -17,11 +17,21 @@ use qol_gpui::window_options::PopupWindowOptions;
 pub(crate) type ActiveLaunchers = ActiveWindows<LauncherView>;
 
 fn header_size() -> Size<Pixels> {
-    size(px(WINDOW_WIDTH), px(window_height_for_rows(0)))
+    size(px(WINDOW_WIDTH), px(header_window_height()))
 }
 
 fn full_window_size() -> Size<Pixels> {
     size(px(WINDOW_WIDTH), px(full_window_height()))
+}
+
+fn launcher_placement(monitor: Option<&monitor::ActiveMonitor>, cx: &App) -> WindowPlacement {
+    let mut placement = centered_window_placement(monitor, header_size(), cx);
+    if let Some(monitor) = monitor {
+        let area = monitor.bounds();
+        let lowest = area.origin.y + area.size.height - px(full_window_height());
+        placement.bounds.origin.y = placement.bounds.origin.y.min(lowest).max(area.origin.y);
+    }
+    placement
 }
 
 pub(crate) fn pre_create_ghost(
@@ -30,9 +40,9 @@ pub(crate) fn pre_create_ghost(
     tracker: MonitorTracker,
     cx: &mut App,
 ) {
-    crate::config::apply_ghost_debug();
+    apply_ghost_debug();
     for monitor in tracker.all_monitors_or_snapshot() {
-        let placement = centered_window_placement(Some(&monitor), header_size(), cx);
+        let placement = launcher_placement(Some(&monitor), cx);
         let target = placement.target;
         let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
         let Some(handle) = open_hidden_ghost(cx, entries.clone(), &placement, &title) else {
@@ -129,7 +139,7 @@ pub(crate) fn activate_or_open_launcher(
     monitor_snapshot: Option<monitor::ActiveMonitor>,
     cx: &mut App,
 ) {
-    crate::config::apply_ghost_debug();
+    apply_ghost_debug();
     if show_ghost(active.clone(), monitor_snapshot.as_ref(), cx) {
         return;
     }
@@ -148,7 +158,7 @@ fn show_ghost(
     cx: &mut App,
 ) -> bool {
     let _reason = qol_gpui::popup_window::reason_scope("show");
-    let placement = centered_window_placement(monitor_snapshot, header_size(), cx);
+    let placement = launcher_placement(monitor_snapshot, cx);
     let target = placement.target;
     let handle = active.borrow().existing(target);
     let Some(handle) = handle else {
@@ -197,7 +207,7 @@ fn create_and_show_ghost(
     cx: &mut App,
 ) {
     let _reason = qol_gpui::popup_window::reason_scope("create");
-    let placement = centered_window_placement(monitor_snapshot, header_size(), cx);
+    let placement = launcher_placement(monitor_snapshot, cx);
     let target = placement.target;
     let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
 
@@ -278,4 +288,15 @@ fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptio
         .focus(focus)
         .app_id(LAUNCHER_APP_ID)
         .build()
+}
+
+pub(super) fn apply_ghost_debug() {
+    #[cfg(debug_assertions)]
+    {
+        let config = crate::config::load_launcher_config();
+        popup_window::set_ghost_debug(
+            config.display.ghost_opacity,
+            config.display.ghost_debug_color.as_deref(),
+        );
+    }
 }

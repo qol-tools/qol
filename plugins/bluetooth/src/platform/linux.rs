@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
+mod media;
 mod operations;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -421,10 +422,11 @@ pub fn devices_snapshot() -> Result<serde_json::Value> {
     );
     qol_runtime::probe!(
         "BLUETOOTH_SNAPSHOT",
-        "devices={} paired={} connected={} searching={}",
+        "devices={} paired={} connected={} ready={} searching={}",
         payload["count"],
         payload["paired_count"],
         payload["connected_count"],
+        payload["ready_count"],
         payload["searching"]
     );
     Ok(payload)
@@ -625,12 +627,20 @@ async fn list_devices_with(adapter: &Adapter) -> Result<Vec<DeviceInfo>> {
     addresses.sort();
     let mut devices = Vec::with_capacity(addresses.len());
     for address in addresses {
-        devices.push(device_info(&adapter.device(address)?).await?);
+        devices.push(device_properties(&adapter.device(address)?).await?);
     }
+    media::resolve_audio_connections(adapter.name(), &mut devices).await?;
     Ok(devices)
 }
 
 async fn device_info(device: &Device) -> Result<DeviceInfo> {
+    let mut info = device_properties(device).await?;
+    media::resolve_audio_connections(device.adapter_name(), std::slice::from_mut(&mut info))
+        .await?;
+    Ok(info)
+}
+
+async fn device_properties(device: &Device) -> Result<DeviceInfo> {
     let mut uuids = device
         .uuids()
         .await?
@@ -645,6 +655,7 @@ async fn device_info(device: &Device) -> Result<DeviceInfo> {
         paired: device.is_paired().await?,
         trusted: device.is_trusted().await?,
         connected: device.is_connected().await?,
+        audio_connected: None,
         services_resolved: device.is_services_resolved().await?,
         icon: device.icon().await?,
         class: device.class().await?,
@@ -2059,11 +2070,12 @@ fn trace_device_action(action: &str, address: Address, result: Result<DeviceInfo
     match result {
         Ok(device) => qol_runtime::probe!(
             "BLUETOOTH_DEVICE_ACTION",
-            "action={action} device={} paired={} trusted={} connected={} services_resolved={} audio={} a2dp_sink={} ready={} outcome=ok",
+            "action={action} device={} paired={} trusted={} connected={} audio_connected={:?} services_resolved={} audio={} a2dp_sink={} ready={} outcome=ok",
             redacted(address),
             device.paired,
             device.trusted,
             device.connected,
+            device.audio_connected,
             device.services_resolved,
             is_audio_device(&device),
             supports_audio_sink(&device),

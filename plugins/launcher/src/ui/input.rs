@@ -1,4 +1,5 @@
-use super::state::{EdgeHit, LauncherState, NavDirection};
+use super::state::{EdgeHit, LauncherState, NavDirection, PanelItem};
+use crate::discovery::search::SearchMode;
 use gpui::Modifiers;
 use qol_gpui::text_edit;
 #[cfg(test)]
@@ -11,9 +12,12 @@ pub enum InputEffect {
     QueryChanged,
     Launch,
     OpenFolder,
+    CopyPath,
+    CopyName,
     Dismiss,
     BoostUp,
     BoostDown,
+    Tune { narrower: bool, changed: bool },
     FlowQueryChanged,
     FlowActivate,
     FlowDetail,
@@ -39,28 +43,32 @@ impl LauncherState {
         let shift = modifiers.shift;
         let alt = modifiers.alt;
         let span = text_edit::span(modifiers);
-        let boost = (secondary || alt) && !shift && self.list_focused;
+        let boost = (secondary || alt) && !shift && (self.list_focused || self.query.is_empty());
         #[cfg(debug_assertions)]
         if matches!(key, "left" | "right") {
             eprintln!(
                 "[input] key={key:?} secondary={secondary} control={control} shift={shift} alt={alt}"
             );
         }
+        let in_panel = self.mode == SearchMode::Files && self.list_focused;
         match key {
-            "escape" | "esc" => InputEffect::Dismiss,
-            "up" if secondary => {
-                if self.decrease_fuzziness() {
-                    InputEffect::QueryChanged
-                } else {
-                    InputEffect::Navigate
-                }
+            "escape" | "esc" if self.query.is_empty() => InputEffect::Dismiss,
+            "escape" | "esc" => {
+                self.query.clear();
+                self.clear_launch_error();
+                InputEffect::QueryChanged
             }
-            "down" if secondary => {
-                if self.increase_fuzziness() {
-                    InputEffect::QueryChanged
-                } else {
-                    InputEffect::Navigate
-                }
+            "up" if secondary => InputEffect::Tune {
+                narrower: true,
+                changed: self.decrease_fuzziness(),
+            },
+            "down" if secondary => InputEffect::Tune {
+                narrower: false,
+                changed: self.increase_fuzziness(),
+            },
+            "tab" if in_panel => {
+                self.panel = self.panel.step(shift);
+                InputEffect::Navigate
             }
             "tab" => {
                 self.cycle_mode(shift);
@@ -103,11 +111,23 @@ impl LauncherState {
                 if self.is_phantom_reversal(NavDirection::Down) {
                     return InputEffect::Ignore;
                 }
-                self.list_focused |= result_count > 0;
+                if !self.list_focused {
+                    if result_count > 0 {
+                        self.list_focused = true;
+                        self.register_nav(NavDirection::Down);
+                    }
+                    return InputEffect::Navigate;
+                }
                 self.move_down(result_count);
                 InputEffect::Navigate
             }
             "enter" if shift && !secondary && !alt => InputEffect::OpenFolder,
+            "enter" if in_panel && !secondary && !alt => match self.panel {
+                PanelItem::Open => InputEffect::Launch,
+                PanelItem::OpenFolder => InputEffect::OpenFolder,
+                PanelItem::CopyPath => InputEffect::CopyPath,
+                PanelItem::CopyName => InputEffect::CopyName,
+            },
             "enter" => InputEffect::Launch,
             "backspace" => {
                 if self.query.backspace(span) {
@@ -296,7 +316,7 @@ pub fn key_to_input_char(key: &str, shift: bool) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::discovery::search::{Fuzziness, SearchMode};
+    use crate::discovery::search::Fuzziness;
     use crate::flow::FlowEntry;
 
     fn mods(secondary: bool, control: bool, shift: bool, alt: bool) -> Modifiers {
@@ -412,6 +432,74 @@ mod tests {
     }
 
     #[test]
+    fn tab_switches_modes_in_the_field_and_walks_the_panel_in_file_results() {
+        let plain = Modifiers::none();
+        let shift = mods(false, false, true, false);
+        let mut state = typed("re");
+        assert_eq!(state.apply_key("tab", &plain, 3), InputEffect::QueryChanged);
+        assert_eq!(state.mode, SearchMode::Files);
+
+        state.apply_key("down", &plain, 3);
+        assert!(state.list_focused);
+        assert_eq!(state.apply_key("tab", &plain, 3), InputEffect::Navigate);
+        assert_eq!(state.apply_key("tab", &plain, 3), InputEffect::Navigate);
+        assert_eq!(state.panel, PanelItem::CopyPath);
+        assert_eq!(state.mode, SearchMode::Files);
+        assert_eq!(state.apply_key("tab", &shift, 3), InputEffect::Navigate);
+        assert_eq!(state.panel, PanelItem::OpenFolder);
+        assert_eq!(state.apply_key("tab", &plain, 3), InputEffect::Navigate);
+
+        state.last_nav_at = None;
+        state.apply_key("down", &plain, 3);
+        assert_eq!(
+            state.panel,
+            PanelItem::CopyPath,
+            "moving the chosen file keeps the panel choice"
+        );
+        state.apply_key("x", &plain, 3);
+        state.reset_results_position();
+        assert_eq!(
+            state.panel,
+            PanelItem::CopyPath,
+            "typing keeps the panel choice"
+        );
+        assert!(!state.list_focused);
+        assert_eq!(state.apply_key("tab", &plain, 3), InputEffect::QueryChanged);
+        assert_eq!(state.mode, SearchMode::Apps);
+    }
+
+    #[test]
+    fn enter_in_file_results_runs_the_panel_choice() {
+        let plain = Modifiers::none();
+        let mut state = typed("re");
+        state.mode = SearchMode::Files;
+        state.list_focused = true;
+        for (item, effect) in [
+            (PanelItem::Open, InputEffect::Launch),
+            (PanelItem::OpenFolder, InputEffect::OpenFolder),
+            (PanelItem::CopyPath, InputEffect::CopyPath),
+            (PanelItem::CopyName, InputEffect::CopyName),
+        ] {
+            state.panel = item;
+            assert_eq!(state.apply_key("enter", &plain, 3), effect, "{item:?}");
+        }
+        state.list_focused = false;
+        assert_eq!(state.apply_key("enter", &plain, 3), InputEffect::Launch);
+    }
+
+    #[test]
+    fn escape_clears_the_query_before_closing() {
+        let plain = Modifiers::none();
+        let mut state = typed("term");
+        assert_eq!(
+            state.apply_key("escape", &plain, 3),
+            InputEffect::QueryChanged
+        );
+        assert!(state.query.is_empty());
+        assert_eq!(state.apply_key("escape", &plain, 3), InputEffect::Dismiss);
+    }
+
+    #[test]
     fn shifted_word_arrows_select_words() {
         let mut state = typed("qol memory");
         let select_word = Modifiers {
@@ -477,6 +565,24 @@ mod tests {
     }
 
     #[test]
+    fn arrows_boost_the_chosen_row_from_an_empty_search_box() {
+        for modifiers in boost_modifiers() {
+            let mut state = LauncherState::new();
+            assert!(!state.list_focused);
+            assert_eq!(
+                state.apply_key("right", &modifiers, 3),
+                InputEffect::BoostUp,
+                "{modifiers:?}"
+            );
+            assert_eq!(
+                state.apply_key("left", &modifiers, 3),
+                InputEffect::BoostDown,
+                "{modifiers:?}"
+            );
+        }
+    }
+
+    #[test]
     fn word_arrows_jump_words_while_the_search_box_has_focus() {
         let mut state = typed("qol memory");
         assert_eq!(state.apply_key("left", &word(), 3), InputEffect::Navigate);
@@ -494,6 +600,11 @@ mod tests {
 
         state.apply_key("down", &plain, 3);
         assert!(state.list_focused);
+        assert_eq!(
+            state.scroll_list.selected, 0,
+            "the first down enters the list on the first result"
+        );
+        state.apply_key("down", &plain, 3);
         assert_eq!(state.scroll_list.selected, 1);
         assert_eq!(
             state.apply_key("right", &secondary, 3),
@@ -540,6 +651,7 @@ mod tests {
     #[test]
     fn fast_direction_reversal_is_ignored_as_phantom() {
         let mut state = LauncherState::new();
+        state.list_focused = true;
 
         assert_eq!(
             state.apply_key("down", &mods(false, false, false, false), 7),
@@ -563,6 +675,7 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let mut state = LauncherState::new();
+        state.list_focused = true;
         state.apply_key("down", &mods(false, false, false, false), 7);
         assert_eq!(state.scroll_list.selected, 1);
 
@@ -578,6 +691,7 @@ mod tests {
     #[test]
     fn repeated_same_direction_is_never_treated_as_phantom() {
         let mut state = LauncherState::new();
+        state.list_focused = true;
         let cases = [1usize, 2, 3, 4];
         for expected in cases {
             assert_eq!(
@@ -595,7 +709,6 @@ mod tests {
     #[test]
     fn down_uses_freshly_filtered_count_not_stale_store() {
         use crate::discovery::entry_store::EntryStore;
-        use crate::discovery::search::SearchMode;
         use crate::discovery::{AppEntry, FileEntry};
         use std::sync::Arc;
 
@@ -630,6 +743,7 @@ mod tests {
             "query should match multiple apps, got {result_count}"
         );
 
+        state.list_focused = true;
         let effect = state.apply_key("down", &mods(false, false, false, false), result_count);
         assert_eq!(effect, InputEffect::Navigate);
         assert_eq!(
@@ -653,9 +767,19 @@ mod tests {
         assert_eq!(state.fuzziness, Fuzziness::Balanced);
         assert_eq!(
             state.apply_key("down", &mods(true, false, false, false), 0),
-            InputEffect::QueryChanged
+            InputEffect::Tune {
+                narrower: false,
+                changed: true
+            }
         );
         assert_eq!(state.fuzziness, Fuzziness::Loose);
+        assert_eq!(
+            state.apply_key("down", &mods(true, false, false, false), 0),
+            InputEffect::Tune {
+                narrower: false,
+                changed: false
+            }
+        );
     }
 
     fn flow_entry(title: &str) -> FlowEntry {

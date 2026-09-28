@@ -11,7 +11,10 @@ examples = []
 
 [dependencies]
 anyhow = "1"
+flate2 = "1"
 gpui.workspace = true
+imagesize = "0.13"
+memchr = "2"
 serde.workspace = true
 serde_json.workspace = true
 qol-plugin-api.workspace = true
@@ -25,6 +28,7 @@ qol-frecency.workspace = true
 qol-apps.workspace = true
 qol-platform.workspace = true
 qol-process.workspace = true
+qol-color.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 toml.workspace = true
@@ -33,6 +37,7 @@ workspace-hack.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { workspace = true, features = ["xinput"] }
 libc = "0.2"
+roxmltree = "0.20"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

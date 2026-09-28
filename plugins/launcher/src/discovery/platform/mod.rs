@@ -16,8 +16,9 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use super::details::AppDetails;
 use super::AppEntry;
 pub use qol_apps::AppRoot;
 
@@ -35,4 +36,16 @@ pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
 
 pub fn file_watch_roots() -> Vec<PathBuf> {
     imp::file_watch_roots()
+}
+
+pub fn app_details(entry: &AppEntry) -> AppDetails {
+    imp::app_details(entry)
+}
+
+pub fn file_icon(path: &Path) -> Option<PathBuf> {
+    imp::file_icon(path)
+}
+
+pub fn recent_files(limit: usize) -> Vec<PathBuf> {
+    imp::recent_files(limit)
 }

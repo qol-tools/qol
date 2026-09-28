@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use super::FileEntry;
 
-const CACHE_VERSION: &str = "v1";
+const CACHE_VERSION: &str = "v2";
 const CACHE_TTL: Duration = Duration::from_secs(60 * 15);
 const CACHE_FILE_NAME: &str = "launcher-files-index-v1.tsv";
 
@@ -83,7 +83,7 @@ pub fn store(roots: &[PathBuf], entries: &[FileEntry]) {
 pub(super) fn cache_path() -> Option<PathBuf> {
     Some(
         super::platform::cache_dir()?
-            .join("gpui-test")
+            .join("qol-launcher")
             .join(CACHE_FILE_NAME),
     )
 }

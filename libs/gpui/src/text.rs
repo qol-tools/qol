@@ -20,6 +20,37 @@ pub fn shaped_width(window: &mut Window, text: &str, run_font: Font, font_size: 
         .into()
 }
 
+pub fn wrapped_line_count(
+    window: &mut Window,
+    text: &str,
+    run_font: Font,
+    font_size: f32,
+    wrap_width: f32,
+) -> usize {
+    window
+        .text_system()
+        .shape_text(
+            SharedString::from(text.to_owned()),
+            px(font_size),
+            &[TextRun {
+                len: text.len(),
+                font: run_font,
+                color: Hsla::default(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            Some(px(wrap_width)),
+            None,
+        )
+        .map_or(1, |lines| {
+            lines
+                .iter()
+                .map(|line| line.wrap_boundaries().len() + 1)
+                .sum()
+        })
+}
+
 pub fn truncate_to_width(
     text: &str,
     font: Font,

@@ -72,7 +72,14 @@ pub enum ResultItem<'a> {
 pub enum ResultSource {
     App,
     File,
+    Recent,
     Flow,
+}
+
+impl ResultSource {
+    pub fn is_file(self) -> bool {
+        matches!(self, Self::File | Self::Recent)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,7 +185,7 @@ pub fn filtered_from_candidates(
                         let entry = entries.flows.get(candidate.index)?;
                         score_flow(candidate.index, &entry.title, &prepared)
                     }
-                    ResultSource::File => None,
+                    ResultSource::File | ResultSource::Recent => None,
                 })
                 .collect()
         }

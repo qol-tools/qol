@@ -29,10 +29,12 @@ pub enum Icon {
     Square,
     Triangle,
     Home,
+    Folder,
+    Grid,
 }
 
 impl Icon {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 28] = [
         Self::Enter,
         Self::Tab,
         Self::Backspace,
@@ -59,6 +61,8 @@ impl Icon {
         Self::Square,
         Self::Triangle,
         Self::Home,
+        Self::Folder,
+        Self::Grid,
     ];
 
     fn name(self) -> &'static str {
@@ -89,6 +93,8 @@ impl Icon {
             Self::Square => "square",
             Self::Triangle => "triangle",
             Self::Home => "home",
+            Self::Folder => "folder",
+            Self::Grid => "grid",
         }
     }
 
@@ -134,6 +140,8 @@ impl Icon {
             Self::Square => r#"<rect x="2.6" y="2.6" width="6.8" height="6.8" rx=".6"/>"#,
             Self::Triangle => r#"<path d="M6 2.2L10 9.3H2z"/>"#,
             Self::Home => r#"<path d="M2 6.2L6 2.5l4 3.7"/><path d="M3.3 5.2v4.3h5.4V5.2"/>"#,
+            Self::Folder => r#"<path d="M1.5 3h3l1 1.2h5v5.3h-9z"/>"#,
+            Self::Grid => r#"<path d="M2 2h3v3H2zM7 2h3v3H7zM2 7h3v3H2zM7 7h3v3H7z"/>"#,
         }
     }
 

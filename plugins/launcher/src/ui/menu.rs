@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
-use super::layout::{HEADER_HEIGHT, WINDOW_WIDTH};
+use super::layout::HEADER_HEIGHT;
 use super::trace;
 use super::LauncherView;
 use crate::discovery::search::{ResultSource, SearchMode};
@@ -57,7 +57,7 @@ fn option_actions(source: Option<ResultSource>, boost: i32) -> Vec<OptionAction>
     if source.is_some() {
         actions.push(OptionAction::Open);
     }
-    if matches!(source, Some(ResultSource::App | ResultSource::File)) {
+    if source.is_some_and(|source| matches!(source, ResultSource::App) || source.is_file()) {
         actions.push(OptionAction::OpenFolder);
     }
     if matches!(source, Some(ResultSource::App)) {
@@ -153,8 +153,7 @@ impl LauncherView {
 
     pub(super) fn set_search_mode(&mut self, mode: SearchMode, cx: &mut Context<Self>) {
         self.menu_kind = None;
-        self.state.mode = mode;
-        self.state.clear_launch_error();
+        self.state.set_mode(mode);
         self.state.reset_results_position();
         self.dispatch_query_change(cx);
     }
@@ -186,12 +185,7 @@ impl LauncherView {
         (HELP_SEARCH_LEFT_ROWS, HELP_SEARCH_RIGHT_ROWS, &[])
     }
 
-    pub(super) fn handle_menu_key(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub(super) fn handle_menu_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let key = event.keystroke.key.as_str();
         let modifiers = &event.keystroke.modifiers;
         if modifiers.alt && key == "h" {
@@ -231,7 +225,7 @@ impl LauncherView {
         }
         if key == "enter" {
             if let Some(action) = self.available_options().get(self.menu_selected).copied() {
-                self.activate_option(action, window, cx);
+                self.activate_option(action, cx);
             }
             return true;
         }
@@ -247,21 +241,16 @@ impl LauncherView {
         )
     }
 
-    fn activate_option(
-        &mut self,
-        action: OptionAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn activate_option(&mut self, action: OptionAction, cx: &mut Context<Self>) {
         self.menu_kind = None;
         trace::menu("options", action.label());
         match action {
             OptionAction::Apps => self.set_search_mode(SearchMode::Apps, cx),
             OptionAction::Files => self.set_search_mode(SearchMode::Files, cx),
-            OptionAction::Open => self.launch_selected(window, cx),
-            OptionAction::OpenFolder => self.open_selected_folder(window, cx),
-            OptionAction::BoostUp => self.adjust_selected_boost(25, cx),
-            OptionAction::BoostDown => self.adjust_selected_boost(-25, cx),
+            OptionAction::Open => self.launch_selected(cx),
+            OptionAction::OpenFolder => self.open_selected_folder(cx),
+            OptionAction::BoostUp => self.step_selected_rank(true, cx),
+            OptionAction::BoostDown => self.step_selected_rank(false, cx),
         }
         cx.notify();
     }
@@ -278,7 +267,7 @@ impl LauncherView {
                 frame
                     .top(px(HEADER_HEIGHT))
                     .left_0()
-                    .w(px(WINDOW_WIDTH))
+                    .right_0()
                     .border_b(px(qol_gpui::theme::LINE))
                     .border_color(rgba(kit.washes.hairline.packed()))
                     .bg(super::view::bg_color()),
@@ -457,8 +446,8 @@ fn option_row(
         .text(TextStyle::ListName)
         .child(div().flex_1().min_w_0().child(action.label()))
         .child(mark)
-        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.activate_option(action, window, cx);
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.activate_option(action, cx);
         }));
     kit.highlight(row, selected)
 }
@@ -531,8 +520,24 @@ mod tests {
                 InputEffect::BoostDown,
             ),
             ("Lower rank in list", "left", alt, InputEffect::BoostDown),
-            ("Narrow", "up", secondary, InputEffect::QueryChanged),
-            ("Broaden", "down", secondary, InputEffect::QueryChanged),
+            (
+                "Narrow",
+                "up",
+                secondary,
+                InputEffect::Tune {
+                    narrower: true,
+                    changed: true,
+                },
+            ),
+            (
+                "Broaden",
+                "down",
+                secondary,
+                InputEffect::Tune {
+                    narrower: false,
+                    changed: true,
+                },
+            ),
         ] {
             assert!(HELP_SEARCH_LEFT_ROWS
                 .iter()

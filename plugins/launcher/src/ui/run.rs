@@ -47,7 +47,7 @@ pub fn run(intent: StartupIntent) {
         keepalive::open_keepalive_window(cx);
         qol_gpui::platform::set_accessory_policy();
 
-        crate::config::apply_ghost_debug();
+        super::window_host::apply_ghost_debug();
 
         pre_create_ghost(entries.clone(), active.clone(), focus_cache.clone(), cx);
         spawn_ghost_reposition_listener(active.clone(), focus_cache.clone(), cx);
@@ -145,7 +145,7 @@ async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
 }
 
 fn reload_ghost_debug(active: &Rc<RefCell<ActiveLaunchers>>, cx: &mut App) {
-    crate::config::apply_ghost_debug();
+    super::window_host::apply_ghost_debug();
     if any_showing(active, cx) {
         return;
     }
