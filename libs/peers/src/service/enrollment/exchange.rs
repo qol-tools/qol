@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::{
@@ -232,15 +232,21 @@ impl PeerAuthority {
             transaction: key.transaction,
             outcome: ResponseOutcome::Pending {},
         };
+        let mut probe = [0_u8; 1];
         loop {
             tokio::select! {
                 biased;
                 result = &mut approval => return result,
                 _ = heartbeat.tick() => {
-                    write_json(connection, &pending, FrameLimit::Enrollment).await.map_err(|_| EnrollmentError::Framing)?;
+                    if write_json(connection, &pending, FrameLimit::Enrollment).await.is_err() {
+                        break;
+                    }
                 }
+                _ = connection.read(&mut probe) => break,
             }
         }
+        self.abandon_nearby(key);
+        Err(EnrollmentError::Framing)
     }
 
     async fn send_commit<S: AsyncRead + AsyncWrite + Unpin>(

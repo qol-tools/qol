@@ -107,6 +107,24 @@ impl PeerAuthority {
         }
     }
 
+    pub(in crate::service) fn abandon_nearby(&self, key: EnrollmentRequestKey) {
+        let Ok(mut inner) = self.lock() else {
+            return;
+        };
+        let before = inner.invitations.len();
+        inner.invitations.retain(|entry| {
+            entry.id != key.invitation
+                || entry.nearby.is_none()
+                || entry
+                    .reservation
+                    .as_ref()
+                    .is_none_or(|reserved| reserved.transaction != key.transaction)
+        });
+        if inner.invitations.len() != before {
+            self.changes.send_replace(());
+        }
+    }
+
     pub fn inbound_nearby(&self) -> Result<Vec<InboundNearby>, EnrollmentError> {
         let inner = self.lock()?;
         inner.ensure_ready()?;

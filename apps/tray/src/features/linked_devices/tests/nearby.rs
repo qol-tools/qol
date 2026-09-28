@@ -341,3 +341,84 @@ async fn two_devices_that_both_click_link_need_one_accept() {
     laptop.close().await;
     desk.close().await;
 }
+
+fn decline(fixture: &Fixture, peer_id: PeerId) -> Response {
+    fixture.shared.peer_admin(Request::Nearby {
+        request: NearbyRequest::Decline {
+            expected: fixture.expected(),
+            peer_id,
+        },
+    })
+}
+
+fn link_state(fixture: &Fixture, peer: PeerId) -> Option<NearbyState> {
+    nearby(fixture)
+        .into_iter()
+        .find(|device| device.peer_id == peer)
+        .and_then(|device| device.link)
+        .map(|link| link.state)
+}
+
+#[tokio::test]
+async fn a_cancelled_request_disappears_from_the_other_device() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (laptop, desk) = pair(temporary.path()).await;
+    let laptop_id = peer_id(&laptop);
+    let desk_id = peer_id(&desk);
+    until(|| {
+        nearby(&desk)
+            .iter()
+            .any(|device| device.peer_id == laptop_id)
+            .then_some(())
+    })
+    .await;
+    link(&desk, laptop_id);
+    until(|| code(&laptop, desk_id)).await;
+    until(|| (link_state(&desk, laptop_id) == Some(NearbyState::WaitingForPeer {})).then_some(()))
+        .await;
+    assert!(matches!(
+        decline(&desk, laptop_id),
+        Response::Changed { .. }
+    ));
+    until(|| link_state(&laptop, desk_id).is_none().then_some(())).await;
+    assert!(!matches!(
+        confirm(&laptop, desk_id),
+        Response::Changed { .. }
+    ));
+    assert!(!linked(&laptop, desk_id));
+    laptop.close().await;
+    desk.close().await;
+}
+
+#[tokio::test]
+async fn a_declined_request_tells_the_requester() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (laptop, desk) = pair(temporary.path()).await;
+    let laptop_id = peer_id(&laptop);
+    let desk_id = peer_id(&desk);
+    until(|| {
+        nearby(&desk)
+            .iter()
+            .any(|device| device.peer_id == laptop_id)
+            .then_some(())
+    })
+    .await;
+    link(&desk, laptop_id);
+    until(|| code(&laptop, desk_id)).await;
+    until(|| (link_state(&desk, laptop_id) == Some(NearbyState::WaitingForPeer {})).then_some(()))
+        .await;
+    assert!(matches!(
+        decline(&laptop, desk_id),
+        Response::Changed { .. }
+    ));
+    until(|| {
+        matches!(
+            link_state(&desk, laptop_id),
+            Some(NearbyState::Failed { .. })
+        )
+        .then_some(())
+    })
+    .await;
+    laptop.close().await;
+    desk.close().await;
+}
