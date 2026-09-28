@@ -243,7 +243,7 @@ mod tests {
         host.shutdown();
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn socket_route_rejects_old_activation_stamps_after_persistent_reopen() {
         let temporary = tempfile::tempdir().unwrap();
@@ -573,7 +573,7 @@ mod enrollment_tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn lost_admission_reply_restart_and_explicit_recovery_keep_original_pin_and_transaction()
     {

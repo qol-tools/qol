@@ -54,8 +54,8 @@ fn session_only_lifecycle_creates_no_credential_files() {
     assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 0);
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod persistent {
     use std::{fs, os::unix::fs::symlink, path::Path, process::Command};
 
     use super::now;
@@ -79,7 +79,7 @@ mod linux {
 
     fn probe(root: &Path, expected: &str) {
         let result = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "linux::writer_probe", "--nocapture"])
+            .args(["--exact", "persistent::writer_probe", "--nocapture"])
             .env("QOL_PEERS_WRITER_PROBE_ROOT", root)
             .env("QOL_PEERS_WRITER_PROBE_EXPECT", expected)
             .output()
@@ -119,7 +119,7 @@ mod linux {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[test]
 fn persistence_is_explicitly_unsupported_without_creating_files() {
     use qol_peers::service::AuthorityError;

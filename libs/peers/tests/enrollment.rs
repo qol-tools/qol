@@ -516,7 +516,7 @@ async fn invitation_and_outbound_caps_fail_before_mutation() {
     assert_eq!(joiner.outbound_enrollments().unwrap().len(), 32);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod persistent {
     use super::*;
 

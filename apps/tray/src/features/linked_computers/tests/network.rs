@@ -290,7 +290,7 @@ async fn network_pages_bind_both_revisions_and_activation_without_resetting_auth
     fixture.owner.closed().await.unwrap();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn standby_promotion_and_writer_reopen_use_the_real_host_request_owner() {
     use qol_peers::service::PeerAuthority;
@@ -346,7 +346,7 @@ async fn standby_promotion_and_writer_reopen_use_the_real_host_request_owner() {
     assert_eq!(fixture.closed.load(Ordering::SeqCst), 2);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn failed_or_stalled_cleanup_keeps_the_persistent_writer_and_bounds_shutdown() {
     use qol_peers::service::PeerAuthority;

@@ -258,7 +258,7 @@ fn operation_revoke_after_start_settles_without_restoring_trust() {
     assert!(authority.lock().unwrap().state.operations.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn operation_restart_commits_recovery_and_preserves_original_sender_allocation() {
     for started in [false, true] {
@@ -312,7 +312,7 @@ fn operation_restart_commits_recovery_and_preserves_original_sender_allocation()
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn operation_v3_migration_preserves_authority_and_initializes_link_epochs_once() {
     let temporary = tempfile::tempdir().unwrap();
@@ -416,7 +416,7 @@ fn operation_old_epoch_overflow_and_busy_refuse_without_advancing_watermark() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn operation_dispatch_commit_fault_never_grants_start_and_writer_remains_owned() {
     use crate::service::authority::storage::CommitFault;
@@ -584,7 +584,7 @@ fn operation_global_record_limit_prunes_terminal_details_but_never_active_owners
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn operation_receiver_restart_keeps_terminal_result_epoch_and_grantless_outcome_access() {
     let temporary = tempfile::tempdir().unwrap();

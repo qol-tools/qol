@@ -8,7 +8,7 @@ use qol_conventions::{
     operations::{OperationKey, OperationKind},
     plugin_id::PluginUid,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -137,7 +137,7 @@ fn operation_byte_capacity_refuses_before_queueing_and_stale_close_keeps_replace
     assert!(hub.elect(replacement).is_err());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn operation_shutdown_joins_actual_started_closure_and_keeps_writer_owned() {
     struct Dispatcher {

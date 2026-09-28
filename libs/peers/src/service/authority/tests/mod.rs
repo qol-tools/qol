@@ -1,5 +1,5 @@
-#[cfg(target_os = "linux")]
-mod linux;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod persistent;
 mod tls;
 
 use std::time::{Duration, SystemTime};

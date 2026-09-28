@@ -118,7 +118,7 @@ fn delayed_mutations_cannot_cross_session_replacement_at_the_same_revision() {
     ));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn persistent_reopen_invalidates_stamps_and_pages_without_changing_identity_or_revision() {
     let temporary = tempfile::tempdir().unwrap();
@@ -215,7 +215,7 @@ fn randomness_failure_precedes_every_explicit_constructor_and_creates_no_storage
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn randomness_failure_during_startup_does_not_acquire_the_existing_writer() {
     let temporary = tempfile::tempdir().unwrap();

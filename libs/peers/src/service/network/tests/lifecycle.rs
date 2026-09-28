@@ -64,7 +64,7 @@ async fn startup_failure_closes_the_partial_discovery_owner_and_leaves_listener_
     drop(stream);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn persistent_writer_is_reacquired_only_after_all_network_work_is_reaped() {
     let temporary = tempfile::tempdir().unwrap();
