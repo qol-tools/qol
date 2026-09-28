@@ -7,7 +7,7 @@ use crate::dev_server::{
 };
 use crate::dev_shutdown::ShutdownMethod;
 use crate::host_facade;
-use crate::progress::{print_title, run_status, step_label, StepKind};
+use crate::progress::{print_title, run_status, step_label, PercentProgress, StepKind};
 use crate::workspace::{
     cargo_bin_name, cargo_build_command, dev_repo_root, display_name, repo_root,
     scan_buildable_plugins, BuildablePlugin,
@@ -611,7 +611,9 @@ pub(crate) fn dev_run_root(root: &Path) -> PathBuf {
 
 fn build_qol_tray_dev(root: &Path, bins: &[&str], verbose: bool) -> Result<PathBuf> {
     dev_step_label("build", StepKind::Pending, "qol-tray dev", verbose);
+    let bar = PercentProgress::new("qol-tray", verbose);
     let result = qol_dev_build::tray::build_tray(root, bins, |percent, phase| {
+        bar.update(percent);
         dev_step_label(
             "build",
             StepKind::Info,
@@ -619,6 +621,7 @@ fn build_qol_tray_dev(root: &Path, bins: &[&str], verbose: bool) -> Result<PathB
             verbose,
         );
     });
+    bar.finish(result.success);
     if !result.success {
         bail!("{}", result.output);
     }

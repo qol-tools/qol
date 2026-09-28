@@ -284,6 +284,40 @@ impl LoopProgress {
     }
 }
 
+// ---------- PercentProgress: bar fed by a reported percent ----------
+
+pub(crate) struct PercentProgress {
+    label: &'static str,
+    active: bool,
+}
+
+impl PercentProgress {
+    pub(crate) fn new(label: &'static str, verbose: bool) -> Self {
+        let active = !verbose && progress_enabled();
+        if active {
+            render_percent_bar(label, 0);
+        }
+        Self { label, active }
+    }
+
+    pub(crate) fn update(&self, percent: u8) {
+        if self.active {
+            render_percent_bar(self.label, percent);
+        }
+    }
+
+    pub(crate) fn finish(self, ok: bool) {
+        if !self.active {
+            return;
+        }
+        if ok {
+            eprintln!();
+            return;
+        }
+        clear_progress_line();
+    }
+}
+
 // ---------- internals ----------
 
 fn inline_clearing_enabled() -> bool {
@@ -801,6 +835,20 @@ fn render_loop_bar(label: &str, done: usize, total: usize) -> bool {
     true
 }
 
+fn render_percent_bar(label: &str, percent: u8) {
+    eprint!(
+        "\r  {} {}",
+        dim_stderr(label),
+        percent_progress_text(percent)
+    );
+    let _ = std::io::stderr().flush();
+}
+
+fn percent_progress_text(percent: u8) -> String {
+    let percent = usize::from(percent.min(100));
+    format!("{percent:>3}% {}", determinate_progress_bar(percent, 100))
+}
+
 fn cargo_progress_text(done: usize, total: usize) -> String {
     let done = done.min(total);
     let percent = progress_percent(done, total);
@@ -989,6 +1037,13 @@ mod tests {
             cargo_progress_text(10, 10),
             "10/10 100% [##################]"
         );
+    }
+
+    #[test]
+    fn formats_percent_progress_and_caps_at_full() {
+        assert_eq!(percent_progress_text(0), "  0% [------------------]");
+        assert_eq!(percent_progress_text(50), " 50% [#########---------]");
+        assert_eq!(percent_progress_text(250), "100% [##################]");
     }
 
     #[test]
