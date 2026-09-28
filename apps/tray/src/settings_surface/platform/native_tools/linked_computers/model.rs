@@ -41,6 +41,7 @@ pub(super) struct Row {
     pub control: Control,
     pub verb: Option<&'static str>,
     pub action: Option<Action>,
+    pub remove: Option<(&'static str, Action)>,
     pub header: bool,
 }
 
@@ -52,6 +53,7 @@ impl Row {
             control: Control::None,
             verb: None,
             action,
+            remove: None,
             header: false,
         }
     }
@@ -82,6 +84,11 @@ impl Row {
 
     fn verb(mut self, verb: &'static str) -> Self {
         self.verb = Some(verb);
+        self
+    }
+
+    fn remove(mut self, verb: &'static str, action: Action) -> Self {
+        self.remove = Some((verb, action));
         self
     }
 }
@@ -148,7 +155,8 @@ pub(super) fn rows(
         return rows;
     }
 
-    rows.extend(nearby_rows(snapshot, catalog, withheld, expected));
+    rows.extend(request_rows(snapshot, catalog, withheld, expected));
+    rows.extend(nearby_rows(snapshot, expected));
     rows.extend(linked_rows(snapshot, catalog, expected));
     rows.extend(invitation_rows(snapshot, source, invitation, expected));
     if let Some(pointz) = &snapshot.pointz {
@@ -157,58 +165,38 @@ pub(super) fn rows(
     rows
 }
 
-fn nearby_rows(
+fn request_rows(
     snapshot: &Snapshot,
     catalog: Option<&[CatalogOperation]>,
     withheld: &[PluginId],
     expected: ExpectedAuthority,
 ) -> Vec<Row> {
-    let mut rows = vec![Row::header("nearby", "computers on this network")];
-    if snapshot.nearby.is_empty() {
-        rows.push(Row::new(
-            "Looking for computers",
-            "Open Linked computers on the other computer. Both need to be on this network.",
-            None,
-        ));
-        return rows;
-    }
     let grants: Vec<_> = catalog
         .into_iter()
         .flatten()
         .filter(|operation| !withheld.contains(&operation.plugin_id))
         .map(|operation| operation.key.clone())
         .collect();
+    let mut rows = Vec::new();
     let mut confirming = false;
     for computer in &snapshot.nearby {
-        let link = Action::Send(Request::Nearby {
-            request: NearbyRequest::Link {
-                expected,
-                peer_id: computer.peer_id,
-            },
-        });
+        let Some(state) = &computer.link else {
+            continue;
+        };
+        let code = state.code.map(|code| code.to_string()).unwrap_or_default();
+        let label = format!("{} \u{b7} {code}", computer.name);
         let decline = Action::Send(Request::Nearby {
             request: NearbyRequest::Decline {
                 expected,
                 peer_id: computer.peer_id,
             },
         });
-        let Some(state) = &computer.link else {
-            rows.push(
-                Row::new(&computer.name, "On this network, not linked", Some(link)).chip("link"),
-            );
-            continue;
-        };
-        let code = state.code.map(|code| code.to_string()).unwrap_or_default();
         match state.state {
-            NearbyState::Connecting {} => rows.push(
-                Row::new(&computer.name, "Asking it for a code", None)
-                    .value("connecting", SettingsValueTone::Muted),
-            ),
             NearbyState::Confirm {} => {
                 confirming = true;
                 rows.push(
                     Row::new(
-                        format!("{} \u{b7} {code}", computer.name),
+                        label,
                         format!("Link if {} shows the same code", computer.name),
                         Some(Action::Send(Request::Nearby {
                             request: NearbyRequest::Confirm {
@@ -218,35 +206,66 @@ fn nearby_rows(
                             },
                         })),
                     )
-                    .chip("link"),
-                );
-                rows.push(
-                    Row::new(
-                        "Decline",
-                        format!(
-                            "The codes differ, or you did not ask to link {}",
-                            computer.name
-                        ),
-                        Some(decline),
-                    )
-                    .chip("decline"),
+                    .chip("link")
+                    .remove("decline", decline),
                 );
             }
             NearbyState::WaitingForPeer {} => rows.push(
                 Row::new(
-                    format!("{} \u{b7} {code}", computer.name),
+                    label,
                     format!("Now choose Link on {}", computer.name),
                     Some(decline),
                 )
                 .chip("cancel"),
             ),
-            NearbyState::Failed { error } => {
-                rows.push(Row::new(&computer.name, failure_detail(error), Some(link)).chip("retry"))
-            }
+            NearbyState::Connecting {} | NearbyState::Failed { .. } => {}
         }
     }
+    if rows.is_empty() {
+        return rows;
+    }
+    rows.insert(
+        0,
+        Row::header("link requests", "compare the code on both computers"),
+    );
     if confirming {
         rows.extend(new_link_permissions(catalog, withheld));
+    }
+    rows
+}
+
+fn nearby_rows(snapshot: &Snapshot, expected: ExpectedAuthority) -> Vec<Row> {
+    let mut rows = vec![Row::header("nearby", "computers on this network")];
+    for computer in &snapshot.nearby {
+        let link = Action::Send(Request::Nearby {
+            request: NearbyRequest::Link {
+                expected,
+                peer_id: computer.peer_id,
+            },
+        });
+        match computer.link.as_ref().map(|link| link.state) {
+            None => rows.push(
+                Row::new(&computer.name, "On this network, not linked", Some(link)).chip("link"),
+            ),
+            Some(NearbyState::Connecting {}) => rows.push(
+                Row::new(&computer.name, "Asking it for a code", None)
+                    .value("connecting", SettingsValueTone::Muted),
+            ),
+            Some(NearbyState::Failed { error }) => {
+                rows.push(Row::new(&computer.name, failure_detail(error), Some(link)).chip("retry"))
+            }
+            Some(NearbyState::Confirm {} | NearbyState::WaitingForPeer {}) => {}
+        }
+    }
+    if snapshot.nearby.is_empty() {
+        rows.push(Row::new(
+            "Looking for computers",
+            "Open Linked computers on the other computer. Both need to be on this network.",
+            None,
+        ));
+    }
+    if rows.len() == 1 {
+        rows.clear();
     }
     rows
 }

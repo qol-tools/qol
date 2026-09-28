@@ -401,13 +401,23 @@ fn a_nearby_code_confirms_with_every_plugin_the_user_left_allowed() {
             ("Let it use Media", Control::Toggle(false))
         ]
     );
-    assert!(shown.iter().any(|row| row.label == "Decline"
-        && matches!(
-            row.action,
-            Some(Action::Send(Request::Nearby {
+    assert!(matches!(
+        &desk.remove,
+        Some((
+            "decline",
+            Action::Send(Request::Nearby {
                 request: NearbyRequest::Decline { .. }
-            }))
-        )));
+            })
+        ))
+    ));
+    let headers: Vec<_> = shown
+        .iter()
+        .filter(|row| row.header)
+        .map(|row| row.label.as_str())
+        .collect();
+    assert!(headers.contains(&"link requests"));
+    assert!(!headers.contains(&"nearby"));
+    assert!(!shown.iter().any(|row| row.label == "Desk"));
 }
 
 #[test]

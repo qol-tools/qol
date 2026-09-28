@@ -427,6 +427,17 @@ impl LinkedComputersView {
         cx.stop_propagation();
         let key = event.keystroke.key.as_str();
         let editing = !matches!(self.editing, Editing::None);
+        if !editing && matches!(key, "backspace" | "delete") {
+            if let Some((_, action)) = self
+                .rows()
+                .get(self.selected)
+                .and_then(|row| row.remove.clone())
+            {
+                self.activate(action, cx);
+                cx.notify();
+            }
+            return;
+        }
         match intent(key, event.keystroke.key_char.as_deref(), editing) {
             Some(Intent::CancelEdit) => {
                 self.editing = Editing::None;
@@ -599,6 +610,13 @@ impl CustomSettingsBreadcrumbs for LinkedComputersView {
         let mut left = Vec::new();
         if let Some(verb) = self.rows().get(self.selected).and_then(|row| row.verb) {
             left.push(SettingsHint::new(Key::ENTER, verb));
+        }
+        if let Some((verb, _)) = self
+            .rows()
+            .get(self.selected)
+            .and_then(|row| row.remove.as_ref())
+        {
+            left.push(SettingsHint::new(Key::BACKSPACE, *verb));
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
