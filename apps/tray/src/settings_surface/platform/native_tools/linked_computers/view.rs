@@ -436,7 +436,6 @@ impl LinkedComputersView {
         }
         SettingsRow::setting(("linked-computers-row", index), kit)
             .selected(selected, focused)
-            .dimmed(row.action.is_none())
             .on_click(cx.listener(move |view, _, _, cx| {
                 if !matches!(view.editing, Editing::None) {
                     return;
