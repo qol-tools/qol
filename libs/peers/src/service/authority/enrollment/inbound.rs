@@ -38,7 +38,7 @@ impl PeerAuthority {
             inner
                 .invitations
                 .iter()
-                .filter(|entry| entry.deadline > now)
+                .filter(|entry| entry.deadline > now && entry.nearby.is_none())
                 .filter_map(|entry| {
                     let reserved = entry.reservation.as_ref()?;
                     if inner.state.is_revoked(reserved.pin.peer_id()) {
@@ -73,6 +73,15 @@ impl PeerAuthority {
             }
             .into());
         }
+        self.approve_locked(&mut inner, key, Vec::new())
+    }
+
+    pub(super) fn approve_locked(
+        &self,
+        inner: &mut super::super::Inner,
+        key: EnrollmentRequestKey,
+        grants: Vec<qol_conventions::operations::OperationKey>,
+    ) -> Result<EnrollmentReceipt, EnrollmentError> {
         if inner.state.is_revoked(key.peer) {
             return Err(EnrollmentError::Rejected(EnrollmentRejection::Revoked));
         }
@@ -105,7 +114,7 @@ impl PeerAuthority {
         if reserved.transaction != key.transaction || reserved.pin.peer_id() != key.peer {
             return Err(EnrollmentError::Rejected(EnrollmentRejection::Conflict));
         }
-        check_remote(&inner, &reserved.pin)?;
+        check_remote(inner, &reserved.pin)?;
         if inner.state.peer(key.peer).is_some()
             || inner.state.outbound.iter().any(|entry| {
                 entry.pin == reserved.pin
@@ -131,13 +140,13 @@ impl PeerAuthority {
         candidate.peers.push(LinkedPeer {
             pin: reserved.pin.clone(),
             name: reserved.name.clone(),
-            grants: Vec::new(),
+            grants,
         });
         candidate.receipts.push(InboundReceipt {
             pin: reserved.pin.clone(),
             receipt: receipt.clone(),
         });
-        self.publish_checked(&mut inner, candidate, || {
+        self.publish_checked(inner, candidate, || {
             if deadline <= Instant::now() {
                 return Err(EnrollmentError::Rejected(EnrollmentRejection::Expired));
             }
@@ -225,6 +234,15 @@ impl PeerAuthority {
                 EnrollmentRejection::InvalidInvitation,
             ));
         }
+        if let Some(bound) = &invitation.nearby {
+            if bound.code.is_none()
+                || bound.pin != *pin
+                || bound.name != *name
+                || bound.lifetime != *lifetime
+            {
+                return Err(EnrollmentError::Rejected(EnrollmentRejection::Conflict));
+            }
+        }
         if let Some(reserved) = &invitation.reservation {
             if reserved.pin != *pin
                 || reserved.transaction != request.transaction
@@ -241,7 +259,19 @@ impl PeerAuthority {
             name: name.clone(),
             lifetime: *lifetime,
         });
+        let approval = invitation
+            .nearby
+            .as_ref()
+            .and_then(|bound| bound.approval.clone());
         self.changes.send_replace(());
+        if let Some(grants) = approval {
+            let key = EnrollmentRequestKey {
+                invitation: request.invitation,
+                transaction: request.transaction,
+                peer: pin.peer_id(),
+            };
+            self.approve_locked(&mut inner, key, grants)?;
+        }
         Ok(())
     }
 

@@ -1,7 +1,4 @@
-use std::{
-    net::{SocketAddr, SocketAddrV4},
-    time::Duration,
-};
+use std::{net::SocketAddr, time::Duration};
 
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -10,11 +7,11 @@ use tokio::{
     time::timeout,
 };
 
-use super::{Job, Owner, MAX_EXCHANGES};
+use super::{nearby, Job, Owner, MAX_EXCHANGES};
 use crate::admin::{AttemptState, EnrollmentFailure};
 use crate::network::{ListenerStatus, NetworkFailure};
-use crate::service::enrollment::{EnrollmentError, EnrollmentOutcome, Invitation};
-use crate::service::network::{discovery::cancelled, NetworkOptions, NetworkSnapshot};
+use crate::service::enrollment::{EnrollmentError, EnrollmentOutcome, Invitation, NearbyOffer};
+use crate::service::network::{discovery::cancelled, NetworkSnapshot};
 use crate::service::{PeerAuthority, PeerPin};
 use crate::PeerId;
 
@@ -25,28 +22,39 @@ impl Owner {
     pub(in crate::service::network) async fn run(
         mut self,
         authority: PeerAuthority,
-        options: NetworkOptions,
+        listener: Result<TcpListener, NetworkFailure>,
         mut stop: watch::Receiver<bool>,
         view: watch::Sender<NetworkSnapshot>,
     ) -> Result<(), NetworkFailure> {
         let mut inbound = JoinSet::new();
         let mut outbound = JoinSet::new();
-        let result = self
-            .serve(
-                &authority,
-                options,
-                &mut stop,
-                &view,
-                &mut inbound,
-                &mut outbound,
-            )
-            .await;
+        let mut offering = JoinSet::new();
+        let result = match listener {
+            Ok(listener) => {
+                self.serve(
+                    &authority,
+                    listener,
+                    &mut stop,
+                    &view,
+                    &mut inbound,
+                    &mut outbound,
+                    &mut offering,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
         self.commands.close();
         while self.commands.try_recv().is_ok() {}
+        self.offer_commands.close();
+        while self.offer_commands.try_recv().is_ok() {}
         inbound.abort_all();
         outbound.abort_all();
+        offering.abort_all();
         while inbound.join_next().await.is_some() {}
         while outbound.join_next().await.is_some() {}
+        while offering.join_next().await.is_some() {}
+        self.offers.close();
         let mut attempts = self
             .attempts
             .lock()
@@ -67,22 +75,21 @@ impl Owner {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn serve(
         &mut self,
         authority: &PeerAuthority,
-        options: NetworkOptions,
+        listener: TcpListener,
         stop: &mut watch::Receiver<bool>,
         view: &watch::Sender<NetworkSnapshot>,
         inbound: &mut JoinSet<()>,
         outbound: &mut JoinSet<(crate::enrollment::TransactionId, AttemptState)>,
+        offering: &mut JoinSet<(PeerId, Result<NearbyOffer, EnrollmentError>)>,
     ) -> Result<(), NetworkFailure> {
         if *stop.borrow() {
             return Ok(());
         }
         let mut changes = authority.watch_changes();
-        let listener = TcpListener::bind(SocketAddrV4::new(options.bind, 0))
-            .await
-            .map_err(|_| NetworkFailure::Listener)?;
         let port = listener
             .local_addr()
             .map_err(|_| NetworkFailure::Listener)?
@@ -108,6 +115,21 @@ impl Owner {
                 result = inbound.join_next(), if !inbound.is_empty() => {
                     if matches!(result, Some(Err(_))) { return Err(NetworkFailure::Task); }
                 },
+                result = offering.join_next(), if !offering.is_empty() => {
+                    match result {
+                        Some(Ok((peer, result))) => self.offers.finished(peer, result),
+                        Some(Err(_)) => return Err(NetworkFailure::Task),
+                        None => {},
+                    }
+                },
+                command = self.offer_commands.recv(), if offering.len() < MAX_EXCHANGES => {
+                    let Some(job) = command else { return Ok(()); };
+                    let authority = authority.clone();
+                    offering.spawn(async move {
+                        let peer = job.peer;
+                        (peer, nearby::offer(authority, job).await)
+                    });
+                },
                 command = self.commands.recv(), if outbound.len() < MAX_EXCHANGES => {
                     let Some(job) = command else { return Ok(()); };
                     self.state(job.transaction, AttemptState::Running {}, false);
@@ -130,6 +152,9 @@ impl Owner {
 }
 
 async fn receive(authority: PeerAuthority, stream: TcpStream) -> Result<(), EnrollmentError> {
+    let local = stream
+        .local_addr()
+        .map_err(|_| EnrollmentError::Transport)?;
     let config = authority.enrollment_server_config()?;
     let connection = tokio::select! {
         biased;
@@ -140,7 +165,18 @@ async fn receive(authority: PeerAuthority, stream: TcpStream) -> Result<(), Enro
     tokio::select! {
         biased;
         () = invalidated(&authority, Some(peer)) => Err(EnrollmentError::Transport),
-        result = authority.serve_enrollment(connection) => result.map(|_| ()),
+        result = serve(&authority, connection, local) => result,
+    }
+}
+
+async fn serve(
+    authority: &PeerAuthority,
+    connection: crate::service::PeerConnection<TcpStream>,
+    local: SocketAddr,
+) -> Result<(), EnrollmentError> {
+    match connection.session_kind() {
+        crate::service::SessionKind::Nearby => authority.serve_nearby(connection, local).await,
+        _ => authority.serve_enrollment(connection).await.map(|_| ()),
     }
 }
 
@@ -152,7 +188,12 @@ async fn send(authority: PeerAuthority, mut job: Job) -> AttemptState {
         result = timeout(EXCHANGE_DEADLINE, exchange(&authority, &job.pin, job.transaction, &job.endpoints, job.document.as_ref())) => result.unwrap_or(Err(EnrollmentError::Transport)),
     };
     match result {
-        Ok(EnrollmentOutcome::Completed(receipt)) => AttemptState::Completed { receipt },
+        Ok(EnrollmentOutcome::Completed(receipt)) => {
+            if !job.grants.is_empty() {
+                let _ = authority.grant_linked(receipt.inviter, job.grants);
+            }
+            AttemptState::Completed { receipt }
+        }
         Ok(EnrollmentOutcome::Rejected(reason)) => AttemptState::Rejected { reason },
         Ok(EnrollmentOutcome::Pending(_)) => unknown(EnrollmentFailure::Unavailable),
         Ok(EnrollmentOutcome::Unknown { reason, .. }) | Err(reason) => unknown(failure(reason)),
@@ -215,7 +256,7 @@ fn unknown(reason: EnrollmentFailure) -> AttemptState {
     AttemptState::Unknown { reason }
 }
 
-fn failure(error: EnrollmentError) -> EnrollmentFailure {
+pub(super) fn failure(error: EnrollmentError) -> EnrollmentFailure {
     match error {
         EnrollmentError::Authority(_) | EnrollmentError::Randomness => {
             EnrollmentFailure::Unavailable

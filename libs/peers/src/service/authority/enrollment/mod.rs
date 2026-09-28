@@ -1,12 +1,14 @@
 mod admin;
 mod inbound;
+mod nearby;
 mod outbound;
 mod state;
 
 #[cfg(test)]
 mod tests;
 
-pub(super) use state::{InboundReceipt, OutboundJoin, PendingInvitation};
+pub use nearby::InboundNearby;
+pub(super) use state::{InboundReceipt, NearbyBinding, OutboundJoin, PendingInvitation};
 pub(super) use state::{MAX_OUTBOUND, MAX_RECEIPTS};
 
 use std::{net::SocketAddr, time::Duration};
@@ -50,7 +52,7 @@ impl PeerAuthority {
         &self,
         endpoints: Vec<SocketAddr>,
     ) -> Result<Invitation, EnrollmentError> {
-        self.create_invitation_inner(None, endpoints)
+        self.create_invitation_inner(None, endpoints, None)
     }
 
     pub fn create_invitation_checked(
@@ -58,18 +60,32 @@ impl PeerAuthority {
         expected: crate::StoreRevision,
         endpoints: Vec<SocketAddr>,
     ) -> Result<Invitation, EnrollmentError> {
-        self.create_invitation_inner(Some(expected), endpoints)
+        self.create_invitation_inner(Some(expected), endpoints, None)
     }
 
     fn create_invitation_inner(
         &self,
         expected: Option<crate::StoreRevision>,
         endpoints: Vec<SocketAddr>,
+        nearby: Option<NearbyBinding>,
     ) -> Result<Invitation, EnrollmentError> {
         let mut inner = self.lock()?;
         inner.ensure_ready()?;
         if let Some(expected) = expected {
             check_revision(&inner, expected)?;
+        }
+        if let Some(binding) = &nearby {
+            check_remote(&inner, &binding.pin)?;
+            if inner.state.peer(binding.pin.peer_id()).is_some() {
+                return Err(EnrollmentError::Rejected(EnrollmentRejection::Conflict));
+            }
+            inner.invitations.retain(|entry| {
+                entry.reservation.is_some()
+                    || entry
+                        .nearby
+                        .as_ref()
+                        .is_none_or(|bound| bound.pin != binding.pin)
+            });
         }
         let invitation = Invitation::create(
             inner.state.identity.pin().clone(),
@@ -103,6 +119,7 @@ impl PeerAuthority {
             secret: invitation.document.secret.clone(),
             deadline: now + Duration::from_secs(120),
             reservation: None,
+            nearby,
         });
         self.changes.send_replace(());
         Ok(invitation)

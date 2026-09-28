@@ -1,8 +1,11 @@
-use mdns_sd::{DaemonEvent, IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{DaemonEvent, IfKind, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::sync::{mpsc, watch};
 
 use super::cleanup::close;
-use super::{cancelled, Advertisement, DiscoveryEvent, DiscoveryFactory, DiscoveryFuture};
+use super::{
+    cancelled, Advertisement, DiscoveryEvent, DiscoveryFactory, DiscoveryFuture,
+    NearbyAdvertisement, MAX_ADVERTISED_NAME,
+};
 use crate::network::NetworkFailure;
 
 const SERVICE: &str = "_qol-peer._tcp.local.";
@@ -69,7 +72,12 @@ async fn serve(
         .map(|byte| format!("{byte:02x}"))
         .collect();
     let hostname = format!("qol-{}.{}.local.", &digest[..32], &digest[32..]);
-    let properties = [("version", "1"), ("peer_id", peer.as_str())];
+    let link = advertisement.link.map(|port| port.to_string());
+    let mut properties = vec![("version", "1"), ("peer_id", peer.as_str())];
+    if let Some(link) = &link {
+        properties.push(("name", advertisement.name.as_str()));
+        properties.push(("link", link.as_str()));
+    }
     let mut info = ServiceInfo::new(
         SERVICE,
         &peer,
@@ -111,6 +119,7 @@ async fn serve(
                         endpoints: info.get_addresses_v4().into_iter().take(8)
                             .map(|address| std::net::SocketAddrV4::new(std::net::Ipv4Addr::from(address.octets()), info.get_port()))
                             .collect(),
+                        claim: nearby(&info),
                     }),
                 ServiceEvent::ServiceRemoved(_, source) => Some(DiscoveryEvent::Removed { source }),
                 _ => None,
@@ -123,4 +132,14 @@ async fn serve(
                 .map_err(|_| NetworkFailure::Discovery)?;
         }
     }
+}
+
+fn nearby(info: &ResolvedService) -> Option<NearbyAdvertisement> {
+    let name = info.get_property_val_str("name")?;
+    let link = info.get_property_val_str("link")?.parse().ok()?;
+    let valid = name.len() <= MAX_ADVERTISED_NAME && crate::is_valid_name(name);
+    (valid && link != 0).then(|| NearbyAdvertisement {
+        name: name.to_owned(),
+        link,
+    })
 }

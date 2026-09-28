@@ -20,7 +20,10 @@ use tokio::{
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use super::{exchange_data, raw_handshake, tls_error, Fixture, LiveTrust, DEADLINE};
-use crate::service::tls::{verify::PinnedServer, ENROLLMENT_ALPN, NORMAL_ALPN};
+use crate::service::tls::{
+    verify::{Expected, PinnedServer},
+    ENROLLMENT_ALPN, NORMAL_ALPN,
+};
 use crate::service::{
     EnrollmentClientConfig, EnrollmentServerConfig, Identity, NormalClientConfig,
     NormalServerConfig, PeerError, SessionKind,
@@ -166,7 +169,9 @@ async fn client_certificate_is_mandatory_for_normal_and_enrollment() {
             .with_protocol_versions(&[&rustls::version::TLS13])
             .unwrap()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PinnedServer(fixture.server.pin().clone())))
+            .with_custom_certificate_verifier(Arc::new(PinnedServer(Expected::Pin(
+                fixture.server.pin().clone(),
+            ))))
             .with_no_client_auth();
         client.alpn_protocols = vec![alpn.to_vec()];
         let (_, server) = raw_handshake(Arc::new(client), server).await;
@@ -281,7 +286,9 @@ async fn tls12_client_hello_cannot_negotiate_a_peer_session() {
             .with_protocol_versions(&[&rustls::version::TLS12])
             .unwrap()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PinnedServer(fixture.server.pin().clone())))
+            .with_custom_certificate_verifier(Arc::new(PinnedServer(Expected::Pin(
+                fixture.server.pin().clone(),
+            ))))
             .with_client_cert_resolver(fixture.client_config.0.client_auth_cert_resolver.clone());
         client.alpn_protocols = vec![alpn.to_vec()];
         let (client, server) = raw_handshake(Arc::new(client), server).await;

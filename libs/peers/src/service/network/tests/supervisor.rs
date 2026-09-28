@@ -10,6 +10,7 @@ fn owner() -> Supervisor {
         revision: NetworkRevision::default(),
         status: NetworkStatus::default(),
         sessions: Vec::new(),
+        nearby: Vec::new(),
     })
     .0;
     let (operations, workers) = super::super::operations::Hub::new(authority.clone(), None);
@@ -19,7 +20,9 @@ fn owner() -> Supervisor {
         workers,
         dispatches: JoinSet::new(),
         trusted: BTreeSet::new(),
+        ignored: BTreeSet::new(),
         routes: Routes::default(),
+        nearby: super::super::nearby::Nearby::default(),
         live: BTreeMap::new(),
         handshakes: JoinSet::new(),
         sessions: JoinSet::new(),
@@ -143,6 +146,7 @@ async fn discovery_failure_invalidates_routing_without_clearing_authenticated_se
         source: "peer".into(),
         peer,
         endpoints: vec![SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 4242)],
+        claim: None,
     });
     assert!(owner.routes.peers[&peer].endpoint().is_some());
     let authenticated = AuthenticatedSession {

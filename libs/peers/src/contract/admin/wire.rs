@@ -8,7 +8,11 @@ pub(super) enum Request {
     Enrollment {
         request: super::EnrollmentRequest,
     },
+    Nearby {
+        request: super::NearbyRequest,
+    },
     Status {},
+    Enable {},
     Network {},
     Sessions {
         cursor: super::SessionCursor,
@@ -55,7 +59,9 @@ impl From<Request> for super::Request {
     fn from(value: Request) -> Self {
         match value {
             Request::Enrollment { request } => Self::Enrollment { request },
+            Request::Nearby { request } => Self::Nearby { request },
             Request::Status {} => Self::Status,
+            Request::Enable {} => Self::Enable,
             Request::Network {} => Self::Network,
             Request::Sessions { cursor } => Self::Sessions { cursor },
             Request::Peers { cursor } => Self::Peers { cursor },

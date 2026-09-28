@@ -91,7 +91,7 @@ impl Invitation {
         let document = Document {
             version: EnrollmentVersion::V1,
             invitation: InvitationId::from_random(random()?),
-            secret: Token(Zeroizing::new(random()?)),
+            secret: Token::random()?,
             inviter: WirePin::from_pin(&pin),
             endpoints,
             lifetime,
@@ -125,6 +125,18 @@ impl Document {
 pub(crate) struct Token(Zeroizing<[u8; 32]>);
 
 impl Token {
+    pub fn random() -> Result<Self, EnrollmentError> {
+        Ok(Self(Zeroizing::new(random()?)))
+    }
+
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(Zeroizing::new(bytes))
+    }
+
+    pub fn expose(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
     pub fn matches(&self, other: &Self) -> bool {
         bool::from(self.0.as_slice().ct_eq(other.0.as_slice()))
     }

@@ -106,8 +106,13 @@ impl Fixture {
 
     async fn port(&mut self) -> u16 {
         loop {
-            if let Some(advertisement) = *self.advertised.borrow() {
-                return advertisement.port;
+            if let Some(port) = self
+                .advertised
+                .borrow()
+                .as_ref()
+                .map(|advertised| advertised.port)
+            {
+                return port;
             }
             self.advertised.changed().await.unwrap();
         }
@@ -166,5 +171,6 @@ fn hint(peer: crate::PeerId, port: u16) -> DiscoveryEvent {
         source: peer.to_string(),
         peer,
         endpoints: vec![std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)],
+        claim: None,
     }
 }

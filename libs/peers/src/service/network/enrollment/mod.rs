@@ -3,18 +3,22 @@ mod transport;
 #[cfg(test)]
 mod tests;
 
+mod nearby;
+
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
 };
 
+use qol_conventions::operations::OperationKey;
 use tokio::sync::{mpsc, watch};
 
 use crate::admin::{AttemptState, EnrollmentFailure, Error};
 use crate::enrollment::{ExportedInvitation, TransactionId};
 use crate::service::{enrollment::Invitation, PeerAuthority, PeerPin};
 use crate::StoreRevision;
+use nearby::{OfferJob, Offers};
 
 pub(super) const MAX_EXCHANGES: usize = 8;
 const MAX_RESULTS: usize = 256;
@@ -29,12 +33,16 @@ type Attempts = Arc<Mutex<HashMap<TransactionId, Attempt>>>;
 pub(super) struct Control {
     commands: mpsc::Sender<Job>,
     attempts: Attempts,
+    offer_commands: mpsc::Sender<OfferJob>,
+    offers: Offers,
     pub(super) loopback: bool,
 }
 
 pub(super) struct Owner {
     commands: mpsc::Receiver<Job>,
     attempts: Attempts,
+    offer_commands: mpsc::Receiver<OfferJob>,
+    offers: Offers,
 }
 
 struct Job {
@@ -42,21 +50,28 @@ struct Job {
     pin: PeerPin,
     endpoints: Vec<SocketAddr>,
     document: Option<ExportedInvitation>,
+    grants: Vec<OperationKey>,
     cancel: watch::Receiver<bool>,
 }
 
 pub(super) fn prepare(loopback: bool) -> (Control, Owner) {
     let (commands, incoming) = mpsc::channel(MAX_EXCHANGES);
+    let (offer_commands, offer_incoming) = mpsc::channel(MAX_EXCHANGES);
     let attempts = Arc::new(Mutex::new(HashMap::new()));
+    let offers = Offers::default();
     (
         Control {
             commands,
             attempts: attempts.clone(),
+            offer_commands,
+            offers: offers.clone(),
             loopback,
         },
         Owner {
             commands: incoming,
             attempts,
+            offer_commands: offer_incoming,
+            offers,
         },
     )
 }
@@ -69,6 +84,7 @@ impl Control {
         transaction: TransactionId,
         document: Option<ExportedInvitation>,
         endpoints: Vec<SocketAddr>,
+        grants: Vec<OperationKey>,
     ) -> Result<AttemptState, Error> {
         let invitation = document
             .as_ref()
@@ -101,6 +117,7 @@ impl Control {
                 pin,
                 endpoints,
                 document,
+                grants,
                 cancel: cancelled,
             };
             self.commands.try_send(job).map_err(|error| match error {

@@ -11,7 +11,12 @@ use rustls::{
 use super::TrustPolicy;
 use crate::service::{validate_certificate, CertificateError, PeerPin};
 
-pub(super) struct PinnedServer(pub(super) PeerPin);
+pub(super) enum Expected {
+    Pin(PeerPin),
+    Peer(crate::PeerId),
+}
+
+pub(super) struct PinnedServer(pub(super) Expected);
 
 impl fmt::Debug for PinnedServer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -29,7 +34,11 @@ impl ServerCertVerifier for PinnedServer {
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
         let pin = verified_pin(end_entity, intermediates, now)?;
-        if pin != self.0 {
+        let matches = match &self.0 {
+            Expected::Pin(expected) => pin == *expected,
+            Expected::Peer(expected) => pin.peer_id() == *expected,
+        };
+        if !matches {
             return Err(untrusted());
         }
         Ok(ServerCertVerified::assertion())

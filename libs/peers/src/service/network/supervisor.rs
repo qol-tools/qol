@@ -12,7 +12,8 @@ use tokio::{
 };
 
 use super::{
-    discovery::{cancelled, Advertisement, DiscoveryEvent, CLOSE_TIMEOUT},
+    discovery::{advertised_name, cancelled, Advertisement, DiscoveryEvent, CLOSE_TIMEOUT},
+    nearby::Nearby,
     routing::{rank, Routes, MAX_HANDSHAKES, MAX_PEERS},
     NetworkOptions, NetworkSnapshot,
 };
@@ -42,7 +43,9 @@ struct Live {
 struct Supervisor {
     authority: PeerAuthority,
     trusted: BTreeSet<PeerId>,
+    ignored: BTreeSet<PeerId>,
     routes: Routes,
+    nearby: Nearby,
     live: BTreeMap<PeerId, Live>,
     handshakes: JoinSet<Handshake>,
     sessions: JoinSet<AuthenticatedSession>,
@@ -60,11 +63,14 @@ pub(super) async fn run(
     view: watch::Sender<NetworkSnapshot>,
     operations: std::sync::Arc<super::operations::Hub>,
     workers: mpsc::Receiver<super::operations::Worker>,
+    link: Option<u16>,
 ) -> Result<(), NetworkFailure> {
     let mut owner = Supervisor {
         authority,
         trusted: BTreeSet::new(),
+        ignored: BTreeSet::new(),
         routes: Routes::default(),
+        nearby: Nearby::default(),
         live: BTreeMap::new(),
         handshakes: JoinSet::new(),
         sessions: JoinSet::new(),
@@ -74,7 +80,7 @@ pub(super) async fn run(
         workers,
         dispatches: JoinSet::new(),
     };
-    let result = owner.serve(options, &mut stop).await;
+    let result = owner.serve(options, &mut stop, link).await;
     owner.view.send_modify(|view| {
         view.status.stopping = true;
         view.status.listener = ListenerStatus::Closed {};
@@ -126,6 +132,7 @@ impl Supervisor {
         &mut self,
         options: NetworkOptions,
         stop: &mut watch::Receiver<bool>,
+        link: Option<u16>,
     ) -> Result<(), NetworkFailure> {
         let mut changes = self.authority.watch_changes();
         self.refresh_authority()?;
@@ -146,6 +153,13 @@ impl Supervisor {
             .local_pin()
             .map_err(|_| NetworkFailure::Authority)?
             .peer_id();
+        let name = advertised_name(
+            &self
+                .authority
+                .projection()
+                .map_err(|_| NetworkFailure::Authority)?
+                .name,
+        );
         let (events, mut discovery_events) = mpsc::channel(64);
         let (discovery_stop, stopping) = watch::channel(false);
         let mut discovery = options.discovery.run(
@@ -153,6 +167,8 @@ impl Supervisor {
                 peer,
                 port,
                 bind: options.bind,
+                name,
+                link,
             },
             events,
             stopping,
@@ -199,6 +215,7 @@ impl Supervisor {
                 },
                 result = &mut discovery, if discovery_done.is_none() => {
                     self.routes.clear_hints();
+                    self.forget_nearby();
                     self.view.send_modify(|view| {
                         view.status.discovery = DiscoveryStatus::Failed { error: result.err().unwrap_or(NetworkFailure::Discovery) };
                         view.status.failure = result.err();
@@ -243,6 +260,7 @@ impl Supervisor {
             live.stop.send_replace(true);
         }
         self.live.clear();
+        self.forget_nearby();
         let cleared = self.publish_sessions();
         discovery_stop.send_replace(true);
         let closed = match discovery_done {
@@ -276,6 +294,16 @@ impl Supervisor {
             .into_iter()
             .map(|peer| peer.peer_id)
             .collect();
+        self.ignored = self
+            .trusted
+            .iter()
+            .copied()
+            .chain(projection.tombstones)
+            .chain([projection.peer_id])
+            .collect();
+        if self.nearby.retain(&self.ignored) {
+            self.publish_nearby();
+        }
         self.routes.retain(&self.trusted);
         self.live.retain(|peer, live| {
             if self.trusted.contains(peer) {
@@ -295,6 +323,7 @@ impl Supervisor {
                 .send_modify(|view| view.status.discovery = DiscoveryStatus::Ready {}),
             DiscoveryEvent::Failed => {
                 self.routes.clear_hints();
+                self.forget_nearby();
                 self.view.send_modify(|view| {
                     view.status.discovery = DiscoveryStatus::Failed {
                         error: NetworkFailure::Discovery,
@@ -305,11 +334,39 @@ impl Supervisor {
                 source,
                 peer,
                 endpoints,
-            } => self
-                .routes
-                .resolved(source, peer, endpoints, &self.trusted, self.loopback),
-            DiscoveryEvent::Removed { source } => self.routes.removed(&source),
+                claim,
+            } => {
+                if self.nearby.resolved(
+                    source.clone(),
+                    peer,
+                    &endpoints,
+                    claim,
+                    &self.ignored,
+                    self.loopback,
+                ) {
+                    self.publish_nearby();
+                }
+                self.routes
+                    .resolved(source, peer, endpoints, &self.trusted, self.loopback)
+            }
+            DiscoveryEvent::Removed { source } => {
+                if self.nearby.removed(&source) {
+                    self.publish_nearby();
+                }
+                self.routes.removed(&source)
+            }
         }
+    }
+
+    fn forget_nearby(&mut self) {
+        if self.nearby.clear() {
+            self.publish_nearby();
+        }
+    }
+
+    fn publish_nearby(&self) {
+        let claims = self.nearby.claims();
+        self.view.send_modify(|view| view.nearby = claims);
     }
 
     fn can_accept(&self) -> bool {

@@ -1,6 +1,8 @@
 mod activation;
 mod enrollment;
 pub use enrollment::{AttemptState, EnrollmentFailure, EnrollmentRequest};
+mod nearby;
+pub use nearby::{LinkCode, NearbyComputer, NearbyLink, NearbyRequest, NearbyState, MAX_NEARBY};
 mod network;
 mod pointz;
 pub use network::{NetworkRevision, NetworkSummary, SessionCursor, SessionPage, SessionSummary};
@@ -30,7 +32,11 @@ pub enum Request {
     Enrollment {
         request: EnrollmentRequest,
     },
+    Nearby {
+        request: NearbyRequest,
+    },
     Status,
+    Enable,
     Network,
     Sessions {
         cursor: SessionCursor,
@@ -77,6 +83,7 @@ impl Request {
     pub fn is_mutation(&self) -> bool {
         match self {
             Self::Enrollment { request } => request.is_mutation(),
+            Self::Nearby { request } => request.is_mutation(),
             Self::Pointz { request } => request.is_mutation(),
             Self::Status
             | Self::Network
@@ -84,7 +91,8 @@ impl Request {
             | Self::Peers { .. }
             | Self::Grants { .. }
             | Self::Tombstones { .. } => false,
-            Self::StartSession { .. }
+            Self::Enable
+            | Self::StartSession { .. }
             | Self::CreatePersistent { .. }
             | Self::OpenPersistent
             | Self::Stop { .. }
@@ -177,6 +185,10 @@ pub enum Response {
         authority: ExpectedAuthority,
         transaction: crate::enrollment::TransactionId,
         state: AttemptState,
+    },
+    Nearby {
+        authority: ExpectedAuthority,
+        computers: Vec<NearbyComputer>,
     },
 
     Network {

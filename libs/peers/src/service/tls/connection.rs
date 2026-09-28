@@ -13,12 +13,13 @@ use crate::{
     PeerId,
 };
 
-use super::{ENROLLMENT_ALPN, NORMAL_ALPN};
+use super::{ENROLLMENT_ALPN, NEARBY_ALPN, NORMAL_ALPN};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionKind {
     Normal,
     Enrollment,
+    Nearby,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,6 +58,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> PeerConnection<S> {
         let alpn = match kind {
             SessionKind::Normal => NORMAL_ALPN,
             SessionKind::Enrollment => ENROLLMENT_ALPN,
+            SessionKind::Nearby => NEARBY_ALPN,
         };
         if connection.is_handshaking()
             || connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3)

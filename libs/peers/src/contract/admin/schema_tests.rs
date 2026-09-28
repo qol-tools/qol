@@ -88,6 +88,7 @@ fn strict<T: DeserializeOwned + Serialize>(fixture: Value) {
 fn every_request_rejects_unknown_and_duplicate_fields_recursively() {
     for fixture in [
         json!({"operation": "status"}),
+        json!({"operation": "enable"}),
         json!({"operation": "network"}),
         json!({"operation": "sessions", "cursor": session_cursor()}),
         json!({"operation": "peers", "cursor": cursor()}),
@@ -422,4 +423,37 @@ fn invitation_document_limits_and_debug_never_expose_secret_input() {
         request: EnrollmentRequest::Pending {}
     }
     .is_mutation());
+}
+
+#[test]
+fn nearby_requests_and_replies_are_strict() {
+    for request in [
+        json!({"action": "list"}),
+        json!({"action": "link", "expected": expected(), "peer_id": PEER}),
+        json!({"action": "confirm", "expected": expected(), "peer_id": PEER, "grants": [operation()]}),
+        json!({"action": "decline", "expected": expected(), "peer_id": PEER}),
+    ] {
+        strict::<Request>(json!({"operation": "nearby", "request": request}));
+    }
+    for link in [
+        json!(null),
+        json!({"code": null, "state": {"state": "connecting"}}),
+        json!({"code": 42, "state": {"state": "confirm"}}),
+        json!({"code": 999_999, "state": {"state": "waiting_for_peer"}}),
+        json!({"code": 1, "state": {"state": "failed", "error": "transport"}}),
+    ] {
+        strict::<Response>(
+            json!({"result": "nearby", "authority": expected(), "computers": [
+                {"peer_id": PEER, "name": "Desk", "link": link}
+            ]}),
+        );
+    }
+    for invalid in [
+        json!({"peer_id": PEER, "name": "Desk", "link": {"code": 1_000_000, "state": {"state": "confirm"}}}),
+        json!({"peer_id": PEER, "name": "", "link": null}),
+        json!({"peer_id": PEER, "name": " Desk", "link": null}),
+    ] {
+        assert!(serde_json::from_value::<NearbyComputer>(invalid).is_err());
+    }
+    assert_eq!(LinkCode::new(7_042).unwrap().to_string(), "007 042");
 }

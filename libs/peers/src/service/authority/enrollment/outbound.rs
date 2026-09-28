@@ -25,6 +25,23 @@ impl PeerAuthority {
         expected: StoreRevision,
         invitation: &Invitation,
     ) -> Result<TransactionId, EnrollmentError> {
+        self.prepare_join_inner(expected, invitation, false)
+    }
+
+    pub fn prepare_nearby_join(
+        &self,
+        expected: StoreRevision,
+        invitation: &Invitation,
+    ) -> Result<TransactionId, EnrollmentError> {
+        self.prepare_join_inner(expected, invitation, true)
+    }
+
+    fn prepare_join_inner(
+        &self,
+        expected: StoreRevision,
+        invitation: &Invitation,
+        replace_pending: bool,
+    ) -> Result<TransactionId, EnrollmentError> {
         let transaction = TransactionId::from_random(random()?);
         let mut inner = self.lock()?;
         inner.ensure_ready()?;
@@ -36,8 +53,17 @@ impl PeerAuthority {
             .into());
         }
         check_remote(&inner, invitation.inviter_pin())?;
+        let mut candidate = inner.state.clone();
+        if replace_pending {
+            for entry in candidate.outbound.iter_mut().filter(|entry| {
+                entry.pin == *invitation.inviter_pin()
+                    && matches!(entry.state, OutboundEnrollmentState::Pending {})
+            }) {
+                entry.state = OutboundEnrollmentState::Abandoned {};
+            }
+        }
         let now = Instant::now();
-        if inner.state.outbound.iter().any(|entry| {
+        if candidate.outbound.iter().any(|entry| {
             (entry.pin == *invitation.inviter_pin()
                 && !matches!(entry.state, OutboundEnrollmentState::Abandoned {}))
                 || entry.transaction == transaction
@@ -61,9 +87,8 @@ impl PeerAuthority {
         {
             return Err(EnrollmentError::Rejected(EnrollmentRejection::Conflict));
         }
-        if inner.state.outbound.len() >= MAX_OUTBOUND
-            || inner
-                .state
+        if candidate.outbound.len() >= MAX_OUTBOUND
+            || candidate
                 .outbound
                 .iter()
                 .filter(|entry| matches!(entry.state, OutboundEnrollmentState::Pending {}))
@@ -72,7 +97,6 @@ impl PeerAuthority {
         {
             return Err(EnrollmentError::Rejected(EnrollmentRejection::Capacity));
         }
-        let mut candidate = inner.state.clone();
         candidate.outbound.push(OutboundJoin {
             invitation: invitation.id(),
             transaction,

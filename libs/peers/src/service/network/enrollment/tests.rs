@@ -35,6 +35,7 @@ fn retained_unknown_results_are_not_evicted_to_admit_a_new_transaction() {
         transaction,
         Some(invitation.export().unwrap()),
         Vec::new(),
+        Vec::new(),
     );
     assert_eq!(result, Err(refusal(EnrollmentFailure::Capacity)));
     assert_eq!(control.attempts.lock().unwrap().len(), MAX_RESULTS);

@@ -1,9 +1,11 @@
 pub mod discovery;
 mod enrollment;
 pub mod local_addresses;
+mod nearby;
 pub(crate) mod operations;
 mod routing;
 mod supervisor;
+pub use nearby::NearbyClaim;
 pub use operations::OperationDispatcher;
 
 #[cfg(test)]
@@ -50,6 +52,7 @@ pub struct NetworkSnapshot {
     pub revision: NetworkRevision,
     pub status: NetworkStatus,
     pub sessions: Vec<AuthenticatedSession>,
+    pub nearby: Vec<NearbyClaim>,
 }
 
 pub struct NetworkControl {
@@ -119,8 +122,65 @@ impl NetworkControl {
                 error: crate::admin::EnrollmentFailure::Unavailable,
             });
         }
+        self.enrollment.admit(
+            authority,
+            expected,
+            transaction,
+            document,
+            endpoints,
+            Vec::new(),
+        )
+    }
+
+    pub fn link_nearby(
+        &self,
+        authority: &PeerAuthority,
+        peer: crate::PeerId,
+    ) -> Result<(), crate::admin::Error> {
+        self.running()?;
+        let claim = self
+            .view
+            .borrow()
+            .nearby
+            .iter()
+            .find(|claim| claim.peer_id == peer)
+            .cloned()
+            .ok_or(crate::admin::Error::Enrollment {
+                error: crate::admin::EnrollmentFailure::InvalidEndpoint,
+            })?;
         self.enrollment
-            .admit(authority, expected, transaction, document, endpoints)
+            .link_nearby(authority, peer, claim.name, claim.endpoints)
+    }
+
+    pub fn confirm_nearby(
+        &self,
+        authority: &PeerAuthority,
+        expected: crate::StoreRevision,
+        peer: crate::PeerId,
+        grants: Vec<qol_conventions::operations::OperationKey>,
+    ) -> Result<crate::admin::AttemptState, crate::admin::Error> {
+        self.running()?;
+        self.enrollment
+            .confirm_nearby(authority, expected, peer, grants)
+    }
+
+    pub fn decline_nearby(&self, peer: crate::PeerId) -> Option<crate::enrollment::TransactionId> {
+        self.enrollment.decline_nearby(peer)
+    }
+
+    pub fn nearby_links(
+        &self,
+    ) -> Result<Vec<(crate::PeerId, String, crate::admin::NearbyLink)>, crate::admin::Error> {
+        self.enrollment.nearby_links()
+    }
+
+    fn running(&self) -> Result<(), crate::admin::Error> {
+        if *self.stop.borrow() {
+            return Err(crate::admin::Error::Enrollment {
+                error: crate::admin::EnrollmentFailure::Unavailable,
+            });
+        }
+        Ok(())
     }
 
     pub fn enrollment_attempt(
@@ -171,6 +231,7 @@ fn prepare_inner(
         revision: NetworkRevision::default(),
         status: NetworkStatus::default(),
         sessions: Vec::new(),
+        nearby: Vec::new(),
     });
     let (enrollment, owner) = enrollment::prepare(options.allow_loopback_hints);
     let task = Box::pin(run(
@@ -203,6 +264,14 @@ async fn run(
     workers: tokio::sync::mpsc::Receiver<operations::Worker>,
 ) -> Result<(), NetworkFailure> {
     let (closing, closed) = watch::channel(false);
+    let listener = tokio::net::TcpListener::bind(std::net::SocketAddrV4::new(options.bind, 0))
+        .await
+        .map_err(|_| NetworkFailure::Listener);
+    let link = listener
+        .as_ref()
+        .ok()
+        .and_then(|listener| listener.local_addr().ok())
+        .map(|address| address.port());
     let normal = supervisor::run(
         authority.clone(),
         options.clone(),
@@ -210,8 +279,9 @@ async fn run(
         view.clone(),
         operations,
         workers,
+        link,
     );
-    let enrollment = enrollment.run(authority, options, closed, view);
+    let enrollment = enrollment.run(authority, listener, closed, view);
     tokio::pin!(normal, enrollment);
     tokio::select! {
         biased;

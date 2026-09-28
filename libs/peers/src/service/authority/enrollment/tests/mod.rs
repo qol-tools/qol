@@ -1,5 +1,6 @@
 mod expiry;
 mod lifecycle;
+mod nearby;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod persistence;
 mod schema;

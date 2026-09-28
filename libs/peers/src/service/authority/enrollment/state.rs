@@ -20,6 +20,15 @@ pub(in crate::service::authority) struct PendingInvitation {
     pub secret: Token,
     pub deadline: Instant,
     pub reservation: Option<Reservation>,
+    pub nearby: Option<NearbyBinding>,
+}
+
+pub(in crate::service::authority) struct NearbyBinding {
+    pub pin: PeerPin,
+    pub name: String,
+    pub lifetime: AuthorityLifetime,
+    pub code: Option<crate::admin::LinkCode>,
+    pub approval: Option<Vec<qol_conventions::operations::OperationKey>>,
 }
 
 #[derive(Clone)]

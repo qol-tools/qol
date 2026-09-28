@@ -26,6 +26,7 @@ use storage::Storage;
 #[cfg(test)]
 use state::{LinkedPeer, MAX_PEERS};
 
+pub use enrollment::InboundNearby;
 pub use error::AuthorityError;
 
 #[derive(Clone)]

@@ -8,14 +8,15 @@ mod pin;
 pub mod session;
 mod tls;
 
-pub use authority::{AuthorityError, PeerAuthority, WeakPeerAuthority};
+pub use authority::{AuthorityError, InboundNearby, PeerAuthority, WeakPeerAuthority};
 pub use certificate::{validate_certificate, MAX_CERTIFICATE_BYTES};
 pub use error::{CertificateError, PeerError};
 pub use identity::{Identity, SecretKeyBytes};
 pub use pin::PeerPin;
 pub use tls::{
-    EnrollmentClientConfig, EnrollmentServerConfig, NormalClientConfig, NormalServerConfig,
-    PeerConnection, RemoteIdentity, SessionKind, TrustPolicy, ENROLLMENT_ALPN, NORMAL_ALPN,
+    EnrollmentClientConfig, EnrollmentServerConfig, NearbyClientConfig, NormalClientConfig,
+    NormalServerConfig, PeerConnection, RemoteIdentity, SessionKind, TrustPolicy, ENROLLMENT_ALPN,
+    NEARBY_ALPN, NORMAL_ALPN,
 };
 
 pub mod network;

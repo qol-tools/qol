@@ -1,9 +1,11 @@
 mod exchange;
 mod invitation;
+mod nearby;
 pub(crate) mod wire;
 
 pub use crate::enrollment::ExportedInvitation;
 pub use invitation::Invitation;
+pub use nearby::NearbyOffer;
 
 use crate::enrollment::{EnrollmentReceipt, EnrollmentRejection, TransactionId};
 use crate::AuthorityError;
