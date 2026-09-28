@@ -297,7 +297,6 @@ struct LineState {
     verb: String,
     measure: Measure,
     detail: String,
-    since: Instant,
 }
 
 pub(crate) struct ProgressLine {
@@ -312,22 +311,20 @@ impl ProgressLine {
             verb: String::new(),
             measure: Measure::Unknown,
             detail: String::new(),
-            since: Instant::now(),
         }));
         let running = Arc::new(AtomicBool::new(true));
         let handle = (!verbose && progress_enabled()).then(|| {
             let state = Arc::clone(&state);
             let running = Arc::clone(&running);
             thread::spawn(move || {
-                let mut tick = 0;
+                let started = Instant::now();
                 while running.load(Ordering::Relaxed) {
                     if let Ok(line) = state.lock() {
                         if !line.verb.is_empty() {
-                            eprint!("\r{}\x1b[K", render_line(&line, tick));
+                            eprint!("\r{}\x1b[K", render_line(&line, started.elapsed()));
                             let _ = std::io::stderr().flush();
                         }
                     }
-                    tick += 1;
                     thread::sleep(PROGRESS_INTERVAL);
                 }
                 eprint!("\r\x1b[K");
@@ -345,13 +342,9 @@ impl ProgressLine {
         let Ok(mut line) = self.state.lock() else {
             return;
         };
-        let detail = detail.into();
-        if line.verb != verb || line.detail != detail {
-            line.since = Instant::now();
-        }
         line.verb = verb.to_string();
         line.measure = measure;
-        line.detail = detail;
+        line.detail = detail.into();
     }
 }
 
@@ -364,31 +357,22 @@ impl Drop for ProgressLine {
     }
 }
 
-fn render_line(line: &LineState, tick: usize) -> String {
+fn render_line(line: &LineState, elapsed: Duration) -> String {
     let padded = format!("{:<STEP_LABEL_WIDTH$}", line.verb);
     format!(
         "  {}{}",
         paint_stderr(&padded, COLOR_PENDING),
-        line_text(line.measure, &line.detail, line.since.elapsed(), tick)
+        line_text(line.measure, &line.detail, elapsed)
     )
 }
 
-fn line_text(measure: Measure, detail: &str, elapsed: Duration, tick: usize) -> String {
-    let (bar, amount) = match measure {
-        Measure::Percent(percent) => {
-            let percent = usize::from(percent.min(100));
-            (
-                determinate_progress_bar(percent, 100),
-                format!("{percent:>3}%"),
-            )
-        }
-        Measure::Count(done, total) => (
-            determinate_progress_bar(done, total),
-            format!("{}/{total}", done.min(total)),
-        ),
-        Measure::Unknown => (indeterminate_progress_bar(tick), format_elapsed(elapsed)),
-    };
-    format!("{bar} {amount} {detail}")
+fn line_text(measure: Measure, detail: &str, elapsed: Duration) -> String {
+    let elapsed = format_elapsed(elapsed);
+    match measure {
+        Measure::Percent(percent) => format!("{elapsed}  {}% {detail}", percent.min(100)),
+        Measure::Count(done, total) => format!("{elapsed}  {}/{total} {detail}", done.min(total)),
+        Measure::Unknown => format!("{elapsed}  {detail}"),
+    }
 }
 
 // ---------- internals ----------
@@ -1099,22 +1083,28 @@ mod tests {
     }
 
     #[test]
-    fn progress_line_formats_each_measure_with_the_same_bar() {
-        let elapsed = Duration::from_secs(7);
+    fn progress_line_leads_with_the_boot_clock() {
+        let elapsed = Duration::from_secs(67);
         assert_eq!(
-            line_text(Measure::Percent(50), "qol-tray", elapsed, 0),
-            "[#########---------]  50% qol-tray"
+            line_text(
+                Measure::Percent(42),
+                "qol-tray: compiling qol_runtime",
+                elapsed
+            ),
+            "01:07  42% qol-tray: compiling qol_runtime"
         );
         assert_eq!(
-            line_text(Measure::Percent(250), "qol-tray", elapsed, 0),
-            "[##################] 100% qol-tray"
+            line_text(Measure::Percent(250), "qol-tray", elapsed),
+            "01:07  100% qol-tray"
         );
         assert_eq!(
-            line_text(Measure::Count(3, 12), "restarting qol-shot", elapsed, 0),
-            "[#####-------------] 3/12 restarting qol-shot"
+            line_text(Measure::Count(13, 12), "restarting qol-shot", elapsed),
+            "01:07  12/12 restarting qol-shot"
         );
-        let unknown = line_text(Measure::Unknown, "running tray", elapsed, 0);
-        assert!(unknown.ends_with("] 00:07 running tray"), "{unknown}");
+        assert_eq!(
+            line_text(Measure::Unknown, "running tray", elapsed),
+            "01:07  running tray"
+        );
     }
 
     #[test]
