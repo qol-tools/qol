@@ -117,7 +117,11 @@ impl Owner {
                 },
                 result = offering.join_next(), if !offering.is_empty() => {
                     match result {
-                        Some(Ok((peer, result))) => self.offers.finished(peer, result),
+                        Some(Ok((peer, result))) => {
+                            if let (Some(grants), Some(control)) = (self.offers.finished(peer, result), self.control()) {
+                                control.accept_offer(authority, peer, grants);
+                            }
+                        },
                         Some(Err(_)) => return Err(NetworkFailure::Task),
                         None => {},
                     }

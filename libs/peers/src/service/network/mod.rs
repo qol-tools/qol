@@ -136,6 +136,7 @@ impl NetworkControl {
         &self,
         authority: &PeerAuthority,
         peer: crate::PeerId,
+        grants: Vec<qol_conventions::operations::OperationKey>,
     ) -> Result<(), crate::admin::Error> {
         self.running()?;
         let claim = self
@@ -149,7 +150,7 @@ impl NetworkControl {
                 error: crate::admin::EnrollmentFailure::InvalidEndpoint,
             })?;
         self.enrollment
-            .link_nearby(authority, peer, claim.name, claim.endpoints)
+            .link_nearby(authority, peer, claim.name, claim.endpoints, grants)
     }
 
     pub fn confirm_nearby(

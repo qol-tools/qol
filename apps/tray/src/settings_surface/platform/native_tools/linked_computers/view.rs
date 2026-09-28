@@ -272,6 +272,8 @@ impl LinkedComputersView {
             self.snapshot.as_ref(),
             self.source.as_ref(),
             self.invitation.as_ref(),
+            self.catalog.as_deref(),
+            &self.withheld,
         )
     }
 

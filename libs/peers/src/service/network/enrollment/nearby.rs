@@ -33,6 +33,7 @@ pub(super) struct OfferJob {
 enum OfferState {
     Connecting {
         cancel: watch::Sender<bool>,
+        grants: Vec<OperationKey>,
     },
     Ready {
         invitation: Invitation,
@@ -56,24 +57,33 @@ impl Offers {
         self.0.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    pub(super) fn finished(&self, peer: PeerId, result: Result<NearbyOffer, EnrollmentError>) {
+    pub(super) fn finished(
+        &self,
+        peer: PeerId,
+        result: Result<NearbyOffer, EnrollmentError>,
+    ) -> Option<Vec<OperationKey>> {
         let mut offers = self.lock();
-        let Some((_, state)) = offers.get_mut(&peer) else {
-            return;
+        let (_, state) = offers.get_mut(&peer)?;
+        let OfferState::Connecting { grants, .. } = state else {
+            return None;
         };
-        if !matches!(state, OfferState::Connecting { .. }) {
-            return;
+        let grants = std::mem::take(grants);
+        match result {
+            Ok(offer) => {
+                *state = OfferState::Ready {
+                    invitation: offer.invitation,
+                    code: offer.code,
+                    deadline: Instant::now() + CONFIRM_WINDOW,
+                };
+                Some(grants)
+            }
+            Err(error) => {
+                *state = OfferState::Failed {
+                    error: failure(error),
+                };
+                None
+            }
         }
-        *state = match result {
-            Ok(offer) => OfferState::Ready {
-                invitation: offer.invitation,
-                code: offer.code,
-                deadline: Instant::now() + CONFIRM_WINDOW,
-            },
-            Err(error) => OfferState::Failed {
-                error: failure(error),
-            },
-        };
     }
 
     pub(super) fn close(&self) {
@@ -97,6 +107,7 @@ impl Control {
         peer: PeerId,
         name: String,
         endpoints: Vec<SocketAddr>,
+        grants: Vec<OperationKey>,
     ) -> Result<(), Error> {
         validate_endpoints(&endpoints, self.loopback)?;
         authority.nearby_client_config(peer)?;
@@ -138,7 +149,7 @@ impl Control {
                     refusal(EnrollmentFailure::Unavailable)
                 }
             })?;
-        offers.insert(peer, (name, OfferState::Connecting { cancel }));
+        offers.insert(peer, (name, OfferState::Connecting { cancel, grants }));
         Ok(())
     }
 
@@ -183,12 +194,36 @@ impl Control {
         )
     }
 
+    pub(super) fn accept_offer(
+        &self,
+        authority: &PeerAuthority,
+        peer: PeerId,
+        grants: Vec<OperationKey>,
+    ) {
+        let result = match authority.projection() {
+            Ok(projection) => self
+                .confirm_nearby(authority, projection.revision, peer, grants)
+                .map(drop),
+            Err(_) => Err(refusal(EnrollmentFailure::Unavailable)),
+        };
+        let Err(error) = result else {
+            return;
+        };
+        let error = match error {
+            Error::Enrollment { error } => error,
+            _ => EnrollmentFailure::Unavailable,
+        };
+        if let Some((_, state @ OfferState::Ready { .. })) = self.offers.lock().get_mut(&peer) {
+            *state = OfferState::Failed { error };
+        }
+    }
+
     pub(in crate::service::network) fn decline_nearby(
         &self,
         peer: PeerId,
     ) -> Option<TransactionId> {
         match self.offers.lock().remove(&peer)?.1 {
-            OfferState::Connecting { cancel } => {
+            OfferState::Connecting { cancel, .. } => {
                 cancel.send_replace(true);
                 None
             }

@@ -180,6 +180,7 @@ fn link(fixture: &Fixture, peer_id: PeerId) -> Response {
         request: NearbyRequest::Link {
             expected: fixture.expected(),
             peer_id,
+            grants: Vec::new(),
         },
     })
 }
@@ -231,7 +232,7 @@ fn linked(fixture: &Fixture, peer: PeerId) -> bool {
 }
 
 #[tokio::test]
-async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
+async fn a_computer_links_once_the_other_accepts_its_request() {
     let temporary = tempfile::tempdir().unwrap();
     let (laptop, desk) = pair(temporary.path()).await;
     let laptop_id = peer_id(&laptop);
@@ -247,34 +248,25 @@ async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
 
     let linking = link(&desk, laptop_id);
     assert!(matches!(linking, Response::Nearby { .. }), "{linking:?}");
-    let desk_code = until(|| code(&desk, laptop_id)).await;
-    let laptop_view = until(|| {
-        nearby(&laptop)
+    let laptop_code = until(|| code(&laptop, desk_id)).await;
+    let desk_link = until(|| {
+        nearby(&desk)
             .into_iter()
-            .find(|computer| computer.peer_id == desk_id)
+            .find(|computer| computer.peer_id == laptop_id)
+            .and_then(|computer| computer.link)
+            .filter(|link| link.state == NearbyState::WaitingForPeer {})
     })
     .await;
-    assert_eq!(laptop_view.name, "Desk");
-    let laptop_link = laptop_view.link.unwrap();
-    assert_eq!(laptop_link.code, Some(desk_code));
-    assert_eq!(laptop_link.state, NearbyState::Confirm {});
+    assert_eq!(desk_link.code, Some(laptop_code));
+    assert_eq!(nearby(&laptop)[0].name, "Desk");
 
     assert!(matches!(
         confirm(&laptop, desk_id),
         Response::Changed { .. }
     ));
-    assert_eq!(
-        nearby(&laptop)[0].link.as_ref().unwrap().state,
-        NearbyState::WaitingForPeer {}
-    );
-    assert!(matches!(
-        confirm(&desk, laptop_id),
-        Response::Changed { .. }
-    ));
     until(|| (linked(&laptop, desk_id) && linked(&desk, laptop_id)).then_some(())).await;
     until(|| (connected(&laptop, desk_id) && connected(&desk, laptop_id)).then_some(())).await;
-    assert!(nearby(&laptop).is_empty());
-    until(|| nearby(&desk).is_empty().then_some(())).await;
+    until(|| (nearby(&laptop).is_empty() && nearby(&desk).is_empty()).then_some(())).await;
     laptop.close().await;
     desk.close().await;
 }
@@ -293,10 +285,8 @@ async fn unlinking_forgets_the_link_on_both_computers_and_they_can_link_again() 
     })
     .await;
     link(&desk, laptop_id);
-    until(|| code(&desk, laptop_id)).await;
     until(|| code(&laptop, desk_id)).await;
     confirm(&laptop, desk_id);
-    confirm(&desk, laptop_id);
     until(|| (connected(&laptop, desk_id) && connected(&desk, laptop_id)).then_some(())).await;
     let unlinked = laptop.shared.peer_admin(Request::Revoke {
         expected: laptop.expected(),
@@ -319,7 +309,7 @@ async fn unlinking_forgets_the_link_on_both_computers_and_they_can_link_again() 
 }
 
 #[tokio::test]
-async fn two_computers_that_both_click_link_agree_on_one_code_and_link() {
+async fn two_computers_that_both_click_link_need_one_accept() {
     let temporary = tempfile::tempdir().unwrap();
     let (laptop, desk) = pair(temporary.path()).await;
     let laptop_id = peer_id(&laptop);
@@ -336,37 +326,15 @@ async fn two_computers_that_both_click_link_agree_on_one_code_and_link() {
     .await;
     link(&laptop, desk_id);
     link(&desk, laptop_id);
-    let shared = until(|| {
-        let (Some(left), Some(right)) = (code(&laptop, desk_id), code(&desk, laptop_id)) else {
-            return None;
-        };
-        let settled = [(&laptop, desk_id), (&desk, laptop_id)]
-            .iter()
-            .all(|(fixture, peer)| {
-                fixture
-                    .owner
-                    .handle
-                    .inner
-                    .lock()
-                    .unwrap()
-                    .authority()
-                    .unwrap()
-                    .authority
-                    .inbound_nearby()
-                    .unwrap()
-                    .iter()
-                    .any(|request| request.peer_id == *peer)
-            });
-        (settled && left == right).then_some(left)
-    })
-    .await;
-    assert_eq!(code(&laptop, desk_id), Some(shared));
+    let (accepter, requester) = if laptop_id < desk_id {
+        ((&desk, laptop_id), (&laptop, desk_id))
+    } else {
+        ((&laptop, desk_id), (&desk, laptop_id))
+    };
+    until(|| code(accepter.0, accepter.1)).await;
+    assert_eq!(code(requester.0, requester.1), None);
     assert!(matches!(
-        confirm(&laptop, desk_id),
-        Response::Changed { .. }
-    ));
-    assert!(matches!(
-        confirm(&desk, laptop_id),
+        confirm(accepter.0, accepter.1),
         Response::Changed { .. }
     ));
     until(|| (linked(&laptop, desk_id) && linked(&desk, laptop_id)).then_some(())).await;

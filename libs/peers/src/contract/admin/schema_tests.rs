@@ -429,7 +429,7 @@ fn invitation_document_limits_and_debug_never_expose_secret_input() {
 fn nearby_requests_and_replies_are_strict() {
     for request in [
         json!({"action": "list"}),
-        json!({"action": "link", "expected": expected(), "peer_id": PEER}),
+        json!({"action": "link", "expected": expected(), "peer_id": PEER, "grants": [operation()]}),
         json!({"action": "confirm", "expected": expected(), "peer_id": PEER, "grants": [operation()]}),
         json!({"action": "decline", "expected": expected(), "peer_id": PEER}),
     ] {

@@ -43,6 +43,7 @@ pub(super) struct Owner {
     attempts: Attempts,
     offer_commands: mpsc::Receiver<OfferJob>,
     offers: Offers,
+    control: (mpsc::WeakSender<Job>, mpsc::WeakSender<OfferJob>, bool),
 }
 
 struct Job {
@@ -61,9 +62,9 @@ pub(super) fn prepare(loopback: bool) -> (Control, Owner) {
     let offers = Offers::default();
     (
         Control {
-            commands,
+            commands: commands.clone(),
             attempts: attempts.clone(),
-            offer_commands,
+            offer_commands: offer_commands.clone(),
             offers: offers.clone(),
             loopback,
         },
@@ -72,8 +73,22 @@ pub(super) fn prepare(loopback: bool) -> (Control, Owner) {
             attempts,
             offer_commands: offer_incoming,
             offers,
+            control: (commands.downgrade(), offer_commands.downgrade(), loopback),
         },
     )
+}
+
+impl Owner {
+    fn control(&self) -> Option<Control> {
+        let (commands, offer_commands, loopback) = &self.control;
+        Some(Control {
+            commands: commands.upgrade()?,
+            attempts: self.attempts.clone(),
+            offer_commands: offer_commands.upgrade()?,
+            offers: self.offers.clone(),
+            loopback: *loopback,
+        })
+    }
 }
 
 impl Control {

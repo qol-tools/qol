@@ -15,6 +15,7 @@ pub enum NearbyRequest {
     Link {
         expected: ExpectedAuthority,
         peer_id: PeerId,
+        grants: Vec<OperationKey>,
     },
     Confirm {
         expected: ExpectedAuthority,

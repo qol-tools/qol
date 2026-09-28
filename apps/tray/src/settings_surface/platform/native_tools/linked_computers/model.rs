@@ -98,6 +98,8 @@ pub(super) fn rows(
     snapshot: Option<&Snapshot>,
     source: Option<&(ExportedInvitation, InvitationInfo)>,
     invitation: Option<&qol_peers::admin::Response>,
+    catalog: Option<&[CatalogOperation]>,
+    withheld: &[PluginId],
 ) -> Vec<Row> {
     let mut rows = vec![Row::header(
         "this computer",
@@ -155,7 +157,7 @@ pub(super) fn rows(
     }
 
     rows.extend(request_rows(snapshot, expected));
-    rows.extend(nearby_rows(snapshot, expected));
+    rows.extend(nearby_rows(snapshot, catalog, withheld, expected));
     rows.extend(linked_rows(snapshot, expected));
     rows.extend(invitation_rows(snapshot, source, invitation, expected));
     if let Some(pointz) = &snapshot.pointz {
@@ -262,12 +264,7 @@ fn request_card(
     withheld: &[PluginId],
     expected: ExpectedAuthority,
 ) -> Vec<Row> {
-    let grants: Vec<_> = catalog
-        .into_iter()
-        .flatten()
-        .filter(|operation| !withheld.contains(&operation.plugin_id))
-        .map(|operation| operation.key.clone())
-        .collect();
+    let grants = grants(catalog, withheld);
     let mut rows = vec![Row::new(
         "Link",
         format!("Only if {} shows {}", computer.name, link_code(computer)),
@@ -292,13 +289,28 @@ fn request_card(
     rows
 }
 
-fn nearby_rows(snapshot: &Snapshot, expected: ExpectedAuthority) -> Vec<Row> {
+fn grants(catalog: Option<&[CatalogOperation]>, withheld: &[PluginId]) -> Vec<OperationKey> {
+    catalog
+        .into_iter()
+        .flatten()
+        .filter(|operation| !withheld.contains(&operation.plugin_id))
+        .map(|operation| operation.key.clone())
+        .collect()
+}
+
+fn nearby_rows(
+    snapshot: &Snapshot,
+    catalog: Option<&[CatalogOperation]>,
+    withheld: &[PluginId],
+    expected: ExpectedAuthority,
+) -> Vec<Row> {
     let mut rows = vec![Row::header("nearby", "computers on this network")];
     for computer in &snapshot.nearby {
         let link = Action::Send(Request::Nearby {
             request: NearbyRequest::Link {
                 expected,
                 peer_id: computer.peer_id,
+                grants: grants(catalog, withheld),
             },
         });
         match computer.link.as_ref().map(|link| link.state) {
