@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use super::BundleFacts;
 use crate::AppRoot;
 
 trait BundlePlatform {
     fn cache_dir(&self) -> Option<PathBuf>;
     fn launcher_roots(&self) -> Vec<AppRoot>;
-    fn bundle_info(&self, path: &Path) -> (Option<String>, Option<String>);
+    fn bundle_facts(&self, path: &Path) -> BundleFacts;
     fn spotlight_app_paths(&self, roots: &[PathBuf]) -> Vec<PathBuf>;
 }
 
@@ -40,8 +41,8 @@ pub(super) fn launcher_exec(path: &Path) -> Vec<String> {
     launcher::exec(path)
 }
 
-pub(super) fn bundle_info(path: &Path) -> (Option<String>, Option<String>) {
-    imp::Platform.bundle_info(path)
+pub(super) fn bundle_facts(path: &Path) -> BundleFacts {
+    imp::Platform.bundle_facts(path)
 }
 
 pub(super) fn spotlight_app_paths(roots: &[PathBuf]) -> Vec<PathBuf> {

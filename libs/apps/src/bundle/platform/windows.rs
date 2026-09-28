@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::bundle::BundleFacts;
 use crate::AppRoot;
 
 use super::BundlePlatform;
@@ -15,8 +16,8 @@ impl BundlePlatform for Platform {
         Vec::new()
     }
 
-    fn bundle_info(&self, _path: &Path) -> (Option<String>, Option<String>) {
-        (None, None)
+    fn bundle_facts(&self, _path: &Path) -> BundleFacts {
+        BundleFacts::default()
     }
 
     fn spotlight_app_paths(&self, _roots: &[PathBuf]) -> Vec<PathBuf> {

@@ -41,8 +41,15 @@ roxmltree = "0.20"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
+qol-app-icon.workspace = true
 objc2 = { workspace = true }
-objc2-foundation = { workspace = true }
+objc2-foundation = { workspace = true, features = [
+  "NSDate",
+  "NSMetadata",
+  "NSString",
+  "NSURL",
+  "NSValue",
+] }
 objc2-app-kit = { workspace = true, features = [
   "NSApplication",
   "NSEvent",

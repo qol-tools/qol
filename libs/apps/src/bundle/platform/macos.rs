@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::bundle::BundleFacts;
 use crate::AppRoot;
 
 use super::BundlePlatform;
@@ -39,20 +40,29 @@ impl BundlePlatform for Platform {
             .collect()
     }
 
-    fn bundle_info(&self, app_path: &Path) -> (Option<String>, Option<String>) {
+    fn bundle_facts(&self, app_path: &Path) -> BundleFacts {
         let Ok(value) = plist::Value::from_file(app_path.join("Contents/Info.plist")) else {
-            return (None, None);
+            return BundleFacts::default();
         };
         let Some(dictionary) = value.as_dictionary() else {
-            return (None, None);
+            return BundleFacts::default();
         };
         let string = |key: &str| {
             dictionary
                 .get(key)
                 .and_then(|value| value.as_string())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .map(str::to_string)
         };
-        (string("CFBundleIdentifier"), string("CFBundleName"))
+        BundleFacts {
+            identifier: string("CFBundleIdentifier"),
+            name: string("CFBundleName"),
+            version: string("CFBundleShortVersionString").or_else(|| string("CFBundleVersion")),
+            executable: string("CFBundleExecutable"),
+            category: string("LSApplicationCategoryType"),
+            copyright: string("NSHumanReadableCopyright"),
+        }
     }
 
     fn spotlight_app_paths(&self, roots: &[PathBuf]) -> Vec<PathBuf> {
@@ -81,7 +91,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundle_info_reads_identifier_and_name() {
+    fn bundle_facts_read_the_info_plist() {
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("Foo.app");
         std::fs::create_dir_all(bundle.join("Contents")).unwrap();
@@ -91,13 +101,29 @@ mod tests {
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.acme.foo</string>
 <key>CFBundleName</key><string>Foo</string>
+<key>CFBundleShortVersionString</key><string>2.1</string>
+<key>CFBundleVersion</key><string>2100</string>
+<key>CFBundleExecutable</key><string>foo</string>
+<key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+<key>NSHumanReadableCopyright</key><string> </string>
 </dict></plist>"#,
         )
         .unwrap();
 
         assert_eq!(
-            Platform.bundle_info(&bundle),
-            (Some("com.acme.foo".to_string()), Some("Foo".to_string()))
+            Platform.bundle_facts(&bundle),
+            BundleFacts {
+                identifier: Some("com.acme.foo".to_string()),
+                name: Some("Foo".to_string()),
+                version: Some("2.1".to_string()),
+                executable: Some("foo".to_string()),
+                category: Some("public.app-category.developer-tools".to_string()),
+                copyright: None,
+            }
+        );
+        assert_eq!(
+            Platform.bundle_facts(&temp.path().join("Missing.app")),
+            BundleFacts::default()
         );
     }
 }

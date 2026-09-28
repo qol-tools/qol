@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::RgbaImage;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -20,6 +22,7 @@ use windows::Platform;
 
 pub(super) trait AppIconPlatform {
     fn icon_for_bundle_id(&self, bundle_id: &str, size: usize) -> Option<RgbaImage>;
+    fn icon_png_for_path(&self, path: &Path, size: usize) -> Option<Vec<u8>>;
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage>;
     fn app_display_name(&self, app_id: &str) -> Option<String>;
     fn parent_pid(&self, pid: i32) -> Option<i32>;
@@ -28,6 +31,10 @@ pub(super) trait AppIconPlatform {
 
 pub(super) fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
     Platform.icon_for_bundle_id(bundle_id, size)
+}
+
+pub(super) fn icon_png_for_path(path: &Path, size: usize) -> Option<Vec<u8>> {
+    Platform.icon_png_for_path(path, size)
 }
 
 pub(super) fn icon_for_pid(pid: i32, size: usize) -> Option<RgbaImage> {

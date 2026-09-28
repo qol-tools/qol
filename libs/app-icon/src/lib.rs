@@ -1,3 +1,5 @@
+use std::path::Path;
+
 mod platform;
 
 #[derive(Debug, Clone)]
@@ -9,6 +11,10 @@ pub struct RgbaImage {
 
 pub fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
     platform::icon_for_bundle_id(bundle_id, size)
+}
+
+pub fn icon_png_for_path(path: &Path, size: usize) -> Option<Vec<u8>> {
+    platform::icon_png_for_path(path, size)
 }
 
 pub fn icon_for_pid(pid: i32, size: usize) -> Option<RgbaImage> {

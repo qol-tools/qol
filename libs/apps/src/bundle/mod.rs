@@ -17,6 +17,16 @@ pub struct InstalledApp {
     pub path: PathBuf,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BundleFacts {
+    pub identifier: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub executable: Option<String>,
+    pub category: Option<String>,
+    pub copyright: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Spotlight<'a> {
     Disabled,
@@ -41,6 +51,10 @@ pub fn scan_macos_launcher_root(root: &AppRoot) -> Vec<AppEntry> {
             .any(|excluded| excluded.eq_ignore_ascii_case(&entry.name))
     });
     entries
+}
+
+pub fn read_macos_bundle_facts(path: &Path) -> BundleFacts {
+    platform::bundle_facts(path)
 }
 
 pub fn macos_installed_apps(app_dirs: &[PathBuf], spotlight: Spotlight<'_>) -> Vec<InstalledApp> {
@@ -84,8 +98,8 @@ pub fn read_macos_app_bundle(path: PathBuf) -> Option<InstalledApp> {
     if !is_macos_app_bundle(&path) {
         return None;
     }
-    let (bundle_id, bundle_name) = platform::bundle_info(&path);
-    let name = bundle_name.unwrap_or_else(|| {
+    let facts = platform::bundle_facts(&path);
+    let name = facts.name.unwrap_or_else(|| {
         path.file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or("Unknown")
@@ -93,7 +107,7 @@ pub fn read_macos_app_bundle(path: PathBuf) -> Option<InstalledApp> {
     });
     Some(InstalledApp {
         name,
-        bundle_id,
+        bundle_id: facts.identifier,
         path,
     })
 }

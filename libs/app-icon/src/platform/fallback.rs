@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::RgbaImage;
 
 use super::AppIconPlatform;
@@ -6,6 +8,10 @@ pub(super) struct Platform;
 
 impl AppIconPlatform for Platform {
     fn icon_for_bundle_id(&self, _bundle_id: &str, _size: usize) -> Option<RgbaImage> {
+        None
+    }
+
+    fn icon_png_for_path(&self, _path: &Path, _size: usize) -> Option<Vec<u8>> {
         None
     }
 

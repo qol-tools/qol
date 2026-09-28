@@ -1,6 +1,6 @@
 use crate::RgbaImage;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use super::AppIconPlatform;
@@ -10,6 +10,10 @@ pub(super) struct Platform;
 impl AppIconPlatform for Platform {
     fn icon_for_bundle_id(&self, bundle_id: &str, size: usize) -> Option<RgbaImage> {
         icon_for_bundle_id(bundle_id, size)
+    }
+
+    fn icon_png_for_path(&self, _path: &Path, _size: usize) -> Option<Vec<u8>> {
+        None
     }
 
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage> {

@@ -1,5 +1,6 @@
 use crate::RgbaImage;
 use std::ffi::c_void;
+use std::path::Path;
 
 use super::AppIconPlatform;
 
@@ -8,6 +9,10 @@ pub(super) struct Platform;
 impl AppIconPlatform for Platform {
     fn icon_for_bundle_id(&self, bundle_id: &str, size: usize) -> Option<RgbaImage> {
         icon_for_bundle_id(bundle_id, size)
+    }
+
+    fn icon_png_for_path(&self, path: &Path, size: usize) -> Option<Vec<u8>> {
+        icon_png_for_path(path, size)
     }
 
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage> {
@@ -159,6 +164,26 @@ fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
         let path = url.path()?;
         let ns_image = ws.iconForFile(&path);
         nsimage_to_rgba(&ns_image, size)
+    })
+}
+
+fn icon_png_for_path(path: &Path, size: usize) -> Option<Vec<u8>> {
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWorkspace};
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+
+    let path = path.to_str()?;
+    objc2::rc::autoreleasepool(|_pool| {
+        let image = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(path));
+        let side = size as f64;
+        let mut rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(side, side));
+        let cg_image =
+            unsafe { image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
+        let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg_image);
+        let png = unsafe {
+            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+        }?;
+        Some(png.to_vec())
     })
 }
 
