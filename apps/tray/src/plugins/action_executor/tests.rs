@@ -874,7 +874,7 @@ fn operation_fallback_counter_fixture() {
 fn query_reply_loss_never_performs_readiness_recovery_or_query_retry() {
     use std::io::BufReader;
     use std::os::unix::net::UnixListener;
-    let dir = TempDir::new().unwrap();
+    let dir = TempDir::new_in("/tmp").unwrap();
     let _paths = crate::paths::push_test_path_root(dir.path());
     let socket = crate::dev_generation::daemon_socket_path("query-loss.sock");
     std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
