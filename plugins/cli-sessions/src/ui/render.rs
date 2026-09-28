@@ -233,7 +233,7 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
             s.summary.clone()
         },
         TextStyle::Detail,
-        kit.palette.text_muted,
+        (s.status.definition().colors)(&kit).0,
     )
     .h(px(qol_gpui::theme::SPACE_PAD))
     .into_any_element()
@@ -245,6 +245,7 @@ fn text_line(text: String, style: TextStyle, color: u32) -> gpui::Div {
             .flex_1()
             .min_w_0()
             .text(style)
+            .truncate()
             .text_color(rgb(color))
             .child(text),
     )
