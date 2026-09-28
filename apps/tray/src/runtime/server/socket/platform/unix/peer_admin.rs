@@ -324,7 +324,6 @@ mod enrollment_tests {
         AttemptState, EnrollmentFailure, EnrollmentRequest, Error, PageCursor, Request, Response,
     };
     use qol_peers::enrollment::OutboundEnrollmentState;
-    use qol_runtime::protocol::PeerAdminClientError;
     use std::net::Ipv4Addr;
 
     use super::peer_test_support::*;
@@ -600,7 +599,7 @@ mod enrollment_tests {
                 true
             )
             .await,
-            Err(PeerAdminClientError::OutcomeUnknown)
+            Err(qol_runtime::protocol::PeerAdminClientError::OutcomeUnknown)
         );
         let key = pending(&inviter).await;
         joiner.close().await;
