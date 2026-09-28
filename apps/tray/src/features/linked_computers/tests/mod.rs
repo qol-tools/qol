@@ -1,5 +1,6 @@
 mod activation;
 pub(crate) mod enrollment;
+mod nearby;
 mod network;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod network_pages;

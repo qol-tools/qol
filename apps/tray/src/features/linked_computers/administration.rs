@@ -13,8 +13,13 @@ impl PeerHostHandle {
             &mut request,
             qol_peers::service::network::local_addresses::current,
         )?;
-        let catalog = if matches!(&request, Request::SetGrants { grants, .. } if !grants.is_empty())
-        {
+        let catalog = if matches!(
+            &request,
+            Request::SetGrants { grants, .. }
+                | Request::Nearby {
+                    request: qol_peers::admin::NearbyRequest::Confirm { grants, .. },
+                } if !grants.is_empty()
+        ) {
             let capture = {
                 let manager = self.plugins.lock().map_err(|_| Error::HostUnavailable)?;
                 crate::plugins::operation_catalog::CatalogCapture::capture(&manager)
@@ -32,6 +37,13 @@ impl PeerHostHandle {
             Request::Enrollment { request } => {
                 super::enrollment::dispatch(host.authority()?, request)
             }
+            Request::Nearby { request } => {
+                if let qol_peers::admin::NearbyRequest::Confirm { grants, .. } = &request {
+                    self.check_grants(grants, &[], catalog.as_ref())?;
+                }
+                super::nearby::dispatch(host.authority()?, request)
+            }
+            Request::Enable => host.enable(),
             Request::Status => Ok(Response::Status {
                 status: host.status()?,
             }),
@@ -119,8 +131,20 @@ impl PeerHostHandle {
             .find(|peer| peer.peer_id == peer_id)
             .map(|peer| peer.grants)
             .unwrap_or_default();
+        self.check_grants(&grants, &existing, catalog)?;
+        authority
+            .set_grants(expected, peer_id, grants)
+            .map_err(Error::from)
+    }
+
+    fn check_grants(
+        &self,
+        grants: &[OperationKey],
+        existing: &[OperationKey],
+        catalog: Option<&crate::plugins::operation_catalog::ResolvedCatalog>,
+    ) -> Result<(), Error> {
         let manager = self.plugins.lock().map_err(|_| Error::HostUnavailable)?;
-        for grant in &grants {
+        for grant in grants {
             if existing.contains(grant) {
                 continue;
             }
@@ -134,13 +158,32 @@ impl PeerHostHandle {
                 return Err(Error::GrantUnavailable);
             }
         }
-        authority
-            .set_grants(expected, peer_id, grants)
-            .map_err(Error::from)
+        Ok(())
     }
 }
 
 impl Host {
+    fn enable(&mut self) -> Result<Response, Error> {
+        match &self.state {
+            State::Active(_) => {
+                return Ok(Response::Status {
+                    status: self.status()?,
+                })
+            }
+            State::Unavailable(error) => return Err(*error),
+            State::Inactive | State::Standby | State::Stopping(_) | State::Shutdown => {}
+        }
+        let name = (self.defaults.name)();
+        if (self.defaults.resident)() {
+            self.start(|host| {
+                let root = host.root.as_ref().map_err(|error| *error)?;
+                PeerAuthority::create_persistent(root, name, SystemTime::now()).map_err(Error::from)
+            })
+        } else {
+            self.start(|_| PeerAuthority::session(name, SystemTime::now()).map_err(Error::from))
+        }
+    }
+
     fn start(
         &mut self,
         create: impl FnOnce(&Host) -> Result<PeerAuthority, Error>,
@@ -198,7 +241,9 @@ fn changed(active: &ActiveAuthority, revision: StoreRevision) -> Result<Response
 pub(super) fn operation_name(request: &Request) -> &'static str {
     match request {
         Request::Enrollment { request } => request.action_name(),
+        Request::Nearby { request } => request.action_name(),
         Request::Status => "status",
+        Request::Enable => "enable",
         Request::Network => "network",
         Request::Sessions { .. } => "sessions",
         Request::Peers { .. } => "peers",
@@ -296,6 +341,7 @@ pub(super) fn trace_outcome(operation: &str, result: &Result<Response, Error>) {
             Response::Invitation { .. }
             | Response::PendingEnrollments { .. }
             | Response::OutboundEnrollments { .. }
+            | Response::Nearby { .. }
             | Response::Sessions { .. }
             | Response::Peers { .. }
             | Response::Grants { .. }

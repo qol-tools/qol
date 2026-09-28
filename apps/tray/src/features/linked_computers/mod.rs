@@ -1,5 +1,6 @@
 mod administration;
 mod enrollment;
+mod nearby;
 mod network;
 mod operations;
 mod pointz;
@@ -43,12 +44,27 @@ struct Host {
     root: Result<PathBuf, Error>,
     state: State,
     activation: fn() -> Result<ActivationId, Error>,
+    defaults: Defaults,
     network: Option<network::NetworkLauncher>,
     pointz: Option<pointz::PointzLauncher>,
     driver: Option<tokio::task::JoinHandle<()>>,
     observer: Option<tokio::task::JoinHandle<Result<(), Error>>>,
     shutting_down: bool,
     completion: watch::Sender<u64>,
+}
+
+struct Defaults {
+    resident: fn() -> bool,
+    name: fn() -> String,
+}
+
+impl Default for Defaults {
+    fn default() -> Self {
+        Self {
+            resident: || qol_host_fixes::residency::HostResidency::current().is_resident(),
+            name: pointz::hostname,
+        }
+    }
 }
 
 struct ActiveAuthority {
@@ -171,6 +187,7 @@ impl PeerHostHandle {
                 root,
                 state,
                 activation: activation_id,
+                defaults: Defaults::default(),
                 network: None,
                 pointz: None,
                 driver: None,

@@ -19,6 +19,7 @@ fn session_pages_derive_names_and_reject_each_stale_generation_of_the_view() {
     let snapshot = NetworkSnapshot {
         revision: NetworkRevision(StoreRevision::new(8)),
         status: NetworkStatus::default(),
+        nearby: Vec::new(),
         sessions: peers
             .iter()
             .map(|peer| AuthenticatedSession {

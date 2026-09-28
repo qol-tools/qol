@@ -170,7 +170,7 @@ pub(super) fn dispatch(
     }
 }
 
-fn network(active: &ActiveAuthority) -> Result<&NetworkControl, Error> {
+pub(super) fn network(active: &ActiveAuthority) -> Result<&NetworkControl, Error> {
     active.network.as_ref().ok_or(Error::Enrollment {
         error: EnrollmentFailure::Unavailable,
     })
@@ -184,11 +184,11 @@ fn stamp_at(active: &ActiveAuthority, revision: StoreRevision) -> Result<Expecte
     })
 }
 
-fn stamp(active: &ActiveAuthority) -> Result<ExpectedAuthority, Error> {
+pub(super) fn stamp(active: &ActiveAuthority) -> Result<ExpectedAuthority, Error> {
     stamp_at(active, active.authority.projection()?.revision)
 }
 
-fn changed(active: &ActiveAuthority) -> Result<Response, Error> {
+pub(super) fn changed(active: &ActiveAuthority) -> Result<Response, Error> {
     let stamp = stamp(active)?;
     Ok(Response::Changed {
         authority_id: stamp.authority_id,

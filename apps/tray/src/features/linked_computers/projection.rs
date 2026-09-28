@@ -212,6 +212,7 @@ fn network_snapshot(
         .unwrap_or_else(|| qol_peers::service::network::NetworkSnapshot {
             revision: qol_peers::admin::NetworkRevision::default(),
             sessions: Vec::new(),
+            nearby: Vec::new(),
             status: NetworkStatus {
                 listener: ListenerStatus::Closed {},
                 enrollment_listener: ListenerStatus::Closed {},
