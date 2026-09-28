@@ -161,7 +161,7 @@ pub(crate) fn run() -> Result<()> {
 }
 
 struct PeerRuntime {
-    handle: features::linked_computers::PeerHostHandle,
+    handle: features::linked_devices::PeerHostHandle,
     thread: std::thread::JoinHandle<std::result::Result<(), qol_peers::admin::Error>>,
     exit: tokio::sync::oneshot::Sender<()>,
 }
@@ -375,7 +375,7 @@ struct InitResult {
     feature_registry: Arc<FeatureRegistry>,
     events: Arc<qol_tray::daemon::EventBus>,
     post_pull_task: Option<tokio::task::JoinHandle<()>>,
-    linked_computers: features::linked_computers::LinkedComputers,
+    linked_devices: features::linked_devices::LinkedDevices,
 }
 
 #[cfg(feature = "dev")]
@@ -404,11 +404,11 @@ fn app_init_inner(
         #[cfg(feature = "dev")]
         core_log_controls,
     ))?;
-    let handle = init.linked_computers.handle();
+    let handle = init.linked_devices.handle();
     let (exit, exited) = tokio::sync::oneshot::channel();
     let thread = std::thread::spawn(move || {
         rt.block_on(async move {
-            let result = init.linked_computers.closed().await;
+            let result = init.linked_devices.closed().await;
             let _ = exited.await;
             result
         })
@@ -465,13 +465,13 @@ async fn async_init_inner(
     let mut plugin_manager = PluginManager::new();
     plugin_manager.load_plugins()?;
     let plugin_manager = Arc::new(Mutex::new(plugin_manager));
-    let linked_computers = features::linked_computers::LinkedComputers::start(
+    let linked_devices = features::linked_devices::LinkedDevices::start(
         plugin_manager.clone(),
         shutdown_tx.subscribe(),
     )
     .await;
-    if !state_server.attach_peers(linked_computers.handle()) {
-        linked_computers.handle().shutdown();
+    if !state_server.attach_peers(linked_devices.handle()) {
+        linked_devices.handle().shutdown();
         log::error!("Peer administration unavailable: shared runtime handle was not installed");
     }
     {
@@ -509,7 +509,7 @@ async fn async_init_inner(
     .await
     {
         Ok(port) => port,
-        Err(error) => return Err(close_failed_peer_startup(linked_computers, error).await),
+        Err(error) => return Err(close_failed_peer_startup(linked_devices, error).await),
     };
     if !shadow_generation && !rolling_restart {
         run_startup_doctor();
@@ -548,7 +548,7 @@ async fn async_init_inner(
     .await
     {
         Ok(task) => task,
-        Err(error) => return Err(close_failed_peer_startup(linked_computers, error).await),
+        Err(error) => return Err(close_failed_peer_startup(linked_devices, error).await),
     };
     if shadow_generation {
         log::info!("Shadow dev generation: deferring hotkey capture until promotion");
@@ -581,12 +581,12 @@ async fn async_init_inner(
         feature_registry,
         events: daemon.events.clone(),
         post_pull_task,
-        linked_computers,
+        linked_devices,
     })
 }
 
 async fn close_failed_peer_startup(
-    owner: features::linked_computers::LinkedComputers,
+    owner: features::linked_devices::LinkedDevices,
     error: anyhow::Error,
 ) -> anyhow::Error {
     owner.handle().shutdown();

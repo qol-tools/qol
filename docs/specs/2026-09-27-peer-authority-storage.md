@@ -1,7 +1,7 @@
 # Core peer authority and storage
 
 Status: selected implementation boundary; no production authority is active.
-The [design](2026-09-27-linked-computers-design.md) owns delivery and migration.
+The [design](2026-09-27-linked-devices-design.md) owns delivery and migration.
 The [transport contract](2026-09-27-peer-transport-v1.md) owns cryptography.
 
 ## Dependency and contract ownership

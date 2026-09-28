@@ -1,4 +1,4 @@
-use crate::features::linked_computers::tests::enrollment::Fixture;
+use crate::features::linked_devices::tests::enrollment::Fixture;
 use crate::runtime::SharedState;
 use qol_peers::admin::{AttemptState, EnrollmentRequest, Request, Response};
 use qol_peers::enrollment::{EnrollmentRequestKey, ExportedInvitation, TransactionId};

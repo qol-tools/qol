@@ -77,7 +77,7 @@ impl<'de> Deserialize<'de> for LinkCode {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct NearbyComputer {
+pub struct NearbyDevice {
     pub peer_id: PeerId,
     #[serde(deserialize_with = "crate::enrollment::deserialize_name")]
     pub name: String,

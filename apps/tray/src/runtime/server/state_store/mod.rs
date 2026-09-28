@@ -25,7 +25,7 @@ pub(crate) struct SharedState {
     next_subscriber_id: AtomicU64,
     armed_lifelines: Mutex<HashMap<String, usize>>,
     platform: OnceLock<SharedPlatform>,
-    peers: OnceLock<crate::features::linked_computers::PeerHostHandle>,
+    peers: OnceLock<crate::features::linked_devices::PeerHostHandle>,
 }
 
 impl SharedState {
@@ -76,12 +76,12 @@ impl SharedState {
 
     pub(crate) fn attach_peers(
         &self,
-        handle: crate::features::linked_computers::PeerHostHandle,
+        handle: crate::features::linked_devices::PeerHostHandle,
     ) -> bool {
         self.peers.set(handle).is_ok()
     }
 
-    pub(crate) fn peers(&self) -> Option<&crate::features::linked_computers::PeerHostHandle> {
+    pub(crate) fn peers(&self) -> Option<&crate::features::linked_devices::PeerHostHandle> {
         self.peers.get()
     }
 

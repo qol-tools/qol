@@ -470,7 +470,7 @@ peer = { replay = "never" }
         let capture = CatalogCapture::capture(&manager);
         drop(manager);
         let resolved = capture.try_resolve().unwrap();
-        let projection = crate::features::linked_computers::settings::catalog_operations(&resolved);
+        let projection = crate::features::linked_devices::settings::catalog_operations(&resolved);
         let names: Vec<_> = projection
             .iter()
             .map(|item| item.key.name.as_str())

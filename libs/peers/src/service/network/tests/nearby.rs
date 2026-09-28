@@ -21,7 +21,7 @@ fn lan(last: u8) -> SocketAddrV4 {
 }
 
 #[test]
-fn a_claim_lists_the_computer_on_its_link_port() {
+fn a_claim_lists_the_device_on_its_link_port() {
     let mut nearby = Nearby::default();
     assert!(nearby.resolved(
         "desk".into(),
@@ -45,7 +45,7 @@ fn a_claim_lists_the_computer_on_its_link_port() {
 }
 
 #[test]
-fn linked_revoked_local_and_unclaimed_computers_are_not_listed() {
+fn linked_revoked_local_and_unclaimed_devices_are_not_listed() {
     let mut nearby = Nearby::default();
     let ignored = BTreeSet::from([peer(1)]);
     assert!(!nearby.resolved(
@@ -106,7 +106,7 @@ fn removal_and_failure_drop_claims_and_the_list_is_bounded() {
 }
 
 #[test]
-fn two_sources_for_one_computer_merge_their_endpoints() {
+fn two_sources_for_one_device_merge_their_endpoints() {
     let mut nearby = Nearby::default();
     nearby.resolved(
         "wifi".into(),

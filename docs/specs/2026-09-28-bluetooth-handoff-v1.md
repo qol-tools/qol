@@ -1,13 +1,13 @@
-# Earbud handoff between linked computers
+# Earbud handoff between linked devices
 
-Status: selected implementation contract. The [design](2026-09-27-linked-computers-design.md)
+Status: selected implementation contract. The [design](2026-09-27-linked-devices-design.md)
 owns the requirements; the [remote operation contract](2026-09-27-peer-operations-v1.md)
 owns delivery.
 
 ## What changes for the user
 
 A paired pair of earbuds in Bluetooth settings gets a "Move here" button. It asks
-the linked computer that has them to let go, connects them to this computer and
+the linked device that has them to let go, connects them to this computer and
 checks that audio is ready. If the other computer cannot be reached or refuses,
 nothing changes there and the reason is shown.
 
@@ -65,7 +65,7 @@ remote limit.
 ## The "Move here" workflow
 
 1. Resolve the address and read the local device. An unpaired device is refused.
-2. Read linked computers from core and ask each one, at most 16, for
+2. Read linked devices from core and ask each one, at most 16, for
    `handoff_state`. A computer that refuses or cannot be reached is skipped and
    named in the outcome.
 3. If one computer reports the earbuds connected, call `release_for_handoff`

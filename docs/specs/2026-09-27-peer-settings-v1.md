@@ -1,4 +1,4 @@
-# Linked computers settings v1
+# Linked devices settings v1
 
 ## Ownership and scope
 
@@ -8,11 +8,11 @@ This is an intermediate implementation slice. PointZ migration, Bluetooth handof
 
 ## User flow
 
-Core settings gains a Linked computers entry, using the existing retained settings window and shared controls. The web dashboard gains its corresponding page and supplies the existing native-failure fallback.
+Core settings gains a Linked devices entry, using the existing retained settings window and shared controls. The web dashboard gains its corresponding page and supplies the existing native-failure fallback.
 
 Opening either view only reads state. An inactive service offers explicit setup with a computer name and a clear choice between this session and persistent links on this computer. Unsupported persistence and unavailable/standby/stopping states are visible. Changing lifetime never silently destroys or replaces the active authority.
 
-Active state shows this computer's name and lifetime, linked computers, fresh connection status and pending pairing requests. Rename, stop and revoke use the displayed authority identity, activation and revision. Destructive transitions are confirmed through the existing UI pattern.
+Active state shows this computer's name and lifetime, linked devices, fresh connection status and pending pairing requests. Rename, stop and revoke use the displayed authority identity, activation and revision. Destructive transitions are confirmed through the existing UI pattern.
 
 Pairing has two paths: create/copy an invitation, or paste an invitation from another computer. Invitations are displayed as an opaque link code, not an editable JSON configuration. Core validates the code and owns prepare/redeem/approve/reject/cancel/abandon/recover. Show the authenticated peer name and identity when confirming a request. Pairing grants no operations automatically. No IP entry is required.
 

@@ -42,7 +42,7 @@ impl Remote for CoreRemote {
         };
         let authority = status
             .authority
-            .ok_or_else(|| anyhow!("linked computers are turned off"))?;
+            .ok_or_else(|| anyhow!("linked devices are turned off"))?;
         let expected = authority.expected();
         self.expected.set(Some(expected));
         let mut cursor = PageCursor {
@@ -71,11 +71,11 @@ impl Remote for CoreRemote {
         let expected = self
             .expected
             .get()
-            .ok_or_else(|| RemoteError::Refused("linked computers were not read".into()))?;
+            .ok_or_else(|| RemoteError::Refused("linked devices were not read".into()))?;
         let recipient = peer
             .id
             .parse()
-            .map_err(|_| RemoteError::Refused("invalid linked computer".into()))?;
+            .map_err(|_| RemoteError::Refused("invalid linked device".into()))?;
         let kind = match operation {
             Operation::State => OperationKind::Query,
             Operation::Release | Operation::Resume => OperationKind::Action,

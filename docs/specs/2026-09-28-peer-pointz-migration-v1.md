@@ -1,6 +1,6 @@
 # PointZ trust moves into core
 
-Status: selected implementation contract. The [design](2026-09-27-linked-computers-design.md)
+Status: selected implementation contract. The [design](2026-09-27-linked-devices-design.md)
 owns the migration requirements; this document selects the mechanics.
 
 ## What changes for the user
@@ -76,7 +76,7 @@ The installed PointZ declares `peer_trust = "pointz-v1"` under `[capabilities]`.
 Plugin API validation accepts only that value.
 
 - Legacy PointZ and no `pointz` section: PointZ keeps its own pairing until it
-  is updated. Core does not bind its ports. Linked computers status says so.
+  is updated. Core does not bind its ports. Linked devices status says so.
 - Legacy PointZ after cutover: the host refuses to start its daemon and reports
   that PointZ must be updated. It never falls back to the legacy registry.
 - Compatible PointZ: the plugin binds no discovery or command socket and writes
@@ -110,7 +110,7 @@ pairing, cancel pairing and remove device. Removal carries the expected
 authority stamp. Status reports the import outcome, `server_id`, device count,
 pairing window (code only while open), socket state, drop counts and whether the
 installed PointZ is compatible. `qol peers pointz` exposes the same requests.
-Linked computers settings list paired phones and remove them; PointZ settings
+Linked devices settings list paired phones and remove them; PointZ settings
 keep the pairing button and code, served by the PointZ daemon asking core.
 
 ## Evidence

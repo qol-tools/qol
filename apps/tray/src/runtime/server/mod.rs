@@ -29,7 +29,7 @@ impl StateSocketStatus {
 }
 
 impl RuntimeServer {
-    pub fn attach_peers(&self, handle: crate::features::linked_computers::PeerHostHandle) -> bool {
+    pub fn attach_peers(&self, handle: crate::features::linked_devices::PeerHostHandle) -> bool {
         super::publisher::shared().is_some_and(|shared| shared.attach_peers(handle))
     }
 
@@ -160,7 +160,7 @@ mod tests {
     #[cfg(feature = "dev")]
     #[tokio::test]
     async fn peer_shutdown_closes_the_same_attached_owner() {
-        use crate::features::linked_computers::tests::{attach, host_at, status};
+        use crate::features::linked_devices::tests::{attach, host_at, status};
         use qol_peers::admin::Lifecycle;
 
         let temporary = tempfile::tempdir().unwrap();

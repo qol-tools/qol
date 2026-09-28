@@ -45,10 +45,10 @@ pub const EXPORTED: &[ExportedCommand] = &[
         core_action: "updates",
     },
     ExportedCommand {
-        id: "linked-computers-open",
-        label: "Linked computers",
-        route: "linked-computers",
-        core_action: "linked-computers",
+        id: "linked-devices-open",
+        label: "Linked devices",
+        route: "linked-devices",
+        core_action: "linked-devices",
     },
 ];
 
@@ -118,16 +118,16 @@ mod tests {
     }
 
     #[test]
-    fn linked_computers_command_opens_the_linked_computers_tool() {
+    fn linked_devices_command_opens_the_linked_devices_tool() {
         let linked = EXPORTED
             .iter()
-            .find(|c| c.id == "linked-computers-open")
-            .expect("linked computers command");
-        assert_eq!(linked.route, "linked-computers");
-        assert_eq!(command_label(linked), "QoL › Linked computers");
+            .find(|c| c.id == "linked-devices-open")
+            .expect("linked devices command");
+        assert_eq!(linked.route, "linked-devices");
+        assert_eq!(command_label(linked), "QoL › Linked devices");
         assert_eq!(
             crate::plugins::action_executor::core_tool_for_action(linked.core_action),
-            Some(crate::settings_surface::CoreTool::LinkedComputers)
+            Some(crate::settings_surface::CoreTool::LinkedDevices)
         );
     }
 

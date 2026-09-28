@@ -39,7 +39,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::features::linked_computers::tests::{attach, authority, host_at, status};
+    use crate::features::linked_devices::tests::{attach, authority, host_at, status};
     use qol_peers::admin::{Lifecycle, PageCursor};
     use qol_runtime::protocol::RuntimeRequest;
     use qol_runtime::PlatformStateClient;
@@ -319,7 +319,7 @@ mod tests {
 
 #[cfg(test)]
 mod enrollment_tests {
-    use crate::features::linked_computers::tests::enrollment::Fixture;
+    use crate::features::linked_devices::tests::enrollment::Fixture;
     use qol_peers::admin::{
         AttemptState, EnrollmentFailure, EnrollmentRequest, Error, PageCursor, Request, Response,
     };

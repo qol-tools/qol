@@ -20,7 +20,7 @@ Bluetooth pairing works.
 authority is already active. Otherwise it creates the authority the user would
 have chosen: a persistent store on a Resident host and a session authority on a
 Portable host, named after the computer. The settings page sends it when it
-opens, so opening Linked computers is the local request the enrollment contract
+opens, so opening Linked devices is the local request the enrollment contract
 requires. Residency itself is never changed.
 
 ## Discovery

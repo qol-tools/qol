@@ -1,5 +1,5 @@
 use super::peer_test_support::{action, call, finished, pending, prepare, redeem, start};
-use crate::features::linked_computers::tests::enrollment::Fixture;
+use crate::features::linked_devices::tests::enrollment::Fixture;
 use qol_peers::admin::{
     AttemptState, EnrollmentRequest, Request as AdminRequest, Response as AdminResponse,
 };

@@ -55,7 +55,7 @@ async fn redeem(
 }
 
 #[tokio::test]
-async fn both_computers_show_one_code_and_an_early_confirmation_links_with_its_grants() {
+async fn both_devices_show_one_code_and_an_early_confirmation_links_with_its_grants() {
     let inviter = session("Laptop");
     let joiner = session("Desk");
     let (offer, served) = nearby(&inviter, &joiner).await;
@@ -154,7 +154,7 @@ async fn declining_cancels_the_request_before_the_joiner_confirms() {
 }
 
 #[tokio::test]
-async fn a_linked_computer_is_refused_and_a_new_nearby_join_replaces_a_stale_one() {
+async fn a_linked_device_is_refused_and_a_new_nearby_join_replaces_a_stale_one() {
     let inviter = session("Laptop");
     let joiner = session("Desk");
     let stale = nearby(&inviter, &joiner).await.0.unwrap();

@@ -119,7 +119,7 @@ fn corrupt(case: &str, value: &mut Value) {
 }
 
 #[test]
-fn a_computer_blocked_by_an_older_unlink_can_link_again() {
+fn a_device_blocked_by_an_older_unlink_can_link_again() {
     let (_temporary, root, authority) = persistent();
     drop(authority);
     let mut value = wire(&root);

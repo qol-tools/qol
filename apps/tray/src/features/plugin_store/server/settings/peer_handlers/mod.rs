@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use std::sync::{Arc, Mutex};
 
 use super::super::types::AppState;
-use crate::features::linked_computers::settings::{catalog_operations, invitation_info, Failure};
+use crate::features::linked_devices::settings::{catalog_operations, invitation_info, Failure};
 use crate::plugins::{operation_catalog::CatalogCapture, PluginManager};
 
 #[cfg(test)]

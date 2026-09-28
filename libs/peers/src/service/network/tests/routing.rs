@@ -57,7 +57,7 @@ async fn source_replacement_and_removal_preserve_other_sources() {
 }
 
 #[test]
-fn a_computer_seen_before_it_was_linked_is_dialed_once_linked() {
+fn a_device_seen_before_it_was_linked_is_dialed_once_linked() {
     let mut routes = Routes::default();
     let endpoint = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 1234);
     routes.resolved("a".into(), peer(1), vec![endpoint], &BTreeSet::new(), true);

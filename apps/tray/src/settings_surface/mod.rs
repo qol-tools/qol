@@ -13,7 +13,7 @@ pub(crate) enum CoreTool {
     Hotkeys,
     Shortcuts,
     Updates,
-    LinkedComputers,
+    LinkedDevices,
 }
 
 impl CoreTool {
@@ -24,7 +24,7 @@ impl CoreTool {
             Self::Hotkeys => "__core-hotkeys",
             Self::Shortcuts => "__core-shortcuts",
             Self::Updates => "__core-updates",
-            Self::LinkedComputers => "__core-linked-computers",
+            Self::LinkedDevices => "__core-linked-devices",
         }
     }
 
@@ -35,7 +35,7 @@ impl CoreTool {
             "__core-hotkeys" => Some(Self::Hotkeys),
             "__core-shortcuts" => Some(Self::Shortcuts),
             "__core-updates" => Some(Self::Updates),
-            "__core-linked-computers" => Some(Self::LinkedComputers),
+            "__core-linked-devices" => Some(Self::LinkedDevices),
             _ => None,
         }
     }
@@ -47,7 +47,7 @@ impl CoreTool {
             Self::Hotkeys => "hotkeys",
             Self::Shortcuts => "shortcuts",
             Self::Updates => "plugins",
-            Self::LinkedComputers => "linked-computers",
+            Self::LinkedDevices => "linked-devices",
         }
     }
 
@@ -56,7 +56,7 @@ impl CoreTool {
             Self::AddHotkey | Self::Hotkeys => "__core-hotkeys",
             Self::AddShortcut | Self::Shortcuts => "__core-shortcuts",
             Self::Updates => "__core-updates",
-            Self::LinkedComputers => "__core-linked-computers",
+            Self::LinkedDevices => "__core-linked-devices",
         }
     }
 }
@@ -221,7 +221,7 @@ mod tests {
             CoreTool::Hotkeys,
             CoreTool::Shortcuts,
             CoreTool::Updates,
-            CoreTool::LinkedComputers,
+            CoreTool::LinkedDevices,
         ] {
             assert_eq!(CoreTool::from_wire_id(tool.wire_id()), Some(tool));
             assert!(tool.wire_id().starts_with("__core-"));

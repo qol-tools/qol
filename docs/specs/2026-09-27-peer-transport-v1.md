@@ -1,7 +1,7 @@
 # Core peer transport v1
 
 Status: selected for implementation; runtime and security verification remain
-outstanding. The [linked-computers design](2026-09-27-linked-computers-design.md)
+outstanding. The [linked-devices design](2026-09-27-linked-devices-design.md)
 owns product scope, service ownership, migration, and acceptance. This document
 owns the cryptographic transport choice. It does not establish a second trust
 registry or authorize deployment.

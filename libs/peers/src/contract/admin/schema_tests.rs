@@ -443,7 +443,7 @@ fn nearby_requests_and_replies_are_strict() {
         json!({"code": 1, "state": {"state": "failed", "error": "transport"}}),
     ] {
         strict::<Response>(
-            json!({"result": "nearby", "authority": expected(), "computers": [
+            json!({"result": "nearby", "authority": expected(), "devices": [
                 {"peer_id": PEER, "name": "Desk", "link": link}
             ]}),
         );
@@ -453,7 +453,7 @@ fn nearby_requests_and_replies_are_strict() {
         json!({"peer_id": PEER, "name": "", "link": null}),
         json!({"peer_id": PEER, "name": " Desk", "link": null}),
     ] {
-        assert!(serde_json::from_value::<NearbyComputer>(invalid).is_err());
+        assert!(serde_json::from_value::<NearbyDevice>(invalid).is_err());
     }
     assert_eq!(LinkCode::new(7_042).unwrap().to_string(), "007 042");
 }

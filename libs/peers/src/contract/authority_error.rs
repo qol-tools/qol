@@ -50,7 +50,7 @@ pub enum AuthorityError {
     Storage,
     #[error("authority TLS configuration failed")]
     Transport,
-    #[error("PointZ trust has not been set up on this computer")]
+    #[error("PointZ trust has not been set up on this device")]
     PointzAbsent,
     #[error("PointZ trust was already imported")]
     PointzMigrated,

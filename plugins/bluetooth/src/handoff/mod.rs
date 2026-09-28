@@ -124,7 +124,7 @@ impl<R: Remote, L: Local> Handoff<R, L> {
         let Some(peer) = holder else {
             return Attempt::Skipped((!unreachable.is_empty()).then(|| {
                 format!(
-                    "no reachable linked computer has {}; not asked: {}",
+                    "no reachable linked device has {}; not asked: {}",
                     device.alias,
                     unreachable.join(", ")
                 )

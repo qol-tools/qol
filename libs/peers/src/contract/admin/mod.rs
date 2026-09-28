@@ -2,7 +2,7 @@ mod activation;
 mod enrollment;
 pub use enrollment::{AttemptState, EnrollmentFailure, EnrollmentRequest};
 mod nearby;
-pub use nearby::{LinkCode, NearbyComputer, NearbyLink, NearbyRequest, NearbyState, MAX_NEARBY};
+pub use nearby::{LinkCode, NearbyDevice, NearbyLink, NearbyRequest, NearbyState, MAX_NEARBY};
 mod network;
 mod pointz;
 pub use network::{NetworkRevision, NetworkSummary, SessionCursor, SessionPage, SessionSummary};
@@ -188,7 +188,7 @@ pub enum Response {
     },
     Nearby {
         authority: ExpectedAuthority,
-        computers: Vec<NearbyComputer>,
+        devices: Vec<NearbyDevice>,
     },
 
     Network {

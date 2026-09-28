@@ -47,7 +47,7 @@ async fn malformed_and_oversized_requests_are_bounded_and_never_echoed() {
 #[cfg(unix)]
 #[tokio::test]
 async fn adapter_reaches_an_attached_authority_and_preserves_lost_mutation_uncertainty() {
-    use crate::features::linked_computers::tests::{attach, authority, host_at};
+    use crate::features::linked_devices::tests::{attach, authority, host_at};
     use qol_peers::admin::Request as PeerRequest;
     use qol_runtime::protocol::RuntimeRequest;
     use std::io::{BufReader, Write};

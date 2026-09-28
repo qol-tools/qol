@@ -271,7 +271,7 @@ fn release_for_handoff_command() -> Command {
 
 fn resume_reconnect_command() -> Command {
     Command::new("resume-reconnect")
-        .about("Allow a Bluetooth device released for a linked computer to reconnect here again.")
+        .about("Allow a Bluetooth device released for a linked device to reconnect here again.")
         .usage(format!("{PLUGIN_ID} resume-reconnect AA:BB:CC:DD:EE:FF"))
         .output("Whether a handoff hold was released.")
         .exit_behavior("Exits non-zero when the hold store cannot be updated.")

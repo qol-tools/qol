@@ -41,12 +41,12 @@ description = "Remove a Bluetooth device and its pairing information"
 input = { address = "string" }
 
 [action.release_for_handoff]
-description = "Let go of a Bluetooth device for a linked computer and keep it from reconnecting here"
+description = "Let go of a Bluetooth device for a linked device and keep it from reconnecting here"
 input = { address = "string" }
 peer = { replay = "never" }
 
 [action.resume_reconnect]
-description = "Allow a Bluetooth device released for a linked computer to reconnect here again"
+description = "Allow a Bluetooth device released for a linked device to reconnect here again"
 input = { address = "string" }
 peer = { replay = "idempotent" }
 
