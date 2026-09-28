@@ -10,6 +10,7 @@ use qol_bluetooth_control::{now_ms, HoldOwner, Holds};
 use serde_json::{json, Value};
 
 use crate::bluetooth::{connection_ready, normalize_address, DeviceInfo};
+use crate::config::ReconnectConfig;
 
 use self::core::CoreRemote;
 
@@ -181,8 +182,7 @@ impl Local for PlatformLocal {
     }
 
     fn connect(&self, address: &str) -> Result<DeviceInfo> {
-        release_for_user(address);
-        crate::platform::connect_device(address, self.power_on_adapter)
+        connect_for_user(address, self.power_on_adapter)
     }
 
     fn pause(&self, delay: Duration) {
@@ -235,6 +235,17 @@ pub(crate) fn release_for_user(address: &str) {
             "event=user_release outcome=failed kind={:?}",
             error.kind()
         );
+    }
+}
+
+pub(crate) fn connect_for_user(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
+    release_for_user(address);
+    crate::platform::connect_device(address, power_on_adapter)
+}
+
+pub(crate) fn release_managed_for_user(config: &ReconnectConfig) {
+    for address in &config.managed_devices {
+        release_for_user(address);
     }
 }
 

@@ -1894,9 +1894,7 @@ async fn daemon_loop(
                 } else {
                     ReconnectSelection::Managed
                 };
-                for address in &config.managed_devices {
-                    crate::handoff::release_for_user(address);
-                }
+                crate::handoff::release_managed_for_user(config);
                 operations.reconnect(adapter.clone(), config.clone(), selection);
             }
             event = adapter_events.next() => {

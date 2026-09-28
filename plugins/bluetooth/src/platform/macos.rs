@@ -773,8 +773,7 @@ fn handle_daemon_command(command: DaemonCommand, config: &mut ReconnectConfig) -
             pair_device(&address, power_on_adapter).map(std::mem::drop)
         }),
         DaemonCommand::Connect(address) => run_device_command(&address, "connect", || {
-            crate::handoff::release_for_user(&address);
-            connect_device(&address, power_on_adapter).map(std::mem::drop)
+            crate::handoff::connect_for_user(&address, power_on_adapter).map(std::mem::drop)
         }),
         DaemonCommand::Disconnect(address) => run_device_command(&address, "disconnect", || {
             disconnect_device(&address).map(std::mem::drop)
@@ -789,9 +788,7 @@ fn handle_daemon_command(command: DaemonCommand, config: &mut ReconnectConfig) -
         }
         DaemonCommand::StopSearch => report_daemon_failure("search stop", mark_search_stopped()),
         DaemonCommand::ReconnectManaged | DaemonCommand::ReconnectTrusted => {
-            for address in &config.managed_devices {
-                crate::handoff::release_for_user(address);
-            }
+            crate::handoff::release_managed_for_user(config);
             let selection = if matches!(command, DaemonCommand::ReconnectTrusted) {
                 ReconnectSelection::Trusted
             } else {

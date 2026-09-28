@@ -8,7 +8,7 @@ use crate::bluetooth::{
     normalize_address, AdapterHealth, DeviceInfo, ReconnectReport, ReconnectSelection,
 };
 use crate::hostfix::{self, BluetoothHostFixes};
-use crate::{config, platform, PLUGIN_ID};
+use crate::{config, handoff, platform, PLUGIN_ID};
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
@@ -147,12 +147,12 @@ fn connect_command() -> Command {
         .exit_behavior("Exits non-zero when the address is invalid or the connection fails.")
         .run_plain_text(|context| {
             let address = one_address("connect", context.args())?;
-            let device = platform::connect_device(&address, config::load().power_on_adapter)?;
+            let device = handoff::connect_for_user(&address, config::load().power_on_adapter)?;
             Ok(PlainTextOutput::text(device_line(&device)))
         })
         .run_json(|context| {
             let address = one_address("connect", context.args())?;
-            let device = platform::connect_device(&address, config::load().power_on_adapter)?;
+            let device = handoff::connect_for_user(&address, config::load().power_on_adapter)?;
             Ok(serde_json::to_value(device)?)
         })
 }
@@ -314,12 +314,12 @@ fn reconnect_command() -> Command {
         .exit_behavior("Exits non-zero only when the Bluetooth stack itself is unavailable.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
-            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Managed)?;
+            let report = reconnect_for_user(ReconnectSelection::Managed)?;
             Ok(PlainTextOutput::text(report_lines(&report)))
         })
         .run_json(|context| {
             reject_args(context.args())?;
-            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Managed)?;
+            let report = reconnect_for_user(ReconnectSelection::Managed)?;
             Ok(serde_json::to_value(report)?)
         })
 }
@@ -333,12 +333,12 @@ fn reconnect_trusted_command() -> Command {
         .exit_behavior("Exits non-zero only when the Bluetooth stack itself is unavailable.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
-            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Trusted)?;
+            let report = reconnect_for_user(ReconnectSelection::Trusted)?;
             Ok(PlainTextOutput::text(report_lines(&report)))
         })
         .run_json(|context| {
             reject_args(context.args())?;
-            let report = platform::reconnect_devices(&config::load(), ReconnectSelection::Trusted)?;
+            let report = reconnect_for_user(ReconnectSelection::Trusted)?;
             Ok(serde_json::to_value(report)?)
         })
 }
@@ -546,6 +546,12 @@ fn reject_args(args: &[String]) -> Result<()> {
         return Ok(());
     }
     bail!("unexpected arguments: {}", args.join(" "))
+}
+
+fn reconnect_for_user(selection: ReconnectSelection) -> Result<ReconnectReport> {
+    let config = config::load();
+    handoff::release_managed_for_user(&config);
+    platform::reconnect_devices(&config, selection)
 }
 
 fn one_address(command: &str, args: &[String]) -> Result<String> {
