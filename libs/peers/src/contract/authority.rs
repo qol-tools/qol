@@ -58,6 +58,15 @@ impl<'de> Deserialize<'de> for StoreRevision {
     }
 }
 
+pub const MAX_NAME_BYTES: usize = 256;
+
+pub fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_NAME_BYTES
+        && name.trim() == name
+        && !name.chars().any(char::is_control)
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthorityLifetime {

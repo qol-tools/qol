@@ -4,8 +4,8 @@ pub use contract::session;
 pub use contract::{admin, enrollment, pointz, AuthorityError};
 
 pub use contract::{
-    AuthorityLifetime, AuthorityProjection, AuthorityStatus, PeerId, PeerIdError, PeerProjection,
-    StoreRevision, StoreRevisionError,
+    is_valid_name, AuthorityLifetime, AuthorityProjection, AuthorityStatus, PeerId, PeerIdError,
+    PeerProjection, StoreRevision, StoreRevisionError, MAX_NAME_BYTES,
 };
 
 #[cfg(feature = "service")]

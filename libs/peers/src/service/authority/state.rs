@@ -20,7 +20,6 @@ pub(super) const MAX_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
 pub(super) const MAX_PEERS: usize = 256;
 pub(super) const MAX_GRANTS: usize = 128;
 pub(super) const MAX_TOMBSTONES: usize = 4096;
-const MAX_NAME_BYTES: usize = 256;
 const MAX_OPERATION_BYTES: usize = 256;
 const MAX_UID_BYTES: usize = 256;
 
@@ -111,11 +110,7 @@ impl State {
 }
 
 pub(super) fn validate_name(name: &str) -> Result<(), AuthorityError> {
-    if name.is_empty()
-        || name.len() > MAX_NAME_BYTES
-        || name.trim() != name
-        || name.chars().any(char::is_control)
-    {
+    if !crate::is_valid_name(name) {
         return Err(AuthorityError::InvalidName);
     }
     Ok(())
@@ -124,7 +119,7 @@ pub(super) fn validate_name(name: &str) -> Result<(), AuthorityError> {
 pub(super) fn sanitize_name(name: &str, fallback: &str) -> String {
     let mut bounded = String::new();
     for character in name.chars().filter(|character| !character.is_control()) {
-        if bounded.len() + character.len_utf8() > MAX_NAME_BYTES {
+        if bounded.len() + character.len_utf8() > crate::MAX_NAME_BYTES {
             break;
         }
         bounded.push(character);

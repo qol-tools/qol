@@ -8,8 +8,8 @@ pub mod session;
 pub use authority_error::AuthorityError;
 
 pub use authority::{
-    AuthorityLifetime, AuthorityProjection, AuthorityStatus, PeerProjection, StoreRevision,
-    StoreRevisionError,
+    is_valid_name, AuthorityLifetime, AuthorityProjection, AuthorityStatus, PeerProjection,
+    StoreRevision, StoreRevisionError, MAX_NAME_BYTES,
 };
 
 use std::{fmt, str::FromStr};
