@@ -27,8 +27,9 @@ impl DiscoveryFactory for Mesh {
         events: mpsc::Sender<DiscoveryEvent>,
         mut stop: watch::Receiver<bool>,
     ) -> DiscoveryFuture {
+        let local_peer = local.peer;
         self.0.send_modify(|peers| {
-            peers.retain(|peer| peer.peer != local.peer);
+            peers.retain(|peer| peer.peer != local_peer);
             peers.push(local);
         });
         let mut peers = self.0.subscribe();
@@ -36,12 +37,13 @@ impl DiscoveryFactory for Mesh {
             events.send(DiscoveryEvent::Ready).await.unwrap();
             loop {
                 let hints = peers.borrow_and_update().clone();
-                for peer in hints.into_iter().filter(|peer| peer.peer != local.peer) {
+                for peer in hints.into_iter().filter(|peer| peer.peer != local_peer) {
                     events
                         .send(DiscoveryEvent::Resolved {
                             source: peer.peer.to_string(),
                             peer: peer.peer,
                             endpoints: vec![std::net::SocketAddrV4::new(peer.bind, peer.port)],
+                            claim: None,
                         })
                         .await
                         .unwrap();
