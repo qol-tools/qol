@@ -29,7 +29,6 @@ fn app() -> HeadlessApp {
         .command(connect_command())
         .command(disconnect_command())
         .command(reclaim_command())
-        .command(take_over_command())
         .command(release_for_handoff_command())
         .command(resume_reconnect_command())
         .command(remove_command())
@@ -147,14 +146,21 @@ fn connect_command() -> Command {
         .exit_behavior("Exits non-zero when the address is invalid or the connection fails.")
         .run_plain_text(|context| {
             let address = one_address("connect", context.args())?;
-            let device = handoff::connect_for_user(&address, config::load().power_on_adapter)?;
+            let device = connect_for_user(&address)?;
             Ok(PlainTextOutput::text(device_line(&device)))
         })
         .run_json(|context| {
             let address = one_address("connect", context.args())?;
-            let device = handoff::connect_for_user(&address, config::load().power_on_adapter)?;
+            let device = connect_for_user(&address)?;
             Ok(serde_json::to_value(device)?)
         })
+}
+
+fn connect_for_user(address: &str) -> anyhow::Result<crate::bluetooth::DeviceInfo> {
+    let power_on_adapter = config::load().power_on_adapter;
+    crate::connect::for_user(address, power_on_adapter, |address| {
+        platform::connect_device(address, power_on_adapter)
+    })
 }
 
 fn pair_command() -> Command {
@@ -243,24 +249,6 @@ fn reclaim_command() -> Command {
                 "address": address,
                 "reclaimed": true,
             }))
-        })
-}
-
-fn take_over_command() -> Command {
-    Command::new("take-over")
-        .about(
-            "Ask the linked computer that has a Bluetooth device to let go, then connect it here.",
-        )
-        .usage(format!("{PLUGIN_ID} take-over AA:BB:CC:DD:EE:FF"))
-        .output("Where the device came from and whether its audio is ready here.")
-        .exit_behavior("Exits non-zero when the device could not be moved here.")
-        .run_plain_text(|context| {
-            let address = one_address("take-over", context.args())?;
-            let config = crate::config::load();
-            let result = crate::handoff::run_take_over(&address, config.power_on_adapter);
-            let message = crate::handoff::message(&result);
-            result?;
-            Ok(PlainTextOutput::text(message))
         })
 }
 

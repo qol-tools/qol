@@ -40,10 +40,6 @@ input = { address = "string" }
 description = "Remove a Bluetooth device and its pairing information"
 input = { address = "string" }
 
-[action.take_over]
-description = "Ask the linked computer that has a Bluetooth device to let go, then connect it here and check audio"
-input = { address = "string" }
-
 [action.release_for_handoff]
 description = "Let go of a Bluetooth device for a linked computer and keep it from reconnecting here"
 input = { address = "string" }

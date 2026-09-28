@@ -254,7 +254,6 @@ enum DaemonAction {
     HandoffState,
     ReleaseForHandoff,
     ResumeReconnect,
-    TakeOver,
 }
 
 impl TryFrom<&str> for DaemonAction {
@@ -289,7 +288,6 @@ impl TryFrom<&str> for DaemonAction {
             "handoff_state" => Ok(Self::HandoffState),
             "release_for_handoff" => Ok(Self::ReleaseForHandoff),
             "resume_reconnect" => Ok(Self::ResumeReconnect),
-            "take_over" => Ok(Self::TakeOver),
             unknown => Err(format!("unknown Bluetooth action: {unknown}")),
         }
     }
@@ -1469,16 +1467,6 @@ fn dispatch_daemon_action(
             crate::handoff::release(address, list_devices, disconnect_device, std::thread::sleep)
         }),
         DaemonAction::ResumeReconnect => handoff_result(request, crate::handoff::resume),
-        DaemonAction::TakeOver => match request_address(request) {
-            Ok(address) => match begin_device_action(address, DeviceIntent::MoveHere) {
-                Ok(()) => {
-                    spawn_take_over(address);
-                    ReadResult::Handled
-                }
-                Err(error) => ReadResult::Error(error.to_string()),
-            },
-            Err(error) => ReadResult::Error(error),
-        },
     }
 }
 
@@ -1493,15 +1481,6 @@ fn handoff_result(
         },
         Err(error) => ReadResult::Error(error),
     }
-}
-
-fn spawn_take_over(address: Address) {
-    let power_on_adapter = crate::config::load().power_on_adapter;
-    std::mem::drop(std::thread::spawn(move || {
-        let result = crate::handoff::run_take_over(&address.to_string(), power_on_adapter);
-        send_notification("Bluetooth", &crate::handoff::message(&result));
-        finish_device_action(address, "move here", &result);
-    }));
 }
 
 fn host_fix_id(request: &DaemonRequest) -> std::result::Result<String, String> {
@@ -1843,16 +1822,10 @@ async fn daemon_loop(
                     continue;
                 }
                 if let DaemonCommand::Connect(address) = command {
-                    crate::handoff::release_for_user(&address.to_string());
                     let cached = discovery_state()
                         .ok()
                         .and_then(|state| state.device(&address.to_string()));
-                    spawn_explicit_device_action(
-                        ExplicitDeviceAction::Connect,
-                        address,
-                        config.power_on_adapter,
-                        cached,
-                    );
+                    spawn_connect(address, config.power_on_adapter, cached);
                     continue;
                 }
                 if let DaemonCommand::Disconnect(address) = command {
@@ -2038,6 +2011,22 @@ fn spawn_explicit_device_action(
             run_explicit_device_action(action, address, power_on_adapter, cached),
         )
         .await;
+        finish_device_action(address, action.label(), &result);
+        trace_device_action(action.trace_name(), address, result);
+    }));
+}
+
+fn spawn_connect(address: Address, power_on_adapter: bool, cached: Option<DeviceInfo>) {
+    let runtime = tokio::runtime::Handle::current();
+    let action = ExplicitDeviceAction::Connect;
+    std::mem::drop(std::thread::spawn(move || {
+        let result = crate::connect::for_user(&address.to_string(), power_on_adapter, |_| {
+            runtime.block_on(complete_device_action_within(
+                action.label(),
+                EXPLICIT_DEVICE_ACTION_TIMEOUT,
+                run_explicit_device_action(action, address, power_on_adapter, cached.clone()),
+            ))
+        });
         finish_device_action(address, action.label(), &result);
         trace_device_action(action.trace_name(), address, result);
     }));

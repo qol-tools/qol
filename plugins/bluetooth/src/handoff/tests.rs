@@ -5,8 +5,9 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use super::{take_over, Local, Moved, Operation, Peer, Remote, RemoteError};
+use super::{Handoff, Local, Operation, Peer, Remote, RemoteError};
 use crate::bluetooth::DeviceInfo;
+use crate::connect::{Attempt, Route};
 
 const EARBUDS: &str = "AA:BB:CC:DD:EE:FF";
 
@@ -100,6 +101,13 @@ impl Local for FakeLocal {
     fn pause(&self, _: Duration) {}
 }
 
+fn failure(attempt: Attempt) -> String {
+    match attempt {
+        Attempt::Failed(error) => format!("{error:#}"),
+        _ => panic!("expected a failure"),
+    }
+}
+
 #[test]
 fn the_computer_holding_the_earbuds_releases_them_and_they_connect_here() {
     let remote = FakeRemote {
@@ -122,17 +130,15 @@ fn the_computer_holding_the_earbuds_releases_them_and_they_connect_here() {
         Ok(json!({"released": true, "was_connected": true})),
     );
     let local = FakeLocal::new(vec![Err(anyhow!("slot still busy")), Ok(earbuds(true))]);
+    let handoff = Handoff { remote, local };
 
-    let moved = take_over("aa:bb:cc:dd:ee:ff", &remote, &local).unwrap();
-
-    assert_eq!(
-        moved,
-        Moved::Connected {
-            from: Some("Laptop".into())
-        }
-    );
-    assert_eq!(*local.attempts.borrow(), 2);
-    assert!(!remote
+    assert!(matches!(
+        handoff.attempt("aa:bb:cc:dd:ee:ff"),
+        Attempt::Connected(_)
+    ));
+    assert_eq!(*handoff.local.attempts.borrow(), 2);
+    assert!(!handoff
+        .remote
         .calls
         .borrow()
         .iter()
@@ -153,13 +159,17 @@ fn a_failed_local_connect_tells_the_other_computer_to_reconnect() {
         Ok(earbuds(false)),
         Err(anyhow!("refused")),
     ]);
+    let handoff = Handoff { remote, local };
 
-    let error = take_over(EARBUDS, &remote, &local).unwrap_err();
+    let message = failure(handoff.attempt(EARBUDS));
 
-    assert!(format!("{error:#}").contains("Laptop can reconnect them again"));
-    assert_eq!(*local.attempts.borrow(), 3);
+    assert!(
+        message.contains("Laptop can reconnect them again"),
+        "{message}"
+    );
+    assert_eq!(*handoff.local.attempts.borrow(), 3);
     assert_eq!(
-        remote.calls.borrow().last(),
+        handoff.remote.calls.borrow().last(),
         Some(&("laptop".to_string(), Operation::Resume))
     );
 }
@@ -178,14 +188,15 @@ fn an_unproven_release_stops_before_this_computer_touches_the_earbuds() {
         .reply("laptop", Operation::State, Ok(json!({"connected": true})))
         .reply("laptop", Operation::Release, reply);
         let local = FakeLocal::new(vec![Ok(earbuds(true))]);
+        let handoff = Handoff { remote, local };
 
-        assert!(take_over(EARBUDS, &remote, &local).is_err());
-        assert_eq!(*local.attempts.borrow(), 0);
+        failure(handoff.attempt(EARBUDS));
+        assert_eq!(*handoff.local.attempts.borrow(), 0);
     }
 }
 
 #[test]
-fn without_a_holder_the_earbuds_connect_here_and_unreachable_computers_are_named() {
+fn without_a_holder_the_route_steps_aside_and_names_unreachable_computers() {
     let remote = FakeRemote {
         peers: vec![("laptop", "Laptop")],
         ..Default::default()
@@ -195,39 +206,36 @@ fn without_a_holder_the_earbuds_connect_here_and_unreachable_computers_are_named
         Operation::State,
         Err(RemoteError::Refused("it is not connected".into())),
     );
-    let failing = FakeLocal::new(vec![
-        Err(anyhow!("busy")),
-        Err(anyhow!("busy")),
-        Err(anyhow!("busy")),
-    ]);
-
-    let error = take_over(EARBUDS, &remote, &failing).unwrap_err();
-    assert!(format!("{error:#}").contains("Laptop (it is not connected)"));
+    let handoff = Handoff {
+        remote,
+        local: FakeLocal::new(Vec::new()),
+    };
+    let Attempt::Skipped(Some(note)) = handoff.attempt(EARBUDS) else {
+        panic!("expected the route to step aside with a note");
+    };
+    assert!(note.contains("Laptop (it is not connected)"), "{note}");
 
     let remote = FakeRemote {
         peers: vec![("laptop", "Laptop")],
         ..Default::default()
     }
     .reply("laptop", Operation::State, Ok(json!({"connected": false})));
-    let local = FakeLocal::new(vec![Ok(earbuds(true))]);
-    assert_eq!(
-        take_over(EARBUDS, &remote, &local).unwrap(),
-        Moved::Connected { from: None }
-    );
+    let handoff = Handoff {
+        remote,
+        local: FakeLocal::new(Vec::new()),
+    };
+    assert!(matches!(handoff.attempt(EARBUDS), Attempt::Skipped(None)));
+    assert_eq!(*handoff.local.attempts.borrow(), 0);
 }
 
 #[test]
-fn connected_earbuds_and_unpaired_devices_need_no_remote_call() {
-    let remote = FakeRemote::default();
+fn unpaired_devices_need_no_remote_call() {
     let mut local = FakeLocal::new(Vec::new());
-    local.device = earbuds(true);
-    assert_eq!(
-        take_over(EARBUDS, &remote, &local).unwrap(),
-        Moved::AlreadyHere
-    );
-
-    local.device.connected = false;
     local.device.paired = false;
-    assert!(take_over(EARBUDS, &remote, &local).is_err());
-    assert!(remote.calls.borrow().is_empty());
+    let handoff = Handoff {
+        remote: FakeRemote::default(),
+        local,
+    };
+    assert!(matches!(handoff.attempt(EARBUDS), Attempt::Skipped(None)));
+    assert!(handoff.remote.calls.borrow().is_empty());
 }

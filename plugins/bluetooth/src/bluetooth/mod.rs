@@ -59,7 +59,6 @@ pub struct DeviceActionState {
 pub enum DeviceIntent {
     Pair,
     Connect,
-    MoveHere,
     Disconnect,
     Remove,
     Trust(bool),
@@ -70,7 +69,6 @@ impl DeviceIntent {
         match self {
             Self::Pair => "Pairing",
             Self::Connect => "Connecting",
-            Self::MoveHere => "Moving here",
             Self::Disconnect => "Disconnecting",
             Self::Remove => "Removing",
             Self::Trust(true) => "Trusting",
@@ -81,7 +79,7 @@ impl DeviceIntent {
     fn reached_by(self, device: &DeviceInfo) -> bool {
         match self {
             Self::Pair => device.paired,
-            Self::Connect | Self::MoveHere => device.connected,
+            Self::Connect => device.connected,
             Self::Disconnect => !device.connected,
             Self::Remove => !device.paired && !device.trusted,
             Self::Trust(trusted) => device.trusted == trusted,
@@ -319,7 +317,6 @@ pub fn devices_payload(
                 "can_pair": !device.paired,
                 "can_reclaim": capabilities.audio_reclaim && ready && audio,
                 "can_remove": device.paired || device.trusted,
-                "can_take_over": device.paired && audio && !ready,
                 "can_trust": capabilities.separate_trust_flag && device.paired && !device.trusted,
                 "can_untrust": capabilities.separate_trust_flag && device.trusted,
                 "connected": device.connected,
@@ -468,7 +465,6 @@ mod tests {
                         "can_pair": false,
                         "can_reclaim": false,
                         "can_remove": true,
-                        "can_take_over": false,
                         "can_trust": false,
                         "can_untrust": true,
                         "connected": true,
@@ -496,7 +492,6 @@ mod tests {
                         "can_pair": false,
                         "can_reclaim": false,
                         "can_remove": true,
-                        "can_take_over": false,
                         "can_trust": false,
                         "can_untrust": true,
                         "connected": false,
@@ -524,7 +519,6 @@ mod tests {
                         "can_pair": true,
                         "can_reclaim": false,
                         "can_remove": false,
-                        "can_take_over": false,
                         "can_trust": false,
                         "can_untrust": false,
                         "connected": false,

@@ -57,15 +57,8 @@ card_description = "Devices nearby and already paired."
 [[field.devices.row_actions]]
 action = "connect_device"
 label = "Connect"
-description = "Connects the device to this computer."
+description = "Connects the device to this computer, taking it from a linked computer when one has it."
 when = "can_connect"
-input = { address = "{address}" }
-
-[[field.devices.row_actions]]
-action = "take_over"
-label = "Move here"
-description = "Asks the linked computer that has the device to let go, then connects it here."
-when = "can_take_over"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]

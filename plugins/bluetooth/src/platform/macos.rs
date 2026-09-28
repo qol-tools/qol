@@ -606,16 +606,6 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
             )
         }),
         "resume_reconnect" => handoff_result(request, crate::handoff::resume),
-        "take_over" => match request_address(request) {
-            Ok(address) => match begin_device_action(&address, DeviceIntent::MoveHere) {
-                Ok(()) => {
-                    spawn_take_over(address);
-                    ReadResult::Handled
-                }
-                Err(error) => ReadResult::Error(error.to_string()),
-            },
-            Err(error) => ReadResult::Error(error),
-        },
         unknown => ReadResult::Error(format!("unknown Bluetooth action: {unknown}")),
     }
 }
@@ -628,15 +618,6 @@ fn handoff_result(
         Ok(address) => snapshot_result(operation(&address)),
         Err(error) => ReadResult::Error(error),
     }
-}
-
-fn spawn_take_over(address: String) {
-    let power_on_adapter = crate::config::load().power_on_adapter;
-    std::mem::drop(std::thread::spawn(move || {
-        let result = crate::handoff::run_take_over(&address, power_on_adapter);
-        send_notification("Bluetooth", &crate::handoff::message(&result));
-        finish_device_action(&address, "move here", &result.map(std::mem::drop));
-    }));
 }
 
 fn snapshot_result(payload: Result<serde_json::Value>) -> ReadResult<DaemonCommand> {
@@ -773,7 +754,10 @@ fn handle_daemon_command(command: DaemonCommand, config: &mut ReconnectConfig) -
             pair_device(&address, power_on_adapter).map(std::mem::drop)
         }),
         DaemonCommand::Connect(address) => run_device_command(&address, "connect", || {
-            crate::handoff::connect_for_user(&address, power_on_adapter).map(std::mem::drop)
+            crate::connect::for_user(&address, power_on_adapter, |address| {
+                connect_device(address, power_on_adapter)
+            })
+            .map(std::mem::drop)
         }),
         DaemonCommand::Disconnect(address) => run_device_command(&address, "disconnect", || {
             disconnect_device(&address).map(std::mem::drop)

@@ -13,6 +13,7 @@ use crate::bluetooth::{connection_ready, normalize_address, DeviceInfo};
 use crate::config::ReconnectConfig;
 
 use self::core::CoreRemote;
+use crate::connect::{Attempt, Route};
 
 const HANDOFF_HOLD: Duration = Duration::from_secs(12 * 60 * 60);
 const RELEASE_SETTLE: Duration = Duration::from_secs(5);
@@ -69,84 +70,93 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum Moved {
-    AlreadyHere,
-    Connected { from: Option<String> },
+pub(crate) struct Handoff<R, L> {
+    remote: R,
+    local: L,
 }
 
-pub(crate) fn take_over(address: &str, remote: &impl Remote, local: &impl Local) -> Result<Moved> {
-    let address = normalize_address(address)?;
-    let device = local
-        .device(&address)?
-        .ok_or_else(|| anyhow!("{address} is not known to this computer"))?;
-    if !device.paired {
-        bail!("{} is not paired with this computer", device.alias);
-    }
-    if connection_ready(&device) {
-        return Ok(Moved::AlreadyHere);
-    }
-    let peers = remote
-        .peers()
-        .map_err(|error| anyhow!("linked computers are unavailable: {error:#}"))?;
-    let mut unreachable = Vec::new();
-    let mut holder = None;
-    for peer in peers.iter().take(MAX_PEERS) {
-        match remote.call(peer, Operation::State, &address) {
-            Ok(state) if state["connected"] == true => {
-                holder = Some(peer);
-                break;
-            }
-            Ok(_) => {}
-            Err(error) => unreachable.push(format!("{} ({error})", peer.name)),
+impl Handoff<CoreRemote, PlatformLocal> {
+    pub(crate) fn from_env(power_on_adapter: bool) -> Self {
+        Self {
+            remote: CoreRemote::from_env(),
+            local: PlatformLocal { power_on_adapter },
         }
     }
-    let Some(peer) = holder else {
-        return connect_here(&address, local)
-            .map(|_| Moved::Connected { from: None })
-            .map_err(|error| match unreachable.is_empty() {
-                true => error,
-                false => error.context(format!(
+}
+
+impl<R: Remote, L: Local> Route for Handoff<R, L> {
+    fn attempt(&self, address: &str) -> Attempt {
+        let attempt = self.move_here(address);
+        let outcome = match &attempt {
+            Attempt::Connected(_) => "moved",
+            Attempt::Skipped(_) => "skipped",
+            Attempt::Failed(_) => "failed",
+        };
+        qol_runtime::probe!("BLUETOOTH_HANDOFF", "event=move outcome={outcome}");
+        attempt
+    }
+}
+
+impl<R: Remote, L: Local> Handoff<R, L> {
+    fn move_here(&self, address: &str) -> Attempt {
+        let Ok(address) = normalize_address(address) else {
+            return Attempt::Skipped(None);
+        };
+        let device = match self.local.device(&address) {
+            Ok(Some(device)) if device.paired => device,
+            _ => return Attempt::Skipped(None),
+        };
+        let Ok(peers) = self.remote.peers() else {
+            return Attempt::Skipped(None);
+        };
+        let mut unreachable = Vec::new();
+        let mut holder = None;
+        for peer in peers.iter().take(MAX_PEERS) {
+            match self.remote.call(peer, Operation::State, &address) {
+                Ok(state) if state["connected"] == true => {
+                    holder = Some(peer);
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => unreachable.push(format!("{} ({error})", peer.name)),
+            }
+        }
+        let Some(peer) = holder else {
+            return Attempt::Skipped((!unreachable.is_empty()).then(|| {
+                format!(
                     "no reachable linked computer has {}; not asked: {}",
                     device.alias,
                     unreachable.join(", ")
-                )),
-            });
-    };
-    match remote.call(peer, Operation::Release, &address) {
-        Ok(result) if result["released"] == true => {}
-        Ok(_) => bail!(
-            "{} did not confirm that it let go of {}",
-            peer.name,
-            device.alias
-        ),
-        Err(RemoteError::Unknown) => bail!(
-            "{} may have let go of {}, but the result is unknown; check it before trying again",
-            peer.name,
-            device.alias
-        ),
-        Err(error) => bail!(
-            "{} refused to let go of {}: {error}",
-            peer.name,
-            device.alias
-        ),
+                )
+            }));
+        };
+        match self.take_from(peer, &address, &device.alias) {
+            Ok(device) => Attempt::Connected(device),
+            Err(error) => Attempt::Failed(error),
+        }
     }
-    match connect_here(&address, local) {
-        Ok(_) => Ok(Moved::Connected {
-            from: Some(peer.name.clone()),
-        }),
-        Err(error) => {
-            let resumed = remote.call(peer, Operation::Resume, &address).is_ok();
-            let next = if resumed {
+
+    fn take_from(&self, peer: &Peer, address: &str, alias: &str) -> Result<DeviceInfo> {
+        match self.remote.call(peer, Operation::Release, address) {
+            Ok(result) if result["released"] == true => {}
+            Ok(_) => bail!("{} did not confirm that it let go of {alias}", peer.name),
+            Err(RemoteError::Unknown) => bail!(
+                "{} may have let go of {alias}, but the result is unknown; check it before trying again",
+                peer.name
+            ),
+            Err(error) => bail!("{} refused to let go of {alias}: {error}", peer.name),
+        }
+        connect_here(address, &self.local).map_err(|error| {
+            let next = if self.remote.call(peer, Operation::Resume, address).is_ok() {
                 format!("{} can reconnect them again", peer.name)
             } else {
                 format!("{} could not be told to reconnect them", peer.name)
             };
-            Err(error.context(format!(
-                "{} let go of {}, but this computer could not connect; {next}",
-                peer.name, device.alias
-            )))
-        }
+            error.context(format!(
+                "{} let go of {alias}, but this computer could not connect; {next}",
+                peer.name
+            ))
+        })
     }
 }
 
@@ -182,40 +192,11 @@ impl Local for PlatformLocal {
     }
 
     fn connect(&self, address: &str) -> Result<DeviceInfo> {
-        connect_for_user(address, self.power_on_adapter)
+        crate::platform::connect_device(address, self.power_on_adapter)
     }
 
     fn pause(&self, delay: Duration) {
         std::thread::sleep(delay);
-    }
-}
-
-pub(crate) fn run_take_over(address: &str, power_on_adapter: bool) -> Result<Moved> {
-    let result = take_over(
-        address,
-        &CoreRemote::from_env(),
-        &PlatformLocal { power_on_adapter },
-    );
-    let outcome = match &result {
-        Ok(Moved::AlreadyHere) => "already_here",
-        Ok(Moved::Connected { from: Some(_) }) => "moved",
-        Ok(Moved::Connected { from: None }) => "connected",
-        Err(_) => "failed",
-    };
-    qol_runtime::probe!("BLUETOOTH_HANDOFF", "event=take_over outcome={outcome}");
-    result
-}
-
-pub(crate) fn message(result: &Result<Moved>) -> String {
-    match result {
-        Ok(Moved::AlreadyHere) => "Already connected here with audio ready".into(),
-        Ok(Moved::Connected { from: Some(from) }) => {
-            format!("Moved here from {from}; audio is ready")
-        }
-        Ok(Moved::Connected { from: None }) => {
-            "No linked computer had it; connected here with audio ready".into()
-        }
-        Err(error) => format!("Could not move it here: {error:#}"),
     }
 }
 
@@ -236,11 +217,6 @@ pub(crate) fn release_for_user(address: &str) {
             error.kind()
         );
     }
-}
-
-pub(crate) fn connect_for_user(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
-    release_for_user(address);
-    crate::platform::connect_device(address, power_on_adapter)
 }
 
 pub(crate) fn release_managed_for_user(config: &ReconnectConfig) {
