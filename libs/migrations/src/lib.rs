@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 pub mod cloud;
 mod fs_util;
+pub mod hotkey_layers;
 mod journal;
 mod lock;
 pub mod portability;
@@ -16,6 +17,7 @@ mod v3_18_to_v3_19_declared_plugin_id;
 mod v3_19_to_v3_20_plugin_uid;
 mod v3_20_to_v3_21_keyremap_delete_alias;
 mod v3_21_to_v3_22_plugin_id_rename;
+mod v3_77_to_v3_78_shared_hotkeys;
 
 pub use v3_15_to_v3_16_gist_to_repo::V3_15ToV3_16GistToRepo;
 pub use v3_16_to_v3_17_device_to_os::V3_16ToV3_17DeviceToOs;
@@ -110,6 +112,9 @@ impl PreFlightRegistry {
         ));
         registry.register(Box::new(
             v3_21_to_v3_22_plugin_id_rename::V3_21ToV3_22PluginIdRename::default_for_production(),
+        ));
+        registry.register(Box::new(
+            v3_77_to_v3_78_shared_hotkeys::V3_77ToV3_78SharedHotkeys,
         ));
         registry
     }

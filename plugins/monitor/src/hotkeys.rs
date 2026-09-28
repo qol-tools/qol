@@ -25,15 +25,13 @@ pub struct HostHotkeyConfig {
     pub hotkeys: Vec<HostHotkeyBinding>,
 }
 
-pub fn load_host_hotkeys(path: &Path) -> Result<Option<HostHotkeyConfig>> {
-    if !path.exists() {
+pub fn load_host_hotkeys(config_root: &Path) -> Result<Option<HostHotkeyConfig>> {
+    let Some(hotkeys) = crate::config::sync_paths(config_root).read_hotkeys()? else {
         return Ok(None);
-    }
-    let content = std::fs::read(path)
-        .with_context(|| format!("failed to read host hotkey config {}", path.display()))?;
-    let config: HostHotkeyConfig = serde_json::from_slice(&content)
-        .with_context(|| format!("failed to parse host hotkey config {}", path.display()))?;
-    Ok(Some(config))
+    };
+    let hotkeys = serde_json::from_value(serde_json::Value::Array(hotkeys))
+        .context("failed to parse host hotkey config")?;
+    Ok(Some(HostHotkeyConfig { hotkeys }))
 }
 
 pub fn monitor_bindings(config: &HostHotkeyConfig) -> Vec<&HostHotkeyBinding> {
@@ -58,7 +56,7 @@ pub fn duplicate_enabled_chord(config: &HostHotkeyConfig) -> Option<String> {
 }
 
 pub fn hotkey_registration_result(config_root: &Path) -> Result<DoctorCheckResult> {
-    let Some(config) = load_host_hotkeys(&crate::config::hotkeys_path(config_root)?)? else {
+    let Some(config) = load_host_hotkeys(config_root)? else {
         return Ok(DoctorCheckResult::warn(
             "hotkey_bindings",
             "no host hotkey config exists; brightness hotkeys are unbound",

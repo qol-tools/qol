@@ -159,6 +159,29 @@ fn os_bucket_files(profile_dir: &Path, file_name: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+pub(crate) fn archive_original(
+    config_dir: &Path,
+    archive_dir: &Path,
+    path: &Path,
+) -> Result<PathBuf> {
+    let relative = path
+        .strip_prefix(config_dir)
+        .with_context(|| format!("{} is outside {}", path.display(), config_dir.display()))?;
+    let archived_path = archive_dir.join(relative);
+    if let Some(parent) = archived_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::copy(path, &archived_path).with_context(|| {
+        format!(
+            "archiving original {} -> {}",
+            path.display(),
+            archived_path.display()
+        )
+    })?;
+    Ok(archived_path)
+}
+
 pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Result<()> {
     let serialized = serde_json::to_string_pretty(value).context("serializing migrated json")?;
     qol_fs::atomic_write(path, serialized.as_bytes())

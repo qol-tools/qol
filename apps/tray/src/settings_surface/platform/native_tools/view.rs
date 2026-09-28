@@ -38,7 +38,10 @@ use super::model::{
 const MAX_VISIBLE: usize = 9;
 const EDITOR_DEPTH: usize = 1;
 const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
-const HOTKEY_FIELDS: usize = 4;
+const HOTKEY_FIELDS: usize = 5;
+static OS_ONLY_LABEL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("Only on {}", crate::features::plugin_store::host_os_label())
+});
 const EDITOR_ANIMATION: &str = "native-tools-editor-slide";
 const CHOOSE_ANIMATION: &str = "native-tools-choose-slide";
 
@@ -850,6 +853,10 @@ impl NativeToolsView {
                     self.start_capture(cx);
                     cx.notify();
                 }
+                4 if matches!(key, "enter" | "return" | "space") => {
+                    draft.os_only = !draft.os_only;
+                    cx.notify();
+                }
                 _ => {}
             },
             Mode::List => {}
@@ -1146,6 +1153,14 @@ impl NativeToolsView {
             .and_then(|plugin| self.current_action(plugin, &hotkey.action))
             .map(|action| action.label.clone())
             .unwrap_or_else(|| hotkey.action.clone());
+        let action = if hotkey.os_only {
+            format!(
+                "{action} · {} only",
+                crate::features::plugin_store::host_os_label()
+            )
+        } else {
+            action
+        };
         SettingsRow::setting(("native-hotkey-row", item), kit)
             .selected(selected, self.body_focused)
             .dimmed(!hotkey.enabled)
@@ -1335,6 +1350,13 @@ impl NativeToolsView {
             .child(self.select_field(1, "Plugin", plugin_label, draft.selected == 1, cx))
             .child(self.select_field(2, "Action", action_label, draft.selected == 2, cx))
             .child(self.capture_field(draft, cx))
+            .child(self.boolean_field(
+                4,
+                OS_ONLY_LABEL.as_str(),
+                draft.os_only,
+                draft.selected == 4,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -1502,7 +1524,7 @@ impl NativeToolsView {
             Mode::Shortcut(draft) => {
                 draft.selected = index.min(draft.field_count().saturating_sub(1));
             }
-            Mode::Hotkey(draft) => draft.selected = index.min(3),
+            Mode::Hotkey(draft) => draft.selected = index.min(HOTKEY_FIELDS - 1),
             Mode::List => {}
         }
     }
@@ -1520,6 +1542,7 @@ impl NativeToolsView {
             Mode::Hotkey(draft) => match draft.selected {
                 0 => draft.enabled = !draft.enabled,
                 3 => self.start_capture(cx),
+                4 => draft.os_only = !draft.os_only,
                 _ => {}
             },
             Mode::List => {}

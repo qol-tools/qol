@@ -179,7 +179,11 @@ pub fn session_dir(config_root: &Path) -> Result<PathBuf> {
 }
 
 pub fn hotkeys_path(config_root: &Path) -> Result<PathBuf> {
-    Ok(SyncPaths::new(profile_root(config_root)).hotkeys_path())
+    Ok(sync_paths(config_root).hotkeys_path())
+}
+
+pub fn sync_paths(config_root: &Path) -> SyncPaths {
+    SyncPaths::new(profile_root(config_root))
 }
 
 pub fn legacy_config_path(config_root: &Path) -> Result<PathBuf> {

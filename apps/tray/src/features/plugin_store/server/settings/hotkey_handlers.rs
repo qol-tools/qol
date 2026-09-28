@@ -37,7 +37,7 @@ pub(in super::super) async fn set_hotkeys(
 }
 
 pub(in super::super) async fn open_hotkeys_file() -> impl IntoResponse {
-    let path = crate::paths::hotkeys_path();
+    let path = crate::paths::core_hotkeys_path();
     blocking_open(move || open_config_file(path)).await
 }
 

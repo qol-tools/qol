@@ -102,7 +102,7 @@ fn write_json(path: &Path, value: &Value) {
 
 fn write_hotkeys(value: Value) {
     write_json(
-        &paths::hotkeys_path().unwrap(),
+        &paths::core_hotkeys_path().unwrap(),
         &json!({ "hotkeys": value }),
     );
 }

@@ -218,7 +218,13 @@ pub fn replace_plugin_configs(configs: &HashMap<String, Value>) -> Result<()> {
 }
 
 pub fn read_hotkeys_list() -> Vec<Value> {
-    read_wrapped_json_array(crate::paths::hotkeys_path(), "hotkeys")
+    match crate::hotkeys::HotkeyLayers::active().and_then(|layers| layers.load_values()) {
+        Ok(hotkeys) => hotkeys,
+        Err(error) => {
+            log::warn!("Failed to read hotkeys for the profile bundle: {error:#}");
+            Vec::new()
+        }
+    }
 }
 
 pub fn read_shortcuts_list() -> Vec<Value> {
@@ -231,10 +237,7 @@ pub fn read_task_runner_value() -> Value {
 
 pub(super) fn write_core_settings(bundle: &ProfileImportBundle) -> Result<()> {
     if let Some(hotkeys) = &bundle.hotkeys {
-        write_json_config(
-            crate::paths::hotkeys_path()?,
-            &serde_json::json!({ "hotkeys": hotkeys }),
-        )?;
+        crate::hotkeys::HotkeyLayers::active()?.save_values(hotkeys)?;
     }
     if let Some(shortcuts) = &bundle.shortcuts {
         write_json_config(

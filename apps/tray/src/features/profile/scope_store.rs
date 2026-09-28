@@ -168,6 +168,10 @@ impl ProfileScopeStore {
         self.os_dir().join(HOTKEYS_FILE)
     }
 
+    pub fn core_hotkeys_path(&self) -> PathBuf {
+        self.core_dir().join(HOTKEYS_FILE)
+    }
+
     pub fn shortcuts_path(&self) -> PathBuf {
         self.os_dir().join(SHORTCUTS_FILE)
     }

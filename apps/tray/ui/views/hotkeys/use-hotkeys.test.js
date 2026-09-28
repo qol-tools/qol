@@ -61,7 +61,7 @@ register('data:text/javascript,' + encodeURIComponent(loaderSource), pathToFileU
 
 globalThis.__hotkeyApiText = async () => 'Hotkeys saved';
 const { executeDelete, executeSave } = await import(`./use-hotkeys.js?test=${Date.now()}`);
-const { persistHotkeys, getAvailableActions } = await import('./data.js');
+const { persistHotkeys, getAvailableActions, buildSavedHotkeys } = await import('./data.js');
 
 function deferred() {
     let resolve;
@@ -227,4 +227,22 @@ test('getAvailableActions hides actions that are not hotkey bindable', () => {
     const available = getAvailableActions(plugins, [], 'qol-sound', null);
 
     assert.deepEqual(available.map(action => action.id), ['volume_up']);
+});
+
+test('editing a hotkey that only runs on this OS keeps it there', () => {
+    const local = { ...hotkey('hk-1', 'Super+N'), os_only: true };
+
+    assert.deepEqual(
+        buildSavedHotkeys([local], editModal(local, 'Super+M')),
+        [{ ...local, key: 'Super+M' }]
+    );
+});
+
+test('editing a shared hotkey keeps it shared', () => {
+    const shared = hotkey('hk-1', 'Super+N');
+
+    assert.deepEqual(
+        buildSavedHotkeys([shared], editModal(shared, 'Super+M')),
+        [{ ...shared, key: 'Super+M' }]
+    );
 });

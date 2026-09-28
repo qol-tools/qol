@@ -267,6 +267,7 @@ fn binding(uid: &str, action: &str, key: &str, enabled: bool) -> HotkeyBinding {
         plugin_uid: PluginUid::new(uid),
         action: action.to_string(),
         enabled,
+        os_only: false,
     }
 }
 
@@ -392,6 +393,7 @@ fn hotkey_binding_serializes_as_plugin_uid_not_plugin_id() {
         plugin_uid: PluginUid::new("plugin-x"),
         action: "run".to_string(),
         enabled: true,
+        os_only: false,
     };
     let value = serde_json::to_value(&binding).unwrap();
     assert_eq!(

@@ -64,6 +64,7 @@ function hotkeyEntry(modal) {
         key: modal.key,
         plugin_uid: modal.pluginUid,
         action: modal.action,
-        enabled: modal.enabled !== false
+        enabled: modal.enabled !== false,
+        ...(modal.hotkey?.os_only ? { os_only: true } : {})
     };
 }

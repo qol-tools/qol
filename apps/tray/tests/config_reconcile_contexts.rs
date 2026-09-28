@@ -97,6 +97,7 @@ fn enabled_binding(id: &str, key: &str, plugin_id: &str, action: &str) -> Hotkey
         plugin_uid: qol_tray::plugins::PluginUid::new(plugin_id),
         action: action.to_string(),
         enabled: true,
+        os_only: false,
     }
 }
 
@@ -107,6 +108,7 @@ fn disabled_binding(id: &str, key: &str, plugin_id: &str, action: &str) -> Hotke
         plugin_uid: qol_tray::plugins::PluginUid::new(plugin_id),
         action: action.to_string(),
         enabled: false,
+        os_only: false,
     }
 }
 

@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::fs_util::{list_profile_dirs, plugin_config_dirs, write_json_atomic};
+use crate::fs_util::{archive_original, list_profile_dirs, plugin_config_dirs, write_json_atomic};
 use crate::{FileMigration, MigrationReport};
 
 pub struct V3_20ToV3_21KeyremapDeleteAlias;
@@ -154,25 +154,6 @@ fn rewrite_key_string(value: &mut Value) -> bool {
     }
     *value = Value::String("backspace".to_string());
     true
-}
-
-fn archive_original(config_dir: &Path, archive_dir: &Path, path: &Path) -> Result<PathBuf> {
-    let relative = path
-        .strip_prefix(config_dir)
-        .with_context(|| format!("{} is outside {}", path.display(), config_dir.display()))?;
-    let archived_path = archive_dir.join(relative);
-    if let Some(parent) = archived_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    std::fs::copy(path, &archived_path).with_context(|| {
-        format!(
-            "archiving original {} -> {}",
-            path.display(),
-            archived_path.display()
-        )
-    })?;
-    Ok(archived_path)
 }
 
 #[cfg(test)]

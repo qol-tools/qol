@@ -326,6 +326,7 @@ pub(super) struct HotkeyDraft {
     pub(super) action: String,
     pub(super) key: String,
     pub(super) enabled: bool,
+    pub(super) os_only: bool,
     pub(super) selected: usize,
     pub(super) recording: bool,
     pub(super) capture_session: Option<u64>,
@@ -350,6 +351,7 @@ impl HotkeyDraft {
             action,
             key: String::new(),
             enabled: true,
+            os_only: false,
             selected: 3,
             recording: false,
             capture_session: None,
@@ -363,6 +365,7 @@ impl HotkeyDraft {
             action: hotkey.action.clone(),
             key: hotkey.key.clone(),
             enabled: hotkey.enabled,
+            os_only: hotkey.os_only,
             selected: 0,
             recording: false,
             capture_session: None,
@@ -411,6 +414,7 @@ impl HotkeyDraft {
             plugin_uid: crate::plugins::PluginUid::new(&self.plugin_uid),
             action: self.action.clone(),
             enabled: self.enabled,
+            os_only: self.os_only,
         }
     }
 }

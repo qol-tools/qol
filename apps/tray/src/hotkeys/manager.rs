@@ -2,20 +2,17 @@ use super::capture::{parse_combo, Combo};
 use super::catalog::AvailableActions;
 use super::planning::{plan_registrations, PlannedRegistration};
 use super::registration_status::{self, RegistrationError};
-use super::store;
+use super::store::HotkeyLayers;
 use super::{HotkeyAction, HotkeyConfig};
 use anyhow::Result;
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager};
 use std::collections::HashMap;
-use std::path::PathBuf;
-
-use crate::paths;
 
 pub struct HotkeyManager {
     manager: Option<GlobalHotKeyManager>,
     applied: HashMap<String, AppliedHotkey>,
     bindings: HashMap<u32, RegisteredHotkey>,
-    config_path: PathBuf,
+    layers: HotkeyLayers,
 }
 
 struct AppliedHotkey {
@@ -31,15 +28,15 @@ pub(super) struct RegisteredHotkey {
 
 impl HotkeyManager {
     pub fn new() -> Result<Self> {
-        Ok(Self::with_config_path(paths::hotkeys_path()?))
+        Ok(Self::with_layers(HotkeyLayers::active()?))
     }
 
     pub fn load_config(&self) -> Result<HotkeyConfig> {
-        store::load_config(&self.config_path)
+        self.layers.load()
     }
 
     pub fn save_config(&self, config: &HotkeyConfig) -> Result<()> {
-        store::save_config(&self.config_path, config)
+        self.layers.save(config)
     }
 
     pub fn register_hotkeys(
@@ -101,12 +98,12 @@ impl HotkeyManager {
         Ok(())
     }
 
-    fn with_config_path(config_path: PathBuf) -> Self {
+    fn with_layers(layers: HotkeyLayers) -> Self {
         Self {
             manager: None,
             applied: HashMap::new(),
             bindings: HashMap::new(),
-            config_path,
+            layers,
         }
     }
 

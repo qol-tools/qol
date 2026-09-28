@@ -1,4 +1,4 @@
-use super::scope::{current_os_bucket, OS_SUBDIR};
+use super::scope::{current_os_bucket, CORE_SUBDIR, OS_SUBDIR};
 use super::types::{
     default_true, ResolvableConflict, SyncBackupEntry, SyncHealth, SyncIncident, SyncStatus,
     SyncTarget,
@@ -61,6 +61,22 @@ impl SyncPaths {
 
     pub fn hotkeys_path(&self) -> PathBuf {
         self.os_dir().join(HOTKEYS_FILE)
+    }
+
+    pub fn core_hotkeys_path(&self) -> PathBuf {
+        self.active_dir().join(CORE_SUBDIR).join(HOTKEYS_FILE)
+    }
+
+    pub fn read_hotkeys(&self) -> Result<Option<Vec<Value>>> {
+        let core = read_hotkey_layer(&self.core_hotkeys_path())?;
+        let os = read_hotkey_layer(&self.hotkeys_path())?;
+        if core.is_none() && os.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(qol_migrations::hotkey_layers::merge(
+            &core.unwrap_or_default(),
+            &os.unwrap_or_default(),
+        )))
     }
 
     pub fn state_path(&self) -> PathBuf {
@@ -322,6 +338,23 @@ fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let content = serde_json::to_string_pretty(value)?;
     qol_fs::atomic_write(path, content.as_bytes())
         .with_context(|| format!("write {}", path.display()))
+}
+
+pub fn read_hotkey_layer(path: &Path) -> Result<Option<Vec<Value>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read(path)
+        .with_context(|| format!("failed to read hotkey config {}", path.display()))?;
+    let layer: Value = serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to parse hotkey config {}", path.display()))?;
+    Ok(Some(
+        layer
+            .get("hotkeys")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    ))
 }
 
 #[cfg(test)]

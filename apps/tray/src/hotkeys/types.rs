@@ -16,6 +16,8 @@ pub struct HotkeyBinding {
     pub action: String,
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub os_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

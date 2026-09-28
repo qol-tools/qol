@@ -261,6 +261,7 @@ mod tests {
             plugin_uid: crate::plugins::PluginUid::new("test-plugin"),
             action: "open".into(),
             enabled: true,
+            os_only: false,
         }
     }
 

@@ -373,8 +373,10 @@ Three entry points converge on one executor:
   executable hotkey targets. On the fallback path an uncatalogued binding is
   dropped at plan time (logged); on the kernel-capture path it is installed and
   fails to resolve an action at dispatch.
-- Bindings live in `hotkeys.json`, **OS-scoped** in the profile
-  (`os/<platform>/hotkeys.json`). Key syntax `MOD+MOD+KEY`, case-insensitive; mods
+- Bindings live in two `hotkeys.json` layers in the profile: `core/hotkeys.json`
+  is shared by every OS, and `os/<platform>/hotkeys.json` holds bindings for
+  that OS only. An OS binding hides a shared one with the same id or key.
+  Key syntax `MOD+MOD+KEY`, case-insensitive; mods
   `ctrl`/`alt`/`shift`/`super` (+ aliases) plus a non-modifier key (zero keys is
   rejected; the parser does not error on extra keys, last one wins).
 - qol-tray **takes the key back from the desktop environment** via kernel-level

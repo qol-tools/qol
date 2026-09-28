@@ -121,7 +121,7 @@ pub(super) fn current_manifest_token() -> &'static str {
     Platform.host_os().manifest_token()
 }
 
-pub(super) fn display_label() -> &'static str {
+pub(crate) fn display_label() -> &'static str {
     Platform.host_os().display_label()
 }
 

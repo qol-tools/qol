@@ -1,6 +1,7 @@
 pub(crate) mod github;
 pub mod installer;
 mod platform;
+pub(crate) use platform::display_label as host_os_label;
 mod plugin_ui;
 mod release_assets;
 pub(crate) mod release_integrity;

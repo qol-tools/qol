@@ -7,6 +7,7 @@ mod planning;
 mod platform;
 mod reload;
 mod store;
+pub(crate) use store::HotkeyLayers;
 pub(crate) mod takeover;
 #[cfg(test)]
 mod tests;
