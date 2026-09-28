@@ -1,8 +1,8 @@
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use sha2::{Digest, Sha256};
 
 const ICON_PIXELS: usize = 128;
 
@@ -29,10 +29,17 @@ fn stamp(app: &Path) -> Option<SystemTime> {
 }
 
 fn cache_name(app: &Path, stamp: Option<SystemTime>) -> String {
-    let mut hasher = DefaultHasher::new();
-    app.hash(&mut hasher);
-    stamp.hash(&mut hasher);
-    format!("{:016x}.png", hasher.finish())
+    let mut hasher = Sha256::new();
+    hasher.update(app.as_os_str().as_encoded_bytes());
+    if let Some(since) = stamp.and_then(|stamp| stamp.duration_since(UNIX_EPOCH).ok()) {
+        hasher.update(since.as_nanos().to_le_bytes());
+    }
+    let digest = hasher.finalize();
+    let name: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{name}.png")
 }
 
 #[cfg(test)]
