@@ -59,6 +59,7 @@ pub struct DeviceActionState {
 pub enum DeviceIntent {
     Pair,
     Connect,
+    MoveHere,
     Disconnect,
     Remove,
     Trust(bool),
@@ -69,6 +70,7 @@ impl DeviceIntent {
         match self {
             Self::Pair => "Pairing",
             Self::Connect => "Connecting",
+            Self::MoveHere => "Moving here",
             Self::Disconnect => "Disconnecting",
             Self::Remove => "Removing",
             Self::Trust(true) => "Trusting",
@@ -79,7 +81,7 @@ impl DeviceIntent {
     fn reached_by(self, device: &DeviceInfo) -> bool {
         match self {
             Self::Pair => device.paired,
-            Self::Connect => device.connected,
+            Self::Connect | Self::MoveHere => device.connected,
             Self::Disconnect => !device.connected,
             Self::Remove => !device.paired && !device.trusted,
             Self::Trust(trusted) => device.trusted == trusted,

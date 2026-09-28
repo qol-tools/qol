@@ -1470,7 +1470,7 @@ fn dispatch_daemon_action(
         }),
         DaemonAction::ResumeReconnect => handoff_result(request, crate::handoff::resume),
         DaemonAction::TakeOver => match request_address(request) {
-            Ok(address) => match begin_device_action(address, "Moving here") {
+            Ok(address) => match begin_device_action(address, DeviceIntent::MoveHere) {
                 Ok(()) => {
                     spawn_take_over(address);
                     ReadResult::Handled

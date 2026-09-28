@@ -607,7 +607,7 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
         }),
         "resume_reconnect" => handoff_result(request, crate::handoff::resume),
         "take_over" => match request_address(request) {
-            Ok(address) => match begin_device_action(&address, "Moving here") {
+            Ok(address) => match begin_device_action(&address, DeviceIntent::MoveHere) {
                 Ok(()) => {
                     spawn_take_over(address);
                     ReadResult::Handled
