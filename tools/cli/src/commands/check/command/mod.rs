@@ -538,6 +538,11 @@ fn force_stop(child: &mut Child, owner: &CommandOwner, output: &mut CommandResul
     output.lifecycle.recovery_liveness = Some(settled.as_ref().copied().map_err(error_category));
     let sealed = owner.seal(pid);
     output.lifecycle.recovery_seal = Some(record_operation(&sealed));
+    let tree = if matches!(settled, Ok(false)) {
+        Ok(())
+    } else {
+        tree
+    };
     let errors = [tree, process, waited.map(drop), settled.map(drop), sealed]
         .into_iter()
         .filter_map(Result::err)

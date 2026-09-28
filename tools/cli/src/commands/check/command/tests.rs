@@ -629,3 +629,20 @@ fn residual_deadline_starts_before_observation() {
     assert!(shutdown.deadline <= observed_at.unwrap() + TERMINATION_GRACE);
     force_stop(&mut child, &owner, &mut output).unwrap();
 }
+
+#[test]
+fn recovery_accepts_a_group_whose_leader_exited_before_the_kill() {
+    let owner = CommandOwner::from_attempt(
+        Containment::Preferred,
+        Err(io::Error::from(io::ErrorKind::Unsupported).into()),
+    )
+    .unwrap();
+    let mut command = Command::new("sh");
+    command.args(["-c", "exit 0"]);
+    let mut child = owner.spawn(&mut command).unwrap();
+    thread::sleep(Duration::from_millis(200));
+    let mut output = CommandResult::new(Containment::Preferred);
+
+    force_stop(&mut child, &owner, &mut output).unwrap();
+    assert!(output.leader.is_some_and(|status| status.success()));
+}
