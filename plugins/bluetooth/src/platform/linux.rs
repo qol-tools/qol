@@ -1661,7 +1661,7 @@ fn fail_command_without_adapter(command: DaemonCommand) {
         return;
     };
     let result: Result<()> = Err(anyhow!("Bluetooth adapter is unavailable"));
-    finish_device_action(address, label, &result);
+    finish_device_action(label, &result);
     qol_runtime::probe!(
         "BLUETOOTH_DEVICE_ACTION",
         "action={action} device={} outcome=failed reason=adapter_unavailable",
@@ -2011,7 +2011,7 @@ fn spawn_explicit_device_action(
             run_explicit_device_action(action, address, power_on_adapter, cached),
         )
         .await;
-        finish_device_action(address, action.label(), &result);
+        finish_device_action(action.label(), &result);
         trace_device_action(action.trace_name(), address, result);
     }));
 }
@@ -2027,7 +2027,7 @@ fn spawn_connect(address: Address, power_on_adapter: bool, cached: Option<Device
                 run_explicit_device_action(action, address, power_on_adapter, cached.clone()),
             ))
         });
-        finish_device_action(address, action.label(), &result);
+        finish_device_action(action.label(), &result);
         trace_device_action(action.trace_name(), address, result);
     }));
 }
@@ -2088,7 +2088,7 @@ fn begin_device_action(address: Address, intent: DeviceIntent) -> Result<()> {
     Ok(())
 }
 
-fn finish_device_action<T>(address: Address, label: &str, result: &Result<T>) {
+fn finish_device_action<T>(label: &str, result: &Result<T>) {
     if let Err(error) = result {
         match DEVICE_ACTION_STATE.write() {
             Ok(mut state) => {
@@ -3206,7 +3206,7 @@ mod tests {
             Duration::ZERO,
             futures::future::pending::<Result<()>>(),
         ));
-        finish_device_action(address, "Connect", &result);
+        finish_device_action("Connect", &result);
         let state = DEVICE_ACTION_STATE.read().unwrap().clone().unwrap();
         let error = result.unwrap_err();
 
