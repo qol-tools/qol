@@ -150,12 +150,10 @@ async fn enabling_follows_residency_and_names_the_computer() {
     portable.close().await;
 }
 
-#[tokio::test]
-async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
-    let temporary = tempfile::tempdir().unwrap();
+async fn pair(temporary: &std::path::Path) -> (Fixture, Fixture) {
     let lan = Lan::default();
     let laptop = computer(
-        &temporary.path().join("laptop"),
+        &temporary.join("laptop"),
         &lan,
         Defaults {
             resident: || false,
@@ -164,7 +162,7 @@ async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
     )
     .await;
     let desk = computer(
-        &temporary.path().join("desk"),
+        &temporary.join("desk"),
         &lan,
         Defaults {
             resident: || false,
@@ -174,6 +172,48 @@ async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
     .await;
     laptop.shared.peer_admin(Request::Enable);
     desk.shared.peer_admin(Request::Enable);
+    (laptop, desk)
+}
+
+fn link(fixture: &Fixture, peer_id: PeerId) -> Response {
+    fixture.shared.peer_admin(Request::Nearby {
+        request: NearbyRequest::Link {
+            expected: fixture.expected(),
+            peer_id,
+        },
+    })
+}
+
+fn code(fixture: &Fixture, peer: PeerId) -> Option<qol_peers::admin::LinkCode> {
+    nearby(fixture)
+        .into_iter()
+        .find(|computer| computer.peer_id == peer)
+        .and_then(|computer| computer.link)
+        .filter(|link| link.state == NearbyState::Confirm {})
+        .and_then(|link| link.code)
+}
+
+fn linked(fixture: &Fixture, peer: PeerId) -> bool {
+    fixture
+        .owner
+        .handle
+        .inner
+        .lock()
+        .unwrap()
+        .authority()
+        .unwrap()
+        .authority
+        .projection()
+        .unwrap()
+        .peers
+        .iter()
+        .any(|linked| linked.peer_id == peer)
+}
+
+#[tokio::test]
+async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (laptop, desk) = pair(temporary.path()).await;
     let laptop_id = peer_id(&laptop);
     let desk_id = peer_id(&desk);
     let listed = until(|| {
@@ -185,22 +225,9 @@ async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
     assert_eq!(listed.name, "Laptop");
     assert_eq!(listed.link, None);
 
-    let linking = desk.shared.peer_admin(Request::Nearby {
-        request: NearbyRequest::Link {
-            expected: desk.expected(),
-            peer_id: laptop_id,
-        },
-    });
+    let linking = link(&desk, laptop_id);
     assert!(matches!(linking, Response::Nearby { .. }), "{linking:?}");
-    let desk_code = until(|| {
-        nearby(&desk)
-            .into_iter()
-            .find(|computer| computer.peer_id == laptop_id)
-            .and_then(|computer| computer.link)
-            .filter(|link| link.state == NearbyState::Confirm {})
-            .and_then(|link| link.code)
-    })
-    .await;
+    let desk_code = until(|| code(&desk, laptop_id)).await;
     let laptop_view = until(|| {
         nearby(&laptop)
             .into_iter()
@@ -224,28 +251,65 @@ async fn two_nearby_computers_link_after_both_confirm_the_same_code() {
         confirm(&desk, laptop_id),
         Response::Changed { .. }
     ));
-    until(|| {
-        let linked = |fixture: &Fixture, peer: PeerId| {
-            fixture
-                .owner
-                .handle
-                .inner
-                .lock()
-                .unwrap()
-                .authority()
-                .unwrap()
-                .authority
-                .projection()
-                .unwrap()
-                .peers
-                .iter()
-                .any(|linked| linked.peer_id == peer)
-        };
-        (linked(&laptop, desk_id) && linked(&desk, laptop_id)).then_some(())
-    })
-    .await;
+    until(|| (linked(&laptop, desk_id) && linked(&desk, laptop_id)).then_some(())).await;
     assert!(nearby(&laptop).is_empty());
     until(|| nearby(&desk).is_empty().then_some(())).await;
+    laptop.close().await;
+    desk.close().await;
+}
+
+#[tokio::test]
+async fn two_computers_that_both_click_link_agree_on_one_code_and_link() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (laptop, desk) = pair(temporary.path()).await;
+    let laptop_id = peer_id(&laptop);
+    let desk_id = peer_id(&desk);
+    until(|| {
+        (nearby(&laptop)
+            .iter()
+            .any(|computer| computer.peer_id == desk_id)
+            && nearby(&desk)
+                .iter()
+                .any(|computer| computer.peer_id == laptop_id))
+        .then_some(())
+    })
+    .await;
+    link(&laptop, desk_id);
+    link(&desk, laptop_id);
+    let shared = until(|| {
+        let (Some(left), Some(right)) = (code(&laptop, desk_id), code(&desk, laptop_id)) else {
+            return None;
+        };
+        let settled = [(&laptop, desk_id), (&desk, laptop_id)]
+            .iter()
+            .all(|(fixture, peer)| {
+                fixture
+                    .owner
+                    .handle
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .authority()
+                    .unwrap()
+                    .authority
+                    .inbound_nearby()
+                    .unwrap()
+                    .iter()
+                    .any(|request| request.peer_id == *peer)
+            });
+        (settled && left == right).then_some(left)
+    })
+    .await;
+    assert_eq!(code(&laptop, desk_id), Some(shared));
+    assert!(matches!(
+        confirm(&laptop, desk_id),
+        Response::Changed { .. }
+    ));
+    assert!(matches!(
+        confirm(&desk, laptop_id),
+        Response::Changed { .. }
+    ));
+    until(|| (linked(&laptop, desk_id) && linked(&desk, laptop_id)).then_some(())).await;
     laptop.close().await;
     desk.close().await;
 }

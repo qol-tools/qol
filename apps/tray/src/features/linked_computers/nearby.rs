@@ -50,7 +50,21 @@ fn inbound(active: &ActiveAuthority, peer: PeerId) -> Result<bool, Error> {
         .authority
         .inbound_nearby()?
         .iter()
-        .any(|request| request.peer_id == peer))
+        .any(|request| request.peer_id == peer)
+        && !joins(active, peer)?)
+}
+
+fn joins(active: &ActiveAuthority, peer: PeerId) -> Result<bool, Error> {
+    let Some(network) = &active.network else {
+        return Ok(false);
+    };
+    if active.authority.projection()?.peer_id >= peer {
+        return Ok(false);
+    }
+    Ok(network
+        .nearby_links()?
+        .iter()
+        .any(|(id, _, link)| *id == peer && !matches!(link.state, NearbyState::Failed { .. })))
 }
 
 fn list(active: &ActiveAuthority) -> Result<Response, Error> {
@@ -71,6 +85,9 @@ fn list(active: &ActiveAuthority) -> Result<Response, Error> {
         }
     }
     for request in active.authority.inbound_nearby()? {
+        if joins(active, request.peer_id)? {
+            continue;
+        }
         let state = if request.confirmed && !request.redeemed {
             NearbyState::WaitingForPeer {}
         } else {

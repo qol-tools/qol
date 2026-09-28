@@ -191,3 +191,31 @@ async fn a_linked_computer_is_refused_and_a_new_nearby_join_replaces_a_stale_one
     );
     assert!(again.is_err());
 }
+
+#[tokio::test]
+async fn a_stale_join_toward_the_joiner_does_not_block_linking_nearby() {
+    let inviter = session("Laptop");
+    let joiner = session("Desk");
+    let earlier = nearby(&joiner, &inviter).await.0.unwrap();
+    let stale = inviter
+        .prepare_nearby_join(revision(&inviter), &earlier.invitation)
+        .unwrap();
+    let offer = nearby(&inviter, &joiner).await.0.unwrap();
+    let peer = joiner.local_pin().unwrap().peer_id();
+    inviter
+        .confirm_nearby(revision(&inviter), peer, Vec::new())
+        .unwrap();
+    let transaction = joiner
+        .prepare_nearby_join(revision(&joiner), &offer.invitation)
+        .unwrap();
+    let outcome = redeem(&inviter, &joiner, &offer, transaction).await;
+    assert!(matches!(outcome, EnrollmentOutcome::Completed(_)));
+    assert_eq!(inviter.projection().unwrap().peers[0].peer_id, peer);
+    let states: Vec<_> = inviter
+        .outbound_enrollments()
+        .unwrap()
+        .into_iter()
+        .map(|join| (join.key.transaction, join.state))
+        .collect();
+    assert_eq!(states, vec![(stale, OutboundEnrollmentState::Abandoned {})]);
+}

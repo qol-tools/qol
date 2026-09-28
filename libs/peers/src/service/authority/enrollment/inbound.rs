@@ -115,11 +115,13 @@ impl PeerAuthority {
             return Err(EnrollmentError::Rejected(EnrollmentRejection::Conflict));
         }
         check_remote(inner, &reserved.pin)?;
+        let nearby = invitation.nearby.is_some();
         if inner.state.peer(key.peer).is_some()
-            || inner.state.outbound.iter().any(|entry| {
-                entry.pin == reserved.pin
-                    && !matches!(entry.state, OutboundEnrollmentState::Abandoned {})
-            })
+            || inner
+                .state
+                .outbound
+                .iter()
+                .any(|entry| blocks(entry, &reserved.pin, nearby))
         {
             return Err(EnrollmentError::Rejected(EnrollmentRejection::Conflict));
         }
@@ -137,6 +139,15 @@ impl PeerAuthority {
             joiner_lifetime: reserved.lifetime,
         };
         let mut candidate = inner.state.clone();
+        for entry in candidate
+            .outbound
+            .iter_mut()
+            .filter(|entry| entry.pin == reserved.pin)
+        {
+            if matches!(entry.state, OutboundEnrollmentState::Pending {}) {
+                entry.state = OutboundEnrollmentState::Abandoned {};
+            }
+        }
         candidate.peers.push(LinkedPeer {
             pin: reserved.pin.clone(),
             name: reserved.name.clone(),
@@ -197,6 +208,10 @@ impl PeerAuthority {
             return Err(EnrollmentError::Rejected(EnrollmentRejection::Capacity));
         }
         let now = Instant::now();
+        let nearby = inner
+            .invitations
+            .iter()
+            .any(|entry| entry.id == request.invitation && entry.nearby.is_some());
         if inner.state.peer(pin.peer_id()).is_some()
             || inner
                 .state
@@ -206,8 +221,7 @@ impl PeerAuthority {
             || inner.state.outbound.iter().any(|entry| {
                 entry.transaction == request.transaction
                     || entry.invitation == request.invitation
-                    || (entry.pin == *pin
-                        && !matches!(entry.state, OutboundEnrollmentState::Abandoned {}))
+                    || blocks(entry, pin, nearby)
             })
             || inner.invitations.iter().any(|entry| {
                 entry.id != request.invitation
@@ -324,6 +338,15 @@ impl PeerAuthority {
             EnrollmentRejection::UnknownTransaction,
         ))
     }
+}
+
+fn blocks(entry: &super::OutboundJoin, pin: &PeerPin, nearby: bool) -> bool {
+    entry.pin == *pin
+        && match entry.state {
+            OutboundEnrollmentState::Abandoned {} => false,
+            OutboundEnrollmentState::Pending {} => !nearby,
+            OutboundEnrollmentState::Committed { .. } => true,
+        }
 }
 
 fn matching_receipt(
