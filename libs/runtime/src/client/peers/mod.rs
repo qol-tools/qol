@@ -114,9 +114,14 @@ fn read_reply(
 ) -> Result<Zeroizing<Vec<u8>>, PeerAdminClientError> {
     let mut reply = Zeroizing::new(Vec::with_capacity(MAX_MESSAGE_BYTES));
     loop {
-        connection
-            .set_read_timeout(Some(remaining(deadline)?))
-            .map_err(io_error)?;
+        let remaining = remaining(deadline)?;
+        // macOS refuses a new timeout once the server has replied and closed;
+        // the reply is still buffered, so read it under the previous timeout
+        if let Err(error) = connection.set_read_timeout(Some(remaining)) {
+            if error.kind() != io::ErrorKind::InvalidInput {
+                return Err(io_error(error));
+            }
+        }
         let mut chunk = Zeroizing::new([0; 1024]);
         let count = connection.read(&mut chunk[..]).map_err(io_error)?;
         if count == 0 {

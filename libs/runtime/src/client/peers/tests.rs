@@ -327,3 +327,16 @@ fn enrollment_unknown_delivery_uses_the_same_single_dispatch_boundary() {
     );
     assert_eq!(*written.lock().unwrap(), *payload);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_reply_already_waiting_after_the_server_closes_is_still_read() {
+    use std::io::Write;
+    let (mut client, mut server) = std::os::unix::net::UnixStream::pair().unwrap();
+    server.write_all(b"{\"ok\":true}\n").unwrap();
+    drop(server);
+
+    let reply = read_reply(&mut client, Instant::now() + Duration::from_secs(1)).unwrap();
+
+    assert_eq!(&reply[..], b"{\"ok\":true}\n");
+}
