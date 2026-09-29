@@ -16,3 +16,8 @@ tempfile = "3"
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+print_stderr = "deny"
+print_stdout = "deny"

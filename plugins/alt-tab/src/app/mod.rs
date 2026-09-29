@@ -148,10 +148,7 @@ impl AltTabApp {
         window.focus(&focus_handle);
 
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/hold] AltTabApp::new: action_mode={:?}",
-            action_mode
-        );
+        log::debug!("AltTabApp::new: action_mode={:?}", action_mode);
 
         let dismiss_sub = qol_gpui::ghost::track_dismiss(
             "alt-tab",
@@ -234,8 +231,8 @@ impl AltTabApp {
 
     fn log_reuse_layout(&self, req: &crate::picker::ReuseRequest) {
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/show] count={} max_cols={} hints={} layout.size={}x{} bounds.origin=({},{})",
+        log::debug!(
+            "count={} max_cols={} hints={} layout.size={}x{} bounds.origin=({},{})",
             req.gathered.windows.len(),
             req.config.display.max_columns,
             req.config.display.show_hotkey_hints,
@@ -591,7 +588,7 @@ async fn alt_release_check(
     }
     qol_gpui::probe::probe("ALT_POLL", "release detected -> activate+dismiss");
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/hold] Alt released via poll — activating selection");
+    log::debug!("Alt released via poll — activating selection");
     let weak = this.clone();
     let updated = cx.update_window(window_handle, move |_, window, cx| {
         if !PICKER_VISIBLE.load(Ordering::Relaxed) {
@@ -645,7 +642,7 @@ impl AltTabApp {
         cx: &mut Context<Self>,
     ) {
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/dismiss] from={}", _source);
+        log::debug!("from={}", _source);
         let active = self.is_active_visible();
         qol_runtime::probe!(
             "DISMISS",

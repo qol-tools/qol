@@ -44,7 +44,7 @@ where
         "reload" => ReadResult::Command(Command::Reload),
         "toggle_theme" => match toggle() {
             Ok(scheme) => {
-                eprintln!("[os-themes] applied {scheme:?} theme");
+                log::debug!("applied {scheme:?} theme");
                 ReadResult::HandledWithData(theme_status(scheme))
             }
             Err(error) => ReadResult::Error(format!("{error:#}")),

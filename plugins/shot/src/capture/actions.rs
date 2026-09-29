@@ -95,7 +95,7 @@ pub(crate) fn perform_when_file_ready(
         started.elapsed().as_millis()
     );
     if let Err(error) = &result {
-        eprintln!("[qol-shot] {surface} action failed: {error:#}");
+        log::warn!("{surface} action failed: {error:#}");
         crate::platform::show_notification(action.error_message(), &error.to_string(), 3000);
     }
     result

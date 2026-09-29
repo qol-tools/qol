@@ -233,7 +233,7 @@ fn remember_ax_windows(pid: i32, value: &AxWindowsResult) {
 pub(super) fn ax_windows(pid: i32) -> AxWindowsResult {
     if let Some(cached) = cached_ax_windows(pid) {
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/ax] cache hit pid={}", pid);
+        log::debug!("cache hit pid={}", pid);
         return cached;
     }
     let computed = ax_windows_compute(pid);
@@ -256,8 +256,8 @@ pub(super) fn prefetch_ax_parallel(pids: HashSet<i32>) -> HashMap<i32, AxWindows
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/ax] prefetch_ax_parallel pids={} {}ms",
+    log::debug!(
+        "prefetch_ax_parallel pids={} {}ms",
         pid_count,
         t.elapsed().as_millis()
     );
@@ -278,9 +278,10 @@ fn ax_windows_compute(pid: i32) -> AxWindowsResult {
         {
             let open_ms = t_open.elapsed().as_millis();
             if open_ms >= 50 {
-                eprintln!(
-                    "[alt-tab/ax] SLOW ax_open_window_list pid={} {}ms (null result)",
-                    pid, open_ms
+                log::debug!(
+                    "SLOW ax_open_window_list pid={} {}ms (null result)",
+                    pid,
+                    open_ms
                 );
             }
         }
@@ -289,10 +290,7 @@ fn ax_windows_compute(pid: i32) -> AxWindowsResult {
     let attrs = AxAttrs::new();
     let count = unsafe { CFArrayGetCount(wins_val as CFArrayRef) };
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/ax] ax_windows pid={} AXWindows count={}",
-        pid, count
-    );
+    log::debug!("ax_windows pid={} AXWindows count={}", pid, count);
 
     #[cfg(debug_assertions)]
     let t_collect = std::time::Instant::now();
@@ -304,9 +302,12 @@ fn ax_windows_compute(pid: i32) -> AxWindowsResult {
         let open_ms = t_open.elapsed().as_millis();
         let collect_ms = t_collect.elapsed().as_millis();
         if open_ms >= 100 {
-            eprintln!(
-                "[alt-tab/ax] SLOW ax_windows pid={} total={}ms collect={}ms count={}",
-                pid, open_ms, collect_ms, count
+            log::debug!(
+                "SLOW ax_windows pid={} total={}ms collect={}ms count={}",
+                pid,
+                open_ms,
+                collect_ms,
+                count
             );
         }
     }
@@ -317,8 +318,8 @@ fn ax_windows_compute(pid: i32) -> AxWindowsResult {
         id_map.len()
     );
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/ax] ax_windows pid={} id_map={} all_meta={} accepted={}",
+    log::debug!(
+        "ax_windows pid={} id_map={} all_meta={} accepted={}",
         pid,
         id_map.len(),
         all_meta.len(),
@@ -449,10 +450,7 @@ fn should_keep(win: &CgWindow, dedup: &PidDedup, emitted: usize) -> bool {
     }
     if !dedup.ax_ids.is_empty() && !dedup.ax_ids.contains(&win.id) {
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/ax] DEDUP not in AX ids: wid={} app={:?}",
-            win.id, win.app_name
-        );
+        log::debug!("DEDUP not in AX ids: wid={} app={:?}", win.id, win.app_name);
         return false;
     }
     true
@@ -472,9 +470,12 @@ pub(crate) unsafe fn ax_find_window(
     let title_attr = ffi::cfstr(b"AXTitle");
     let count = CFArrayGetCount(wins_val as CFArrayRef);
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/ax_find_window] pid={} count={} cg_id={} title_hint={:?}",
-        pid, count, cg_window_id, title_hint
+    log::debug!(
+        "pid={} count={} cg_id={} title_hint={:?}",
+        pid,
+        count,
+        cg_window_id,
+        title_hint
     );
 
     let result = scan_for_match(

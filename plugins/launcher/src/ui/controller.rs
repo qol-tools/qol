@@ -343,20 +343,20 @@ impl LauncherView {
             self.state.fuzziness,
         );
         let Some(scored) = self.store.get(self.state.scroll_list.selected) else {
-            eprintln!(
-                "[controller] launch_selected: no scored item at index {}",
+            log::debug!(
+                "launch_selected: no scored item at index {}",
                 self.state.scroll_list.selected
             );
             return;
         };
-        eprintln!(
-            "[controller] launch_selected: index={} source={:?} name={:?}",
+        log::debug!(
+            "launch_selected: index={} source={:?} name={:?}",
             self.state.scroll_list.selected,
             scored.source,
             self.store.name(scored)
         );
         let Some(item) = self.store.item(scored) else {
-            eprintln!("[controller] launch_selected: failed to resolve item");
+            log::warn!("launch_selected: failed to resolve item");
             return;
         };
         if let crate::discovery::search::ResultItem::Flow(entry) = item {
@@ -367,17 +367,17 @@ impl LauncherView {
         }
         let is_app = matches!(scored.source, crate::discovery::search::ResultSource::App);
         let name = self.store.name(scored).to_string();
-        eprintln!("[controller] launching item...");
+        log::debug!("launching item...");
         trace::launch(self, "send", started);
         let launch_result = crate::launch::launch_item(&item);
         trace::launch(self, "sent", started);
         if let Err(error) = launch_result {
-            eprintln!("[controller] launch error: {error}");
+            log::warn!("launch error: {error}");
             self.state.set_launch_error(error.to_string());
             cx.notify();
             return;
         }
-        eprintln!("[controller] launch succeeded, closing");
+        log::debug!("launch succeeded, closing");
         self.yield_focus();
         self.request_dismiss("launch");
         cx.notify();
@@ -615,7 +615,7 @@ impl LauncherView {
                     )
                     .await;
                 if let Err(error) = outcome {
-                    eprintln!("[controller] flow dislike failed: {error}");
+                    log::warn!("flow dislike failed: {error}");
                 }
                 this.update(&mut async_cx, |view, _| trace::flow(view, "disliked"))
                     .ok();

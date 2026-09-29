@@ -203,7 +203,7 @@ pub(crate) fn freeze_frame() -> Option<FrozenFrame> {
             None
         }
         Err(error) => {
-            eprintln!("[qol-shot] failed to freeze screenshot frame: {error:#}");
+            log::warn!("failed to freeze screenshot frame: {error:#}");
             qol_runtime::probe!(
                 "SHOT_FREEZE",
                 "result=error ms={}",
@@ -382,7 +382,7 @@ fn spawn_frozen_file_write(
                 "source=frozen ms={} result=ok",
                 started.elapsed().as_millis()
             ),
-            Err(error) => eprintln!("[qol-shot] background screenshot file failed: {error:#}"),
+            Err(error) => log::warn!("background screenshot file failed: {error:#}"),
         }
         worker_ready.complete(result.map_err(|error| format!("{error:#}")));
     });
@@ -415,7 +415,7 @@ fn spawn_file_write(rect: Rect, path: PathBuf) -> (CaptureFileReady, CaptureFile
         let result = platform::capture_screenshot(&rect, &path);
         match &result {
             Ok(()) => qol_runtime::probe!("SHOT_FILE", "ms={}", started.elapsed().as_millis()),
-            Err(error) => eprintln!("[qol-shot] background screenshot file failed: {error:#}"),
+            Err(error) => log::warn!("background screenshot file failed: {error:#}"),
         }
         worker_ready.complete(result.map_err(|error| format!("{error:#}")));
     });
@@ -431,9 +431,9 @@ fn swap_red_blue(data: &mut [u8]) {
 fn present_capture(output_file: &Path, completion: crate::capture::completion::PreviewCompletion) {
     let fallback = completion.clone();
     if let Err(error) = show_preview(output_file, completion) {
-        eprintln!("[qol-shot] preview unavailable, copying instead: {error:#}");
+        log::warn!("preview unavailable, copying instead: {error:#}");
         if let Err(error) = platform::copy_image_to_clipboard(output_file) {
-            eprintln!("[qol-shot] failed to copy screenshot to clipboard: {error:#}");
+            log::warn!("failed to copy screenshot to clipboard: {error:#}");
         }
         platform::show_notification("Screenshot saved", &output_file.display().to_string(), 1800);
         fallback.finish(crate::capture::completion::PreviewExit::Unavailable);

@@ -4,6 +4,8 @@ version = "1.44.1"
 edition = "2021"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 qol-apps.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
@@ -20,3 +22,6 @@ qol-conventions.workspace = true
 [dev-dependencies]
 qol-plugin-api.workspace = true
 tempfile = "3.8"
+
+[lints]
+workspace = true

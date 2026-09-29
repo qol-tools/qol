@@ -28,11 +28,7 @@ pub fn load_gpui_runtime_config() -> GpuiRuntimeConfig {
         match serde_json::from_str::<GpuiRuntimeConfig>(&contents) {
             Ok(cfg) => return cfg,
             Err(e) => {
-                eprintln!(
-                    "[qol-gpui/runtime_config] failed to parse {}: {}",
-                    path.display(),
-                    e
-                );
+                log::warn!("failed to parse {}: {}", path.display(), e);
             }
         }
     }

@@ -246,8 +246,8 @@ impl MonitorTracker {
         let state = self.client.get_state()?;
         let monitor = focus_first_monitor(&state)?;
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[monitor] focus-first snapshot: cursor_idx={:?} focus_idx={:?} active_idx={:?} -> ({}, {})",
+        log::debug!(
+            "focus-first snapshot: cursor_idx={:?} focus_idx={:?} active_idx={:?} -> ({}, {})",
             state.cursor_monitor_idx,
             state.focus_monitor_idx,
             state.active_monitor_idx,
@@ -278,8 +278,8 @@ impl MonitorTracker {
         }
 
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[monitor] snapshot: cursor_idx={:?} focus_idx={:?} active_idx={:?} → ({}, {})",
+        log::debug!(
+            "snapshot: cursor_idx={:?} focus_idx={:?} active_idx={:?} → ({}, {})",
             state.cursor_monitor_idx,
             state.focus_monitor_idx,
             state.active_monitor_idx,

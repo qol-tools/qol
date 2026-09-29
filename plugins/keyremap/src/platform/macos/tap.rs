@@ -86,13 +86,13 @@ fn wait_for_accessibility() {
         return;
     }
 
-    eprintln!("[keyremap] waiting for Accessibility permission...");
-    eprintln!("[keyremap] grant in System Settings > Privacy & Security > Accessibility");
+    log::warn!("waiting for Accessibility permission...");
+    log::warn!("grant in System Settings > Privacy & Security > Accessibility");
 
     loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
         if accessibility_trusted() {
-            eprintln!("[keyremap] Accessibility permission granted");
+            log::info!("Accessibility permission granted");
             return;
         }
     }
@@ -131,7 +131,7 @@ fn run_tap(state: Arc<TapState>) {
     let tap = match tap {
         Ok(tap) => tap,
         Err(()) => {
-            eprintln!("[keyremap] failed to create event tap (even with Accessibility granted)");
+            log::warn!("failed to create event tap (even with Accessibility granted)");
             std::process::exit(1);
         }
     };
@@ -232,7 +232,7 @@ unsafe extern "C" fn event_tap_callback(
     })) {
         Ok(event_ref) => event_ref,
         Err(_) => {
-            eprintln!("[keyremap] panic in event callback - passing event through");
+            log::warn!("panic in event callback - passing event through");
             event_ref
         }
     }
@@ -333,7 +333,7 @@ fn tap_trace() -> &'static TraceSink {
     SINK.get_or_init(|| {
         TraceSink::spawn("keyremap-tap-trace", QUEUE_DEPTH, |batch| {
             for line in batch {
-                eprintln!("{line}");
+                log::debug!("{line}");
             }
         })
     })

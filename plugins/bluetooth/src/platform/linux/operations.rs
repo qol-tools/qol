@@ -159,7 +159,7 @@ pub(super) fn complete(
             );
         }
         Completion::Retry(address, _, Err(error)) => {
-            eprintln!(
+            log::warn!(
                 "Bluetooth reconnect failed for {}: {error:#}",
                 redacted(address)
             );

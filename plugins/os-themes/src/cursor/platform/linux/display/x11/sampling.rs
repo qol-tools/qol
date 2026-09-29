@@ -101,8 +101,8 @@ pub(super) fn log_cursor_image(prefix: &str, image: &CursorImage) {
         .first()
         .map(|source| format!("{}x{}x{}", source.width, source.height, image.source.len()))
         .unwrap_or_else(|| "none".to_string());
-    eprintln!(
-        "[shake-to-grow] {prefix}: size={}x{} hot=({}, {}) name={:?} source={source} hash={:016x}",
+    log::debug!(
+        "{prefix}: size={}x{} hot=({}, {}) name={:?} source={source} hash={:016x}",
         image.width,
         image.height,
         image.xhot,

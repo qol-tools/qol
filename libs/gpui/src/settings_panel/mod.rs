@@ -663,10 +663,7 @@ fn prepare_panel(
                 prepared_sources.push(prepared);
             }
             Err(error) if panel.sources.len() > 1 => {
-                eprintln!(
-                    "[settings] skipping broken source {}: {error:#}",
-                    source.plugin_id
-                );
+                log::warn!("skipping broken source {}: {error:#}", source.plugin_id);
             }
             Err(error) => return Err(error),
         }

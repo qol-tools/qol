@@ -1,6 +1,7 @@
 use super::{NvidiaPolicyBackend, PolicyStatusView};
+use crate::policy::cli::print_help;
 use crate::policy::cli::{self, ResidentCommand};
-use crate::policy::nvidia::{print_help, NVIDIA_POLICY_ID};
+use crate::policy::nvidia::NVIDIA_POLICY_ID;
 use crate::policy::{PolicyError, ResidencyOwnerId, ResidentPolicy};
 use anyhow::Result;
 

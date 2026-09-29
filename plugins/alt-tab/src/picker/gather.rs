@@ -470,15 +470,18 @@ pub(super) fn gather(
 
     #[cfg(debug_assertions)]
     {
-        eprintln!(
-            "[alt-tab/gather] show_minimized={} total={}",
+        log::debug!(
+            "show_minimized={} total={}",
             config.display.show_minimized,
             windows.len()
         );
         for w in &windows {
-            eprintln!(
-                "[alt-tab/gather]   wid={} app={:?} title={:?} minimized={}",
-                w.id, w.app_name, w.title, w.is_minimized
+            log::debug!(
+                "wid={} app={:?} title={:?} minimized={}",
+                w.id,
+                w.app_name,
+                w.title,
+                w.is_minimized
             );
         }
     }

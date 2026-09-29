@@ -33,22 +33,23 @@ pub struct NetworkConfig {
 }
 
 pub fn startup(engine: &RequestEngine, config: &NetworkConfig) -> Result<()> {
-    eprintln!("[znp] resetting coordinator...");
+    log::debug!("resetting coordinator...");
     reset(engine).context("reset")?;
-    eprintln!("[znp] ping...");
+    log::debug!("ping...");
     ping(engine).context("ping")?;
-    eprintln!(
-        "[znp] configuring (channel={}, pan=0x{:04X})...",
-        config.channel, config.pan_id
+    log::debug!(
+        "configuring (channel={}, pan=0x{:04X})...",
+        config.channel,
+        config.pan_id
     );
     configure(engine, config).context("configure")?;
-    eprintln!("[znp] registering endpoint...");
+    log::debug!("registering endpoint...");
     register_endpoint(engine).context("register_endpoint")?;
-    eprintln!("[znp] starting network...");
+    log::info!("starting network...");
     start_network(engine).context("start_network")?;
-    eprintln!("[znp] getting device info...");
+    log::debug!("getting device info...");
     get_device_info(engine).context("get_device_info")?;
-    eprintln!("[znp] coordinator ready");
+    log::info!("coordinator ready");
     Ok(())
 }
 

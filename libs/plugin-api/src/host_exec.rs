@@ -61,7 +61,7 @@ fn daemon_client(timeout: Duration) -> io::Result<Client> {
     Ok(Client::new(qol_conventions::DEFAULT_PORT, read_auth_token()?).with_io_timeout(timeout))
 }
 
-pub fn run_exec(target: &str, action: &str) -> i32 {
+pub fn run_exec(target: &str, action: &str) -> Result<(), String> {
     qol_runtime::probe!(
         "ACTION_EXEC",
         "plugin={} action={} phase=start",
@@ -72,30 +72,27 @@ pub fn run_exec(target: &str, action: &str) -> i32 {
         return fire_shortcut_request(action);
     }
     if !crate::manifest::is_valid_plugin_id(target) {
-        eprintln!("Invalid plugin id: {target}");
-        return 1;
+        return Err(format!("Invalid plugin id: {target}"));
     }
     if !crate::manifest::is_valid_action_id(action) {
-        eprintln!("Invalid action id: {action}");
-        return 1;
+        return Err(format!("Invalid action id: {action}"));
     }
     fire_action_request(target, action)
 }
 
-fn fire_shortcut_request(id: &str) -> i32 {
+fn fire_shortcut_request(id: &str) -> Result<(), String> {
     if crate::manifest::validate_safe_identifier(id).is_err() {
-        eprintln!("Invalid shortcut id: {id}");
-        return 1;
+        return Err(format!("Invalid shortcut id: {id}"));
     }
     fire_daemon_post("shortcut", id, &format!("/api/shortcuts/{id}/execute"))
 }
 
-fn fire_action_request(plugin_id: &str, action_id: &str) -> i32 {
+fn fire_action_request(plugin_id: &str, action_id: &str) -> Result<(), String> {
     let path = format!("/api/plugins/{plugin_id}/actions/{action_id}");
     fire_daemon_post(plugin_id, action_id, &path)
 }
 
-fn fire_daemon_post(plugin_id: &str, action_id: &str, path: &str) -> i32 {
+fn fire_daemon_post(plugin_id: &str, action_id: &str, path: &str) -> Result<(), String> {
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
     #[cfg(not(debug_assertions))]
@@ -104,20 +101,10 @@ fn fire_daemon_post(plugin_id: &str, action_id: &str, path: &str) -> i32 {
     let result = post_to_daemon(path, "");
     trace_action_exec("sent", plugin_id, action_id, &started);
     match result {
-        Ok((status, _)) if (200..300).contains(&status) => 0,
-        Ok((status, body)) => {
-            let msg = if body.is_empty() {
-                format!("Request failed (HTTP {})", status)
-            } else {
-                body
-            };
-            eprintln!("{}", msg);
-            1
-        }
-        Err(_) => {
-            eprintln!("qol-tray is not running");
-            1
-        }
+        Ok((status, _)) if (200..300).contains(&status) => Ok(()),
+        Ok((status, body)) if body.is_empty() => Err(format!("Request failed (HTTP {status})")),
+        Ok((_, body)) => Err(body),
+        Err(_) => Err("qol-tray is not running".to_string()),
     }
 }
 
@@ -141,9 +128,9 @@ mod tests {
 
     #[test]
     fn run_exec_rejects_invalid_plugin_and_action_ids_without_network() {
-        assert_eq!(run_exec("bad plugin id!", "settings"), 1);
-        assert_eq!(run_exec("qol-monitor", "bad action!"), 1);
-        assert_eq!(run_exec("shortcut", "bad id!"), 1);
-        assert_eq!(run_exec("qol-monitor", ""), 1);
+        assert!(run_exec("bad plugin id!", "settings").is_err());
+        assert!(run_exec("qol-monitor", "bad action!").is_err());
+        assert!(run_exec("shortcut", "bad id!").is_err());
+        assert!(run_exec("qol-monitor", "").is_err());
     }
 }

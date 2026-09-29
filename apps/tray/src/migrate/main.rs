@@ -5,6 +5,8 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput};
 
+mod cli;
+
 const APP_ID: &str = "qol-tray-migrate";
 const BINARY_NAME: &str = "qol-tray-migrate";
 
@@ -20,7 +22,7 @@ struct ProductionOperations;
 
 impl MigrationOperations for ProductionOperations {
     fn apply(&self, args: Vec<String>) -> Result<()> {
-        run_migrations(args)
+        cli::run_migrations(args)
     }
 
     fn inspect_config_dir(&self) -> Result<DoctorCheckResult> {
@@ -113,48 +115,6 @@ fn normalize_legacy_argv(args: impl IntoIterator<Item = String>) -> Vec<String> 
             .collect();
     }
     args
-}
-
-fn run_migrations(args: impl IntoIterator<Item = String>) -> Result<()> {
-    let args = parse_args(args)?;
-    let config_dir = match args.config_dir {
-        Some(dir) => dir,
-        None => qol_tray::paths::shared_config_dir().context("locating qol-tray config dir")?,
-    };
-    if !config_dir.exists() {
-        eprintln!("config dir does not exist: {}", config_dir.display());
-        return Ok(());
-    }
-
-    let pre_flight_reports =
-        qol_migrations::run_pre_flight(&config_dir, env!("CARGO_PKG_VERSION"))?;
-    print_reports("pre-flight", &pre_flight_reports);
-
-    if args.post_auth {
-        run_post_auth_blocking(&config_dir)?;
-    }
-
-    if pre_flight_reports.is_empty() && !args.post_auth {
-        println!(
-            "qol-tray-migrate: nothing to migrate in {}",
-            config_dir.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn print_reports(phase: &str, reports: &[qol_migrations::MigrationReport]) {
-    for report in reports {
-        println!(
-            "qol-tray-migrate[{phase}]: applied {} (archived {} paths)",
-            report.name,
-            report.archived.len(),
-        );
-        for path in &report.archived {
-            println!("    - {}", path.display());
-        }
-    }
 }
 
 fn run_post_auth_blocking(config_dir: &Path) -> Result<()> {

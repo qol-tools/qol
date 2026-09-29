@@ -220,7 +220,7 @@ fn prepare_recording_rect(selected: Rect) -> Result<Rect> {
 fn stop_capture_processes(state: &platform::CaptureSession, config: &Config) -> Result<()> {
     trace_record_config("stop", config);
     if let Err(error) = platform::stop_capture(state) {
-        eprintln!(
+        log::warn!(
             "failed to stop recording pids {}: {error:#}",
             state.pid_list()
         );

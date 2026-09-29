@@ -69,7 +69,7 @@ fn spawn_command_poll(
                         .update(move |cx| panel.borrow_mut().present(&tracker, cx))
                         .unwrap_or(false);
                     if !presented {
-                        eprintln!("[{PLUGIN_ID}] panel activation failed");
+                        log::warn!("[{PLUGIN_ID}] panel activation failed");
                     }
                     LoopFlow::Continue
                 }

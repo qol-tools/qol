@@ -97,9 +97,10 @@ pub(super) fn prepare() {
                 "backend=cinnamon_shell outcome=fallback stage={}",
                 error.stage
             );
-            eprintln!(
-                "[alt-tab/preview-plane] Cinnamon integration failed at {}: {}",
-                error.stage, error.detail
+            log::warn!(
+                "Cinnamon integration failed at {}: {}",
+                error.stage,
+                error.detail
             );
         }
     }

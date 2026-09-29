@@ -929,6 +929,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[allow(clippy::print_stdout)]
     fn bench_tick_poll_subscriber_gate_with_slow_platform() {
         const ITERATIONS: u32 = 32;
         const PLATFORM_CALL_DELAY: Duration = Duration::from_millis(1);

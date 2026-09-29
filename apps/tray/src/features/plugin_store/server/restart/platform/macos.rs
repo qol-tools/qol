@@ -29,7 +29,7 @@ impl RestartPlatformOps for Platform {
             let (binary, args) = unsafe { *Box::from_raw(ctx as *mut ExecData) };
             crate::lifeline_handoff::prepare_for_exec();
             let error = std::process::Command::new(&binary).args(&args).exec();
-            eprintln!("[qol-tray] exec restart failed: {}", error);
+            log::warn!("exec restart failed: {}", error);
             std::process::exit(1);
         }
 

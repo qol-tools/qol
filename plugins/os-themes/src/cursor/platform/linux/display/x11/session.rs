@@ -19,7 +19,7 @@ unsafe extern "C" fn log_x_error(
     event: *mut xlib::XErrorEvent,
 ) -> libc::c_int {
     let (code, request) = unsafe { ((*event).error_code, (*event).request_code) };
-    eprintln!("[shake-to-grow] ignored X error code={code} request={request}");
+    log::debug!("ignored X error code={code} request={request}");
     0
 }
 
@@ -184,12 +184,12 @@ impl CursorSession {
 
     fn capture_live_cursors(&mut self) {
         let Some(live_cursor) = load_live_cursor_image(self.display, self.base.default_size) else {
-            eprintln!("[shake-to-grow] failed to capture live cursor at grow-start");
+            log::warn!("failed to capture live cursor at grow-start");
             return;
         };
         if is_empty_cursor(&live_cursor) {
-            eprintln!(
-                "[shake-to-grow] live cursor is hidden at grow-start, growing the base cursor (guard missed)"
+            log::info!(
+                "live cursor is hidden at grow-start, growing the base cursor (guard missed)"
             );
             return;
         }
@@ -212,7 +212,7 @@ impl CursorSession {
             .as_ref()
             .and_then(|scaled| make_cursor_from_frames(self.display, &scaled.frames));
         let Some(next_cursor) = next_cursor else {
-            eprintln!("[shake-to-grow] live refresh failed to build scaled cursor");
+            log::warn!("live refresh failed to build scaled cursor");
             return false;
         };
         self.apply_cursor(next_cursor);
@@ -305,7 +305,7 @@ pub(crate) fn recover_scale(root: u64, windows: &[u64]) {
     }
     sync(display);
     unsafe { xlib::XCloseDisplay(display) };
-    eprintln!("[os-themes] recovered cursors left scaled after an abnormal exit");
+    log::debug!("recovered cursors left scaled after an abnormal exit");
 }
 
 pub(super) fn collect_tree(display: *mut xlib::Display, root: xlib::Window) -> Vec<xlib::Window> {
@@ -380,11 +380,11 @@ pub(super) fn subscribe_cursor_notifications(
     let mut error_base = 0;
     let status = unsafe { xfixes::XFixesQueryExtension(display, &mut event_base, &mut error_base) };
     if status == 0 {
-        eprintln!("[shake-to-grow] live refresh cursor-notify unavailable");
+        log::warn!("live refresh cursor-notify unavailable");
         return None;
     }
     unsafe { xfixes_select_cursor_input_raw(display, root, XFIXES_DISPLAY_CURSOR_NOTIFY_MASK) };
     sync(display);
-    eprintln!("[shake-to-grow] live refresh cursor-notify subscribed event_base={event_base}");
+    log::debug!("live refresh cursor-notify subscribed event_base={event_base}");
     Some(event_base)
 }

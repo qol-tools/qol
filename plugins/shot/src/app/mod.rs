@@ -253,7 +253,7 @@ async fn capture_and_preview(cx: &AsyncApp, state: &State) {
     let capture = match captured {
         Ok(capture) => capture,
         Err(error) => {
-            eprintln!("[qol-shot] capture failed: {error:#}");
+            log::warn!("capture failed: {error:#}");
             show_screenshot_failure(
                 cx,
                 &state.capture_status,
@@ -285,7 +285,7 @@ async fn complete_screenshot(
 ) {
     let result = cx.background_spawn(async move { file_ready.wait() }).await;
     if let Err(error) = result {
-        eprintln!("[qol-shot] screenshot completion failed: {error:#}");
+        log::warn!("screenshot completion failed: {error:#}");
         show_screenshot_failure(cx, &status, "Could not save the selected area");
         return;
     }
@@ -440,7 +440,7 @@ async fn preview_latest(cx: &AsyncApp, state: &State) {
                 },
             );
         }
-        Err(error) => eprintln!("[qol-shot] no screenshot to preview: {error:#}"),
+        Err(error) => log::warn!("no screenshot to preview: {error:#}"),
     }
 }
 
@@ -531,7 +531,7 @@ fn present(cx: &AsyncApp, state: &State, capture: PreviewCapture) -> bool {
     let tracker = state.tracker.clone();
     cx.update(|cx| {
         if let Err(error) = crate::ui::preview::show_capture(&windows, &tracker, capture, cx) {
-            eprintln!("[qol-shot] preview failed: {error:#}");
+            log::warn!("preview failed: {error:#}");
             return false;
         }
         true
@@ -605,7 +605,7 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
             }
             Err(error) => {
                 qol_runtime::probe!("SHOT_SETTINGS_PANEL", "result=fallback error={error:#}");
-                eprintln!("[qol-shot] settings panel failed, opening browser: {error:#}");
+                log::warn!("settings panel failed, opening browser: {error:#}");
             }
         }
     }
@@ -689,7 +689,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
             qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon state=idle")
         }
         Err(error) => {
-            eprintln!("[qol-shot] recording stop failed: {error:#}");
+            log::warn!("recording stop failed: {error:#}");
             qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=stop-error");
             return;
         }
@@ -757,7 +757,7 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
         })
         .await;
     if let Err(error) = result {
-        eprintln!("[qol-shot] recording start failed: {error:#}");
+        log::warn!("recording start failed: {error:#}");
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=start-error");
         return;
     }

@@ -1,6 +1,65 @@
-use super::nvidia::NVIDIA_POLICY_ID;
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
+use super::nvidia::{PolicyStatusView, NVIDIA_POLICY_ID};
 use super::{ResidencyOwnerId, ResidentPolicy};
 use anyhow::{anyhow, bail, Result};
+
+pub fn run_standalone(args: &[String]) -> i32 {
+    match super::nvidia::run_resident_policy_cli_traced(args) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("resident-policy: {error:#}");
+            1
+        }
+    }
+}
+
+pub fn run_guardian() -> i32 {
+    match qol_process::run_process_tree_guardian_entry() {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("resident-policy: process-tree guardian entry failed: {error}");
+            1
+        }
+    }
+}
+
+pub fn print_status(view: &PolicyStatusView) {
+    let module = view.expected_module_version.as_deref().unwrap_or("-");
+    println!(
+        "policy={} state={} owners={} module={} {}",
+        view.policy,
+        view.state.as_str(),
+        view.owners.join(","),
+        module,
+        view.detail
+    );
+}
+
+pub fn print_help() {
+    println!("qol-tray resident-policy");
+    println!();
+    println!("Manage a durable, host-local residency policy. Enabling pins the exact");
+    println!("installed NVIDIA driver versions with APT preferences and is an explicit,");
+    println!("machine-scoped mutation; disabling restores the exact owned state.");
+    println!();
+    println!("USAGE:");
+    println!("    qol-tray resident-policy status                 Read-only state (no elevation)");
+    println!("    qol-tray resident-policy help                   This message (no elevation)");
+    println!("    qol-tray resident-policy enable                 Adopt the NVIDIA policy");
+    println!("    qol-tray resident-policy disable [--owner <id>] Release this owner's state");
+    println!("    qol-tray resident-policy join --owner <id>      Join an active policy");
+    println!("    qol-tray resident-policy transfer --owner <id>  Replace the owner set");
+    println!("    qol-tray resident-policy residency --resident   Mark THIS device resident");
+    println!("    qol-tray resident-policy residency --portable   Mark THIS device portable");
+    println!();
+    println!("Mutations require elevation (pkexec) and root. Status is read-only and");
+    println!("never elevates. The residency toggle writes the per-device status into the");
+    println!("active profile and never elevates. Only the fixed nvidia-driver-version-pin");
+    println!("policy is known.");
+    println!("Activation succeeds only from a managed install; raw and portable artifacts");
+    println!("cannot create resident state.");
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResidentCommand {

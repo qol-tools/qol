@@ -32,5 +32,5 @@ pub fn send_notification_with_layout(
         return;
     }
 
-    println!("{title}: {message}");
+    log::info!("{title}: {message}");
 }

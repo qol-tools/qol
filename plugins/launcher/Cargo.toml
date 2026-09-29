@@ -10,6 +10,8 @@ autoexamples = false
 examples = []
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 anyhow = "1"
 flate2 = "1"
 gpui.workspace = true
@@ -124,3 +126,6 @@ required-features = ["examples"]
 [[example]]
 name = "15_action_modifiers"
 required-features = ["examples"]
+
+[lints]
+workspace = true

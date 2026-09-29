@@ -10,6 +10,8 @@ name = "qol-cli-sessions"
 path = "src/main.rs"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 anyhow = "1"
 qol-apps.workspace = true
 qol-color.workspace = true
@@ -34,3 +36,6 @@ proptest = "1"
 qol-plugin-api.workspace = true
 tempfile = "3"
 toml.workspace = true
+
+[lints]
+workspace = true

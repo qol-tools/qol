@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use qol_audio::default_output;
 use qol_audio::devices::{self, Direction};
 

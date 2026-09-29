@@ -49,7 +49,7 @@ pub fn journal_scaled(root: u64, windows: &[u64]) {
         })
     })();
     if let Err(error) = result {
-        eprintln!("[os-themes] failed to journal the scaled cursor: {error:#}");
+        log::warn!("failed to journal the scaled cursor: {error:#}");
     }
 }
 

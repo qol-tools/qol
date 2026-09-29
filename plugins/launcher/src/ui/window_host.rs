@@ -46,8 +46,8 @@ pub(crate) fn pre_create_ghost(
         let target = placement.target;
         let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
         let Some(handle) = open_hidden_ghost(cx, entries.clone(), &placement, &title) else {
-            eprintln!(
-                "[launcher] pre-create failed for monitor={:?}; will open on demand",
+            log::warn!(
+                "pre-create failed for monitor={:?}; will open on demand",
                 target
             );
             continue;
@@ -213,7 +213,7 @@ fn create_and_show_ghost(
 
     mark_non_target_hidden(&active, target, cx);
     let Some(handle) = open_visible_ghost(cx, entries, &placement, &title) else {
-        eprintln!("[launcher] open failed");
+        log::warn!("open failed");
         return;
     };
     active.borrow_mut().insert(target, handle);

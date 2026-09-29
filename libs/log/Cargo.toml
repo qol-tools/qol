@@ -6,6 +6,7 @@ license.workspace = true
 description = "Log directory resolution and bounded file retention for qol-tools"
 
 [dependencies]
+log.workspace = true
 qol-config = { workspace = true }
 tracing-appender = "0.2"
 workspace-hack.workspace = true
@@ -18,3 +19,6 @@ dirs = "6.0.0"
 
 [dev-dependencies]
 tempfile = "3.27"
+
+[lints]
+workspace = true

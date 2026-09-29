@@ -33,8 +33,8 @@ fn apply_command() -> Command {
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if no driver-specific fix applies or pkexec fails.")
         .run_plain_text(|_| {
-            app::execute_action_once("apply_fixes")?;
-            Ok(PlainTextOutput::empty())
+            Ok(app::execute_action_once("apply_fixes")?
+                .map_or_else(PlainTextOutput::empty, PlainTextOutput::text))
         })
 }
 
@@ -51,8 +51,8 @@ fn reclaim_command() -> Command {
             "Exits non-zero when no controller needs reconnecting or the disconnect fails.",
         )
         .run_plain_text(|_| {
-            app::execute_action_once("reclaim_controller")?;
-            Ok(PlainTextOutput::empty())
+            Ok(app::execute_action_once("reclaim_controller")?
+                .map_or_else(PlainTextOutput::empty, PlainTextOutput::text))
         })
 }
 

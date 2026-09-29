@@ -140,7 +140,7 @@ pub fn append(root: &Path, event: &RetrievalEvent) {
         return;
     }
     if let Err(err) = append_inner(root, event) {
-        eprintln!("qol-memory: retrieval log append failed: {}", err);
+        log::warn!("qol-memory: retrieval log append failed: {}", err);
     }
 }
 

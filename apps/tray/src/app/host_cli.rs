@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Invocation {
     Daemon,
@@ -16,6 +18,120 @@ pub(super) enum Invocation {
 
 pub(super) fn from_env() -> Invocation {
     classify(std::env::args().skip(1).collect())
+}
+
+pub(super) fn dispatch(invocation: Invocation) -> Option<i32> {
+    match invocation {
+        Invocation::Daemon => None,
+        Invocation::Help => {
+            print_usage();
+            Some(0)
+        }
+        Invocation::Version => {
+            println!("qol-tray {}", super::qol_tray_version());
+            Some(0)
+        }
+        Invocation::WriteMode(value) => {
+            let exit = write_mode_flag(&value);
+            if exit != 0 {
+                Some(exit)
+            } else {
+                None
+            }
+        }
+        Invocation::Headless(args) => Some(qol_tray::doctor::run_host_cli(args)),
+        Invocation::ResidentPolicy(args) => {
+            Some(qol_tray::features::resident_policy::run_cli(&args))
+        }
+        Invocation::ResidentPolicyHidden(args) => {
+            Some(qol_tray::features::resident_policy::run_hidden(&args))
+        }
+        Invocation::Exec { target, action } => Some(
+            match qol_plugin_api::host_exec::run_exec(&target, &action) {
+                Ok(()) => 0,
+                Err(message) => {
+                    eprintln!("{message}");
+                    1
+                }
+            },
+        ),
+        Invocation::Open(route) => Some(forward_route(&route)),
+        Invocation::UrlCourier(route) => Some(courier_forward_with_retry(&route)),
+        Invocation::Url(route) => {
+            if super::is_already_running() {
+                Some(forward_route(&route))
+            } else {
+                let _ = super::PENDING_COLD_ROUTE.set(route);
+                None
+            }
+        }
+        Invocation::Invalid => {
+            eprintln!("Invalid qol-tray invocation. Run `qol-tray help` for supported forms.");
+            Some(2)
+        }
+    }
+}
+
+fn write_mode_flag(value: &str) -> i32 {
+    let mode = match qol_tray::mode::ModeFlag::parse_cli(value) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            return 1;
+        }
+    };
+    if let Err(e) = qol_tray::mode::ModeConfig::set(mode) {
+        eprintln!("Failed to write mode.json: {}", e);
+        return 1;
+    }
+    println!("mode.json set to {:?}", mode);
+    0
+}
+
+fn print_usage() {
+    println!("qol-tray {}", super::qol_tray_version());
+    println!();
+    println!("USAGE:");
+    println!("    qol-tray                              Run the tray daemon");
+    println!(
+        "    qol-tray exec <plugin_id> <action>    Trigger a plugin action via the running daemon"
+    );
+    println!("    qol-tray exec shortcut <id>           Run a shortcut via the running daemon");
+    println!(
+        "    qol-tray open <route>                 Open the app at an in-app route (e.g. shortcuts/add)"
+    );
+    println!("    qol-tray doctor                       Run read-only host and plugin checks");
+    println!(
+        "    qol-tray resident-policy <op>        Inspect or manage the durable NVIDIA residency policy; residency --resident|--portable toggles this device"
+    );
+    println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
+    println!("    qol-tray --version, -V                Print version and exit");
+    println!("    qol-tray help, --help, -h             Print this message and exit");
+}
+
+/// Navigate an already-open UI tab to `route`, falling back to opening a fresh
+/// browser tab. Shared by `qol-tray open` and the `qol://` courier.
+fn forward_route(route: &str) -> i32 {
+    if super::navigated_open_tab(route) {
+        return 0;
+    }
+    let url = qol_tray::local_http::browser_url(route, qol_conventions::DEFAULT_PORT);
+    match qol_tray::paths::open_url(&url) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Failed to open {url}: {e}");
+            1
+        }
+    }
+}
+
+/// A macOS courier is spawned by the running daemon's URL delegate, but that
+/// daemon's HTTP server may still be binding. Wait briefly (up to ~2s) for it to
+/// accept connections so we navigate the live tab instead of opening a dead one,
+/// then forward.
+fn courier_forward_with_retry(route: &str) -> i32 {
+    super::wait_for_server_ready();
+    forward_route(route)
 }
 
 fn classify(args: Vec<String>) -> Invocation {

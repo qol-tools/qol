@@ -268,14 +268,14 @@ fn exec_restart_on_main_thread() -> Result<()> {
 
     extern "C" fn do_exec(ctx: *mut std::ffi::c_void) {
         let (binary, args) = unsafe { *Box::from_raw(ctx as *mut ExecData) };
-        eprintln!(
-            "[qol-tray] exec'ing: {} (exists={}, args={:?})",
+        log::debug!(
+            "exec'ing: {} (exists={}, args={:?})",
             binary.display(),
             binary.exists(),
             args
         );
         let error = std::process::Command::new(&binary).args(&args).exec();
-        eprintln!("[qol-tray] update exec restart failed: {error}");
+        log::warn!("update exec restart failed: {error}");
         std::process::exit(1);
     }
 

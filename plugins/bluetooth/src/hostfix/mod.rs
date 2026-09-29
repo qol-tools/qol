@@ -642,7 +642,7 @@ pub fn adopt_competing_managers_if_resident() -> Vec<String> {
                     "stage=adopt component={} outcome=failed",
                     manager.process
                 );
-                eprintln!(
+                log::warn!(
                     "Bluetooth takeover of {} failed: {error:#}",
                     manager.process
                 );

@@ -5,7 +5,9 @@ use std::time::SystemTime;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
 mod platform;
+mod stderr;
 
+pub use stderr::init_stderr;
 pub use tracing_appender;
 
 /// Number of log files any qol sink keeps. One policy, one home.

@@ -151,8 +151,8 @@ pub fn load_alt_tab_config() -> AltTabConfig {
     let config: AltTabConfig =
         qol_config::load_plugin_config_from_env_with_contract(PLUGIN_ID, CONFIG_CONTRACT);
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab] config: action_mode={:?} max_columns={} card_scale={} dynamic_card_scale={} card_padding={} icon_position={:?} reset_selection_on_open={} open_behavior={:?}",
+    log::debug!(
+        "config: action_mode={:?} max_columns={} card_scale={} dynamic_card_scale={} card_padding={} icon_position={:?} reset_selection_on_open={} open_behavior={:?}",
         config.action_mode,
         config.display.max_columns,
         config.display.card_scale,

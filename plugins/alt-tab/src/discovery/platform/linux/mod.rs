@@ -207,7 +207,7 @@ fn get_open_windows_with(session: &DiscoverySession) -> Vec<WindowInfo> {
     order_picker(&mut windows, &above, &focused, active);
 
     #[cfg(debug_assertions)]
-    eprintln!("[x11] get_open_windows total results: {}", windows.len());
+    log::debug!("get_open_windows total results: {}", windows.len());
 
     windows
 }

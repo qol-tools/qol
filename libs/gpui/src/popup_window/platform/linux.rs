@@ -1649,8 +1649,8 @@ fn find_window_by_title(
     });
     #[cfg(debug_assertions)]
     if titled.len() > 1 {
-        eprintln!(
-            "[popup/x11] title={title:?} candidates={:?} pid_match={pid_match:?}",
+        log::debug!(
+            "title={title:?} candidates={:?} pid_match={pid_match:?}",
             titled
         );
     }
@@ -1691,7 +1691,7 @@ fn move_window(conn: &impl Connection, root: u32, wid: u32, x: i32, y: i32) -> b
     let aux = ConfigureWindowAux::new().x(x).y(y);
     let moved = configure_window_synced(conn, target, &aux);
     #[cfg(debug_assertions)]
-    eprintln!("[popup/x11] move client={wid} target={target} root={root} to=({x},{y}) ok={moved}");
+    log::debug!("move client={wid} target={target} root={root} to=({x},{y}) ok={moved}");
     moved
 }
 
@@ -1712,9 +1712,10 @@ fn set_window_bounds(
         .height(height);
     let configured = configure_window_synced(conn, target, &aux);
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[popup/x11] bounds client={wid} target={target} root={root} to=({x},{y}) size={}x{} ok={configured}",
-        width, height
+    log::debug!(
+        "bounds client={wid} target={target} root={root} to=({x},{y}) size={}x{} ok={configured}",
+        width,
+        height
     );
     configured
 }

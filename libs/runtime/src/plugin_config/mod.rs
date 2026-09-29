@@ -19,7 +19,7 @@ pub fn load_json() -> Option<serde_json::Value> {
 
 pub fn save<T: Serialize>(value: &T) -> bool {
     let Some(plugin_id) = plugin_id() else {
-        eprintln!("[runtime/plugin_config] save skipped: {ENV_PLUGIN_ID} unset");
+        log::warn!("save skipped: {ENV_PLUGIN_ID} unset");
         return false;
     };
     let Ok(json) = serde_json::to_value(value) else {

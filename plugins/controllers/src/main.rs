@@ -1,13 +1,13 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    qol_plugin_daemon::logger::init();
+    qol_log::init_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
         return match qol_controllers::app::run_from_env() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("{error:#}");
+                log::error!("{error:#}");
                 ExitCode::from(1)
             }
         };

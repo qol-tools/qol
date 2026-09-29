@@ -6,6 +6,7 @@ description = "Frequency/recency ranking for qol-tools"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+log.workspace = true
 dirs = "6.0"
 qol-fs.workspace = true
 serde.workspace = true
@@ -14,3 +15,6 @@ workspace-hack.workspace = true
 
 [dev-dependencies]
 tempfile = "3.8"
+
+[lints]
+workspace = true

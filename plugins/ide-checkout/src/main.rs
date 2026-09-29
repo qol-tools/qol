@@ -5,7 +5,7 @@ mod doctor;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    qol_plugin_daemon::logger::init();
+    qol_log::init_stderr();
     cli::exit_code(std::env::args().skip(1))
 }
 

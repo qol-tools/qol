@@ -181,9 +181,11 @@ fn is_screen_helper() -> bool {
 
 /// Prints one `x,y,w,h` work area per line for the `SCREENS_ACTION` subcommand.
 pub(super) fn print_work_areas() {
-    for rect in system_screens() {
-        println!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h);
-    }
+    let lines: Vec<String> = system_screens()
+        .iter()
+        .map(|rect| format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h))
+        .collect();
+    crate::cli::print_lines(&lines);
 }
 
 fn helper_screens() -> Vec<Rect> {

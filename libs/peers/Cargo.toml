@@ -76,3 +76,6 @@ required-features = ["service"]
 [[test]]
 name = "enrollment"
 required-features = ["service"]
+
+[lints]
+workspace = true

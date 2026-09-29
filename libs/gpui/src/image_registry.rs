@@ -42,10 +42,7 @@ impl ImageRegistry {
         {
             let outstanding = inner.refs.len();
             if outstanding > 256 {
-                eprintln!(
-                    "[image-registry] outstanding={} (Proposal C regression signal)",
-                    outstanding
-                );
+                log::debug!("outstanding={} (Proposal C regression signal)", outstanding);
             }
         }
     }
@@ -71,7 +68,7 @@ impl ImageRegistry {
             };
             let Some(count) = inner.refs.get_mut(&image.id) else {
                 #[cfg(debug_assertions)]
-                eprintln!("[image-registry] release without retain: id={:?}", image.id);
+                log::warn!("release without retain: id={:?}", image.id);
                 return;
             };
             *count = count.saturating_sub(1);

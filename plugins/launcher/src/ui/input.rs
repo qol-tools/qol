@@ -46,8 +46,8 @@ impl LauncherState {
         let boost = (secondary || alt) && !shift && (self.list_focused || self.query.is_empty());
         #[cfg(debug_assertions)]
         if matches!(key, "left" | "right") {
-            eprintln!(
-                "[input] key={key:?} secondary={secondary} control={control} shift={shift} alt={alt}"
+            log::debug!(
+                "key={key:?} secondary={secondary} control={control} shift={shift} alt={alt}"
             );
         }
         let in_panel = self.mode == SearchMode::Files && self.list_focused;

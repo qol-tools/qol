@@ -9,7 +9,7 @@ mod rendering;
 mod runtime;
 
 fn main() -> std::process::ExitCode {
-    qol_plugin_daemon::logger::init();
+    qol_log::init_stderr();
     runtime::exit_code(std::env::args().skip(1))
 }
 

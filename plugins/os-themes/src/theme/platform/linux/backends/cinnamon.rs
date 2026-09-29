@@ -37,11 +37,11 @@ fn apply_shell_theme(target: ColorScheme, installed: &[String]) {
     match resolved {
         Ok(name) => {
             if let Err(error) = snapshot_key(SHELL_SCHEMA, "name") {
-                eprintln!("[os-themes] shell theme not updated: {error:#}");
+                log::warn!("shell theme not updated: {error:#}");
             } else if let Err(error) = gsettings::set(SHELL_SCHEMA, "name", &name) {
-                eprintln!("[os-themes] shell theme not updated: {error:#}");
+                log::warn!("shell theme not updated: {error:#}");
             }
         }
-        Err(error) => eprintln!("[os-themes] shell theme not updated: {error:#}"),
+        Err(error) => log::warn!("shell theme not updated: {error:#}"),
     }
 }

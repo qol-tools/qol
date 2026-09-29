@@ -64,11 +64,11 @@ fn apply_icon_theme(target: ColorScheme) {
     match resolve(&current, target, &installed) {
         Some(name) => {
             if let Err(error) = kconfig::set(KDE_GLOBALS, "Icons", "Theme", &name) {
-                eprintln!("[os-themes] icon theme not updated: {error:#}");
+                log::warn!("icon theme not updated: {error:#}");
             }
         }
-        None => eprintln!(
-            "[os-themes] icon theme not updated: no installed {target:?} counterpart for {current:?}"
+        None => log::info!(
+            "icon theme not updated: no installed {target:?} counterpart for {current:?}"
         ),
     }
 }
@@ -81,13 +81,13 @@ fn apply_cursor_theme(target: ColorScheme) {
     match resolve(&current, target, &installed) {
         Some(name) => {
             if let Err(error) = kconfig::set(KCM_INPUT, "Mouse", "cursorTheme", &name) {
-                eprintln!("[os-themes] cursor theme not updated: {error:#}");
+                log::warn!("cursor theme not updated: {error:#}");
                 return;
             }
             apply_cursor_live(&name);
         }
-        None => eprintln!(
-            "[os-themes] cursor theme not updated: no installed {target:?} counterpart for {current:?}"
+        None => log::info!(
+            "cursor theme not updated: no installed {target:?} counterpart for {current:?}"
         ),
     }
 }
@@ -103,9 +103,7 @@ fn apply_cursor_live(name: &str) {
     match cursor_applier(tool_available("kapplymousetheme"), is_x11_session(), size) {
         CursorApplier::KApplyMouseTheme { size } => {
             if !run_live_apply("kapplymousetheme", &[name, &size.to_string()]) {
-                eprintln!(
-                    "[os-themes] cursor theme is persisted and applies after a Plasma reload"
-                );
+                log::debug!("cursor theme is persisted and applies after a Plasma reload");
             }
         }
         CursorApplier::ConfigWrite => {}
@@ -124,13 +122,13 @@ fn apply_gtk_override(target: ColorScheme) {
             for file in ["gtk-3.0/settings.ini", "gtk-4.0/settings.ini"] {
                 if let Err(error) = kconfig::write_direct(file, "Settings", "gtk-theme-name", &name)
                 {
-                    eprintln!("[os-themes] gtk theme not updated: {error:#}");
+                    log::warn!("gtk theme not updated: {error:#}");
                 }
             }
         }
-        None => eprintln!(
-            "[os-themes] gtk theme not updated: no installed {target:?} counterpart for {current:?}"
-        ),
+        None => {
+            log::info!("gtk theme not updated: no installed {target:?} counterpart for {current:?}")
+        }
     }
 }
 
@@ -185,11 +183,11 @@ fn run_live_apply(tool: &str, args: &[&str]) -> bool {
     match Command::new(tool).args(args).status() {
         Ok(status) if status.success() => true,
         Ok(status) => {
-            eprintln!("[os-themes] {tool} failed with {status}");
+            log::warn!("{tool} failed with {status}");
             false
         }
         Err(error) => {
-            eprintln!("[os-themes] {tool} failed to run: {error:#}");
+            log::warn!("{tool} failed to run: {error:#}");
             false
         }
     }

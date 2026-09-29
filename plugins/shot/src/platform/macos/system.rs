@@ -125,8 +125,8 @@ fn capture_frozen_display(job: FrozenCaptureJob) -> Result<FrozenSegmentData> {
             );
         }
         Err(error) => {
-            eprintln!(
-                "[qol-shot] native frozen display {} capture failed: {error:#}",
+            log::warn!(
+                "native frozen display {} capture failed: {error:#}",
                 job.display.display_index
             );
             qol_runtime::probe!(

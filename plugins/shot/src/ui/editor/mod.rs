@@ -422,7 +422,7 @@ pub(crate) async fn open_from(
 
 fn report_open_failure(result: &str, path: &Path, error: anyhow::Error) -> bool {
     qol_runtime::probe!("SHOT_EDIT", "phase=open result={result}");
-    eprintln!("[qol-shot] screenshot editor open failed: {error:#}");
+    log::warn!("screenshot editor open failed: {error:#}");
     crate::platform::show_notification(OPEN_FAILED_TOAST, &path.display().to_string(), 1800);
     false
 }
@@ -820,7 +820,7 @@ impl EditorView {
                                 "SHOT_EDIT",
                                 "phase=output action={action} result=error"
                             );
-                            eprintln!("[qol-shot] screenshot editor output failed: {error:#}");
+                            log::warn!("screenshot editor output failed: {error:#}");
                             view.output_error = Some(output.error_message().to_string());
                             cx.notify();
                         }

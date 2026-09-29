@@ -56,11 +56,11 @@ pub fn start(
                 match bind_ws_listener_retrying(ws_port, BIND_RETRY_WINDOW, BIND_RETRY_INTERVAL) {
                     Ok(l) => l,
                     Err(e) => {
-                        eprintln!("ws: failed to bind port {}: {}", ws_port, e);
+                        log::warn!("ws: failed to bind port {}: {}", ws_port, e);
                         return;
                     }
                 };
-            eprintln!("ws: listening on 127.0.0.1:{}", ws_port);
+            log::info!("ws: listening on 127.0.0.1:{}", ws_port);
             accept_loop(listener, buffer)
         })
         .ok();
@@ -103,7 +103,7 @@ fn handle_client(stream: std::net::TcpStream, buffer: CommandBuffer) {
     let mut ws = match tungstenite::accept(stream) {
         Ok(ws) => ws,
         Err(e) => {
-            eprintln!("ws: handshake failed: {}", e);
+            log::warn!("ws: handshake failed: {}", e);
             return;
         }
     };

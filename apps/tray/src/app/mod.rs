@@ -33,7 +33,7 @@ pub(crate) fn run() -> Result<()> {
     }
     qol_tray::console_guard::guard_console_pipes();
 
-    if let Some(code) = dispatch_host_cli(host_cli::from_env()) {
+    if let Some(code) = host_cli::dispatch(host_cli::from_env()) {
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "HOST_ENTRY",
@@ -69,7 +69,7 @@ pub(crate) fn run() -> Result<()> {
         }
 
         if is_already_running() {
-            eprintln!("qol-tray is already running on port {}", DEFAULT_PORT);
+            log::warn!("qol-tray is already running on port {}", DEFAULT_PORT);
             qol_tray::surfaces::native_notifications::show_already_running();
             return Ok(());
         }
@@ -202,95 +202,12 @@ fn log_binding_restore(phase: &str, summary: hotkeys::RestoreSummary) {
     );
 }
 
-fn dispatch_host_cli(invocation: host_cli::Invocation) -> Option<i32> {
-    match invocation {
-        host_cli::Invocation::Daemon => None,
-        host_cli::Invocation::Help => {
-            print_usage();
-            Some(0)
-        }
-        host_cli::Invocation::Version => {
-            println!("qol-tray {}", qol_tray_version());
-            Some(0)
-        }
-        host_cli::Invocation::WriteMode(value) => {
-            let exit = write_mode_flag(&value);
-            if exit != 0 {
-                Some(exit)
-            } else {
-                None
-            }
-        }
-        host_cli::Invocation::Headless(args) => Some(qol_tray::doctor::run_host_cli(args)),
-        host_cli::Invocation::ResidentPolicy(args) => {
-            Some(qol_tray::features::resident_policy::run_cli(&args))
-        }
-        host_cli::Invocation::ResidentPolicyHidden(args) => {
-            Some(qol_tray::features::resident_policy::run_hidden(&args))
-        }
-        host_cli::Invocation::Exec { target, action } => {
-            Some(qol_plugin_api::host_exec::run_exec(&target, &action))
-        }
-        host_cli::Invocation::Open(route) => Some(forward_route(&route)),
-        host_cli::Invocation::UrlCourier(route) => Some(courier_forward_with_retry(&route)),
-        host_cli::Invocation::Url(route) => {
-            if is_already_running() {
-                Some(forward_route(&route))
-            } else {
-                let _ = PENDING_COLD_ROUTE.set(route);
-                None
-            }
-        }
-        host_cli::Invocation::Invalid => {
-            eprintln!("Invalid qol-tray invocation. Run `qol-tray help` for supported forms.");
-            Some(2)
-        }
-    }
-}
-
-fn write_mode_flag(value: &str) -> i32 {
-    let mode = match qol_tray::mode::ModeFlag::parse_cli(value) {
-        Ok(m) => m,
-        Err(msg) => {
-            eprintln!("{}", msg);
-            return 1;
-        }
-    };
-    if let Err(e) = qol_tray::mode::ModeConfig::set(mode) {
-        eprintln!("Failed to write mode.json: {}", e);
-        return 1;
-    }
-    println!("mode.json set to {:?}", mode);
-    0
-}
-
 fn qol_tray_version() -> String {
     #[cfg(feature = "dev")]
     if let Some(override_version) = qol_tray::version::test_version_override() {
         return override_version.to_string();
     }
     env!("CARGO_PKG_VERSION").to_string()
-}
-
-fn print_usage() {
-    println!("qol-tray {}", qol_tray_version());
-    println!();
-    println!("USAGE:");
-    println!("    qol-tray                              Run the tray daemon");
-    println!(
-        "    qol-tray exec <plugin_id> <action>    Trigger a plugin action via the running daemon"
-    );
-    println!("    qol-tray exec shortcut <id>           Run a shortcut via the running daemon");
-    println!(
-        "    qol-tray open <route>                 Open the app at an in-app route (e.g. shortcuts/add)"
-    );
-    println!("    qol-tray doctor                       Run read-only host and plugin checks");
-    println!(
-        "    qol-tray resident-policy <op>        Inspect or manage the durable NVIDIA residency policy; residency --resident|--portable toggles this device"
-    );
-    println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
-    println!("    qol-tray --version, -V                Print version and exit");
-    println!("    qol-tray help, --help, -h             Print this message and exit");
 }
 
 /// Route stashed when a bare `qol://` URL arrives in argv on a Linux cold launch
@@ -300,31 +217,6 @@ fn print_usage() {
 /// courier process classified by `host_cli`.
 static PENDING_COLD_ROUTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// Navigate an already-open UI tab to `route`, falling back to opening a fresh
-/// browser tab. Shared by `qol-tray open` and the `qol://` courier.
-fn forward_route(route: &str) -> i32 {
-    if navigated_open_tab(route) {
-        return 0;
-    }
-    let url = qol_tray::local_http::browser_url(route, DEFAULT_PORT);
-    match qol_tray::paths::open_url(&url) {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("Failed to open {url}: {e}");
-            1
-        }
-    }
-}
-
-/// A macOS courier is spawned by the running daemon's URL delegate, but that
-/// daemon's HTTP server may still be binding. Wait briefly (up to ~2s) for it to
-/// accept connections so we navigate the live tab instead of opening a dead one,
-/// then forward.
-fn courier_forward_with_retry(route: &str) -> i32 {
-    wait_for_server_ready();
-    forward_route(route)
-}
-
 fn open_pending_cold_route(route: &str) {
     wait_for_server_ready();
     let url = qol_tray::local_http::browser_url(route, DEFAULT_PORT);
@@ -333,7 +225,7 @@ fn open_pending_cold_route(route: &str) {
 
 fn run_startup_doctor() {
     let report = qol_tray::doctor::auto_fix_startup();
-    println!("{}", qol_tray::doctor::startup_doctor_summary(&report));
+    log::info!("{}", qol_tray::doctor::startup_doctor_summary(&report));
 }
 
 /// Ask the running daemon to navigate an already-open UI tab to `route`.

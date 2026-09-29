@@ -868,7 +868,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             self.surface_gamma_warnings(&recovery);
             if let Err(error) = self.host_night_light.release(RestoreMode::Recovery) {
                 self.host_night_light_conflict = true;
-                eprintln!("[{PLUGIN_ID}] host night light recovery failed: {error}");
+                log::warn!("[{PLUGIN_ID}] host night light recovery failed: {error}");
             }
             if recovery.restored > 0 {
                 (self.notify)(
@@ -1091,7 +1091,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 }
                 Err(error) => {
                     self.night_apply_error = Some(error.to_string());
-                    eprintln!(
+                    log::warn!(
                         "[{PLUGIN_ID}] night mode write failed on {}: {error}",
                         handle.connector()
                     );
@@ -1548,7 +1548,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 if !armed {
                     self.night_apply_error = Some(error.to_string());
                 }
-                eprintln!("[{PLUGIN_ID}] host night light takeover failed: {error}");
+                log::warn!("[{PLUGIN_ID}] host night light takeover failed: {error}");
             }
         }
     }
@@ -1808,7 +1808,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         let handles = match self.session.control().enumerate() {
             Ok(handles) => handles,
             Err(error) => {
-                eprintln!(
+                log::warn!(
                     "[{PLUGIN_ID}] display state reapply could not enumerate displays: {error}"
                 );
                 Vec::new()
@@ -2048,7 +2048,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     self.preferred.insert(id.clone(), value);
                 }
                 if let Err(error) = (self.preferred_save)(&self.preferred) {
-                    eprintln!("[{PLUGIN_ID}] failed to persist preferred brightness: {error:#}");
+                    log::warn!("[{PLUGIN_ID}] failed to persist preferred brightness: {error:#}");
                 }
                 if self.config().notify_on_change {
                     (self.notify)("Monitor", &format!("Brightness {value}%"));
@@ -2094,7 +2094,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 if let Err(error) = qol_apps::desktop_integration::open_plugin_settings_via_tray(
                     crate::hotkeys::PLUGIN_ID,
                 ) {
-                    eprintln!("[{PLUGIN_ID}] failed to open settings page: {error}");
+                    log::warn!("[{PLUGIN_ID}] failed to open settings page: {error}");
                 }
                 true
             }
@@ -2106,7 +2106,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             }
             Command::Reload => {
                 let next = config::load().unwrap_or_else(|error| {
-                    eprintln!("[{PLUGIN_ID}] config reload failed: {error:#}");
+                    log::warn!("[{PLUGIN_ID}] config reload failed: {error:#}");
                     DeviceConfig::default()
                 });
                 self.preferred = config::load_preferred(self.config_root.as_deref());
@@ -2117,7 +2117,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 if let Err(error) =
                     config::save_night_state(self.config_root.as_deref(), &self.night)
                 {
-                    eprintln!("[{PLUGIN_ID}] failed to clear night mode override: {error:#}");
+                    log::warn!("[{PLUGIN_ID}] failed to clear night mode override: {error:#}");
                 }
                 self.evaluate_night(true);
                 self.release_unowned_applets();
@@ -2134,7 +2134,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 if let Err(error) =
                     config::save_night_state(self.config_root.as_deref(), &self.night)
                 {
-                    eprintln!("[{PLUGIN_ID}] failed to persist night mode state: {error:#}");
+                    log::warn!("[{PLUGIN_ID}] failed to persist night mode state: {error:#}");
                 }
                 self.evaluate_night(false);
                 self.reset_all_gamma_reclaims();
@@ -2153,7 +2153,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     let report = self.session.restore_all(RestoreMode::Exit);
                     self.surface_gamma_warnings(&report);
                     if let Err(error) = self.host_night_light.release(RestoreMode::Exit) {
-                        eprintln!("[{PLUGIN_ID}] host night light restore failed: {error}");
+                        log::warn!("[{PLUGIN_ID}] host night light restore failed: {error}");
                     }
                 }
                 false
@@ -2460,7 +2460,7 @@ fn session_store_for(config_root: Option<&std::path::Path>) -> SessionStore {
 fn fallback_session_dir() -> PathBuf {
     let fallback = std::env::temp_dir().join("qol-monitor-session");
     if let Err(error) = qol_fs::create_private_dir(&fallback) {
-        eprintln!("[{PLUGIN_ID}] cannot secure the fallback session dir: {error}");
+        log::warn!("[{PLUGIN_ID}] cannot secure the fallback session dir: {error}");
     }
     fallback
 }

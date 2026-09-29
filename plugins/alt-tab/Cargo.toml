@@ -6,6 +6,8 @@ description = "Alt-Tab window switcher plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 futures = "0.3"
 gpui.workspace = true
 qol-apps.workspace = true
@@ -70,3 +72,6 @@ objc2-app-kit = { version = "0.3", features = [
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

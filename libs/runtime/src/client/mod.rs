@@ -89,7 +89,7 @@ impl PlatformStateClient {
         match self.request_json(&request)? {
             PluginConfigResponse::Ok { config } => Some(config),
             PluginConfigResponse::Error { message } => {
-                eprintln!("[runtime/client] get_plugin_config({plugin_id}) failed: {message}");
+                log::warn!("get_plugin_config({plugin_id}) failed: {message}");
                 None
             }
         }
@@ -103,7 +103,7 @@ impl PlatformStateClient {
         match self.request_json(&request) {
             Some(PluginConfigResponse::Ok { .. }) => true,
             Some(PluginConfigResponse::Error { message }) => {
-                eprintln!("[runtime/client] set_plugin_config({plugin_id}) failed: {message}");
+                log::warn!("set_plugin_config({plugin_id}) failed: {message}");
                 false
             }
             None => false,

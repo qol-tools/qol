@@ -8,3 +8,6 @@ license = "PolyForm-Noncommercial-1.0.0"
 [dependencies]
 serde.workspace = true
 workspace-hack.workspace = true
+
+[lints]
+workspace = true

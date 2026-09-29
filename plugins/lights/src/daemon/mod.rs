@@ -63,12 +63,12 @@ fn device_monitor_loop(
                 if let Ok(mut config) = store::load() {
                     config.devices.insert(ieee.clone(), entry);
                     let _ = store::save(&config);
-                    eprintln!("device joined: {} (0x{:04X})", ieee, device.network_address);
+                    log::info!("device joined: {} (0x{:04X})", ieee, device.network_address);
                 }
                 if let Ok(guard) = service.lock() {
                     if let Some(svc) = guard.as_ref() {
                         let _ = svc.backend().permit_join(0);
-                        eprintln!("pairing auto-stopped after device joined");
+                        log::info!("pairing auto-stopped after device joined");
                     }
                 }
             }
@@ -80,12 +80,12 @@ fn runtime_state() -> DaemonRuntime {
     let state = match DaemonState::new() {
         Ok(state) => state,
         Err(error) => {
-            eprintln!("backend unavailable: {error:#}");
+            log::warn!("backend unavailable: {error:#}");
             return DaemonRuntime::Unavailable(error.to_string());
         }
     };
 
-    eprintln!("coordinator ready");
+    log::info!("coordinator ready");
     start_background_services(&state);
     DaemonRuntime::Ready(Box::new(state))
 }
@@ -124,7 +124,7 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
         DaemonOutcome::HandledWithData(data) => ReadResult::HandledWithData(data),
         DaemonOutcome::Fallback => ReadResult::Fallback,
         DaemonOutcome::Error(message) => {
-            eprintln!("action '{}' failed: {}", action, message);
+            log::warn!("action '{}' failed: {}", action, message);
             ReadResult::Error(message)
         }
     }
@@ -204,7 +204,7 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
         }
     };
 
-    eprintln!("coordinator ready");
+    log::info!("coordinator ready");
     start_background_services(&state);
     *runtime = DaemonRuntime::Ready(Box::new(state));
     DaemonOutcome::Handled

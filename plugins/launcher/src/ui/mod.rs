@@ -297,7 +297,7 @@ impl LauncherView {
                                 return false;
                             }
                             if view.sync_entries_from_shared() {
-                                eprintln!("[launcher] entry watch: entries updated");
+                                log::debug!("entry watch: entries updated");
                                 cx.notify();
                             }
                             true

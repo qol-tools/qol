@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::path::Path;
 mod support;
 use std::sync::{Arc, Mutex};

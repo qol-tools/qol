@@ -74,7 +74,7 @@ impl InstallerOps for Platform {
         let legacy_binary = home.join(".local").join("bin").join("qol-tray");
         let legacy_marker = home.join(".local").join("bin").join("qol-tray.install-id");
         if legacy_binary.exists() {
-            println!("Removing legacy install at {}", legacy_binary.display());
+            log::info!("Removing legacy install at {}", legacy_binary.display());
             let _ = std::fs::remove_file(&legacy_binary);
         }
         if legacy_marker.exists() {

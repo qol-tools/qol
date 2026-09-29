@@ -84,7 +84,7 @@ impl Runtime {
                 let result = crate::platform::execute_action(&action, &self.store, &config);
                 timer.finish(&result);
                 if let Err(error) = result {
-                    eprintln!("{error}");
+                    log::warn!("{error}");
                 }
                 true
             }
@@ -97,13 +97,13 @@ impl Runtime {
                 let result = self.update_glide(direction, phase);
                 trace_glide(direction, phase, &trace, started.elapsed(), &result);
                 if let Err(error) = result {
-                    eprintln!("{error}");
+                    log::warn!("{error}");
                 }
                 true
             }
             Command::Settings => {
                 if let Err(error) = (self.open_settings)() {
-                    eprintln!("[{PLUGIN_ID}] failed to open settings page: {error}");
+                    log::warn!("[{PLUGIN_ID}] failed to open settings page: {error}");
                 }
                 true
             }
@@ -138,7 +138,7 @@ impl Runtime {
         };
         trace_glide_watchdog(&result);
         if let Err(error) = result {
-            eprintln!("{error}");
+            log::warn!("{error}");
         }
     }
 

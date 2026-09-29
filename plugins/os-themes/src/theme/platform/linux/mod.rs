@@ -59,9 +59,10 @@ pub(crate) fn restore(mode: RestoreMode, report: &mut RestoreReport) {
                 report.restored += 1;
             }
             Err(error) => {
-                eprintln!(
-                    "[os-themes] failed to restore pre-qol value of {}:{}: {error:#}",
-                    snapshot.schema, snapshot.key
+                log::warn!(
+                    "failed to restore pre-qol value of {}:{}: {error:#}",
+                    snapshot.schema,
+                    snapshot.key
                 );
                 report.failed += 1;
             }

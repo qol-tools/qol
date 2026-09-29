@@ -46,8 +46,8 @@ impl EventBusClient {
     /// acknowledged.
     pub fn publish(&self, topic: &str, payload: &serde_json::Value) -> bool {
         let Ok(stream) = connect(&self.socket_path) else {
-            eprintln!(
-                "[runtime/broker] publish to {topic:?} dropped: no broker listening on {}",
+            log::warn!(
+                "publish to {topic:?} dropped: no broker listening on {}",
                 self.socket_path.display()
             );
             return false;
@@ -82,8 +82,8 @@ impl EventBusClient {
     ) -> Option<EventSubscription> {
         let mut stream = connect(&self.socket_path)
             .map_err(|error| {
-                eprintln!(
-                    "[runtime/broker] subscribe to {topic:?} failed: no broker listening on {} ({error})",
+                log::warn!(
+                    "subscribe to {topic:?} failed: no broker listening on {} ({error})",
                     self.socket_path.display()
                 );
             })

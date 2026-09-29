@@ -9,6 +9,7 @@ edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [workspace.dependencies]
+log = "0.4"
 # internal crates - the single source of truth for every cross-crate path
 qol-agent-homes = { path = "libs/agent-homes" }
 qol-artifact = { path = "libs/artifact" }
@@ -202,3 +203,8 @@ opt-level = 2
 
 [profile.dev.package.simd-adler32]
 opt-level = 2
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+print_stderr = "deny"
+print_stdout = "deny"

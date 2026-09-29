@@ -13,9 +13,11 @@ pub(crate) fn handle_key_down(
     #[cfg(debug_assertions)]
     let focused = this.focus_handle.is_focused(window);
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/input] key_down: key={:?} alt={} shift={}",
-        event.keystroke.key, event.keystroke.modifiers.alt, event.keystroke.modifiers.shift,
+    log::debug!(
+        "key_down: key={:?} alt={} shift={}",
+        event.keystroke.key,
+        event.keystroke.modifiers.alt,
+        event.keystroke.modifiers.shift,
     );
     // A missing KEY_RECV while the picker is open and cannot cycle means keys
     // never reached us: the window is visible but not the key window (the

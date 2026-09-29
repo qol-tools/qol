@@ -164,7 +164,7 @@ fn resolve_serial_port(configured: &str) -> Result<String> {
         return Ok(configured.to_string());
     }
 
-    eprintln!(
+    log::warn!(
         "configured serial port '{}' not found, falling back to auto-detection",
         configured
     );

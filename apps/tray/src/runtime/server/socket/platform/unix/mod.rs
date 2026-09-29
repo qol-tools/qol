@@ -447,6 +447,7 @@ mod tests {
 
     #[test]
     #[ignore = "benchmark for concurrent runtime socket burst dispatch"]
+    #[allow(clippy::print_stdout)]
     fn bench_concurrent_get_state_burst_dispatch() {
         const CLIENTS: usize = 256;
 

@@ -77,14 +77,14 @@ pub fn load(path: &Path) -> FrequencyData {
         Ok(contents) => contents,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FrequencyData::default(),
         Err(e) => {
-            eprintln!("[frecency] failed to read {}: {}", path.display(), e);
+            log::warn!("failed to read {}: {}", path.display(), e);
             return FrequencyData::default();
         }
     };
     match serde_json::from_str(&contents) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("[frecency] discarding corrupt {}: {}", path.display(), e);
+            log::warn!("discarding corrupt {}: {}", path.display(), e);
             FrequencyData::default()
         }
     }
@@ -94,12 +94,12 @@ pub fn save(path: &Path, data: &FrequencyData) {
     let json = match serde_json::to_string_pretty(data) {
         Ok(json) => json,
         Err(e) => {
-            eprintln!("[frecency] failed to serialize: {}", e);
+            log::warn!("failed to serialize: {}", e);
             return;
         }
     };
     if let Err(e) = qol_fs::atomic_write(path, json.as_bytes()) {
-        eprintln!("[frecency] failed to save {}: {}", path.display(), e);
+        log::warn!("failed to save {}: {}", path.display(), e);
     }
 }
 

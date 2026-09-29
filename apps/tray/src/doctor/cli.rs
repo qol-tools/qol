@@ -1,14 +1,29 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use super::{
     check, check_quick, check_single, fix_single_with_policy, fix_with_policy, FixPolicy,
     FixReport, Outcome, OutcomeStatus, Report,
 };
 use anyhow::{anyhow, Context, Result};
-use qol_conventions::doctor_cli::{ARG_CHECK, ARG_FIX, ARG_ID, ARG_JSON, ARG_QUICK};
+use qol_conventions::doctor_cli::{
+    ARG_CHECK, ARG_FIX, ARG_ID, ARG_JSON, ARG_QUICK, PROGRESS_ENV_VAR, PROGRESS_LINE_PREFIX,
+};
 use serde::Serialize;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static PROGRESS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn progress(step: &str) {
+    if PROGRESS_ENABLED.load(Ordering::Relaxed) {
+        eprintln!("{PROGRESS_LINE_PREFIX}{step}");
+    }
+}
 
 pub(super) fn run_cli_from_env() -> Result<i32> {
-    super::progress::enable_from_env();
+    if std::env::var_os(PROGRESS_ENV_VAR).is_some() {
+        PROGRESS_ENABLED.store(true, Ordering::Relaxed);
+    }
     match command()? {
         DoctorCommand::Check {
             selection,

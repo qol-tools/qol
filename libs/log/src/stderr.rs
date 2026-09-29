@@ -27,9 +27,10 @@ impl log::Log for StderrLogger {
     }
 }
 
-/// Sends a plugin's `log::*!` records to stderr, which the tray relays into
-/// its daemon log. Call first thing in `main`; a second call is a no-op.
-pub fn init() {
+/// Sends this process's `log::*!` records to stderr. Every qol process except
+/// qol-tray calls it first thing in `main`; the tray relays plugin stderr into
+/// its daemon log. A second call is a no-op.
+pub fn init_stderr() {
     if log::set_logger(&LOGGER).is_ok() {
         log::set_max_level(if cfg!(debug_assertions) {
             log::LevelFilter::Debug
