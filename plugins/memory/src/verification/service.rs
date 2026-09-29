@@ -188,7 +188,7 @@ fn run(shared: Arc<Shared>, root: PathBuf, mut verifier: impl Verifier) {
         let entry = match result {
             Ok(decision) => {
                 if let Err(error) = save(&root, &key, verifier.identity(), &decision) {
-                    log::warn!("qol-memory: verification binding write failed: {error}");
+                    log::warn!("verification binding write failed: {error}");
                 }
                 qol_runtime::probe!(
                     "QOL_MEMORY_DAEMON",
@@ -198,7 +198,7 @@ fn run(shared: Arc<Shared>, root: PathBuf, mut verifier: impl Verifier) {
                 Entry::Ready(decision)
             }
             Err(error) => {
-                log::warn!("qol-memory: answer verification unavailable: {error}");
+                log::warn!("answer verification unavailable: {error}");
                 qol_runtime::probe!(
                     "QOL_MEMORY_DAEMON",
                     "event=verification_unavailable key={key}"

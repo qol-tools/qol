@@ -343,7 +343,7 @@ impl LauncherView {
             self.state.fuzziness,
         );
         let Some(scored) = self.store.get(self.state.scroll_list.selected) else {
-            log::debug!(
+            log::warn!(
                 "launch_selected: no scored item at index {}",
                 self.state.scroll_list.selected
             );

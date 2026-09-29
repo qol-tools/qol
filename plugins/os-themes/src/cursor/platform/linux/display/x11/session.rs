@@ -305,7 +305,7 @@ pub(crate) fn recover_scale(root: u64, windows: &[u64]) {
     }
     sync(display);
     unsafe { xlib::XCloseDisplay(display) };
-    log::debug!("recovered cursors left scaled after an abnormal exit");
+    log::warn!("recovered cursors left scaled after an abnormal exit");
 }
 
 pub(super) fn collect_tree(display: *mut xlib::Display, root: xlib::Window) -> Vec<xlib::Window> {

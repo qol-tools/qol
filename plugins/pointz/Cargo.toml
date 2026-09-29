@@ -17,7 +17,7 @@ qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-conventions.workspace = true
 log.workspace = true
-env_logger = { version = "0.11", default-features = false }
+qol-log.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 if-addrs = "0.10"
 gethostname = "1.1"

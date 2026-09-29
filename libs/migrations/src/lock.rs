@@ -31,7 +31,7 @@ impl Drop for MigrationLock {
     fn drop(&mut self) {
         if let Err(err) = self.file.unlock() {
             log::warn!(
-                "[qol-migrations] failed to release migration lock {}: {err}",
+                "failed to release migration lock {}: {err}",
                 self.path.display()
             );
         }

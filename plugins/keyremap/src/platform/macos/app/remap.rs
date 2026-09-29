@@ -370,7 +370,7 @@ fn warn_shadowed_rules(rules: &[ResolvedKeyRule]) {
         let pair = (rule.from_mods, rule.from_key);
         if seen.contains(&pair) {
             log::warn!(
-                "warning: shadowed rule — {} appears multiple times, only first match fires",
+                "shadowed rule — {} appears multiple times, only first match fires",
                 rule_label(&rule.from_mods, rule.from_key),
             );
         } else {

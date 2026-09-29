@@ -4,8 +4,6 @@ pub(crate) mod pairing;
 use crate::input::InputHandler;
 
 pub(crate) fn run() {
-    env_logger::init();
-
     log::info!("Starting PointZerver (headless mode)...");
     if let Some(ts) = std::env::current_exe()
         .ok()

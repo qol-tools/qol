@@ -27,7 +27,7 @@ pub fn recover() {
     crate::theme::restore(RestoreMode::Recovery, &mut report);
     crate::cursor::recover();
     if report.restored > 0 {
-        log::debug!(
+        log::warn!(
             "recovered {} pre-qol theme values after an abnormal exit",
             report.restored
         );

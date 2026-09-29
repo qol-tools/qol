@@ -2705,7 +2705,7 @@ async fn adopt_reconnected_output(
 
 async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, AudioWatchState>) {
     for address in expire_adoption_retries() {
-        log::debug!(
+        log::warn!(
             "Bluetooth default output selection expired for {}: the retry window closed",
             redacted(address)
         );

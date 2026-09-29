@@ -53,27 +53,10 @@ where
         emit_result(args, &carrier, outcome, &reason, recorder);
         return code;
     }
-    if matches!(command, ResidentCommand::Status | ResidentCommand::Help) {
-        let result = qol_host_fixes::policy::nvidia::run_resident_policy_cli(args);
-        if let Err(error) = &result {
-            eprintln!("resident-policy: {error:#}");
-        }
-        let code = result.as_ref().copied().unwrap_or(1);
-        let outcome = qol_host_fixes::policy::trace::outcome_of(&result);
-        let reason = qol_host_fixes::policy::trace::error_reason(&result);
-        emit_result(args, &carrier, outcome, &reason, recorder);
-        return code;
-    }
-    if qol_host_fixes::privilege::is_elevated() {
-        let result = qol_host_fixes::policy::nvidia::run_resident_policy_cli(args);
-        if let Err(error) = &result {
-            eprintln!("resident-policy: {error:#}");
-        }
-        let code = result.as_ref().copied().unwrap_or(1);
-        let outcome = qol_host_fixes::policy::trace::outcome_of(&result);
-        let reason = qol_host_fixes::policy::trace::error_reason(&result);
-        emit_result(args, &carrier, outcome, &reason, recorder);
-        return code;
+    if matches!(command, ResidentCommand::Status | ResidentCommand::Help)
+        || qol_host_fixes::privilege::is_elevated()
+    {
+        return run_direct(args, &carrier, recorder);
     }
     match escalate_command(&command) {
         Ok(()) => {
@@ -129,13 +112,21 @@ where
         );
         return 2;
     }
-    let result = qol_host_fixes::policy::nvidia::run_resident_policy_cli(raw_args);
+    run_direct(raw_args, &carrier, recorder)
+}
+
+fn run_direct<R: PhaseRecorder>(
+    args: &[String],
+    carrier: &qol_host_fixes::policy::trace::CarrierObservation,
+    recorder: &mut R,
+) -> i32 {
+    let result = qol_host_fixes::policy::nvidia::run_resident_policy_cli(args);
     if let Err(error) = &result {
         eprintln!("resident-policy: {error:#}");
     }
     let code = result.as_ref().copied().unwrap_or(1);
     let outcome = qol_host_fixes::policy::trace::outcome_of(&result);
     let reason = qol_host_fixes::policy::trace::error_reason(&result);
-    emit_result(raw_args, &carrier, outcome, &reason, recorder);
+    emit_result(args, carrier, outcome, &reason, recorder);
     code
 }

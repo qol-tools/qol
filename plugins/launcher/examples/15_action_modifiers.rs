@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 use gpui::*;
 use qol_launcher::{
     action_for_modifiers, action_hint, action_label, open_window_with_focus, LaunchAction,

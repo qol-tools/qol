@@ -151,10 +151,6 @@ pub fn execute_action_with_input(
                     action_id,
                     error
                 );
-                #[cfg(feature = "dev")]
-                {
-                    log::error!("{}::{} failed: {}", plugin_id, action_id, error);
-                }
             }
         }
     }

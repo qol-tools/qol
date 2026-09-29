@@ -149,7 +149,10 @@ pub fn wait_until_ready(timeout: Duration) -> bool {
 
 pub fn run_from_current_args() -> Option<anyhow::Result<()>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    requested_boot(&args).map(platform::run)
+    requested_boot(&args).map(|boot| {
+        qol_log::init_stderr();
+        platform::run(boot)
+    })
 }
 
 fn requested_boot(args: &[String]) -> Option<HostBoot> {

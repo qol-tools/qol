@@ -21,6 +21,9 @@ pub(super) fn from_env() -> Invocation {
 }
 
 pub(super) fn dispatch(invocation: Invocation) -> Option<i32> {
+    if !matches!(invocation, Invocation::Daemon | Invocation::WriteMode(_)) {
+        qol_log::init_stderr();
+    }
     match invocation {
         Invocation::Daemon => None,
         Invocation::Help => {

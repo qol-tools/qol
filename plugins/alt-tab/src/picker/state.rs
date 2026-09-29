@@ -319,7 +319,7 @@ impl PickerState {
             return;
         };
         let Some(win) = self.windows.get(ix) else {
-            log::debug!(
+            log::warn!(
                 "selection {ix} is past {} windows - skipping",
                 self.windows.len()
             );

@@ -104,7 +104,7 @@ pub fn run(store: &Store, notes_runs_kept: usize) -> Result<DistillReport> {
     let pruned = match store.prune_notes_runs(notes_runs_kept) {
         Ok(removed) => removed,
         Err(error) => {
-            log::warn!("qol-memory: notes prune failed: {error:#}");
+            log::warn!("notes prune failed: {error:#}");
             qol_runtime::probe!(
                 "QOL_MEMORY_DISTILL",
                 "event=prune outcome=error error={error}"

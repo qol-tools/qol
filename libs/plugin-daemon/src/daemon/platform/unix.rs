@@ -465,7 +465,6 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
     }
 
     let Some(socket_path) = socket_path(config) else {
-        #[cfg(debug_assertions)]
         log::warn!(
             "{} unset and no fallback socket - not binding",
             qol_conventions::ENV_DAEMON_SOCKET
@@ -684,10 +683,7 @@ where
             return ReadResult::Ignore;
         }
         Err(e) => {
-            #[cfg(debug_assertions)]
             log::warn!("read_line error: {:?}", e);
-            #[cfg(not(debug_assertions))]
-            let _ = e;
             return ReadResult::Ignore;
         }
         Ok(Some(line)) => line,

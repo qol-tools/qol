@@ -435,7 +435,7 @@ pub fn build_or_load(
     }
     let idx = build_index(items);
     if let Err(err) = save_index(root, layer, &idx, items, source_path) {
-        log::warn!("qol-memory: index save failed for {layer}: {err}");
+        log::warn!("index save failed for {layer}: {err}");
     }
     idx
 }

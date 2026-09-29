@@ -4,9 +4,14 @@ struct StderrLogger;
 
 static LOGGER: StderrLogger = StderrLogger;
 
+/// Dependencies such as gpui log routine window setup at info; only their
+/// warnings and errors reach a qol log.
+const DEPENDENCY_LEVEL: log::Level = log::Level::Warn;
+
 impl log::Log for StderrLogger {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
         metadata.level() <= log::max_level()
+            && (metadata.target().starts_with("qol") || metadata.level() <= DEPENDENCY_LEVEL)
     }
 
     fn log(&self, record: &log::Record<'_>) {
@@ -37,5 +42,32 @@ pub fn init_stderr() {
         } else {
             log::LevelFilter::Info
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StderrLogger, DEPENDENCY_LEVEL};
+    use log::{Level, Log, Metadata};
+
+    #[test]
+    fn dependency_records_below_warn_are_dropped() {
+        log::set_max_level(log::LevelFilter::Trace);
+        let cases = [
+            ("qol_alt_tab::picker", Level::Debug, true),
+            ("qol_log", Level::Info, true),
+            ("gpui::platform::linux::x11::client", Level::Info, false),
+            ("gpui::window", Level::Debug, false),
+            ("gpui::window", DEPENDENCY_LEVEL, true),
+            ("zbus", Level::Error, true),
+        ];
+        for (target, level, expected) in cases {
+            let metadata = Metadata::builder().target(target).level(level).build();
+            assert_eq!(
+                StderrLogger.enabled(&metadata),
+                expected,
+                "{target} at {level}"
+            );
+        }
     }
 }

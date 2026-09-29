@@ -8,7 +8,6 @@ use qol_windowing::display::{DisplayHandle, DisplayPlacement, DisplaySnapshot};
 
 use crate::display_color;
 use crate::display_color::backends::{AppletControl, NoAppletControl};
-use crate::hotkeys::PLUGIN_ID;
 use crate::monitor::night::Tint;
 use crate::monitor::{BrightnessSource, BrightnessState, DisplayControl, GammaTable, MonitorError};
 
@@ -423,10 +422,7 @@ impl SessionStore {
                 Ok(Some(snapshot)) => inventory.snapshots.push(snapshot),
                 Ok(None) => {}
                 Err(error) => {
-                    log::warn!(
-                        "[{PLUGIN_ID}] skipping unreadable snapshot {}: {error:#}",
-                        path.display()
-                    );
+                    log::warn!("skipping unreadable snapshot {}: {error:#}", path.display());
                     inventory.unreadable.push(path);
                 }
             }
@@ -864,10 +860,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 })
                 .is_err()
             {
-                log::warn!(
-                    "[{PLUGIN_ID}] failed to mark snapshot {} for reload handoff",
-                    display_id
-                );
+                log::warn!("failed to mark snapshot {} for reload handoff", display_id);
             }
         }
         let Ok(Some(layout)) = self.store.load_layout() else {
@@ -885,7 +878,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             })
             .is_err()
         {
-            log::warn!("[{PLUGIN_ID}] failed to mark the layout snapshot for reload handoff");
+            log::warn!("failed to mark the layout snapshot for reload handoff");
         }
     }
 
@@ -982,10 +975,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             }
             if snapshot.last_value != snapshot.value {
                 if let Err(error) = self.control.set_brightness(handle, snapshot.value) {
-                    log::warn!(
-                        "[{PLUGIN_ID}] restore of {} failed: {error}",
-                        handle.connector()
-                    );
+                    log::warn!("restore of {} failed: {error}", handle.connector());
                     return RestoreOutcome::Failed;
                 }
             }
@@ -998,10 +988,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         match self.control.set_brightness(handle, snapshot.value) {
             Ok(()) => RestoreOutcome::Restored,
             Err(error) => {
-                log::warn!(
-                    "[{PLUGIN_ID}] restore of {} failed: {error}",
-                    handle.connector()
-                );
+                log::warn!("restore of {} failed: {error}", handle.connector());
                 RestoreOutcome::Failed
             }
         }
@@ -1045,7 +1032,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
     pub fn restore_all(&self, mode: RestoreMode) -> RestoreReport {
         let mut report = RestoreReport::default();
         let Ok(inventory) = self.store.load_all() else {
-            log::warn!("[{PLUGIN_ID}] session directory is unreadable; restore skipped");
+            log::warn!("session directory is unreadable; restore skipped");
             return report;
         };
         report.unreadable = inventory.unreadable.len();
@@ -1137,10 +1124,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         {
             Ok(()) => RestoreOutcome::Restored,
             Err(error) => {
-                log::warn!(
-                    "[{PLUGIN_ID}] gamma re-assert failed on {}: {error}",
-                    handle.connector()
-                );
+                log::warn!("gamma re-assert failed on {}: {error}", handle.connector());
                 RestoreOutcome::Failed
             }
         }
@@ -1234,7 +1218,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         snapshot.applet_claim = None;
         if let Err(error) = self.store.write_snapshot(snapshot) {
             log::warn!(
-                "[{PLUGIN_ID}] failed to clear the applet claim for {}: {error:#}",
+                "failed to clear the applet claim for {}: {error:#}",
                 snapshot.display_id
             );
         }
@@ -1369,10 +1353,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 return Ok(RestoreOutcome::ForeignLutPreserved);
             }
             Err(error) => {
-                log::warn!(
-                    "[{PLUGIN_ID}] gamma re-assert failed on {}: {error}",
-                    handle.connector()
-                );
+                log::warn!("gamma re-assert failed on {}: {error}", handle.connector());
                 return Err(error);
             }
         }
@@ -1407,7 +1388,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 return report;
             }
             Err(error) => {
-                log::warn!("[{PLUGIN_ID}] layout snapshot is unreadable: {error:#}");
+                log::warn!("layout snapshot is unreadable: {error:#}");
                 report.record(RestoreOutcome::Failed);
                 return report;
             }
@@ -1427,9 +1408,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         let current = match self.control.snapshot() {
             Ok(current) => current,
             Err(error) => {
-                log::warn!(
-                    "[{PLUGIN_ID}] display state is unavailable; layout restore skipped: {error}"
-                );
+                log::warn!("display state is unavailable; layout restore skipped: {error}");
                 report.record(RestoreOutcome::Failed);
                 return report;
             }
@@ -1445,7 +1424,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 Ok(modes) => modes,
                 Err(error) => {
                     log::warn!(
-                        "[{PLUGIN_ID}] mode list for {} is unreadable: {error}",
+                        "mode list for {} is unreadable: {error}",
                         handle.connector()
                     );
                     continue;
@@ -1466,7 +1445,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 });
             let Some(selected) = selected else {
                 log::debug!(
-                    "[{PLUGIN_ID}] recorded mode for {} is no longer available",
+                    "recorded mode for {} is no longer available",
                     handle.connector()
                 );
                 continue;
@@ -1478,10 +1457,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                     qol_runtime::probe::token(handle.id()),
                     qol_runtime::probe::quoted(&error.to_string(), 160)
                 );
-                log::warn!(
-                    "[{PLUGIN_ID}] mode restore failed on {}: {error}",
-                    handle.connector()
-                );
+                log::warn!("mode restore failed on {}: {error}", handle.connector());
             }
         }
         let mut placements = Vec::with_capacity(snapshot.placements.len());
@@ -1511,9 +1487,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         let fresh = match self.control.snapshot() {
             Ok(fresh) => fresh,
             Err(error) => {
-                log::warn!(
-                    "[{PLUGIN_ID}] display state is unavailable; layout restore skipped: {error}"
-                );
+                log::warn!("display state is unavailable; layout restore skipped: {error}");
                 report.record(RestoreOutcome::Failed);
                 return report;
             }
@@ -1532,21 +1506,21 @@ impl<C: DisplayControl + ?Sized> Session<C> {
                 "event=rejected op=restore display=none error=\"{}\"",
                 qol_runtime::probe::quoted(&error.to_string(), 160)
             );
-            log::warn!("[{PLUGIN_ID}] layout restore failed: {error}");
+            log::warn!("layout restore failed: {error}");
             report.record(RestoreOutcome::Failed);
             return report;
         }
         let applied = match self.control.snapshot() {
             Ok(applied) => applied,
             Err(error) => {
-                log::warn!("[{PLUGIN_ID}] the restored layout could not be read back: {error}");
+                log::warn!("the restored layout could not be read back: {error}");
                 report.record(RestoreOutcome::Failed);
                 return report;
             }
         };
         if !placements_match(&applied, &placements) {
-            log::debug!(
-                "[{PLUGIN_ID}] the restored layout does not match the snapshot; keeping it for the next attempt"
+            log::warn!(
+                "the restored layout does not match the snapshot; keeping it for the next attempt"
             );
             report.record(RestoreOutcome::Failed);
             return report;
@@ -1561,9 +1535,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             report.record(RestoreOutcome::SkippedDisplayGone);
         }
         if let Err(error) = self.store.delete_layout() {
-            log::warn!(
-                "[{PLUGIN_ID}] restored the layout but could not clear the snapshot: {error:#}"
-            );
+            log::warn!("restored the layout but could not clear the snapshot: {error:#}");
         }
         report.record(RestoreOutcome::Restored);
         report

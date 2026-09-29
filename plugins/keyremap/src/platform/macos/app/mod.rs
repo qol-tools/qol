@@ -46,7 +46,7 @@ pub(crate) fn run() {
                     new_resolved.scroll_rules.len(),
                 );
                 for warning in remap::diff_key_rules(&current_key_rules, &new_resolved.key_rules) {
-                    log::warn!("warning: {warning}");
+                    log::warn!("{warning}");
                 }
                 current_key_rules = new_resolved.key_rules.clone();
                 state.swap_config(new_resolved);

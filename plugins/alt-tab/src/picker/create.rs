@@ -204,7 +204,6 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool, focus: bool)
 }
 
 fn on_open_failure() {
-    #[cfg(debug_assertions)]
     log::warn!("failed to open picker window");
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     if let Ok(mut lock) = crate::app::ACTIVE_PICKER_MONITOR.lock() {
@@ -243,7 +242,6 @@ pub(crate) fn pre_create_ghost(
     );
     let bounds = layout.bounds;
     let Some(handle) = open_picker_window(bounds, title.clone(), init, false, cx) else {
-        #[cfg(debug_assertions)]
         log::warn!("pre-create failed; falling back to on-demand creation");
         return;
     };

@@ -186,7 +186,7 @@ pub fn run_pre_flight_with(
     for migration in &registry.entries {
         let name = migration.name();
         if journal::is_done(config_dir, name) {
-            log::info!("[qol-migrations] skipping {name}: already journaled");
+            log::info!("skipping {name}: already journaled");
             continue;
         }
         let applies = migration
@@ -203,7 +203,7 @@ pub fn run_pre_flight_with(
         journal::write_done(config_dir, name)
             .with_context(|| format!("journaling completion of {name}"))?;
         log::info!(
-            "[qol-migrations] applied {} (archived {} paths to {})",
+            "applied {} (archived {} paths to {})",
             report.name,
             report.archived.len(),
             archive_dir.display()
@@ -247,7 +247,7 @@ pub async fn run_post_auth_with_boundary(
     for migration in &registry.entries {
         let name = migration.name();
         if journal::is_done(ctx.config_dir, name) {
-            log::info!("[qol-migrations] skipping {name}: already journaled");
+            log::info!("skipping {name}: already journaled");
             continue;
         }
         let applies = migration
@@ -266,7 +266,7 @@ pub async fn run_post_auth_with_boundary(
         journal::write_done(ctx.config_dir, name)
             .with_context(|| format!("journaling completion of {name}"))?;
         log::info!(
-            "[qol-migrations] applied {} (archived {} paths to {})",
+            "applied {} (archived {} paths to {})",
             report.name,
             report.archived.len(),
             archive_dir.display()
@@ -306,7 +306,7 @@ fn reject_if_below_oldest_supported(config_dir: &Path, host_version: &str) -> Re
     let installed_major = parse_semver(&installed).0;
     if installed_major == 0 && compare_semver(host_version, OLDEST_SUPPORTED) >= 0 {
         log::warn!(
-            "[qol-migrations] version.txt contains {installed} (major == 0, the buggy lib stamp); \
+            "version.txt contains {installed} (major == 0, the buggy lib stamp); \
              host {host_version} is current. Treating as the env!CARGO_PKG_VERSION bug and \
              overwriting with host version after this run."
         );

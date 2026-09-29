@@ -1,6 +1,7 @@
 qol_conventions::declare_build_identity!(ResidentPolicy);
 
 fn main() {
+    qol_log::init_stderr();
     if qol_process::process_tree_guardian_requested() {
         std::process::exit(qol_host_fixes::policy::cli::run_guardian());
     }

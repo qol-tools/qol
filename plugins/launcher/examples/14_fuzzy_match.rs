@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 use gpui::*;
 use qol_launcher::{fuzzy_match, open_window_with_focus, FuzzyMatch};
 

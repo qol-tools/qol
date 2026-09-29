@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 // Test: Hide/show window
 // Verifies: minimize_window on Linux, hide app on macOS (popup windows can't minimize)
 
