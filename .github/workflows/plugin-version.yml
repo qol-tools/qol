@@ -98,6 +98,9 @@ jobs:
           cache-key: plugin-release-${{ matrix.target }}
           targets: ${{ matrix.target }}
 
+      - name: Export production artifact identity
+        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+
       - name: Build plugin at the source commit
         run: >
           python .github/scripts/release_candidate.py build
