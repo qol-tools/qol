@@ -473,22 +473,18 @@ fn apply_pending() -> Result<String> {
     Ok(format!("applied {pending} driver-specific fix(es)"))
 }
 
-pub fn execute_action_once(action: &str) -> Result<()> {
+pub fn execute_action_once(action: &str) -> Result<Option<String>> {
     if !is_supported_action(action) {
         bail!("unknown action: {action}");
     }
     if action == "reclaim_controller" {
-        return reclaim_once();
+        return reclaim_once().map(|()| None);
     }
     let mut runtime = DaemonRuntime::default();
     match handle_action(&mut runtime, action) {
-        ReadResult::Handled => Ok(()),
-        ReadResult::HandledWithData(data) => {
-            println!("{data}");
-            Ok(())
-        }
+        ReadResult::HandledWithData(data) => Ok(Some(data.to_string())),
         ReadResult::Error(message) => bail!(message),
-        _ => Ok(()),
+        _ => Ok(None),
     }
 }
 

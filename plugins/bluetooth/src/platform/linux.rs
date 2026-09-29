@@ -467,7 +467,7 @@ fn adapter_available() -> Result<bool> {
 fn set_adapter_state(adapter: Option<AdapterHealth>) {
     match ADAPTER_STATE.write() {
         Ok(mut state) => *state = adapter,
-        Err(_) => eprintln!("Bluetooth adapter state is unavailable"),
+        Err(_) => log::warn!("Bluetooth adapter state is unavailable"),
     }
 }
 
@@ -818,7 +818,7 @@ async fn pair_bonded(adapter: &Adapter, device: &Device) -> Result<()> {
     let result = device.pair().await.map_err(anyhow::Error::from);
     if restore_non_pairable {
         if let Err(error) = adapter.set_pairable(false).await {
-            eprintln!("failed to restore the non-pairable Bluetooth adapter: {error:#}");
+            log::warn!("failed to restore the non-pairable Bluetooth adapter: {error:#}");
         }
     }
     result
@@ -1501,7 +1501,7 @@ fn spawn_host_fix(id: String) {
             }
             Err(error) => {
                 qol_runtime::probe!("BLUETOOTH_HOST_FIX", "stage=apply fix={id} outcome=failed");
-                eprintln!("Bluetooth host fix {id} failed: {error:#}");
+                log::warn!("Bluetooth host fix {id} failed: {error:#}");
                 send_notification("Bluetooth", &format!("{error:#}"));
             }
         }
@@ -1559,7 +1559,7 @@ async fn resilient_daemon_loop(
             Ok(Err(error)) => {
                 set_adapter_state(None);
                 reset_discovery_state("adapter_unavailable")?;
-                eprintln!("Bluetooth adapter unavailable; retrying: {error:#}");
+                log::warn!("Bluetooth adapter unavailable; retrying: {error:#}");
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=retrying");
                 if wait_without_adapter(&mut config, &mut commands).await? {
                     return Ok(());
@@ -1569,7 +1569,7 @@ async fn resilient_daemon_loop(
             Err(_) => {
                 set_adapter_state(None);
                 reset_discovery_state("adapter_lookup_timed_out")?;
-                eprintln!(
+                log::warn!(
                     "Bluetooth adapter lookup timed out after {} seconds; retrying",
                     ADAPTER_CONNECT_TIMEOUT.as_secs()
                 );
@@ -1585,7 +1585,7 @@ async fn resilient_daemon_loop(
             Err(error) => {
                 set_adapter_state(None);
                 reset_discovery_state("adapter_session_ended")?;
-                eprintln!("Bluetooth adapter session ended; retrying: {error:#}");
+                log::warn!("Bluetooth adapter session ended; retrying: {error:#}");
                 qol_runtime::probe!("BLUETOOTH_ADAPTER", "available=false outcome=session_ended");
             }
         }
@@ -1613,9 +1613,9 @@ async fn wait_without_adapter(
                     DaemonCommand::Kill => return Ok(true),
                     DaemonCommand::Settings => {
                         if let Err(error) = spawn_settings_panel() {
-                            eprintln!("failed to launch native Bluetooth settings: {error:#}");
+                            log::warn!("failed to launch native Bluetooth settings: {error:#}");
                             if let Err(error) = crate::settings::open_browser() {
-                                eprintln!("failed to open Bluetooth settings fallback: {error:#}");
+                                log::warn!("failed to open Bluetooth settings fallback: {error:#}");
                             }
                         }
                     }
@@ -1697,7 +1697,7 @@ async fn daemon_loop(
 ) -> Result<()> {
     if config.auto_reconnect && !config.managed_devices.is_empty() {
         if let Err(error) = ensure_powered(&adapter, config.power_on_adapter).await {
-            eprintln!("Bluetooth adapter unavailable at daemon start: {error:#}");
+            log::warn!("Bluetooth adapter unavailable at daemon start: {error:#}");
         }
     }
     let mut adapter_powered = adapter.is_powered().await?;
@@ -1749,9 +1749,9 @@ async fn daemon_loop(
                 }
                 if matches!(command, DaemonCommand::Settings) {
                     if let Err(error) = spawn_settings_panel() {
-                        eprintln!("failed to launch native Bluetooth settings: {error:#}");
+                        log::warn!("failed to launch native Bluetooth settings: {error:#}");
                         if let Err(error) = crate::settings::open_browser() {
-                            eprintln!("failed to open Bluetooth settings fallback: {error:#}");
+                            log::warn!("failed to open Bluetooth settings fallback: {error:#}");
                         }
                     }
                     continue;
@@ -1769,7 +1769,7 @@ async fn daemon_loop(
                             );
                         }
                         Err(error) => {
-                            eprintln!("failed to set Bluetooth adapter power: {error:#}");
+                            log::warn!("failed to set Bluetooth adapter power: {error:#}");
                             qol_runtime::probe!(
                                 "BLUETOOTH_ADAPTER_POWER",
                                 "source=settings powered={powered} outcome=failed"
@@ -1789,9 +1789,9 @@ async fn daemon_loop(
                         continue;
                     }
                     if let Err(error) = result {
-                        eprintln!("failed to start Bluetooth search: {error:#}");
+                        log::warn!("failed to start Bluetooth search: {error:#}");
                         if let Err(state_error) = mark_search_stopped() {
-                            eprintln!("failed to reset Bluetooth search state: {state_error:#}");
+                            log::warn!("failed to reset Bluetooth search state: {state_error:#}");
                         }
                         qol_runtime::probe!("BLUETOOTH_SEARCH", "outcome=failed stage=start");
                     }
@@ -1799,7 +1799,7 @@ async fn daemon_loop(
                 }
                 if matches!(command, DaemonCommand::StopSearch) {
                     if let Err(error) = stop_search_session(&mut discovery, "cancelled") {
-                        eprintln!("failed to stop Bluetooth search: {error:#}");
+                        log::warn!("failed to stop Bluetooth search: {error:#}");
                     }
                     continue;
                 }
@@ -1908,7 +1908,7 @@ async fn daemon_loop(
                         if !powered {
                             discovery.take();
                             if let Err(error) = reset_discovery_state("adapter_powered_off") {
-                                eprintln!("failed to reset Bluetooth search after adapter power-off: {error:#}");
+                                log::warn!("failed to reset Bluetooth search after adapter power-off: {error:#}");
                             }
                         }
                         qol_runtime::probe!(
@@ -1963,7 +1963,7 @@ async fn daemon_loop(
                     None => {
                         discovery = None;
                         if let Err(error) = mark_search_stopped() {
-                            eprintln!("failed to update Bluetooth search state: {error:#}");
+                            log::warn!("failed to update Bluetooth search state: {error:#}");
                         }
                         qol_runtime::probe!("BLUETOOTH_SEARCH", "outcome=ended source=bluez");
                     }
@@ -1971,7 +1971,7 @@ async fn daemon_loop(
             }
             _ = wait_for_deadline(search_deadline) => {
                 if let Err(error) = stop_search_session(&mut discovery, "timed_out") {
-                    eprintln!("failed to time out Bluetooth search: {error:#}");
+                    log::warn!("failed to time out Bluetooth search: {error:#}");
                 }
             }
             _ = wait_for_deadline(deadline) => {
@@ -2097,7 +2097,7 @@ fn finish_device_action<T>(label: &str, result: &Result<T>) {
                     action.pending = false;
                 }
             }
-            Err(_) => eprintln!("Bluetooth device action state is unavailable"),
+            Err(_) => log::warn!("Bluetooth device action state is unavailable"),
         }
         return;
     }
@@ -2107,7 +2107,7 @@ fn finish_device_action<T>(label: &str, result: &Result<T>) {
 fn set_device_action_state(action: Option<DeviceActionState>) {
     match DEVICE_ACTION_STATE.write() {
         Ok(mut state) => *state = action,
-        Err(_) => eprintln!("Bluetooth device action state is unavailable"),
+        Err(_) => log::warn!("Bluetooth device action state is unavailable"),
     }
 }
 
@@ -2127,7 +2127,7 @@ fn trace_device_action(action: &str, address: Address, result: Result<DeviceInfo
             connection_ready(&device),
         ),
         Err(error) => {
-            eprintln!("Bluetooth {action} failed: {error:#}");
+            log::warn!("Bluetooth {action} failed: {error:#}");
             let outcome = if error.downcast_ref::<DeviceActionTimeout>().is_some() {
                 "timed_out"
             } else {
@@ -2150,7 +2150,7 @@ fn trace_remove_action(address: Address, result: Result<()>) {
             redacted(address),
         ),
         Err(error) => {
-            eprintln!("Bluetooth remove failed: {error:#}");
+            log::warn!("Bluetooth remove failed: {error:#}");
             qol_runtime::probe!(
                 "BLUETOOTH_DEVICE_ACTION",
                 "action=remove device={} outcome=failed",
@@ -2277,7 +2277,7 @@ fn reset_discovery_state(reason: &'static str) -> Result<()> {
 async fn track_discovered_device(adapter: &Adapter, address: Address) {
     let total = {
         let Ok(mut state) = DISCOVERY_STATE.write() else {
-            eprintln!("Bluetooth discovery state is unavailable");
+            log::warn!("Bluetooth discovery state is unavailable");
             return;
         };
         state.record(address.to_string());
@@ -2292,7 +2292,7 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
     let device = match adapter.device(address) {
         Ok(device) => device,
         Err(error) => {
-            eprintln!(
+            log::warn!(
                 "failed to resolve discovered Bluetooth device {}: {error:#}",
                 redacted(address)
             );
@@ -2307,7 +2307,7 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
     let device = match device_info(&device).await {
         Ok(device) => device,
         Err(error) => {
-            eprintln!(
+            log::warn!(
                 "failed to inspect discovered Bluetooth device {}: {error:#}",
                 redacted(address)
             );
@@ -2320,7 +2320,7 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
         }
     };
     let Ok(mut state) = DISCOVERY_STATE.write() else {
-        eprintln!("Bluetooth discovery state is unavailable");
+        log::warn!("Bluetooth discovery state is unavailable");
         return;
     };
     state.record_device(device);
@@ -2334,7 +2334,7 @@ async fn track_discovered_device(adapter: &Adapter, address: Address) {
 
 fn remove_discovered_device(address: Address) {
     let Ok(mut state) = DISCOVERY_STATE.write() else {
-        eprintln!("Bluetooth discovery state is unavailable");
+        log::warn!("Bluetooth discovery state is unavailable");
         return;
     };
     state.remove(&address.to_string());
@@ -2444,7 +2444,7 @@ fn spawn_audio_profile_ensure(address: Address, adoption: AudioAdoption) {
                 adopt_reconnected_output(address, adoption, "connect").await
             }
             Ok(AudioProfile::Absent) => {}
-            Err(error) => eprintln!(
+            Err(error) => log::warn!(
                 "Bluetooth A2DP profile restore failed for {}: {error:#}",
                 redacted(address)
             ),
@@ -2610,7 +2610,7 @@ fn record_adoption_skip_blocked(address: Address, blocking: &str) {
         return;
     }
     let blocking = redacted_sink(blocking);
-    eprintln!(
+    log::warn!(
         "Bluetooth default output selection skipped for {}: {blocking} is playing",
         redacted(address)
     );
@@ -2626,7 +2626,7 @@ fn record_adoption_skip_unverified(address: Address) {
     if !register_adoption_retry(address) {
         return;
     }
-    eprintln!(
+    log::warn!(
         "Bluetooth default output selection skipped for {}: the PipeWire sink listing is unavailable",
         redacted(address)
     );
@@ -2639,7 +2639,7 @@ fn record_adoption_skip_unverified(address: Address) {
 
 fn record_adoption_skip_other_output(address: Address) {
     clear_adoption_retry(address);
-    eprintln!(
+    log::warn!(
         "Bluetooth default output selection skipped for {}: another output is the machine default",
         redacted(address)
     );
@@ -2654,7 +2654,7 @@ fn record_adoption_sink_absent(address: Address) {
     if !register_adoption_retry(address) {
         return;
     }
-    eprintln!(
+    log::debug!(
         "Bluetooth default output selection deferred for {}: the device has no PipeWire sink yet",
         redacted(address)
     );
@@ -2690,7 +2690,7 @@ async fn adopt_reconnected_output(
             }
             Ok(AdoptionOutcome::Unverified) => record_adoption_skip_unverified(address),
             Ok(AdoptionOutcome::SinkAbsent) => record_adoption_sink_absent(address),
-            Err(error) => eprintln!(
+            Err(error) => log::warn!(
                 "Bluetooth default output selection failed for {}: {error:#}",
                 redacted(address)
             ),
@@ -2705,7 +2705,7 @@ async fn adopt_reconnected_output(
 
 async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, AudioWatchState>) {
     for address in expire_adoption_retries() {
-        eprintln!(
+        log::warn!(
             "Bluetooth default output selection expired for {}: the retry window closed",
             redacted(address)
         );
@@ -2769,7 +2769,7 @@ async fn audio_watch_tick(adapter: &Adapter, states: &mut HashMap<Address, Audio
                 }
                 Ok(false) => {}
                 Err(error) => {
-                    eprintln!(
+                    log::warn!(
                         "Bluetooth A2DP repair deferred for {}: the microphone state could not be verified: {error:#}",
                         redacted(address)
                     );
@@ -2843,11 +2843,11 @@ fn spawn_audio_profile_reconnect(address: Address) {
                 adopt_reconnected_output(address, AudioAdoption::Adopt, "repair").await;
             }
             Ok(Ok(AudioProfile::Absent)) => {}
-            Ok(Err(error)) => eprintln!(
+            Ok(Err(error)) => log::warn!(
                 "Bluetooth A2DP reconnect repair failed for {}: {error:#}",
                 redacted(address)
             ),
-            Err(_) => eprintln!(
+            Err(_) => log::warn!(
                 "Bluetooth A2DP reconnect repair failed for {}: the repair exceeded {} seconds",
                 redacted(address),
                 EXPLICIT_DEVICE_ACTION_TIMEOUT.as_secs()
@@ -3044,7 +3044,7 @@ fn trace_report(report: &ReconnectReport, selection: ReconnectSelection) {
 }
 
 fn trace_manual_failure(error: &anyhow::Error, selection: ReconnectSelection, stage: &str) {
-    eprintln!("Bluetooth manual reconnect failed: {error:#}");
+    log::warn!("Bluetooth manual reconnect failed: {error:#}");
     qol_runtime::probe!(
         "BLUETOOTH_MANUAL",
         "selection={} outcome=failed stage={stage}",

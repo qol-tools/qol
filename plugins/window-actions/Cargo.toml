@@ -4,6 +4,8 @@ version = "2.45.1"
 edition = "2021"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 qol-apps.workspace = true
 qol-cinnamon.workspace = true
 qol-config.workspace = true
@@ -27,3 +29,6 @@ proptest = "1"
 qol-plugin-api.workspace = true
 tempfile = "3"
 toml.workspace = true
+
+[lints]
+workspace = true

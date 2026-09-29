@@ -28,3 +28,6 @@ objc2-app-kit = { workspace = true, features = [
   "libc",
 ] }
 objc2-core-graphics = { workspace = true }
+
+[lints]
+workspace = true

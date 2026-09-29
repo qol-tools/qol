@@ -83,8 +83,8 @@ impl Render for AltTabApp {
             let n = RENDER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             let win_count = self.delegate.read(cx).windows.len();
             let b = window.window_bounds().get_bounds();
-            eprintln!(
-                "[alt-tab/render] call={} windows={} t={}us window=(origin=({:.1},{:.1}) size={:.1}x{:.1}) scale={:.2} visible={}",
+            log::debug!(
+                "call={} windows={} t={}us window=(origin=({:.1},{:.1}) size={:.1}x{:.1}) scale={:.2} visible={}",
                 n,
                 win_count,
                 PROCESS_START.elapsed().as_micros(),
@@ -113,7 +113,7 @@ impl Render for AltTabApp {
             }
             qol_gpui::probe::probe("MODS_UP", "alt released -> activate+dismiss");
             #[cfg(debug_assertions)]
-            eprintln!("[alt-tab/hold] Alt released via on_modifiers_changed");
+            log::debug!("Alt released via on_modifiers_changed");
             this.dismiss("modifiers/alt-up", window, cx);
             this.delegate
                 .update(cx, |s, _| s.activate_selected_target());

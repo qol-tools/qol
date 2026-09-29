@@ -276,7 +276,7 @@ impl Platform {
 
         ensure_dpkg_owns_launcher(dpkg_query, &app.path, package.id())?;
         ensure_apt_package_is_removable(dpkg_query, package.id())?;
-        eprintln!(
+        log::debug!(
             "[{PLUGIN_ID}] package-preflight manager=apt id={}",
             package.id()
         );
@@ -293,7 +293,7 @@ impl Platform {
         }
         ensure_apt_removes_only_target(&simulation.stdout, package.id())?;
 
-        eprintln!(
+        log::debug!(
             "[{PLUGIN_ID}] package-remove manager=apt id={} scope=system",
             package.id()
         );
@@ -335,7 +335,7 @@ impl Platform {
                 sanitize_stderr(&info.stderr, STDERR_CAP)
             )
         }
-        eprintln!(
+        log::debug!(
             "[{PLUGIN_ID}] package-remove manager=flatpak id={} scope={scope}",
             package.id()
         );

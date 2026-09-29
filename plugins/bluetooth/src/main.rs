@@ -3,13 +3,14 @@ use std::process::ExitCode;
 qol_conventions::declare_build_identity!(Plugin);
 
 fn main() -> ExitCode {
+    qol_log::init_stderr();
     register_build_identity();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if matches!(args.as_slice(), [arg] if arg == qol_bluetooth::SETTINGS_SURFACE_ARG) {
         return match qol_bluetooth::show_settings() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("{error:#}");
+                log::error!("{error:#}");
                 ExitCode::from(1)
             }
         };
@@ -18,7 +19,7 @@ fn main() -> ExitCode {
         return match qol_bluetooth::platform::run_daemon(qol_bluetooth::config::load()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("{error:#}");
+                log::error!("{error:#}");
                 ExitCode::from(1)
             }
         };

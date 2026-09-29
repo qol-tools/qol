@@ -6,8 +6,8 @@ pub(crate) fn run() {
     let raw_config = config::load_config();
     let resolved = remap::resolve(&raw_config);
 
-    eprintln!(
-        "[keyremap] loaded {} char rules, {} key rules, {} mouse rules, {} scroll rules, {} excluded apps",
+    log::info!(
+        "loaded {} char rules, {} key rules, {} mouse rules, {} scroll rules, {} excluded apps",
         resolved.char_rules.len(),
         resolved.key_rules.len(),
         resolved.mouse_rules.len(),
@@ -26,40 +26,40 @@ pub(crate) fn run() {
         })
     else {
         if daemon::send_reload() {
-            eprintln!("[keyremap] another instance running, sent reload");
+            log::debug!("another instance running, sent reload");
         }
         return;
     };
 
-    eprintln!("[keyremap] daemon started");
+    log::info!("daemon started");
 
     for command in rx {
         match command {
             daemon::Command::Reload => {
                 let new_raw = config::load_config();
                 let new_resolved = remap::resolve(&new_raw);
-                eprintln!(
-                    "[keyremap] reloaded {} char rules, {} key rules, {} mouse rules, {} scroll rules",
+                log::debug!(
+                    "reloaded {} char rules, {} key rules, {} mouse rules, {} scroll rules",
                     new_resolved.char_rules.len(),
                     new_resolved.key_rules.len(),
                     new_resolved.mouse_rules.len(),
                     new_resolved.scroll_rules.len(),
                 );
                 for warning in remap::diff_key_rules(&current_key_rules, &new_resolved.key_rules) {
-                    eprintln!("[keyremap] warning: {warning}");
+                    log::warn!("{warning}");
                 }
                 current_key_rules = new_resolved.key_rules.clone();
                 state.swap_config(new_resolved);
             }
             daemon::Command::Kill => {
-                eprintln!("[keyremap] kill received, shutting down");
+                log::info!("kill received, shutting down");
                 break;
             }
             daemon::Command::Settings => {
                 if let Err(error) = qol_apps::desktop_integration::open_plugin_settings_via_tray(
                     crate::cli::PLUGIN_ID,
                 ) {
-                    eprintln!("[keyremap] failed to open settings page: {error}");
+                    log::warn!("failed to open settings page: {error}");
                 }
             }
         }

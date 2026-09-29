@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 // Test: List with selection highlight and keyboard navigation
 // Verifies: Up/Down navigation, selection state, visual highlight
 

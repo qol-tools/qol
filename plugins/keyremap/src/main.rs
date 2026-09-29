@@ -2,6 +2,7 @@ mod cli;
 mod platform;
 
 fn main() -> std::process::ExitCode {
+    qol_log::init_stderr();
     cli::exit_code(std::env::args().skip(1))
 }
 

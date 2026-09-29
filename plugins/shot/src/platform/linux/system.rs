@@ -153,7 +153,7 @@ fn audio_devices(direction: AudioDirection) -> Vec<AudioDevice> {
             .map(|device| map_audio_device(device, direction))
             .collect(),
         Err(error) => {
-            eprintln!("[qol-shot] listing audio devices failed ({direction:?}): {error}");
+            log::warn!("listing audio devices failed ({direction:?}): {error}");
             Vec::new()
         }
     }

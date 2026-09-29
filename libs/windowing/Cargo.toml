@@ -22,3 +22,6 @@ objc2-app-kit = { version = "0.3", features = [
 [dev-dependencies]
 serde_json.workspace = true
 tempfile = "3"
+
+[lints]
+workspace = true

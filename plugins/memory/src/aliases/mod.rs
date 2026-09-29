@@ -48,7 +48,7 @@ pub fn embedded() -> AliasMap {
     match load(CONCEPT_ALIASES_JSON) {
         Ok(map) => map,
         Err(err) => {
-            eprintln!("concept-aliases: load failed: {err}; using empty alias map");
+            log::warn!("concept-aliases: load failed: {err}; using empty alias map");
             AliasMap::default()
         }
     }

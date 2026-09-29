@@ -32,7 +32,7 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
     Some(match run_cinnamon_capture_helper(&request) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("[qol-shot] Cinnamon capture helper failed: {error:#}");
+            log::error!("Cinnamon capture helper failed: {error:#}");
             ExitCode::FAILURE
         }
     })
@@ -53,9 +53,7 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
                     "SHOT_RECORD_START_BACKEND",
                     "backend=cinnamon_after_paint outcome=fallback reason=start_failed"
                 );
-                eprintln!(
-                    "[qol-shot] Cinnamon synchronized capture unavailable, using x11grab: {error:#}"
-                );
+                log::warn!("Cinnamon synchronized capture unavailable, using x11grab: {error:#}");
             }
         }
     }
@@ -217,8 +215,8 @@ fn run_cinnamon_capture_helper(request_json: &str) -> Result<()> {
     let cursor_guard = match XfixesCursorGuard::hide() {
         Ok(guard) => Some(guard),
         Err(error) => {
-            eprintln!(
-                "[qol-shot] XFixes cursor isolation unavailable, using Cinnamon's built-in cursor: {error:#}"
+            log::warn!(
+                "XFixes cursor isolation unavailable, using Cinnamon's built-in cursor: {error:#}"
             );
             None
         }
@@ -295,7 +293,7 @@ impl XfixesCursorGuard {
 impl Drop for XfixesCursorGuard {
     fn drop(&mut self) {
         if let Err(error) = self.show() {
-            eprintln!("[qol-shot] failed to restore the X11 cursor: {error:#}");
+            log::warn!("failed to restore the X11 cursor: {error:#}");
         }
     }
 }
@@ -664,7 +662,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
     let output_file = session.output_file.as_deref()?;
     let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
     if let Err(error) = wait_for_recording_file(session, capture_file) {
-        eprintln!("[qol-shot] recording finalization failed: {error:#}");
+        log::warn!("recording finalization failed: {error:#}");
         if discard_empty_capture(capture_file) {
             qol_runtime::probe!(
                 "SHOT_RECORD_FINALIZE",
@@ -686,7 +684,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
         match convert_cinnamon_recording(capture_file, output_file, config) {
             Ok(()) => output_file.to_path_buf(),
             Err(error) => {
-                eprintln!("[qol-shot] Cinnamon recording conversion failed: {error:#}");
+                log::warn!("Cinnamon recording conversion failed: {error:#}");
                 show_notification(
                     "Recording conversion failed",
                     "Saved the synchronized WebM recording instead",
@@ -787,8 +785,8 @@ fn discard_empty_capture(capture_file: &Path) -> bool {
     match std::fs::remove_file(capture_file) {
         Ok(()) => true,
         Err(error) => {
-            eprintln!(
-                "[qol-shot] failed to remove empty capture {}: {error}",
+            log::warn!(
+                "failed to remove empty capture {}: {error}",
                 capture_file.display()
             );
             false

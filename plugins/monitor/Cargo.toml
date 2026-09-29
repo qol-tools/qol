@@ -4,6 +4,8 @@ version = "0.20.1"
 edition = "2021"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 qol-apps.workspace = true
@@ -33,3 +35,6 @@ x11rb = { workspace = true, features = ["randr"] }
 [dev-dependencies]
 qol-plugin-api.workspace = true
 tempfile = "3"
+
+[lints]
+workspace = true

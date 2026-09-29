@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 mod cli;
 mod commands;
 mod dev_console;

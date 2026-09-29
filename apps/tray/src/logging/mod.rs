@@ -1,3 +1,5 @@
+#![allow(clippy::print_stderr)]
+
 pub mod console_guard;
 mod control;
 mod error_capture;

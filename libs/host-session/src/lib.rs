@@ -153,7 +153,7 @@ impl SessionStore {
         let ids = match store.ids::<M::Snapshot>() {
             Ok(ids) => ids,
             Err(error) => {
-                eprintln!("qol-host-session: failed to list records for {owner}: {error:#}");
+                log::warn!("failed to list records for {owner}: {error:#}");
                 report.unreadable += 1;
                 return report;
             }
@@ -164,8 +164,8 @@ impl SessionStore {
             let envelope: Envelope<M::Snapshot> = match read_envelope(&path) {
                 Ok(envelope) => envelope,
                 Err(error) => {
-                    eprintln!(
-                        "qol-host-session: cannot read record {} for {owner}: {error:#}",
+                    log::warn!(
+                        "cannot read record {} for {owner}: {error:#}",
                         path.display()
                     );
                     report.unreadable += 1;
@@ -179,14 +179,12 @@ impl SessionStore {
                 Ok(()) => match store.delete(&id) {
                     Ok(()) => report.restored += 1,
                     Err(error) => {
-                        eprintln!(
-                            "qol-host-session: restored {owner}:{id} but could not clear it: {error:#}"
-                        );
+                        log::warn!("restored {owner}:{id} but could not clear it: {error:#}");
                         report.failed += 1;
                     }
                 },
                 Err(error) => {
-                    eprintln!("qol-host-session: failed to restore {owner}:{id}: {error:#}");
+                    log::warn!("failed to restore {owner}:{id}: {error:#}");
                     report.failed += 1;
                 }
             }

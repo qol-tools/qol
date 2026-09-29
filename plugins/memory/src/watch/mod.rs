@@ -55,7 +55,7 @@ fn drain(
             let compactions = match ingest::ingest_paths(&store, &roots, &paths, warm.keys()) {
                 Ok(report) => report.compactions,
                 Err(error) => {
-                    eprintln!("qol-memory: transcript ingest failed: {error:#}");
+                    log::warn!("transcript ingest failed: {error:#}");
                     qol_runtime::probe!("QOL_MEMORY_WATCH", "event=ingest_failed error={error}");
                     0
                 }
@@ -76,7 +76,7 @@ fn drain(
             Ok(_) => {}
             Err(error) if crate::distill::is_busy(&error) => {}
             Err(error) => {
-                eprintln!("qol-memory: watch distill failed: {error:#}");
+                log::warn!("watch distill failed: {error:#}");
                 qol_runtime::probe!("QOL_MEMORY_WATCH", "event=distill_failed error={error}");
             }
         }

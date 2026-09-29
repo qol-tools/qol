@@ -24,19 +24,19 @@ pub enum StartupIntent {
 
 pub fn run(intent: StartupIntent) {
     let show_immediately = intent == StartupIntent::Visible;
-    eprintln!("[launcher] run start show_immediately={show_immediately}");
+    log::debug!("run start show_immediately={show_immediately}");
 
     let (tx, rx) = mpsc::channel();
     if !app::start_listener(tx) {
-        eprintln!("[launcher] daemon listener failed, exiting");
+        log::warn!("daemon listener failed, exiting");
         return;
     }
-    eprintln!("[launcher] daemon listener started");
+    log::info!("daemon listener started");
 
     Application::new().run(move |cx: &mut App| {
         qol_gpui::fonts::install(cx);
         #[cfg(debug_assertions)]
-        eprintln!("[launcher] run: pid={}", std::process::id());
+        log::debug!("run: pid={}", std::process::id());
 
         let focus_cache = MonitorTracker::start(cx);
 
@@ -60,7 +60,7 @@ pub fn run(intent: StartupIntent) {
 
         if show_immediately {
             #[cfg(debug_assertions)]
-            eprintln!("[launcher] show_immediately");
+            log::debug!("show_immediately");
             cx.spawn({
                 let entries = entries.clone();
                 let active = active.clone();
@@ -137,11 +137,11 @@ async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {
     )
     .await;
     if let Err(error) = opened {
-        eprintln!("[launcher] settings panel failed, opening browser: {error:#}");
+        log::warn!("settings panel failed, opening browser: {error:#}");
         if let Err(error) =
             qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::config::plugin_id())
         {
-            eprintln!("[launcher] failed to open settings page: {error}");
+            log::warn!("failed to open settings page: {error}");
         }
     }
 }

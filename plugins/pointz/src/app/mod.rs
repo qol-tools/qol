@@ -4,8 +4,6 @@ pub(crate) mod pairing;
 use crate::input::InputHandler;
 
 pub(crate) fn run() {
-    env_logger::init();
-
     log::info!("Starting PointZerver (headless mode)...");
     if let Some(ts) = std::env::current_exe()
         .ok()
@@ -22,12 +20,12 @@ pub(crate) fn run() {
     let (tx, rx) = std::sync::mpsc::channel();
     if !daemon::start_listener(tx) {
         if daemon::send_action("settings") {
-            eprintln!("[pointz] another instance running, sent settings");
+            log::debug!("another instance running, sent settings");
         }
         return;
     }
 
-    eprintln!("[pointz] daemon started");
+    log::info!("daemon started");
 
     let input_handler = match InputHandler::new() {
         Ok(handler) => handler,
@@ -55,7 +53,7 @@ pub(crate) fn run() {
                 }
             }
             daemon::Command::Kill => {
-                eprintln!("[pointz] kill received, shutting down");
+                log::info!("kill received, shutting down");
                 daemon::cleanup();
                 std::process::exit(0);
             }

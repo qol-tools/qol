@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 use gpui::*;
 use qol_launcher::open_window_with_focus;
 use std::time::Duration;

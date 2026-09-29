@@ -4,6 +4,8 @@ version = "1.48.1"
 edition = "2021"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 anyhow = "1"
 crossbeam-channel = "0.5"
 getrandom = "0.3"
@@ -30,3 +32,6 @@ qol-conventions.workspace = true
 [dev-dependencies]
 qol-plugin-api.workspace = true
 tempfile = "3"
+
+[lints]
+workspace = true

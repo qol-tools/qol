@@ -1146,7 +1146,7 @@ impl SettingsPanelView {
             Err(error) => {
                 if !self.attention_error_logged {
                     self.attention_error_logged = true;
-                    eprintln!("[settings] attention feed unavailable: {error}");
+                    log::warn!("attention feed unavailable: {error}");
                 }
                 false
             }

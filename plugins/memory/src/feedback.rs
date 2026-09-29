@@ -22,7 +22,7 @@ pub fn append_vote(root: &Path, norm: &str, key: &str, vote: i64) {
         .open(&path)
         .and_then(|mut file| writeln!(file, "{line}"));
     if let Err(error) = result {
-        eprintln!("qol-memory: feedback append failed: {error}");
+        log::warn!("feedback append failed: {error}");
     }
 }
 

@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 // Test: Close window when focus is lost (blur detection)
 // Verifies: on_blur for launcher-style popups
 

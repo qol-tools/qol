@@ -22,3 +22,6 @@ workspace-hack.workspace = true
 
 [dev-dependencies]
 proptest = "1.6"
+
+[lints]
+workspace = true

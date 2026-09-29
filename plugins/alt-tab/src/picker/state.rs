@@ -155,8 +155,8 @@ impl PickerState {
         };
 
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/select] set_windows reset={} next={:?} total={}",
+        log::debug!(
+            "set_windows reset={} next={:?} total={}",
             reset_selection,
             self.selected_index,
             self.windows.len()
@@ -315,20 +315,23 @@ impl PickerState {
     pub(crate) fn activate_selected_target(&self) {
         let Some(ix) = self.selected_index else {
             #[cfg(debug_assertions)]
-            eprintln!("[alt-tab/activate] no selection — skipping");
+            log::debug!("no selection — skipping");
             return;
         };
         let Some(win) = self.windows.get(ix) else {
-            eprintln!(
-                "[alt-tab/activate] selection {ix} is past {} windows - skipping",
+            log::warn!(
+                "selection {ix} is past {} windows - skipping",
                 self.windows.len()
             );
             return;
         };
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/activate] idx={} id={} app={} title={}",
-            ix, win.id, win.app_name, win.title
+        log::debug!(
+            "idx={} id={} app={} title={}",
+            ix,
+            win.id,
+            win.app_name,
+            win.title
         );
         actions::activate_window(win.id);
     }

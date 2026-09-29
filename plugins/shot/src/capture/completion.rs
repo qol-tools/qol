@@ -75,7 +75,7 @@ pub(crate) struct SavedAnnouncement {
 impl SavedAnnouncement {
     pub(crate) fn reveal_automatically(&self) {
         if let Err(error) = self.target.open("automatic") {
-            eprintln!("[qol-shot] automatic folder reveal failed: {error:#}");
+            log::warn!("automatic folder reveal failed: {error:#}");
         }
     }
 }
@@ -184,7 +184,7 @@ impl PreviewCompletion {
 
     fn open_automatically(&self) {
         if let Err(error) = self.target.open("automatic") {
-            eprintln!("[qol-shot] automatic folder reveal failed: {error:#}");
+            log::warn!("automatic folder reveal failed: {error:#}");
         }
     }
 }
@@ -202,7 +202,7 @@ pub(crate) fn background_saved(
         return;
     }
     if let Err(error) = target.open("automatic") {
-        eprintln!("[qol-shot] automatic folder reveal failed: {error:#}");
+        log::warn!("automatic folder reveal failed: {error:#}");
     }
 }
 

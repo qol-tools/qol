@@ -150,7 +150,7 @@ fn mono_now() -> u64 {
 
 fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex<Registry>>) {
     let Some(dir) = paths::snapshots_dir() else {
-        eprintln!("[cli-sessions] snapshot: no data dir");
+        log::debug!("snapshot: no data dir");
         return;
     };
     let panel: HashMap<SessionId, Status> = match registry.lock() {
@@ -158,8 +158,8 @@ fn snapshot_now(host: &Arc<dyn TerminalHost + Send + Sync>, registry: &Arc<Mutex
         Err(_) => HashMap::new(),
     };
     match snapshot::capture_all(host.as_ref(), &panel, &dir, now_secs()) {
-        Ok(path) => eprintln!("[cli-sessions] snapshot -> {}", path.display()),
-        Err(e) => eprintln!("[cli-sessions] snapshot failed: {e}"),
+        Ok(path) => log::debug!("snapshot -> {}", path.display()),
+        Err(e) => log::warn!("snapshot failed: {e}"),
     }
 }
 
@@ -184,7 +184,7 @@ fn open_panel(
     let opened = match result {
         Ok(opened) => opened,
         Err(error) => {
-            eprintln!("[cli-sessions] open_panel failed: {error}");
+            log::warn!("open_panel failed: {error}");
             #[cfg(debug_assertions)]
             qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=false err={error}");
             return None;

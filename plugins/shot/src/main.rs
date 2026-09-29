@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    qol_log::init_stderr();
     if let Some(exit_code) = qol_shot::run_internal_mode() {
         return exit_code;
     }

@@ -24,7 +24,7 @@ impl InstallerOps for Platform {
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-            println!("Skipping auto-start because no GUI session was detected.");
+            log::info!("Skipping auto-start because no GUI session was detected.");
             return Ok(());
         }
         if super::unix_common::is_running("qol-tray") {
@@ -61,8 +61,8 @@ impl InstallerOps for Platform {
         if !system_binary.exists() {
             return;
         }
-        println!(
-            "Warning: A system-wide installation exists at {}.\n\
+        log::warn!(
+            "A system-wide installation exists at {}.\n\
              Run 'sudo apt remove qol-tray' to avoid conflicts.\n\
              The user-local install at ~/.local/bin/ takes precedence if it appears earlier in PATH.",
             system_binary.display()

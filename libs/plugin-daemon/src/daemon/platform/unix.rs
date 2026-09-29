@@ -363,7 +363,7 @@ where
                 }
             }
             Err(error) => {
-                eprintln!("accept error: {error:#}");
+                log::warn!("accept error: {error:#}");
             }
         }
     }
@@ -444,7 +444,7 @@ where
                 }
             }
             Err(error) => {
-                eprintln!("accept error: {error:#}");
+                log::warn!("accept error: {error:#}");
             }
         }
     }
@@ -460,14 +460,13 @@ where
 fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<PathBuf>)> {
     if let Some(listener) = inherited_listener() {
         #[cfg(debug_assertions)]
-        eprintln!("[daemon] adopting a pre-bound listener fd, skipping bind()");
+        log::debug!("adopting a pre-bound listener fd, skipping bind()");
         return Ok((listener, None));
     }
 
     let Some(socket_path) = socket_path(config) else {
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[daemon] {} unset and no fallback socket - not binding",
+        log::warn!(
+            "{} unset and no fallback socket - not binding",
             qol_conventions::ENV_DAEMON_SOCKET
         );
         return Err(io::Error::new(
@@ -476,7 +475,7 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
         ));
     };
     #[cfg(debug_assertions)]
-    eprintln!("[daemon] binding to {:?}", socket_path);
+    log::debug!("binding to {:?}", socket_path);
 
     let listener = match local_ipc::bind_listener(&socket_path) {
         Ok(listener) => listener,
@@ -488,7 +487,7 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(UnixListener, Option<Path
             }
             if send_ping(config) {
                 #[cfg(debug_assertions)]
-                eprintln!("[daemon] existing instance alive, exiting");
+                log::info!("existing instance alive, exiting");
                 return Err(io::Error::new(
                     ErrorKind::AddrInUse,
                     "existing daemon instance is alive",
@@ -536,8 +535,8 @@ fn inherited_listener() -> Option<UnixListener> {
     match listener_from_fd_str(&raw) {
         Ok(listener) => Some(listener),
         Err(error) => {
-            eprintln!(
-                "[daemon] ignoring {}={raw}: {error}; binding the socket path instead",
+            log::warn!(
+                "ignoring {}={raw}: {error}; binding the socket path instead",
                 qol_conventions::ENV_DAEMON_LISTENER_FD
             );
             std::env::remove_var(qol_conventions::ENV_DAEMON_LISTENER_FD);
@@ -643,9 +642,7 @@ fn fd_from_env(env_name: &str) -> Option<RawFd> {
     let raw = std::env::var(env_name).ok()?;
     let fd: RawFd = raw.parse().ok()?;
     if !is_adoptable_socket(fd) {
-        eprintln!(
-            "[daemon] ignoring {env_name}={raw}: fd {fd} is not a pre-bound socket in this process"
-        );
+        log::warn!("ignoring {env_name}={raw}: fd {fd} is not a pre-bound socket in this process");
         std::env::remove_var(env_name);
         return None;
     }
@@ -682,14 +679,11 @@ where
     let line = match local_ipc::read_line(&mut reader) {
         Ok(None) => {
             #[cfg(debug_assertions)]
-            eprintln!("[daemon] read_line EOF (0 bytes)");
+            log::debug!("read_line EOF (0 bytes)");
             return ReadResult::Ignore;
         }
         Err(e) => {
-            #[cfg(debug_assertions)]
-            eprintln!("[daemon] read_line error: {:?}", e);
-            #[cfg(not(debug_assertions))]
-            let _ = e;
+            log::warn!("read_line error: {:?}", e);
             return ReadResult::Ignore;
         }
         Ok(Some(line)) => line,

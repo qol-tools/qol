@@ -20,3 +20,6 @@ ttf-parser = "0.25"
 [[bin]]
 name = "qol-theme-css"
 path = "src/bin/qol-theme-css.rs"
+
+[lints]
+workspace = true

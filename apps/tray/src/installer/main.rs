@@ -38,6 +38,7 @@ impl InstallerOperations for ProductionOperations {
 }
 
 fn main() -> ExitCode {
+    qol_log::init_stderr();
     register_build_identity();
     app().run(normalize_legacy_argv(std::env::args().skip(1)))
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use qol_conventions::artifact::{
     self, BuildFlavor, BuildIdentity, BuildIntent, BuildRole, CompilerFacts, SourceIdentity,
     ENV_BUILD_INTENT, ENV_COMPILER_OVERFLOW_CHECKS, ENV_SOURCE_COMMIT, ENV_SOURCE_HEAD_TREE,

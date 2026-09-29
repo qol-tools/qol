@@ -73,7 +73,7 @@ getrandom.workspace = true
 anyhow = "1.0"
 
 # Logging
-log = "0.4"
+log.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "registry"] }
 tracing-appender = "0.2"
@@ -177,6 +177,8 @@ unsafe_op_in_unsafe_fn = "deny"
 unreachable_pub = "warn"
 
 [lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
 await_holding_lock = "warn"
 dbg_macro = "deny"
 todo = "deny"

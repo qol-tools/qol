@@ -23,3 +23,6 @@ tempfile = "3.8"
 
 [dependencies]
 workspace-hack.workspace = true
+
+[lints]
+workspace = true

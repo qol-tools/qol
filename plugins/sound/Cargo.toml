@@ -4,6 +4,8 @@ version = "0.5.1"
 edition = "2021"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 anyhow = "1"
 qol-apps.workspace = true
 qol-audio.workspace = true
@@ -21,3 +23,6 @@ qol-conventions.workspace = true
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
+
+[lints]
+workspace = true

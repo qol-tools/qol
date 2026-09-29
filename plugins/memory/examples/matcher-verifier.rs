@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use anyhow::{bail, Result};
 use qol_memory::verification::{self, Fact, Prediction};
 use serde::Deserialize;

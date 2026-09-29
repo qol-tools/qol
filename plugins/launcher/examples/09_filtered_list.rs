@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 // Test: Text input with filtered list
 // Verifies: Combined input + dynamic list filtering (core launcher pattern)
 

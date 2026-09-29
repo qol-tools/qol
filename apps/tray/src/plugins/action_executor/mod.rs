@@ -151,13 +151,6 @@ pub fn execute_action_with_input(
                     action_id,
                     error
                 );
-                #[cfg(feature = "dev")]
-                {
-                    eprintln!(
-                        "[\x1b[31mACTION ERROR\x1b[0m] {}::{} failed: {}",
-                        plugin_id, action_id, error
-                    );
-                }
             }
         }
     }

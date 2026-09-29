@@ -117,21 +117,24 @@ pub(super) fn collect_on_screen_windows(
     ax_cache: &mut AxCache,
 ) {
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/enum] CG on-screen: {} windows", parsed.len());
+    log::debug!("CG on-screen: {} windows", parsed.len());
 
     let switchable_cache = register_on_screen(&parsed, state);
     let filtered = filter_visible(parsed, &switchable_cache);
     #[cfg(debug_assertions)]
     for w in &filtered {
-        eprintln!(
-            "[alt-tab/enum] pre-dedup: wid={} pid={} app={:?} title={:?}",
-            w.id, w.pid, w.app_name, w.title
+        log::debug!(
+            "pre-dedup: wid={} pid={} app={:?} title={:?}",
+            w.id,
+            w.pid,
+            w.app_name,
+            w.title
         );
     }
     let deduped = ax::dedup_by_ax(filtered, ax_cache);
     let deduped = stabilize_on_screen_order(move_true_focus_to_front(deduped), tracker);
     #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/enum] post-dedup: {} windows", deduped.len());
+    log::debug!("post-dedup: {} windows", deduped.len());
     for window in deduped {
         tracker.remember_window(window.pid, window.id);
         state.push_on_screen(window);
@@ -685,10 +688,7 @@ pub(super) fn collect_off_screen_windows(
     ax_cache: &mut AxCache,
 ) {
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/enum] CG off-screen candidates: {}",
-        off_screen.len()
-    );
+    log::debug!("CG off-screen candidates: {}", off_screen.len());
 
     let candidates = filter_minimized_candidates(off_screen, state);
     let candidate_pids = candidate_pids(&candidates);
@@ -718,9 +718,10 @@ pub(super) fn collect_off_screen_windows(
         }
         if !passes_ax_filter(&window, state, &other_space_pids, &hidden_pids, ax_cache) {
             #[cfg(debug_assertions)]
-            eprintln!(
-                "[alt-tab/enum] MINIMIZED skip (AX filter): wid={} app={:?}",
-                window.id, window.app_name
+            log::debug!(
+                "MINIMIZED skip (AX filter): wid={} app={:?}",
+                window.id,
+                window.app_name
             );
             continue;
         }
@@ -736,9 +737,11 @@ pub(super) fn collect_off_screen_windows(
             continue;
         };
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/enum] MINIMIZED accepted: wid={} app={:?} title={:?}",
-            window.id, window.app_name, resolved.title
+        log::debug!(
+            "MINIMIZED accepted: wid={} app={:?} title={:?}",
+            window.id,
+            window.app_name,
+            resolved.title
         );
         tracker.remember_window(window.pid, window.id);
         state.push_minimized(&window, resolved.title);
@@ -760,10 +763,7 @@ pub(super) fn collect_off_screen_windows(
     }
 
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/enum] total windows after minimized: {}",
-        state.windows.len()
-    );
+    log::debug!("total windows after minimized: {}", state.windows.len());
 }
 
 fn candidate_pids(candidates: &[CgWindow]) -> HashSet<i32> {

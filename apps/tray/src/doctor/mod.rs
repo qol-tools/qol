@@ -7,7 +7,6 @@ mod framework;
 mod host_cli;
 mod install_id;
 pub(crate) mod platform;
-mod progress;
 pub mod report;
 pub mod trigger;
 
@@ -191,7 +190,7 @@ fn run_selected(selector: &Selector, ctx: &DoctorContext) -> Vec<DoctorCheckResu
                 && check_enabled_for_build(meta.dev_only)
         })
         .map(|check| {
-            progress::emit(&format!("check {}", check.meta().id));
+            cli::progress(&format!("check {}", check.meta().id));
             run_check(check.as_ref(), ctx)
         })
         .collect()
@@ -235,7 +234,7 @@ fn apply_result_fixes(summary: &mut FixSummary, result: DoctorCheckResult, polic
             continue;
         }
         summary.attempted += 1;
-        progress::emit(&format!("fix {}", result.outcome.id));
+        cli::progress(&format!("fix {}", result.outcome.id));
         if let Err(error) = apply_fix(&action) {
             summary
                 .failures

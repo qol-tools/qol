@@ -175,14 +175,14 @@ pub fn observe(
 
 fn report(dir: &Path, anomaly: &Anomaly) {
     match dump(dir, anomaly) {
-        Ok(path) => eprintln!(
-            "[cli-sessions] recorded {} on {} (dwell {}s) -> {}",
+        Ok(path) => log::debug!(
+            "recorded {} on {} (dwell {}s) -> {}",
             anomaly.kind,
             anomaly.session_id,
             anomaly.dwell_secs,
             path.display()
         ),
-        Err(e) => eprintln!("[cli-sessions] anomaly dump failed: {e}"),
+        Err(e) => log::warn!("anomaly dump failed: {e}"),
     }
 }
 

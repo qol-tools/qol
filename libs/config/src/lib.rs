@@ -191,7 +191,7 @@ fn load_typed_from_paths<T: DeserializeOwned>(paths: &[PathBuf], default: impl F
         };
         match serde_json::from_value::<T>(canonicalize_whole_floats(value)) {
             Ok(config) => {
-                eprintln!("[config] loaded from {}", path.display());
+                log::info!("loaded from {}", path.display());
                 clear_parse_failure(path);
                 return config;
             }
@@ -224,7 +224,7 @@ pub fn parse_error_marker_path(config_path: &Path) -> PathBuf {
 }
 
 fn record_parse_failure(path: &Path, error: &dyn std::fmt::Display) {
-    eprintln!("[config] failed to parse {}: {}", path.display(), error);
+    log::warn!("failed to parse {}: {}", path.display(), error);
     let _ = fs::write(parse_error_marker_path(path), error.to_string());
 }
 
@@ -286,7 +286,7 @@ fn load_merged_from_paths<T: DeserializeOwned>(
             canonicalize_whole_floats(defaults::merge_json_defaults(defaults.clone(), overrides));
         match serde_json::from_value::<T>(merged) {
             Ok(config) => {
-                eprintln!("[config] loaded from {}", path.display());
+                log::info!("loaded from {}", path.display());
                 clear_parse_failure(path);
                 return config;
             }

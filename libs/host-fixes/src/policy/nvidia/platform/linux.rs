@@ -2149,20 +2149,11 @@ fn run_privileged_operation(
 fn execute(policy: &ResidentPolicy, command: &cli::ResidentCommand) -> Result<i32> {
     match command {
         cli::ResidentCommand::Status => {
-            let view = policy.status()?;
-            let module = view.expected_module_version.as_deref().unwrap_or("-");
-            println!(
-                "policy={} state={} owners={} module={} {}",
-                view.policy,
-                view.state.as_str(),
-                view.owners.join(","),
-                module,
-                view.detail
-            );
+            cli::print_status(&policy.status()?);
             Ok(0)
         }
         cli::ResidentCommand::Help => {
-            super::super::print_help();
+            cli::print_help();
             Ok(0)
         }
         cli::ResidentCommand::Enable => {

@@ -106,9 +106,12 @@ impl ZigbeeController {
         zcl_frame: ZclFrame,
     ) -> Result<()> {
         let payload = zcl_frame.encode();
-        eprintln!(
-            "[znp] send ZCL: addr=0x{:04X} ep={} cluster=0x{:04X} payload={:02X?}",
-            network_address, endpoint, cluster_id, payload
+        log::debug!(
+            "send ZCL: addr=0x{:04X} ep={} cluster=0x{:04X} payload={:02X?}",
+            network_address,
+            endpoint,
+            cluster_id,
+            payload
         );
         coordinator::send_zcl_command(
             &self.engine,
@@ -124,8 +127,8 @@ impl ZigbeeController {
         let mut reg = self.registry.lock().unwrap();
         if let Some(dev) = reg.by_ieee_address(ieee).cloned() {
             if dev.network_address != nwk {
-                eprintln!(
-                    "[znp] device {} NWK updated: 0x{:04X} → 0x{:04X}",
+                log::debug!(
+                    "device {} NWK updated: 0x{:04X} → 0x{:04X}",
                     format_ieee(&dev.ieee_address),
                     dev.network_address,
                     nwk,
@@ -195,8 +198,8 @@ fn handle_device_announce(
         reg.register(updated_device.clone());
     }
 
-    eprintln!(
-        "[znp] device joined: addr=0x{:04X} ieee={:02X?} endpoints={:?}",
+    log::debug!(
+        "device joined: addr=0x{:04X} ieee={:02X?} endpoints={:?}",
         updated_device.network_address,
         updated_device.ieee_address,
         updated_device
@@ -285,10 +288,7 @@ fn query_simple_desc(engine: &RequestEngine, nwk_addr: u16, endpoint_id: u8) -> 
         })
         .collect();
 
-    eprintln!(
-        "[znp] endpoint {} clusters: {:?}",
-        endpoint_id, input_clusters
-    );
+    log::debug!("endpoint {} clusters: {:?}", endpoint_id, input_clusters);
 
     Ok(Endpoint {
         id: endpoint_id,

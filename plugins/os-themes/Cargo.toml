@@ -4,6 +4,8 @@ version = "0.51.1"
 edition = "2021"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 anyhow = "1"
 serde_json.workspace = true
 qol-plugin-daemon.workspace = true
@@ -26,3 +28,6 @@ qol-conventions.workspace = true
 
 [dev-dependencies]
 qol-plugin-api.workspace = true
+
+[lints]
+workspace = true

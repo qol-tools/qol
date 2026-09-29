@@ -181,7 +181,7 @@ pub(crate) fn open_at_cursor<V: 'static>(
                 "SHOT_PIN_PLACE",
                 "{trace} result=anchor-failed reason={error}"
             );
-            eprintln!("[qol-shot] pin cursor anchor failed: {error}");
+            log::warn!("pin cursor anchor failed: {error}");
             platform::show_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE, 1800);
             return false;
         }
@@ -193,7 +193,7 @@ pub(crate) fn open_at_cursor<V: 'static>(
                 "SHOT_PIN_PLACE",
                 "{trace} result=resolve-failed reason={error}"
             );
-            eprintln!("[qol-shot] pin placement resolve failed: {error}");
+            log::warn!("pin placement resolve failed: {error}");
             platform::show_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE, 1800);
             return false;
         }
@@ -281,7 +281,7 @@ pub fn open(
     };
     let opened_at = Instant::now();
     let Some(handle) = open_window(content, spec, cx) else {
-        eprintln!("[qol-shot] pinned window open failed");
+        log::warn!("pinned window open failed");
         return false;
     };
     platform::after_pin_open(&title);
@@ -531,7 +531,7 @@ impl PinnedView {
         let receiver = match spawn_full_resolution_load(file_ready, path) {
             Ok(receiver) => receiver,
             Err(error) => {
-                eprintln!("[qol-shot] pinned image worker failed: {error:#}");
+                log::warn!("pinned image worker failed: {error:#}");
                 return;
             }
         };
@@ -562,7 +562,7 @@ impl PinnedView {
             Ok(image) => image,
             Err(error) => {
                 qol_runtime::probe!("SHOT_PIN_IMAGE", "generation={generation} state=failed");
-                eprintln!("[qol-shot] full-resolution pinned image failed: {error:#}");
+                log::warn!("full-resolution pinned image failed: {error:#}");
                 return;
             }
         };
@@ -1043,7 +1043,7 @@ impl PinnedView {
             if let Err(error) =
                 crate::capture::actions::spawn_file_action("pinned", action, file_ready, perform)
             {
-                eprintln!("[qol-shot] pinned action worker failed: {error:#}");
+                log::warn!("pinned action worker failed: {error:#}");
                 self.action_pending = false;
                 return;
             }

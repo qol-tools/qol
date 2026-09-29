@@ -368,28 +368,3 @@ pub fn validate_payload(payload: &NvidiaPayload) -> Result<()> {
     }
     Ok(())
 }
-
-pub fn print_help() {
-    println!("qol-tray resident-policy");
-    println!();
-    println!("Manage a durable, host-local residency policy. Enabling pins the exact");
-    println!("installed NVIDIA driver versions with APT preferences and is an explicit,");
-    println!("machine-scoped mutation; disabling restores the exact owned state.");
-    println!();
-    println!("USAGE:");
-    println!("    qol-tray resident-policy status                 Read-only state (no elevation)");
-    println!("    qol-tray resident-policy help                   This message (no elevation)");
-    println!("    qol-tray resident-policy enable                 Adopt the NVIDIA policy");
-    println!("    qol-tray resident-policy disable [--owner <id>] Release this owner's state");
-    println!("    qol-tray resident-policy join --owner <id>      Join an active policy");
-    println!("    qol-tray resident-policy transfer --owner <id>  Replace the owner set");
-    println!("    qol-tray resident-policy residency --resident   Mark THIS device resident");
-    println!("    qol-tray resident-policy residency --portable   Mark THIS device portable");
-    println!();
-    println!("Mutations require elevation (pkexec) and root. Status is read-only and");
-    println!("never elevates. The residency toggle writes the per-device status into the");
-    println!("active profile and never elevates. Only the fixed nvidia-driver-version-pin");
-    println!("policy is known.");
-    println!("Activation succeeds only from a managed install; raw and portable artifacts");
-    println!("cannot create resident state.");
-}

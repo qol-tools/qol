@@ -292,7 +292,7 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
         let a = a.trim();
         let b = b.trim();
         if a.is_empty() || b.is_empty() {
-            eprintln!("[keyremap] skipping char_swap with empty value");
+            log::warn!("skipping char_swap with empty value");
             continue;
         }
         char_swap_rules.push(ResolvedCharSwapRule {
@@ -321,7 +321,7 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
                 let from = from_char.trim();
                 let to = to_char.trim();
                 if from.is_empty() || to.is_empty() {
-                    eprintln!("[keyremap] skipping char rule with empty from_char or to_char");
+                    log::warn!("skipping char rule with empty from_char or to_char");
                     continue;
                 }
                 char_swap_rules.push(ResolvedCharSwapRule {
@@ -369,8 +369,8 @@ fn warn_shadowed_rules(rules: &[ResolvedKeyRule]) {
     for rule in rules {
         let pair = (rule.from_mods, rule.from_key);
         if seen.contains(&pair) {
-            eprintln!(
-                "[keyremap] warning: shadowed rule — {} appears multiple times, only first match fires",
+            log::warn!(
+                "shadowed rule — {} appears multiple times, only first match fires",
                 rule_label(&rule.from_mods, rule.from_key),
             );
         } else {
@@ -559,7 +559,7 @@ fn parse_modifiers(mods: &[String]) -> Modifiers {
                 result.ralt = true;
                 result.alt = true;
             }
-            other => eprintln!("[keyremap] unknown modifier: {other}"),
+            other => log::warn!("unknown modifier: {other}"),
         }
     }
     result
@@ -655,7 +655,7 @@ fn resolve_mouse_rule(rule: &MouseRule) -> Option<ResolvedMouseRule> {
         "left" => MouseButton::Left,
         "right" => MouseButton::Right,
         other => {
-            eprintln!("[keyremap] unknown mouse button: {other}");
+            log::warn!("unknown mouse button: {other}");
             return None;
         }
     };

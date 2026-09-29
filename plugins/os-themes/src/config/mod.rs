@@ -55,45 +55,40 @@ fn reset_tuning(config: &mut Config) {
     config.grow_ms = defaults.grow_ms;
     config.shrink_ms = defaults.shrink_ms;
     config.tuning_revision = TUNING_REVISION;
-    eprintln!(
-        "[shake-to-grow] tuning reset to revision {TUNING_REVISION}: stored shake tuning predates the fast-shake defaults"
+    log::debug!(
+        "tuning reset to revision {TUNING_REVISION}: stored shake tuning predates the fast-shake defaults"
     );
 }
 
 fn persist_tuning_reset(config: &Config) {
     let id = qol_config::plugin_id_from_env(PLUGIN_ID);
     let Ok(value) = serde_json::to_value(config) else {
-        eprintln!("[shake-to-grow] tuning reset could not be serialized and was not persisted");
+        log::warn!("tuning reset could not be serialized and was not persisted");
         return;
     };
     if qol_runtime::PlatformStateClient::from_env().set_plugin_config(&id, &value) {
-        eprintln!("[shake-to-grow] tuning reset persisted via the state socket");
+        log::debug!("tuning reset persisted via the state socket");
         return;
     }
     let Some(path) = qol_config::plugin_config_write_path(&id) else {
-        eprintln!(
-            "[shake-to-grow] tuning reset could not be persisted, it re-applies on next start"
-        );
+        log::warn!("tuning reset could not be persisted, it re-applies on next start");
         return;
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let Ok(json) = serde_json::to_string_pretty(config) else {
-        eprintln!(
-            "[shake-to-grow] tuning reset could not be persisted to {}, it re-applies on next start",
+        log::warn!(
+            "tuning reset could not be persisted to {}, it re-applies on next start",
             path.display()
         );
         return;
     };
     if std::fs::write(&path, json).is_ok() {
-        eprintln!(
-            "[shake-to-grow] tuning reset persisted to {}",
-            path.display()
-        );
+        log::debug!("tuning reset persisted to {}", path.display());
     } else {
-        eprintln!(
-            "[shake-to-grow] tuning reset could not be persisted to {}, it re-applies on next start",
+        log::warn!(
+            "tuning reset could not be persisted to {}, it re-applies on next start",
             path.display()
         );
     }
@@ -105,8 +100,8 @@ fn contract_defaults() -> Config {
 }
 
 fn log_config(config: &Config) {
-    eprintln!(
-        "[shake-to-grow] config: enabled={} pause_in_games={} fullscreen={} strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} grow_ms={} shrink_ms={} tuning_rev={}",
+    log::info!(
+        "config: enabled={} pause_in_games={} fullscreen={} strictness={} regrow={} min_extent={}px regrow_extent={}px window_ms={} scale={} calm_ms={} grow_ms={} shrink_ms={} tuning_rev={}",
         config.enabled,
         config.pause_in_games,
         config.pause_in_fullscreen,

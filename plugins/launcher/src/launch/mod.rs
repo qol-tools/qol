@@ -52,20 +52,17 @@ fn launch_item_with<OpenFile, LaunchApp, DaemonLaunch>(
 where
     OpenFile: FnMut(&Path) -> io::Result<()>,
     LaunchApp: FnMut(&Path, &[String]) -> io::Result<()>,
-    DaemonLaunch: FnMut(&Path, &[String]) -> Option<i32>,
+    DaemonLaunch: FnMut(&Path, &[String]) -> Option<Result<(), String>>,
 {
     match item {
         search::ResultItem::App(entry) => {
-            if let Some(code) = daemon_launch(&entry.path, &entry.exec) {
-                if code == 0 {
-                    return Ok(());
-                }
-                return Err(LaunchError::AppFailed {
+            if let Some(result) = daemon_launch(&entry.path, &entry.exec) {
+                return result.map_err(|message| LaunchError::AppFailed {
                     name: entry.name.clone(),
-                    message: format!("qol daemon action failed with exit code {code}"),
+                    message,
                 });
             }
-            eprintln!("[launch] app: {:?} exec: {:?}", entry.name, entry.exec);
+            log::debug!("app: {:?} exec: {:?}", entry.name, entry.exec);
             launch_app(&entry.path, &entry.exec).map_err(|error| LaunchError::AppFailed {
                 name: entry.name.clone(),
                 message: error.to_string(),
@@ -181,7 +178,7 @@ mod tests {
             &ResultItem::App(&entry),
             |_| panic!("files must not reach the opener"),
             |_, _| panic!("qol daemon entries must not reach the OS launcher"),
-            |_, _| Some(0),
+            |_, _| Some(Ok(())),
         );
 
         assert!(result.is_ok());
@@ -204,12 +201,12 @@ mod tests {
             &ResultItem::App(&entry),
             |_| panic!("files must not reach the opener"),
             |_, _| panic!("failed qol daemon entries must not reach the OS launcher"),
-            |_, _| Some(1),
+            |_, _| Some(Err("qol-tray is not running".to_string())),
         )
         .unwrap_err();
 
         assert!(matches!(error, LaunchError::AppFailed { .. }));
-        assert!(error.to_string().contains("exit code 1"));
+        assert!(error.to_string().contains("qol-tray is not running"));
     }
 
     #[test]

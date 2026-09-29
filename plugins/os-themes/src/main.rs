@@ -12,6 +12,7 @@ mod theme;
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn main() -> std::process::ExitCode {
+    qol_log::init_stderr();
     cli::exit_code(std::env::args().skip(1))
 }
 

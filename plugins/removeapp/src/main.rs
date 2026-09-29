@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use qol_removeapp::cli;
 
 fn main() -> ExitCode {
+    qol_log::init_stderr();
     cli::exit_code(env::args().skip(1))
 }
 

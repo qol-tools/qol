@@ -2340,25 +2340,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_filter"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e90c2accc4b07a8456ea0debdc2e7587bdd890680d71173a15d4ae604f6eef"
-dependencies = [
- "log",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.11.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0621c04f2196ac3f488dd583365b9c09be011a4ab8b9f37248ffcc8f6198b56a"
-dependencies = [
- "env_filter",
- "log",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6295,6 +6276,7 @@ dependencies = [
  "futures",
  "gpui",
  "libc",
+ "log",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -6305,6 +6287,7 @@ dependencies = [
  "qol-fs",
  "qol-gpui",
  "qol-headless",
+ "qol-log",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -6377,6 +6360,7 @@ dependencies = [
  "dbus-tokio",
  "futures",
  "libc",
+ "log",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -6390,6 +6374,7 @@ dependencies = [
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",
+ "qol-log",
  "qol-peers",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -6439,6 +6424,7 @@ version = "0.68.1"
 dependencies = [
  "anyhow",
  "gpui",
+ "log",
  "proptest",
  "qol-apps",
  "qol-color",
@@ -6447,6 +6433,7 @@ dependencies = [
  "qol-fs",
  "qol-gpui",
  "qol-headless",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -6473,6 +6460,7 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "indexmap",
+ "log",
  "proptest",
  "qol-conventions",
  "qol-headless",
@@ -6489,11 +6477,13 @@ version = "0.38.1"
 dependencies = [
  "anyhow",
  "evdev",
+ "log",
  "qol-apps",
  "qol-bluetooth-control",
  "qol-conventions",
  "qol-headless",
  "qol-host-fixes",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "serde_json",
@@ -6579,6 +6569,7 @@ name = "qol-frecency"
 version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
+ "log",
  "qol-fs",
  "serde",
  "serde_json",
@@ -6604,6 +6595,7 @@ dependencies = [
  "gpui",
  "image",
  "libc",
+ "log",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -6676,6 +6668,7 @@ name = "qol-host-session"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "log",
  "qol-fs",
  "serde",
  "serde_json",
@@ -6693,10 +6686,12 @@ dependencies = [
 name = "qol-ide-checkout"
 version = "1.44.1"
 dependencies = [
+ "log",
  "qol-apps",
  "qol-config",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -6714,6 +6709,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.25.0",
  "foreign-types-shared 0.3.1",
+ "log",
  "objc2",
  "objc2-app-kit",
  "proptest",
@@ -6722,6 +6718,7 @@ dependencies = [
  "qol-conventions",
  "qol-headless",
  "qol-hotkeys",
+ "qol-log",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -6741,6 +6738,7 @@ dependencies = [
  "gpui",
  "imagesize",
  "libc",
+ "log",
  "memchr",
  "objc2",
  "objc2-app-kit",
@@ -6754,6 +6752,7 @@ dependencies = [
  "qol-frecency",
  "qol-gpui",
  "qol-headless",
+ "qol-log",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -6779,11 +6778,13 @@ dependencies = [
  "crossbeam-channel",
  "getrandom 0.3.4",
  "libc",
+ "log",
  "qol-apps",
  "qol-color",
  "qol-config",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -6801,6 +6802,7 @@ name = "qol-log"
 version = "1.0.0"
 dependencies = [
  "dirs 6.0.0",
+ "log",
  "qol-config",
  "tempfile",
  "tracing-appender",
@@ -6824,11 +6826,13 @@ dependencies = [
  "anyhow",
  "flate2",
  "gethostname",
+ "log",
  "qol-agent-homes",
  "qol-config",
  "qol-conventions",
  "qol-fs",
  "qol-headless",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -6871,6 +6875,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "libc",
+ "log",
  "qol-apps",
  "qol-config",
  "qol-conventions",
@@ -6879,6 +6884,7 @@ dependencies = [
  "qol-host-fixes",
  "qol-host-session",
  "qol-hotkeys",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-profile-sync",
@@ -6898,6 +6904,7 @@ version = "0.51.1"
 dependencies = [
  "anyhow",
  "libc",
+ "log",
  "qol-apps",
  "qol-config",
  "qol-conventions",
@@ -6905,6 +6912,7 @@ dependencies = [
  "qol-headless",
  "qol-host-fixes",
  "qol-host-session",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -6983,6 +6991,7 @@ version = "1.0.0"
 dependencies = [
  "cc",
  "libc",
+ "log",
  "qol-config",
  "qol-conventions",
  "qol-runtime",
@@ -7000,7 +7009,6 @@ version = "1.46.1"
 dependencies = [
  "anyhow",
  "chrono",
- "env_logger",
  "gethostname",
  "if-addrs 0.10.2",
  "log",
@@ -7008,6 +7016,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "qol-peers",
  "qol-platform",
  "qol-plugin-api",
@@ -7058,12 +7067,14 @@ dependencies = [
  "dirs 6.0.0",
  "gpui",
  "libc",
+ "log",
  "objc2",
  "objc2-app-kit",
  "qol-apps",
  "qol-conventions",
  "qol-gpui",
  "qol-headless",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
@@ -7080,6 +7091,7 @@ name = "qol-runtime"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "log",
  "qol-config",
  "qol-conventions",
  "qol-peers",
@@ -7110,6 +7122,7 @@ dependencies = [
  "gpui",
  "image",
  "libc",
+ "log",
  "objc2",
  "qol-apps",
  "qol-audio",
@@ -7121,6 +7134,7 @@ dependencies = [
  "qol-gpui",
  "qol-headless",
  "qol-hotkeys",
+ "qol-log",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
@@ -7139,11 +7153,13 @@ name = "qol-sound"
 version = "0.5.1"
 dependencies = [
  "anyhow",
+ "log",
  "qol-apps",
  "qol-audio",
  "qol-config",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -7285,11 +7301,13 @@ dependencies = [
  "crossbeam-channel",
  "futures-util",
  "hf-hub",
+ "log",
  "qol-apps",
  "qol-audio",
  "qol-config",
  "qol-conventions",
  "qol-headless",
+ "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
@@ -7317,6 +7335,7 @@ dependencies = [
 name = "qol-window-actions"
 version = "2.45.1"
 dependencies = [
+ "log",
  "proptest",
  "qol-apps",
  "qol-cinnamon",
@@ -7324,6 +7343,7 @@ dependencies = [
  "qol-conventions",
  "qol-fs",
  "qol-headless",
+ "qol-log",
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",

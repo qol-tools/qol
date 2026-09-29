@@ -3,6 +3,7 @@ mod doctor;
 mod geometry;
 mod objc;
 mod screen;
+mod screen_cli;
 mod trace;
 
 use std::path::PathBuf;
@@ -73,7 +74,7 @@ pub(crate) fn execute_action(
         "move-monitor-left" => move_monitor_left(),
         "move-monitor-right" => move_monitor_right(),
         screen::SCREENS_ACTION => {
-            screen::print_work_areas();
+            screen_cli::print_work_areas();
             Ok(())
         }
         _ => Err(format!("Unknown action: {action}")),

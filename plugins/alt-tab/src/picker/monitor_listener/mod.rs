@@ -539,7 +539,7 @@ fn reposition_ghost_only(state: &ListenerState, event: &RuntimeEvent, app_cx: &m
     qol_gpui::monitor::record_active_monitor(event);
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/listener] picker visible, skipping ghost reposition");
+        log::debug!("picker visible, skipping ghost reposition");
         return;
     }
     let _reason = qol_gpui::popup_window::reason_scope("amc");
@@ -604,7 +604,7 @@ fn rebuild_ghosts_for_topology(state: &ListenerState, event: &RuntimeEvent, app_
     let inputs = &state.inputs;
     if PICKER_VISIBLE.load(Ordering::Relaxed) {
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/listener] picker visible, skipping topology rebuild");
+        log::debug!("picker visible, skipping topology rebuild");
         return;
     }
     let _reason = qol_gpui::popup_window::reason_scope("topology");
@@ -816,8 +816,8 @@ async fn refresh_data(
             );
         }
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[alt-tab/data-refresh] windows={} reset={} visible={}",
+        log::debug!(
+            "windows={} reset={} visible={}",
             gathered.windows.len(),
             reset_selection,
             picker_visible,

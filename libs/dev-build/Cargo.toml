@@ -6,7 +6,7 @@ license.workspace = true
 description = "Shared dev-linked plugin registry, build, and fingerprint tracking for qol-tray and qol-cli"
 
 [dependencies]
-log = "0.4"
+log.workspace = true
 qol-artifact.workspace = true
 qol-build-identity.workspace = true
 qol-conventions.workspace = true
@@ -24,3 +24,6 @@ workspace-hack.workspace = true
 
 [dev-dependencies]
 proptest = "1.6"
+
+[lints]
+workspace = true

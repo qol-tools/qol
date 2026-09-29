@@ -6,6 +6,8 @@ description = "Keyboard and mouse remapping plugin for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+log.workspace = true
+qol-log.workspace = true
 anyhow = "1"
 qol-apps.workspace = true
 serde.workspace = true
@@ -33,3 +35,6 @@ qol-plugin-api.workspace = true
 
 [build-dependencies]
 qol-conventions.workspace = true
+
+[lints]
+workspace = true

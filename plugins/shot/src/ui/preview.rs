@@ -654,7 +654,7 @@ fn create_and_show(
         display_id: None,
     };
     let Some(handle) = open_ghost_window(cx, content, seq, &title, &provisional) else {
-        eprintln!("[qol-shot] preview window open failed");
+        log::warn!("preview window open failed");
         return false;
     };
     let open_ms = opened_at.elapsed().as_millis();
@@ -760,7 +760,7 @@ fn open_quit_window(
         Ok(token) => token,
         Err(error) => {
             qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=anchor-failed reason={error}");
-            eprintln!("[qol-shot] preview cursor anchor failed: {error}");
+            log::warn!("preview cursor anchor failed: {error}");
             return false;
         }
     };
@@ -803,21 +803,21 @@ fn open_quit_window(
                         "SHOT_PREVIEW_PLACE",
                         "result=resolve-failed reason={error}"
                     );
-                    eprintln!("[qol-shot] preview placement resolve failed: {error}");
+                    log::warn!("preview placement resolve failed: {error}");
                     failed = true;
                     return;
                 }
             };
             if !sync_cursor_window_layout(&title, window, &resolved) {
                 qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=layout");
-                eprintln!("[qol-shot] preview placement apply failed");
+                log::warn!("preview placement apply failed");
                 failed = true;
                 return;
             }
             trace_preview_place(&resolved);
             if !qol_gpui::popup_window::show_normal_window_by_title(&title) {
                 qol_runtime::probe!("SHOT_PREVIEW_PLACE", "result=apply-failed reason=show");
-                eprintln!("[qol-shot] preview placement show failed");
+                log::warn!("preview placement show failed");
                 failed = true;
                 return;
             }
@@ -1319,7 +1319,7 @@ impl PreviewView {
             if let Err(error) =
                 crate::capture::actions::spawn_file_action("preview", action, file_ready, perform)
             {
-                eprintln!("[qol-shot] preview action worker failed: {error:#}");
+                log::warn!("preview action worker failed: {error:#}");
                 self.action_pending = false;
                 return;
             }

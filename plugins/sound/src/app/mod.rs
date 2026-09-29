@@ -42,7 +42,7 @@ pub fn run() -> ExitCode {
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx, |request| {
         dispatch(&request.action, &request.input)
     }) {
-        eprintln!("sound: failed to start the daemon listener");
+        log::error!("failed to start the daemon listener");
         return ExitCode::FAILURE;
     }
     while let Ok(command) = rx.recv() {
@@ -106,7 +106,7 @@ fn apply_saved_choice() {
     let inspection = match crate::config::inspect() {
         Ok(inspection) => inspection,
         Err(error) => {
-            eprintln!("sound: cannot read the saved configuration: {error}");
+            log::warn!("sound: cannot read the saved configuration: {error}");
             return;
         }
     };
@@ -121,12 +121,12 @@ fn apply_saved_choice() {
         Ok(rows) if rows.iter().any(|row| row.value == device) => {}
         Ok(_) => return,
         Err(error) => {
-            eprintln!("sound: cannot list the sound outputs: {error:#}");
+            log::warn!("sound: cannot list the sound outputs: {error:#}");
             return;
         }
     }
     if let Err(error) = crate::output::switch(&device) {
-        eprintln!("sound: cannot apply the saved output `{device}`: {error:#}");
+        log::warn!("sound: cannot apply the saved output `{device}`: {error:#}");
     }
 }
 

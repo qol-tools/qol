@@ -221,7 +221,7 @@ async fn dispatch_settings(cx: &AsyncApp, state: &PickerState) {
     )
     .await;
     if let Err(error) = opened {
-        eprintln!("[alt-tab/daemon] settings panel failed, opening browser: {error:#}");
+        log::warn!("settings panel failed, opening browser: {error:#}");
         crate::runtime::open_settings_page();
     }
 }
@@ -266,8 +266,8 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         qol_runtime::probe!("SHOW_CYCLE_FAST", "show_id={show_id} cycled={cycled}");
         if cycled {
             #[cfg(debug_assertions)]
-            eprintln!(
-                "[alt-tab/daemon] fast cycle, no requery ({}ms)",
+            log::debug!(
+                "fast cycle, no requery ({}ms)",
                 t_total.elapsed().as_millis()
             );
             let cached_previews = state
@@ -324,7 +324,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
 
     if !has_windows(&windows) {
         #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/daemon] no windows, skipping open");
+        log::debug!("no windows, skipping open");
         return;
     }
     let state_for_update = state.clone();

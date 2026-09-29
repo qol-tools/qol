@@ -680,7 +680,7 @@ fn spawn_host_fix(id: String) {
             }
             Err(error) => {
                 qol_runtime::probe!("BLUETOOTH_HOST_FIX", "stage=apply fix={id} outcome=failed");
-                eprintln!("Bluetooth host fix {id} failed: {error:#}");
+                log::warn!("Bluetooth host fix {id} failed: {error:#}");
                 send_notification("Bluetooth", &format!("{error:#}"));
             }
         }
@@ -713,7 +713,7 @@ fn finish_device_action(address: &str, label: &str, result: &Result<()>) {
     match result {
         Ok(()) => set_device_action_state(None),
         Err(error) => {
-            eprintln!("Bluetooth {label} failed for {address}: {error:#}");
+            log::warn!("Bluetooth {label} failed for {address}: {error:#}");
             let Ok(mut state) = DEVICE_ACTION_STATE.write() else {
                 return;
             };
@@ -737,7 +737,7 @@ fn run_device_command(address: &str, label: &str, action: impl FnOnce() -> Resul
 
 fn report_daemon_failure(label: &str, result: Result<()>) {
     if let Err(error) = result {
-        eprintln!("Bluetooth {label} failed: {error:#}");
+        log::warn!("Bluetooth {label} failed: {error:#}");
     }
 }
 

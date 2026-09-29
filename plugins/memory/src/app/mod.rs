@@ -32,7 +32,7 @@ pub fn run_daemon() -> Result<()> {
         )
         .and_then(|provider| warm.enable_verification(provider));
         if let Err(error) = enabled {
-            eprintln!("qol-memory: answer verification unavailable: {error:#}");
+            log::warn!("answer verification unavailable: {error:#}");
         }
     }
     let state = Arc::new(Mutex::new(warm));
@@ -41,7 +41,7 @@ pub fn run_daemon() -> Result<()> {
         match crate::watch::spawn(IngestRoots::resolve(), Arc::clone(&state), notes_runs_kept) {
             Ok(handle) => Some(handle),
             Err(error) => {
-                eprintln!("qol-memory: transcript watch unavailable: {error}");
+                log::warn!("transcript watch unavailable: {error}");
                 qol_runtime::probe!("QOL_MEMORY_DAEMON", "event=watch_unavailable error={error}");
                 None
             }
@@ -57,7 +57,7 @@ pub fn run_daemon() -> Result<()> {
                 run_initial_warm(warm_state, progress, notes_runs_kept);
             }));
             if result.is_err() {
-                eprintln!("qol-memory: initial warm thread panicked");
+                log::warn!("initial warm thread panicked");
             }
             warm_readiness.mark_ready();
         })
@@ -92,7 +92,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_
         match ingest::ingest_paths(&store, &roots, chunk, warm.keys()) {
             Ok(_) => {}
             Err(error) => {
-                eprintln!("qol-memory: initial ingest failed: {error:#}");
+                log::warn!("initial ingest failed: {error:#}");
                 qol_runtime::probe!(
                     "QOL_MEMORY_DAEMON",
                     "event=initial_ingest_failed error={error}"
@@ -124,7 +124,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_
         Ok(_) => {}
         Err(error) if crate::distill::is_busy(&error) => {}
         Err(error) => {
-            eprintln!("qol-memory: initial distill failed: {error:#}");
+            log::warn!("initial distill failed: {error:#}");
             qol_runtime::probe!(
                 "QOL_MEMORY_DAEMON",
                 "event=initial_distill_failed error={error}"
@@ -143,7 +143,7 @@ fn run_initial_warm(state: Arc<Mutex<WarmState>>, warming: ReadinessGate, notes_
             Err(poisoned) => poisoned.into_inner(),
         };
         if let Err(error) = warm.layers() {
-            eprintln!("qol-memory: initial warm build failed: {error:#}");
+            log::warn!("initial warm build failed: {error:#}");
             qol_runtime::probe!(
                 "QOL_MEMORY_DAEMON",
                 "event=initial_warm_failed error={error}"
@@ -166,7 +166,7 @@ fn prune_notes_runs_at_warm(store: &Store, notes_runs_kept: usize) {
         Ok(Some(_guard)) => match store.prune_notes_runs(notes_runs_kept) {
             Ok(_) => {}
             Err(error) => {
-                eprintln!("qol-memory: notes prune failed: {error:#}");
+                log::warn!("notes prune failed: {error:#}");
                 qol_runtime::probe!(
                     "QOL_MEMORY_DISTILL",
                     "event=prune outcome=error error={error}"
@@ -174,7 +174,7 @@ fn prune_notes_runs_at_warm(store: &Store, notes_runs_kept: usize) {
             }
         },
         Err(error) => {
-            eprintln!("qol-memory: notes prune failed: {error:#}");
+            log::warn!("notes prune failed: {error:#}");
             qol_runtime::probe!(
                 "QOL_MEMORY_DISTILL",
                 "event=prune outcome=error error={error}"
@@ -188,7 +188,7 @@ fn hygiene_sweep_at_warm(store: &Store) {
     let pruned_markers = match crate::continue_recall::prune_stale_marker_entries(store) {
         Ok(count) => count,
         Err(error) => {
-            eprintln!("qol-memory: continue marker prune failed: {error:#}");
+            log::warn!("continue marker prune failed: {error:#}");
             qol_runtime::probe!(
                 "QOL_MEMORY_DAEMON",
                 "event=marker_prune_failed error={error}"

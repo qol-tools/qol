@@ -21,7 +21,7 @@ pub fn run() -> u8 {
     match server::serve(daemon_port(), config) {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!(
+            log::warn!(
                 "[{}] failed to start daemon: {error}",
                 env!("QOL_PLUGIN_ID")
             );

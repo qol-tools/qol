@@ -204,8 +204,7 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool, focus: bool)
 }
 
 fn on_open_failure() {
-    #[cfg(debug_assertions)]
-    eprintln!("[alt-tab/open] failed to open picker window");
+    log::warn!("failed to open picker window");
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
     if let Ok(mut lock) = crate::app::ACTIVE_PICKER_MONITOR.lock() {
         *lock = None;
@@ -243,8 +242,7 @@ pub(crate) fn pre_create_ghost(
     );
     let bounds = layout.bounds;
     let Some(handle) = open_picker_window(bounds, title.clone(), init, false, cx) else {
-        #[cfg(debug_assertions)]
-        eprintln!("[alt-tab/boot] pre-create failed; falling back to on-demand creation");
+        log::warn!("pre-create failed; falling back to on-demand creation");
         return;
     };
     current.borrow_mut().insert(target, handle);
@@ -260,9 +258,10 @@ pub(crate) fn pre_create_ghost(
     qol_runtime::probe!("PICKER_READY", "title={title}");
     qol_gpui::popup_window::dump_ghost_windows(&format!("pre-create title={title}"));
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/boot] pre-created picker window target={:?} title={:?}",
-        target, title
+    log::debug!(
+        "pre-created picker window target={:?} title={:?}",
+        target,
+        title
     );
 }
 

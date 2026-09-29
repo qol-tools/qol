@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    qol_log::init_stderr();
     qol_lights::cli::exit_code(std::env::args().skip(1))
 }
 

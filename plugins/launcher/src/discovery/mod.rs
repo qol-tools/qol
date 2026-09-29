@@ -229,10 +229,10 @@ fn spawn_host_subscriber(tx: std::sync::mpsc::Sender<WatchSignal>) {
     std::thread::spawn(move || {
         let client = PlatformStateClient::from_env();
         let Some(mut sub) = client.subscribe(vec![RuntimeEventKind::LauncherAppsSynced]) else {
-            eprintln!("[launcher] index: host subscribe failed; running on fs watcher only");
+            log::warn!("index: host subscribe failed; running on fs watcher only");
             return;
         };
-        eprintln!("[launcher] index: subscribed to LauncherAppsSynced");
+        log::debug!("index: subscribed to LauncherAppsSynced");
         while let Some(event) = sub.next_event() {
             if let RuntimeEvent::LauncherAppsSynced { dir } = event {
                 if tx.send(WatchSignal::HostHint(dir)).is_err() {
@@ -255,16 +255,13 @@ pub(crate) fn start(
         let mut file_entries = Arc::new(load_file_entries_from_roots(&file_roots));
         let mut flow_entries = Arc::new(load_flow_entries());
         publish(&entries, &published, &cache, &file_entries, &flow_entries);
-        eprintln!(
-            "[launcher] index: initial load complete ({} roots)",
-            roots.len()
-        );
+        log::debug!("index: initial load complete ({} roots)", roots.len());
         if cache.fill_faces() {
             publish(&entries, &published, &cache, &file_entries, &flow_entries);
         }
 
         if roots.is_empty() && file_roots.iter().all(|root| !root.is_dir()) {
-            eprintln!("[launcher] index: no watch roots, exiting watcher thread");
+            log::info!("index: no watch roots, exiting watcher thread");
             return;
         }
 
@@ -295,13 +292,13 @@ pub(crate) fn start(
         }) {
             Ok(watcher) => watcher,
             Err(error) => {
-                eprintln!("[launcher] index: failed to create watcher: {error}");
+                log::warn!("index: failed to create watcher: {error}");
                 return;
             }
         };
         for rejected in watcher.rejected_roots() {
-            eprintln!(
-                "[launcher] index: watch failed for {}: {}",
+            log::warn!(
+                "index: watch failed for {}: {}",
                 rejected.path.display(),
                 rejected.reason
             );
@@ -336,7 +333,7 @@ pub(crate) fn start(
                     continue;
                 }
                 Ok(WatchSignal::FsFailed(e)) => {
-                    eprintln!("[launcher] index: watcher error: {e}");
+                    log::warn!("index: watcher error: {e}");
                     continue;
                 }
                 Ok(WatchSignal::HostHint(dir)) => {
@@ -345,16 +342,16 @@ pub(crate) fn start(
                     flow_entries = fresh_flows;
                     if let Some(root) = find_containing_root(&dir, &roots) {
                         dirty.insert(root.path.clone());
-                        eprintln!(
-                            "[launcher] index: host hint for {} -> rescan {}",
+                        log::debug!(
+                            "index: host hint for {} -> rescan {}",
                             dir.display(),
                             root.path.display()
                         );
                     } else if flows_changed {
                         publish(&entries, &published, &cache, &file_entries, &flow_entries);
                     } else {
-                        eprintln!(
-                            "[launcher] index: host hint {} matches no root, ignoring",
+                        log::warn!(
+                            "index: host hint {} matches no root, ignoring",
                             dir.display()
                         );
                     }
@@ -374,8 +371,8 @@ pub(crate) fn start(
                     cache.rescan(root);
                 }
             }
-            eprintln!(
-                "[launcher] index: rescanned {} root(s): {}",
+            log::debug!(
+                "index: rescanned {} root(s): {}",
                 dirty_now.len(),
                 dirty_now
                     .iter()
@@ -402,8 +399,8 @@ pub(crate) fn start(
                     file_entries.len(),
                     if files_changed { "changed" } else { "noop" },
                 );
-                eprintln!(
-                    "[launcher] index: refreshed {changed_count} file path(s), {} entries, {}",
+                log::debug!(
+                    "index: refreshed {changed_count} file path(s), {} entries, {}",
                     file_entries.len(),
                     if files_changed {
                         "changed"

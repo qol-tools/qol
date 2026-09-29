@@ -83,7 +83,7 @@ impl CursorEffect for LinuxCursorEffect {
 }
 
 fn idle_until_stopped(control: &dyn RunControl) -> Result<()> {
-    eprintln!("[shake-to-grow] disabled, idling");
+    log::info!("disabled, idling");
     while !control.should_stop() {
         std::thread::sleep(IDLE_WAKE_INTERVAL);
     }
@@ -207,7 +207,7 @@ impl EffectState {
             if let Some(reason) = reason {
                 self.detector.reset();
                 self.scaled = false;
-                eprintln!("[shake-to-grow] grow suppressed reason={reason}");
+                log::debug!("grow suppressed reason={reason}");
                 return;
             }
         }
@@ -225,7 +225,7 @@ fn delta(last: Option<(f32, f32)>, x: f32, y: f32) -> (i32, i32) {
 
 fn open_session(config: &Config) -> Result<Session> {
     super::display::ensure_cursor_support()?;
-    eprintln!("[shake-to-grow] started mode=tree");
+    log::info!("started mode=tree");
     Ok(Session::Tree(super::display::x11::CursorSession::open(
         config.scale_factor,
     )?))
@@ -238,7 +238,7 @@ fn open_game_focus_detector(enabled: bool) -> Option<GameFocusDetector> {
     match GameFocusDetector::open() {
         Ok(detector) => Some(detector),
         Err(error) => {
-            eprintln!("[shake-to-grow] game-focus detection unavailable: {error:#}");
+            log::warn!("game-focus detection unavailable: {error:#}");
             None
         }
     }
@@ -294,9 +294,9 @@ impl CursorSession for Session {
 fn log_event(event: ScaleEvent) {
     match event {
         ScaleEvent::Grew { tortuosity } => {
-            eprintln!("[shake-to-grow] grow tortuosity={tortuosity:.1}")
+            log::debug!("grow tortuosity={tortuosity:.1}")
         }
-        ScaleEvent::Restored => eprintln!("[shake-to-grow] restore"),
+        ScaleEvent::Restored => log::debug!("restore"),
     }
 }
 
@@ -310,12 +310,12 @@ fn log_game_focus(focus: GameFocus) {
             .pid
             .map(|pid| pid.to_string())
             .unwrap_or_else(|| "unknown".to_string());
-        eprintln!(
-            "[shake-to-grow] paused for focused game window={window} pid={pid} evidence={}",
+        log::debug!(
+            "paused for focused game window={window} pid={pid} evidence={}",
             focus.evidence.unwrap_or("unknown")
         );
     } else {
-        eprintln!("[shake-to-grow] resumed after game focus");
+        log::debug!("resumed after game focus");
     }
 }
 

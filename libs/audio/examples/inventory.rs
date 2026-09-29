@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 #[cfg(target_os = "linux")]
 use qol_audio::control;
 #[cfg(target_os = "linux")]

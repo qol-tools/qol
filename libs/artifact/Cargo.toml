@@ -14,3 +14,6 @@ workspace-hack.workspace = true
 [dev-dependencies]
 object = { workspace = true, features = ["write"] }
 serde_json.workspace = true
+
+[lints]
+workspace = true

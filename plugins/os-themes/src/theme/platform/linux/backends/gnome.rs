@@ -39,11 +39,11 @@ fn apply_gtk_theme(target: ColorScheme) {
     match resolved {
         Ok(name) => {
             if let Err(error) = snapshot_key(INTERFACE_SCHEMA, "gtk-theme") {
-                eprintln!("[os-themes] gtk theme not updated: {error:#}");
+                log::warn!("gtk theme not updated: {error:#}");
             } else if let Err(error) = gsettings::set(INTERFACE_SCHEMA, "gtk-theme", &name) {
-                eprintln!("[os-themes] gtk theme not updated: {error:#}");
+                log::warn!("gtk theme not updated: {error:#}");
             }
         }
-        Err(error) => eprintln!("[os-themes] gtk theme not updated: {error:#}"),
+        Err(error) => log::warn!("gtk theme not updated: {error:#}"),
     }
 }

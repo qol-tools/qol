@@ -52,10 +52,7 @@ pub(crate) struct OpenPickerRequest<'a> {
 
 pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     #[cfg(debug_assertions)]
-    eprintln!(
-        "[alt-tab/open] show request id={} reverse={}",
-        req.show_id, req.reverse
-    );
+    log::debug!("show request id={} reverse={}", req.show_id, req.reverse);
 
     crate::actions::cancel_pending_activation();
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
@@ -338,10 +335,7 @@ fn try_cycle_selection(
                 view.start_alt_poll(window.window_handle(), cx);
             }
             #[cfg(debug_assertions)]
-            eprintln!(
-                "[alt-tab/hold] window already visible (reverse={}) — cycling",
-                reverse
-            );
+            log::debug!("window already visible (reverse={}) — cycling", reverse);
             let from = view.delegate.read(cx).selected_index;
             view.delegate.update(cx, |s, _| s.cycle(reverse));
             view.mark_cycle(if reverse { "shift-tab" } else { "tab" }, from);
