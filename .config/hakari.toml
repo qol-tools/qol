@@ -30,3 +30,9 @@ workspace-hack-line-style = "workspace-dotted"
 
 [final-excludes]
 workspace-members = ["qol-build-identity", "qol-conventions"]
+third-party = [
+    { name = "gpui", path = "vendor/gpui" },
+    { name = "gpui_collections" },
+    { name = "gpui_http_client" },
+    { name = "gpui_util" },
+]

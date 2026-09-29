@@ -134,7 +134,14 @@ class LocalPlannerContract(unittest.TestCase):
     @patch.object(ac, "full_workspace")
     @patch.object(ac, "changed_files")
     def test_global_change_uses_full_workspace(self, changed_files, full_workspace):
-        for path in [".github/workflows/ci.yml", ".gitattributes", ".gitmodules"]:
+        for path in [
+            ".github/workflows/ci.yml",
+            ".gitattributes",
+            ".gitmodules",
+            ".config/hakari.toml",
+            "vendor/gpui/src/window.rs",
+            "vendor/ravif/src/lib.rs",
+        ]:
             with self.subTest(path=path):
                 changed_files.return_value = [path]
                 full_workspace.reset_mock()
