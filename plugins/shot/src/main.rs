@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    qol_plugin_daemon::logger::init();
     if let Some(exit_code) = qol_shot::run_internal_mode() {
         return exit_code;
     }

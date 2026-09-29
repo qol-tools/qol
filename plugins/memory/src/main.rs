@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    qol_plugin_daemon::logger::init();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() && std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_some() {
         return match qol_memory::app::run_daemon() {
