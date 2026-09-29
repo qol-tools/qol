@@ -63,11 +63,8 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
 
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
     let mut phases = PhaseTimer::start(verbose);
-    crate::setup::run_setup_with_install(
-        &cli_build_root(&plan, &root),
-        verbose,
-        plan.target.branch.is_none(),
-    )?;
+    let build_root = cli_build_root(&plan, &root);
+    crate::setup::run_setup_with_install(&build_root, verbose, plan.target.branch.is_none())?;
     phases.mark("setup");
     if verbose {
         print_title("qol dev");
@@ -77,13 +74,8 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
     }
     let target = plan.target;
     let reload = std::env::var_os(RELOAD_ENV).is_some();
-    let buildable = boot_preflight(
-        &root,
-        verbose,
-        skip_plugins,
-        reload,
-        target.branch.as_deref(),
-    )?;
+    let worktree_root = target.branch.as_ref().map(|_| build_root.as_path());
+    let buildable = boot_preflight(&root, worktree_root, verbose, skip_plugins, reload)?;
     phases.mark("plugins");
     let run_root = dev_run_root(&target.root);
     let status = ProgressLine::start(verbose);
@@ -281,28 +273,43 @@ fn finish_boot(
 
 fn boot_preflight(
     root: &Path,
+    worktree_root: Option<&Path>,
     verbose: bool,
     skip_plugins: bool,
     reload: bool,
-    branch: Option<&str>,
 ) -> Result<Vec<BuildablePlugin>> {
-    let buildable = collect_buildable_plugins(root, skip_plugins, verbose)?;
-    fix_rustfmt(root, verbose)?;
-    if branch.is_none() {
-        build_plugins_batch(root, &buildable, verbose)?;
-    } else if !buildable.is_empty() {
-        dev_step_label(
-            "plugins",
-            StepKind::Info,
-            "worktree reload will build",
-            verbose,
-        );
-    }
+    let build_root = worktree_root.unwrap_or(root);
+    let buildable = collect_buildable_plugins(build_root, skip_plugins, verbose)?;
+    fix_rustfmt(build_root, verbose)?;
+    build_plugins_batch(build_root, &buildable, verbose)?;
+    let links = plugin_link_candidates(root, worktree_root, buildable, skip_plugins, verbose)?;
     if reload {
         dev_step_label("reload", StepKind::Info, "self-reload", verbose);
+        return Ok(links);
+    }
+    Ok(links)
+}
+
+fn plugin_link_candidates(
+    root: &Path,
+    worktree_root: Option<&Path>,
+    buildable: Vec<BuildablePlugin>,
+    skip_plugins: bool,
+    verbose: bool,
+) -> Result<Vec<BuildablePlugin>> {
+    if worktree_root.is_none() {
         return Ok(buildable);
     }
-    Ok(buildable)
+    let mut links = collect_buildable_plugins(root, skip_plugins, verbose)?;
+    for plugin in buildable {
+        if !links
+            .iter()
+            .any(|base| base.package_name == plugin.package_name)
+        {
+            links.push(plugin);
+        }
+    }
+    Ok(links)
 }
 
 struct CliEventSink {
@@ -378,22 +385,14 @@ pub(crate) fn prebuild(args: &[OsString], verbose: bool, skip_plugins: bool) -> 
     let root = repo_root()?;
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
     dev_reload_progress("setup", "workspace");
-    crate::setup::run_setup_with_install(
-        &cli_build_root(&plan, &root),
-        verbose,
-        plan.target.branch.is_none(),
-    )?;
+    let build_root = cli_build_root(&plan, &root);
+    crate::setup::run_setup_with_install(&build_root, verbose, plan.target.branch.is_none())?;
     if let Some(note) = &plan.note {
         eprintln!("{note}");
     }
     dev_reload_progress("plugins", "workspace plugins");
-    boot_preflight(
-        &root,
-        verbose,
-        skip_plugins,
-        false,
-        plan.target.branch.as_deref(),
-    )?;
+    let worktree_root = plan.target.branch.as_ref().map(|_| build_root.as_path());
+    boot_preflight(&root, worktree_root, verbose, skip_plugins, false)?;
     if plan.target.branch.is_some() {
         dev_reload_progress("plugins", "dev-linked plugins");
         reload_linked_plugins(verbose, skip_plugins, plan.target.branch.as_deref())?;
@@ -1104,6 +1103,39 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
     use tempfile::TempDir;
+
+    #[test]
+    fn worktree_plugin_links_include_branch_only_plugins_and_keep_base_paths() {
+        let base = TempDir::new().unwrap();
+        let worktree = TempDir::new().unwrap();
+        let (base_plugin, _) = write_freshness_workspace(base.path());
+        let (branch_plugin, _) = write_freshness_workspace(worktree.path());
+        let branch_only = BuildablePlugin {
+            dir: worktree.path().join("plugins/plugin-b"),
+            package_name: "plugin-b".to_string(),
+        };
+        let cases = [
+            (None, vec![base_plugin.clone()], vec![base_plugin.clone()]),
+            (
+                Some(worktree.path()),
+                vec![branch_plugin.clone(), branch_only.clone()],
+                vec![base_plugin.clone(), branch_only.clone()],
+            ),
+            (Some(worktree.path()), vec![], vec![base_plugin]),
+        ];
+        for (selection, built, expected) in cases {
+            assert_eq!(
+                plugin_link_candidates(base.path(), selection, built, false, false).unwrap(),
+                expected,
+                "selection={selection:?}"
+            );
+        }
+        assert!(
+            plugin_link_candidates(base.path(), Some(worktree.path()), vec![], true, false)
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn plugin_reload_progress_reports_restarts_builds_and_idle_checks() {
