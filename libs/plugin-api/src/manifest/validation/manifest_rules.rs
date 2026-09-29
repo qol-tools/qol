@@ -7,7 +7,7 @@ impl PluginManifest {
         self.plugin.validate_identity()?;
         let menu_action_ids = super::menu_rules::collect_menu_action_ids(&self.menu.items)?;
         let catalog_executable_action_ids =
-            super::action_rules::validate_action_catalog(&self.actions)?;
+            super::action_rules::validate_action_catalog(&self.actions, self.plugin.uid.as_ref())?;
         let executable_action_ids = if self.actions.is_empty() {
             &menu_action_ids.executable
         } else {

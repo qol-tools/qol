@@ -94,6 +94,7 @@ struct CommandReport {
     command: Vec<String>,
     status: &'static str,
     exit_code: Option<i32>,
+    execution: Option<serde_json::Value>,
     duration_ms: u64,
 }
 
@@ -259,15 +260,16 @@ impl CheckReport {
         }
         let argv = command_argv(command);
         let started = Instant::now();
-        let (exit_code, result) = command_runner::run(command, cancellation, containment, verbose);
+        let output = command_runner::run(command, cancellation, containment, verbose);
         self.commands.push(CommandReport {
             name,
             command: argv,
-            status: command_status(&result),
-            exit_code,
+            status: command_status(&output.result),
+            exit_code: output.leader.and_then(|status| status.code()),
+            execution: Some(command_evidence(&output)),
             duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
         });
-        result.with_context(|| format!("{name} failed"))
+        output.result.with_context(|| format!("{name} failed"))
     }
 
     pub(super) fn skip(&mut self, name: &'static str, reason: &str) {
@@ -277,6 +279,7 @@ impl CheckReport {
             command: Vec::new(),
             status: "skipped",
             exit_code: None,
+            execution: None,
             duration_ms: 0,
         });
     }
@@ -383,6 +386,147 @@ fn command_argv(command: &Command) -> Vec<String> {
         .map(OsStr::to_string_lossy)
         .map(|arg| arg.into_owned())
         .collect()
+}
+
+pub(super) fn command_evidence(output: &command_runner::CommandResult) -> serde_json::Value {
+    use command_runner::{Containment, ShutdownReason};
+    use serde_json::json;
+    let lifecycle = &output.lifecycle;
+    let leader = output
+        .leader
+        .map(|status| {
+            let signal = command_runner::exit_signal(status);
+            let kind = match (status.code(), signal) {
+                (Some(_), _) => "exit_code",
+                (None, Some(_)) => "signal",
+                (None, None) => "unknown",
+            };
+            json!({"kind": kind, "code": status.code(), "signal": signal})
+        })
+        .unwrap_or_else(|| json!({"kind": "not_observed", "code": null, "signal": null}));
+    let requested = match lifecycle.requested {
+        Containment::Preferred => "preferred",
+        Containment::Required => "required",
+    };
+    let acquired = match (lifecycle.backend, lifecycle.acquisition_failure.as_ref()) {
+        ("not_acquired", _) => "not_acquired",
+        (_, Some(_)) => "fallback",
+        (_, None) => "verified_tree",
+    };
+    let shutdown = lifecycle.shutdown_reason.map(|reason| match reason {
+        ShutdownReason::Cancelled => "cancelled",
+        ShutdownReason::ResidualGroup => "residual_tree",
+    });
+    json!({
+        "leader": leader,
+        "containment": {
+            "requested": requested,
+            "acquired": acquired,
+            "backend": lifecycle.backend,
+            "membership_observation": match lifecycle.membership_observation_supported {
+                Some(true) => "supported_residual_only",
+                Some(false) => "unsupported",
+                None => "not_acquired",
+            },
+            "acquisition_failure_category": lifecycle.acquisition_failure,
+        },
+        "first_post_leader_liveness": operation(&lifecycle.first_post_leader_liveness),
+        "shutdown_reason": shutdown,
+        "residual_observation": lifecycle.observation.as_ref().map(tree_observation),
+        "cleanup": {
+            "request_stop": operation(&lifecycle.stop),
+            "force_stop": operation(&lifecycle.force),
+            "seal": operation(&lifecycle.seal),
+            "recovery_force_stop": operation(&lifecycle.recovery_force),
+            "recovery_kill_leader": operation(&lifecycle.recovery_kill),
+            "recovery_reap_leader": operation(&lifecycle.recovery_reap),
+            "recovery_liveness": operation(&lifecycle.recovery_liveness),
+            "recovery_seal": operation(&lifecycle.recovery_seal),
+        },
+    })
+}
+
+fn operation<T: Serialize>(value: &Option<Result<T, String>>) -> serde_json::Value {
+    match value {
+        Some(Ok(value)) => serde_json::json!({"status": "ok", "value": value}),
+        Some(Err(category)) => serde_json::json!({"status": "failed", "category": category}),
+        None => serde_json::json!({"status": "not_attempted"}),
+    }
+}
+
+fn observation<T>(
+    value: &qol_process::Observation<T>,
+    project: impl FnOnce(&T) -> serde_json::Value,
+) -> serde_json::Value {
+    use qol_process::Observation;
+    let status = match value {
+        Observation::Value(value) => {
+            return serde_json::json!({"status": "observed", "value": project(value)})
+        }
+        Observation::Vanished => "vanished",
+        Observation::Unavailable => "unavailable",
+        Observation::Reused => "reused",
+        Observation::Truncated => "truncated",
+        Observation::BudgetExceeded => "budget_exceeded",
+        Observation::Unsupported => "unsupported",
+        Observation::NotCaptured => "not_captured",
+    };
+    serde_json::json!({"status": status})
+}
+
+fn scope_identity(value: &qol_process::ScopeIdentity) -> serde_json::Value {
+    serde_json::json!({"device": value.device, "inode": value.inode})
+}
+
+fn provenance(value: &qol_process::ProcessProvenance) -> serde_json::Value {
+    serde_json::json!({
+        "pid": observation(&value.pid, |value| serde_json::json!(value)),
+        "start_ticks": observation(&value.start_ticks, |value| serde_json::json!(value)),
+        "generation": observation(&value.generation, |value| serde_json::json!(value)),
+    })
+}
+
+fn tree_observation(value: &qol_process::ProcessTreeObservation) -> serde_json::Value {
+    use serde_json::json;
+    let nodes = value
+        .nodes
+        .iter()
+        .map(|node| {
+            json!({
+                "index": node.index, "parent": node.parent, "depth": node.depth,
+                "identity": observation(&node.identity, scope_identity),
+                "populated": observation(&node.populated, |value| json!(value)),
+                "membership": observation(&node.membership, |value| json!(value)),
+            })
+        })
+        .collect::<Vec<_>>();
+    let members = value
+        .members
+        .iter()
+        .map(|member| {
+            json!({
+                "node": member.node, "pid": member.pid,
+                "stat": observation(&member.stat, |stat| json!({
+                    "start_ticks": stat.start_ticks, "state": stat.state,
+                    "ppid": stat.ppid, "pgid": stat.pgid, "sid": stat.sid,
+                    "proc_identity": scope_identity(&stat.proc_identity),
+                })),
+                "identity_check": observation(&member.identity_check, |value| json!(value)),
+                "pidfd_alive": observation(&member.pidfd_alive, |value| json!(value)),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "support": value.support,
+        "duration_us": value.duration.as_micros().min(u128::from(u64::MAX)) as u64,
+        "incomplete": value.incomplete, "timing_perturbed": value.timing_perturbed,
+        "budget_exceeded": value.budget_exceeded, "truncated": value.truncated,
+        "scope": observation(&value.scope, scope_identity),
+        "root_populated_before": observation(&value.root_populated_before, |value| json!(value)),
+        "root_populated_after": observation(&value.root_populated_after, |value| json!(value)),
+        "creator": provenance(&value.creator), "leader": provenance(&value.leader),
+        "guardian": provenance(&value.guardian), "nodes": nodes, "members": members,
+    })
 }
 
 #[cfg(test)]
@@ -708,5 +852,79 @@ mod tests {
         assert_eq!(value["commands"][0]["command"][0], "sh");
         assert_eq!(value["commands"][0]["status"], "failed");
         assert_eq!(value["commands"][0]["exit_code"], 5);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn residual_command_report_keeps_failure_and_raw_zero_or_seven() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::time::Duration;
+        for code in [0, 7] {
+            let directory = tempfile::tempdir().unwrap();
+            let member = UnixListener::bind(directory.path().join("member.sock")).unwrap();
+            let leader = UnixListener::bind(directory.path().join("leader.sock")).unwrap();
+            let barrier = std::thread::spawn(move || {
+                let accept = |listener: UnixListener| {
+                    listener.set_nonblocking(true).unwrap();
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => {
+                                stream
+                                    .set_read_timeout(Some(Duration::from_secs(5)))
+                                    .unwrap();
+                                break stream;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(Instant::now() < deadline, "fixture never became ready");
+                                std::thread::yield_now();
+                            }
+                            Err(error) => panic!("fixture accept failed: {error}"),
+                        }
+                    }
+                };
+                let mut member = accept(member);
+                member.read_exact(&mut [0; 4]).unwrap();
+                let mut leader = accept(leader);
+                leader.read_exact(&mut [0; 4]).unwrap();
+                leader.write_all(&[1]).unwrap();
+                let mut released = [0];
+                assert_eq!(member.read(&mut released).unwrap(), 0);
+            });
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "commands::check::command::tests::residual_evidence_child_helper",
+                ])
+                .env("QOL_CHECK_RESIDUAL_FIXTURE", directory.path())
+                .env("QOL_CHECK_RESIDUAL_EXIT", code.to_string())
+                .env_remove("QOL_CHECK_RESIDUAL_MEMBER");
+            let mut report = report("worktree", directory.path());
+            let result = report.run(
+                "sample",
+                ("step", "target"),
+                &mut command,
+                &CancellationToken::new(),
+                command_runner::Containment::Required,
+                false,
+            );
+            barrier.join().unwrap();
+            assert!(result.is_err());
+            report.finish(&result, false);
+            let report_path = directory.path().join("report.json");
+            report.write(&report_path).unwrap();
+            let value = read(&report_path);
+            assert_eq!(value["status"], "failed");
+            assert_eq!(value["commands"][0]["status"], "failed");
+            assert_eq!(value["commands"][0]["exit_code"], code);
+            let execution = &value["commands"][0]["execution"];
+            assert_eq!(execution["leader"]["code"], code);
+            assert_eq!(execution["shutdown_reason"], "residual_tree");
+            assert_eq!(execution["first_post_leader_liveness"]["value"], true);
+            assert_eq!(execution["containment"]["backend"], "linux_cgroup_v2");
+            assert_eq!(execution["cleanup"]["recovery_seal"]["status"], "ok");
+        }
     }
 }

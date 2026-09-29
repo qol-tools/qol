@@ -19,6 +19,9 @@ const BUILD_SCOPE_PATHS: [&str; 7] = [
 pub const TRAY_BUILD_SCOPE_PATHS: [&str; 5] =
     ["apps", "libs", "vendor", "Cargo.toml", "Cargo.lock"];
 
+pub const PLUGIN_BUILD_SCOPE_PATHS: [&str; 5] =
+    ["plugins", "libs", "vendor", "Cargo.toml", "Cargo.lock"];
+
 const GIT_ROUTING_ENVIRONMENT: [&str; 7] = [
     "GIT_INDEX_FILE",
     "GIT_DIR",

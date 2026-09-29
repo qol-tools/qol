@@ -2,7 +2,7 @@ use super::CliArgs;
 use anyhow::{anyhow, Result};
 use qol_headless::{Command, Execution, HeadlessApp};
 
-use crate::commands::{agents, sessions};
+use crate::commands::{agents, peers, sessions};
 
 pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
     let has_help = args.values.iter().any(|value| {
@@ -11,7 +11,8 @@ pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
             .is_some_and(|value| matches!(value, "help" | "-h" | "--help"))
     });
     let is_agents = args.values.first().and_then(|value| value.to_str()) == Some("agents");
-    if !is_agents && !args.values.is_empty() && !has_help && !args.json {
+    let is_peers = args.values.first().and_then(|value| value.to_str()) == Some("peers");
+    if !is_agents && !is_peers && !args.values.is_empty() && !has_help && !args.json {
         return Ok(None);
     }
     if !has_help
@@ -91,6 +92,7 @@ fn app() -> HeadlessApp {
     let agent_tools = sessions::tool_names();
     HeadlessApp::new("qol", "qol")
         .about("Build, inspect, diagnose, and run the qol-tools workspace.")
+        .command(peers::command())
         .command(command(
             "setup",
             "Build and install local qol development tooling.",

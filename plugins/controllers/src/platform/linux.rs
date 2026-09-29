@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use evdev::{AbsInfo, AbsoluteAxisCode, Device, KeyCode};
+use qol_bluetooth_control::{normalize_address, now_ms, HoldOwner, Holds};
 
 use crate::detection;
 use crate::detection::clash::{self, Holder, LinkEvidence};
@@ -23,6 +24,7 @@ const KERNEL_LOG_WINDOW: &str = "-60s";
 const DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const SIGNAL_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const SIGNAL_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+const RECLAIM_HOLD: Duration = Duration::from_secs(30);
 const LEFT_STICK_BUTTON: usize = 10;
 const RIGHT_STICK_BUTTON: usize = 11;
 
@@ -883,22 +885,48 @@ pub fn disconnect_bluetooth(device: &DetectedDevice) -> Result<String> {
             )
         })?;
     let object_path = bluez_device_path(&adapter, target.address);
-    let output = Command::new("busctl")
-        .args([
-            "--system",
-            "--timeout=5s",
-            "call",
-            "org.bluez",
-            &object_path,
-            "org.bluez.Device1",
-            "Disconnect",
-        ])
-        .output()
-        .context("failed to run busctl")?;
-    if !output.status.success() {
-        bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
-    }
+    let holds = Holds::shared().context("the QoL runtime directory is unavailable")?;
+    disconnect_held(&holds, target.address, || {
+        let output = Command::new("busctl")
+            .args([
+                "--system",
+                "--timeout=5s",
+                "call",
+                "org.bluez",
+                &object_path,
+                "org.bluez.Device1",
+                "Disconnect",
+            ])
+            .output()
+            .context("failed to run busctl")?;
+        if !output.status.success() {
+            bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+        }
+        Ok(())
+    })?;
     Ok(adapter)
+}
+
+fn disconnect_held(
+    holds: &Holds,
+    address: Mac,
+    disconnect: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let address = normalize_address(&address.to_string())?;
+    let now = now_ms();
+    holds
+        .place(
+            &address,
+            HoldOwner::ControllerReclaim,
+            now.saturating_add(RECLAIM_HOLD.as_millis() as u64),
+            now,
+        )
+        .context("could not pause Bluetooth reconnect for the controller")?;
+    let disconnected = disconnect();
+    if disconnected.is_err() {
+        let _ = holds.release(&address, HoldOwner::ControllerReclaim, now_ms());
+    }
+    disconnected
 }
 
 #[cfg(test)]
@@ -919,6 +947,27 @@ mod tests {
             bluez_device_path("hci1", Mac::parse("00:11:22:33:44:55").expect("mac")),
             "/org/bluez/hci1/dev_00_11_22_33_44_55"
         );
+    }
+
+    #[test]
+    fn reclaim_pauses_bluetooth_reconnect_before_it_disconnects() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let holds = Holds::at(directory.path());
+        let controller = Mac::parse("00:11:22:33:44:aa").expect("mac");
+        let held = || holds.active("00:11:22:33:44:AA", now_ms()).expect("holds");
+
+        disconnect_held(&holds, controller, || {
+            assert_eq!(
+                held().map(|hold| hold.owner),
+                Some(HoldOwner::ControllerReclaim)
+            );
+            Ok(())
+        })
+        .expect("disconnect");
+        assert!(held().is_some());
+
+        disconnect_held(&holds, controller, || bail!("busy")).expect_err("failed disconnect");
+        assert!(held().is_none());
     }
 
     #[test]

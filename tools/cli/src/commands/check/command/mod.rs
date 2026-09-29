@@ -11,8 +11,9 @@ const CAPTURE_STDERR_LIMIT: usize = 64 * 1024;
 const CAPTURE_BUFFER: usize = 8192;
 
 mod platform;
+pub(super) use platform::exit_signal;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum Containment {
     Preferred,
     Required,
@@ -33,8 +34,8 @@ impl CancellationState for CancellationToken {
     }
 }
 
-#[derive(Clone, Copy)]
-enum ShutdownReason {
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ShutdownReason {
     Cancelled,
     ResidualGroup,
 }
@@ -47,7 +48,92 @@ struct Shutdown {
 
 enum CommandOwner {
     Tree(qol_process::ProcessTreeGuard),
-    Fallback,
+    Fallback { acquisition_failure: String },
+}
+
+#[derive(Debug)]
+pub(super) struct CommandResult {
+    pub(super) leader: Option<ExitStatus>,
+    pub(super) result: Result<()>,
+    pub(super) lifecycle: Lifecycle,
+}
+
+#[derive(Debug)]
+pub(super) struct Lifecycle {
+    pub(super) requested: Containment,
+    pub(super) backend: &'static str,
+    pub(super) acquisition_failure: Option<String>,
+    pub(super) membership_observation_supported: Option<bool>,
+    pub(super) first_post_leader_liveness: Option<Result<bool, String>>,
+    pub(super) shutdown_reason: Option<ShutdownReason>,
+    pub(super) observation: Option<qol_process::ProcessTreeObservation>,
+    pub(super) stop: Option<Result<(), String>>,
+    pub(super) force: Option<Result<(), String>>,
+    pub(super) seal: Option<Result<(), String>>,
+    pub(super) recovery_force: Option<Result<(), String>>,
+    pub(super) recovery_kill: Option<Result<(), String>>,
+    pub(super) recovery_reap: Option<Result<(), String>>,
+    pub(super) recovery_liveness: Option<Result<bool, String>>,
+    pub(super) recovery_seal: Option<Result<(), String>>,
+}
+
+impl CommandResult {
+    fn new(containment: Containment) -> Self {
+        Self {
+            leader: None,
+            result: Ok(()),
+            lifecycle: Lifecycle {
+                requested: containment,
+                backend: "not_acquired",
+                acquisition_failure: None,
+                membership_observation_supported: None,
+                first_post_leader_liveness: None,
+                shutdown_reason: None,
+                observation: None,
+                stop: None,
+                force: None,
+                seal: None,
+                recovery_force: None,
+                recovery_kill: None,
+                recovery_reap: None,
+                recovery_liveness: None,
+                recovery_seal: None,
+            },
+        }
+    }
+
+    fn acquire(&mut self) -> Result<CommandOwner> {
+        let owner = CommandOwner::acquire(self.lifecycle.requested).inspect_err(|error| {
+            self.lifecycle.acquisition_failure = Some(error_category(error));
+        })?;
+        match &owner {
+            CommandOwner::Tree(tree) => {
+                self.lifecycle.backend = tree.containment_backend();
+                self.lifecycle.membership_observation_supported =
+                    Some(tree.membership_observation_supported());
+            }
+            CommandOwner::Fallback {
+                acquisition_failure,
+            } => {
+                self.lifecycle.backend = platform::FALLBACK_BACKEND;
+                self.lifecycle.membership_observation_supported = Some(false);
+                self.lifecycle.acquisition_failure = Some(acquisition_failure.clone());
+            }
+        }
+        Ok(owner)
+    }
+}
+
+fn error_category(error: &anyhow::Error) -> String {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<io::Error>())
+        .map(|error| format!("{:?}", error.kind()))
+        .unwrap_or_else(|| "unclassified".into())
+}
+
+fn record_operation<T>(result: &Result<T>) -> Result<(), String> {
+    result.as_ref().map(|_| ()).map_err(error_category)
 }
 
 pub(super) fn run(
@@ -55,42 +141,36 @@ pub(super) fn run(
     cancellation: &impl CancellationState,
     containment: Containment,
     verbose: bool,
-) -> (Option<i32>, Result<()>) {
+) -> CommandResult {
+    let mut output = CommandResult::new(containment);
     if cancellation.is_cancelled() {
-        return (
-            None,
-            Err(anyhow::anyhow!("check cancelled before command start")),
-        );
+        output.lifecycle.shutdown_reason = Some(ShutdownReason::Cancelled);
+        output.result = Err(anyhow::anyhow!("check cancelled before command start"));
+        return output;
     }
-    let owner = match CommandOwner::acquire(containment) {
+    let owner = match output.acquire() {
         Ok(owner) => owner,
-        Err(error) => return (None, Err(error)),
+        Err(error) => {
+            output.result = Err(error);
+            return output;
+        }
     };
-    let mut exit = None;
-    let result = crate::progress::run_status_with(
+    output.result = crate::progress::run_status_with(
         command,
         verbose,
         |command| owner.spawn(command),
         |child| {
-            let outcome = wait_for_exit(child, &owner, cancellation);
-            if let Ok(status) = &outcome {
-                exit = Some(*status);
-            }
-            recover_wait_failure(child, &owner, outcome)
+            let outcome = wait_for_exit(child, &owner, cancellation, &mut output);
+            recover_wait_failure(child, &owner, outcome, &mut output)
         },
     );
-    (exit.and_then(|status| status.code()), result)
-}
-
-pub(super) enum CapturedOutcome {
-    Exited(ExitStatus),
-    Failed(anyhow::Error),
+    output
 }
 
 pub(super) struct CapturedOutput {
     pub(super) stdout: Vec<u8>,
     pub(super) stderr: Vec<u8>,
-    pub(super) outcome: CapturedOutcome,
+    pub(super) command: CommandResult,
 }
 
 pub(super) fn run_captured(
@@ -99,21 +179,31 @@ pub(super) fn run_captured(
     cancellation: &impl CancellationState,
     containment: Containment,
 ) -> CapturedOutput {
-    if cancellation.is_cancelled() {
-        return captured_failure(anyhow::anyhow!("check cancelled before command start"));
-    }
-    let owner = match CommandOwner::acquire(containment) {
-        Ok(owner) => owner,
-        Err(error) => return captured_failure(error),
+    let mut output = CapturedOutput {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        command: CommandResult::new(containment),
     };
+    output.command.result = capture(command, input, cancellation, &mut output);
+    output
+}
+
+fn capture(
+    command: &mut Command,
+    input: &[u8],
+    cancellation: &impl CancellationState,
+    output: &mut CapturedOutput,
+) -> Result<()> {
+    if cancellation.is_cancelled() {
+        output.command.lifecycle.shutdown_reason = Some(ShutdownReason::Cancelled);
+        bail!("check cancelled before command start");
+    }
+    let owner = output.command.acquire()?;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = match owner.spawn(command) {
-        Ok(child) => child,
-        Err(error) => return captured_failure(error),
-    };
+    let mut child = owner.spawn(command)?;
     let stdout_reader = child
         .stdout
         .take()
@@ -127,33 +217,18 @@ pub(super) fn run_captured(
         .stdin
         .take()
         .map(|mut pipe| thread::spawn(move || pipe.write_all(&payload)));
-    let outcome = wait_for_exit(&mut child, &owner, cancellation);
-    let outcome = recover_wait_failure(&mut child, &owner, outcome);
-    let stdout = join_capture(stdout_reader);
-    let stderr = join_capture(stderr_reader);
+    let outcome = wait_for_exit(&mut child, &owner, cancellation, &mut output.command);
+    let outcome = recover_wait_failure(&mut child, &owner, outcome, &mut output.command);
+    output.stdout = join_capture(stdout_reader);
+    output.stderr = join_capture(stderr_reader);
     if let Some(writer) = stdin_writer {
         let _ = writer.join();
     }
-    match outcome {
-        Ok(status) => CapturedOutput {
-            stdout,
-            stderr,
-            outcome: CapturedOutcome::Exited(status),
-        },
-        Err(error) => CapturedOutput {
-            stdout,
-            stderr,
-            outcome: CapturedOutcome::Failed(error),
-        },
+    let status = outcome?;
+    if !status.success() {
+        bail!("command failed with {status}");
     }
-}
-
-fn captured_failure(error: anyhow::Error) -> CapturedOutput {
-    CapturedOutput {
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-        outcome: CapturedOutcome::Failed(error),
-    }
+    Ok(())
 }
 
 fn read_capture<R: Read>(mut reader: R, limit: Option<usize>) -> Vec<u8> {
@@ -184,6 +259,13 @@ fn join_capture(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
 }
 
 impl CommandOwner {
+    fn observe_residual(&self) -> qol_process::ProcessTreeObservation {
+        match self {
+            Self::Tree(tree) => tree.observe_residual(),
+            Self::Fallback { .. } => qol_process::ProcessTreeObservation::unsupported(),
+        }
+    }
+
     fn acquire(containment: Containment) -> Result<Self> {
         Self::from_attempt(containment, crate::process_guardian::own_process_tree())
     }
@@ -197,14 +279,16 @@ impl CommandOwner {
             Err(error) if matches!(containment, Containment::Required) => {
                 Err(error).context("verified process-tree containment is required")
             }
-            Err(_) => Ok(Self::Fallback),
+            Err(error) => Ok(Self::Fallback {
+                acquisition_failure: error_category(&error),
+            }),
         }
     }
 
     fn spawn(&self, command: &mut Command) -> Result<Child> {
         match self {
             Self::Tree(tree) => spawn_owned_tree(tree, command),
-            Self::Fallback => {
+            Self::Fallback { .. } => {
                 qol_process::isolate_owned_command(command)
                     .context("failed to isolate command fallback")?;
                 command.spawn().context("failed to spawn command")
@@ -218,14 +302,14 @@ impl CommandOwner {
                 .tree_has_exited()
                 .map(|exited| !exited)
                 .context("failed to inspect command tree"),
-            Self::Fallback => Ok(platform::fallback_alive(pid)),
+            Self::Fallback { .. } => Ok(platform::fallback_alive(pid)),
         }
     }
 
     fn request_stop(&self, pid: u32) -> Result<()> {
         let result = match self {
             Self::Tree(tree) => tree.request_stop(),
-            Self::Fallback => platform::fallback_request_stop(pid),
+            Self::Fallback { .. } => platform::fallback_request_stop(pid),
         };
         tolerate_stopped(result, self, pid).context("failed to terminate command tree")
     }
@@ -233,7 +317,7 @@ impl CommandOwner {
     fn force_stop(&self, pid: u32) -> Result<()> {
         let result = match self {
             Self::Tree(tree) => tree.force_stop_and_wait(TERMINATION_GRACE).map(drop),
-            Self::Fallback => platform::fallback_force_stop(pid),
+            Self::Fallback { .. } => platform::fallback_force_stop(pid),
         };
         tolerate_stopped(result, self, pid).context("failed to kill command tree")
     }
@@ -244,10 +328,10 @@ impl CommandOwner {
                 .force_stop_and_wait(TERMINATION_GRACE)
                 .map(drop)
                 .context("failed to seal command tree"),
-            Self::Fallback if platform::fallback_alive(pid) => {
+            Self::Fallback { .. } if platform::fallback_alive(pid) => {
                 bail!("command fallback still has live processes")
             }
-            Self::Fallback => Ok(()),
+            Self::Fallback { .. } => Ok(()),
         }
     }
 }
@@ -270,45 +354,102 @@ fn wait_for_exit(
     child: &mut Child,
     owner: &CommandOwner,
     cancellation: &impl CancellationState,
+    output: &mut CommandResult,
+) -> Result<ExitStatus> {
+    wait_with_observation(
+        child,
+        owner,
+        cancellation,
+        output,
+        CommandOwner::observe_residual,
+    )
+}
+
+fn wait_with_observation(
+    child: &mut Child,
+    owner: &CommandOwner,
+    cancellation: &impl CancellationState,
+    output: &mut CommandResult,
+    observe: impl FnOnce(&CommandOwner) -> qol_process::ProcessTreeObservation,
 ) -> Result<ExitStatus> {
     let pid = child.id();
-    let mut exit = None;
     let mut shutdown = None;
+    let mut observe = Some(observe);
     loop {
         if cancellation.is_cancelled() && shutdown.is_none() {
-            shutdown = Some(begin_shutdown(owner, pid, ShutdownReason::Cancelled)?);
+            shutdown = Some(begin_shutdown(
+                owner,
+                pid,
+                ShutdownReason::Cancelled,
+                output,
+                &mut observe,
+            )?);
         }
-        if exit.is_none() {
-            exit = child.try_wait().context("failed waiting for command")?;
+        if output.leader.is_none() {
+            output.leader = child.try_wait().context("failed waiting for command")?;
         }
-        if let Some(status) = exit {
-            if shutdown.is_none() && !owner.is_alive(pid)? {
-                owner.seal(pid)?;
+        if let Some(status) = output.leader {
+            if shutdown.is_none() && !inspect_liveness(owner, pid, output)? {
+                let sealed = owner.seal(pid);
+                output.lifecycle.seal = Some(record_operation(&sealed));
+                sealed?;
                 return Ok(status);
             }
             if shutdown.is_none() {
-                shutdown = Some(begin_shutdown(owner, pid, ShutdownReason::ResidualGroup)?);
+                shutdown = Some(begin_shutdown(
+                    owner,
+                    pid,
+                    ShutdownReason::ResidualGroup,
+                    output,
+                    &mut observe,
+                )?);
             }
         }
         if let Some(state) = shutdown.as_mut() {
-            if !owner.is_alive(pid)? {
-                if exit.is_none() {
-                    exit = Some(child.wait().context("failed to reap command")?);
+            if !inspect_liveness(owner, pid, output)? {
+                if output.leader.is_none() {
+                    output.leader = Some(child.wait().context("failed to reap command")?);
                 }
-                owner.seal(pid)?;
-                return finish_shutdown(state.reason, exit);
+                let sealed = owner.seal(pid);
+                output.lifecycle.seal = Some(record_operation(&sealed));
+                sealed?;
+                return finish_shutdown(state.reason, output.leader);
             }
-            advance_shutdown(owner, pid, state, cancellation)?;
+            advance_shutdown(owner, pid, state, cancellation, output)?;
         }
         thread::sleep(POLL_INTERVAL);
     }
 }
 
-fn begin_shutdown(owner: &CommandOwner, pid: u32, reason: ShutdownReason) -> Result<Shutdown> {
-    owner.request_stop(pid)?;
+fn inspect_liveness(owner: &CommandOwner, pid: u32, output: &mut CommandResult) -> Result<bool> {
+    let alive = owner.is_alive(pid);
+    if output.leader.is_some() && output.lifecycle.first_post_leader_liveness.is_none() {
+        output.lifecycle.first_post_leader_liveness =
+            Some(alive.as_ref().copied().map_err(error_category));
+    }
+    alive
+}
+
+fn begin_shutdown(
+    owner: &CommandOwner,
+    pid: u32,
+    reason: ShutdownReason,
+    output: &mut CommandResult,
+    observe: &mut Option<impl FnOnce(&CommandOwner) -> qol_process::ProcessTreeObservation>,
+) -> Result<Shutdown> {
+    let deadline = Instant::now() + TERMINATION_GRACE;
+    output.lifecycle.shutdown_reason = Some(reason);
+    if matches!(reason, ShutdownReason::ResidualGroup) {
+        if let Some(observe) = observe.take() {
+            output.lifecycle.observation = Some(observe(owner));
+        }
+    }
+    let stopped = owner.request_stop(pid);
+    output.lifecycle.stop = Some(record_operation(&stopped));
+    stopped?;
     Ok(Shutdown {
         reason,
-        deadline: Instant::now() + TERMINATION_GRACE,
+        deadline,
         forced: false,
     })
 }
@@ -318,9 +459,12 @@ fn advance_shutdown(
     pid: u32,
     shutdown: &mut Shutdown,
     cancellation: &impl CancellationState,
+    output: &mut CommandResult,
 ) -> Result<()> {
     if !shutdown.forced && should_escalate(shutdown.deadline, cancellation) {
-        owner.force_stop(pid)?;
+        let forced = owner.force_stop(pid);
+        output.lifecycle.force = Some(record_operation(&forced));
+        forced?;
         shutdown.forced = true;
     }
     Ok(())
@@ -352,30 +496,73 @@ fn recover_wait_failure(
     child: &mut Child,
     owner: &CommandOwner,
     outcome: Result<ExitStatus>,
+    output: &mut CommandResult,
 ) -> Result<ExitStatus> {
     let Err(error) = outcome else {
         return outcome;
     };
-    let cleanup = force_stop(child, owner);
+    let error = match output.lifecycle.shutdown_reason {
+        Some(reason) => {
+            let message = match reason {
+                ShutdownReason::Cancelled => "check cancelled",
+                ShutdownReason::ResidualGroup => {
+                    "command exited while descendants remained in its owned process tree"
+                }
+            };
+            error.context(message)
+        }
+        None => error,
+    };
+    let cleanup = force_stop(child, owner, output);
     match cleanup {
         Ok(()) => Err(error),
         Err(cleanup) => Err(anyhow::anyhow!("{error:#}\n{cleanup:#}")),
     }
 }
 
-fn force_stop(child: &mut Child, owner: &CommandOwner) -> Result<()> {
+fn force_stop(child: &mut Child, owner: &CommandOwner, output: &mut CommandResult) -> Result<()> {
     let pid = child.id();
     let tree = owner.force_stop(pid);
-    let process = child.kill();
-    let waited = child.wait().map(|_| ());
-    process.or_else(ignore_exited_process)?;
-    waited.context("failed to reap command")?;
-    tree?;
+    output.lifecycle.recovery_force = Some(record_operation(&tree));
+    let process = child
+        .kill()
+        .or_else(ignore_exited_process)
+        .map_err(anyhow::Error::from);
+    output.lifecycle.recovery_kill = Some(record_operation(&process));
+    let waited = child.wait().context("failed to reap command");
+    output.lifecycle.recovery_reap = Some(record_operation(&waited));
+    if let Ok(status) = waited.as_ref() {
+        output.leader.get_or_insert(*status);
+    }
+    let settled = wait_until_stopped(owner, pid);
+    output.lifecycle.recovery_liveness = Some(settled.as_ref().copied().map_err(error_category));
+    let sealed = owner.seal(pid);
+    output.lifecycle.recovery_seal = Some(record_operation(&sealed));
+    let tree = if matches!(settled, Ok(false)) {
+        Ok(())
+    } else {
+        tree
+    };
+    let errors = [tree, process, waited.map(drop), settled.map(drop), sealed]
+        .into_iter()
+        .filter_map(Result::err)
+        .map(|error| format!("{error:#}"))
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        bail!("{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
+fn wait_until_stopped(owner: &CommandOwner, pid: u32) -> Result<bool> {
     let deadline = Instant::now() + TERMINATION_GRACE;
-    while owner.is_alive(pid)? && Instant::now() < deadline {
+    loop {
+        let alive = owner.is_alive(pid)?;
+        if !alive || Instant::now() >= deadline {
+            return Ok(alive);
+        }
         thread::sleep(POLL_INTERVAL);
     }
-    owner.seal(pid)
 }
 
 fn ignore_exited_process(error: io::Error) -> io::Result<()> {
@@ -386,317 +573,4 @@ fn ignore_exited_process(error: io::Error) -> io::Result<()> {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    #[derive(Clone, Default)]
-    struct FakeCancellation {
-        cancelled: Arc<AtomicBool>,
-        escalated: Arc<AtomicBool>,
-    }
-
-    impl CancellationState for FakeCancellation {
-        fn is_cancelled(&self) -> bool {
-            self.cancelled.load(Ordering::Acquire)
-        }
-
-        fn escalation_requested(&self) -> bool {
-            self.escalated.load(Ordering::Acquire)
-        }
-    }
-
-    #[test]
-    fn required_containment_rejects_unavailable_ownership() {
-        let error = CommandOwner::from_attempt(
-            Containment::Required,
-            Err(anyhow::anyhow!("unsupported containment")),
-        )
-        .err()
-        .unwrap();
-
-        assert!(error
-            .to_string()
-            .contains("verified process-tree containment is required"));
-    }
-
-    #[test]
-    fn preferred_containment_retains_the_worktree_fallback() {
-        assert!(matches!(
-            CommandOwner::from_attempt(
-                Containment::Preferred,
-                Err(anyhow::anyhow!("unsupported containment")),
-            )
-            .unwrap(),
-            CommandOwner::Fallback
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cancellation_escalates_and_reaps_the_owned_group() {
-        let root = tempfile::tempdir().unwrap();
-        let leader = root.path().join("leader");
-        let descendant = root.path().join("descendant");
-        let cancellation = FakeCancellation::default();
-        let trigger = cancellation.clone();
-        let leader_for_trigger = leader.clone();
-        let trigger_thread = thread::spawn(move || {
-            wait_for_path(&leader_for_trigger);
-            trigger.cancelled.store(true, Ordering::Release);
-            thread::sleep(Duration::from_millis(50));
-            trigger.escalated.store(true, Ordering::Release);
-        });
-        let mut command = stubborn_group_command(&leader, &descendant);
-
-        let (_, error) = run(&mut command, &cancellation, Containment::Preferred, false);
-        let error = error.unwrap_err();
-
-        trigger_thread.join().unwrap();
-        assert!(
-            error.to_string().contains("cancelled"),
-            "unexpected error: {error:#}"
-        );
-        let leader = read_pid(&leader);
-        let descendant = read_pid(&descendant);
-        assert!(!qol_process::is_group_alive(leader));
-        assert!(!qol_process::is_pid_alive(descendant));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn signal_cancellation_runner_helper() {
-        let Some(root) = std::env::var_os("QOL_CHECK_CANCELLATION_TEST_ROOT") else {
-            return;
-        };
-        let root = std::path::PathBuf::from(root);
-        let token = CancellationToken::install().unwrap();
-        let mut command = stubborn_group_command(&root.join("leader"), &root.join("descendant"));
-        let (exit, result) = run(&mut command, &token, Containment::Preferred, false);
-        fs::write(root.join("terminal"), format!("{exit:?} {result:?}")).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn sigterm_reaches_the_runner_and_allows_terminal_finalization() {
-        let root = tempfile::tempdir().unwrap();
-        let mut helper = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "commands::check::command::tests::signal_cancellation_runner_helper",
-            ])
-            .env("QOL_CHECK_CANCELLATION_TEST_ROOT", root.path())
-            .spawn()
-            .unwrap();
-        wait_for_path(&root.path().join("leader"));
-        qol_process::signal_term_pid(helper.id()).unwrap();
-        thread::sleep(Duration::from_millis(50));
-        qol_process::signal_term_pid(helper.id()).unwrap();
-        let status = helper.wait().unwrap();
-
-        assert!(status.success());
-        let terminal = fs::read_to_string(root.path().join("terminal")).unwrap();
-        assert!(
-            terminal.contains("cancelled"),
-            "unexpected terminal result: {terminal}"
-        );
-        assert!(!qol_process::is_group_alive(read_pid(
-            &root.path().join("leader")
-        )));
-        assert!(!qol_process::is_pid_alive(read_pid(
-            &root.path().join("descendant")
-        )));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn escaped_session_descendant_helper() {
-        let Some(marker) = std::env::var_os("QOL_CHECK_ESCAPED_SESSION_MARKER") else {
-            return;
-        };
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-c",
-                "trap '' TERM; echo $$ > \"$1\"; exec sleep 30",
-                "qol-check-escaped",
-            ])
-            .arg(marker);
-        qol_process::isolate_owned_session(&mut command).unwrap();
-        let mut child = command.spawn().unwrap();
-        let _ = child.wait();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn required_containment_reaps_a_descendant_that_escapes_its_session() {
-        let root = tempfile::tempdir().unwrap();
-        let marker = root.path().join("escaped");
-        let cancellation = FakeCancellation::default();
-        let trigger = cancellation.clone();
-        let marker_for_trigger = marker.clone();
-        let trigger_thread = thread::spawn(move || {
-            wait_for_path(&marker_for_trigger);
-            trigger.cancelled.store(true, Ordering::Release);
-            trigger.escalated.store(true, Ordering::Release);
-        });
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "commands::check::command::tests::escaped_session_descendant_helper",
-            ])
-            .env("QOL_CHECK_ESCAPED_SESSION_MARKER", &marker);
-
-        let (_, error) = run(&mut command, &cancellation, Containment::Required, false);
-        let error = error.unwrap_err();
-
-        trigger_thread.join().unwrap();
-        assert!(
-            error.to_string().contains("cancelled"),
-            "unexpected error: {error:#}"
-        );
-        assert!(!qol_process::is_pid_alive(read_pid(&marker)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn successful_steps_report_a_zero_exit_code() {
-        let cancellation = FakeCancellation::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", "exit 0"]);
-
-        let (exit_code, result) = run(&mut command, &cancellation, Containment::Preferred, false);
-
-        assert_eq!(exit_code, Some(0));
-        assert!(result.is_ok());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn failed_steps_report_their_exit_code() {
-        let cancellation = FakeCancellation::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", "exit 7"]);
-
-        let (exit_code, result) = run(&mut command, &cancellation, Containment::Preferred, false);
-
-        assert_eq!(exit_code, Some(7));
-        assert!(result.is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn captured_run_returns_stdout_and_exit_status() {
-        let cancellation = FakeCancellation::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", "cat"]);
-
-        let output = run_captured(
-            &mut command,
-            b"formatted source",
-            &cancellation,
-            Containment::Preferred,
-        );
-
-        match output.outcome {
-            CapturedOutcome::Exited(status) => assert!(status.success()),
-            CapturedOutcome::Failed(error) => panic!("unexpected failure: {error:#}"),
-        }
-        assert_eq!(output.stdout, b"formatted source".as_slice());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn captured_run_reports_a_nonzero_exit_and_stderr() {
-        let cancellation = FakeCancellation::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", "printf problem >&2; exit 3"]);
-
-        let output = run_captured(&mut command, b"", &cancellation, Containment::Preferred);
-
-        match output.outcome {
-            CapturedOutcome::Exited(status) => assert_eq!(status.code(), Some(3)),
-            CapturedOutcome::Failed(error) => panic!("unexpected failure: {error:#}"),
-        }
-        assert_eq!(output.stderr, b"problem".as_slice());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn captured_run_rejects_a_cancelled_token_before_spawn() {
-        let cancellation = FakeCancellation::default();
-        cancellation.cancelled.store(true, Ordering::Release);
-        let mut command = Command::new("sh");
-        command.args(["-c", "exit 0"]);
-
-        let output = run_captured(&mut command, b"", &cancellation, Containment::Preferred);
-
-        match output.outcome {
-            CapturedOutcome::Failed(error) => assert!(error.to_string().contains("cancelled")),
-            CapturedOutcome::Exited(status) => panic!("expected cancellation, got {status}"),
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn captured_run_cancellation_reaps_the_owned_group() {
-        let root = tempfile::tempdir().unwrap();
-        let leader = root.path().join("leader");
-        let descendant = root.path().join("descendant");
-        let cancellation = FakeCancellation::default();
-        let trigger = cancellation.clone();
-        let leader_for_trigger = leader.clone();
-        let trigger_thread = thread::spawn(move || {
-            wait_for_path(&leader_for_trigger);
-            trigger.cancelled.store(true, Ordering::Release);
-            thread::sleep(Duration::from_millis(50));
-            trigger.escalated.store(true, Ordering::Release);
-        });
-        let mut command = stubborn_group_command(&leader, &descendant);
-
-        let output = run_captured(&mut command, b"", &cancellation, Containment::Preferred);
-        trigger_thread.join().unwrap();
-
-        match output.outcome {
-            CapturedOutcome::Failed(error) => assert!(
-                error.to_string().contains("cancelled"),
-                "unexpected error: {error:#}"
-            ),
-            CapturedOutcome::Exited(status) => panic!("expected cancellation, got {status}"),
-        }
-        assert!(!qol_process::is_group_alive(read_pid(&leader)));
-        assert!(!qol_process::is_pid_alive(read_pid(&descendant)));
-    }
-
-    #[cfg(unix)]
-    fn stubborn_group_command(leader: &Path, descendant: &Path) -> Command {
-        let mut command = Command::new("sh");
-        command
-            .args([
-                "-c",
-                "trap '' TERM; echo $$ > \"$1\"; sleep 30 & echo $! > \"$2\"; wait",
-                "qol-check-test",
-            ])
-            .arg(leader)
-            .arg(descendant);
-        command
-    }
-
-    #[cfg(unix)]
-    fn wait_for_path(path: &Path) {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !path.exists() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(path.exists(), "timed out waiting for {}", path.display());
-    }
-
-    #[cfg(unix)]
-    fn read_pid(path: &Path) -> u32 {
-        fs::read_to_string(path).unwrap().trim().parse().unwrap()
-    }
-}
+mod tests;

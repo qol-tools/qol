@@ -4,9 +4,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::MonitorBounds;
 
+pub use crate::client::peers::PeerAdminClientError;
 pub use qol_conventions::dev_health::ReadinessPhase;
 
 // ── Daemon action protocol (qol-tray ↔ plugin daemon) ──────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FencedDaemonRequest {
+    pub fence_version: u8,
+    pub instance: String,
+    pub request: DaemonRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DaemonOperationCapability {
+    pub fence_version: u8,
+    pub instance: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonRequest {
@@ -39,6 +55,12 @@ pub enum DaemonResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum RuntimeRequest {
+    PeerOperation {
+        request: qol_peers::operations::Request,
+    },
+    PeerAdmin {
+        request: qol_peers::admin::Request,
+    },
     GetState,
     SetFocus {
         monitor_idx: usize,

@@ -404,7 +404,7 @@ mod tests {
         command
             .args([
                 "-c",
-                "sleep 30 & child=$!; printf '%s' \"$child\" > \"$QOL_TEST_CHILD_PID\"; wait",
+                "sleep 30 & child=$!; printf '%s' \"$child\" > \"$QOL_TEST_CHILD_PID.tmp\" && mv \"$QOL_TEST_CHILD_PID.tmp\" \"$QOL_TEST_CHILD_PID\"; wait",
             ])
             .env("QOL_TEST_CHILD_PID", &child_pid_path);
         let CargoChild {

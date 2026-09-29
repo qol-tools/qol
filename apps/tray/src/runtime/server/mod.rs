@@ -29,6 +29,25 @@ impl StateSocketStatus {
 }
 
 impl RuntimeServer {
+    pub fn attach_peers(&self, handle: crate::features::linked_devices::PeerHostHandle) -> bool {
+        super::publisher::shared().is_some_and(|shared| shared.attach_peers(handle))
+    }
+
+    pub fn promote_peers() {
+        let Some(shared) = super::publisher::shared() else {
+            return;
+        };
+        let Some(peers) = shared.peers() else {
+            return;
+        };
+        peers.promote();
+    }
+
+    #[cfg(feature = "dev")]
+    pub(crate) async fn shutdown_peers_and_wait() -> Result<(), String> {
+        shutdown_attached_peers(super::publisher::shared()).await
+    }
+
     pub fn state_socket(&self) -> StateSocketStatus {
         self.state_socket
     }
@@ -68,6 +87,19 @@ impl RuntimeServer {
     }
 }
 
+#[cfg(feature = "dev")]
+async fn shutdown_attached_peers(shared: Option<Arc<SharedState>>) -> Result<(), String> {
+    let peers = shared
+        .ok_or_else(|| "Peer shutdown unavailable: runtime publisher is not installed".to_string())?
+        .peers()
+        .cloned()
+        .ok_or_else(|| "Peer shutdown unavailable: core peer owner is not attached".to_string())?;
+    peers
+        .shutdown_and_wait()
+        .await
+        .map_err(|error| format!("Core peer shutdown failed: {error:?}"))
+}
+
 fn bind_state_socket(shared: Arc<SharedState>, path: &std::path::Path) -> StateSocketStatus {
     match socket::bind_at(path) {
         socket::BindOutcome::Bound(listener) => {
@@ -103,6 +135,46 @@ fn spawn_socket_listener_thread(shared: Arc<SharedState>, listener: socket::List
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "dev")]
+    #[tokio::test]
+    async fn peer_shutdown_requires_the_existing_runtime_attachment() {
+        for (shared, expected) in [
+            (
+                None,
+                "Peer shutdown unavailable: runtime publisher is not installed",
+            ),
+            (
+                Some(Arc::new(SharedState::new(Vec::new()))),
+                "Peer shutdown unavailable: core peer owner is not attached",
+            ),
+        ] {
+            assert_eq!(
+                shutdown_attached_peers(shared).await,
+                Err(expected.to_string()),
+                "{expected}"
+            );
+        }
+    }
+
+    #[cfg(feature = "dev")]
+    #[tokio::test]
+    async fn peer_shutdown_closes_the_same_attached_owner() {
+        use crate::features::linked_devices::tests::{attach, host_at, status};
+        use qol_peers::admin::Lifecycle;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("peers");
+        let owner = host_at(&root, false);
+        let attached = Arc::new(attach(&owner));
+        let observer = attach(&owner);
+        assert_eq!(status(&observer).lifecycle, Lifecycle::Inactive);
+
+        shutdown_attached_peers(Some(attached)).await.unwrap();
+
+        assert_eq!(status(&observer).lifecycle, Lifecycle::Shutdown);
+        assert!(!root.exists());
+    }
 
     #[test]
     fn only_a_failed_bind_blocks_a_generation_handoff() {

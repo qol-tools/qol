@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use qol_headless::{DoctorCheck, DoctorCheckResult};
 use serde_json::json;
 
+use qol_peers::admin::PointzStatus;
+use qol_peers::pointz::PointzTransport;
+
 use crate::config::ServerConfig;
-use crate::security::{ExistingSecretInspection, ExistingSecretState};
 
 const CHECK_IDS: [&str; 6] = [
     "platform_supported",
@@ -12,7 +14,7 @@ const CHECK_IDS: [&str; 6] = [
     "permissions",
     "network_metadata",
     "runtime_endpoints",
-    "pairing_secret",
+    "phone_pairing",
 ];
 
 pub(crate) fn checks() -> Vec<DoctorCheck> {
@@ -39,13 +41,13 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
         ),
         DoctorCheck::new(
             CHECK_IDS[4],
-            "Report expected daemon and UDP endpoints without binding or connecting.",
+            "Report the daemon socket and the UDP ports qol-tray owns, without binding or connecting.",
             || Ok(runtime_endpoints_result()),
         ),
         DoctorCheck::new(
             CHECK_IDS[5],
-            "Inspect existing pairing-secret path metadata without reading, creating, or revealing it.",
-            || Ok(pairing_secret_result()),
+            "Ask qol-tray for phone pairing status without changing it or revealing a pairing code.",
+            || Ok(phone_pairing_result(crate::app::pairing::status())),
         ),
     ]
 }
@@ -206,7 +208,7 @@ fn runtime_endpoints_result() -> DoctorCheckResult {
     DoctorCheckResult::ok(
         CHECK_IDS[4],
         format!(
-            "Expected daemon socket and UDP ports {} and {} are defined",
+            "Daemon socket is defined; qol-tray owns UDP ports {} and {}",
             ServerConfig::DISCOVERY_PORT,
             ServerConfig::COMMAND_PORT
         ),
@@ -229,18 +231,14 @@ fn runtime_endpoints_details(
         "udp": [
             {
                 "name": "discovery",
-                "address": "0.0.0.0",
                 "port": ServerConfig::DISCOVERY_PORT,
-                "protocol": "udp",
-                "inherited_fd_present": inherited_fd_present("discovery"),
+                "owner": "qol-tray",
                 "bound": false,
             },
             {
                 "name": "command",
-                "address": "0.0.0.0",
                 "port": ServerConfig::COMMAND_PORT,
-                "protocol": "udp",
-                "inherited_fd_present": inherited_fd_present("command"),
+                "owner": "qol-tray",
                 "bound": false,
             },
         ],
@@ -248,79 +246,66 @@ fn runtime_endpoints_details(
     })
 }
 
-fn inherited_fd_present(name: &str) -> bool {
-    let variable = format!(
-        "{}_{}",
-        qol_conventions::ENV_DAEMON_PORT_FD,
-        name.to_uppercase()
-    );
-    std::env::var_os(variable).is_some()
-}
-
-fn pairing_secret_result() -> DoctorCheckResult {
-    pairing_secret_inspection_result(crate::security::inspect_existing_secret())
-}
-
-fn pairing_secret_inspection_result(inspection: ExistingSecretInspection) -> DoctorCheckResult {
-    let details = secret_details(&inspection);
-    match inspection.state {
-        ExistingSecretState::Missing => DoctorCheckResult::warn(
+fn phone_pairing_result(status: Option<PointzStatus>) -> DoctorCheckResult {
+    let Some(status) = status else {
+        return DoctorCheckResult::warn(
             CHECK_IDS[5],
-            "No pairing secret exists; the daemon will create one when it starts",
+            "qol-tray did not answer, so phone pairing status is unavailable",
         )
-        .with_fix("Start PointZ normally to initialize its pairing secret")
-        .with_details(details),
-        ExistingSecretState::Present => DoctorCheckResult::ok(
+        .with_fix("Start qol-tray, then run the PointZ doctor again")
+        .with_details(json!({ "inspection": "core_status", "reachable": false }));
+    };
+    let details = json!({
+        "inspection": "core_status",
+        "reachable": true,
+        "plugin": status.plugin,
+        "migration": status.migration,
+        "device_count": status.device_count,
+        "transport": status.transport,
+        "pairing_open": status.pairing.open,
+    });
+    let must_pair_again = status
+        .migration
+        .is_some_and(|migration| migration.phones_must_pair_again());
+    let result = match status.transport {
+        PointzTransport::PortBusy { .. } => {
+            DoctorCheckResult::fail(CHECK_IDS[5], "Another program holds a PointZ network port")
+                .with_fix(format!(
+                    "Quit the program using UDP port {} or {}",
+                    ServerConfig::DISCOVERY_PORT,
+                    ServerConfig::COMMAND_PORT
+                ))
+        }
+        PointzTransport::Failed { .. } => DoctorCheckResult::fail(
             CHECK_IDS[5],
-            "Existing pairing-secret regular-file metadata is present; contents were not inspected",
+            "qol-tray could not open the PointZ network ports",
         )
-        .with_details(details),
-        ExistingSecretState::Invalid => DoctorCheckResult::fail(
+        .with_fix("Restart qol-tray and check its log for the PointZ adapter"),
+        _ if must_pair_again => DoctorCheckResult::warn(
             CHECK_IDS[5],
-            inspection
-                .issue
-                .as_deref()
-                .unwrap_or("Existing pairing secret is invalid"),
+            "Some phones must pair again after pairing moved into qol-tray",
         )
-        .with_fix("Remove the invalid pairing-secret path, then start PointZ to regenerate it")
-        .with_details(details),
-        ExistingSecretState::Unavailable => DoctorCheckResult::fail(
+        .with_fix("Open PointZ settings and pair each phone again"),
+        _ if status.migration.is_none() => {
+            DoctorCheckResult::ok(CHECK_IDS[5], "No phone has been paired yet")
+        }
+        PointzTransport::Stopped {} => {
+            DoctorCheckResult::warn(CHECK_IDS[5], "qol-tray is not listening for phones")
+                .with_fix("Open PointZ settings and pair a phone")
+        }
+        PointzTransport::Running { .. } => DoctorCheckResult::ok(
             CHECK_IDS[5],
-            inspection
-                .issue
-                .as_deref()
-                .unwrap_or("PointZ data directory is unavailable"),
-        )
-        .with_fix("Configure a writable local data directory before starting PointZ")
-        .with_details(details),
-    }
-}
-
-fn secret_details(inspection: &ExistingSecretInspection) -> serde_json::Value {
-    json!({
-        "path": inspection.path,
-        "state": match inspection.state {
-            ExistingSecretState::Missing => "missing",
-            ExistingSecretState::Present => "present",
-            ExistingSecretState::Invalid => "invalid",
-            ExistingSecretState::Unavailable => "unavailable",
-        },
-        "file_type": inspection.file_type,
-        "bytes": inspection.bytes,
-        "readonly": inspection.readonly,
-        "issue": inspection.issue,
-        "inspection": "read_only",
-        "content_inspected": false,
-        "validity": "not_inspected",
-        "created": false,
-        "secret_exposed": false,
-    })
+            format!(
+                "qol-tray is listening for {} paired phone(s)",
+                status.device_count
+            ),
+        ),
+    };
+    result.with_details(details)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use qol_headless::DoctorStatus;
 
     use super::*;
@@ -335,50 +320,34 @@ mod tests {
         assert_eq!(details["udp"][1]["bound"], false);
     }
 
-    #[test]
-    fn missing_secret_check_is_read_only_and_redacted() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("missing-secret");
-        let result = pairing_secret_inspection_result(ExistingSecretInspection {
-            path: Some(path.clone()),
-            state: ExistingSecretState::Missing,
-            file_type: "missing",
-            bytes: None,
-            readonly: None,
-            issue: None,
-        });
-
-        assert_eq!(result.status, DoctorStatus::Warn);
-        assert!(!path.exists());
-        let details = result.details.expect("secret details missing");
-        assert_eq!(details["created"], false);
-        assert_eq!(details["content_inspected"], false);
-        assert_eq!(details["secret_exposed"], false);
+    fn status(transport: PointzTransport) -> PointzStatus {
+        PointzStatus {
+            plugin: qol_peers::pointz::PointzPlugin::Compatible,
+            authority: None,
+            migration: Some(qol_peers::pointz::PointzImport::FRESH),
+            server_id: Some("server".into()),
+            device_count: 1,
+            pairing: qol_peers::pointz::PointzPairing {
+                open: true,
+                code: Some("482913".into()),
+                seconds_remaining: 40,
+            },
+            transport,
+        }
     }
 
     #[test]
-    fn secret_check_details_never_contain_file_contents() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("pairing-secret");
-        let private_material = "do-not-print-this-secret";
-        fs::write(&path, private_material).unwrap();
-        let result = pairing_secret_inspection_result(ExistingSecretInspection {
-            path: Some(path.clone()),
-            state: ExistingSecretState::Present,
-            file_type: "regular",
-            bytes: Some(private_material.len() as u64),
-            readonly: Some(false),
-            issue: None,
-        });
+    fn pairing_check_reports_the_core_state_without_the_code() {
+        let running = phone_pairing_result(Some(status(PointzTransport::Running { dropped: 0 })));
+        let busy = phone_pairing_result(Some(status(PointzTransport::PortBusy {
+            socket: qol_peers::pointz::PointzSocket::Command,
+        })));
+        let unreachable = phone_pairing_result(None);
 
-        assert_eq!(fs::read_to_string(path).unwrap(), private_material);
-        assert!(!serde_json::to_string(&result)
-            .unwrap()
-            .contains(private_material));
-        assert_eq!(
-            result.details.expect("secret details missing")["content_inspected"],
-            false
-        );
+        assert_eq!(running.status, DoctorStatus::Ok);
+        assert_eq!(busy.status, DoctorStatus::Fail);
+        assert_eq!(unreachable.status, DoctorStatus::Warn);
+        assert!(!serde_json::to_string(&running).unwrap().contains("482913"));
     }
 
     #[test]

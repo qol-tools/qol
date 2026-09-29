@@ -1,6 +1,8 @@
-use std::io::{BufReader, Write};
+use qol_runtime::local_ipc::SecretReader;
+use std::io::{BufRead, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 use serde::Serialize;
 
@@ -8,21 +10,21 @@ use crate::runtime::server::state_store::SharedState;
 
 const IO_TIMEOUT_MS: u64 = 50;
 
-pub(super) fn prepare_stream(stream: UnixStream) -> Option<(BufReader<UnixStream>, UnixStream)> {
+pub(super) fn prepare_stream(stream: UnixStream) -> Option<(SecretReader<UnixStream>, UnixStream)> {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(IO_TIMEOUT_MS)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(IO_TIMEOUT_MS)));
     let writer = stream.try_clone().ok()?;
-    Some((BufReader::new(stream), writer))
+    Some((SecretReader::new(stream), writer))
 }
 
-pub(super) fn read_request(reader: &mut BufReader<UnixStream>) -> Option<String> {
-    let line = qol_runtime::local_ipc::read_line(reader).ok()??;
+pub(super) fn read_request(reader: &mut impl BufRead) -> Option<Zeroizing<String>> {
+    let line = qol_runtime::local_ipc::read_secret_line(reader).ok()??;
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    Some(trimmed.to_string())
+    Some(Zeroizing::new(trimmed.to_string()))
 }
 
 pub(super) fn write_flushed_json_line<T: Serialize>(writer: &mut UnixStream, value: &T) -> bool {
@@ -53,7 +55,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde::Deserialize;
-    use std::io::Read;
+    use std::io::{BufReader, Read};
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
     struct Sample {
@@ -71,7 +73,12 @@ mod tests {
         tx.write_all(b"  hello world  \n").unwrap();
         drop(tx);
         let mut reader = BufReader::new(rx);
-        assert_eq!(read_request(&mut reader).as_deref(), Some("hello world"));
+        assert_eq!(
+            read_request(&mut reader)
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("hello world")
+        );
     }
 
     #[test]
@@ -172,7 +179,7 @@ mod tests {
             drop(tx);
             let mut reader = BufReader::new(rx);
             let got = read_request(&mut reader);
-            prop_assert_eq!(got.as_deref(), Some(line.trim()));
+            prop_assert_eq!(got.as_ref().map(|value| value.as_str()), Some(line.trim()));
         }
 
         #[test]

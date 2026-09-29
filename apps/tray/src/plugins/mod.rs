@@ -13,12 +13,15 @@ pub mod identity_index;
 pub mod loader;
 pub mod manager;
 pub mod manifest;
+pub mod operation_catalog;
 pub(crate) mod paths;
 pub mod registry;
 pub mod resolver;
 
 pub use config::PluginConfigManager;
 pub use daemon_lifecycle::lifeline_handoff;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use daemon_lifecycle::register_operation_fixture;
 pub use identity_index::{PluginDisplay, PluginIdentityIndex};
 pub use loader::PluginLoader;
 pub use manager::PluginManager;

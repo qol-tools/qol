@@ -137,6 +137,12 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         }
     });
     crate::dev_generation::promote_to_stable();
+    if tokio::task::spawn_blocking(crate::runtime::RuntimeServer::promote_peers)
+        .await
+        .is_err()
+    {
+        log::error!("Peer administration unavailable after promotion");
+    }
     crate::settings_surface::prewarm();
     complete_promotion_in_background(app_state);
     Ok(port)

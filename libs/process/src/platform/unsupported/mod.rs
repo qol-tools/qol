@@ -18,6 +18,18 @@ fn unsupported() -> io::Error {
 }
 
 impl ProcessTreeGuard {
+    pub(crate) fn containment_backend(&self) -> &'static str {
+        "unsupported"
+    }
+
+    pub(crate) fn membership_observation_supported(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn observe_residual(&self) -> crate::ProcessTreeObservation {
+        crate::ProcessTreeObservation::unsupported()
+    }
+
     pub(crate) fn prepare_command(&self, _command: &mut Command) -> io::Result<PreparedSpawn> {
         Err(unsupported())
     }

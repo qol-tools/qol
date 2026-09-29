@@ -40,6 +40,22 @@ input = { address = "string" }
 description = "Remove a Bluetooth device and its pairing information"
 input = { address = "string" }
 
+[action.release_for_handoff]
+description = "Let go of a Bluetooth device for a linked device and keep it from reconnecting here"
+input = { address = "string" }
+peer = { replay = "never" }
+
+[action.resume_reconnect]
+description = "Allow a Bluetooth device released for a linked device to reconnect here again"
+input = { address = "string" }
+peer = { replay = "idempotent" }
+
+[query.handoff_state]
+description = "Whether this computer knows, is connected to, or is holding back a Bluetooth device"
+poll_interval_ms = 5000
+input = { address = "string" }
+peer = { replay = "idempotent" }
+
 [action.apply_host_fix]
 description = "Apply one contextual fix to this computer's Bluetooth stack"
 input = { id = "string" }

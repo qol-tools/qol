@@ -429,6 +429,19 @@ class AttestationTests(unittest.TestCase):
 
 class BuildNodeTests(unittest.TestCase):
     def test_build_commands_preserve_release_profile_parity(self):
+        verify = [
+            "cargo",
+            "run",
+            "--quiet",
+            "--locked",
+            "-p",
+            "qol-build-identity",
+            "--bin",
+            "qol-build-identity",
+            "--",
+            "verify",
+            "production",
+        ]
         cases = [
             (
                 "plugin",
@@ -444,7 +457,8 @@ class BuildNodeTests(unittest.TestCase):
                         "fixture-package",
                         "--target",
                         "x86_64-unknown-linux-gnu",
-                    ]
+                    ],
+                    verify,
                 ],
             ),
             (
@@ -465,7 +479,8 @@ class BuildNodeTests(unittest.TestCase):
                         "local-stt",
                         "--features",
                         "sherpa-stt",
-                    ]
+                    ],
+                    verify,
                 ],
             ),
             (
@@ -474,19 +489,7 @@ class BuildNodeTests(unittest.TestCase):
                 None,
                 [
                     ["cargo", "deb", "-p", "qol-tray", "--locked"],
-                    [
-                        "cargo",
-                        "run",
-                        "--quiet",
-                        "--locked",
-                        "-p",
-                        "qol-build-identity",
-                        "--bin",
-                        "qol-build-identity",
-                        "--",
-                        "verify",
-                        "production",
-                    ],
+                    verify,
                 ],
             ),
             (
@@ -514,19 +517,7 @@ class BuildNodeTests(unittest.TestCase):
                         "--bin",
                         "qol-tray",
                     ],
-                    [
-                        "cargo",
-                        "run",
-                        "--quiet",
-                        "--locked",
-                        "-p",
-                        "qol-build-identity",
-                        "--bin",
-                        "qol-build-identity",
-                        "--",
-                        "verify",
-                        "production",
-                    ],
+                    verify,
                 ],
             ),
         ]

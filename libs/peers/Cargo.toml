@@ -1,0 +1,78 @@
+[package]
+name = "qol-peers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core peer identity and mutually authenticated transport foundation"
+
+[features]
+default = []
+service = [
+  "dep:chacha20poly1305",
+  "dep:hkdf",
+  "dep:hmac",
+  "dep:if-addrs",
+  "dep:libc",
+  "dep:mdns-sd",
+  "dep:p256",
+  "dep:qol-fs",
+  "dep:rcgen",
+  "dep:rustls",
+  "dep:sha2",
+  "dep:serde_json",
+  "dep:subtle",
+  "dep:time",
+  "dep:tokio",
+  "dep:tokio-rustls",
+  "dep:workspace-hack",
+  "dep:x509-cert",
+  "dep:x25519-dalek",
+  "dep:x509-parser",
+]
+
+[dependencies]
+chacha20poly1305 = { version = "0.10", optional = true }
+hkdf = { version = "0.12", optional = true }
+hmac = { workspace = true, optional = true }
+if-addrs = { version = "=0.15.0", optional = true }
+base64.workspace = true
+qol-conventions.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+thiserror = "2"
+mdns-sd = { version = "=0.21.4", optional = true }
+p256 = { version = "0.13.2", default-features = false, features = ["arithmetic"], optional = true }
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "zeroize"], optional = true }
+rustls = { version = "=0.23.40", default-features = false, features = ["ring", "std"], optional = true }
+sha2 = { workspace = true, optional = true }
+time = { version = "0.3", optional = true }
+subtle = { version = "2.6", optional = true }
+tokio = { version = "1", features = ["io-util", "time", "sync", "macros", "rt", "net"], optional = true }
+tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring"], optional = true }
+workspace-hack = { workspace = true, optional = true }
+x25519-dalek = { version = "2", features = ["static_secrets"], optional = true }
+x509-cert = { version = "0.2.5", default-features = false, features = ["std"], optional = true }
+x509-parser = { version = "=0.18.1", features = ["verify"], optional = true }
+zeroize = "1"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libc = { version = "0.2", optional = true }
+qol-fs = { workspace = true, optional = true }
+
+[dev-dependencies]
+rustls = { version = "=0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json.workspace = true
+tempfile = "3.27"
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "time", "sync", "test-util"] }
+
+[[test]]
+name = "service"
+required-features = ["service"]
+
+[[test]]
+name = "authority"
+required-features = ["service"]
+
+[[test]]
+name = "enrollment"
+required-features = ["service"]

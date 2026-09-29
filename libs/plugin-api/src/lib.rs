@@ -2,6 +2,7 @@ pub mod capability;
 pub mod host_exec;
 pub mod launcher_flows;
 pub mod manifest;
+pub mod operations;
 pub mod permissions;
 pub mod restore;
 

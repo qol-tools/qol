@@ -1654,8 +1654,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             return;
         };
         for snapshot in handoffs {
-            if !(snapshot.handoff && self.session.handoff_is_for_this_generation(snapshot))
-                && !(self.is_resident() && snapshot.lut.is_some())
+            if !((snapshot.handoff && self.session.handoff_is_for_this_generation(snapshot))
+                || (self.is_resident() && snapshot.lut.is_some()))
             {
                 continue;
             }

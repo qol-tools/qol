@@ -26,6 +26,7 @@ pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
 pub const ENV_INSTALL_ID: &str = "QOL_TRAY_INSTALL_ID";
 pub const ENV_PLUGIN_ID: &str = "QOL_TRAY_PLUGIN_ID";
+pub const ENV_DAEMON_INSTANCE: &str = "QOL_TRAY_DAEMON_INSTANCE";
 pub const ENV_DAEMON_SOCKET: &str = "QOL_TRAY_DAEMON_SOCKET";
 pub const ENV_DAEMON_REPLACE_EXISTING: &str = "QOL_TRAY_DAEMON_REPLACE_EXISTING";
 pub const ENV_DAEMON_LISTENER_FD: &str = "QOL_TRAY_DAEMON_LISTENER_FD";
@@ -40,7 +41,8 @@ pub const ENV_HTTP_TOKEN: &str = "QOL_TRAY_HTTP_TOKEN";
 /// any other process, and a daemon that trusts it adopts a bogus listener
 /// instead of binding its own socket.
 pub fn is_daemon_handoff_env(key: &str) -> bool {
-    key == ENV_DAEMON_LISTENER_FD
+    key == ENV_DAEMON_INSTANCE
+        || key == ENV_DAEMON_LISTENER_FD
         || key == ENV_DAEMON_REPLACE_EXISTING
         || key.starts_with(ENV_DAEMON_PORT_FD)
 }
@@ -73,6 +75,7 @@ pub const DEV_PROMOTE_GENERATION_ROUTE: &str = dev_routes::PROMOTE_GENERATION;
 
 pub mod artifact;
 
+pub mod operations;
 pub mod plugin_id;
 
 pub mod api_routes {

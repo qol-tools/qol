@@ -594,7 +594,29 @@ fn parse_daemon_request(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
             }
             Err(message) => ReadResult::Error(message),
         },
+        "handoff_state" => handoff_result(request, |address| {
+            list_devices().map(|devices| crate::handoff::state(address, &devices))
+        }),
+        "release_for_handoff" => handoff_result(request, |address| {
+            crate::handoff::release(
+                address,
+                list_devices,
+                disconnect_device,
+                deliver_pending_iobluetooth_callbacks,
+            )
+        }),
+        "resume_reconnect" => handoff_result(request, crate::handoff::resume),
         unknown => ReadResult::Error(format!("unknown Bluetooth action: {unknown}")),
+    }
+}
+
+fn handoff_result(
+    request: &DaemonRequest,
+    operation: impl FnOnce(&str) -> Result<serde_json::Value>,
+) -> ReadResult<DaemonCommand> {
+    match request_address(request) {
+        Ok(address) => snapshot_result(operation(&address)),
+        Err(error) => ReadResult::Error(error),
     }
 }
 
@@ -732,7 +754,10 @@ fn handle_daemon_command(command: DaemonCommand, config: &mut ReconnectConfig) -
             pair_device(&address, power_on_adapter).map(std::mem::drop)
         }),
         DaemonCommand::Connect(address) => run_device_command(&address, "connect", || {
-            connect_device(&address, power_on_adapter).map(std::mem::drop)
+            crate::connect::for_user(&address, power_on_adapter, |address| {
+                connect_device(address, power_on_adapter)
+            })
+            .map(std::mem::drop)
         }),
         DaemonCommand::Disconnect(address) => run_device_command(&address, "disconnect", || {
             disconnect_device(&address).map(std::mem::drop)
@@ -746,14 +771,18 @@ fn handle_daemon_command(command: DaemonCommand, config: &mut ReconnectConfig) -
             }
         }
         DaemonCommand::StopSearch => report_daemon_failure("search stop", mark_search_stopped()),
-        DaemonCommand::ReconnectManaged => report_daemon_failure(
-            "reconnect",
-            reconnect_devices(config, ReconnectSelection::Managed).map(std::mem::drop),
-        ),
-        DaemonCommand::ReconnectTrusted => report_daemon_failure(
-            "reconnect",
-            reconnect_devices(config, ReconnectSelection::Trusted).map(std::mem::drop),
-        ),
+        DaemonCommand::ReconnectManaged | DaemonCommand::ReconnectTrusted => {
+            crate::handoff::release_managed_for_user(config);
+            let selection = if matches!(command, DaemonCommand::ReconnectTrusted) {
+                ReconnectSelection::Trusted
+            } else {
+                ReconnectSelection::Managed
+            };
+            report_daemon_failure(
+                "reconnect",
+                reconnect_devices(config, selection).map(std::mem::drop),
+            )
+        }
         DaemonCommand::Settings => {
             report_daemon_failure("settings", crate::settings::open_browser())
         }
@@ -777,7 +806,7 @@ fn run_retry_pass(
             continue;
         }
         state.request_when_idle(now);
-        if !state.is_due(now) {
+        if !state.is_due(now) || crate::handoff::held(&device.address) {
             continue;
         }
         match connect_device(&device.address, config.power_on_adapter) {

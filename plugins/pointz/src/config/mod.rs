@@ -8,9 +8,6 @@ impl ServerConfig {
     pub const DAEMON_SOCKET: &'static str = "/tmp/qol-pointz.sock";
     pub const DISCOVERY_PORT: u16 = 45454;
     pub const COMMAND_PORT: u16 = 45455;
-    pub const DISCOVER_MESSAGE: &'static str = "DISCOVER";
-    pub const DISCOVERY_BUFFER_SIZE: usize = 1024;
-    pub const COMMAND_BUFFER_SIZE: usize = 4096;
     pub const UNKNOWN_HOSTNAME: &'static str = "Unknown";
 
     pub const MOUSE_CLICK_DELAY_MS: u64 = 10;

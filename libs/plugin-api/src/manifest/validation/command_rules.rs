@@ -1,3 +1,5 @@
+pub use qol_conventions::operations::is_valid_action_id;
+
 use crate::manifest::DaemonConfig;
 use anyhow::{bail, Result};
 use std::path::{Component, Path};
@@ -8,15 +10,6 @@ impl DaemonConfig {
         validate_socket_config(self.socket.as_deref())?;
         Ok(())
     }
-}
-
-pub fn is_valid_action_id(action: &str) -> bool {
-    !action.is_empty()
-        && action.len() <= 64
-        && !action.starts_with('-')
-        && action
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 pub fn is_valid_command_basename(value: &str) -> bool {

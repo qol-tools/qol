@@ -1,4 +1,7 @@
 mod platform;
+mod shutdown;
+
+pub(super) use shutdown::{cleanup_before_restart, PendingRestart};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

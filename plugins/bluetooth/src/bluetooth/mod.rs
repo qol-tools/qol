@@ -2,20 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 pub mod retry;
 
 pub fn normalize_address(value: &str) -> Result<String> {
-    let parts = value.trim().split(':').collect::<Vec<_>>();
-    if parts.len() != 6
-        || parts
-            .iter()
-            .any(|part| part.len() != 2 || !part.chars().all(|char| char.is_ascii_hexdigit()))
-    {
-        bail!("invalid Bluetooth address `{value}`; expected AA:BB:CC:DD:EE:FF");
-    }
-    Ok(parts.join(":").to_ascii_uppercase())
+    Ok(qol_bluetooth_control::normalize_address(value)?)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

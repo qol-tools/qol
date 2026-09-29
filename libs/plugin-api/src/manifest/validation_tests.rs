@@ -538,6 +538,72 @@ mod runtime_rules {
     }
 }
 
+mod peer_rules {
+    use super::*;
+
+    fn manifest_with_peer(uid: Option<&str>, kind: &str) -> PluginManifest {
+        let uid = uid
+            .map(|uid| format!("uid = \"{uid}\"\n"))
+            .unwrap_or_default();
+        let toggle_config = kind == "toggle-config";
+        let config_key = if toggle_config {
+            "config_key = \"enabled\"\n"
+        } else {
+            ""
+        };
+        let args = if toggle_config {
+            ""
+        } else {
+            "args = [\"reconnect\"]\n"
+        };
+        let source = format!(
+            r#"
+[plugin]
+id = "test-plugin"
+{uid}name = "P"
+description = ""
+version = "0.0.1"
+
+[menu]
+label = "M"
+items = []
+
+[action.reconnect]
+label = "Reconnect"
+kind = "{kind}"
+{config_key}{args}peer = {{ replay = "idempotent" }}
+"#
+        );
+        manifest_from_toml(&source)
+    }
+
+    #[test]
+    fn validate_accepts_peer_exposure_on_a_run_action_with_uid() {
+        assert!(manifest_with_peer(Some("uid-test"), "run")
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_peer_exposure_without_a_frozen_uid() {
+        let error = manifest_with_peer(None, "run").validate().unwrap_err();
+        assert!(error.to_string().contains("frozen [plugin].uid"), "{error}");
+    }
+
+    #[test]
+    fn validate_rejects_peer_exposure_on_non_run_actions() {
+        for kind in ["settings", "toggle-config"] {
+            let error = manifest_with_peer(Some("uid-test"), kind)
+                .validate()
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("kind is run"),
+                "kind {kind}: {error}"
+            );
+        }
+    }
+}
+
 mod dependency_rules {
     use super::*;
 
@@ -617,6 +683,7 @@ mod shortcut_rules {
                     checked: false,
                     picture: None,
                     hotkey: true,
+                    peer: None,
                 },
             )]
             .into_iter()

@@ -12,6 +12,7 @@ use crate::{PlatformSpawnFailure, PreparedSpawnCleanup};
 use super::super::unix::{pid_t, signal_target_alive};
 
 mod guardian;
+mod observation;
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};

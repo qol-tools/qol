@@ -74,9 +74,111 @@ fn make_catalog_plugin(
             checked: false,
             picture: None,
             hotkey: true,
+            peer: None,
         },
     );
     plugin
+}
+
+#[test]
+fn catalog_action_eligibility_matches_resolution_for_configured_targets() {
+    for runtime_binary in [None, Some(false), Some(true)] {
+        for daemon_enabled in [false, true] {
+            for kind in [ActionType::Run, ActionType::Settings] {
+                let dir = TempDir::new().unwrap();
+                let runtime = runtime_binary.map(|present| {
+                    if present {
+                        fs::write(dir.path().join("plugin-bin"), "fixture").unwrap();
+                    }
+                    RuntimeConfig {
+                        command: "plugin-bin".into(),
+                        actions: None,
+                    }
+                });
+                let mut plugin = make_catalog_plugin(
+                    &dir,
+                    "activate",
+                    vec!["--action".into(), "fixed value".into()],
+                    runtime,
+                );
+                plugin.manifest.actions["activate"].kind = kind;
+                plugin.manifest.capabilities.gpui = true;
+                fs::write(dir.path().join("qol-config.toml"), "").unwrap();
+                plugin.manifest.daemon = Some(DaemonConfig {
+                    enabled: daemon_enabled,
+                    command: "absent-daemon".into(),
+                    socket: Some(
+                        dir.path()
+                            .join("fixture.sock")
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    port: None,
+                    extra_ports: Vec::new(),
+                    inherit_listener: false,
+                });
+                fs::write(
+                    dir.path().join("qol-runtime.toml"),
+                    "schema_version = 1\n[action.activate]\ndescription = \"Activate\"\n",
+                )
+                .unwrap();
+                let expected = resolve_action(&plugin, "activate").is_ok();
+                let mut manager = PluginManager::new();
+                manager.insert_plugin_for_test(plugin);
+                let catalog = crate::plugins::operation_catalog::installed_catalog(&manager);
+                assert_eq!(
+                    catalog
+                        .iter()
+                        .any(|operation| operation.key.name == "activate"),
+                    expected,
+                    "runtime_binary={runtime_binary:?}, daemon={daemon_enabled}, kind={kind:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn typed_catalog_and_resolver_preserve_action_id_with_arbitrary_cli_argv() {
+    for args in [
+        vec![],
+        vec!["connect"],
+        vec!["session", "start"],
+        vec!["--action", "settings"],
+    ] {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("plugin-bin"), "fixture").unwrap();
+        let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        let plugin = make_catalog_plugin(
+            &dir,
+            "activate",
+            args.clone(),
+            Some(RuntimeConfig {
+                command: "plugin-bin".into(),
+                actions: None,
+            }),
+        );
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            "schema_version = 1\n[action.activate]\ndescription = \"Activate\"\n",
+        )
+        .unwrap();
+        let catalog = qol_plugin_api::operations::OperationCatalog::derive(
+            &plugin.id,
+            &plugin.manifest,
+            Some(&runtime),
+        )
+        .unwrap();
+        let resolved = resolve_action(&plugin, "activate").unwrap();
+        let operation = catalog.iter().next().unwrap();
+        assert_eq!(resolved.action_id, "activate", "{args:?}");
+        assert_eq!(resolved.args, args, "{args:?}");
+        assert_eq!(operation.key.name, resolved.action_id, "{args:?}");
+        assert_eq!(
+            operation.runtime_args.as_ref(),
+            Some(&resolved.args),
+            "{args:?}"
+        );
+    }
 }
 
 #[test]
@@ -689,5 +791,135 @@ fn query_dispatch_uses_an_interactive_budget_not_the_action_ceiling() {
         super::QUERY_DISPATCH_TIMEOUT <= std::time::Duration::from_millis(1000),
         "a settings row read must stay interactive, got {:?}",
         super::QUERY_DISPATCH_TIMEOUT
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_reply_loss_cannot_spawn_the_runtime_fallback() {
+    use std::io::BufReader;
+    use std::os::unix::net::UnixListener;
+    let dir = TempDir::new().unwrap();
+    let _paths = crate::paths::push_test_path_root(dir.path());
+    let socket = crate::dev_generation::daemon_socket_path("loss.sock");
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    let mut plugin = make_catalog_plugin(
+        &dir,
+        "count",
+        vec![
+            "--exact".into(),
+            "plugins::action_executor::tests::operation_fallback_counter_fixture".into(),
+        ],
+        Some(RuntimeConfig {
+            command: "runtime-fixture".into(),
+            actions: None,
+        }),
+    );
+    let current_exe = std::env::current_exe().unwrap();
+    let executable = dir.path().join("runtime-fixture");
+    std::fs::hard_link(&current_exe, &executable)
+        .or_else(|_| std::fs::copy(&current_exe, &executable).map(|_| ()))
+        .unwrap();
+    std::fs::write(dir.path().join("operation-fallback-count"), "0").unwrap();
+    plugin.manifest.daemon = Some(DaemonConfig {
+        enabled: true,
+        command: "other-daemon".into(),
+        socket: Some("loss.sock".into()),
+        port: None,
+        extra_ports: vec![],
+        inherit_listener: false,
+    });
+    let resolved = resolve_action(&plugin, "count").unwrap();
+    assert!(resolved.runtime_fallback_allowed);
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let request = qol_runtime::local_ipc::read_line(&mut BufReader::new(&stream))
+            .unwrap()
+            .unwrap();
+        let request: qol_runtime::protocol::DaemonRequest = serde_json::from_str(&request).unwrap();
+        assert_eq!(request.action, "count");
+        drop(stream);
+        listener
+    });
+    let tracker = Arc::new(ProcessTracker::default());
+    let result = execution::execute_resolved_action(&tracker, &resolved, &serde_json::Value::Null);
+    assert!(
+        matches!(result, Err(ActionExecutionError::ActionRejected(message)) if message.contains("outcome unknown"))
+    );
+    let listener = server.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().err().unwrap().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert!(tracker.action_processes_snapshot().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("operation-fallback-count")).unwrap(),
+        "0"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn operation_fallback_counter_fixture() {
+    let path = std::path::Path::new("operation-fallback-count");
+    if path.is_file() {
+        std::fs::write(path, "1").unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn query_reply_loss_never_performs_readiness_recovery_or_query_retry() {
+    use std::io::BufReader;
+    use std::os::unix::net::UnixListener;
+    let dir = TempDir::new_in("/tmp").unwrap();
+    let _paths = crate::paths::push_test_path_root(dir.path());
+    let socket = crate::dev_generation::daemon_socket_path("query-loss.sock");
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    let plugin = make_plugin(
+        &dir,
+        "query",
+        None,
+        Some(DaemonConfig {
+            enabled: true,
+            command: "absent".into(),
+            socket: Some("query-loss.sock".into()),
+            port: None,
+            extra_ports: vec![],
+            inherit_listener: false,
+        }),
+    );
+    let id = plugin.id.to_string();
+    let mut manager = PluginManager::new();
+    manager.insert_plugin_for_test(plugin);
+    let manager = Arc::new(Mutex::new(manager));
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let request = qol_runtime::local_ipc::read_line(&mut BufReader::new(&stream))
+            .unwrap()
+            .unwrap();
+        let request: qol_runtime::protocol::DaemonRequest = serde_json::from_str(&request).unwrap();
+        assert_eq!(request.action, "query");
+        drop(stream);
+        listener
+    });
+    let result = dispatch_query_with_input(
+        &manager,
+        &id,
+        "query",
+        serde_json::Value::Null,
+        Duration::from_millis(100),
+    );
+    assert!(
+        matches!(result, Err(ActionExecutionError::ActionRejected(message)) if message.contains("outcome unknown"))
+    );
+    let listener = server.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().err().unwrap().kind(),
+        std::io::ErrorKind::WouldBlock
     );
 }

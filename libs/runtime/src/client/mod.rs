@@ -1,3 +1,5 @@
+pub(crate) mod peers;
+
 use crate::protocol::{
     ArmedLifelinesResponse, NotificationLayout, NotificationLevel, PluginConfigResponse, PushAck,
     RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,

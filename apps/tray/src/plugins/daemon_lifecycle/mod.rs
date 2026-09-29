@@ -14,9 +14,17 @@ pub(super) use listener::DaemonListener;
 
 const DAEMON_STOP_GRACE: Duration = Duration::from_secs(2);
 
-static DAEMON_INCARNATIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+#[derive(Default)]
+struct Incarnation {
+    generation: u64,
+    token: Option<String>,
+    endpoint: Option<std::path::PathBuf>,
+    artifact: Option<qol_artifact::InspectedArtifact>,
+}
 
-fn daemon_incarnations() -> &'static Mutex<HashMap<String, u64>> {
+static DAEMON_INCARNATIONS: OnceLock<Mutex<HashMap<String, Incarnation>>> = OnceLock::new();
+
+fn daemon_incarnations() -> &'static Mutex<HashMap<String, Incarnation>> {
     DAEMON_INCARNATIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -24,9 +32,12 @@ fn bump_daemon_incarnation(plugin_id: &str) -> u64 {
     let mut incarnations = daemon_incarnations()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let next = incarnations.get(plugin_id).copied().unwrap_or(0) + 1;
-    incarnations.insert(plugin_id.to_string(), next);
-    next
+    let entry = incarnations.entry(plugin_id.to_string()).or_default();
+    entry.generation = entry.generation.saturating_add(1);
+    entry.token = None;
+    entry.endpoint = None;
+    entry.artifact = None;
+    entry.generation
 }
 
 pub(super) fn current_daemon_incarnation(plugin_id: &str) -> Option<u64> {
@@ -34,7 +45,7 @@ pub(super) fn current_daemon_incarnation(plugin_id: &str) -> Option<u64> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(plugin_id)
-        .copied()
+        .map(|entry| entry.generation)
 }
 
 pub(super) fn start_daemon(plugin: &mut Plugin) -> Result<()> {
@@ -48,6 +59,14 @@ pub(super) fn start_daemon_with_context(
     let Some(daemon_config) = spawn::enabled_daemon(plugin).cloned() else {
         return Ok(None);
     };
+    if crate::features::linked_devices::is_legacy_pointz(&plugin.manifest)
+        && !crate::features::linked_devices::legacy_pointz_allowed()
+    {
+        anyhow::bail!(
+            "{} must be updated: phone pairing now belongs to linked devices",
+            plugin.manifest.plugin.name
+        );
+    }
 
     reap_daemon_if_exited(plugin);
     if let Some(pid) = plugin.daemon_pid() {
@@ -66,13 +85,21 @@ pub(super) fn start_daemon_with_context(
         plugin.daemon_listener = listener::bind_for_plugin(plugin, &daemon_config);
     }
 
-    let (child, consumed_generation, spawn_fingerprint) = spawn::spawn_daemon(
+    let token = fresh_instance_token()?;
+    let (child, consumed_generation, spawn_fingerprint, artifact) = spawn::spawn_daemon(
         plugin,
         &daemon_config,
         plugin.daemon_listener.as_ref(),
         runtime_config,
+        &token,
     )?;
     register_daemon(plugin, child, spawn_fingerprint);
+    let mut incarnations = daemon_incarnations()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let incarnation = incarnations.entry(plugin.id.to_string()).or_default();
+    incarnation.token = Some(token);
+    incarnation.artifact = artifact;
     Ok(Some(consumed_generation))
 }
 
@@ -191,6 +218,12 @@ fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<
     plugin.daemon_process = Some(child);
     plugin.daemon_spawn_fingerprint = spawn_fingerprint;
     bump_daemon_incarnation(plugin.id.as_str());
+    daemon_incarnations()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .entry(plugin.id.to_string())
+        .or_default()
+        .endpoint = super::action_executor::daemon_socket(plugin);
     track_desktop_state_pid(pid);
     super::daemon_tracker::registry::register(
         &crate::paths::runtime_pids_dir(),
@@ -202,6 +235,54 @@ fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<
 
 pub(super) fn track_desktop_state_pid(pid: u32) {
     platform::track_desktop_state_pid(pid);
+}
+
+pub(crate) fn current_daemon_token(plugin_id: &str) -> Option<String> {
+    daemon_incarnations()
+        .lock()
+        .ok()?
+        .get(plugin_id)?
+        .token
+        .clone()
+}
+
+fn fresh_instance_token() -> Result<String> {
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("daemon instance randomness unavailable"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn register_operation_fixture(
+    plugin: &mut Plugin,
+    child: Child,
+    token: String,
+    artifact: qol_artifact::InspectedArtifact,
+) {
+    register_daemon(plugin, child, None);
+    let mut incarnations = daemon_incarnations().lock().unwrap();
+    let incarnation = incarnations.entry(plugin.id.to_string()).or_default();
+    incarnation.token = Some(token);
+    incarnation.artifact = Some(artifact);
+}
+
+pub(crate) fn current_daemon_endpoint(plugin_id: &str) -> Option<std::path::PathBuf> {
+    daemon_incarnations()
+        .lock()
+        .ok()?
+        .get(plugin_id)?
+        .endpoint
+        .clone()
+}
+
+pub(crate) fn current_daemon_artifact(plugin_id: &str) -> Option<qol_artifact::InspectedArtifact> {
+    daemon_incarnations()
+        .lock()
+        .ok()?
+        .get(plugin_id)?
+        .artifact
+        .clone()
 }
 
 #[cfg(test)]

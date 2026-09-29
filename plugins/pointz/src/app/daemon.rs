@@ -1,6 +1,7 @@
 use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
+use qol_runtime::protocol::DaemonRequest;
 
 use crate::config::ServerConfig;
 use crate::network;
@@ -15,6 +16,7 @@ const APP_DOWNLOAD_URL: &str = "https://github.com/qol-tools/pointz/releases/lat
 pub enum Command {
     Settings,
     BeginPairing,
+    Input(serde_json::Value),
     Kill,
 }
 
@@ -27,15 +29,16 @@ pub fn send_kill() -> bool {
 }
 
 pub fn start_listener(tx: Sender<Command>) -> bool {
-    core_daemon::start_listener(&CONFIG, tx, parse_command)
+    core_daemon::start_request_listener(&CONFIG, tx, parse_request)
 }
 
 pub fn cleanup() {
     core_daemon::cleanup(&CONFIG);
 }
 
-fn parse_command(cmd: &str) -> ReadResult<Command> {
-    match cmd {
+fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
+    match request.action.as_str() {
+        "input" => ReadResult::Command(Command::Input(request.input.clone())),
         "ping" => ReadResult::Handled,
         "settings" => ReadResult::Command(Command::Settings),
         "begin_pairing" => ReadResult::Command(Command::BeginPairing),
@@ -48,7 +51,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
             "command_port": ServerConfig::COMMAND_PORT,
             "app_download_url": APP_DOWNLOAD_URL,
         })),
-        "pairing_status" => ReadResult::HandledWithData(crate::security::pairing_status_json()),
+        "pairing_status" => ReadResult::HandledWithData(super::pairing::status_json()),
         _ => ReadResult::Fallback,
     }
 }

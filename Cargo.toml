@@ -14,6 +14,7 @@ qol-agent-homes = { path = "libs/agent-homes" }
 qol-artifact = { path = "libs/artifact" }
 qol-audio = { path = "libs/audio" }
 qol-build-identity = { path = "libs/build-identity" }
+qol-bluetooth-control = { path = "libs/bluetooth-control" }
 qol-cinnamon = { path = "libs/cinnamon" }
 qol-color = { path = "libs/color" }
 qol-config = { path = "libs/config" }
@@ -26,6 +27,7 @@ qol-frecency = { path = "libs/frecency" }
 qol-fs = { path = "libs/fs" }
 qol-log = { path = "libs/log" }
 qol-platform = { path = "libs/platform" }
+qol-peers = { path = "libs/peers" }
 qol-watch = { path = "libs/watch" }
 qol-process = { path = "libs/process" }
 qol-runtime = { path = "libs/runtime" }

@@ -251,6 +251,9 @@ enum DaemonAction {
     Settings,
     HostFixes,
     ApplyHostFix,
+    HandoffState,
+    ReleaseForHandoff,
+    ResumeReconnect,
 }
 
 impl TryFrom<&str> for DaemonAction {
@@ -282,6 +285,9 @@ impl TryFrom<&str> for DaemonAction {
             "settings" => Ok(Self::Settings),
             "host_fixes" => Ok(Self::HostFixes),
             "apply_host_fix" => Ok(Self::ApplyHostFix),
+            "handoff_state" => Ok(Self::HandoffState),
+            "release_for_handoff" => Ok(Self::ReleaseForHandoff),
+            "resume_reconnect" => Ok(Self::ResumeReconnect),
             unknown => Err(format!("unknown Bluetooth action: {unknown}")),
         }
     }
@@ -1454,6 +1460,26 @@ fn dispatch_daemon_action(
             }
             Err(message) => ReadResult::Error(message),
         },
+        DaemonAction::HandoffState => handoff_result(request, |address| {
+            list_devices().map(|devices| crate::handoff::state(address, &devices))
+        }),
+        DaemonAction::ReleaseForHandoff => handoff_result(request, |address| {
+            crate::handoff::release(address, list_devices, disconnect_device, std::thread::sleep)
+        }),
+        DaemonAction::ResumeReconnect => handoff_result(request, crate::handoff::resume),
+    }
+}
+
+fn handoff_result(
+    request: &DaemonRequest,
+    operation: impl FnOnce(&str) -> Result<serde_json::Value>,
+) -> ReadResult<DaemonCommand> {
+    match request_address(request) {
+        Ok(address) => match operation(&address.to_string()) {
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
+        },
+        Err(error) => ReadResult::Error(error),
     }
 }
 
@@ -1635,7 +1661,7 @@ fn fail_command_without_adapter(command: DaemonCommand) {
         return;
     };
     let result: Result<()> = Err(anyhow!("Bluetooth adapter is unavailable"));
-    finish_device_action(address, label, &result);
+    finish_device_action(label, &result);
     qol_runtime::probe!(
         "BLUETOOTH_DEVICE_ACTION",
         "action={action} device={} outcome=failed reason=adapter_unavailable",
@@ -1799,12 +1825,7 @@ async fn daemon_loop(
                     let cached = discovery_state()
                         .ok()
                         .and_then(|state| state.device(&address.to_string()));
-                    spawn_explicit_device_action(
-                        ExplicitDeviceAction::Connect,
-                        address,
-                        config.power_on_adapter,
-                        cached,
-                    );
+                    spawn_connect(address, config.power_on_adapter, cached);
                     continue;
                 }
                 if let DaemonCommand::Disconnect(address) = command {
@@ -1846,6 +1867,7 @@ async fn daemon_loop(
                 } else {
                     ReconnectSelection::Managed
                 };
+                crate::handoff::release_managed_for_user(config);
                 operations.reconnect(adapter.clone(), config.clone(), selection);
             }
             event = adapter_events.next() => {
@@ -1989,7 +2011,23 @@ fn spawn_explicit_device_action(
             run_explicit_device_action(action, address, power_on_adapter, cached),
         )
         .await;
-        finish_device_action(address, action.label(), &result);
+        finish_device_action(action.label(), &result);
+        trace_device_action(action.trace_name(), address, result);
+    }));
+}
+
+fn spawn_connect(address: Address, power_on_adapter: bool, cached: Option<DeviceInfo>) {
+    let runtime = tokio::runtime::Handle::current();
+    let action = ExplicitDeviceAction::Connect;
+    std::mem::drop(std::thread::spawn(move || {
+        let result = crate::connect::for_user(&address.to_string(), power_on_adapter, |_| {
+            runtime.block_on(complete_device_action_within(
+                action.label(),
+                EXPLICIT_DEVICE_ACTION_TIMEOUT,
+                run_explicit_device_action(action, address, power_on_adapter, cached.clone()),
+            ))
+        });
+        finish_device_action(action.label(), &result);
         trace_device_action(action.trace_name(), address, result);
     }));
 }
@@ -2050,7 +2088,7 @@ fn begin_device_action(address: Address, intent: DeviceIntent) -> Result<()> {
     Ok(())
 }
 
-fn finish_device_action<T>(address: Address, label: &str, result: &Result<T>) {
+fn finish_device_action<T>(label: &str, result: &Result<T>) {
     if let Err(error) = result {
         match DEVICE_ACTION_STATE.write() {
             Ok(mut state) => {
@@ -3168,7 +3206,7 @@ mod tests {
             Duration::ZERO,
             futures::future::pending::<Result<()>>(),
         ));
-        finish_device_action(address, "Connect", &result);
+        finish_device_action("Connect", &result);
         let state = DEVICE_ACTION_STATE.read().unwrap().clone().unwrap();
         let error = result.unwrap_err();
 

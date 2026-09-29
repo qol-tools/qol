@@ -1,6 +1,9 @@
 use std::process::ExitCode;
 
+qol_conventions::declare_build_identity!(Plugin);
+
 fn main() -> ExitCode {
+    register_build_identity();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if matches!(args.as_slice(), [arg] if arg == qol_bluetooth::SETTINGS_SURFACE_ARG) {
         return match qol_bluetooth::show_settings() {

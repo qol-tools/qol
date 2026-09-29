@@ -9,3 +9,10 @@ pub(in crate::commands::check::command) fn fallback_request_stop(pid: u32) -> st
 pub(in crate::commands::check::command) fn fallback_force_stop(pid: u32) -> std::io::Result<()> {
     qol_process::kill_pid(pid)
 }
+
+pub(in crate::commands::check) const FALLBACK_BACKEND: &str = "windows_pid";
+
+pub(in crate::commands::check) fn exit_signal(status: std::process::ExitStatus) -> Option<i32> {
+    let _ = status;
+    None
+}

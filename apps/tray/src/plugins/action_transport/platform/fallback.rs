@@ -16,7 +16,7 @@ impl ActionTransportPlatform for Platform {
         _input: &serde_json::Value,
         _timeout: Duration,
     ) -> DaemonActionDispatch {
-        DaemonActionDispatch::Unavailable
+        DaemonActionDispatch::NotSent
     }
 
     fn can_connect(_endpoint: &Path) -> bool {

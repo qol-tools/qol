@@ -44,6 +44,12 @@ pub const EXPORTED: &[ExportedCommand] = &[
         route: "plugins",
         core_action: "updates",
     },
+    ExportedCommand {
+        id: "linked-devices-open",
+        label: "Linked devices",
+        route: "linked-devices",
+        core_action: "linked-devices",
+    },
 ];
 
 /// The launcher display label for a command: brand prefix + bare label.
@@ -109,6 +115,32 @@ mod tests {
         assert!(EXPORTED
             .iter()
             .any(|c| c.id == "shortcuts-add" && c.route == "shortcuts/add"));
+    }
+
+    #[test]
+    fn linked_devices_command_opens_the_linked_devices_tool() {
+        let linked = EXPORTED
+            .iter()
+            .find(|c| c.id == "linked-devices-open")
+            .expect("linked devices command");
+        assert_eq!(linked.route, "linked-devices");
+        assert_eq!(command_label(linked), "QoL › Linked devices");
+        assert_eq!(
+            crate::plugins::action_executor::core_tool_for_action(linked.core_action),
+            Some(crate::settings_surface::CoreTool::LinkedDevices)
+        );
+    }
+
+    #[test]
+    fn every_exported_command_reaches_a_core_tool() {
+        for command in EXPORTED {
+            assert!(
+                crate::plugins::action_executor::core_tool_for_action(command.core_action)
+                    .is_some(),
+                "{} has no core tool",
+                command.core_action
+            );
+        }
     }
 
     #[test]

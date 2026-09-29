@@ -8,7 +8,7 @@ const DIRECT_ACTIONS: [(&str, &str); 5] = [
     ("settings", "Open the PointZ settings surface."),
     (
         "begin_pairing",
-        "Allow the next compatible discovery request to pair.",
+        "Ask qol-tray to open a one-minute window for a phone to pair.",
     ),
     ("ping", "Send a liveness request to the running daemon."),
     (

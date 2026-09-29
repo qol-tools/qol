@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+#[path = "peer_admin.rs"]
+mod peer_admin;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
@@ -44,6 +46,10 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
     };
 
     match request {
+        RuntimeRequest::PeerOperation { request } => {
+            peer_admin::handle_operation(writer, shared, request)
+        }
+        RuntimeRequest::PeerAdmin { request } => peer_admin::handle(writer, shared, request),
         RuntimeRequest::GetState => write_state(writer, shared),
         RuntimeRequest::SetFocus { monitor_idx } => {
             apply_focus(shared, monitor_idx, "[runtime/socket] SET_FOCUS")

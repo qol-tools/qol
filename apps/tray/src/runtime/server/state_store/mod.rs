@@ -25,6 +25,7 @@ pub(crate) struct SharedState {
     next_subscriber_id: AtomicU64,
     armed_lifelines: Mutex<HashMap<String, usize>>,
     platform: OnceLock<SharedPlatform>,
+    peers: OnceLock<crate::features::linked_devices::PeerHostHandle>,
 }
 
 impl SharedState {
@@ -40,6 +41,7 @@ impl SharedState {
             next_subscriber_id: AtomicU64::new(1),
             armed_lifelines: Mutex::new(HashMap::new()),
             platform: OnceLock::new(),
+            peers: OnceLock::new(),
         }
     }
 
@@ -70,6 +72,30 @@ impl SharedState {
 
     pub(crate) fn attach_platform(&self, facade: SharedPlatform) {
         let _ = self.platform.set(facade);
+    }
+
+    pub(crate) fn attach_peers(
+        &self,
+        handle: crate::features::linked_devices::PeerHostHandle,
+    ) -> bool {
+        self.peers.set(handle).is_ok()
+    }
+
+    pub(crate) fn peers(&self) -> Option<&crate::features::linked_devices::PeerHostHandle> {
+        self.peers.get()
+    }
+
+    #[cfg(any(unix, test))]
+    pub(crate) fn peer_admin(
+        &self,
+        request: qol_peers::admin::Request,
+    ) -> qol_peers::admin::Response {
+        match self.peers() {
+            Some(peers) => peers.request(request),
+            None => qol_peers::admin::Response::Error {
+                error: qol_peers::admin::Error::HostUnavailable,
+            },
+        }
     }
 
     /// Forces inline desktop queries against the OS, bypassing the poll loop's

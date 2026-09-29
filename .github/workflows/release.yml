@@ -94,6 +94,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Export production artifact identity
+        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+
       - name: Build
         env:
           PACKAGE: ${{ needs.setup.outputs.package }}

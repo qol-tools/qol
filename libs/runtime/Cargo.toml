@@ -6,6 +6,8 @@ description = "Runtime protocol and client for QoL Tray platform state"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [dependencies]
+zeroize = "1"
+qol-peers.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-windowing.workspace = true

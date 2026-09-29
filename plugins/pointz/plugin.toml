@@ -20,6 +20,7 @@ args = ["--action", "settings"]
 gpui = true
 doctor = true
 permissions = ["input-capture"]
+peer_trust = "pointz-v1"
 
 [menu]
 label = "PointZ"
@@ -30,16 +31,6 @@ enabled = true
 inherit_listener = true
 command = "qol-pointz"
 socket = "/tmp/qol-pointz.sock"
-
-[[daemon.extra_ports]]
-name = "discovery"
-port = 45454
-protocol = "udp"
-
-[[daemon.extra_ports]]
-name = "command"
-port = 45455
-protocol = "udp"
 
 [traits.confined]
 

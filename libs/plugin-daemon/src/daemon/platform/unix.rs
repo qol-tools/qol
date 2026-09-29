@@ -384,7 +384,13 @@ pub fn run_stateful_request_listener<S, F>(
 where
     F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
 {
-    run_stateful_request_listener_inner(config, None, state, handler)
+    run_stateful_request_listener_inner(
+        config,
+        None,
+        DaemonBoundary::from_environment(),
+        state,
+        handler,
+    )
 }
 
 pub fn run_stateful_request_listener_with_readiness<S, F>(
@@ -396,12 +402,19 @@ pub fn run_stateful_request_listener_with_readiness<S, F>(
 where
     F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
 {
-    run_stateful_request_listener_inner(config, Some(readiness), state, handler)
+    run_stateful_request_listener_inner(
+        config,
+        Some(readiness),
+        DaemonBoundary::from_environment(),
+        state,
+        handler,
+    )
 }
 
 fn run_stateful_request_listener_inner<S, F>(
     config: &DaemonConfig,
     readiness: Option<&ReadinessGate>,
+    boundary: DaemonBoundary,
     mut state: S,
     mut handler: F,
 ) -> io::Result<()>
@@ -419,23 +432,13 @@ where
                 if local_ipc::authorize_peer(&s).is_err() {
                     continue;
                 }
-                let mut not_ready: NotReadyState = None;
-                let result = read_request_and_parse(&mut s, |request| {
+                let result = read_request_with_boundary(&mut s, &boundary, readiness, |request| {
                     if request.action == "kill" {
                         kill_requested = true;
-                        return handler(&mut state, request);
-                    }
-                    if let Some(state) = readiness.and_then(ReadinessGate::snapshot) {
-                        not_ready = Some(state);
-                        return ReadResult::Ignore;
                     }
                     handler(&mut state, request)
                 });
-                if let Some((phase, detail)) = not_ready {
-                    write_response(&mut s, &DaemonResponse::NotReady { phase, detail });
-                } else {
-                    handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
-                }
+                handle_read_result(&mut s, result, |_| DaemonResponse::Handled { data: None });
                 if kill_requested {
                     break;
                 }
@@ -656,7 +659,19 @@ where
     read_request_and_parse(stream, |request| parser(&request.action))
 }
 
-fn read_request_and_parse<C, F>(stream: &mut UnixStream, mut parser: F) -> ReadResult<C>
+fn read_request_and_parse<C, F>(stream: &mut UnixStream, parser: F) -> ReadResult<C>
+where
+    F: FnMut(&DaemonRequest) -> ReadResult<C>,
+{
+    read_request_with_boundary(stream, &DaemonBoundary::from_environment(), None, parser)
+}
+
+fn read_request_with_boundary<C, F>(
+    stream: &mut UnixStream,
+    boundary: &DaemonBoundary,
+    readiness: Option<&ReadinessGate>,
+    mut parser: F,
+) -> ReadResult<C>
 where
     F: FnMut(&DaemonRequest) -> ReadResult<C>,
 {
@@ -686,15 +701,37 @@ where
         return ReadResult::Ignore;
     }
 
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if value.get("fence_version").is_some()
+            || value.get("instance").is_some()
+            || value.get("request").is_some()
+        {
+            let Ok(envelope) =
+                serde_json::from_str::<qol_runtime::protocol::FencedDaemonRequest>(trimmed)
+            else {
+                return ReadResult::Error("invalid daemon fence".into());
+            };
+            if envelope.fence_version != 1 || boundary.instance.as_ref() != Some(&envelope.instance)
+            {
+                return ReadResult::Error("daemon instance changed".into());
+            }
+            return boundary.parse(stream, readiness, &envelope.request, &mut parser);
+        }
+    }
     if let Ok(request) = serde_json::from_str::<DaemonRequest>(trimmed) {
-        return parse_with_theme_override(&request, &mut parser);
+        return boundary.parse(stream, readiness, &request, &mut parser);
     }
 
+    if trimmed.starts_with('{') {
+        return ReadResult::Error("invalid daemon request".into());
+    }
     let cmd = match trimmed.strip_prefix("action:") {
         Some(a) => a,
         None => trimmed,
     };
-    parse_with_theme_override(
+    boundary.parse(
+        stream,
+        readiness,
         &DaemonRequest {
             action: cmd.to_string(),
             input: serde_json::Value::Null,
@@ -755,9 +792,9 @@ where
 }
 
 fn write_response(stream: &mut UnixStream, response: &DaemonResponse) {
-    if let Ok(json) = serde_json::to_string(response) {
-        let _ = stream.write_all(json.as_bytes());
-        let _ = stream.write_all(b"\n");
+    if let Ok(payload) = local_ipc::encode_secret_json(response) {
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+        let _ = stream.write_all(&payload);
     }
 }
 
@@ -1587,5 +1624,163 @@ mod tests {
         assert!(matches!(result, ReadResult::Handled));
         let result = parse_with_theme_override(&request, &mut |_| ReadResult::Command(7));
         assert!(matches!(result, ReadResult::Command(7)));
+    }
+}
+
+#[derive(Clone)]
+pub struct DaemonBoundary {
+    instance: Option<String>,
+}
+
+impl DaemonBoundary {
+    pub fn from_environment() -> Self {
+        static INSTANCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        Self {
+            instance: INSTANCE
+                .get_or_init(|| {
+                    std::env::var(qol_conventions::ENV_DAEMON_INSTANCE)
+                        .ok()
+                        .filter(|value| {
+                            value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        })
+                })
+                .clone(),
+        }
+    }
+
+    pub fn with_instance(instance: String) -> io::Result<Self> {
+        if instance.len() != 32 || !instance.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "invalid daemon instance",
+            ));
+        }
+        Ok(Self {
+            instance: Some(instance),
+        })
+    }
+
+    fn parse<C, F>(
+        &self,
+        stream: &mut UnixStream,
+        readiness: Option<&ReadinessGate>,
+        request: &DaemonRequest,
+        parser: &mut F,
+    ) -> ReadResult<C>
+    where
+        F: FnMut(&DaemonRequest) -> ReadResult<C>,
+    {
+        if request.action != "kill" {
+            if let Some((phase, detail)) = readiness.and_then(ReadinessGate::snapshot) {
+                write_response(stream, &DaemonResponse::NotReady { phase, detail });
+                return ReadResult::Ignore;
+            }
+        }
+        if request.action == "ping" {
+            if let Some(instance) = &self.instance {
+                return ReadResult::HandledWithData(
+                    serde_json::json!({ "fence_version": 1, "instance": instance }),
+                );
+            }
+        }
+        parse_with_theme_override(request, parser)
+    }
+}
+
+pub fn run_stateful_request_listener_with_boundary<S, F>(
+    config: &DaemonConfig,
+    readiness: Option<&ReadinessGate>,
+    boundary: DaemonBoundary,
+    state: S,
+    handler: F,
+) -> io::Result<()>
+where
+    F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
+{
+    run_stateful_request_listener_inner(config, readiness, boundary, state, handler)
+}
+
+#[cfg(test)]
+mod operation_fence_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn inherited_listener_replacement_rejects_old_instance_before_any_parser() {
+        let temporary = tempfile::tempdir().unwrap();
+        let socket = temporary.path().join("shared.sock");
+        let inherited = local_ipc::bind_listener(&socket).unwrap();
+        let replacement = inherited.try_clone().unwrap();
+        let calls = AtomicUsize::new(0);
+        for (listener, actual, expected, action, accepted) in [
+            (&inherited, "a".repeat(32), "a".repeat(32), "count", true),
+            (&replacement, "b".repeat(32), "a".repeat(32), "count", false),
+            (
+                &replacement,
+                "b".repeat(32),
+                "a".repeat(32),
+                "theme dark red",
+                false,
+            ),
+            (&replacement, "b".repeat(32), "b".repeat(32), "count", true),
+        ] {
+            let mut client = UnixStream::connect(&socket).unwrap();
+            let request = qol_runtime::protocol::FencedDaemonRequest {
+                fence_version: 1,
+                instance: expected,
+                request: DaemonRequest {
+                    action: action.into(),
+                    input: serde_json::Value::Null,
+                },
+            };
+            writeln!(client, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            local_ipc::authorize_peer(&stream).unwrap();
+            let before = calls.load(Ordering::SeqCst);
+            let result = read_request_with_boundary(
+                &mut stream,
+                &DaemonBoundary::with_instance(actual).unwrap(),
+                None,
+                |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    ReadResult::<()>::Handled
+                },
+            );
+            assert_eq!(matches!(result, ReadResult::Handled), accepted, "{action}");
+            assert_eq!(
+                calls.load(Ordering::SeqCst) - before,
+                usize::from(accepted),
+                "{action}"
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn operation_capability_is_advertised_only_by_the_active_ready_boundary() {
+        let readiness = ReadinessGate::starting();
+        for ready in [false, true] {
+            if ready {
+                readiness.mark_ready();
+            }
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            writeln!(client, "{{\"action\":\"ping\"}}").unwrap();
+            let result = read_request_with_boundary(
+                &mut server,
+                &DaemonBoundary::with_instance("a".repeat(32)).unwrap(),
+                Some(&readiness),
+                |_| -> ReadResult<()> { panic!("readiness must not invoke domain parser") },
+            );
+            handle_read_result(&mut server, result, |_| unreachable!());
+            let line = local_ipc::read_line(&mut BufReader::new(client))
+                .unwrap()
+                .unwrap();
+            let response: DaemonResponse = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                matches!(response, DaemonResponse::Handled { data: Some(_) }),
+                ready
+            );
+            assert_eq!(matches!(response, DaemonResponse::NotReady { .. }), !ready);
+        }
     }
 }

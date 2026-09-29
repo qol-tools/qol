@@ -1,6 +1,7 @@
 import { html } from '../lib/html.js';
 import { isSlotVisible, slotStyle } from '../lib/world-slot-style.js';
 import { PluginsView } from '../views/plugins-view.js';
+import { LinkedDevicesView } from '../views/linked-devices/view.js';
 import { PluginConfigSectionView } from '../views/plugin-config/view.js';
 import { StoreView } from '../views/store-view.js';
 import { HotkeysView, HotkeyEditorSubPage, hotkeyEditorSlot } from '../views/hotkeys-view.js';
@@ -25,13 +26,14 @@ import { PluginActionsSubPage, pluginActionsSlot } from '../views/plugins/plugin
 
 export { VIEW_LABELS, getViewLabel, resolveViewLabel } from './view-labels.js';
 
-const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'profile', 'logs'];
+const BASE_ORDER = ['plugins', 'store', 'hotkeys', 'shortcuts', 'task-runner', 'profile', 'linked-devices', 'logs'];
 
 export function buildViewOrder(devEnabled) {
     return devEnabled ? [...BASE_ORDER, 'dev'] : [...BASE_ORDER];
 }
 
 const WORLD_PAGES = [
+    { id: 'linked-devices', contentSized: true, render: (ctx) => html`<${LinkedDevicesView} active=${ctx.activeViewId === 'linked-devices'} />` },
     { id: 'plugins',           contentSized: true, render: (ctx) => html`<${PluginsView} onOpenPluginConfig=${ctx.openPluginConfig} />` },
     { id: 'store',             contentSized: true, render: () => html`<${StoreView} />` },
     { id: 'hotkeys',           contentSized: true, render: () => html`<${HotkeysView} />` },

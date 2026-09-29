@@ -289,3 +289,107 @@ mod tests {
         headers
     }
 }
+
+#[cfg(test)]
+mod peer_settings_tests {
+    use super::{require_api_access, require_local_host, HttpSecurity};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        middleware,
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn peer_settings_routes_share_token_and_origin_policy() {
+        for route in ["/peers/admin", "/peers/invitation", "/peers/catalog"] {
+            for (host, token, origin, fetch_site, expected) in [
+                (
+                    "localhost:9876",
+                    "",
+                    "http://localhost:9876",
+                    "same-origin",
+                    StatusCode::UNAUTHORIZED,
+                ),
+                (
+                    "localhost:9876",
+                    "wrong",
+                    "http://localhost:9876",
+                    "same-origin",
+                    StatusCode::UNAUTHORIZED,
+                ),
+                (
+                    "localhost:9876",
+                    "secret",
+                    "https://foreign.example",
+                    "same-origin",
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    "localhost:9876",
+                    "secret",
+                    "http://localhost:9876",
+                    "cross-site",
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    "foreign:9876",
+                    "secret",
+                    "http://localhost:9876",
+                    "same-origin",
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    "localhost:9876",
+                    "secret",
+                    "http://localhost:9876",
+                    "same-origin",
+                    StatusCode::BAD_REQUEST,
+                ),
+            ] {
+                let security = HttpSecurity {
+                    token: Arc::from("secret"),
+                    port: 9876,
+                };
+                let app = super::super::settings::peer_routes()
+                    .with_state(super::super::settings::PeerCatalogState(Arc::new(
+                        std::sync::Mutex::new(crate::plugins::PluginManager::new()),
+                    )))
+                    .layer(middleware::from_fn_with_state(
+                        security.clone(),
+                        require_api_access,
+                    ))
+                    .layer(middleware::from_fn_with_state(security, require_local_host));
+                let request = Request::builder()
+                    .method(if route == "/peers/catalog" {
+                        "GET"
+                    } else {
+                        "POST"
+                    })
+                    .uri(route)
+                    .header("host", host)
+                    .header(qol_conventions::HTTP_AUTH_HEADER, token)
+                    .header("origin", origin)
+                    .header("sec-fetch-site", fetch_site)
+                    .body(Body::from("invalid"))
+                    .unwrap();
+                let expected =
+                    if route == "/peers/catalog" && host == "localhost:9876" && token == "secret" {
+                        StatusCode::OK
+                    } else {
+                        expected
+                    };
+                let response = app.oneshot(request).await.unwrap();
+                if expected == StatusCode::OK || expected == StatusCode::BAD_REQUEST {
+                    assert_eq!(response.headers()["cache-control"], "no-store");
+                }
+                assert_eq!(
+                    response.status(),
+                    expected,
+                    "{route} {host} {origin} {fetch_site}"
+                );
+            }
+        }
+    }
+}

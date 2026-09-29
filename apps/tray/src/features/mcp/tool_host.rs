@@ -1,5 +1,6 @@
 use crate::plugins::PluginManager;
-use qol_config::contract::{IndexMap, RuntimeSpec};
+use qol_config::contract::IndexMap;
+use qol_plugin_api::operations::{Invocation, Operation, OperationCatalog};
 use std::sync::{Arc, Mutex};
 
 pub(super) struct PluginToolHost {
@@ -54,10 +55,10 @@ impl qol_mcp::ToolHost for PluginToolHost {
             "event=tool_called plugin={} runable={} kind={}",
             binding.plugin_id,
             binding.runable,
-            kind_label(&binding.kind)
+            kind_label(binding.kind)
         );
-        match &binding.kind {
-            RunableKind::Query => {
+        match binding.kind {
+            Invocation::Query => {
                 match crate::plugins::action_executor::dispatch_query_with_input(
                     &self.plugin_manager,
                     &binding.plugin_id,
@@ -69,7 +70,7 @@ impl qol_mcp::ToolHost for PluginToolHost {
                     Err(error) => tool_failed(&binding, &error.to_string()),
                 }
             }
-            RunableKind::Action => {
+            Invocation::Action => {
                 match crate::plugins::action_executor::try_execute_action_with_input_result(
                     &self.plugin_manager,
                     &binding.plugin_id,
@@ -136,22 +137,17 @@ fn tool_failed(binding: &ToolBinding, error: &str) -> qol_mcp::ToolResult {
     qol_mcp::ToolResult::error(error)
 }
 
-fn kind_label(kind: &RunableKind) -> &'static str {
-    match kind {
-        RunableKind::Query => "query",
-        RunableKind::Action => "action",
+fn kind_label(invocation: Invocation) -> &'static str {
+    match invocation {
+        Invocation::Query => "query",
+        Invocation::Action => "action",
     }
-}
-
-enum RunableKind {
-    Query,
-    Action,
 }
 
 struct ToolBinding {
     plugin_id: String,
     runable: String,
-    kind: RunableKind,
+    kind: Invocation,
     accepts_agent_home: bool,
     spec: qol_mcp::ToolSpec,
 }
@@ -161,93 +157,51 @@ fn tool_name(plugin_id: &str, runable: &str) -> String {
 }
 
 fn bindings(plugin_manager: &Arc<Mutex<PluginManager>>) -> Vec<ToolBinding> {
-    let Ok(manager) = plugin_manager.lock() else {
+    let Ok(mut manager) = plugin_manager.lock() else {
         return Vec::new();
     };
-    manager
-        .plugins()
-        .filter_map(|plugin| {
-            let plugin_id = plugin.id.as_str().to_string();
-            match crate::plugins::config::load_runable_contract_from_root(&plugin.path) {
-                Ok(Some(runtime)) => Some(bindings_for_contract(&plugin_id, &runtime)),
-                Ok(None) => {
-                    qol_runtime::probe!("TRAY_MCP", "event=contract_skipped plugin={}", plugin_id);
-                    None
-                }
-                Err(error) => {
-                    qol_runtime::probe!(
-                        "TRAY_MCP",
-                        "event=contract_skipped plugin={} error={}",
-                        plugin_id,
-                        error
-                    );
-                    None
-                }
-            }
-        })
-        .flatten()
+    if manager.reconcile_profile_generation().is_err() {
+        qol_runtime::probe!(
+            "TRAY_MCP",
+            "event=catalog_skipped reason=profile_reconciliation_failed"
+        );
+        return Vec::new();
+    }
+    let catalog = crate::plugins::operation_catalog::installed_catalog(&manager);
+    catalog_bindings(&catalog)
+}
+
+fn catalog_bindings(catalog: &OperationCatalog) -> Vec<ToolBinding> {
+    catalog
+        .iter()
+        .filter(|operation| operation.agent_tool)
+        .filter_map(tool_binding)
         .collect()
 }
 
-fn bindings_for_contract(plugin_id: &str, runtime: &RuntimeSpec) -> Vec<ToolBinding> {
-    let mut result = Vec::new();
-    for (name, entry) in &runtime.queries {
-        if !entry.agent_tool {
-            continue;
-        }
-        result.push(ToolBinding {
-            plugin_id: plugin_id.to_string(),
-            runable: name.clone(),
-            kind: RunableKind::Query,
-            accepts_agent_home: entry
-                .input
-                .as_ref()
-                .is_some_and(|map| map.contains_key("agent_home")),
-            spec: tool_spec(
-                plugin_id,
-                name,
-                entry.tool_description(),
-                entry.input.as_ref(),
-            ),
-        });
-    }
-    for (name, entry) in &runtime.actions {
-        if !entry.agent_tool {
-            continue;
-        }
-        result.push(ToolBinding {
-            plugin_id: plugin_id.to_string(),
-            runable: name.clone(),
-            kind: RunableKind::Action,
-            accepts_agent_home: entry
-                .input
-                .as_ref()
-                .is_some_and(|map| map.contains_key("agent_home")),
-            spec: tool_spec(
-                plugin_id,
-                name,
-                entry.tool_description(),
-                entry.input.as_ref(),
-            ),
-        });
-    }
-    result
+fn tool_binding(operation: &Operation) -> Option<ToolBinding> {
+    let kind = operation.invocation()?;
+    Some(ToolBinding {
+        plugin_id: operation.plugin_id.as_str().to_string(),
+        runable: operation.key.name.clone(),
+        kind,
+        accepts_agent_home: operation
+            .input
+            .as_ref()
+            .is_some_and(|map| map.contains_key("agent_home")),
+        spec: tool_spec(operation),
+    })
 }
 
-fn tool_spec(
-    plugin_id: &str,
-    runable: &str,
-    description: &str,
-    input: Option<&IndexMap<String, String>>,
-) -> qol_mcp::ToolSpec {
-    let published = input.map(|map| {
+fn tool_spec(operation: &Operation) -> qol_mcp::ToolSpec {
+    let published = operation.input.as_ref().map(|map| {
         let mut published = map.clone();
         published.shift_remove("agent_home");
         published
     });
     qol_mcp::ToolSpec {
-        name: tool_name(plugin_id, runable),
-        description: description.to_string(),
+        name: tool_name(operation.plugin_id.as_str(), &operation.key.name),
+        description: operation.tool_description().to_string(),
         input_schema: qol_mcp::input_schema(published.as_ref().unwrap_or(&IndexMap::new())),
     }
 }
@@ -255,10 +209,122 @@ fn tool_spec(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::manifest::{
+        BuildInfo, Capabilities, MenuConfig, PluginId, PluginInfo, PluginManifest, PluginUid,
+        CURRENT_MANIFEST_VERSION,
+    };
+    use qol_config::contract::RuntimeSpec;
+
+    fn manifest_for(plugin_id: &str) -> PluginManifest {
+        PluginManifest {
+            manifest_version: CURRENT_MANIFEST_VERSION,
+            plugin: PluginInfo {
+                id: Some(PluginId::new(plugin_id)),
+                uid: Some(PluginUid::new(format!("uid-{plugin_id}"))),
+                name: "Test".to_string(),
+                description: String::new(),
+                version: "1.0.0".to_string(),
+                author: None,
+                platforms: None,
+            },
+            menu: MenuConfig {
+                label: "Test".to_string(),
+                icon: None,
+                items: Vec::new(),
+            },
+            daemon: None,
+            dependencies: None,
+            runtime: None,
+            actions: Default::default(),
+            capabilities: Capabilities::default(),
+            build: BuildInfo::default(),
+            traits: None,
+            shortcuts: Vec::new(),
+            config: Default::default(),
+            launcher: None,
+        }
+    }
+
+    fn catalog_for(plugin_id: &str, runtime: &RuntimeSpec) -> OperationCatalog {
+        let manifest = manifest_for(plugin_id);
+        OperationCatalog::derive(&PluginId::new(plugin_id), &manifest, Some(runtime))
+            .expect("derive catalog")
+    }
+
+    fn bindings_for_contract(plugin_id: &str, runtime: &RuntimeSpec) -> Vec<ToolBinding> {
+        catalog_bindings(&catalog_for(plugin_id, runtime))
+    }
 
     #[test]
     fn tool_name_joins_plugin_id_and_runable_with_double_underscore() {
         assert_eq!(tool_name("lights", "status"), "lights__status");
+    }
+
+    #[test]
+    fn shipped_memory_activation_preserves_query_tools_and_typed_capture() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(dir.path());
+        let mut manifest: PluginManifest =
+            toml::from_str(include_str!("../../../../../plugins/memory/plugin.toml")).unwrap();
+        manifest.plugin.platforms = None;
+        let runtime_source = include_str!("../../../../../plugins/memory/qol-runtime.toml");
+        let runtime = qol_config::contract::parse_runtime_spec_str(runtime_source).unwrap();
+        std::fs::write(dir.path().join("qol-runtime.toml"), runtime_source).unwrap();
+        std::fs::write(
+            dir.path().join(&manifest.runtime.as_ref().unwrap().command),
+            "fixture",
+        )
+        .unwrap();
+        let mut manager = PluginManager::new();
+        manager.insert_plugin_for_test(crate::plugins::Plugin::new(
+            PluginId::new("qol-memory"),
+            manifest,
+            dir.path().to_path_buf(),
+        ));
+        let catalog = crate::plugins::operation_catalog::installed_catalog(&manager);
+        let activation = catalog
+            .iter()
+            .find(|operation| {
+                operation.key.name == "status" && operation.invocation() == Some(Invocation::Action)
+            })
+            .unwrap();
+        assert!(!activation.agent_tool);
+        assert!(activation.input.is_none());
+        let bindings = catalog_bindings(&catalog);
+        let names: Vec<_> = bindings
+            .iter()
+            .map(|binding| binding.spec.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "qol-memory__ask",
+                "qol-memory__status",
+                "qol-memory__capture"
+            ]
+        );
+        assert_eq!(bindings[0].kind, Invocation::Query);
+        assert_eq!(bindings[1].kind, Invocation::Query);
+        assert_eq!(bindings[2].kind, Invocation::Action);
+        assert!(bindings[0].accepts_agent_home);
+        assert!(!bindings[1].accepts_agent_home);
+        assert!(bindings[2].accepts_agent_home);
+        let ask = &runtime.queries["ask"];
+        let mut published = ask.input.clone().unwrap();
+        published.shift_remove("agent_home");
+        assert_eq!(
+            bindings[0].spec.input_schema,
+            qol_mcp::input_schema(&published)
+        );
+        assert_eq!(
+            bindings[0].spec.description,
+            *ask.tool_description.as_ref().unwrap()
+        );
+        assert_eq!(
+            bindings[1].spec.description,
+            *runtime.queries["status"].tool_description.as_ref().unwrap()
+        );
+        assert!(catalog.iter().all(|operation| operation.peer.is_none()));
     }
 
     #[test]
@@ -301,14 +367,100 @@ agent_tool = true
                 "required": ["zone"]
             })
         );
-        assert!(matches!(&bindings[0].kind, RunableKind::Query));
+        assert_eq!(bindings[0].kind, Invocation::Query);
         assert_eq!(bindings[1].spec.name, "lights__blink");
         assert_eq!(bindings[1].spec.description, "blink action");
         assert_eq!(
             bindings[1].spec.input_schema,
             serde_json::json!({"type": "object", "properties": {}, "required": []})
         );
-        assert!(matches!(&bindings[1].kind, RunableKind::Action));
+        assert_eq!(bindings[1].kind, Invocation::Action);
+    }
+
+    #[test]
+    fn peer_exposure_alone_publishes_no_tool() {
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.reconnect]
+description = "Reconnect devices"
+peer = { replay = "idempotent" }
+
+[query.devices]
+description = "Device inventory"
+poll_interval_ms = 1000
+peer = { replay = "idempotent" }
+"#,
+        )
+        .unwrap();
+        let catalog = catalog_for("lights", &runtime);
+        assert_eq!(catalog.len(), 2);
+        assert!(catalog.iter().all(|operation| operation.peer.is_some()));
+        assert!(catalog_bindings(&catalog).is_empty());
+    }
+
+    #[test]
+    fn agent_tools_without_peer_stay_exposed() {
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[action.reconnect]
+description = "Reconnect devices"
+agent_tool = true
+"#,
+        )
+        .unwrap();
+        let catalog = catalog_for("lights", &runtime);
+        let entry = catalog
+            .iter()
+            .find(|operation| operation.key.name == "reconnect")
+            .expect("reconnect");
+        assert!(entry.peer.is_none());
+        let bindings = catalog_bindings(&catalog);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].spec.name, "lights__reconnect");
+    }
+
+    #[test]
+    fn manifest_actions_without_a_runtime_contract_publish_no_tool() {
+        let mut manifest = manifest_for("lights");
+        manifest.actions.insert(
+            "blink".to_string(),
+            crate::plugins::manifest::ActionDeclaration {
+                label: "Blink".to_string(),
+                kind: crate::plugins::manifest::ActionType::Run,
+                continuous: false,
+                args: Some(vec!["blink".to_string()]),
+                config_key: None,
+                checked: false,
+                picture: None,
+                hotkey: true,
+                peer: None,
+            },
+        );
+        let catalog =
+            OperationCatalog::derive(&PluginId::new("lights"), &manifest, None).expect("derive");
+        assert_eq!(catalog.len(), 1);
+        assert!(catalog_bindings(&catalog).is_empty());
+    }
+
+    #[test]
+    fn streams_never_publish_a_tool() {
+        let runtime = qol_config::contract::parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[stream.live]
+description = "Live state"
+throttle_ms = 100
+"#,
+        )
+        .unwrap();
+        let catalog = catalog_for("lights", &runtime);
+        assert_eq!(catalog.len(), 1);
+        assert!(catalog_bindings(&catalog).is_empty());
     }
 
     #[test]
@@ -414,5 +566,46 @@ input = { question = "Question to ask", agent_home = "Agent home id" }
         let second = serde_json::json!(["entry"]);
         let forwarded = with_agent_home_argument(second, &caller, false, || false).unwrap();
         assert_eq!(forwarded, serde_json::json!(["entry"]));
+    }
+
+    #[test]
+    fn calls_revalidate_exposure_after_listing_without_invoking_a_stale_tool() {
+        use qol_mcp::ToolHost;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(dir.path());
+        let mut manifest = manifest_for("fixture");
+        manifest.runtime = Some(crate::plugins::manifest::RuntimeConfig {
+            command: "plugin-bin".into(),
+            actions: None,
+        });
+        std::fs::write(dir.path().join("plugin-bin"), "fixture").unwrap();
+        let runtime_path = dir.path().join("qol-runtime.toml");
+        std::fs::write(
+            &runtime_path,
+            "schema_version = 1\n[action.blink]\ndescription = \"Blink\"\nagent_tool = true\n",
+        )
+        .unwrap();
+        let mut manager = PluginManager::new();
+        manager.insert_plugin_for_test(crate::plugins::Plugin::new(
+            PluginId::new("fixture"),
+            manifest,
+            dir.path().to_path_buf(),
+        ));
+        let host = PluginToolHost::new(Arc::new(Mutex::new(manager)));
+        assert_eq!(host.list()[0].name, "fixture__blink");
+        std::fs::write(&runtime_path,
+            "schema_version = 1\n[action.blink]\ndescription = \"Blink\"\npeer = { replay = \"never\" }\n"
+        ).unwrap();
+        let result = host.call(
+            "fixture__blink",
+            serde_json::json!({}),
+            &qol_mcp::Caller::default(),
+        );
+        assert_eq!(
+            result,
+            qol_mcp::ToolResult::error("unknown tool: fixture__blink")
+        );
+        assert!(host.list().is_empty());
     }
 }

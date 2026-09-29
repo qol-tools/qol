@@ -1,5 +1,11 @@
 mod bounded_output;
+mod observation;
 mod platform;
+
+pub use observation::{
+    MemberObservation, NodeObservation, Observation, ProcessProvenance, ProcessStat,
+    ProcessTreeObservation, ScopeIdentity,
+};
 
 pub use bounded_output::{
     run_guarded_with_output_timeout, run_owned_with_output_timeout, BoundedCommandOutput,
@@ -111,6 +117,18 @@ pub struct CurrentProcessTreeGuard {
 }
 
 impl ProcessTreeGuard {
+    pub fn containment_backend(&self) -> &'static str {
+        self._inner.containment_backend()
+    }
+
+    pub fn membership_observation_supported(&self) -> bool {
+        self._inner.membership_observation_supported()
+    }
+
+    pub fn observe_residual(&self) -> ProcessTreeObservation {
+        self._inner.observe_residual()
+    }
+
     pub fn prepare_command(&self, mut command: Command) -> io::Result<PreparedCommand<'_>> {
         let prepared = self._inner.prepare_command(&mut command)?;
         Ok(PreparedCommand {

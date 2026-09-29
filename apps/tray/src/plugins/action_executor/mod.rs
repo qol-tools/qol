@@ -1,3 +1,4 @@
+pub(crate) mod remote;
 use super::manager::PluginManager;
 use crate::plugins::action_transport::DaemonActionDispatch;
 use crate::plugins::daemon_health::{probe_daemon_readiness_with_timeout, DaemonReadiness};
@@ -184,6 +185,19 @@ pub fn try_execute_action_with_input(
     try_execute_action_with_input_result(plugin_manager, plugin_id, action_id, input).map(drop)
 }
 
+pub(crate) fn core_tool_for_action(action_id: &str) -> Option<crate::settings_surface::CoreTool> {
+    use crate::settings_surface::CoreTool;
+    match action_id {
+        "shortcuts" => Some(CoreTool::Shortcuts),
+        "shortcuts-add" => Some(CoreTool::AddShortcut),
+        "hotkeys" => Some(CoreTool::Hotkeys),
+        "hotkeys-add" => Some(CoreTool::AddHotkey),
+        "updates" => Some(CoreTool::Updates),
+        "linked-devices" => Some(CoreTool::LinkedDevices),
+        _ => None,
+    }
+}
+
 pub fn try_execute_action_with_input_result(
     plugin_manager: &Arc<Mutex<PluginManager>>,
     plugin_id: &str,
@@ -193,22 +207,7 @@ pub fn try_execute_action_with_input_result(
     if plugin_id == qol_conventions::CORE_PANEL_ID {
         let requested = match action_id {
             "settings" => Some(crate::settings_surface::request(plugin_id)),
-            "shortcuts" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::Shortcuts,
-            )),
-            "shortcuts-add" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::AddShortcut,
-            )),
-            "hotkeys" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::Hotkeys,
-            )),
-            "hotkeys-add" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::AddHotkey,
-            )),
-            "updates" => Some(crate::settings_surface::request_core_tool(
-                crate::settings_surface::CoreTool::Updates,
-            )),
-            _ => None,
+            _ => core_tool_for_action(action_id).map(crate::settings_surface::request_core_tool),
         };
         if let Some(requested) = requested {
             return match requested {
@@ -302,10 +301,7 @@ pub fn dispatch_query_with_input(
     if matches!(&initial_dispatch, DaemonActionDispatch::Handled { .. }) {
         return query_dispatch_result(initial_dispatch, plugin_id, query_name);
     }
-    if let DaemonReadiness::NotReady { phase, detail } = query_daemon_socket_ready(&socket_path) {
-        return Err(ActionExecutionError::DaemonNotReady { phase, detail });
-    }
-    if !matches!(&initial_dispatch, DaemonActionDispatch::Unavailable) {
+    if !matches!(&initial_dispatch, DaemonActionDispatch::NotSent) {
         return query_dispatch_result(initial_dispatch, plugin_id, query_name);
     }
 
@@ -347,11 +343,17 @@ fn query_dispatch_result(
 ) -> Result<serde_json::Value, ActionExecutionError> {
     match dispatch {
         DaemonActionDispatch::Handled { payload } => Ok(payload.unwrap_or(serde_json::Value::Null)),
+        DaemonActionDispatch::OutcomeUnknown => Err(ActionExecutionError::ActionRejected(
+            "daemon outcome unknown; no reissue".into(),
+        )),
+        DaemonActionDispatch::NotReady { phase, detail } => {
+            Err(ActionExecutionError::DaemonNotReady { phase, detail })
+        }
         DaemonActionDispatch::Fallback => Err(ActionExecutionError::ActionRejected(format!(
             "query {query_name} rejected by {plugin_id} daemon"
         ))),
         DaemonActionDispatch::Error(message) => Err(ActionExecutionError::ActionRejected(message)),
-        DaemonActionDispatch::Unavailable => Err(ActionExecutionError::ActionRejected(format!(
+        DaemonActionDispatch::NotSent => Err(ActionExecutionError::ActionRejected(format!(
             "daemon unavailable for {plugin_id}"
         ))),
     }
@@ -379,7 +381,9 @@ fn dispatch_outcome(dispatch: &DaemonActionDispatch) -> &'static str {
     match dispatch {
         DaemonActionDispatch::Handled { .. } => "handled",
         DaemonActionDispatch::Fallback => "fallback",
-        DaemonActionDispatch::Unavailable => "unavailable",
+        DaemonActionDispatch::NotSent => "not_sent",
+        DaemonActionDispatch::OutcomeUnknown => "outcome_unknown",
+        DaemonActionDispatch::NotReady { .. } => "not_ready",
         DaemonActionDispatch::Error(_) => "error",
     }
 }

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Plugin manifest and restore-claim wire contract for qol-tray plugins"
 
 [dependencies]
+sha2.workspace = true
 anyhow = "1.0"
 base64 = "0.22"
 indexmap = { version = "2.12", features = ["serde"] }

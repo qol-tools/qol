@@ -1,4 +1,4 @@
-use super::command::{self, CapturedOutcome, CapturedOutput};
+use super::command::{self, CapturedOutput};
 use super::report::FormattedFile;
 use crate::progress::{step_label, StepKind};
 use anyhow::{anyhow, bail, Context, Result};
@@ -280,30 +280,22 @@ fn rustfmt_bytes(
     let CapturedOutput {
         stdout,
         stderr,
-        outcome,
+        command: output,
     } = command::run_captured(
         &mut command,
         content,
         cancellation,
         command::Containment::Preferred,
     );
-    match outcome {
-        CapturedOutcome::Failed(error) => {
-            Err(error).with_context(|| format!("rustfmt did not complete for {}", file.relative))
+    if let Err(error) = output.result {
+        let stderr = bounded(String::from_utf8_lossy(&stderr).trim());
+        let error = error.context(format!("rustfmt did not complete for {}", file.relative));
+        if stderr.is_empty() {
+            return Err(error);
         }
-        CapturedOutcome::Exited(status) if status.success() => Ok(stdout),
-        CapturedOutcome::Exited(status) => {
-            let stderr = bounded(String::from_utf8_lossy(&stderr).trim());
-            if stderr.is_empty() {
-                bail!("rustfmt failed for {} with {}", file.relative, status);
-            }
-            bail!(
-                "rustfmt failed for {} with {}: {stderr}",
-                file.relative,
-                status
-            );
-        }
+        return Err(error.context(stderr));
     }
+    Ok(stdout)
 }
 
 fn discover_edition(source_root: &Path, directory: &Path) -> Result<String> {

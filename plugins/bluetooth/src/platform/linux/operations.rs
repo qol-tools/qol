@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bluer::{Adapter, Address};
@@ -14,6 +14,8 @@ use super::{
     ConnectionSource, ReconnectConfig, ReconnectReport, ReconnectSelection, RetryState,
     EXPLICIT_DEVICE_ACTION_TIMEOUT,
 };
+
+const HOLD_RECHECK: Duration = Duration::from_secs(5);
 
 pub(super) enum Completion {
     Retry(Address, u32, Result<()>),
@@ -39,16 +41,26 @@ impl DaemonOperations {
         retries
             .iter()
             .filter(|(address, _)| !self.retrying.contains(address))
-            .filter_map(|(_, state)| state.due())
+            .filter_map(|(address, state)| {
+                let due = state.due()?;
+                if crate::handoff::held(&address.to_string()) {
+                    return Some(due.max(Instant::now() + HOLD_RECHECK));
+                }
+                Some(due)
+            })
             .min()
     }
 
     pub(super) fn start_due(&mut self, adapter: &Adapter, retries: &HashMap<Address, RetryState>) {
         let now = Instant::now();
         for (&address, state) in retries {
-            if !state.is_due(now) || !self.retrying.insert(address) {
+            if !state.is_due(now)
+                || self.retrying.contains(&address)
+                || crate::handoff::held(&address.to_string())
+            {
                 continue;
             }
+            self.retrying.insert(address);
             let attempt = state.failures() + 1;
             let adapter = adapter.clone();
             self.pending.push(
@@ -163,7 +175,7 @@ pub(super) fn complete(
             trace_manual_failure(&error, selection, "reconnect")
         }
         Completion::Remove(address, result) => {
-            finish_device_action(address, "Remove", &result);
+            finish_device_action("Remove", &result);
             if result.is_ok() {
                 retries.remove(&address);
                 subscribed.remove(&address);

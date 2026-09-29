@@ -1,8 +1,16 @@
 use crate::manifest::{PluginId, PluginInfo};
 use anyhow::{anyhow, bail, Result};
+use qol_conventions::plugin_id::is_valid_plugin_uid;
 
 impl PluginInfo {
     pub fn validate_identity(&self) -> Result<()> {
+        if self
+            .uid
+            .as_ref()
+            .is_some_and(|uid| !is_valid_plugin_uid(uid.as_str()))
+        {
+            bail!("plugin.uid must be non-empty and contain no surrounding whitespace or control characters");
+        }
         match &self.id {
             Some(id) => validate_plugin_id(id.as_str()),
             None => Ok(()),

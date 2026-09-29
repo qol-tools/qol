@@ -1,19 +1,46 @@
-use crate::manifest::{ActionCatalog, ActionDeclaration, ActionType};
+use crate::manifest::{ActionCatalog, ActionDeclaration, ActionType, PluginUid};
 use anyhow::{bail, Result};
 use std::collections::BTreeSet;
 
-pub(super) fn validate_action_catalog(actions: &ActionCatalog) -> Result<BTreeSet<String>> {
+pub(super) fn validate_action_catalog(
+    actions: &ActionCatalog,
+    uid: Option<&PluginUid>,
+) -> Result<BTreeSet<String>> {
     let mut executable = BTreeSet::new();
 
     for (action_id, action) in actions {
         validate_action_id(action_id)?;
         validate_action_declaration(action_id, action)?;
+        validate_peer_declaration(action_id, action, uid)?;
         if action.kind.is_executable() {
             executable.insert(action_id.clone());
         }
     }
 
     Ok(executable)
+}
+
+fn validate_peer_declaration(
+    action_id: &str,
+    action: &ActionDeclaration,
+    uid: Option<&PluginUid>,
+) -> Result<()> {
+    if action.peer.is_none() {
+        return Ok(());
+    }
+    if action.kind != ActionType::Run {
+        bail!(
+            "action catalog entry {:?} can only declare peer exposure when kind is run",
+            action_id
+        );
+    }
+    if uid.is_none() {
+        bail!(
+            "action catalog entry {:?} cannot declare peer exposure without a frozen [plugin].uid",
+            action_id
+        );
+    }
+    Ok(())
 }
 
 fn validate_action_id(action_id: &str) -> Result<()> {
