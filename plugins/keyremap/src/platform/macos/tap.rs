@@ -131,7 +131,7 @@ fn run_tap(state: Arc<TapState>) {
     let tap = match tap {
         Ok(tap) => tap,
         Err(()) => {
-            log::warn!("failed to create event tap (even with Accessibility granted)");
+            log::error!("failed to create event tap (even with Accessibility granted)");
             std::process::exit(1);
         }
     };

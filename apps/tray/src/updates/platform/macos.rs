@@ -275,7 +275,7 @@ fn exec_restart_on_main_thread() -> Result<()> {
             args
         );
         let error = std::process::Command::new(&binary).args(&args).exec();
-        log::warn!("update exec restart failed: {error}");
+        log::error!("update exec restart failed: {error}");
         std::process::exit(1);
     }
 

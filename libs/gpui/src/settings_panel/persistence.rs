@@ -102,7 +102,7 @@ pub(super) fn save_values(
     let body = match serde_json::to_string(values) {
         Ok(body) => body,
         Err(error) => {
-            log::warn!("[{base}] settings serialize failed: {error:#}");
+            log::error!("[{base}] settings serialize failed: {error:#}");
             return Err(format!("settings serialize failed: {error:#}"));
         }
     };
@@ -119,7 +119,7 @@ pub(super) fn save_values(
                 "SETTINGS_PERSIST",
                 "panel={base} transport=tray outcome=rejected status={status}"
             );
-            log::warn!(
+            log::error!(
                 "[{base}] settings save rejected by tray ({status}): {}",
                 payload.trim()
             );
@@ -150,7 +150,7 @@ pub(super) fn save_values(
             "SETTINGS_PERSIST",
             "panel={base} transport=file outcome=failed"
         );
-        log::warn!("[{base}] settings save failed: {error:#}");
+        log::error!("[{base}] settings save failed: {error:#}");
         return Err(format!("settings save failed: {error:#}"));
     }
     qol_runtime::probe!(

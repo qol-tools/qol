@@ -42,7 +42,7 @@ pub fn run() -> ExitCode {
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx, |request| {
         dispatch(&request.action, &request.input)
     }) {
-        log::warn!("sound: failed to start the daemon listener");
+        log::error!("failed to start the daemon listener");
         return ExitCode::FAILURE;
     }
     while let Ok(command) = rx.recv() {

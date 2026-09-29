@@ -32,7 +32,7 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
     Some(match run_cinnamon_capture_helper(&request) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            log::warn!("Cinnamon capture helper failed: {error:#}");
+            log::error!("Cinnamon capture helper failed: {error:#}");
             ExitCode::FAILURE
         }
     })
