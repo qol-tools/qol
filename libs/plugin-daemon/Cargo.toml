@@ -6,6 +6,7 @@ license.workspace = true
 description = "Resident-process OS plumbing for qol-tray plugins: unix-socket IPC, activation policy, foreground probe"
 
 [dependencies]
+log = "0.4"
 serde.workspace = true
 serde_json.workspace = true
 qol-config.workspace = true

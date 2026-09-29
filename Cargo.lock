@@ -6983,6 +6983,7 @@ version = "1.0.0"
 dependencies = [
  "cc",
  "libc",
+ "log",
  "qol-config",
  "qol-conventions",
  "qol-runtime",
