@@ -1,0 +1,6 @@
+# Modifications
+
+This is gpui 0.2.2 from crates.io, changed by qol-tools:
+
+- `src/elements/text.rs`: each measure of a text element truncates a copy of its runs, so a narrow measure no longer shortens what a later, wider layout draws. Zed fixed the same bug upstream in zed-industries/zed#45122.
+- The `examples` and `docs` folders and the `[[example]]` targets are removed.
