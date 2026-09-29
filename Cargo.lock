@@ -6733,7 +6733,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.75.1"
+version = "1.75.2"
 dependencies = [
  "anyhow",
  "block2",
