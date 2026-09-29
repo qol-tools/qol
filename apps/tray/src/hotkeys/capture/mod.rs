@@ -1,7 +1,7 @@
 mod binding;
 pub(crate) mod platform;
 
-pub(crate) use binding::{parse_combo, Binding, CaptureEvent, Combo, Phase};
+pub(crate) use binding::{parse_combo, Binding, CaptureEvent, Combo, Phase, HEARTBEAT_INTERVAL};
 #[cfg(target_os = "macos")]
 pub(crate) use platform::release_tap;
 pub(crate) use platform::{cancel_recording, install, release_held_keys, start_recording};

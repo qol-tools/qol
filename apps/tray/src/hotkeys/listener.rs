@@ -1,3 +1,4 @@
+use super::capture::HEARTBEAT_INTERVAL;
 use super::catalog::load_available_actions;
 use super::manager::RegisteredHotkey;
 use super::platform::PhysicalHotkeyState;
@@ -21,7 +22,6 @@ const REASSERT_SCHEDULE: &[Duration] = &[
     Duration::from_secs(240),
     Duration::from_secs(420),
 ];
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
