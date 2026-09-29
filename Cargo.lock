@@ -6384,6 +6384,7 @@ dependencies = [
  "qol-apps",
  "qol-audio",
  "qol-bluetooth-control",
+ "qol-build-identity",
  "qol-config",
  "qol-conventions",
  "qol-fs",
