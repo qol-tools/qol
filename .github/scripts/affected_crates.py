@@ -15,7 +15,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-GLOBAL_PREFIXES = (".github/workflows/", ".github/scripts/", ".cargo/")
+GLOBAL_PREFIXES = (".github/workflows/", ".github/scripts/", ".cargo/", "vendor/")
 GLOBAL_FILES = {
     "Cargo.toml",
     "rust-toolchain.toml",
@@ -25,6 +25,7 @@ GLOBAL_FILES = {
     ".rustfmt.toml",
     ".gitattributes",
     ".gitmodules",
+    ".config/hakari.toml",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKTREE_HEAD = "WORKTREE"
