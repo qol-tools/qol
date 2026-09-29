@@ -377,12 +377,13 @@ impl LauncherView {
             cx.notify();
             return;
         }
-        eprintln!("[controller] launch succeeded, closing after the cue");
+        eprintln!("[controller] launch succeeded, closing");
         self.yield_focus();
+        self.request_dismiss("launch");
+        cx.notify();
         if is_app {
             self.store.record_launch(&name);
         }
-        self.show_cue(Cue::Opening { name }, Vec::new(), cx);
     }
 
     pub(super) fn open_selected_folder(&mut self, cx: &mut Context<Self>) {
@@ -676,7 +677,6 @@ impl LauncherView {
 
 fn dismiss_reason(cue: &Cue) -> &'static str {
     match cue {
-        Cue::Opening { .. } => "launch",
         Cue::OpeningFolder { .. } => "open_folder",
         _ => "copy",
     }

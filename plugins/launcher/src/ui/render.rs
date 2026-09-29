@@ -874,7 +874,6 @@ impl LauncherView {
                         lit: look.lit,
                         cue: look.cue,
                         size,
-                        feedback: look.feedback,
                     },
                     home,
                     cx,

@@ -44,9 +44,6 @@ pub enum Cue {
     },
     Strictest,
     Loosest,
-    Opening {
-        name: String,
-    },
     OpeningFolder {
         folder: String,
     },
@@ -102,7 +99,6 @@ impl Cue {
             | Self::AlreadyTop { name }
             | Self::NotRaised { name }
             | Self::NoRank { name }
-            | Self::Opening { name }
             | Self::Copied { name, .. } => Some(name),
             Self::Level { .. } | Self::Strictest | Self::Loosest | Self::OpeningFolder { .. } => {
                 None
@@ -136,7 +132,6 @@ impl Cue {
             )),
             Self::Strictest => Some("Already strict".to_owned()),
             Self::Loosest => Some("Already loose".to_owned()),
-            Self::Opening { name } => Some(format!("Opening {name}")),
             Self::OpeningFolder { folder } => Some(format!("Opening folder {folder}")),
             Self::Copied {
                 what: Copied::Path, ..
@@ -155,13 +150,9 @@ impl Cue {
         )
     }
 
-    pub fn grows(&self) -> bool {
-        matches!(self, Self::Opening { .. })
-    }
-
     pub fn closes_after(&self) -> Option<Duration> {
         match self {
-            Self::Opening { .. } | Self::OpeningFolder { .. } => Some(OPEN_CLOSE),
+            Self::OpeningFolder { .. } => Some(OPEN_CLOSE),
             Self::Copied { .. } => Some(COPY_CLOSE),
             _ => None,
         }
@@ -274,14 +265,6 @@ mod tests {
             .line()
             .as_deref(),
             Some("Balanced match \u{b7} 5 results")
-        );
-        assert_eq!(
-            Cue::Opening {
-                name: "Terminal".to_owned()
-            }
-            .line()
-            .as_deref(),
-            Some("Opening Terminal")
         );
         assert_eq!(
             Cue::Copied {

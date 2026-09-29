@@ -41,7 +41,6 @@ const PANEL_TINT_RESULTS: f32 = 0.14;
 const LINE_INK_MIX: f32 = 0.86;
 const BADGE_HEIGHT: f32 = 22.0;
 const BADGE_ALPHA: Alpha = Alpha::Halo;
-pub const APP_GROW: f32 = 8.0;
 
 pub struct SearchBarStatus<'a> {
     pub mode: Option<SearchMode>,
@@ -300,26 +299,15 @@ pub fn app_card(card: AppCard<'_>) -> Div {
         .rounded(px(RADIUS_CARD))
         .bg(rgb(card_ground(card.lit)))
         .shadow(card_cast(card.lit))
-        .child({
-            let name = card.name.to_owned();
-            let art = card.art.map(Path::to_path_buf);
-            let size = card.size;
-            growing(
-                mine.filter(|feedback| feedback.cue.grows()),
-                APP_GROW,
-                move |extra| {
-                    tile(
-                        &name,
-                        art.as_deref(),
-                        size.tile + extra,
-                        size.icon + extra,
-                        size.radius,
-                        well.packed(),
-                        pane.soft,
-                    )
-                },
-            )
-        })
+        .child(tile(
+            card.name,
+            card.art,
+            card.size.tile,
+            card.size.icon,
+            card.size.radius,
+            well.packed(),
+            pane.soft,
+        ))
         .child(
             div()
                 .flex_grow()
@@ -378,23 +366,6 @@ pub fn app_card(card: AppCard<'_>) -> Div {
                 )
             },
         )
-}
-
-pub fn growing<F>(grow: Option<&Feedback>, by: f32, build: F) -> AnyElement
-where
-    F: Fn(f32) -> Div + 'static,
-{
-    let Some(feedback) = grow else {
-        return build(0.0).into_any_element();
-    };
-    div()
-        .flex_none()
-        .with_animation(
-            feedback.id("launcher-grow"),
-            qol_gpui::motion::animation(qol_gpui::theme::Motion::SETTLE),
-            move |frame, delta| frame.child(build(by * delta)),
-        )
-        .into_any_element()
 }
 
 pub fn enter_cue(opacity: f32) -> Div {
