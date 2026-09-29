@@ -179,15 +179,6 @@ fn is_screen_helper() -> bool {
     std::env::var_os(SCREEN_HELPER_ENV).is_some()
 }
 
-/// Prints one `x,y,w,h` work area per line for the `SCREENS_ACTION` subcommand.
-pub(super) fn print_work_areas() {
-    let lines: Vec<String> = system_screens()
-        .iter()
-        .map(|rect| format!("{},{},{},{}", rect.x, rect.y, rect.w, rect.h))
-        .collect();
-    crate::cli::print_lines(&lines);
-}
-
 fn helper_screens() -> Vec<Rect> {
     let Ok(exe) = std::env::current_exe() else {
         return Vec::new();
@@ -219,7 +210,7 @@ fn parse_work_area_row(line: &str) -> Option<Rect> {
     (fields.next().is_none() && valid_rect(&rect)).then_some(rect)
 }
 
-fn system_screens() -> Vec<Rect> {
+pub(super) fn system_screens() -> Vec<Rect> {
     unsafe {
         let primary_h = primary_screen_height();
         if primary_h == 0.0 {

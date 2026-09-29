@@ -1,5 +1,3 @@
-#![allow(clippy::print_stdout)]
-
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -50,12 +48,6 @@ impl ActionSpec {
             about,
             continuous: true,
         }
-    }
-}
-
-pub(crate) fn print_lines(lines: &[String]) {
-    for line in lines {
-        println!("{line}");
     }
 }
 
