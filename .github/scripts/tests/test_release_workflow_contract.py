@@ -64,7 +64,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_ci_runs_release_profile_builds(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
 
+        self.assertIn("merge_group:", workflow)
+        self.assertIn("cargo check --release --locked $BUILD_ARGS", workflow)
         self.assertIn("cargo build --release --locked $BUILD_ARGS", workflow)
+        self.assertIn("github.event_name != 'pull_request'", workflow)
         self.assertIn("RUSTFLAGS: -D warnings", workflow)
         self.assertNotIn("debug-assertions", workflow)
         self.assertIn("timeout-minutes:", workflow)

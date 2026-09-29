@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
@@ -66,7 +67,7 @@ jobs:
       - name: Compute affected crates
         id: affected
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           HEAD_SHA: ${{ github.sha }}
         run: python3 .github/scripts/affected_crates.py
 
@@ -159,8 +160,15 @@ jobs:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy --locked $CLIPPY_ARGS -- -D warnings
 
+      - name: Release profile check
+        if: matrix.skip != 'true' && github.event_name == 'pull_request'
+        env:
+          BUILD_ARGS: ${{ matrix.build_args }}
+          RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+        run: cargo check --release --locked $BUILD_ARGS
+
       - name: Release profile build
-        if: matrix.skip != 'true'
+        if: matrix.skip != 'true' && github.event_name != 'pull_request'
         env:
           BUILD_ARGS: ${{ matrix.build_args }}
           RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
