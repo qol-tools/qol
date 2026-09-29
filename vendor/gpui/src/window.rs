@@ -897,6 +897,36 @@ struct PendingInput {
     timer: Option<Task<()>>,
 }
 
+/// A resize or move reported while the app is already borrowed is applied once
+/// that update returns, instead of being dropped. Repeated reports before then
+/// share one deferred update.
+fn bounds_changed_or_defer(
+    handle: AnyWindowHandle,
+    deferred: &Rc<Cell<bool>>,
+    cx: &mut crate::AsyncApp,
+) {
+    let result = handle.update(cx, |_, window, cx| window.bounds_changed(cx));
+    if !result
+        .as_ref()
+        .is_err_and(|error| error.is::<std::cell::BorrowMutError>())
+    {
+        result.log_err();
+        return;
+    }
+    if deferred.replace(true) {
+        return;
+    }
+    let deferred = deferred.clone();
+    cx.spawn(async move |cx| {
+        deferred.set(false);
+        // A window closed in the meantime has no bounds left to refresh.
+        handle
+            .update(cx, |_, window, cx| window.bounds_changed(cx))
+            .ok();
+    })
+    .detach();
+}
+
 pub(crate) struct ElementStateBox {
     pub(crate) inner: Box<dyn Any>,
     #[cfg(debug_assertions)]
@@ -1065,32 +1095,15 @@ impl Window {
                     .log_err();
             }
         }));
+        let bounds_deferred = Rc::new(Cell::new(false));
         platform_window.on_resize(Box::new({
             let mut cx = cx.to_async();
-            move |_, _| {
-                let result = handle.update(&mut cx, |_, window, cx| window.bounds_changed(cx));
-                if result
-                    .as_ref()
-                    .is_err_and(|error| error.is::<std::cell::BorrowMutError>())
-                {
-                    cx.spawn(async move |cx| {
-                        handle
-                            .update(cx, |_, window, cx| window.bounds_changed(cx))
-                            .log_err();
-                    })
-                    .detach();
-                    return;
-                }
-                result.log_err();
-            }
+            let bounds_deferred = bounds_deferred.clone();
+            move |_, _| bounds_changed_or_defer(handle, &bounds_deferred, &mut cx)
         }));
         platform_window.on_moved(Box::new({
             let mut cx = cx.to_async();
-            move || {
-                handle
-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
-                    .log_err();
-            }
+            move || bounds_changed_or_defer(handle, &bounds_deferred, &mut cx)
         }));
         platform_window.on_appearance_changed(Box::new({
             let mut cx = cx.to_async();
