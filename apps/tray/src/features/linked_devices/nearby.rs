@@ -58,7 +58,7 @@ fn inbound(active: &ActiveAuthority, peer: PeerId) -> Result<bool, Error> {
         .authority
         .inbound_nearby()?
         .iter()
-        .any(|request| request.peer_id == peer)
+        .any(|request| request.peer_id == peer && request.redeemed)
         && !joins(active, peer)?)
 }
 
@@ -93,17 +93,12 @@ fn list(active: &ActiveAuthority) -> Result<Response, Error> {
         }
     }
     for request in active.authority.inbound_nearby()? {
-        if joins(active, request.peer_id)? {
+        if !request.redeemed || joins(active, request.peer_id)? {
             continue;
         }
-        let state = if request.confirmed && !request.redeemed {
-            NearbyState::WaitingForPeer {}
-        } else {
-            NearbyState::Confirm {}
-        };
         let link = NearbyLink {
             code: Some(request.code),
-            state,
+            state: NearbyState::Confirm {},
         };
         upsert(&mut devices, request.peer_id, request.name, Some(link));
     }

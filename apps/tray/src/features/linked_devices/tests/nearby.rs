@@ -218,22 +218,6 @@ fn connected(fixture: &Fixture, peer: PeerId) -> bool {
         })
 }
 
-fn redeemed(fixture: &Fixture, peer: PeerId) -> bool {
-    fixture
-        .owner
-        .handle
-        .inner
-        .lock()
-        .unwrap()
-        .authority()
-        .unwrap()
-        .authority
-        .inbound_nearby()
-        .unwrap()
-        .iter()
-        .any(|request| request.peer_id == peer && request.redeemed)
-}
-
 fn linked(fixture: &Fixture, peer: PeerId) -> bool {
     fixture
         .owner
@@ -396,7 +380,6 @@ async fn a_cancelled_request_disappears_from_the_other_device() {
     until(|| code(&laptop, desk_id)).await;
     until(|| (link_state(&desk, laptop_id) == Some(NearbyState::WaitingForPeer {})).then_some(()))
         .await;
-    until(|| redeemed(&laptop, desk_id).then_some(())).await;
     assert!(matches!(
         decline(&desk, laptop_id),
         Response::Changed { .. }
