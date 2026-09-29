@@ -10,12 +10,11 @@ use qol_gpui::theme::{
 };
 use qol_gpui::Key;
 
-use super::feedback::Feedback;
 use super::layout::PANEL_WIDTH;
 use super::sizing::FileCardSize;
 use super::state::PanelItem;
 use super::tags;
-use super::view::{card_cast, card_ground, enter_cue, growing, name_text, tile};
+use super::view::{card_cast, card_ground, enter_cue, name_text, tile};
 use super::LauncherView;
 use crate::discovery::details::{FactKind, FactText, FileDetails};
 
@@ -33,7 +32,6 @@ const WELL_LINE_ALPHA: Alpha = Alpha::Wash;
 const PANEL_CURRENT_ALPHA: Alpha = Alpha::Halo;
 const PANEL_RESTING_ALPHA: Alpha = Alpha::Trace;
 const PANEL_DONE_ALPHA: Alpha = Alpha::Edge;
-const FILE_GROW: f32 = 6.0;
 
 pub struct FileCard<'a> {
     pub index: Option<usize>,
@@ -43,7 +41,6 @@ pub struct FileCard<'a> {
     pub lit: f32,
     pub cue: f32,
     pub size: FileCardSize,
-    pub feedback: Option<&'a Feedback>,
 }
 
 pub struct Panel<'a> {
@@ -127,29 +124,19 @@ pub fn file_card(
                 .flex()
                 .items_center()
                 .gap(px(SPACE_INSET))
-                .child({
-                    let name = card.name.to_owned();
-                    let art = card.details.and_then(|details| details.icon.clone());
-                    growing(
-                        card.feedback.filter(|feedback| {
-                            feedback.cue.grows() && feedback.is_about(card.name)
-                        }),
-                        FILE_GROW,
-                        move |extra| {
-                            tile(
-                                &name,
-                                art.as_deref(),
-                                ICON_TILE + extra,
-                                ICON_SIZE + extra,
-                                RADIUS_TIGHT,
-                                translucent(WELL_SHADE, WELL_ALPHA),
-                                pane.soft,
-                            )
-                            .border_b(px(LINE))
-                            .border_color(rgba(translucent(pane.ink, WELL_LINE_ALPHA)))
-                        },
+                .child(
+                    tile(
+                        card.name,
+                        card.details.and_then(|details| details.icon.as_deref()),
+                        ICON_TILE,
+                        ICON_SIZE,
+                        RADIUS_TIGHT,
+                        translucent(WELL_SHADE, WELL_ALPHA),
+                        pane.soft,
                     )
-                })
+                    .border_b(px(LINE))
+                    .border_color(rgba(translucent(pane.ink, WELL_LINE_ALPHA))),
+                )
                 .child(
                     name_text(card.name, card.size.name, pane.ink)
                         .min_w(px(0.0))
