@@ -4,3 +4,7 @@ use qol_theme::Motion;
 pub fn animation(motion: Motion) -> Animation {
     Animation::new(motion.duration).with_easing(move |delta| motion.curve.at(delta))
 }
+
+pub fn after_hold(motion: Motion, hold: std::time::Duration) -> Animation {
+    Animation::new(hold + motion.duration)
+}

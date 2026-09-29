@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{Animation, ElementId, SharedString};
+use qol_gpui::icon::Icon;
 use qol_gpui::theme::Motion;
 
 use crate::discovery::search::Fuzziness;
@@ -111,14 +112,17 @@ impl Cue {
 
     pub fn badge(&self) -> Option<String> {
         match self {
-            Self::Moved {
-                up: true, place, ..
-            } => Some(format!("\u{25b2} {}", ordinal(place + 1))),
-            Self::Moved {
-                up: false, place, ..
-            } => Some(format!("\u{25bc} {}", ordinal(place + 1))),
+            Self::Moved { place, .. } => Some(ordinal(place + 1)),
             Self::AlreadyTop { .. } => Some("already 1st".to_owned()),
             Self::NotRaised { .. } => Some("not raised".to_owned()),
+            _ => None,
+        }
+    }
+
+    pub fn arrow(&self) -> Option<Icon> {
+        match self {
+            Self::Moved { up: true, .. } => Some(Icon::Up),
+            Self::Moved { up: false, .. } => Some(Icon::Down),
             _ => None,
         }
     }
@@ -176,7 +180,7 @@ pub fn ordinal(place: usize) -> String {
 }
 
 pub fn held(hold: Duration) -> Animation {
-    Animation::new(hold + Motion::QUICK.duration)
+    qol_gpui::motion::after_hold(Motion::QUICK, hold)
 }
 
 pub fn hold_then_fade(hold: Duration, delta: f32) -> f32 {
@@ -217,7 +221,7 @@ pub fn ghost(delta: f32) -> f32 {
 }
 
 pub fn ghost_animation() -> Animation {
-    Animation::new(GHOST_HOLD + Motion::FADE.duration)
+    qol_gpui::motion::after_hold(Motion::FADE, GHOST_HOLD)
 }
 
 pub fn nudge(delta: f32) -> f32 {
@@ -233,7 +237,7 @@ pub fn nudge(delta: f32) -> f32 {
 }
 
 pub fn nudge_animation() -> Animation {
-    Animation::new(NUDGE_HOLD + Motion::QUICK.duration)
+    qol_gpui::motion::after_hold(Motion::QUICK, NUDGE_HOLD)
 }
 
 #[cfg(test)]
@@ -259,7 +263,8 @@ mod tests {
             up: true,
             place: 0,
         };
-        assert_eq!(moved.badge().as_deref(), Some("\u{25b2} 1st"));
+        assert_eq!(moved.badge().as_deref(), Some("1st"));
+        assert_eq!(moved.arrow(), Some(Icon::Up));
         assert_eq!(moved.line(), None);
         assert_eq!(
             Cue::Level {

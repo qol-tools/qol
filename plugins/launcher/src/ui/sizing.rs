@@ -1,4 +1,4 @@
-use qol_gpui::theme::{RADIUS_CONTROL, RADIUS_TIGHT};
+use qol_gpui::theme::{TextStyle, RADIUS_CONTROL, RADIUS_TIGHT, TEXT_BODY};
 
 const DISPLAY_FROM: f32 = 18.0;
 const NAME_LINE: f32 = 1.2;
@@ -12,15 +12,13 @@ pub struct AppCardSize {
     pub tile: f32,
     pub icon: f32,
     pub radius: f32,
-    pub name: f32,
-    pub display: bool,
+    pub name: TextStyle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FileCardSize {
     pub height: f32,
-    pub name: f32,
-    pub display: bool,
+    pub name: TextStyle,
 }
 
 pub fn app_card(strength: f32) -> AppCardSize {
@@ -38,8 +36,7 @@ pub fn app_card(strength: f32) -> AppCardSize {
         } else {
             RADIUS_TIGHT
         },
-        name,
-        display: name >= DISPLAY_FROM,
+        name: name_style(name),
     }
 }
 
@@ -47,8 +44,17 @@ pub fn file_card(strength: f32) -> FileCardSize {
     let name = name_size(strength.clamp(0.0, 1.0));
     FileCardSize {
         height: (80.0 + 1.25 * name).round(),
-        name,
-        display: name >= DISPLAY_FROM,
+        name: name_style(name),
+    }
+}
+
+pub fn name_style(size: f32) -> TextStyle {
+    if size >= DISPLAY_FROM {
+        TextStyle::Heading
+    } else if size >= TEXT_BODY {
+        TextStyle::Name
+    } else {
+        TextStyle::ListName
     }
 }
 
@@ -137,9 +143,8 @@ mod tests {
         let terminal = app_card(match_strength("Terminal", "te"));
         assert_eq!(
             (terminal.tile, terminal.icon, terminal.name),
-            (46.0, 34.0, 19.5)
+            (46.0, 34.0, TextStyle::Heading)
         );
-        assert!(terminal.display);
     }
 
     #[test]
@@ -151,8 +156,7 @@ mod tests {
                 tile: 28.0,
                 icon: 16.0,
                 radius: RADIUS_TIGHT,
-                name: 13.5,
-                display: false,
+                name: TextStyle::ListName,
             }
         );
         assert_eq!(
@@ -162,8 +166,7 @@ mod tests {
                 tile: 48.0,
                 icon: 36.0,
                 radius: RADIUS_CONTROL,
-                name: 20.0,
-                display: true,
+                name: TextStyle::Heading,
             }
         );
         assert_eq!(file_card(1.0).height, 105.0);

@@ -5,7 +5,7 @@ use gpui::*;
 use qol_gpui::icon::{icon, Icon};
 use qol_gpui::text::{shaped_width, wrapped_line_count, TextStyled};
 use qol_gpui::theme::{
-    css_rgba_milli, TextStyle, LINE, RADIUS_CARD, RADIUS_CONTROL, RADIUS_TIGHT, SPACE_INSET,
+    translucent, Alpha, TextStyle, LINE, RADIUS_CARD, RADIUS_CONTROL, RADIUS_TIGHT, SPACE_INSET,
     SPACE_SNUG, SPACE_STACK, SPACE_TIGHT, TEXT_MICRO,
 };
 
@@ -16,17 +16,14 @@ use super::view::tile;
 use super::LauncherView;
 use crate::discovery::details::{date_label, AppAbout};
 
-const BAND_SHADE_ALPHA: u16 = 180;
-const WELL_SHADE_ALPHA: u16 = 120;
-const WELL_LINE_ALPHA: u16 = 70;
-const DONE_ALPHA: u16 = 300;
-const TAG_ALPHA: u16 = 300;
+const BAND_SHADE_ALPHA: Alpha = Alpha::Halo;
+const WELL_SHADE_ALPHA: Alpha = Alpha::Wash;
+const WELL_LINE_ALPHA: Alpha = Alpha::Wash;
+const DONE_ALPHA: Alpha = Alpha::Edge;
+const TAG_ALPHA: Alpha = Alpha::Edge;
 const HEAD_HEIGHT: f32 = 60.0;
 const HEAD_TILE: f32 = 44.0;
 const HEAD_ICON: f32 = 36.0;
-const HEAD_NAME: f32 = 17.0;
-const HEAD_NAME_LINE: f32 = 1.15;
-const SUMMARY_LINE: f32 = 16.0;
 const BAND_AIR: f32 = 6.0;
 const BAND_INSET: f32 = SPACE_SNUG + SPACE_INSET;
 const WELL_BLOCK: f32 = 24.0;
@@ -35,7 +32,7 @@ const WELL_CHARS: usize = 42;
 const TAGS_TOP: f32 = 2.0;
 const TAGS_BOTTOM: f32 = 4.0;
 const SECTION_AIR: f32 = 8.0;
-const DESCRIPTION_LINE: f32 = 18.0;
+const DESCRIPTION_LINE: f32 = TextStyle::Detail.spec().size * TextStyle::Detail.spec().line_height;
 const DESCRIPTION_LINES: usize = 8;
 const DESCRIPTION_AIR: f32 = 4.0;
 const RULE_BLOCK: f32 = 9.0;
@@ -142,7 +139,6 @@ pub fn panel(about: About<'_>, window: &mut Window, cx: &mut Context<LauncherVie
                     .flex_none()
                     .px(px(SPACE_INSET))
                     .text(TextStyle::Detail)
-                    .line_height(px(DESCRIPTION_LINE))
                     .text_color(rgb(ground.soft))
                     .wraps()
                     .line_clamp(DESCRIPTION_LINES)
@@ -166,7 +162,7 @@ pub fn panel(about: About<'_>, window: &mut Window, cx: &mut Context<LauncherVie
                 blocks.push(
                     LINE_BLOCK,
                     line_block()
-                        .font_weight(FontWeight::MEDIUM)
+                        .text(TextStyle::ListName)
                         .text_color(rgb(ground.ink))
                         .child(div().line_clamp(1).child(developer.clone())),
                 );
@@ -217,7 +213,7 @@ fn head(about: &About<'_>) -> (Div, f32) {
         .flex()
         .flex_col()
         .gap(px(SPACE_STACK))
-        .bg(rgba(css_rgba_milli(0x000000, BAND_SHADE_ALPHA).packed()))
+        .bg(rgba(translucent(0x000000, BAND_SHADE_ALPHA)))
         .child(
             div()
                 .flex_none()
@@ -231,7 +227,7 @@ fn head(about: &About<'_>) -> (Div, f32) {
                     HEAD_TILE,
                     HEAD_ICON,
                     RADIUS_CONTROL,
-                    ground.well,
+                    ground.well.packed(),
                     ground.soft,
                 ))
                 .child(
@@ -240,21 +236,16 @@ fn head(about: &About<'_>) -> (Div, f32) {
                         .flex()
                         .flex_col()
                         .gap(px(SPACE_STACK))
-                        .child(
-                            div()
-                                .line_clamp(1)
-                                .font_family(qol_gpui::theme::font_display())
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(px(HEAD_NAME))
-                                .line_height(px((HEAD_NAME * HEAD_NAME_LINE).round()))
-                                .text_color(rgb(ground.ink))
-                                .child(about.name.to_owned()),
-                        )
+                        .child(kit.heading_title(
+                            TextStyle::Heading,
+                            about.name.to_owned(),
+                            None,
+                            true,
+                        ))
                         .when_some(summary, |text, summary| {
                             text.child(
                                 div()
                                     .text(TextStyle::Detail)
-                                    .line_height(px(SUMMARY_LINE))
                                     .text_color(rgb(ground.soft))
                                     .child(summary),
                             )
@@ -291,12 +282,12 @@ fn well_frame(done: bool) -> Div {
         .gap(px(SPACE_INSET))
         .rounded(px(RADIUS_TIGHT))
         .bg(rgba(if done {
-            css_rgba_milli(ground.ink, DONE_ALPHA).packed()
+            translucent(ground.ink, DONE_ALPHA)
         } else {
-            css_rgba_milli(0x000000, WELL_SHADE_ALPHA).packed()
+            translucent(0x000000, WELL_SHADE_ALPHA)
         }))
         .border_b(px(LINE))
-        .border_color(rgba(css_rgba_milli(ground.ink, WELL_LINE_ALPHA).packed()))
+        .border_color(rgba(translucent(ground.ink, WELL_LINE_ALPHA)))
         .text(TextStyle::Detail)
         .text_color(rgb(ground.soft))
 }
@@ -331,7 +322,6 @@ fn path_well(
                         .child(
                             div()
                                 .flex_grow()
-                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(ground.ink))
                                 .child("Copied path"),
                         )
@@ -353,8 +343,7 @@ fn command_well(command: &str) -> Div {
             div()
                 .flex_grow()
                 .min_w_0()
-                .line_clamp(1)
-                .font_family(qol_gpui::theme::font_mono())
+                .text(TextStyle::Code)
                 .child(command.to_owned()),
         ),
     )
@@ -376,7 +365,6 @@ fn link(url: String, cx: &mut Context<LauncherView>) -> Stateful<Div> {
     let ink = kit.grounds.menu.soft;
     line_block()
         .id("launcher-app-website")
-        .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(ink))
         .cursor_pointer()
         .child(div().line_clamp(1).child(website_label(&url)))

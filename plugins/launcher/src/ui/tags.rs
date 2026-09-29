@@ -1,6 +1,6 @@
 use gpui::*;
 use qol_gpui::text::TextStyled;
-use qol_gpui::theme::{css_rgba_milli, TextStyle, RADIUS_TIGHT, SPACE_SNUG};
+use qol_gpui::theme::{translucent, Alpha, TextStyle, RADIUS_TIGHT, SPACE_SNUG};
 
 pub const HEIGHT: f32 = 20.0;
 pub const PAD: f32 = SPACE_SNUG;
@@ -11,7 +11,7 @@ pub const USE: u32 = 0x7cc4b8;
 pub const DIM: u32 = 0x9a978f;
 pub const NEG: u32 = 0xe0897d;
 
-pub fn tag(text: impl Into<SharedString>, hue: u32, alpha: u16, ink: u32) -> Div {
+pub fn tag(text: impl Into<SharedString>, hue: u32, alpha: Alpha, ink: u32) -> Div {
     div()
         .flex_none()
         .h(px(HEIGHT))
@@ -19,7 +19,7 @@ pub fn tag(text: impl Into<SharedString>, hue: u32, alpha: u16, ink: u32) -> Div
         .flex()
         .items_center()
         .rounded(px(RADIUS_TIGHT))
-        .bg(rgba(css_rgba_milli(hue, alpha).packed()))
+        .bg(rgba(translucent(hue, alpha)))
         .text(TextStyle::Detail)
         .text_color(rgb(ink))
         .child(text.into())

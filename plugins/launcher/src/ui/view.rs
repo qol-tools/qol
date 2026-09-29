@@ -8,9 +8,9 @@ use qol_gpui::text::shaped_width;
 use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{
-    css_rgba_milli, CssRgba, TextStyle, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE, RADIUS_CARD,
+    translucent, Alpha, TextStyle, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE, RADIUS_CARD,
     RADIUS_CONTROL, RADIUS_THUMB, RADIUS_TIGHT, SPACE_CELL, SPACE_INSET, SPACE_PAD, SPACE_SNUG,
-    SPACE_TIGHT, TEXT_BODY,
+    SPACE_TIGHT, TEXT_BODY, TEXT_MICRO,
 };
 use qol_gpui::trail::{Trail, TrailItem};
 use qol_gpui::Key;
@@ -28,20 +28,19 @@ pub const CARD_HEIGHT: f32 = 116.0;
 // so it has to end one PAD_TOP short of the next slot to keep that rhythm.
 const CARD_GAP: f32 = qol_gpui::trail::motion::PAD_TOP;
 const CARD_DOT_CY: f32 = 36.0;
-const FIELD_FILL_ALPHA: u16 = 30;
-const MODE_FILL_ALPHA: u16 = 160;
+const FIELD_FILL_ALPHA: Alpha = Alpha::Trace;
+const MODE_FILL_ALPHA: Alpha = Alpha::Halo;
 const MODE_INK_MIX: f32 = 0.6;
 const MODE_KEY_MIX: f32 = 0.3;
-const MODE_KEY_EDGE_ALPHA: u16 = 350;
+const MODE_KEY_EDGE_ALPHA: Alpha = Alpha::Veil;
 const MODE_CHIP_HEIGHT: f32 = 24.0;
 const MODE_TRAILING: f32 = 120.0;
-const NAME_LINE: f32 = 1.2;
 const CHOSEN_CARD_MIX: f32 = 0.31;
 const PANEL_TINT_TYPING: f32 = 0.06;
 const PANEL_TINT_RESULTS: f32 = 0.14;
 const LINE_INK_MIX: f32 = 0.86;
 const BADGE_HEIGHT: f32 = 22.0;
-const BADGE_ALPHA: u16 = 140;
+const BADGE_ALPHA: Alpha = Alpha::Halo;
 pub const APP_GROW: f32 = 8.0;
 
 pub struct SearchBarStatus<'a> {
@@ -110,7 +109,7 @@ pub fn search_bar(
                 .pl(px(SPACE_CELL))
                 .pr(px(SPACE_INSET))
                 .rounded(px(RADIUS_CARD))
-                .bg(rgba(css_rgba_milli(pane.ink, FIELD_FILL_ALPHA).packed()))
+                .bg(rgba(translucent(pane.ink, FIELD_FILL_ALPHA)))
                 .border(px(LINE))
                 .border_color(rgba(kit.washes.hairline_strong.packed()))
                 .when(!status.list_focused, |field| field.children(focus_ring()))
@@ -230,7 +229,7 @@ fn mode_chip(
         .items_center()
         .gap(px(SPACE_SNUG))
         .rounded(px(RADIUS_CONTROL))
-        .bg(rgba(css_rgba_milli(accent, MODE_FILL_ALPHA).packed()))
+        .bg(rgba(translucent(accent, MODE_FILL_ALPHA)))
         .text(TextStyle::Label)
         .text_color(rgb(ink))
         .cursor_pointer()
@@ -250,7 +249,7 @@ fn mode_chip(
                     .px(px(SPACE_TIGHT))
                     .rounded(px(RADIUS_THUMB))
                     .border(px(LINE))
-                    .border_color(rgba(css_rgba_milli(key_ink, MODE_KEY_EDGE_ALPHA).packed()))
+                    .border_color(rgba(translucent(key_ink, MODE_KEY_EDGE_ALPHA)))
                     .child(kit.key_name(&[Key::TAB], key_ink)),
             )
         })
@@ -315,7 +314,7 @@ pub fn app_card(card: AppCard<'_>) -> Div {
                         size.tile + extra,
                         size.icon + extra,
                         size.radius,
-                        well,
+                        well.packed(),
                         pane.soft,
                     )
                 },
@@ -328,14 +327,7 @@ pub fn app_card(card: AppCard<'_>) -> Div {
                 .flex()
                 .flex_col()
                 .gap(px(SPACE_SNUG))
-                .child(name_text(
-                    card.name,
-                    card.size.name,
-                    card.size.display,
-                    FontWeight::SEMIBOLD,
-                    FontWeight::MEDIUM,
-                    pane.ink,
-                ))
+                .child(name_text(card.name, card.size.name, pane.ink))
                 .when_some(card.summary, |text, summary| {
                     text.child(
                         div()
@@ -362,10 +354,16 @@ pub fn app_card(card: AppCard<'_>) -> Div {
                         .flex()
                         .items_center()
                         .rounded(px(RADIUS_CONTROL))
-                        .bg(rgba(css_rgba_milli(pane.ink, BADGE_ALPHA).packed()))
+                        .bg(rgba(translucent(pane.ink, BADGE_ALPHA)))
                         .text(TextStyle::Detail)
-                        .font_weight(FontWeight::MEDIUM)
+                        .gap(px(SPACE_TIGHT))
                         .text_color(rgb(pane.ink))
+                        .children(
+                            feedback
+                                .cue
+                                .arrow()
+                                .map(|arrow| icon(arrow, TEXT_MICRO, pane.ink)),
+                        )
                         .child(text)
                         .with_animation(
                             feedback.id("launcher-badge"),
@@ -453,14 +451,14 @@ pub fn panel_fill(lit: f32) -> u32 {
 }
 
 pub fn card_cast(lit: f32) -> Vec<BoxShadow> {
-    let mut color = rgba(qol_gpui::kit::kit().washes.cast.packed());
-    color.a *= 1.0 - lit.clamp(0.0, 1.0);
-    vec![BoxShadow {
-        color: color.into(),
-        offset: point(px(0.0), px(2.0)),
-        blur_radius: px(6.0),
-        spread_radius: px(0.0),
-    }]
+    let dark = 1.0 - lit.clamp(0.0, 1.0);
+    qol_gpui::kit::raised_shadow(qol_gpui::kit::kit().washes.cast.rgb)
+        .into_iter()
+        .map(|mut layer| {
+            layer.color.a *= dark;
+            layer
+        })
+        .collect()
 }
 
 pub fn tile(
@@ -469,23 +467,21 @@ pub fn tile(
     size: f32,
     art_size: f32,
     radius: f32,
-    well: CssRgba,
+    well: u32,
     ink: u32,
 ) -> Div {
     let frame = div()
         .flex_none()
         .size(px(size))
         .rounded(px(radius))
-        .bg(rgba(well.packed()))
+        .bg(rgba(well))
         .flex()
         .items_center()
         .justify_center();
     match art {
         Some(art) => frame.child(img(art.to_path_buf()).size(px(art_size))),
         None => frame
-            .font_family(qol_gpui::theme::font_ui())
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_size(px((art_size * 0.6).round()))
+            .text(super::sizing::name_style((art_size * 0.6).round()))
             .text_color(rgb(ink))
             .child(
                 name.chars()
@@ -498,24 +494,9 @@ pub fn tile(
     }
 }
 
-pub fn name_text(
-    name: &str,
-    size: f32,
-    display: bool,
-    display_weight: FontWeight,
-    ui_weight: FontWeight,
-    ink: u32,
-) -> Div {
+pub fn name_text(name: &str, style: TextStyle, ink: u32) -> Div {
     div()
-        .line_clamp(1)
-        .font_family(if display {
-            qol_gpui::theme::font_display()
-        } else {
-            qol_gpui::theme::font_ui()
-        })
-        .font_weight(if display { display_weight } else { ui_weight })
-        .text_size(px(size))
-        .line_height(px((size * NAME_LINE).round()))
+        .text(style)
         .text_color(rgb(ink))
         .child(name.to_owned())
 }

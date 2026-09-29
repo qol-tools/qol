@@ -38,8 +38,8 @@ static REGISTER_NATIVE_DISPLAY: std::sync::Once = std::sync::Once::new();
 const FEEDBACK_LIFE: std::time::Duration = std::time::Duration::from_secs(2);
 const GHOST_INK_MIX: f32 = 0.6;
 const GHOST_EDGE: f32 = 1.5;
-const GHOST_EDGE_ALPHA: u16 = 550;
-const GHOST_FILL_ALPHA: u16 = 180;
+const GHOST_EDGE_ALPHA: qol_gpui::theme::Alpha = qol_gpui::theme::Alpha::Veil;
+const GHOST_FILL_ALPHA: qol_gpui::theme::Alpha = qol_gpui::theme::Alpha::Halo;
 const GHOST_OUTSET: f32 = 2.0;
 const WINDOW_KEY: &str = "launcher:window";
 const PANEL_KEY: &str = "launcher:panel";
@@ -1014,12 +1014,11 @@ fn ghost(feedback: &Feedback, placed: &[Placed]) -> Option<AnyElement> {
             .h(px(was.height))
             .rounded(px(qol_gpui::theme::RADIUS_CONTROL))
             .border(px(GHOST_EDGE))
-            .border_color(rgba(
-                qol_gpui::theme::css_rgba_milli(edge, GHOST_EDGE_ALPHA).packed(),
-            ))
-            .bg(rgba(
-                qol_gpui::theme::css_rgba_milli(kit.grounds.band.bg, GHOST_FILL_ALPHA).packed(),
-            ))
+            .border_color(rgba(qol_gpui::theme::translucent(edge, GHOST_EDGE_ALPHA)))
+            .bg(rgba(qol_gpui::theme::translucent(
+                kit.grounds.band.bg,
+                GHOST_FILL_ALPHA,
+            )))
             .with_animation(
                 feedback.id("launcher-ghost"),
                 feedback::ghost_animation(),

@@ -142,14 +142,14 @@ fn vint(data: &[u8], at: usize, marked: bool) -> Option<(u64, usize)> {
     let value = data
         .get(at + 1..at + len)?
         .iter()
-        .fold(lead, |value, byte| (value << 8) | u64::from(*byte));
+        .fold(lead, |value, byte| value << 8 | u64::from(*byte));
     Some((value, len))
 }
 
 fn uint(data: &[u8]) -> Option<u64> {
     (!data.is_empty() && data.len() <= 8).then(|| {
         data.iter()
-            .fold(0, |value, byte| (value << 8) | u64::from(*byte))
+            .fold(0, |value, byte| value << 8 | u64::from(*byte))
     })
 }
 

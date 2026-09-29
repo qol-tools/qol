@@ -5,8 +5,8 @@ use gpui::*;
 use qol_gpui::icon::{icon, Icon};
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{
-    css_rgba_milli, TextStyle, LINE, RADIUS_CARD, RADIUS_TIGHT, SPACE_CELL, SPACE_INSET, SPACE_PAD,
-    SPACE_SNUG, SPACE_STACK, SPACE_TIGHT, TEXT_CAPTION,
+    translucent, Alpha, TextStyle, LINE, RADIUS_CARD, RADIUS_TIGHT, SPACE_CELL, SPACE_INSET,
+    SPACE_PAD, SPACE_SNUG, SPACE_STACK, SPACE_TIGHT,
 };
 use qol_gpui::Key;
 
@@ -21,18 +21,18 @@ use crate::discovery::details::{FactKind, FactText, FileDetails};
 
 const PATH_CHARS: usize = 50;
 const PATH_HEIGHT: f32 = 22.0;
-const TAG_ALPHA: u16 = 260;
+const TAG_ALPHA: Alpha = Alpha::Edge;
 const ICON_TILE: f32 = 26.0;
 const ICON_SIZE: f32 = 20.0;
 const PANEL_ROW: f32 = 32.0;
 const PANEL_GLYPH: f32 = 16.0;
 const PANEL_ICON: f32 = 18.0;
 const WELL_SHADE: u32 = 0x000000;
-const WELL_ALPHA: u16 = 60;
-const WELL_LINE_ALPHA: u16 = 70;
-const PANEL_CURRENT_ALPHA: u16 = 160;
-const PANEL_RESTING_ALPHA: u16 = 50;
-const PANEL_DONE_ALPHA: u16 = 300;
+const WELL_ALPHA: Alpha = Alpha::Trace;
+const WELL_LINE_ALPHA: Alpha = Alpha::Wash;
+const PANEL_CURRENT_ALPHA: Alpha = Alpha::Halo;
+const PANEL_RESTING_ALPHA: Alpha = Alpha::Trace;
+const PANEL_DONE_ALPHA: Alpha = Alpha::Edge;
 const FILE_GROW: f32 = 6.0;
 
 pub struct FileCard<'a> {
@@ -142,58 +142,53 @@ pub fn file_card(
                                 ICON_TILE + extra,
                                 ICON_SIZE + extra,
                                 RADIUS_TIGHT,
-                                css_rgba_milli(WELL_SHADE, WELL_ALPHA),
+                                translucent(WELL_SHADE, WELL_ALPHA),
                                 pane.soft,
                             )
                             .border_b(px(LINE))
-                            .border_color(rgba(css_rgba_milli(pane.ink, WELL_LINE_ALPHA).packed()))
+                            .border_color(rgba(translucent(pane.ink, WELL_LINE_ALPHA)))
                         },
                     )
                 })
                 .child(
-                    name_text(
-                        card.name,
-                        card.size.name,
-                        card.size.display,
-                        FontWeight::NORMAL,
-                        FontWeight::NORMAL,
-                        pane.ink,
-                    )
-                    .min_w(px(0.0))
-                    .flex_grow(),
+                    name_text(card.name, card.size.name, pane.ink)
+                        .min_w(px(0.0))
+                        .flex_grow(),
                 )
                 .when(card.cue > 0.0, |row| row.child(enter_cue(card.cue))),
         )
         .child(
-            div()
-                .id(card_id("launcher-file-path", index, card.name))
-                .flex_none()
-                .w_full()
-                .h(px(PATH_HEIGHT))
-                .px(px(SPACE_INSET))
-                .flex()
-                .items_center()
-                .gap(px(SPACE_INSET))
-                .rounded(px(RADIUS_TIGHT))
-                .bg(rgba(css_rgba_milli(WELL_SHADE, WELL_ALPHA).packed()))
-                .border_b(px(LINE))
-                .border_color(rgba(css_rgba_milli(pane.ink, WELL_LINE_ALPHA).packed()))
-                .text(TextStyle::Detail)
-                .text_color(rgb(pane.faint))
-                .cursor_pointer()
-                .hover(|well| well.bg(rgba(kit.washes.fill_hover.packed())))
-                .child(div().flex_grow().min_w_0().line_clamp(1).child(label))
-                .child(icon(
-                    Icon::Reveal,
-                    TextStyle::Detail.spec().size,
-                    pane.faint,
-                ))
-                .when_some(index, |well, index| {
-                    well.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.state.scroll_list.selected = index;
-                        this.open_selected_folder(cx);
-                    }))
-                }),
+            kit.pointable(
+                div()
+                    .id(card_id("launcher-file-path", index, card.name))
+                    .flex_none()
+                    .w_full()
+                    .h(px(PATH_HEIGHT))
+                    .px(px(SPACE_INSET))
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_INSET))
+                    .rounded(px(RADIUS_TIGHT))
+                    .bg(rgba(translucent(WELL_SHADE, WELL_ALPHA)))
+                    .border_b(px(LINE))
+                    .border_color(rgba(translucent(pane.ink, WELL_LINE_ALPHA)))
+                    .text(TextStyle::Detail)
+                    .text_color(rgb(pane.faint))
+                    .cursor_pointer(),
+                rgb(pane.lift),
+            )
+            .child(div().flex_grow().min_w_0().line_clamp(1).child(label))
+            .child(icon(
+                Icon::Reveal,
+                TextStyle::Detail.spec().size,
+                pane.faint,
+            ))
+            .when_some(index, |well, index| {
+                well.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.state.scroll_list.selected = index;
+                    this.open_selected_folder(cx);
+                }))
+            }),
         )
         .child(
             div()
@@ -246,16 +241,14 @@ pub fn panel(panel: Panel<'_>) -> Div {
                     PANEL_ICON,
                     PANEL_ICON,
                     0.0,
-                    css_rgba_milli(ground.bg, 0),
+                    0,
                     ground.soft,
                 ))
                 .child(
                     div()
                         .flex_grow()
                         .min_w_0()
-                        .line_clamp(1)
-                        .font_family(qol_gpui::theme::font_ui())
-                        .text_size(px(TEXT_CAPTION))
+                        .text(TextStyle::Name)
                         .text_color(rgb(ground.ink))
                         .child(panel.name.to_owned()),
                 ),
@@ -293,7 +286,7 @@ fn panel_row(item: PanelItem, current: bool, done: bool, active: bool) -> Div {
         .gap(px(SPACE_INSET))
         .rounded(px(RADIUS_TIGHT))
         .when_some(fill, |row, alpha| {
-            row.bg(rgba(css_rgba_milli(ground.ink, alpha).packed()))
+            row.bg(rgba(translucent(ground.ink, alpha)))
         })
         .child(
             div()
@@ -315,8 +308,7 @@ fn panel_row(item: PanelItem, current: bool, done: bool, active: bool) -> Div {
             div()
                 .flex_grow()
                 .min_w_0()
-                .font_family(qol_gpui::theme::font_ui())
-                .text_size(px(TEXT_CAPTION))
+                .text(TextStyle::Value)
                 .text_color(rgb(ground.ink))
                 .child(if done {
                     item.done_label()
