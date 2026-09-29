@@ -1068,9 +1068,20 @@ impl Window {
         platform_window.on_resize(Box::new({
             let mut cx = cx.to_async();
             move |_, _| {
-                handle
-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
-                    .log_err();
+                let result = handle.update(&mut cx, |_, window, cx| window.bounds_changed(cx));
+                if result
+                    .as_ref()
+                    .is_err_and(|error| error.is::<std::cell::BorrowMutError>())
+                {
+                    cx.spawn(async move |cx| {
+                        handle
+                            .update(cx, |_, window, cx| window.bounds_changed(cx))
+                            .log_err();
+                    })
+                    .detach();
+                    return;
+                }
+                result.log_err();
             }
         }));
         platform_window.on_moved(Box::new({
