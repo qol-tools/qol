@@ -231,6 +231,7 @@ default = true
 label = "Debug"
 description = "Only for tracking down picker problems."
 actions = ["open", "open-reverse"]
+dev_only = true
 
 [field.display_show_debug_overlay]
 type = "boolean"

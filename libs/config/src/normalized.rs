@@ -120,7 +120,7 @@ pub fn resolve_config(
     }
 
     let mut root_fields = Vec::new();
-    let mut sections = build_sections(spec);
+    let mut sections = build_sections(spec, cfg!(debug_assertions));
 
     for (id, field) in &spec.fields {
         let no_stored_value = !field.has_stored_value();
@@ -318,9 +318,10 @@ fn validate_overrides_shape(overrides: &serde_json::Value, errors: &mut Vec<Vali
     errors.push(ValidationError::new("overrides", "must be a JSON object"));
 }
 
-fn build_sections(spec: &ConfigSpec) -> Vec<ResolvedSection> {
+fn build_sections(spec: &ConfigSpec, include_dev_only: bool) -> Vec<ResolvedSection> {
     spec.sections
         .iter()
+        .filter(|(_, section)| include_dev_only || !section.dev_only)
         .map(|(id, section)| ResolvedSection {
             id: id.clone(),
             label: section.label.clone().unwrap_or_else(|| humanize(id)),
@@ -493,6 +494,46 @@ type = "string_array"
 config_key = "service_commands"
 default = []
 "#;
+
+    #[test]
+    fn dev_only_sections_drop_outside_dev_builds() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[section.main]
+label = "Main"
+
+[section.debug]
+label = "Debug"
+dev_only = true
+
+[field.visible]
+type = "boolean"
+config_key = "visible"
+section = "main"
+default = true
+
+[field.ghost]
+type = "boolean"
+config_key = "ghost"
+section = "debug"
+default = false
+"#,
+        )
+        .unwrap();
+
+        let release: Vec<_> = build_sections(&spec, false)
+            .into_iter()
+            .map(|section| section.id)
+            .collect();
+        assert_eq!(release, ["main"]);
+        let dev: Vec<_> = build_sections(&spec, true)
+            .into_iter()
+            .map(|section| section.id)
+            .collect();
+        assert_eq!(dev, ["main", "debug"]);
+    }
 
     #[test]
     fn free_form_string_array_normalizes_overrides_and_defaults() {

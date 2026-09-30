@@ -38,6 +38,7 @@ default = true
 label = "Debug"
 description = "Only for tracking down launcher problems."
 actions = ["open"]
+dev_only = true
 
 [field.display_ghost_opacity]
 type = "number"

@@ -41,6 +41,8 @@ pub struct SectionSpec {
     pub description: Option<String>,
     #[serde(default)]
     pub actions: Vec<String>,
+    #[serde(default)]
+    pub dev_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

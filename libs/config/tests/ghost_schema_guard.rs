@@ -57,3 +57,24 @@ fn ghost_debug_fields_keep_their_shared_schema_contract() {
         &["type", "config_key", "label"],
     );
 }
+
+#[test]
+fn ghost_debug_sections_are_dev_only() {
+    for plugin in ["launcher", "alt-tab"] {
+        let config = plugin_config(plugin);
+        let section = field(&config, "display_ghost_opacity")
+            .get("section")
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{plugin}: ghost opacity has no section"));
+        let dev_only = config
+            .get("section")
+            .and_then(|sections| sections.get(section))
+            .and_then(|section| section.get("dev_only"))
+            .and_then(toml::Value::as_bool);
+        assert_eq!(
+            dev_only,
+            Some(true),
+            "{plugin}: [section.{section}] must be dev_only"
+        );
+    }
+}
