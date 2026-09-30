@@ -2,6 +2,7 @@
 id = "qol-window-actions"
 uid = "9fb4b550-714a-4723-b342-7a62c766cf56"
 name = "Window Actions"
+icon = "window-actions"
 description = "Window snapping, centering, and multi-monitor management"
 version = "2.45.2"
 author = "KMRH47"

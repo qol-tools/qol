@@ -12,6 +12,8 @@ pub struct FlowEntry {
     pub query: String,
     #[serde(default)]
     pub row_actions: Vec<qol_config::contract::RowActionSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<PathBuf>,
 }
 
 pub fn flows_path() -> Option<PathBuf> {
@@ -62,6 +64,7 @@ mod tests {
             prompt: "Ask memory".to_string(),
             query: "rows".to_string(),
             row_actions: Vec::new(),
+            icon: Some(PathBuf::from("/icons/memory.svg")),
         }]
     }
 

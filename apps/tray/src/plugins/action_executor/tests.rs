@@ -26,10 +26,10 @@ fn make_plugin(
             version: "1.0.0".to_string(),
             author: None,
             platforms: None,
+            icon: None,
         },
         menu: MenuConfig {
             label: "Test".to_string(),
-            icon: None,
             items: vec![MenuItem::Action {
                 id: action_id.to_string(),
                 label: "Action".to_string(),

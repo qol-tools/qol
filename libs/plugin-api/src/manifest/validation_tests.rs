@@ -20,10 +20,10 @@ fn base_manifest() -> PluginManifest {
             version: "0.0.1".to_string(),
             author: None,
             platforms: None,
+            icon: None,
         },
         menu: MenuConfig {
             label: "M".to_string(),
-            icon: None,
             items: Vec::new(),
         },
         daemon: None,
@@ -415,7 +415,6 @@ mod runtime_rules {
         let manifest = PluginManifest {
             menu: MenuConfig {
                 label: "M".to_string(),
-                icon: None,
                 items: vec![MenuItem::Action {
                     id: "run".to_string(),
                     label: "Run".to_string(),
@@ -648,7 +647,6 @@ mod shortcut_rules {
         let manifest = PluginManifest {
             menu: MenuConfig {
                 label: "M".to_string(),
-                icon: None,
                 items: vec![MenuItem::Action {
                     id: "open".to_string(),
                     label: "Open".to_string(),
@@ -722,7 +720,6 @@ mod shortcut_rules {
         let manifest = PluginManifest {
             menu: MenuConfig {
                 label: "M".to_string(),
-                icon: None,
                 items: vec![MenuItem::Action {
                     id: "open".to_string(),
                     label: "Open".to_string(),

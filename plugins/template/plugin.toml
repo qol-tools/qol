@@ -2,6 +2,7 @@
 id = "qol-template"
 # uid = "run: uuidgen | tr A-F a-f"   # frozen, mint once and never change
 name = "My Plugin"
+icon = "qol"
 description = "A qol-tray plugin"
 
 

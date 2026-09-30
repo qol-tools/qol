@@ -758,12 +758,14 @@ fn load_plugin_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, Settings
         format!("{} Settings", source.heading),
     );
     panel.sources[0].heading = source.heading;
+    panel.sources[0].mark = source.mark;
     Ok((panel, runtime))
 }
 
 struct PluginSettingsSource {
     contract: String,
     heading: String,
+    mark: qol_theme::Mark,
 }
 
 fn load_plugin_source(plugin_id: &str) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
@@ -790,6 +792,7 @@ fn load_plugin_source(plugin_id: &str) -> anyhow::Result<(PluginSettingsSource, 
         PluginSettingsSource {
             contract,
             heading: manifest.plugin.name.clone(),
+            mark: crate::features::launcher_apps::icon::manifest_mark(plugin_id, &manifest),
         },
         runtime,
     ))
@@ -803,11 +806,27 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
         .next()
         .expect("core panel has one source")];
     let mut runtimes = vec![core_runtime];
-    for (tool, heading) in [
-        (super::super::CoreTool::Shortcuts, "Shortcuts"),
-        (super::super::CoreTool::Hotkeys, "Hotkeys"),
-        (super::super::CoreTool::Updates, "Updates"),
-        (super::super::CoreTool::LinkedDevices, "Linked devices"),
+    for (tool, heading, mark) in [
+        (
+            super::super::CoreTool::Shortcuts,
+            "Shortcuts",
+            qol_theme::Mark::Shortcuts,
+        ),
+        (
+            super::super::CoreTool::Hotkeys,
+            "Hotkeys",
+            qol_theme::Mark::Hotkeys,
+        ),
+        (
+            super::super::CoreTool::Updates,
+            "Updates",
+            qol_theme::Mark::Updates,
+        ),
+        (
+            super::super::CoreTool::LinkedDevices,
+            "Linked devices",
+            qol_theme::Mark::LinkedDevices,
+        ),
     ] {
         sources.push(PanelSource {
             plugin_id: tool.wire_id().to_string(),
@@ -815,6 +834,7 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
             heading: heading.to_string(),
             group: PanelSourceGroup::Core,
             custom: true,
+            mark,
         });
         runtimes.push(SettingsRuntime::empty());
     }
@@ -845,6 +865,7 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
                     heading: source.heading,
                     group: PanelSourceGroup::Plugin,
                     custom: false,
+                    mark: source.mark,
                 });
                 runtimes.push(runtime);
             }

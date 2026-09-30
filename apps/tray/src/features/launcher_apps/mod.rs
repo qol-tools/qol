@@ -1,9 +1,12 @@
+pub mod icon;
 mod platform;
 
 use crate::plugins::{Plugin, PluginManager};
 use crate::shortcuts::model::{Shortcut, ShortcutAction};
+use icon::{LauncherIcon, MarkFiles, PluginMarks};
 use qol_plugin_api::launcher_flows::{self, FlowEntry};
 use qol_plugin_api::manifest::LauncherKind;
+use qol_theme::Mark;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,9 +21,10 @@ pub struct LauncherEntry {
     pub bundle_id: String,
     pub exec_args: Vec<String>,
     pub shortcut_action: Option<ShortcutAction>,
+    pub icon: LauncherIcon,
 }
 
-pub fn collect_shortcut_entries(shortcuts: &[Shortcut]) -> Vec<LauncherEntry> {
+pub fn collect_shortcut_entries(shortcuts: &[Shortcut], marks: &PluginMarks) -> Vec<LauncherEntry> {
     shortcuts
         .iter()
         .filter(|s| s.enabled && s.export_to_launcher)
@@ -31,6 +35,7 @@ pub fn collect_shortcut_entries(shortcuts: &[Shortcut]) -> Vec<LauncherEntry> {
             bundle_id: format!("com.qol-tools.shortcut.{}", s.id),
             exec_args: vec!["exec".into(), "shortcut".into(), s.id.clone()],
             shortcut_action: Some(s.action.clone()),
+            icon: icon::shortcut_icon(s, marks),
         })
         .collect()
 }
@@ -49,6 +54,7 @@ pub fn collect_command_entries() -> Vec<LauncherEntry> {
                 c.core_action.into(),
             ],
             shortcut_action: None,
+            icon: LauncherIcon::Mark(c.mark),
         })
         .collect()
 }
@@ -68,6 +74,7 @@ pub fn core_settings_entry() -> LauncherEntry {
             "settings".into(),
         ],
         shortcut_action: None,
+        icon: LauncherIcon::Mark(Mark::Settings),
     }
 }
 
@@ -95,12 +102,16 @@ pub fn collect_plugin_settings_entries<'a>(
                 bundle_id: format!("com.qol-tools.plugin-settings.{}", id),
                 exec_args: vec!["exec".into(), id.to_string(), action.id],
                 shortcut_action: None,
+                icon: LauncherIcon::Mark(icon::plugin_mark(plugin)),
             })
         })
         .collect()
 }
 
-pub fn collect_flow_entries<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) -> Vec<FlowEntry> {
+pub fn collect_flow_entries<'a>(
+    plugins: impl IntoIterator<Item = &'a Plugin>,
+    marks: &MarkFiles,
+) -> Vec<FlowEntry> {
     plugins
         .into_iter()
         .filter_map(|plugin| {
@@ -141,24 +152,30 @@ pub fn collect_flow_entries<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) -
                 prompt,
                 query,
                 row_actions: launcher.row_actions.clone(),
+                icon: Some(marks.path(icon::plugin_mark(plugin))),
             })
         })
         .collect()
 }
 
-pub fn sync_entries(entries: Vec<LauncherEntry>, binary_path: &Path) {
-    if let Err(e) = platform::sync(&entries, binary_path) {
+pub fn sync_entries(entries: Vec<LauncherEntry>, binary_path: &Path, marks: &MarkFiles) {
+    if let Err(e) = platform::sync(&entries, binary_path, marks) {
         log::error!("Failed to sync launcher apps: {}", e);
     }
 }
 
 pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let (plugin_settings_entries, flows) = match plugin_manager.lock() {
+    let Some(marks) = MarkFiles::locate() else {
+        log::warn!("Skipping launcher sync: no data directory");
+        return;
+    };
+    let (plugin_settings_entries, flows, plugin_marks) = match plugin_manager.lock() {
         Ok(manager) => {
             reconcile_plugin_shortcuts(manager.plugins());
             (
                 collect_plugin_settings_entries(manager.plugins()),
-                collect_flow_entries(manager.plugins()),
+                collect_flow_entries(manager.plugins(), &marks),
+                icon::plugin_marks(manager.plugins()),
             )
         }
         Err(error) => {
@@ -166,10 +183,10 @@ pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>
                 "plugin manager lock poisoned during launcher sync: {}",
                 error
             );
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), PluginMarks::new())
         }
     };
-    sync_launcher_entries(plugin_settings_entries, flows);
+    sync_launcher_entries(plugin_settings_entries, flows, &plugin_marks, marks);
 }
 
 fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) {
@@ -181,7 +198,12 @@ fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>)
     }
 }
 
-fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>, flows: Vec<FlowEntry>) {
+fn sync_launcher_entries(
+    plugin_settings_entries: Vec<LauncherEntry>,
+    flows: Vec<FlowEntry>,
+    plugin_marks: &PluginMarks,
+    marks: MarkFiles,
+) {
     let shortcut_config = match crate::shortcuts::store::load() {
         Ok(c) => c,
         Err(e) => {
@@ -189,7 +211,7 @@ fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>, flows: Vec
             return;
         }
     };
-    let mut entries = collect_shortcut_entries(&shortcut_config.shortcuts);
+    let mut entries = collect_shortcut_entries(&shortcut_config.shortcuts, plugin_marks);
     entries.extend(collect_command_entries());
     entries.push(core_settings_entry());
     entries.extend(plugin_settings_entries);
@@ -203,7 +225,10 @@ fn sync_launcher_entries(plugin_settings_entries: Vec<LauncherEntry>, flows: Vec
             Ok(b) => b,
             Err(_) => return,
         };
-        sync_entries(entries, &bin);
+        if let Err(error) = marks.write() {
+            log::error!("Failed to write launcher icons: {}", error);
+        }
+        sync_entries(entries, &bin, &marks);
         write_flow_entries(&flows);
         platform::publish_synced();
     });
@@ -233,13 +258,14 @@ mod tests {
     fn core_settings_entry_execs_the_reserved_core_panel() {
         let entry = core_settings_entry();
         assert_eq!(entry.exec_args, ["exec", "core", "settings"]);
+        assert!(matches!(entry.icon, LauncherIcon::Mark(Mark::Settings)));
         assert!(entry.display_name.ends_with("Settings"));
     }
 
     #[test]
     fn collect_plugin_settings_entries_exports_settings_actions_only() {
         let with_settings = manifest(
-            "[plugin]\nid = \"foo\"\nname = \"Foo\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n[action.settings]\nlabel = \"Settings...\"\nkind = \"settings\"\nargs = [\"settings\"]\n",
+            "[plugin]\nid = \"foo\"\nname = \"Foo\"\ndescription = \"\"\nversion = \"1.0.0\"\nicon = \"lights\"\n[menu]\nlabel = \"\"\nitems = []\n[action.settings]\nlabel = \"Settings...\"\nkind = \"settings\"\nargs = [\"settings\"]\n",
         );
         let without_settings = manifest(
             "[plugin]\nid = \"bar\"\nname = \"Bar\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n",
@@ -260,6 +286,7 @@ mod tests {
         assert_eq!(entries[0].bundle_id, "com.qol-tools.plugin-settings.foo");
         assert_eq!(entries[0].exec_args, ["exec", "foo", "settings"]);
         assert!(entries[0].shortcut_action.is_none());
+        assert!(matches!(entries[0].icon, LauncherIcon::Mark(Mark::Lights)));
     }
 
     fn url_shortcut(id: &str, enabled: bool, export_to_launcher: bool, url: &str) -> Shortcut {
@@ -296,7 +323,7 @@ mod tests {
             },
         ];
 
-        let entries = collect_shortcut_entries(&shortcuts);
+        let entries = collect_shortcut_entries(&shortcuts, &PluginMarks::new());
         let alpha = &entries[0];
         let delta = &entries[1];
 
@@ -320,6 +347,11 @@ mod tests {
             delta.shortcut_action.as_ref(),
             Some(ShortcutAction::LaunchApp { .. })
         ));
+        assert!(matches!(alpha.icon, LauncherIcon::Mark(Mark::Link)));
+        assert!(matches!(
+            &delta.icon,
+            LauncherIcon::TargetApp(AppRef::BundleId { id }) if id == "com.apple.Safari"
+        ));
     }
 
     #[test]
@@ -340,13 +372,15 @@ mod tests {
             Plugin::new(PluginId::new("b"), manifest_b, dir_b.path().into()),
         ];
 
-        let flows = collect_flow_entries(plugins.iter());
+        let marks = MarkFiles::in_dir("/marks".into(), 0);
+        let flows = collect_flow_entries(plugins.iter(), &marks);
 
         assert_eq!(flows.len(), 1);
         assert_eq!(flows[0].plugin_id, "a");
         assert_eq!(flows[0].title, "a");
         assert_eq!(flows[0].prompt, "a");
         assert_eq!(flows[0].query, "rows");
+        assert_eq!(flows[0].icon, Some(marks.path(Mark::Qol)));
     }
 
     #[test]
@@ -367,5 +401,6 @@ mod tests {
             ]
         );
         assert!(add.shortcut_action.is_none());
+        assert!(matches!(add.icon, LauncherIcon::Mark(Mark::Shortcuts)));
     }
 }

@@ -214,6 +214,8 @@ pub(super) fn apply_theme_to_running_surfaces(state: &AppState) {
             reached.len()
         );
     }
+    drop(manager);
+    crate::features::launcher_apps::trigger_full_sync_with_manager(&state.plugin_manager);
 }
 
 #[cfg(test)]

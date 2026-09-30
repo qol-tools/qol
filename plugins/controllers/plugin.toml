@@ -2,6 +2,7 @@
 id = "qol-controllers"
 uid = "eb274823-d360-47bb-a668-6bf047ba8baf"
 name = "Controllers"
+icon = "controllers"
 description = "Inspect connected game controllers and apply relevant driver-specific fixes"
 version = "0.38.2"
 author = "KMRH47"

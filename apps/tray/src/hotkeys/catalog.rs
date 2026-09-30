@@ -93,10 +93,10 @@ mod tests {
                 version: "0.0.0".to_string(),
                 author: None,
                 platforms: None,
+                icon: None,
             },
             menu: MenuConfig {
                 label: "Foo".to_string(),
-                icon: None,
                 items,
             },
             daemon,

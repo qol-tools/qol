@@ -448,6 +448,7 @@ mod tests {
             prompt: "Ask memory".to_string(),
             query: "rows".to_string(),
             row_actions: Vec::new(),
+            icon: None,
         }
     }
 

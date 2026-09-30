@@ -1,19 +1,21 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use qol_gpui::icon::{icon, Icon};
+use qol_gpui::icon::{icon, mark, Icon};
 use qol_gpui::kit::Chip;
 use qol_gpui::text::shaped_width;
 use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{
-    translucent, Alpha, TextStyle, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE, RADIUS_CARD,
+    translucent, Alpha, Mark, TextStyle, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE, RADIUS_CARD,
     RADIUS_CONTROL, RADIUS_THUMB, RADIUS_TIGHT, SPACE_CELL, SPACE_INSET, SPACE_PAD, SPACE_SNUG,
     SPACE_TIGHT, TEXT_BODY, TEXT_MICRO,
 };
 use qol_gpui::trail::{Trail, TrailItem};
 use qol_gpui::Key;
+use qol_plugin_api::launcher_marks;
 
 use super::feedback::{self, Feedback};
 use super::layout::{FLOW_ROW_HEIGHT, HEADER_HEIGHT};
@@ -283,10 +285,10 @@ pub fn app_card(card: AppCard<'_>) -> Div {
     let mine = card
         .feedback
         .filter(|feedback| feedback.is_about(card.name));
-    let well = if card.chosen {
-        kit.grounds.band.well
+    let (well, line) = if card.chosen {
+        (kit.grounds.band.well, Mark::line_on(&kit.grounds.band))
     } else {
-        pane.well
+        (pane.well, Mark::line_on(&pane))
     };
     div()
         .flex_none()
@@ -305,8 +307,11 @@ pub fn app_card(card: AppCard<'_>) -> Div {
             card.size.tile,
             card.size.icon,
             card.size.radius,
-            well.packed(),
-            pane.soft,
+            TileInk {
+                well: well.packed(),
+                letter: pane.soft,
+                line,
+            },
         ))
         .child(
             div()
@@ -432,20 +437,28 @@ pub fn card_cast(lit: f32) -> Vec<BoxShadow> {
         .collect()
 }
 
+pub struct TileInk {
+    pub well: u32,
+    pub letter: u32,
+    pub line: u32,
+}
+
 pub fn tile(
     name: &str,
     art: Option<&Path>,
     size: f32,
     art_size: f32,
     radius: f32,
-    well: u32,
-    ink: u32,
+    ink: TileInk,
 ) -> Div {
+    if let Some(drawn) = art.and_then(launcher_mark) {
+        return div().flex_none().child(mark(drawn, size, ink.line));
+    }
     let frame = div()
         .flex_none()
         .size(px(size))
         .rounded(px(radius))
-        .bg(rgba(well))
+        .bg(rgba(ink.well))
         .flex()
         .items_center()
         .justify_center();
@@ -453,7 +466,7 @@ pub fn tile(
         Some(art) => frame.child(img(art.to_path_buf()).size(px(art_size))),
         None => frame
             .text(super::sizing::name_style((art_size * 0.6).round()))
-            .text_color(rgb(ink))
+            .text_color(rgb(ink.letter))
             .child(
                 name.chars()
                     .find(|character| character.is_alphanumeric())
@@ -463,6 +476,12 @@ pub fn tile(
                     ),
             ),
     }
+}
+
+fn launcher_mark(art: &Path) -> Option<Mark> {
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    let dir = DIR.get_or_init(launcher_marks::marks_dir).as_deref()?;
+    launcher_marks::mark_at(dir, art)
 }
 
 pub fn name_text(name: &str, style: TextStyle, ink: u32) -> Div {

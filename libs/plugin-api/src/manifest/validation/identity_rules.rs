@@ -55,6 +55,7 @@ mod tests {
             version: "1.0.0".into(),
             author: None,
             platforms: None,
+            icon: None,
         }
     }
 

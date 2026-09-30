@@ -39,6 +39,7 @@ const PANEL_GAMEPAD_WIDTH: f32 = 860.0;
 const PANEL_WIDE_DESCRIPTION_CHARS: usize = 90;
 const PANEL_RAIL_WIDTH: f32 = 196.0;
 const PANEL_RAIL_ITEM_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
+const PANEL_RAIL_MARK_SIZE: f32 = 16.0;
 const PANEL_ROW_HEIGHT: f32 = qol_theme::HEIGHT_SETTING_ROW;
 const PANEL_LIST_HEADER_HEIGHT: f32 = 24.0;
 const PANEL_LIST_DESCRIPTION_HEIGHT: f32 = 20.0;
@@ -76,6 +77,7 @@ pub struct PanelSource {
     pub heading: String,
     pub group: PanelSourceGroup,
     pub custom: bool,
+    pub mark: qol_theme::Mark,
 }
 
 #[derive(Clone)]
@@ -90,10 +92,10 @@ pub struct SettingsPanel {
 
 impl SettingsPanel {
     pub fn single(plugin_id: String, contract: String, heading: String) -> SettingsPanel {
-        let group = if plugin_id == qol_conventions::CORE_PANEL_ID {
-            PanelSourceGroup::Core
+        let (group, mark) = if plugin_id == qol_conventions::CORE_PANEL_ID {
+            (PanelSourceGroup::Core, qol_theme::Mark::Settings)
         } else {
-            PanelSourceGroup::Plugin
+            (PanelSourceGroup::Plugin, qol_theme::Mark::Qol)
         };
         SettingsPanel {
             sources: vec![PanelSource {
@@ -102,6 +104,7 @@ impl SettingsPanel {
                 heading: heading.clone(),
                 group,
                 custom: false,
+                mark,
             }],
             heading,
             focus: None,
@@ -1227,6 +1230,19 @@ mod tests {
     }
 
     #[test]
+    fn a_single_panel_marks_core_as_settings() {
+        let core = SettingsPanel::single(
+            qol_conventions::CORE_PANEL_ID.into(),
+            String::new(),
+            "qol".into(),
+        );
+        let plugin = SettingsPanel::single("plugin-x".into(), String::new(), "X".into());
+
+        assert_eq!(core.sources[0].mark, qol_theme::Mark::Settings);
+        assert_eq!(plugin.sources[0].mark, qol_theme::Mark::Qol);
+    }
+
+    #[test]
     fn custom_sources_do_not_require_a_settings_contract() {
         let source = PanelSource {
             plugin_id: "__core-shortcuts".into(),
@@ -1234,6 +1250,7 @@ mod tests {
             heading: "Shortcuts".into(),
             group: PanelSourceGroup::Core,
             custom: true,
+            mark: qol_theme::Mark::Shortcuts,
         };
         let prepared = super::prepare_source(&source, SettingsRuntime::empty()).unwrap();
 
@@ -1252,6 +1269,7 @@ mod tests {
                     heading: "Shortcuts".into(),
                     group: PanelSourceGroup::Core,
                     custom: true,
+                    mark: qol_theme::Mark::Shortcuts,
                 },
                 PanelSource {
                     plugin_id: "plugin-broken".into(),
@@ -1259,6 +1277,7 @@ mod tests {
                     heading: "Broken".into(),
                     group: PanelSourceGroup::Plugin,
                     custom: false,
+                    mark: qol_theme::Mark::Qol,
                 },
             ],
             heading: "Settings".into(),

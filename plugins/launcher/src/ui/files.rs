@@ -5,7 +5,7 @@ use gpui::*;
 use qol_gpui::icon::{icon, Icon};
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{
-    translucent, Alpha, TextStyle, LINE, RADIUS_CARD, RADIUS_TIGHT, SPACE_CELL, SPACE_INSET,
+    translucent, Alpha, Mark, TextStyle, LINE, RADIUS_CARD, RADIUS_TIGHT, SPACE_CELL, SPACE_INSET,
     SPACE_PAD, SPACE_SNUG, SPACE_STACK, SPACE_TIGHT,
 };
 use qol_gpui::Key;
@@ -14,7 +14,7 @@ use super::layout::PANEL_WIDTH;
 use super::sizing::FileCardSize;
 use super::state::PanelItem;
 use super::tags;
-use super::view::{card_cast, card_ground, enter_cue, name_text, tile};
+use super::view::{card_cast, card_ground, enter_cue, name_text, tile, TileInk};
 use super::LauncherView;
 use crate::discovery::details::{FactKind, FactText, FileDetails};
 
@@ -131,8 +131,11 @@ pub fn file_card(
                         ICON_TILE,
                         ICON_SIZE,
                         RADIUS_TIGHT,
-                        translucent(WELL_SHADE, WELL_ALPHA),
-                        pane.soft,
+                        TileInk {
+                            well: translucent(WELL_SHADE, WELL_ALPHA),
+                            letter: pane.soft,
+                            line: Mark::line_on(&pane),
+                        },
                     )
                     .border_b(px(LINE))
                     .border_color(rgba(translucent(pane.ink, WELL_LINE_ALPHA))),
@@ -228,8 +231,11 @@ pub fn panel(panel: Panel<'_>) -> Div {
                     PANEL_ICON,
                     PANEL_ICON,
                     0.0,
-                    0,
-                    ground.soft,
+                    TileInk {
+                        well: 0,
+                        letter: ground.soft,
+                        line: Mark::line_on(&ground),
+                    },
                 ))
                 .child(
                     div()

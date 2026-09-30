@@ -1,20 +1,31 @@
+use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
+use crate::shortcuts::model::AppRef;
 use anyhow::{Context, Result};
-use qol_apps::desktop::{escape_desktop_entry_value, format_desktop_exec_command, DesktopExecArg};
+use qol_apps::desktop::{
+    desktop_field, escape_desktop_entry_value, format_desktop_exec_command, AppEntry,
+    DesktopExecArg,
+};
+use qol_theme::Mark;
+use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 const DESKTOP_PREFIX: &str = "qol-";
 
-pub(super) fn sync(entries: &[LauncherEntry], target: &Path) -> Result<()> {
+pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) -> Result<()> {
     let dir = apps_dir().context("Could not determine local data directory")?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create applications dir {}", dir.display()))?;
 
     let expected: HashSet<String> = entries.iter().map(desktop_filename).collect();
 
+    let installed = OnceCell::new();
     for entry in entries {
-        write_desktop_file(&dir, entry, target)?;
+        let icon = icon_value(&entry.icon, marks, || {
+            installed.get_or_init(installed_apps).as_slice()
+        });
+        write_desktop_file(&dir, entry, target, &icon)?;
     }
 
     clean_stale(&dir, &expected)?;
@@ -39,7 +50,58 @@ fn desktop_filename(entry: &LauncherEntry) -> String {
     format!("{}{}.desktop", DESKTOP_PREFIX, entry.file_stem)
 }
 
-fn write_desktop_file(dir: &Path, entry: &LauncherEntry, target: &Path) -> Result<()> {
+fn icon_value<'a>(
+    icon: &LauncherIcon,
+    marks: &MarkFiles,
+    installed: impl FnOnce() -> &'a [AppEntry],
+) -> String {
+    let mark = match icon {
+        LauncherIcon::Mark(mark) => *mark,
+        LauncherIcon::TargetApp(app) => match target_app_icon(app, installed()) {
+            Some(icon) => return icon,
+            None => Mark::App,
+        },
+    };
+    marks.path(mark).display().to_string()
+}
+
+fn installed_apps() -> Vec<AppEntry> {
+    qol_apps::desktop::linux_app_roots()
+        .iter()
+        .flat_map(qol_apps::desktop::scan_desktop_root)
+        .collect()
+}
+
+fn target_app_icon(app: &AppRef, installed: &[AppEntry]) -> Option<String> {
+    let (AppRef::BundleId { id: program }
+    | AppRef::Path { path: program }
+    | AppRef::Name { name: program }) = app;
+    let wanted = program_name(program)?;
+    installed
+        .iter()
+        .filter(|entry| {
+            let is_ours = entry
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(DESKTOP_PREFIX));
+            let stem = entry.path.file_stem().and_then(|stem| stem.to_str());
+            let program = entry.exec.first().and_then(|program| program_name(program));
+            !is_ours && (program == Some(wanted) || stem == Some(wanted))
+        })
+        .find_map(|entry| {
+            let content = std::fs::read_to_string(&entry.path).ok()?;
+            let icon = desktop_field(&content, "Icon=")?;
+            let icon = icon.trim();
+            (!icon.is_empty()).then(|| icon.to_owned())
+        })
+}
+
+fn program_name(program: &str) -> Option<&str> {
+    Path::new(program).file_name()?.to_str()
+}
+
+fn write_desktop_file(dir: &Path, entry: &LauncherEntry, target: &Path, icon: &str) -> Result<()> {
     super::verify_target(entry, target)?;
     let exec_args = entry
         .exec_args
@@ -49,6 +111,7 @@ fn write_desktop_file(dir: &Path, entry: &LauncherEntry, target: &Path) -> Resul
     let exec = format_desktop_exec_command(target, &exec_args);
     let name = escape_desktop_entry_value(&entry.display_name);
     let comment = escape_desktop_entry_value(&entry.description);
+    let icon = escape_desktop_entry_value(icon);
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -56,10 +119,11 @@ fn write_desktop_file(dir: &Path, entry: &LauncherEntry, target: &Path) -> Resul
          Name={}\n\
          Comment={}\n\
          Exec={}\n\
+         Icon={}\n\
          Terminal=false\n\
          Categories=Utility;\n\
          StartupNotify=false\n",
-        name, comment, exec
+        name, comment, exec, icon
     );
 
     let path = dir.join(desktop_filename(entry));
@@ -101,6 +165,78 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    const ICON: &str = "/icons/link.svg";
+
+    fn installed(dir: &Path, stem: &str, exec: &str, icon: &str) -> AppEntry {
+        let path = dir.join(format!("{stem}.desktop"));
+        std::fs::write(
+            &path,
+            format!("[Desktop Entry]\nName={stem}\nExec={exec}\nIcon={icon}\n"),
+        )
+        .unwrap();
+        qol_apps::desktop::parse_desktop_entry_file(&path).unwrap()
+    }
+
+    fn app(name: &str) -> LauncherIcon {
+        LauncherIcon::TargetApp(AppRef::Name { name: name.into() })
+    }
+
+    #[test]
+    fn desktop_file_names_its_icon() {
+        let tmp = TempDir::new().unwrap();
+        let binary = tmp.path().join("qol-tray");
+        std::fs::write(&binary, "").unwrap();
+
+        write_desktop_file(tmp.path(), &entry(&["exec"]), &binary, ICON).unwrap();
+
+        let content =
+            std::fs::read_to_string(tmp.path().join("qol-shortcut-space.desktop")).unwrap();
+        assert!(content.lines().any(|line| line == format!("Icon={ICON}")));
+    }
+
+    #[test]
+    fn mark_icons_point_at_the_mark_file() {
+        let marks = MarkFiles::in_dir(PathBuf::from("/marks"), 0);
+
+        let icon = icon_value(&LauncherIcon::Mark(Mark::Sound), &marks, || {
+            unreachable!("a mark never scans installed apps")
+        });
+
+        assert_eq!(icon, "/marks/sound.svg");
+    }
+
+    #[test]
+    fn target_apps_borrow_the_installed_icon_by_program_or_file_name() {
+        let tmp = TempDir::new().unwrap();
+        let marks = MarkFiles::in_dir(PathBuf::from("/marks"), 0);
+        let apps = [
+            installed(tmp.path(), "qol-shortcut-ff", "/usr/bin/firefox", "qol-own"),
+            installed(
+                tmp.path(),
+                "org.mozilla.firefox",
+                "/usr/bin/firefox %u",
+                "firefox",
+            ),
+            installed(tmp.path(), "kitty", "kitty-launcher", "kitty-icon"),
+        ];
+
+        let by_program = icon_value(&app("firefox"), &marks, || &apps);
+        let by_path = icon_value(
+            &LauncherIcon::TargetApp(AppRef::Path {
+                path: "/opt/bin/firefox".into(),
+            }),
+            &marks,
+            || &apps,
+        );
+        let by_file_name = icon_value(&app("kitty"), &marks, || &apps);
+        let missing = icon_value(&app("gimp"), &marks, || &apps);
+
+        assert_eq!(by_program, "firefox");
+        assert_eq!(by_path, "firefox");
+        assert_eq!(by_file_name, "kitty-icon");
+        assert_eq!(missing, "/marks/app.svg");
+    }
+
     fn entry(exec_args: &[&str]) -> LauncherEntry {
         LauncherEntry {
             file_stem: "shortcut-space".to_string(),
@@ -109,6 +245,7 @@ mod tests {
             bundle_id: "com.qol-tools.shortcut.space".to_string(),
             exec_args: exec_args.iter().map(|arg| arg.to_string()).collect(),
             shortcut_action: None,
+            icon: LauncherIcon::Mark(Mark::Link),
         }
     }
 
@@ -122,6 +259,7 @@ mod tests {
             tmp.path(),
             &entry(&["exec", "shortcut id", "path%to%tool"]),
             &binary,
+            ICON,
         )
         .unwrap();
 
@@ -147,9 +285,10 @@ mod tests {
             bundle_id: String::new(),
             exec_args: vec!["open".into(), "shortcuts/add".into()],
             shortcut_action: None,
+            icon: LauncherIcon::Mark(Mark::Shortcuts),
         };
 
-        write_desktop_file(tmp.path(), &command_entry, &binary).unwrap();
+        write_desktop_file(tmp.path(), &command_entry, &binary, ICON).unwrap();
 
         let content =
             std::fs::read_to_string(tmp.path().join("qol-command-shortcuts-add.desktop")).unwrap();
@@ -165,7 +304,13 @@ mod tests {
         let binary = tmp.path().join("qol-tray");
         std::fs::write(&binary, "").unwrap();
 
-        write_desktop_file(tmp.path(), &entry(&["exec", "shortcut", "id"]), &binary).unwrap();
+        write_desktop_file(
+            tmp.path(),
+            &entry(&["exec", "shortcut", "id"]),
+            &binary,
+            ICON,
+        )
+        .unwrap();
 
         let mode = std::fs::metadata(tmp.path().join("qol-shortcut-space.desktop"))
             .unwrap()
@@ -182,8 +327,13 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let binary = tmp.path().join("qol-tray");
 
-        let error = write_desktop_file(tmp.path(), &entry(&["exec", "shortcut", "id"]), &binary)
-            .unwrap_err();
+        let error = write_desktop_file(
+            tmp.path(),
+            &entry(&["exec", "shortcut", "id"]),
+            &binary,
+            ICON,
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("missing binary"), "got: {error}");
         assert!(

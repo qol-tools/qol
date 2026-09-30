@@ -5,14 +5,14 @@ use gpui::*;
 use qol_gpui::icon::{icon, Icon};
 use qol_gpui::text::{shaped_width, wrapped_line_count, TextStyled};
 use qol_gpui::theme::{
-    translucent, Alpha, TextStyle, LINE, RADIUS_CARD, RADIUS_CONTROL, RADIUS_TIGHT, SPACE_INSET,
-    SPACE_SNUG, SPACE_STACK, SPACE_TIGHT, TEXT_MICRO,
+    translucent, Alpha, Mark, TextStyle, LINE, RADIUS_CARD, RADIUS_CONTROL, RADIUS_TIGHT,
+    SPACE_INSET, SPACE_SNUG, SPACE_STACK, SPACE_TIGHT, TEXT_MICRO,
 };
 
 use super::files::spaced_path;
 use super::layout::APP_PANEL_WIDTH;
 use super::tags;
-use super::view::tile;
+use super::view::{tile, TileInk};
 use super::LauncherView;
 use crate::discovery::details::{date_label, AppAbout};
 
@@ -227,8 +227,11 @@ fn head(about: &About<'_>) -> (Div, f32) {
                     HEAD_TILE,
                     HEAD_ICON,
                     RADIUS_CONTROL,
-                    ground.well.packed(),
-                    ground.soft,
+                    TileInk {
+                        well: ground.well.packed(),
+                        letter: ground.soft,
+                        line: Mark::line_on(&ground),
+                    },
                 ))
                 .child(
                     div()

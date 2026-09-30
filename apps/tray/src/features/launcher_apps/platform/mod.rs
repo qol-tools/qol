@@ -19,8 +19,9 @@ use windows as imp;
 pub(super) fn sync(
     entries: &[super::LauncherEntry],
     target: &std::path::Path,
+    marks: &super::icon::MarkFiles,
 ) -> anyhow::Result<()> {
-    imp::sync(entries, target)
+    imp::sync(entries, target, marks)
 }
 
 pub(super) fn verify_target(

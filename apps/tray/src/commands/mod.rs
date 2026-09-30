@@ -1,11 +1,14 @@
 pub mod local_http;
 pub mod net;
 
+use qol_theme::Mark;
+
 pub struct ExportedCommand {
     pub id: &'static str,
     pub label: &'static str,
     pub route: &'static str,
     pub core_action: &'static str,
+    pub mark: Mark,
 }
 
 /// Brand prefix prepended to every exported command's launcher label, so
@@ -19,36 +22,42 @@ pub const EXPORTED: &[ExportedCommand] = &[
         label: "Add Shortcut",
         route: "shortcuts/add",
         core_action: "shortcuts-add",
+        mark: Mark::Shortcuts,
     },
     ExportedCommand {
         id: "shortcuts-open",
         label: "Shortcuts",
         route: "shortcuts",
         core_action: "shortcuts",
+        mark: Mark::Shortcuts,
     },
     ExportedCommand {
         id: "hotkeys-add",
         label: "Add Hotkey",
         route: "hotkeys",
         core_action: "hotkeys-add",
+        mark: Mark::Hotkeys,
     },
     ExportedCommand {
         id: "hotkeys-open",
         label: "Hotkeys",
         route: "hotkeys",
         core_action: "hotkeys",
+        mark: Mark::Hotkeys,
     },
     ExportedCommand {
         id: "updates-open",
         label: "Updates",
         route: "plugins",
         core_action: "updates",
+        mark: Mark::Updates,
     },
     ExportedCommand {
         id: "linked-devices-open",
         label: "Linked devices",
         route: "linked-devices",
         core_action: "linked-devices",
+        mark: Mark::LinkedDevices,
     },
 ];
 

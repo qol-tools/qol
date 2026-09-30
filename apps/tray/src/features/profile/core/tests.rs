@@ -2009,10 +2009,10 @@ fn test_plugin(
                 version: version.to_string(),
                 author: None,
                 platforms,
+                icon: None,
             },
             menu: MenuConfig {
                 label: id.to_string(),
-                icon: None,
                 items: Vec::new(),
             },
             daemon: None,
@@ -2116,10 +2116,10 @@ fn test_plugin_with_uid(
                 version: version.to_string(),
                 author: None,
                 platforms,
+                icon: None,
             },
             menu: MenuConfig {
                 label: id.to_string(),
-                icon: None,
                 items: Vec::new(),
             },
             daemon: None,

@@ -16,6 +16,10 @@ impl AppIconPlatform for Platform {
         None
     }
 
+    fn icon_png_for_bundle_id(&self, _bundle_id: &str, _size: usize) -> Option<Vec<u8>> {
+        None
+    }
+
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage> {
         icon_for_pid(pid, size)
     }
