@@ -143,30 +143,49 @@ fn run_tap(state: Arc<TapState>) {
         CGEventType::ScrollWheel,
     ];
 
-    let tap = RawEventTap::new(
+    let session = open_tap(
         CGEventTapLocation::AnnotatedSession,
+        events,
+        Arc::clone(&state),
+        handle_event,
+    );
+    let hid = open_tap(
+        CGEventTapLocation::HID,
+        vec![CGEventType::KeyDown, CGEventType::KeyUp],
+        state,
+        stamp_virtual_key,
+    );
+    CFRunLoop::run_current();
+    drop((session, hid));
+}
+
+fn open_tap(
+    location: CGEventTapLocation,
+    events: Vec<CGEventType>,
+    state: Arc<TapState>,
+    handler: EventHandler,
+) -> RawEventTap {
+    let Ok(tap) = RawEventTap::new(
+        location,
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::Default,
         events,
         state,
-    );
-
-    let tap = match tap {
-        Ok(tap) => tap,
-        Err(()) => {
-            log::error!("failed to create event tap (even with Accessibility granted)");
-            std::process::exit(1);
-        }
+        handler,
+    ) else {
+        log::error!("failed to create event tap (even with Accessibility granted)");
+        std::process::exit(1);
     };
-
     let loop_source = tap
         .mach_port()
         .create_runloop_source(0)
         .expect("failed to create run loop source for event tap");
     CFRunLoop::get_current().add_source(&loop_source, unsafe { kCFRunLoopCommonModes });
     tap.enable();
-    CFRunLoop::run_current();
+    tap
 }
+
+type EventHandler = fn(&TapState, CGEventType, &core_graphics::event::CGEvent) -> CallbackResult;
 
 struct RawEventTap {
     mach_port: CFMachPort,
@@ -175,6 +194,7 @@ struct RawEventTap {
 
 struct RawEventTapState {
     state: Arc<TapState>,
+    handler: EventHandler,
     tap_port: AtomicUsize,
 }
 
@@ -185,9 +205,11 @@ impl RawEventTap {
         options: CGEventTapOptions,
         events: Vec<CGEventType>,
         state: Arc<TapState>,
+        handler: EventHandler,
     ) -> Result<Self, ()> {
         let callback_state = Box::new(RawEventTapState {
             state,
+            handler,
             tap_port: AtomicUsize::new(0),
         });
         let callback_ptr = Box::into_raw(callback_state);
@@ -286,11 +308,26 @@ fn event_tap_callback_inner(
     }
 
     let event = unsafe { ManuallyDrop::new(core_graphics::event::CGEvent::from_ptr(event_ref)) };
-    match handle_event(&callback_state.state, event_type, &event) {
+    match (callback_state.handler)(&callback_state.state, event_type, &event) {
         CallbackResult::Keep => event.as_ptr(),
         CallbackResult::Drop => ptr::null_mut(),
         CallbackResult::Replace(new_event) => ManuallyDrop::new(new_event).as_ptr(),
     }
+}
+
+fn stamp_virtual_key(
+    state: &TapState,
+    event_type: CGEventType,
+    event: &core_graphics::event::CGEvent,
+) -> CallbackResult {
+    if state.input.strategy.get() != Strategy::VirtualHid || !state.config().enabled {
+        return CallbackResult::Keep;
+    }
+    event_tap::stamp_marker(
+        &state.input.markers,
+        event,
+        matches!(event_type, CGEventType::KeyDown),
+    )
 }
 
 fn handle_event(
@@ -322,11 +359,7 @@ fn handle_event(
             Strategy::EventTap => {
                 event_tap::handle_key_event(config.as_ref(), event, target_pid, &bundle_id)
             }
-            Strategy::VirtualHid => event_tap::stamp_marker(
-                &state.input.markers,
-                event,
-                matches!(event_type, CGEventType::KeyDown),
-            ),
+            Strategy::VirtualHid => CallbackResult::Keep,
         },
         CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => {
             handle_mouse_event(config.as_ref(), event, MouseButton::Left, &bundle_id)
