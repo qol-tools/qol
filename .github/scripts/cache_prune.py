@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""Prune GitHub Actions build caches and retire superseded compiler archives.
+
+Dependency cache keys carry a trailing lockfile-hash segment, e.g.
+`v0-rust-ci-ubuntu-latest-Linux-x64-607b40e9-23b0bf21`, so every Cargo.lock
+change deposits a new entry under the same logical namespace (the key with
+its trailing `-[0-9a-f]{8}` segment stripped). Compiler archives are keyed
+`qol-compiler-v1-<os>-<arch>-<commit sha>` and share the namespace without
+the sha. Entries are grouped per ref and namespace, pruned to the newest
+`--keep` by creation time, dropped when unaccessed for `--max-age-days`, and
+then evicted least recently used first until the total fits `--max-bytes`.
+`--retire-compiler-caches SHA` only deletes compiler archives older than the
+archive saved for that commit, and runs no other pruning.
+Deletes are by cache id, never by key prefix, so a cache a concurrent build
+just recreated under the same prefix is never harmed.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -78,6 +94,20 @@ def replaced_compiler_caches(caches: list[dict], key: str, ref: str) -> list[dic
         and namespace_of_key(cache["key"]) == namespace
         and cache_order(cache) < cache_order(replacement)
     ]
+
+
+def retired_compiler_caches(caches: list[dict], sha: str, ref: str) -> list[dict]:
+    saved = sorted({
+        cache["key"] for cache in caches
+        if cache["ref"] == ref
+        and COMPILER_CACHE_COMMIT.fullmatch(cache["key"])
+        and cache["key"].endswith(f"-{sha}")
+    })
+    doomed = {}
+    for key in saved:
+        for cache in replaced_compiler_caches(caches, key, ref):
+            doomed[cache["id"]] = cache
+    return list(doomed.values())
 
 
 def plan_prune(
@@ -187,8 +217,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--compiler-cache-config", action="store_true")
-    modes.add_argument("--prepare-compiler-cache", metavar="KEY")
-    modes.add_argument("--retire-compiler-cache", metavar="KEY")
+    modes.add_argument("--retire-compiler-caches", metavar="SHA")
     parser.add_argument("--ref", help="Exact cache ref for compiler archive retirement")
     args = parser.parse_args()
 
@@ -214,11 +243,9 @@ def main() -> int:
     if args.max_bytes < 1:
         print("refusing to run with --max-bytes < 1", file=sys.stderr)
         return 1
-    compiler_key = args.prepare_compiler_cache or args.retire_compiler_cache
-    if compiler_key and (
-        not args.ref or not COMPILER_CACHE_COMMIT.fullmatch(compiler_key)
-    ):
-        print("compiler cache maintenance requires a compiler key and ref", file=sys.stderr)
+    sha = args.retire_compiler_caches
+    if sha is not None and (not args.ref or not re.fullmatch(r"[0-9a-f]{40}", sha)):
+        print("compiler archive retirement requires a commit sha and ref", file=sys.stderr)
         return 1
 
     try:
@@ -227,28 +254,12 @@ def main() -> int:
         print(error.stderr or error.stdout, file=sys.stderr)
         return 1
 
-    doomed = []
-    if args.retire_compiler_cache:
-        try:
-            doomed = replaced_compiler_caches(caches, args.retire_compiler_cache, args.ref)
-        except LookupError as error:
-            print(error, file=sys.stderr)
-            return 0
-    retired_ids = {cache["id"] for cache in doomed}
-    remaining = [cache for cache in caches if cache["id"] not in retired_ids]
-    budget = args.max_bytes
-    if args.prepare_compiler_cache and not any(
-        cache["ref"] == args.ref
-        and namespace_of_key(cache["key"]) == namespace_of_key(compiler_key)
-        for cache in remaining
-    ):
-        budget -= COMPILER_CACHE_BYTES
-        if budget < 1:
-            print("byte budget cannot hold a compiler archive", file=sys.stderr)
-            return 1
-    doomed.extend(plan_prune(
-        remaining, args.keep, args.max_age_days, datetime.now(timezone.utc), budget
-    ))
+    if sha is not None:
+        doomed = retired_compiler_caches(caches, sha, args.ref)
+    else:
+        doomed = plan_prune(
+            caches, args.keep, args.max_age_days, datetime.now(timezone.utc), args.max_bytes
+        )
     total_bytes = sum(cache.get("size_in_bytes", 0) for cache in caches)
     freed_bytes = sum(cache.get("size_in_bytes", 0) for cache in doomed)
     print(

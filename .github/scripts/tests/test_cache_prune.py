@@ -297,60 +297,39 @@ class Main(unittest.TestCase):
             self.assertEqual(cp.main(), 0)
         delete.assert_called_once_with("owner/repo", entries[0]["id"])
 
-    def test_first_compiler_upload_reserves_capacity_without_displacing_current_dependencies(self):
+    def test_retire_mode_only_retires_archives_older_than_this_commits_saves(self):
         now = datetime.now(timezone.utc)
-        old = cache_entry("release-linux-11111111", stamp(now - timedelta(days=1)),
-                          size_in_bytes=cp.COMPILER_CACHE_BYTES)
-        current = cache_entry("release-linux-22222222", stamp(now),
-                              size_in_bytes=cp.MAX_CACHE_BYTES - cp.COMPILER_CACHE_BYTES)
-        key = f"{cp.COMPILER_CACHE_PREFIX}Linux-X64-{'a' * 40}"
-        existing = cache_entry(key, stamp(now))
-        for entries, expected in [([old, current], [old["id"]]),
-                                  ([current, existing], [])]:
+        linux = cp.COMPILER_CACHE_PREFIX + "Linux-X64-"
+        macos = cp.COMPILER_CACHE_PREFIX + "macOS-ARM64-"
+        old_linux = cache_entry(linux + "a" * 40, stamp(now - timedelta(days=1)))
+        old_macos = cache_entry(macos + "a" * 40, stamp(now - timedelta(days=1)))
+        saved_linux = cache_entry(linux + "b" * 40, stamp(now))
+        saved_macos = cache_entry(macos + "b" * 40, stamp(now))
+        expired = cache_entry("ci-linux-11111111", stamp(now - timedelta(days=30)),
+                              size_in_bytes=cp.MAX_CACHE_BYTES)
+        foreign = dict(old_linux, id=next(_IDS), ref="refs/pull/44/merge")
+        everything = [old_linux, old_macos, saved_linux, saved_macos, expired, foreign]
+        for entries, expected in [
+            (everything, {old_linux["id"], old_macos["id"]}),
+            ([old_linux, old_macos, saved_linux, expired], {old_linux["id"]}),
+            ([old_linux, old_macos, expired, foreign], set()),
+            ([], set()),
+        ]:
             with (
-                self.subTest(existing=len(entries) == 2 and entries[-1] == existing),
+                self.subTest(entries=[entry["key"] for entry in entries]),
                 patch("sys.argv", ["cache_prune.py", "--repo", "owner/repo",
-                                   "--prepare-compiler-cache", key, "--ref", "refs/heads/main"]),
+                                   "--retire-compiler-caches", "b" * 40, "--ref", "refs/heads/main"]),
                 patch.object(cp, "list_caches", return_value=entries),
                 patch.object(cp, "delete_cache") as delete,
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 self.assertEqual(cp.main(), 0)
-                self.assertEqual([call.args[1] for call in delete.call_args_list], expected)
+                self.assertEqual({call.args[1] for call in delete.call_args_list}, expected)
 
-    def test_first_upload_refuses_a_budget_smaller_than_archive_capacity(self):
-        key = f"{cp.COMPILER_CACHE_PREFIX}Linux-X64-{'a' * 40}"
-        with (
-            patch("sys.argv", ["cache_prune.py", "--repo", "owner/repo", "--max-bytes", "1",
-                               "--prepare-compiler-cache", key, "--ref", "refs/heads/main"]),
-            patch.object(cp, "list_caches", return_value=[]),
-            patch.object(cp, "delete_cache") as delete,
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            self.assertEqual(cp.main(), 1)
-        delete.assert_not_called()
-
-    def test_retire_mode_verifies_the_save_then_deletes_by_id(self):
-        now = datetime.now(timezone.utc)
-        prefix = cp.COMPILER_CACHE_PREFIX + "Linux-X64-"
-        old = cache_entry(prefix + "a" * 40, stamp(now - timedelta(days=1)))
-        saved = cache_entry(prefix + "b" * 40, stamp(now))
-        for entries, expected in [([old, saved], [old["id"]]), ([old], [])]:
-            with (
-                self.subTest(saved=len(entries) == 2),
-                patch("sys.argv", ["cache_prune.py", "--repo", "owner/repo",
-                                   "--retire-compiler-cache", saved["key"], "--ref", "refs/heads/main"]),
-                patch.object(cp, "list_caches", return_value=entries),
-                patch.object(cp, "delete_cache") as delete,
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                self.assertEqual(cp.main(), 0)
-                self.assertEqual([call.args[1] for call in delete.call_args_list], expected)
-
-    def test_retire_mode_requires_a_compiler_key_and_explicit_ref(self):
-        for arguments in [["--retire-compiler-cache", "ci-linux-12345678", "--ref", "refs/heads/main"],
-                          ["--retire-compiler-cache", f"{cp.COMPILER_CACHE_PREFIX}Linux-X64-{'a' * 40}"]]:
+    def test_retire_mode_requires_a_commit_sha_and_explicit_ref(self):
+        for arguments in [["--retire-compiler-caches", "b" * 39, "--ref", "refs/heads/main"],
+                          ["--retire-compiler-caches", "B" * 40, "--ref", "refs/heads/main"],
+                          ["--retire-compiler-caches", "b" * 40]]:
             with (
                 self.subTest(arguments=arguments),
                 patch("sys.argv", ["cache_prune.py", "--repo", "owner/repo", *arguments]),

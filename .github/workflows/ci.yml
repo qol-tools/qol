@@ -108,9 +108,6 @@ jobs:
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
-    permissions:
-      contents: read
-      actions: write
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     env:
@@ -304,37 +301,47 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-      - name: Prepare compiler cache upload
-        id: compiler_upload
+      - name: Flush compiler cache
         if: >-
-          ${{ always() && !cancelled() && github.ref == 'refs/heads/main' &&
+          ${{ !cancelled() && github.ref == 'refs/heads/main' &&
           steps.rust_setup.outcome == 'success' &&
           steps.rust_setup.outputs.compiler-cache-hit != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          COMPILER_CACHE_KEY: ${{ steps.rust_setup.outputs.compiler-cache-key }}
-        run: |
-          sccache --stop-server
-          python3 .github/scripts/cache_prune.py --prepare-compiler-cache "$COMPILER_CACHE_KEY" --ref "$GITHUB_REF"
+        run: sccache --stop-server || true
 
       - name: Save compiler cache
-        id: compiler_save
         if: >-
-          ${{ always() && !cancelled() && steps.compiler_upload.outcome == 'success' }}
+          ${{ !cancelled() && github.ref == 'refs/heads/main' &&
+          steps.rust_setup.outcome == 'success' &&
+          steps.rust_setup.outputs.compiler-cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: ${{ steps.rust_setup.outputs.compiler-cache-path }}
           key: ${{ steps.rust_setup.outputs.compiler-cache-key }}
 
+  # Deleting caches needs an actions:write token, which must never reach the
+  # check job: every build script, proc macro and test compiled there could
+  # read it. This job runs repository scripts only, without stored credentials.
+  compiler-cache-retire:
+    name: Retire superseded compiler archives
+    needs: check
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.check.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
       - name: Retire superseded compiler archives
-        if: >-
-          ${{ always() && !cancelled() && steps.compiler_save.outcome == 'success' }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          COMPILER_CACHE_KEY: ${{ steps.rust_setup.outputs.compiler-cache-key }}
-        run: python3 .github/scripts/cache_prune.py --retire-compiler-cache "$COMPILER_CACHE_KEY" --ref "$GITHUB_REF"
+        run: python3 .github/scripts/cache_prune.py --retire-compiler-caches "$GITHUB_SHA" --ref "$GITHUB_REF"
 
   process-windows:
     name: sandbox lifecycle (windows)
