@@ -1,20 +1,19 @@
 mod app;
 mod app_tracker;
-#[allow(dead_code)]
 mod hid_helper;
-#[allow(dead_code)]
 mod input;
-#[allow(dead_code)]
 mod layout;
 mod secure_input;
 mod tap;
-#[allow(dead_code)]
 mod virtual_hid;
 
 use anyhow::Result;
 use qol_headless::CommandResult;
 
-use super::{ConfigInspection, PlatformAdapter, TrustStatus};
+use super::{
+    ConfigInspection, DriverState, HelperState, LayoutGap, PlatformAdapter, Probe,
+    SecureInputHolder, TrustStatus,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Adapter;
@@ -106,6 +105,42 @@ impl PlatformAdapter for Adapter {
 
     fn trust_status(&self) -> TrustStatus {
         TrustStatus::from_trusted(tap::accessibility_trusted())
+    }
+
+    fn virtual_hid_driver(&self) -> Probe<DriverState> {
+        virtual_hid::driver::driver_state()
+    }
+
+    fn virtual_hid_daemon(&self) -> Probe<bool> {
+        virtual_hid::driver::daemon_running()
+    }
+
+    fn hid_helper_state(&self) -> Probe<HelperState> {
+        hid_helper::query_status()
+    }
+
+    fn secure_input(&self) -> Probe<Option<SecureInputHolder>> {
+        Probe::Known(secure_input::holder())
+    }
+
+    fn layout_gaps(&self) -> Probe<Vec<LayoutGap>> {
+        let snapshot = match layout::LayoutSnapshot::read_current() {
+            Ok(snapshot) => snapshot,
+            Err(error) => return Probe::Unknown(error.to_string()),
+        };
+        let resolved = app::remap::resolve(&app::config::load_config());
+        let gaps = app::remap::character_targets(&resolved)
+            .into_iter()
+            .flat_map(|(rule, text)| {
+                layout::missing_characters(&snapshot.table, [text.as_str()])
+                    .into_iter()
+                    .map(move |character| LayoutGap {
+                        rule: rule.clone(),
+                        character,
+                    })
+            })
+            .collect();
+        Probe::Known(gaps)
     }
 }
 

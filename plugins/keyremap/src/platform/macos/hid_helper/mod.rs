@@ -55,6 +55,60 @@ pub(crate) fn run() -> Result<()> {
     devices::run(shared)
 }
 
+pub(crate) fn query_status() -> crate::platform::Probe<crate::platform::HelperState> {
+    use std::io::{BufRead, BufReader, ErrorKind};
+
+    use crate::platform::{HelperReport, HelperState, Probe};
+
+    let stream = match UnixStream::connect(protocol::SOCKET_PATH) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::NotFound | ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Probe::Known(if Path::new(install::HELPER_PLIST).exists() {
+                HelperState::NotRunning
+            } else {
+                HelperState::NotInstalled
+            });
+        }
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+            return Probe::Unknown("the helper socket belongs to another user".to_string());
+        }
+        Err(error) => return Probe::Unknown(format!("could not reach the helper: {error}")),
+    };
+    let exchange = || -> anyhow::Result<ToDaemon> {
+        stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let mut writer = stream.try_clone()?;
+        protocol::write_message(
+            &mut writer,
+            &protocol::ToHelper::Hello {
+                protocol: PROTOCOL_VERSION,
+                role: protocol::Role::Status,
+            },
+        )?;
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line)?;
+        Ok(protocol::parse_message(&line)?)
+    };
+    match exchange() {
+        Ok(ToDaemon::Status(status)) => Probe::Known(HelperState::Running(HelperReport {
+            virtual_keyboard_ready: status.virtual_keyboard_ready,
+            input_monitoring: status.input_monitoring,
+            seized: status.seized,
+            conflicts: status.conflicts,
+        })),
+        Ok(ToDaemon::Refused { protocol, .. }) => Probe::Known(HelperState::VersionMismatch {
+            helper: protocol,
+            expected: PROTOCOL_VERSION,
+        }),
+        Ok(other) => Probe::Unknown(format!("the helper answered {other:?}")),
+        Err(error) => Probe::Unknown(format!("the helper did not answer: {error:#}")),
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Shared {
     state: Mutex<State>,

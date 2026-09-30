@@ -15,6 +15,7 @@ use crate::platform::macos::virtual_hid::client::request::{
 use crate::platform::macos::virtual_hid::{
     OWN_DAEMON_LABEL, PQRS_DAEMON_BINARY, PQRS_DAEMON_LABEL, PQRS_MANAGER_BINARY,
 };
+use crate::platform::INPUT_MONITORING_FIX;
 
 pub(crate) const HELPER_LABEL: &str = "com.qol-tools.keyremap.hid-helper";
 pub(crate) const HELPER_BINARY: &str =
@@ -82,9 +83,7 @@ pub(crate) fn install() -> Result<String> {
     steps.push(format!("Started {HELPER_LABEL}."));
     run(PQRS_MANAGER_BINARY, &["activate"])?;
     steps.push("Activated the driver extension.".to_string());
-    steps.push(format!(
-        "If macOS asks, turn on {HELPER_LABEL} in System Settings > Privacy & Security > Input Monitoring."
-    ));
+    steps.push(format!("Next: {INPUT_MONITORING_FIX}"));
     Ok(steps.join("\n"))
 }
 

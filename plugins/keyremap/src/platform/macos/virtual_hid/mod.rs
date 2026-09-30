@@ -1,4 +1,5 @@
 pub(crate) mod client;
+pub(crate) mod driver;
 
 pub(crate) const PQRS_SOCKET: &str =
     "/Library/Application Support/org.pqrs/tmp/rootonly/karabiner_virtual_hid_device_service.sock";

@@ -379,6 +379,38 @@ fn warn_shadowed_rules(rules: &[ResolvedKeyRule]) {
     }
 }
 
+pub fn character_targets(config: &ResolvedConfig) -> Vec<(String, String)> {
+    let mut targets = Vec::new();
+    for rule in &config.char_rules {
+        targets.push((
+            format!(
+                "char rule {} -> {}",
+                rule_label(&rule.from_mods, rule.from_key),
+                rule.to_char
+            ),
+            rule.to_char.clone(),
+        ));
+    }
+    for rule in &config.char_swap_rules {
+        targets.push((
+            format!("char swap {} -> {}", rule.from_char, rule.to_char),
+            rule.to_char.clone(),
+        ));
+    }
+    for rule in &config.key_rules {
+        if let ResolvedKeyTarget::Char { text } = &rule.to {
+            targets.push((
+                format!(
+                    "key rule {} -> {text}",
+                    rule_label(&rule.from_mods, rule.from_key)
+                ),
+                text.clone(),
+            ));
+        }
+    }
+    targets
+}
+
 pub fn diff_key_rules(old: &[ResolvedKeyRule], new: &[ResolvedKeyRule]) -> Vec<String> {
     let mut warnings = Vec::new();
     for old_rule in old {
@@ -677,6 +709,23 @@ fn resolve_scroll_rule(rule: &ScrollRule) -> Option<ResolvedScrollRule> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn character_targets_name_every_rule_that_types_text() {
+        let raw: RemapConfig = serde_json::from_value(serde_json::json!({
+            "char_swaps": [["$", "€"]],
+            "char_rules": [{ "from_mods": ["ralt"], "from_key": "2", "to_char": "@" }],
+            "key_rules": [
+                { "from_key": "f12", "to_key": "~" },
+                { "from_mods": ["ctrl"], "from_key": "c", "to_mods": ["cmd"], "to_key": "c" }
+            ]
+        }))
+        .unwrap();
+        let targets = character_targets(&resolve(&raw));
+        let texts: Vec<&str> = targets.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(texts, vec!["@", "€", "$", "~"]);
+        assert!(targets[0].0.contains("ralt+2"), "{}", targets[0].0);
+    }
     use super::*;
     use proptest::prelude::*;
 
