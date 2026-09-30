@@ -1,5 +1,7 @@
 mod app;
 mod app_tracker;
+#[allow(dead_code)]
+mod layout;
 mod tap;
 
 use anyhow::Result;
