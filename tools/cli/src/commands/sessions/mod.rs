@@ -686,11 +686,15 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         let binding = single_binding(args, "qol sessions next [<session>]")?;
         pending.pending_round(&binding)?.into_iter().collect()
     };
+    let watched = qol_config::data_subdir("sessions")
+        .map(|dir| watch_owner::watched_tokens(&dir))
+        .unwrap_or_default();
     let rows = next_rows(
         &terminals,
         &CliSessionInterpreter::system(),
         &pending,
         &rounds,
+        &watched,
     )?;
     match output_format {
         OutputFormat::Json => println!(
@@ -737,6 +741,7 @@ fn next_rows(
     interpreter: &CliSessionInterpreter,
     pending: &bridge::PendingBridgeStore,
     rounds: &[bridge::PendingRound],
+    watched: &std::collections::HashSet<String>,
 ) -> Result<Vec<serde_json::Value>> {
     let live = terminals.discover().ok();
     let mut rows = Vec::with_capacity(rounds.len());
@@ -846,6 +851,15 @@ fn next_rows(
                     bridge::TIMEOUT_MAX_MS
                 ),
                 "instruction": format!("The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the kickstart never leaves the session's editor, or the session is hung on a provider error, clear the lane in one call with `qol sessions close {}` and spawn a fresh one.", round.session),
+            }));
+        } else if watched.contains(&round.session) {
+            rows.push(serde_json::json!({
+                "phase": "watched",
+                "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
+                "command": "",
+                "instruction": "Implementation is still running and a watcher owns this round: it wakes the session that delivered the round when it completes. End your turn now. Never wait on this round with session_bridge, qol sessions resume, bridge or wait.",
             }));
         } else {
             rows.push(serde_json::json!({
@@ -1242,6 +1256,7 @@ mod tests {
             &CliSessionInterpreter::system(),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
 
@@ -1329,6 +1344,7 @@ mod tests {
             &transcript_interpreter(Some(false)),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
 
@@ -1358,6 +1374,7 @@ mod tests {
             &transcript_interpreter(Some(true)),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
 
@@ -1390,6 +1407,7 @@ mod tests {
             &CliSessionInterpreter::system(),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
         assert_eq!(rows.len(), 2);
@@ -1407,6 +1425,33 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("qol sessions resume"));
+    }
+
+    #[test]
+    fn a_watcher_owned_round_tells_the_architect_to_end_its_turn_instead_of_waiting() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false, None)
+            .unwrap();
+        let (terminals, _) = fake_terminals(vec![fake_facts("2", 200)]);
+        let watched = std::collections::HashSet::from(["v1:fake:2:200".to_owned()]);
+
+        let rows = next_rows(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store,
+            &store.pending_rounds().unwrap(),
+            &watched,
+        )
+        .unwrap();
+        assert_eq!(rows[0]["phase"], "watched");
+        assert_eq!(rows[0]["command"], "");
+        assert!(rows[0]["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("End your turn now"));
     }
 
     #[test]
@@ -1747,6 +1792,7 @@ mod tests {
             &CliSessionInterpreter::system(),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
         assert_eq!(rows.len(), 1);
