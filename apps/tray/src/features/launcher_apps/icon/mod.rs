@@ -2,6 +2,7 @@ mod files;
 
 pub use files::MarkFiles;
 
+use crate::plugins::manifest::PluginManifest;
 use crate::plugins::Plugin;
 use crate::shortcuts::model::{AppRef, Shortcut, ShortcutAction, ShortcutSource};
 use qol_theme::Mark;
@@ -16,15 +17,15 @@ pub enum LauncherIcon {
 pub type PluginMarks = HashMap<String, Mark>;
 
 pub fn plugin_mark(plugin: &Plugin) -> Mark {
-    let Some(name) = plugin.manifest.plugin.icon.as_deref() else {
+    manifest_mark(plugin.id.as_str(), &plugin.manifest)
+}
+
+pub fn manifest_mark(plugin_id: &str, manifest: &PluginManifest) -> Mark {
+    let Some(name) = manifest.plugin.icon.as_deref() else {
         return Mark::Qol;
     };
     Mark::from_name(name).unwrap_or_else(|| {
-        log::warn!(
-            "plugin {} names unknown launcher icon {:?}; using the qol mark",
-            plugin.id.as_str(),
-            name
-        );
+        log::warn!("plugin {plugin_id} names unknown launcher icon {name:?}; using the qol mark");
         Mark::Qol
     })
 }

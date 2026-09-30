@@ -2983,6 +2983,16 @@ impl SettingsPanelView {
     ) -> impl IntoElement {
         let label = self.plugin_title(index);
         let active = index == self.selected_source;
+        let mark = self
+            .panel
+            .sources
+            .get(index)
+            .map_or(qol_theme::Mark::Qol, |source| source.mark);
+        let line = qol_theme::Mark::line_on(if active {
+            &self.kit.grounds.band
+        } else {
+            &self.kit.grounds.rail
+        });
         let mut item = div()
             .id(("settings-source", index))
             .when(quiet, |item| item.opacity(RAIL_SECTION_OPACITY))
@@ -2993,6 +3003,8 @@ impl SettingsPanelView {
             .ml(px(-qol_theme::SPACE_INSET))
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
             .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
+            .gap(px(qol_theme::SPACE_INSET))
+            .child(crate::icon::mark(mark, super::PANEL_RAIL_MARK_SIZE, line))
             .child(rail_item_label(label, active, self.kit))
             .cursor(CursorStyle::PointingHand);
         if active {
