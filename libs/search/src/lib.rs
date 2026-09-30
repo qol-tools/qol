@@ -31,12 +31,12 @@ pub fn fuzzy_match_prepared(prepared: &PreparedFuzzyQuery, candidate: &str) -> O
             positions: vec![],
         });
     }
+    if !contains_subsequence(&prepared.query_lower, candidate) {
+        return None;
+    }
 
     let c_orig: Vec<char> = candidate.chars().collect();
-    let c_lower: Vec<char> = candidate
-        .chars()
-        .map(|c| c.to_lowercase().next().unwrap())
-        .collect();
+    let c_lower: Vec<char> = candidate.chars().map(lower_first).collect();
 
     let greedy = score_pass(
         &prepared.query_lower,
@@ -69,6 +69,26 @@ pub fn fuzzy_match_prepared(prepared: &PreparedFuzzyQuery, candidate: &str) -> O
         .into_iter()
         .flatten()
         .min_by_key(|m| m.score)
+}
+
+fn contains_subsequence(query_lower: &[char], candidate: &str) -> bool {
+    let mut remaining = query_lower.iter();
+    let mut next = remaining.next();
+    for c in candidate.chars() {
+        let Some(&wanted) = next else { break };
+        if lower_first(c) == wanted {
+            next = remaining.next();
+        }
+    }
+    next.is_none()
+}
+
+fn lower_first(c: char) -> char {
+    if c.is_ascii() {
+        c.to_ascii_lowercase()
+    } else {
+        c.to_lowercase().next().unwrap()
+    }
 }
 
 fn score_pass(
@@ -303,6 +323,18 @@ mod tests {
     fn unicode_lowercase_expansion_does_not_panic() {
         let result = fuzzy_match("l", "İstanbul").expect("should match trailing l in İstanbul");
         assert_eq!(result.positions, vec![7]);
+    }
+
+    #[test]
+    fn non_ascii_candidates_match_case_insensitively() {
+        assert!(fuzzy_match("éla", "Élan Vital").is_some());
+        assert!(fuzzy_match("ÉLA", "élan vital").is_some());
+    }
+
+    #[test]
+    fn out_of_order_query_is_rejected() {
+        assert!(fuzzy_match("xof", "Firefox").is_none());
+        assert!(fuzzy_match("ffx", "Firefox").is_some());
     }
 
     #[test]
