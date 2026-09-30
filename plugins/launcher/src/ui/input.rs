@@ -52,7 +52,9 @@ impl LauncherState {
         }
         let in_panel = self.mode == SearchMode::Files && self.list_focused;
         match key {
-            "escape" | "esc" if self.query.is_empty() => InputEffect::Dismiss,
+            "escape" | "esc" if self.query.is_empty() || !self.escape_clears_text => {
+                InputEffect::Dismiss
+            }
             "escape" | "esc" => {
                 self.query.clear();
                 self.clear_launch_error();
@@ -497,6 +499,16 @@ mod tests {
         );
         assert!(state.query.is_empty());
         assert_eq!(state.apply_key("escape", &plain, 3), InputEffect::Dismiss);
+    }
+
+    #[test]
+    fn escape_closes_at_once_when_clearing_is_off() {
+        let mut state = typed("term");
+        state.escape_clears_text = false;
+        assert_eq!(
+            state.apply_key("escape", &Modifiers::none(), 3),
+            InputEffect::Dismiss
+        );
     }
 
     #[test]

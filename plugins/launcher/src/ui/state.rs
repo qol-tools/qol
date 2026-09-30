@@ -103,6 +103,7 @@ pub struct LauncherState {
     pub launch_error: Option<String>,
     pub flow: Option<FlowSession>,
     pub feedback: Option<Feedback>,
+    pub escape_clears_text: bool,
 }
 
 impl FlowSession {
@@ -130,6 +131,7 @@ impl LauncherState {
             launch_error: None,
             flow: None,
             feedback: None,
+            escape_clears_text: true,
         }
     }
 

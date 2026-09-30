@@ -34,6 +34,14 @@ description = "Show recently opened files while a Files search is empty."
 section = "launcher"
 default = true
 
+[field.escape_clears_text]
+type = "boolean"
+config_key = "escape_clears_text"
+label = "Esc clears text before closing"
+description = "With text typed, the first Esc clears it and the second closes. Off: Esc always closes."
+section = "launcher"
+default = true
+
 [section.appearance]
 label = "Debug"
 description = "Only for tracking down launcher problems."

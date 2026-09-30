@@ -70,8 +70,13 @@ pub(crate) struct LauncherView {
     last_render_trace: Option<trace::RenderSignature>,
 }
 
-fn before_typing() -> BeforeTyping {
-    let config = crate::config::load_launcher_config();
+fn fresh_state(config: &crate::config::LauncherConfig) -> LauncherState {
+    let mut state = LauncherState::new();
+    state.escape_clears_text = config.escape_clears_text;
+    state
+}
+
+fn before_typing(config: &crate::config::LauncherConfig) -> BeforeTyping {
     BeforeTyping {
         apps: config.most_used_apps,
         files: config.recent_files,
@@ -91,9 +96,10 @@ impl LauncherView {
             entries.file_entries.clone(),
             entries.flow_entries.clone(),
         );
-        store.set_before_typing(before_typing());
+        let config = crate::config::load_launcher_config();
+        store.set_before_typing(before_typing(&config));
         Self {
-            state: LauncherState::new(),
+            state: fresh_state(&config),
             store,
             shared_entries: shared,
             last_entries_snapshot: entries,
@@ -170,8 +176,9 @@ impl LauncherView {
                 self.window_title,
             );
         }
-        self.state = LauncherState::new();
-        self.store.set_before_typing(before_typing());
+        let config = crate::config::load_launcher_config();
+        self.state = fresh_state(&config);
+        self.store.set_before_typing(before_typing(&config));
         self.details.forget_files();
         self.recent_stale = true;
         self.menu_kind = None;

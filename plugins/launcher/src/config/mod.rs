@@ -16,6 +16,8 @@ pub struct LauncherConfig {
     pub most_used_apps: bool,
     #[serde(default = "enabled")]
     pub recent_files: bool,
+    #[serde(default = "enabled")]
+    pub escape_clears_text: bool,
 }
 
 fn enabled() -> bool {
@@ -67,5 +69,6 @@ mod tests {
         assert!(defaults.extra_file_scan_roots.is_empty());
         assert!(defaults.most_used_apps);
         assert!(defaults.recent_files);
+        assert!(defaults.escape_clears_text);
     }
 }
