@@ -9,6 +9,7 @@ use anyhow::{bail, ensure, Context, Result};
 
 use super::console::{self, ConsoleUser};
 use super::devices;
+use super::peer_signature::Signer;
 use super::protocol::{self, Role, ToDaemon, ToHelper, PROTOCOL_VERSION, SOCKET_PATH};
 use super::Shared;
 
@@ -22,6 +23,9 @@ extern "C" {
 }
 
 pub(super) fn serve(shared: &Arc<Shared>) {
+    let signer = Signer::of_this_helper()
+        .inspect_err(|error| log::error!("keyremap sessions are refused: {error:#}"))
+        .ok();
     let mut generation = 0;
     loop {
         shared.set_input_monitoring(devices::input_monitoring_granted());
@@ -32,7 +36,13 @@ pub(super) fn serve(shared: &Arc<Shared>) {
         match bind(owner) {
             Ok(listener) => {
                 log::info!("listening on {SOCKET_PATH} for uid {}", owner.uid);
-                accept_until_owner_changes(&listener, owner, shared, &mut generation);
+                accept_until_owner_changes(
+                    &listener,
+                    owner,
+                    signer.as_ref(),
+                    shared,
+                    &mut generation,
+                );
             }
             Err(error) => {
                 log::error!("cannot listen on {SOCKET_PATH}: {error}");
@@ -57,6 +67,7 @@ fn bind(owner: ConsoleUser) -> io::Result<UnixListener> {
 fn accept_until_owner_changes(
     listener: &UnixListener,
     owner: ConsoleUser,
+    signer: Option<&Signer>,
     shared: &Arc<Shared>,
     generation: &mut u64,
 ) {
@@ -64,7 +75,7 @@ fn accept_until_owner_changes(
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Err(error) = accept(stream, owner, shared, generation) {
+                if let Err(error) = accept(stream, owner, signer, shared, generation) {
                     log::warn!("refused a keyremap connection: {error:#}");
                 }
             }
@@ -91,6 +102,7 @@ fn accept_until_owner_changes(
 fn accept(
     stream: UnixStream,
     owner: ConsoleUser,
+    signer: Option<&Signer>,
     shared: &Arc<Shared>,
     generation: &mut u64,
 ) -> Result<()> {
@@ -124,6 +136,9 @@ fn accept(
     match role {
         Role::Status => protocol::write_message(&mut writer, &ToDaemon::Status(shared.status()))?,
         Role::Session => {
+            signer
+                .context("the helper has no certificate to verify keyremap with")?
+                .verify(&writer)?;
             *generation += 1;
             let session = *generation;
             protocol::write_message(
@@ -179,6 +194,7 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
 
+    use super::super::peer_signature::tests::{trusting_anyone, trusting_no_one};
     use super::*;
 
     extern "C" {
@@ -214,7 +230,7 @@ mod tests {
                 role: Role::Status,
             },
         );
-        accept(server, me(), &shared, &mut 0).unwrap();
+        accept(server, me(), None, &shared, &mut 0).unwrap();
         let ToDaemon::Status(status) = hear(&client) else {
             panic!("expected status")
         };
@@ -233,7 +249,7 @@ mod tests {
                 role: Role::Session,
             },
         );
-        accept(server, me(), &shared, &mut 0).unwrap();
+        accept(server, me(), None, &shared, &mut 0).unwrap();
         assert!(matches!(
             hear(&client),
             ToDaemon::Refused { protocol, .. } if protocol == PROTOCOL_VERSION
@@ -252,7 +268,14 @@ mod tests {
                 role: Role::Session,
             },
         );
-        accept(server, me(), &shared, &mut generation).unwrap();
+        accept(
+            server,
+            me(),
+            Some(&trusting_anyone()),
+            &shared,
+            &mut generation,
+        )
+        .unwrap();
         assert!(matches!(hear(&client), ToDaemon::Welcome { .. }));
         assert_eq!(generation, 1);
         assert!(shared.lock().watchdog.is_current(1));
@@ -265,6 +288,45 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("closing the session did not reach the watchdog");
+    }
+
+    #[test]
+    fn a_session_from_code_without_the_helper_certificate_is_refused() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let shared = Arc::new(Shared::default());
+        let mut generation = 0;
+        say(
+            &mut client,
+            &ToHelper::Hello {
+                protocol: PROTOCOL_VERSION,
+                role: Role::Session,
+            },
+        );
+        let error = accept(
+            server,
+            me(),
+            Some(&trusting_no_one()),
+            &shared,
+            &mut generation,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("certificate"), "{error:#}");
+        assert_eq!(generation, 0);
+        assert!(!shared.lock().watchdog.is_current(1));
+    }
+
+    #[test]
+    fn a_session_is_refused_when_the_helper_has_no_certificate() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let shared = Arc::new(Shared::default());
+        say(
+            &mut client,
+            &ToHelper::Hello {
+                protocol: PROTOCOL_VERSION,
+                role: Role::Session,
+            },
+        );
+        assert!(accept(server, me(), None, &shared, &mut 0).is_err());
     }
 
     #[test]
@@ -282,7 +344,7 @@ mod tests {
             uid: me().uid + 1,
             gid: me().gid,
         };
-        assert!(accept(server, stranger, &shared, &mut 0).is_err());
+        assert!(accept(server, stranger, None, &shared, &mut 0).is_err());
         let _ = client.flush();
     }
 }

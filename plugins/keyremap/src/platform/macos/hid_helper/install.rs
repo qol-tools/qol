@@ -58,7 +58,7 @@ pub(crate) fn install() -> Result<String> {
             install_file(&current, HELPER_BINARY, 0o755)?;
             steps.push(format!("Copied {} to {HELPER_BINARY}.", current.display()));
             steps.push(
-                "No code signing identity is configured, so macOS forgets the Input Monitoring grant every time you reinstall. Set QOL_CODESIGN_IDENTITY and start qol-tray once to remember one."
+                "No code signing identity is configured, so the helper cannot verify keyremap and Key Remap stays on the event tap. Set QOL_CODESIGN_IDENTITY, start qol-tray once to remember it, then install again."
                     .to_string(),
             );
         }
