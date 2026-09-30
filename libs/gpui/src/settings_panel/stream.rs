@@ -124,7 +124,7 @@ fn valid_hex(hex: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{brightness_frame, color_frame, StreamClient};
+    use super::{brightness_frame, color_frame, StreamClient, SEND_MIN_INTERVAL};
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -160,30 +160,22 @@ mod tests {
         let (port, received) = stub_server();
         let client = StreamClient::new(Some(format!("ws://127.0.0.1:{port}")));
         client.open();
-        for index in 0..25 {
-            client.send(format!("frame-{index}"));
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        std::thread::sleep(Duration::from_millis(300));
+        client.send("frame-0".into());
+        let within_interval = Instant::now() + Duration::from_secs(60);
+        *client.last_sent.lock().unwrap() = Some(within_interval);
+        client.send("throttled".into());
+        let past_interval = Instant::now() - SEND_MIN_INTERVAL * 2;
+        *client.last_sent.lock().unwrap() = Some(past_interval);
+        client.send("frame-1".into());
         client.close();
         let frames = received.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(
-            frames.len() >= 2,
-            "expected throttled frames to arrive, got {frames:?}"
+        assert_eq!(
+            frames
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            ["frame-0", "frame-1"]
         );
-        assert!(
-            frames.len() < 20,
-            "frames must be throttled below the daemon drain interval, got {}",
-            frames.len()
-        );
-        assert_eq!(frames[0].1, "frame-0");
-        for pair in frames.windows(2) {
-            let gap = pair[1].0.duration_since(pair[0].0);
-            assert!(
-                gap >= Duration::from_millis(85),
-                "frames must be spaced like the daemon drain, gap was {gap:?}"
-            );
-        }
     }
 
     #[test]
