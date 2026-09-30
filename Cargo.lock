@@ -6718,7 +6718,7 @@ dependencies = [
 
 [[package]]
 name = "qol-ide-checkout"
-version = "1.44.2"
+version = "1.45.0"
 dependencies = [
  "log",
  "qol-apps",
@@ -6737,7 +6737,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.47.1"
+version = "1.48.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -6806,7 +6806,7 @@ dependencies = [
 
 [[package]]
 name = "qol-lights"
-version = "1.48.2"
+version = "1.49.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -6855,7 +6855,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -7040,7 +7040,7 @@ dependencies = [
 
 [[package]]
 name = "qol-pointz"
-version = "1.46.2"
+version = "1.47.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7185,7 +7185,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "log",
@@ -7328,7 +7328,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.34.2"
+version = "0.35.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -7369,7 +7369,7 @@ dependencies = [
 
 [[package]]
 name = "qol-window-actions"
-version = "2.45.2"
+version = "2.46.0"
 dependencies = [
  "log",
  "proptest",
