@@ -454,34 +454,9 @@ where
     F: FnMut(u8, String),
 {
     codesign_debug_binaries(plugin_id, path);
-    persist_fingerprint_sidecar(plugin_id, path);
     on_progress(100, "Build complete".to_string());
     log::info!("Cargo build succeeded for {}", plugin_id);
     super::finished_build(plugin_id, combined)
-}
-
-fn persist_fingerprint_sidecar(plugin_id: &str, path: &Path) {
-    let Ok(fingerprint) = crate::fingerprint_plugin(path) else {
-        log::warn!(
-            "[dev-build] event=fingerprint_failed plugin_id={} reason=compute_failed",
-            plugin_id
-        );
-        return;
-    };
-    let Some(binary) = crate::plugin_binary_path(path) else {
-        log::warn!(
-            "[dev-build] event=fingerprint_failed plugin_id={} reason=no_binary",
-            plugin_id
-        );
-        return;
-    };
-    if let Err(error) = crate::write_fingerprint_sidecar(&binary, &fingerprint) {
-        log::warn!(
-            "[dev-build] event=fingerprint_failed plugin_id={} reason=write: {}",
-            plugin_id,
-            error
-        );
-    }
 }
 
 fn failed_spawn(plugin_id: &str, error: String) -> BuildResult {
@@ -683,9 +658,10 @@ mod tests {
     }
 
     #[test]
-    fn builds_workspace_batch_successfully() {
+    fn builds_workspace_batch_without_publishing_unplanned_fingerprints() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
             "[workspace]\nmembers = [\"first\", \"second\"]\nresolver = \"2\"\n",
@@ -705,6 +681,13 @@ mod tests {
             .unwrap();
             std::fs::write(package.join("src/lib.rs"), source).unwrap();
             std::fs::write(package.join("src/main.rs"), "fn main() {}\n").unwrap();
+            std::fs::write(
+                package.join("plugin.toml"),
+                format!(
+                    "[plugin]\nid = \"{name}\"\nname = \"{name}\"\ndescription = \"\"\nversion = \"0.1.0\"\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[runtime]\ncommand = \"{name}\"\n"
+                ),
+            )
+            .unwrap();
         }
         let plugins = [("first", first.as_path()), ("second", second.as_path())];
         let mut progress = |_: &str, _: u8, _: String| {};
@@ -713,6 +696,10 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|result| result.success));
+        for (_, path) in plugins {
+            let binary = crate::plugin_binary_path(path).unwrap();
+            assert!(crate::read_fingerprint_sidecar(&binary).is_none());
+        }
     }
 
     #[cfg(windows)]

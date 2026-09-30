@@ -17,8 +17,12 @@ pub fn plan_linked_plugin_builds(
     worktree_branch: Option<&str>,
 ) -> Vec<PluginBuildPlan> {
     let effective_links = worktree::resolve_worktree_paths(dev_links, worktree_branch);
+    plan_plugin_builds(&effective_links)
+}
+
+pub fn plan_plugin_builds(plugins: &HashMap<String, PathBuf>) -> Vec<PluginBuildPlan> {
     let mut fingerprint_cache = FingerprintCache::default();
-    selection::select_linked_plugins(&effective_links)
+    selection::select_linked_plugins(plugins)
         .into_iter()
         .map(|selection| rebuild_reason::plan_selection(selection, &mut fingerprint_cache))
         .collect()

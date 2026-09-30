@@ -203,10 +203,16 @@ where
 
     fn record_build_result(&mut self, plan: &PluginBuildPlan, result: BuildResult) {
         if result.success {
-            if let Some(fingerprint) = built_fingerprint(plan) {
-                self.fingerprints
-                    .insert(plan.plugin_id.clone(), fingerprint.clone());
-                persist_fingerprint_sidecar(plan, &fingerprint);
+            match &plan.current_fingerprint {
+                Some(fingerprint) => {
+                    self.fingerprints
+                        .insert(plan.plugin_id.clone(), fingerprint.clone());
+                    persist_fingerprint_sidecar(plan, fingerprint);
+                }
+                None => log::warn!(
+                    "[dev-build] event=sidecar_skip plugin_id={} reason=prebuild_fingerprint_unavailable",
+                    plan.plugin_id
+                ),
             }
             self.events.plugin_progress(
                 &plan.plugin_id,
@@ -220,12 +226,6 @@ where
         }
         self.results.push(result);
     }
-}
-
-fn built_fingerprint(plan: &PluginBuildPlan) -> Option<String> {
-    crate::fingerprint::fingerprint_plugin(&plan.path)
-        .ok()
-        .or_else(|| plan.current_fingerprint.clone())
 }
 
 fn persist_fingerprint_sidecar(plan: &PluginBuildPlan, fingerprint: &str) {
@@ -491,13 +491,14 @@ mod tests {
     }
 
     fn build_plan_for(path: PathBuf) -> PluginBuildPlan {
+        let current_fingerprint = crate::fingerprint_plugin(&path).ok();
         PluginBuildPlan {
             plugin_id: "plugin-a".to_string(),
             path,
             has_cargo: true,
             supports_platform: true,
             needs_rebuild: true,
-            current_fingerprint: None,
+            current_fingerprint,
             last_built_fingerprint: None,
             reason: "Source changed".to_string(),
         }
@@ -529,6 +530,33 @@ mod tests {
             runner.fingerprints.get("plugin-a").map(String::as_str),
             Some(expected.as_str())
         );
+    }
+
+    #[test]
+    fn successful_build_uses_only_the_planned_fingerprint() {
+        for fingerprint_available in [true, false] {
+            let tmp = TempDir::new().unwrap();
+            let plugin_dir = daemon_plugin_dir(tmp.path());
+            let original = crate::fingerprint_plugin(&plugin_dir).unwrap();
+            let mut plan = build_plan_for(plugin_dir.clone());
+            plan.current_fingerprint = fingerprint_available.then_some(original);
+            let expected = plan.current_fingerprint.clone();
+            let builder = SucceedingBuilder;
+            let mut runner = BuildRunner::new(vec![plan], &builder, CoreEventEmitter::new(|_| {}));
+            let binary = crate::freshness::plugin_binary_path(&plugin_dir).unwrap();
+            std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            std::fs::write(&binary, "binary").unwrap();
+            std::fs::write(plugin_dir.join("src/main.rs"), "fn main() { let _ = 2; }\n").unwrap();
+
+            runner.run_builds(&[0]);
+
+            assert_eq!(crate::read_fingerprint_sidecar(&binary), expected);
+            assert_eq!(runner.fingerprints.get("plugin-a"), expected.as_ref());
+            assert!(!crate::binary_is_fresh(
+                &binary,
+                &crate::fingerprint_plugin(&plugin_dir).unwrap()
+            ));
+        }
     }
 
     #[test]

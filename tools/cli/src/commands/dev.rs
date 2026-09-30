@@ -15,6 +15,7 @@ use crate::workspace::{
 use anyhow::{bail, Context, Result};
 use qol_dev_build::adapters::CoreEventSink;
 use qol_dev_build::core::CoreEvent;
+use qol_dev_build::PluginBuildPlan;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -363,15 +364,14 @@ fn reload_linked_plugins(verbose: bool, skip_plugins: bool, branch: Option<&str>
         Some(&config_dir),
         branch,
     );
-    let failed: Vec<&str> = run
+    let failed: Vec<String> = run
         .results
         .iter()
         .filter(|r| !r.success && !r.skipped)
-        .map(|r| r.plugin_id.as_str())
+        .map(|r| format!("{}:\n{}", r.plugin_id, r.output.trim()))
         .collect();
     if !failed.is_empty() {
-        eprintln!("qol dev: plugin build failed for: {}", failed.join(", "));
-        eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
+        bail!("dev-linked plugin build failed:\n{}", failed.join("\n"));
     }
     Ok(())
 }
@@ -734,76 +734,68 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
     }
     let label = stale
         .iter()
-        .map(|p| display_name(&p.dir))
+        .map(|p| display_name(&p.path))
         .collect::<Vec<_>>()
         .join(" ");
     let features = qol_dev_build::dev_feature_flags(root).map_err(anyhow::Error::msg)?;
-    let mut command = plugin_batch_command(root, &stale, &features)?;
-    let result = run_dev_step("build", StepKind::Pending, &label, &mut command, verbose);
-    if result.is_err() {
-        eprintln!("qol dev: plugin batch build failed");
-        eprintln!("qol dev: continuing - recover via qol-tray GUI Recompile pane.");
-        return Ok(());
-    }
+    let mut command = plugin_batch_command(
+        root,
+        stale.iter().map(|plan| plan.path.as_path()),
+        &features,
+    )?;
+    run_dev_step("build", StepKind::Pending, &label, &mut command, verbose)
+        .context("plugin batch build failed")?;
     persist_batch_fingerprints(&stale);
     Ok(())
 }
 
-fn plugins_needing_build(plugins: &[BuildablePlugin]) -> Vec<BuildablePlugin> {
-    plugins
+fn plugins_needing_build(plugins: &[BuildablePlugin]) -> Vec<PluginBuildPlan> {
+    let links = plugins
         .iter()
-        .filter(|plugin| !plugin_is_fresh(plugin))
-        .cloned()
+        .map(|plugin| (plugin.package_name.clone(), plugin.dir.clone()))
+        .collect();
+    qol_dev_build::planning::plan_plugin_builds(&links)
+        .into_iter()
+        .filter(|plan| plan.needs_rebuild)
         .collect()
 }
 
-fn plugin_is_fresh(plugin: &BuildablePlugin) -> bool {
-    let Ok(fingerprint) = qol_dev_build::fingerprint_plugin(&plugin.dir) else {
-        return false;
-    };
-    qol_dev_build::plugin_binary_path(&plugin.dir)
-        .is_some_and(|binary| qol_dev_build::binary_is_fresh(&binary, &fingerprint))
-}
-
-fn persist_batch_fingerprints(plugins: &[BuildablePlugin]) {
+fn persist_batch_fingerprints(plugins: &[PluginBuildPlan]) {
     for plugin in plugins {
-        let fingerprint = match qol_dev_build::fingerprint_plugin(&plugin.dir) {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => {
-                eprintln!(
-                    "qol dev: failed to fingerprint {}: {}",
-                    display_name(&plugin.dir),
-                    error
-                );
-                continue;
-            }
-        };
-        let Some(binary) = qol_dev_build::plugin_binary_path(&plugin.dir) else {
+        let Some(fingerprint) = &plugin.current_fingerprint else {
             eprintln!(
-                "qol dev: {} declares no daemon or runtime binary, no sidecar written; always rebuilt",
-                display_name(&plugin.dir)
+                "qol dev: no pre-build fingerprint for {}: {}; leaving it pending",
+                display_name(&plugin.path),
+                plugin.reason
             );
             continue;
         };
-        if let Err(error) = qol_dev_build::write_fingerprint_sidecar(&binary, &fingerprint) {
+        let Some(binary) = qol_dev_build::plugin_binary_path(&plugin.path) else {
+            eprintln!(
+                "qol dev: {} declares no daemon or runtime binary, no sidecar written; always rebuilt",
+                display_name(&plugin.path)
+            );
+            continue;
+        };
+        if let Err(error) = qol_dev_build::write_fingerprint_sidecar(&binary, fingerprint) {
             eprintln!(
                 "qol dev: failed to save fingerprint for {}: {}",
-                display_name(&plugin.dir),
+                display_name(&plugin.path),
                 error
             );
         }
     }
 }
 
-fn plugin_batch_command(
+fn plugin_batch_command<'a>(
     root: &Path,
-    plugins: &[BuildablePlugin],
+    plugins: impl IntoIterator<Item = &'a Path>,
     features: &[String],
 ) -> Result<Command> {
     let mut command = Command::new("cargo");
     command.current_dir(root).arg("build").arg("--workspace");
     for plugin in plugins {
-        command.arg("--bin").arg(cargo_bin_name(&plugin.dir)?);
+        command.arg("--bin").arg(cargo_bin_name(plugin)?);
     }
     for feature in features {
         command.arg("--features").arg(feature);
@@ -1252,18 +1244,9 @@ mod tests {
             "[package]\nname = \"qol-alt-tab\"\n\n[[bin]]\nname = \"qol-alt-tab\"\npath = \"src/main.rs\"\n",
         )
         .unwrap();
-        let plugins = [
-            BuildablePlugin {
-                dir: voice.clone(),
-                package_name: "qol-voice".to_string(),
-            },
-            BuildablePlugin {
-                dir: alt_tab.clone(),
-                package_name: "qol-alt-tab".to_string(),
-            },
-        ];
+        let plugins = [voice.as_path(), alt_tab.as_path()];
         let features = ["qol-voice/local-stt".to_string()];
-        let command = plugin_batch_command(Path::new("/repo/qol"), &plugins, &features).unwrap();
+        let command = plugin_batch_command(Path::new("/repo/qol"), plugins, &features).unwrap();
         let args: Vec<&OsStr> = command.get_args().collect();
         assert_eq!(
             args[..8],
@@ -1377,7 +1360,14 @@ mod tests {
         )
         .unwrap();
         std::fs::write(plugin_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(plugin_dir.join("plugin.toml"), plugin_toml).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            plugin_toml.replace(
+                "[plugin]\n",
+                "[plugin]\nplatforms = [\"linux\", \"macos\", \"windows\"]\n",
+            ),
+        )
+        .unwrap();
         let plugin = BuildablePlugin {
             dir: plugin_dir,
             package_name: "plugin-a".to_string(),
@@ -1467,7 +1457,7 @@ mod tests {
             1,
             "a plugin without a runtime binary has no sidecar anchor and must rebuild"
         );
-        persist_batch_fingerprints(&[plugin]);
+        persist_batch_fingerprints(&stale);
         assert!(
             !repo
                 .join("target")
@@ -1485,12 +1475,86 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         let (plugin, binary) = write_freshness_workspace(&repo);
 
-        persist_batch_fingerprints(std::slice::from_ref(&plugin));
+        persist_batch_fingerprints(&plugins_needing_build(std::slice::from_ref(&plugin)));
 
         let stored =
             qol_dev_build::read_fingerprint_sidecar(&binary).expect("batch plugin sidecar written");
         let current = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
         assert_eq!(stored, current);
+    }
+
+    #[test]
+    fn plugin_batch_keeps_source_edits_after_planning_pending() {
+        let repo = TempDir::new().unwrap();
+        let (plugin, binary) = write_freshness_workspace(repo.path());
+        let planned = qol_dev_build::fingerprint_plugin(&plugin.dir).unwrap();
+        let stale = plugins_needing_build(std::slice::from_ref(&plugin));
+        std::fs::write(plugin.dir.join("src/main.rs"), "fn main() { let _ = 2; }\n").unwrap();
+
+        persist_batch_fingerprints(&stale);
+
+        assert_eq!(
+            qol_dev_build::read_fingerprint_sidecar(&binary),
+            Some(planned)
+        );
+        assert_eq!(plugins_needing_build(&[plugin]).len(), 1);
+    }
+
+    #[test]
+    fn plugin_batch_preserves_selected_worktree_sources() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("base");
+        let branch = temp.path().join("selected");
+        std::fs::create_dir_all(&base).unwrap();
+        let (plugin, _) = write_freshness_workspace(&base);
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(&base)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.name", "QoL Tests"]);
+        git(&["config", "user.email", "qol-tests@example.invalid"]);
+        git(&["add", "Cargo.toml", "plugins"]);
+        git(&["commit", "--quiet", "-m", "initial"]);
+        git(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "selected",
+            branch.to_str().unwrap(),
+        ]);
+        let selected = BuildablePlugin {
+            dir: branch.join("plugins/plugin-a"),
+            package_name: plugin.package_name,
+        };
+
+        let plans = plugins_needing_build(std::slice::from_ref(&selected));
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].path, selected.dir);
+    }
+
+    #[test]
+    fn plugin_batch_failure_stops_preflight() {
+        let repo = TempDir::new().unwrap();
+        let (plugin, binary) = write_freshness_workspace(repo.path());
+        std::fs::write(
+            plugin.dir.join("src/main.rs"),
+            "compile_error!(\"broken plugin\");\nfn main() {}\n",
+        )
+        .unwrap();
+
+        assert!(build_plugins_batch(repo.path(), &[plugin], false).is_err());
+        assert!(qol_dev_build::read_fingerprint_sidecar(&binary).is_none());
     }
 
     #[test]
