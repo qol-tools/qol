@@ -20,7 +20,11 @@ pub(crate) fn run() {
         start_services_if_singleton(daemon::start_listener(tx), || {
             let app_tracker = super::app_tracker::AppTracker::start();
             let current_key_rules = resolved.key_rules.clone();
-            let state = std::sync::Arc::new(super::tap::TapState::new(resolved, app_tracker));
+            let state = std::sync::Arc::new(super::tap::TapState::new(
+                resolved,
+                app_tracker,
+                std::sync::Arc::new(super::input::InputState::default()),
+            ));
             super::tap::start_tap(std::sync::Arc::clone(&state));
             (current_key_rules, state)
         })

@@ -3,6 +3,8 @@ mod app_tracker;
 #[allow(dead_code)]
 mod hid_helper;
 #[allow(dead_code)]
+mod input;
+#[allow(dead_code)]
 mod layout;
 mod tap;
 #[allow(dead_code)]
