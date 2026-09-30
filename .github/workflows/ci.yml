@@ -108,6 +108,9 @@ jobs:
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
+    permissions:
+      contents: read
+      actions: write
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     env:
@@ -194,6 +197,7 @@ jobs:
         if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
+          RUSTC_WRAPPER: ""
         run: cargo clippy --locked $CLIPPY_ARGS -- -D warnings
 
       - name: Release profile check
@@ -288,26 +292,49 @@ jobs:
           fi
 
       - name: Record compiler cache statistics
-        if: always() && steps.rust_setup.outcome == 'success'
+        if: always() && !cancelled() && steps.rust_setup.outcome == 'success'
         run: sccache --show-stats --stats-format=json > "${RUNNER_TEMP}/compiler-cache-report.json"
 
       - name: Upload compiler cache statistics
-        if: always() && steps.rust_setup.outcome == 'success'
+        if: always() && !cancelled() && steps.rust_setup.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: compiler-cache-${{ matrix.os }}
           path: ${{ runner.temp }}/compiler-cache-report.json
           if-no-files-found: error
+          overwrite: true
 
-      - name: Save compiler cache
+      - name: Prepare compiler cache upload
+        id: compiler_upload
         if: >-
           ${{ always() && !cancelled() && github.ref == 'refs/heads/main' &&
           steps.rust_setup.outcome == 'success' &&
           steps.rust_setup.outputs.compiler-cache-hit != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMPILER_CACHE_KEY: ${{ steps.rust_setup.outputs.compiler-cache-key }}
+        run: |
+          sccache --stop-server
+          python3 .github/scripts/cache_prune.py --prepare-compiler-cache "$COMPILER_CACHE_KEY" --ref "$GITHUB_REF"
+
+      - name: Save compiler cache
+        id: compiler_save
+        if: >-
+          ${{ always() && !cancelled() && steps.compiler_upload.outcome == 'success' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
-          path: ${{ runner.temp }}/qol-compiler-cache
+          path: ${{ steps.rust_setup.outputs.compiler-cache-path }}
           key: ${{ steps.rust_setup.outputs.compiler-cache-key }}
+
+      - name: Retire superseded compiler archives
+        if: >-
+          ${{ always() && !cancelled() && steps.compiler_save.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMPILER_CACHE_KEY: ${{ steps.rust_setup.outputs.compiler-cache-key }}
+        run: python3 .github/scripts/cache_prune.py --retire-compiler-cache "$COMPILER_CACHE_KEY" --ref "$GITHUB_REF"
 
   process-windows:
     name: sandbox lifecycle (windows)

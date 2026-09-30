@@ -15,9 +15,32 @@ MUTATION_PAUSE_SECONDS = 0.5
 RETRY_PAUSE_SECONDS = 30
 RETRIES = 3
 MAX_CACHE_BYTES = 9 * 1024**3
+COMPILER_CACHE_PREFIX = "qol-compiler-v1-"
+COMPILER_CACHE_BYTES = 512 * 1024**2
 
 LOCKFILE_HASH = re.compile(r"-[0-9a-f]{8}$")
-COMPILER_CACHE_COMMIT = re.compile(r"^(qol-compiler-v\d+-.+)-[0-9a-f]{40}$")
+COMPILER_CACHE_COMMIT = re.compile(
+    rf"^({re.escape(COMPILER_CACHE_PREFIX)}.+)-[0-9a-f]{{40}}$"
+)
+
+
+def compiler_cache_config(environment: dict[str, str]) -> dict[str, str]:
+    platform = [environment["RUNNER_OS"], environment["RUNNER_ARCH"]]
+    if not all(re.fullmatch(r"[A-Za-z0-9_]+", part) for part in platform):
+        raise ValueError("invalid compiler cache platform")
+    sha = environment["GITHUB_SHA"]
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("invalid compiler cache commit")
+    prefix = COMPILER_CACHE_PREFIX + "-".join(platform) + "-"
+    config = {
+        "path": os.path.join(environment["RUNNER_TEMP"], "qol-compiler-cache"),
+        "prefix": prefix,
+        "key": prefix + sha,
+        "capacity": str(COMPILER_CACHE_BYTES),
+    }
+    if any("\n" in value or "\r" in value for value in config.values()):
+        raise ValueError("compiler cache outputs must be single-line values")
+    return config
 
 
 def namespace_of_key(key: str) -> str:
@@ -35,27 +58,46 @@ def parse_timestamp(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def cache_order(cache: dict) -> tuple[datetime, int]:
+    return parse_timestamp(cache["created_at"]), cache["id"]
+
+
+def replaced_compiler_caches(caches: list[dict], key: str, ref: str) -> list[dict]:
+    if not COMPILER_CACHE_COMMIT.fullmatch(key) or not ref:
+        raise ValueError("retiring compiler caches requires a compiler key and ref")
+    replacements = [
+        cache for cache in caches if cache["key"] == key and cache["ref"] == ref
+    ]
+    if not replacements:
+        raise LookupError("replacement compiler archive is absent; retaining existing caches")
+    replacement = max(replacements, key=cache_order)
+    namespace = namespace_of_key(key)
+    return [
+        cache for cache in caches
+        if cache["ref"] == ref
+        and namespace_of_key(cache["key"]) == namespace
+        and cache_order(cache) < cache_order(replacement)
+    ]
+
+
 def plan_prune(
     caches: list[dict], keep: int, max_age_days: int, now: datetime,
     max_bytes: int = MAX_CACHE_BYTES,
 ) -> list[dict]:
     cutoff = now - timedelta(days=max_age_days)
-    grouped: dict[str, list[dict]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for cache in caches:
-        grouped[namespace_of_key(cache["key"])].append(cache)
+        grouped[(cache.get("ref", ""), namespace_of_key(cache["key"]))].append(cache)
     doomed = []
     newest_ids = set()
     for entries in grouped.values():
-        entries.sort(
-            key=lambda cache: parse_timestamp(cache["created_at"]), reverse=True
-        )
-        newest_ids.add(entries[0]["id"])
-        for position, cache in enumerate(entries):
-            if position >= keep:
-                doomed.append(cache)
-                continue
-            if parse_timestamp(cache["last_accessed_at"]) < cutoff:
-                doomed.append(cache)
+        entries.sort(key=cache_order, reverse=True)
+        fresh = [cache for cache in entries if parse_timestamp(cache["last_accessed_at"]) >= cutoff]
+        doomed.extend(cache for cache in entries if parse_timestamp(cache["last_accessed_at"]) < cutoff)
+        if not fresh:
+            continue
+        newest_ids.add(fresh[0]["id"])
+        doomed.extend(fresh[keep:])
     doomed_ids = {cache["id"] for cache in doomed}
     survivors = [cache for cache in caches if cache["id"] not in doomed_ids]
     doomed.extend(over_budget(survivors, newest_ids, max_bytes))
@@ -68,6 +110,7 @@ def over_budget(caches: list[dict], newest_ids: set[int], max_bytes: int) -> lis
         caches,
         key=lambda cache: (
             cache["id"] in newest_ids,
+            not bool(COMPILER_CACHE_COMMIT.fullmatch(cache["key"])),
             parse_timestamp(cache["last_accessed_at"]),
             parse_timestamp(cache["created_at"]),
             cache["id"],
@@ -142,7 +185,21 @@ def main() -> int:
     parser.add_argument("--max-age-days", type=int, default=14)
     parser.add_argument("--max-bytes", type=int, default=MAX_CACHE_BYTES)
     parser.add_argument("--dry-run", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--compiler-cache-config", action="store_true")
+    modes.add_argument("--prepare-compiler-cache", metavar="KEY")
+    modes.add_argument("--retire-compiler-cache", metavar="KEY")
+    parser.add_argument("--ref", help="Exact cache ref for compiler archive retirement")
     args = parser.parse_args()
+
+    if args.compiler_cache_config:
+        try:
+            for name, value in compiler_cache_config(os.environ).items():
+                print(f"{name}={value}")
+        except (KeyError, ValueError) as error:
+            print(error, file=sys.stderr)
+            return 1
+        return 0
 
     repo = args.repo or os.environ.get("GH_REPO")
     if repo is None:
@@ -157,6 +214,12 @@ def main() -> int:
     if args.max_bytes < 1:
         print("refusing to run with --max-bytes < 1", file=sys.stderr)
         return 1
+    compiler_key = args.prepare_compiler_cache or args.retire_compiler_cache
+    if compiler_key and (
+        not args.ref or not COMPILER_CACHE_COMMIT.fullmatch(compiler_key)
+    ):
+        print("compiler cache maintenance requires a compiler key and ref", file=sys.stderr)
+        return 1
 
     try:
         caches = list_caches(repo)
@@ -164,9 +227,28 @@ def main() -> int:
         print(error.stderr or error.stdout, file=sys.stderr)
         return 1
 
-    doomed = plan_prune(
-        caches, args.keep, args.max_age_days, datetime.now(timezone.utc), args.max_bytes
-    )
+    doomed = []
+    if args.retire_compiler_cache:
+        try:
+            doomed = replaced_compiler_caches(caches, args.retire_compiler_cache, args.ref)
+        except LookupError as error:
+            print(error, file=sys.stderr)
+            return 0
+    retired_ids = {cache["id"] for cache in doomed}
+    remaining = [cache for cache in caches if cache["id"] not in retired_ids]
+    budget = args.max_bytes
+    if args.prepare_compiler_cache and not any(
+        cache["ref"] == args.ref
+        and namespace_of_key(cache["key"]) == namespace_of_key(compiler_key)
+        for cache in remaining
+    ):
+        budget -= COMPILER_CACHE_BYTES
+        if budget < 1:
+            print("byte budget cannot hold a compiler archive", file=sys.stderr)
+            return 1
+    doomed.extend(plan_prune(
+        remaining, args.keep, args.max_age_days, datetime.now(timezone.utc), budget
+    ))
     total_bytes = sum(cache.get("size_in_bytes", 0) for cache in caches)
     freed_bytes = sum(cache.get("size_in_bytes", 0) for cache in doomed)
     print(
