@@ -3,6 +3,8 @@ mod app_tracker;
 #[allow(dead_code)]
 mod layout;
 mod tap;
+#[allow(dead_code)]
+mod virtual_hid;
 
 use anyhow::Result;
 use qol_headless::CommandResult;
