@@ -84,10 +84,12 @@ pub(crate) fn parse_status(payload: &[u8]) -> Result<Vec<Status>, StatusError> {
         return Err(StatusError::OddLength(payload.len()));
     }
     payload
-        .chunks_exact(2)
-        .filter_map(|pair| {
-            let value = pair[1] != 0;
-            match pair[0] {
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter_map(|&[kind, value]| {
+            let value = value != 0;
+            match kind {
                 0 | 5 => None,
                 1 => Some(Ok(Status::DriverActivated(value))),
                 2 => Some(Ok(Status::DriverConnected(value))),
