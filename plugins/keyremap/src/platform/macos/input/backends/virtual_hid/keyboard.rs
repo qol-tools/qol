@@ -7,6 +7,8 @@ use crate::platform::macos::input::marker_for;
 use crate::platform::macos::layout::{CharTable, KeyStroke};
 
 const FN_USAGE: u16 = 0x03;
+const GRAVE_USAGE: u16 = 0x35;
+const NON_US_BACKSLASH_USAGE: u16 = 0x64;
 const CAPS_LOCK_USAGE: u16 = 0x39;
 const FIRST_MODIFIER: u16 = 0xE0;
 const LAST_MODIFIER: u16 = 0xE7;
@@ -62,6 +64,11 @@ impl KeyboardState {
         context: &KeyContext<'_>,
     ) -> Vec<Output> {
         let mut outputs = Vec::new();
+        let usage = if page == PAGE_KEYBOARD && apple && context.physical == PhysicalLayout::Iso {
+            apple_iso_usage(usage)
+        } else {
+            usage
+        };
         match page {
             PAGE_KEYBOARD if (FIRST_MODIFIER..=LAST_MODIFIER).contains(&usage) => {
                 self.modifier(usage, pressed, &mut outputs);
@@ -307,6 +314,14 @@ fn emit(page: u16, usage: u16, pressed: bool) -> Output {
     })
 }
 
+fn apple_iso_usage(usage: u16) -> u16 {
+    match usage {
+        GRAVE_USAGE => NON_US_BACKSLASH_USAGE,
+        NON_US_BACKSLASH_USAGE => GRAVE_USAGE,
+        usage => usage,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -409,6 +424,29 @@ mod tests {
             usage,
             pressed: false,
         })
+    }
+
+    #[test]
+    fn an_apple_iso_keyboard_has_its_two_swapped_keys_put_back_in_usb_order() {
+        let mut fixture = Fixture::new(rules());
+        assert_eq!(
+            fixture.key(PAGE_KEYBOARD, 0x64, true, true),
+            vec![down(0x35)]
+        );
+        assert_eq!(
+            fixture.key(PAGE_KEYBOARD, 0x64, false, true),
+            vec![up(0x35)]
+        );
+        assert_eq!(
+            fixture.key(PAGE_KEYBOARD, 0x35, true, true),
+            vec![down(0x64)]
+        );
+        assert_eq!(
+            fixture.key(PAGE_KEYBOARD, 0x35, false, true),
+            vec![up(0x64)]
+        );
+        assert_eq!(fixture.press(0x64), vec![down(0x64)]);
+        assert_eq!(fixture.release(0x64), vec![up(0x64)]);
     }
 
     const CTRL: Modifiers = Modifiers {

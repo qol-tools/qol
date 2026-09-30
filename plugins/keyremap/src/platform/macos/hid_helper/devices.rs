@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFRelease, CFRetain, CFType, CFTypeRef, TCFType};
+use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::number::CFNumber;
 use core_foundation::runloop::{
@@ -211,7 +212,7 @@ extern "C" fn device_matched(
     devices.keyboards.borrow_mut().push(Keyboard {
         device,
         name,
-        apple: vendor == APPLE_VENDOR_ID,
+        apple: is_apple_keyboard(vendor, bool_property(device, "Built-In").unwrap_or(false)),
         seized: false,
         pressed: PressedKeys::default(),
     });
@@ -400,6 +401,10 @@ fn forwarded(page: u16, usage: u16) -> bool {
     }
 }
 
+fn is_apple_keyboard(vendor: i64, built_in: bool) -> bool {
+    built_in || vendor == APPLE_VENDOR_ID
+}
+
 fn is_virtual_keyboard(vendor: i64, product: i64, name: &str) -> bool {
     let pqrs = u64::try_from(vendor) == Ok(VIRTUAL_KEYBOARD_VENDOR_ID)
         && u64::try_from(product) == Ok(VIRTUAL_KEYBOARD_PRODUCT_ID);
@@ -429,6 +434,12 @@ fn number_property(device: IOHIDDeviceRef, key: &str) -> Option<i64> {
     property(device, key)?.downcast::<CFNumber>()?.to_i64()
 }
 
+fn bool_property(device: IOHIDDeviceRef, key: &str) -> Option<bool> {
+    property(device, key)?
+        .downcast::<CFBoolean>()
+        .map(bool::from)
+}
+
 fn string_property(device: IOHIDDeviceRef, key: &str) -> Option<String> {
     property(device, key)?
         .downcast::<CFString>()
@@ -438,6 +449,13 @@ fn string_property(device: IOHIDDeviceRef, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_built_in_keyboard_is_an_apple_keyboard_whatever_its_vendor_id() {
+        assert!(is_apple_keyboard(0, true));
+        assert!(is_apple_keyboard(APPLE_VENDOR_ID, false));
+        assert!(!is_apple_keyboard(0x046D, false));
+    }
 
     #[test]
     fn only_key_pages_are_forwarded() {
