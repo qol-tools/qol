@@ -83,7 +83,11 @@ fn write_frame(writer: &Mutex<UnixStream>, frame: &Frame) -> io::Result<()> {
     let mut stream = writer
         .lock()
         .map_err(|_| io::Error::other("pqrs writer lock poisoned"))?;
-    stream.write_all(&frame.encode())
+    let written = stream.write_all(&frame.encode());
+    if written.is_err() {
+        let _ = stream.shutdown(Shutdown::Both);
+    }
+    written
 }
 
 fn heartbeat_loop(writer: &Mutex<UnixStream>, closed: &AtomicBool) {
@@ -198,6 +202,18 @@ mod tests {
         let (sender, events) = mpsc::channel();
         let connection = Connection::from_stream(client, sender).unwrap();
         (connection, server, events)
+    }
+
+    #[test]
+    fn a_stalled_daemon_ends_the_connection_instead_of_tearing_frames() {
+        let (connection, _server, events) = pair();
+        let request = Request::KeyboardReset;
+        let failed = (0..100_000).any(|_| connection.send(&request).is_err());
+        assert!(failed, "the socket never filled up");
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(2)),
+            Ok(ClientEvent::Disconnected(_))
+        ));
     }
 
     #[test]
