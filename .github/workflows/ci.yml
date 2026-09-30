@@ -23,7 +23,12 @@ jobs:
     if: "${{ !startsWith(github.event.head_commit.message, 'chore(plugins): bump plugin versions') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     outputs:
+      reused: ${{ steps.verdict.outputs.reused }}
       ubuntu_clippy: ${{ steps.affected.outputs.ubuntu_clippy }}
       ubuntu_build: ${{ steps.affected.outputs.ubuntu_build }}
       ubuntu_test: ${{ steps.affected.outputs.ubuntu_test }}
@@ -63,6 +68,14 @@ jobs:
 
       - name: Plugin manifest versions agree
         run: python3 .github/scripts/plugin_version.py --check-manifests
+
+      - name: Reuse the pull request verdict
+        id: verdict
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: python3 .github/scripts/queue_verdict.py
 
       - name: Compute affected crates
         id: affected
@@ -114,13 +127,13 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install cargo-hakari
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
         with:
           tool: cargo-hakari
 
       - name: Install cargo-nextest
-        if: matrix.skip != 'true'
+        if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73
         with:
           tool: cargo-nextest@0.9.143
@@ -130,7 +143,7 @@ jobs:
       # with workspace builds. Both checks exit non-zero when a manifest
       # changed without regenerating it.
       - name: Workspace-hack is current
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         run: |
           cargo hakari generate --diff
           cargo hakari manage-deps --dry-run
@@ -141,7 +154,7 @@ jobs:
       # `--no-deps` cannot stand in here: it skips resolution and exits 0
       # against a stale lockfile.
       - name: Lockfile is current
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         run: |
           if error=$(cargo metadata --locked --format-version 1 2>&1 >/dev/null); then
             exit 0
@@ -151,11 +164,11 @@ jobs:
           exit 1
 
       - name: Format
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        if: matrix.skip != 'true'
+        if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy --locked $CLIPPY_ARGS -- -D warnings
@@ -175,7 +188,7 @@ jobs:
         run: cargo build --release --locked $BUILD_ARGS
 
       - name: Test
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
           DOCTEST: ${{ matrix.doctest }}
@@ -241,7 +254,7 @@ jobs:
           fi
 
       - name: Test
-        if: runner.os == 'macOS' && matrix.skip != 'true'
+        if: runner.os == 'macOS' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
           DOCTEST: ${{ matrix.doctest }}
@@ -255,9 +268,10 @@ jobs:
     name: sandbox lifecycle (windows)
     needs: plan
     if: >-
-      ${{ fromJSON(needs.plan.outputs.windows_process || 'false') ||
+      ${{ needs.plan.outputs.reused != 'true' && (
+      fromJSON(needs.plan.outputs.windows_process || 'false') ||
       fromJSON(needs.plan.outputs.windows_dev_build || 'false') ||
-      fromJSON(needs.plan.outputs.windows_qol || 'false') }}
+      fromJSON(needs.plan.outputs.windows_qol || 'false')) }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
