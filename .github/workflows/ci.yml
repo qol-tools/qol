@@ -292,3 +292,26 @@ jobs:
       - name: Test process containment
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
+
+  # GitHub only marks a queue removal on the pull request timeline, so a failed
+  # queue run says which jobs failed on the pull request itself.
+  queue-report:
+    name: Report merge queue failure
+    needs: [plan, check, process-windows]
+    if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Comment on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: python3 .github/scripts/queue_report.py
