@@ -77,8 +77,9 @@ impl TapState {
         &self.input
     }
 
-    pub(crate) fn frontmost_bundle_id(&self) -> String {
-        self.app_tracker.bundle_id_for_target(0)
+    pub(crate) fn key_target_bundle_id(&self) -> String {
+        self.app_tracker
+            .bundle_id_for_next_key(!super::secure_input::enabled())
     }
 }
 
@@ -87,8 +88,8 @@ impl super::input::backends::virtual_hid::KeyEnvironment for TapState {
         TapState::config(self)
     }
 
-    fn frontmost_bundle_id(&self) -> String {
-        TapState::frontmost_bundle_id(self)
+    fn key_target_bundle_id(&self) -> String {
+        TapState::key_target_bundle_id(self)
     }
 
     fn input(&self) -> &Arc<InputState> {
@@ -297,6 +298,15 @@ fn handle_event(
     event_type: CGEventType,
     event: &core_graphics::event::CGEvent,
 ) -> CallbackResult {
+    let target_pid =
+        i32::try_from(event.get_integer_value_field(EventField::EVENT_TARGET_UNIX_PROCESS_ID))
+            .unwrap_or_default();
+    if matches!(
+        event_type,
+        CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged
+    ) {
+        state.app_tracker.note_key_target(target_pid);
+    }
     if matches!(event_type, CGEventType::FlagsChanged) {
         return CallbackResult::Keep;
     }
@@ -305,9 +315,6 @@ fn handle_event(
     if !config.enabled {
         return CallbackResult::Keep;
     }
-    let target_pid =
-        i32::try_from(event.get_integer_value_field(EventField::EVENT_TARGET_UNIX_PROCESS_ID))
-            .unwrap_or_default();
     let bundle_id = state.app_tracker.bundle_id_for_target(target_pid);
 
     match event_type {

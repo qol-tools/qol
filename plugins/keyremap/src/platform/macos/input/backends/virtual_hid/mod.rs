@@ -42,7 +42,7 @@ extern "C" {
 
 pub(crate) trait KeyEnvironment: Send + Sync {
     fn config(&self) -> Arc<ResolvedConfig>;
-    fn frontmost_bundle_id(&self) -> String;
+    fn key_target_bundle_id(&self) -> String;
     fn input(&self) -> &Arc<InputState>;
 }
 
@@ -160,7 +160,7 @@ fn read_keys(
             } => {
                 let config = environment.config();
                 let layout = layouts.get();
-                let bundle_id = environment.frontmost_bundle_id();
+                let bundle_id = environment.key_target_bundle_id();
                 let context = KeyContext {
                     config: &config,
                     table: &layout.table,
@@ -281,7 +281,7 @@ mod tests {
             Arc::clone(&self.config)
         }
 
-        fn frontmost_bundle_id(&self) -> String {
+        fn key_target_bundle_id(&self) -> String {
             "com.apple.TextEdit".to_string()
         }
 

@@ -28,9 +28,12 @@ extern "C" {
     fn CGSessionCopyCurrentDictionary() -> CFDictionaryRef;
 }
 
+pub(crate) fn enabled() -> bool {
+    unsafe { IsSecureEventInputEnabled() != 0 }
+}
+
 pub(crate) fn holder() -> Option<SecureInputHolder> {
-    let enabled = unsafe { IsSecureEventInputEnabled() };
-    if enabled == 0 {
+    if !enabled() {
         return None;
     }
     let pid = holder_pid();
