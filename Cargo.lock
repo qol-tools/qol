@@ -6713,6 +6713,7 @@ dependencies = [
 name = "qol-hotkeys"
 version = "1.0.0"
 dependencies = [
+ "core-foundation 0.10.0",
  "workspace-hack",
 ]
 
