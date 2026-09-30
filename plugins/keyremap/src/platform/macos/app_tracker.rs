@@ -12,28 +12,39 @@ struct AppSnapshot {
 }
 
 pub struct AppTracker {
-    snapshot: Arc<RwLock<AppSnapshot>>,
+    snapshot: RwLock<AppSnapshot>,
     last_key_target: AtomicI32,
 }
 
 impl AppTracker {
     pub fn start() -> Arc<Self> {
-        let snapshot = Arc::new(RwLock::new(frontmost_app().unwrap_or_default()));
+        let tracker = Arc::new(Self::new(frontmost_app().unwrap_or_default()));
 
-        let poll_ref = Arc::clone(&snapshot);
+        let poll = Arc::clone(&tracker);
         std::thread::spawn(move || loop {
             if let Some(snapshot) = frontmost_app() {
-                if let Ok(mut guard) = poll_ref.write() {
-                    *guard = snapshot;
-                }
+                poll.update(snapshot);
             }
             std::thread::sleep(POLL_INTERVAL);
         });
 
-        Arc::new(Self {
-            snapshot,
+        tracker
+    }
+
+    fn new(snapshot: AppSnapshot) -> Self {
+        Self {
+            snapshot: RwLock::new(snapshot),
             last_key_target: AtomicI32::new(0),
-        })
+        }
+    }
+
+    fn update(&self, snapshot: AppSnapshot) {
+        if let Ok(mut guard) = self.snapshot.write() {
+            if guard.pid != snapshot.pid {
+                self.last_key_target.store(0, Ordering::Relaxed);
+            }
+            *guard = snapshot;
+        }
     }
 
     pub fn bundle_id_for_target(&self, target_pid: i32) -> String {
@@ -166,7 +177,30 @@ fn frontmost_app() -> Option<AppSnapshot> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundle_id_for_event_target, next_key_target};
+    use super::{bundle_id_for_event_target, next_key_target, AppSnapshot, AppTracker};
+
+    fn snapshot(pid: i32, bundle_id: &str) -> AppSnapshot {
+        AppSnapshot {
+            pid,
+            bundle_id: bundle_id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_first_key_after_a_focus_change_goes_by_the_new_frontmost_app() {
+        let tracker = AppTracker::new(snapshot(10, "com.example.previous"));
+        tracker.note_key_target(10);
+        tracker.update(snapshot(20, "com.example.excluded"));
+        assert_eq!(tracker.bundle_id_for_next_key(true), "com.example.excluded");
+    }
+
+    #[test]
+    fn a_floating_window_keeps_its_key_target_while_the_frontmost_app_stays() {
+        let tracker = AppTracker::new(snapshot(10, "com.example.excluded"));
+        tracker.note_key_target(20);
+        tracker.update(snapshot(10, "com.example.excluded"));
+        assert_eq!(tracker.bundle_id_for_next_key(true), "");
+    }
 
     #[test]
     fn a_floating_window_taking_keys_does_not_inherit_the_exclusion_underneath() {
