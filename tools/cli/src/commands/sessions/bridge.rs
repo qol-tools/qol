@@ -535,9 +535,7 @@ impl PendingBridgeStore {
         silent_wake: bool,
         assignment: Option<&AgentAssignment>,
     ) -> Result<()> {
-        fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.file_for(binding);
-        let temporary = file.with_extension("tmp");
         let encoded = serde_json::to_string(&StoredCheckpoint {
             session: binding.token(),
             driver: driver.to_owned(),
@@ -554,8 +552,8 @@ impl PendingBridgeStore {
             transcript_paths: paths.to_vec(),
             agent_assignment: assignment.cloned(),
         })?;
-        fs::write(&temporary, encoded).context("failed to write pending bridge checkpoint")?;
-        fs::rename(&temporary, &file).context("failed to publish pending bridge checkpoint")
+        qol_fs::atomic_write(&file, encoded.as_bytes())
+            .context("failed to publish pending bridge checkpoint")
     }
 
     pub(super) fn acknowledge(
@@ -657,12 +655,10 @@ impl PendingBridgeStore {
 
     pub(super) fn set_role(&self, binding: &SessionBinding, role: Role) -> Result<()> {
         let _lock = self.lock_role(binding)?;
-        fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
         let file = self.role_file_for(binding);
-        let temporary = file.with_extension("tmp");
         let encoded = serde_json::to_string(&StoredRole { role })?;
-        fs::write(&temporary, encoded).context("failed to write session role record")?;
-        fs::rename(&temporary, &file).context("failed to publish session role record")
+        qol_fs::atomic_write(&file, encoded.as_bytes())
+            .context("failed to publish session role record")
     }
 
     pub(super) fn role(&self, binding: &SessionBinding) -> Result<Role> {

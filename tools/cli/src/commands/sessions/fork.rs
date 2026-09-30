@@ -109,12 +109,9 @@ impl ForkStore {
     }
 
     pub(super) fn record(&self, record: &ForkRecord) -> Result<()> {
-        fs::create_dir_all(&self.dir).context("failed to create the fork directory")?;
         let path = self.record_path(&record.key, record.created_at);
-        let temporary = path.with_extension("tmp");
         let encoded = serde_json::to_string(record)?;
-        fs::write(&temporary, encoded).context("failed to write the fork record")?;
-        fs::rename(&temporary, &path).context("failed to publish the fork record")
+        qol_fs::atomic_write(&path, encoded.as_bytes()).context("failed to publish the fork record")
     }
 
     pub(super) fn list(&self) -> Result<Vec<ForkRecord>> {

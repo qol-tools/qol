@@ -584,12 +584,9 @@ impl SpawnLedger {
     }
 
     fn write_record(&self, key: &SpawnKey, cwd: &str, record: &SpawnRecord) -> Result<()> {
-        fs::create_dir_all(&self.dir).context("failed to create spawn record directory")?;
         let path = self.file_for(key, cwd);
-        let temporary = path.with_extension("tmp");
         let encoded = serde_json::to_string(record)?;
-        fs::write(&temporary, encoded).context("failed to write spawn record")?;
-        fs::rename(&temporary, &path).context("failed to publish spawn record")
+        qol_fs::atomic_write(&path, encoded.as_bytes()).context("failed to publish spawn record")
     }
 
     pub(super) fn bind_session(

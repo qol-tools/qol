@@ -1398,12 +1398,8 @@ fn read_group_member(path: &std::path::Path) -> Option<GroupMember> {
 }
 
 fn publish_group_member(path: &std::path::Path, member: &GroupMember) -> Result<()> {
-    let dir = path.parent().expect("member path always has a parent");
-    fs::create_dir_all(dir).context("failed to create group member directory")?;
-    let temporary = path.with_extension("tmp");
     let encoded = serde_json::to_string(member)?;
-    fs::write(&temporary, encoded).context("failed to write group member record")?;
-    fs::rename(&temporary, path).context("failed to publish group member record")
+    qol_fs::atomic_write(path, encoded.as_bytes()).context("failed to publish group member record")
 }
 
 fn write_group_member(round: &std::path::Path, group: &str, member: &GroupMember) -> Result<()> {

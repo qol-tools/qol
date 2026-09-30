@@ -132,6 +132,7 @@ fn temp_prefix(path: &Path) -> String {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("file");
+    let name = name.chars().take(32).collect::<String>();
     format!(".{name}.")
 }
 
@@ -170,6 +171,35 @@ mod tests {
 
         assert_eq!(fs::read(&path).unwrap(), b"new content");
         assert!(temp_files(dir.path(), "state.json").is_empty());
+    }
+
+    #[test]
+    fn atomic_write_publishes_long_filenames_without_leftovers() {
+        let names = [
+            format!("{}-1790784000.json", "x".repeat(230)),
+            "x".repeat(255),
+            format!("{}.json", "界".repeat(80)),
+            format!("{}.json", "𐍈".repeat(60)),
+        ];
+        for name in names {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(&name);
+            for payload in [b"initial".as_slice(), b"replacement".as_slice()] {
+                atomic_write(&path, payload).unwrap_or_else(|error| {
+                    panic!("failed to publish {}-byte filename: {error}", name.len())
+                });
+                assert_eq!(fs::read(&path).unwrap(), payload, "filename: {name}");
+                let entries = fs::read_dir(dir.path())
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    entries.as_slice(),
+                    std::slice::from_ref(&path),
+                    "filename: {name}"
+                );
+            }
+        }
     }
 
     #[test]
