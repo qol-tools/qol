@@ -637,7 +637,20 @@ fn show_window_by_title_with_focus(
     true
 }
 
-pub fn reassert_focus_on_main(title: &str) {
+pub fn reassert_focus_while_current(
+    title: String,
+    gen: &'static std::sync::atomic::AtomicU64,
+    commit_gen: u64,
+) {
+    crate::platform::run_on_main(Box::new(move || {
+        if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
+            return;
+        }
+        reassert_focus_on_main(&title);
+    }));
+}
+
+fn reassert_focus_on_main(title: &str) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };

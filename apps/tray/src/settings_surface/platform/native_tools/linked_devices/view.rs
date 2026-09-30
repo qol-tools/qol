@@ -1,8 +1,7 @@
 use super::super::data::{request_json, REQUEST_TIMEOUT};
 use super::model::{self, Action, Control, Row, NAME_RULE};
-use crate::features::linked_devices::settings::{
-    self, CatalogOperation, Failure, InvitationInfo, Snapshot,
-};
+use super::snapshot::{self, Snapshot};
+use crate::features::linked_devices::settings::{self, CatalogOperation, Failure, InvitationInfo};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, AsyncApp, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent,
@@ -729,10 +728,10 @@ fn load(request: Option<Request>) -> tokio::sync::oneshot::Receiver<Loaded> {
     std::thread::spawn(move || {
         let client = PlatformStateClient::from_env();
         let response = request
-            .map(|request| settings::request(&client, request))
+            .map(|request| snapshot::request(&client, request))
             .transpose();
         let snapshot = match &response {
-            Ok(_) => settings::load(&client),
+            Ok(_) => snapshot::load(&client),
             Err(error) => Err(error.clone()),
         };
         let catalog = request_json::<Vec<CatalogOperation>>(

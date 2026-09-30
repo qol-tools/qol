@@ -1,5 +1,6 @@
+use super::super::snapshot::Snapshot;
 use super::{card, rows, Action, Control};
-use crate::features::linked_devices::settings::{InvitationInfo, Snapshot};
+use crate::features::linked_devices::settings::InvitationInfo;
 use qol_peers::admin::{
     ActivationId, AuthoritySummary, EnrollmentRequest, Lifecycle, PeerSummary, Request, Status,
 };

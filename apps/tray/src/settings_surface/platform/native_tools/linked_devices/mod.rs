@@ -1,4 +1,5 @@
 mod model;
+mod snapshot;
 mod view;
 
 use gpui::AppContext;

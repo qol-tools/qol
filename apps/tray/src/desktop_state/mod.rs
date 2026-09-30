@@ -3,10 +3,7 @@ use std::sync::Arc;
 use qol_runtime::MonitorBounds;
 
 mod ignore_pids;
-mod platform;
-
-#[cfg(all(target_os = "linux", feature = "linux_evdev"))]
-pub(crate) use platform::is_wayland;
+pub(crate) mod platform;
 
 pub(crate) type SharedPlatform = Arc<dyn Platform>;
 
