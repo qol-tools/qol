@@ -32,6 +32,7 @@ where
     let reload = adapter.clone();
     let toggle = adapter.clone();
     let kill = adapter.clone();
+    let helper = adapter.clone();
 
     HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run and control native key, mouse, and scroll remapping.")
@@ -83,6 +84,19 @@ where
                 .run_result(move |context| {
                     no_args(context)?;
                     kill.kill()
+                }),
+        )
+        .command(
+            Command::new("hid-helper")
+                .about("Run the root keyboard helper that launchd starts.")
+                .usage(format!("sudo {PLUGIN_ID} hid-helper"))
+                .detail("Seizes the physical keyboards while Key Remap is running and feeds the virtual keyboard.")
+                .detail("Releases every keyboard within 200 ms when Key Remap stops answering.")
+                .output("Lifecycle diagnostics on stderr.")
+                .exit_behavior("Runs until killed; exits non-zero when not root or not on macOS.")
+                .run_result(move |context| {
+                    no_args(context)?;
+                    helper.hid_helper()
                 }),
         )
         .command(settings_command(settings))
@@ -272,6 +286,7 @@ mod tests {
         reload: AtomicUsize,
         toggle: AtomicUsize,
         kill: AtomicUsize,
+        hid_helper: AtomicUsize,
         settings: AtomicUsize,
         config: AtomicUsize,
         trust: AtomicUsize,
@@ -308,6 +323,11 @@ mod tests {
 
         fn kill(&self) -> Result<CommandResult> {
             self.calls.kill.fetch_add(1, Ordering::SeqCst);
+            Ok(CommandResult::success(""))
+        }
+
+        fn hid_helper(&self) -> Result<CommandResult> {
+            self.calls.hid_helper.fetch_add(1, Ordering::SeqCst);
             Ok(CommandResult::success(""))
         }
 
@@ -446,6 +466,8 @@ mod tests {
             vec!["--toggle", "help"],
             vec!["help", "kill"],
             vec!["--kill", "help"],
+            vec!["help", "hid-helper"],
+            vec!["hid-helper", "help"],
             vec!["help", "settings"],
             vec!["--settings", "help"],
             vec!["doctor"],
@@ -464,6 +486,7 @@ mod tests {
             assert_eq!(calls.reload.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.toggle.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.kill.load(Ordering::SeqCst), 0, "{args:?}");
+            assert_eq!(calls.hid_helper.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.settings.load(Ordering::SeqCst), 0, "{args:?}");
         }
     }

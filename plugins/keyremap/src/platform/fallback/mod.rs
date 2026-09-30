@@ -31,6 +31,10 @@ impl PlatformAdapter for Adapter {
         Ok(unsupported())
     }
 
+    fn hid_helper(&self) -> Result<CommandResult> {
+        Ok(unsupported())
+    }
+
     fn inspect_config(&self) -> Result<ConfigInspection> {
         anyhow::bail!("typed key-remap configuration is only available on macOS")
     }

@@ -73,6 +73,11 @@ impl PlatformAdapter for Adapter {
         ))
     }
 
+    fn hid_helper(&self) -> Result<CommandResult> {
+        hid_helper::run()?;
+        Ok(CommandResult::success(""))
+    }
+
     fn inspect_config(&self) -> Result<ConfigInspection> {
         let inspected = app::config::inspect_config()?;
         let issues = app::remap::validation_issues(&inspected.config);
