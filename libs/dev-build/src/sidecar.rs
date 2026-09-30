@@ -11,9 +11,7 @@ pub fn fingerprint_sidecar_path(binary: &Path) -> PathBuf {
 
 pub fn write_fingerprint_sidecar(binary: &Path, fingerprint: &str) -> Result<(), String> {
     let sidecar = fingerprint_sidecar_path(binary);
-    let staging = sidecar.with_extension("fingerprint.tmp");
-    std::fs::write(&staging, fingerprint).map_err(|error| error.to_string())?;
-    std::fs::rename(&staging, &sidecar).map_err(|error| error.to_string())
+    qol_fs::atomic_write(&sidecar, fingerprint.as_bytes()).map_err(|error| error.to_string())
 }
 
 pub fn read_fingerprint_sidecar(binary: &Path) -> Option<String> {
@@ -77,6 +75,19 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let binary = binary_with_sidecar(tmp.path(), "launcher", "abc123");
         assert!(binary_is_fresh(&binary, "abc123"));
+    }
+
+    #[test]
+    fn failed_publish_preserves_the_destination_and_cleans_up_staging() {
+        let tmp = TempDir::new().unwrap();
+        let binary = tmp.path().join("launcher");
+        let sidecar = fingerprint_sidecar_path(&binary);
+        fs::create_dir(&sidecar).unwrap();
+
+        assert!(write_fingerprint_sidecar(&binary, "new").is_err());
+
+        assert!(sidecar.is_dir());
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1);
     }
 
     #[test]

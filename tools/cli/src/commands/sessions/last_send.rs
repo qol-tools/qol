@@ -20,17 +20,11 @@ impl LastSendStore {
     }
 
     pub(crate) fn record(&self, binding: &SessionBinding, text: &str) {
-        if fs::create_dir_all(&self.dir).is_err() {
-            return;
-        }
         let file = self.file_for(binding);
-        let temporary = file.with_extension("tmp");
         let Ok(encoded) = serde_json::to_string(text) else {
             return;
         };
-        if fs::write(&temporary, encoded).is_ok() {
-            let _ = fs::rename(&temporary, &file);
-        }
+        let _ = qol_fs::atomic_write(&file, encoded.as_bytes());
     }
 
     pub(crate) fn last_sent(&self, binding: &SessionBinding) -> Option<String> {
@@ -88,5 +82,19 @@ mod tests {
             store.last_sent(&binding()).as_deref(),
             Some("line one\nline two\n")
         );
+    }
+
+    #[test]
+    fn failed_publish_preserves_the_destination_and_cleans_up_staging() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = LastSendStore::with_dir(root.path().to_path_buf());
+        let destination = store.file_for(&binding());
+        fs::create_dir(&destination).unwrap();
+
+        store.record(&binding(), "not published");
+
+        assert_eq!(store.last_sent(&binding()), None);
+        assert!(destination.is_dir());
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
     }
 }
