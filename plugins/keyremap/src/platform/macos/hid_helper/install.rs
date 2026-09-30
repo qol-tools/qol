@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -29,8 +29,7 @@ const LAUNCHCTL: &str = "/bin/launchctl";
 const BOOTSTRAP_ATTEMPTS: u32 = 5;
 const DEFAULTS: &str = "/usr/bin/defaults";
 const CODESIGN: &str = "/usr/bin/codesign";
-const SUDO: &str = "/usr/bin/sudo";
-const SIGNING_ROOT: &str = "/private/tmp";
+const LOGIN_KEYCHAIN: &str = "Library/Keychains/login.keychain-db";
 const KEYBOARD_TYPES: &str = "/Library/Preferences/com.apple.keyboardtype";
 
 pub(crate) fn install() -> Result<String> {
@@ -43,12 +42,7 @@ pub(crate) fn install() -> Result<String> {
     let current = std::env::current_exe().context("find the running qol-keyremap binary")?;
     match qol_config::codesign_identity() {
         Some(identity) => {
-            let signed = signed_copy(&current, &identity)?;
-            let installed = install_file(&signed, HELPER_BINARY, 0o755);
-            if let Some(folder) = signed.parent() {
-                remove_signing_folder(folder);
-            }
-            installed?;
+            install_signed(&current, &identity)?;
             steps.push(format!(
                 "Copied {} to {HELPER_BINARY} and signed it as {identity}.",
                 current.display()
@@ -165,6 +159,49 @@ fn install_file(source: &Path, target: &str, mode: u32) -> Result<()> {
     finish_file(&staging, target, mode)
 }
 
+fn install_signed(source: &Path, identity: &str) -> Result<()> {
+    let keychain = login_keychain()?;
+    let staging = format!("{HELPER_BINARY}.new");
+    fs::copy(source, &staging).with_context(|| format!("copy to {staging}"))?;
+    let arguments = codesign_arguments(identity, &keychain, &staging);
+    let signed = run(
+        CODESIGN,
+        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    if signed.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    signed?;
+    finish_file(&staging, HELPER_BINARY, 0o755)
+}
+
+fn login_keychain() -> Result<String> {
+    let home =
+        std::env::var("HOME").context("HOME is not set, so the login keychain is unknown")?;
+    let keychain = Path::new(&home).join(LOGIN_KEYCHAIN);
+    ensure!(
+        keychain.exists(),
+        "no login keychain at {}",
+        keychain.display()
+    );
+    Ok(keychain.to_string_lossy().into_owned())
+}
+
+fn codesign_arguments(identity: &str, keychain: &str, path: &str) -> Vec<String> {
+    [
+        "--force",
+        "--sign",
+        identity,
+        "--keychain",
+        keychain,
+        "--identifier",
+        HELPER_LABEL,
+        path,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
 fn write_file(target: &str, contents: &str, mode: u32) -> Result<()> {
     let staging = format!("{target}.new");
     fs::write(&staging, contents).with_context(|| format!("write {staging}"))?;
@@ -215,78 +252,6 @@ fn virtual_keyboard_type_known() -> bool {
             String::from_utf8_lossy(&output.stdout)
                 .contains(&format!("\"{}\"", virtual_keyboard_id()))
         })
-}
-
-fn signed_copy(source: &Path, identity: &str) -> Result<PathBuf> {
-    let folder = Path::new(SIGNING_ROOT).join(format!("{HELPER_LABEL}.{}", std::process::id()));
-    fs::create_dir(&folder).with_context(|| format!("create {}", folder.display()))?;
-    let signed = sign_in(&folder, source, identity);
-    if signed.is_err() {
-        remove_signing_folder(&folder);
-    }
-    signed
-}
-
-fn remove_signing_folder(folder: &Path) {
-    let folder = folder.to_string_lossy();
-    let _ = match signing_user() {
-        Some(user) => run(SUDO, &["-u", &user, "/bin/rm", "-rf", &folder]),
-        None => fs::remove_dir_all(folder.as_ref()).map_err(Into::into),
-    };
-}
-
-fn signing_user() -> Option<String> {
-    std::env::var("SUDO_USER")
-        .ok()
-        .filter(|user| !user.is_empty())
-}
-
-fn sign_in(folder: &Path, source: &Path, identity: &str) -> Result<PathBuf> {
-    let staging = folder.join("qol-keyremap");
-    fs::copy(source, &staging).with_context(|| format!("copy to {}", staging.display()))?;
-    let signer = signing_user();
-    if signer.is_some() {
-        let id = |key| std::env::var(key).ok().and_then(|value| value.parse().ok());
-        for path in [folder, staging.as_path()] {
-            std::os::unix::fs::chown(path, id("SUDO_UID"), id("SUDO_GID"))
-                .with_context(|| format!("chown {}", path.display()))?;
-        }
-    }
-    let staging_path = staging.to_string_lossy();
-    let (program, arguments) = codesign_command(identity, &staging_path, signer.as_deref());
-    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    run(program, &arguments)?;
-    Ok(staging)
-}
-
-fn codesign_command(
-    identity: &str,
-    path: &str,
-    signer: Option<&str>,
-) -> (&'static str, Vec<String>) {
-    let codesign = [
-        CODESIGN,
-        "--force",
-        "--sign",
-        identity,
-        "--identifier",
-        HELPER_LABEL,
-        path,
-    ];
-    match signer {
-        Some(user) => (
-            SUDO,
-            ["-u", user]
-                .into_iter()
-                .chain(codesign)
-                .map(str::to_owned)
-                .collect(),
-        ),
-        None => (
-            CODESIGN,
-            codesign[1..].iter().map(|arg| (*arg).to_owned()).collect(),
-        ),
-    }
 }
 
 fn virtual_keyboard_id() -> String {
@@ -385,27 +350,24 @@ mod tests {
     }
 
     #[test]
-    fn the_helper_is_signed_as_the_invoking_user_under_a_stable_identifier() {
-        let (program, arguments) = codesign_command("KMRH47", "/tmp/helper", Some("kaho"));
-        assert_eq!(program, "/usr/bin/sudo");
+    fn the_helper_is_signed_with_the_login_keychain_under_a_stable_identifier() {
         assert_eq!(
-            arguments,
+            codesign_arguments(
+                "KMRH47",
+                "/Users/me/Library/Keychains/login.keychain-db",
+                "/tmp/helper"
+            ),
             [
-                "-u",
-                "kaho",
-                "/usr/bin/codesign",
                 "--force",
                 "--sign",
                 "KMRH47",
+                "--keychain",
+                "/Users/me/Library/Keychains/login.keychain-db",
                 "--identifier",
                 "com.qol-tools.keyremap.hid-helper",
                 "/tmp/helper"
             ]
         );
-        let (program, arguments) = codesign_command("KMRH47", "/tmp/helper", None);
-        assert_eq!(program, "/usr/bin/codesign");
-        assert_eq!(arguments[0], "--force");
-        assert_eq!(arguments.len(), 6);
     }
 
     #[test]
