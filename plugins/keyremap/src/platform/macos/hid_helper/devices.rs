@@ -14,6 +14,7 @@ use core_foundation::runloop::{
 };
 use core_foundation::string::{CFString, CFStringRef};
 
+use super::modifier_mapping::ModifierMapping;
 use super::protocol::{
     PAGE_APPLE_VENDOR_KEYBOARD, PAGE_APPLE_VENDOR_TOP_CASE, PAGE_CONSUMER, PAGE_KEYBOARD,
 };
@@ -38,6 +39,7 @@ const RETURN_EXCLUSIVE_ACCESS: IOReturn = 0xE000_02C5_u32 as i32;
 const REQUEST_LISTEN_EVENT: u32 = 1;
 const ACCESS_GRANTED: u32 = 0;
 const APPLE_VENDOR_ID: i64 = 0x05AC;
+const REGISTRY_ITERATE_RECURSIVELY: u32 = 1;
 const TICK_SECONDS: f64 = 0.025;
 
 #[link(name = "IOKit", kind = "framework")]
@@ -97,6 +99,14 @@ extern "C" {
     fn IOHIDValueGetIntegerValue(value: IOHIDValueRef) -> isize;
     fn IOHIDElementGetUsagePage(element: IOHIDElementRef) -> u32;
     fn IOHIDElementGetUsage(element: IOHIDElementRef) -> u32;
+    fn IOHIDDeviceGetService(device: IOHIDDeviceRef) -> u32;
+    fn IORegistryEntrySearchCFProperty(
+        entry: u32,
+        plane: *const std::ffi::c_char,
+        key: CFStringRef,
+        allocator: *const c_void,
+        options: u32,
+    ) -> CFTypeRef;
     fn IOHIDCheckAccess(request: u32) -> u32;
     fn IOHIDRequestAccess(request: u32) -> bool;
 }
@@ -110,6 +120,7 @@ struct Keyboard {
     device: IOHIDDeviceRef,
     name: String,
     apple: bool,
+    modifiers: ModifierMapping,
     seized: bool,
     pressed: PressedKeys,
 }
@@ -213,6 +224,7 @@ extern "C" fn device_matched(
         device,
         name,
         apple: is_apple_keyboard(vendor, bool_property(device, "Built-In").unwrap_or(false)),
+        modifiers: modifier_mapping(device),
         seized: false,
         pressed: PressedKeys::default(),
     });
@@ -264,11 +276,8 @@ extern "C" fn value_changed(
     ) else {
         return;
     };
-    if !forwarded(page, usage) {
-        return;
-    }
     let pressed = unsafe { IOHIDValueGetIntegerValue(value) } != 0;
-    let apple = {
+    let (page, usage, apple) = {
         let mut keyboards = devices.keyboards.borrow_mut();
         let Some(keyboard) = keyboards
             .iter_mut()
@@ -276,8 +285,12 @@ extern "C" fn value_changed(
         else {
             return;
         };
+        let (page, usage) = keyboard.modifiers.apply(page, usage);
+        if !forwarded(page, usage) {
+            return;
+        }
         keyboard.pressed.record(page, usage, pressed);
-        keyboard.apple
+        (page, usage, keyboard.apple)
     };
     devices.shared.forward(page, usage, pressed, apple);
 }
@@ -422,6 +435,48 @@ fn number_dictionary(pairs: &[(&str, i64)]) -> CFDictionary<CFType, CFType> {
         })
         .collect();
     CFDictionary::from_CFType_pairs(&pairs)
+}
+
+fn modifier_mapping(device: IOHIDDeviceRef) -> ModifierMapping {
+    let key = CFString::from_static_string("HIDEventServiceProperties");
+    let found = unsafe {
+        IORegistryEntrySearchCFProperty(
+            IOHIDDeviceGetService(device),
+            c"IOService".as_ptr(),
+            key.as_concrete_TypeRef(),
+            ptr::null(),
+            REGISTRY_ITERATE_RECURSIVELY,
+        )
+    };
+    if found.is_null() {
+        return ModifierMapping::default();
+    }
+    let properties = unsafe { CFType::wrap_under_create_rule(found) };
+    let pairs = properties
+        .downcast::<CFDictionary>()
+        .and_then(|properties| {
+            let key = CFString::from_static_string("HIDKeyboardModifierMappingPairs");
+            let pairs = properties.find(key.as_concrete_TypeRef().cast::<c_void>())?;
+            unsafe { CFType::wrap_under_get_rule(pairs.cast()) }.downcast::<CFArray>()
+        });
+    let Some(pairs) = pairs else {
+        return ModifierMapping::default();
+    };
+    let number = |pair: &CFDictionary, key: &'static str| {
+        let key = CFString::from_static_string(key);
+        let value = pair.find(key.as_concrete_TypeRef().cast::<c_void>())?;
+        unsafe { CFType::wrap_under_get_rule(value.cast()) }
+            .downcast::<CFNumber>()?
+            .to_i64()
+    };
+    ModifierMapping::from_pairs(pairs.iter().filter_map(|pair| {
+        let pair =
+            unsafe { CFType::wrap_under_get_rule(pair.cast()) }.downcast::<CFDictionary>()?;
+        Some((
+            number(&pair, "HIDKeyboardModifierMappingSrc")?,
+            number(&pair, "HIDKeyboardModifierMappingDst")?,
+        ))
+    }))
 }
 
 fn property(device: IOHIDDeviceRef, key: &str) -> Option<CFType> {

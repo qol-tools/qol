@@ -1,6 +1,7 @@
 mod console;
 mod devices;
 pub(crate) mod install;
+mod modifier_mapping;
 pub(crate) mod protocol;
 pub(crate) mod report;
 mod server;
