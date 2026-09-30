@@ -42,6 +42,12 @@ impl Watchdog {
         self.session == Some(generation)
     }
 
+    /// An emit that lands after a release would press a key the release
+    /// already cleared, and nothing would ever let it go.
+    pub(crate) fn accepts_emit(&self, generation: u64) -> bool {
+        self.is_current(generation) && self.seized
+    }
+
     pub(crate) fn set_keyboard_ready(&mut self, ready: bool) {
         self.keyboard_ready = ready;
     }
@@ -96,6 +102,23 @@ mod tests {
             watchdog.tick(start + Duration::from_millis(25)),
             Action::Hold
         );
+    }
+
+    #[test]
+    fn emits_are_refused_once_the_keyboards_are_released() {
+        let start = Instant::now();
+        let mut watchdog = ready();
+        watchdog.session_opened(1);
+        assert!(!watchdog.accepts_emit(1));
+        watchdog.heartbeat(1, start);
+        assert_eq!(watchdog.tick(start), Action::Seize);
+        assert!(watchdog.accepts_emit(1));
+        assert!(!watchdog.accepts_emit(2));
+        assert_eq!(
+            watchdog.tick(start + SILENCE_LIMIT + Duration::from_millis(1)),
+            Action::Release
+        );
+        assert!(!watchdog.accepts_emit(1));
     }
 
     #[test]

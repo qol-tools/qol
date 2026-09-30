@@ -171,7 +171,7 @@ impl Shared {
 
     fn emit(&self, generation: u64, page: u16, usage: u16, pressed: bool) {
         let mut state = self.lock();
-        if state.watchdog.is_current(generation) {
+        if state.watchdog.accepts_emit(generation) {
             state.post(page, usage, pressed);
         }
     }
