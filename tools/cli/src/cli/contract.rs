@@ -307,6 +307,14 @@ fn app() -> HeadlessApp {
                 "Confirmation on stdout; diagnostics on stderr.",
                 "Exits non-zero when no round is open or delivery fails.",
             ))
+            .subcommand(command(
+                "lane-exec",
+                "Start a lane under the Claude account its architect runs under.",
+                "qol sessions lane-exec --secret NAME --env VAR -- PROGRAM [ARGS...]",
+                "Spawn puts this in front of a claude lane when claude_accounts in sessions.toml maps the caller's CLAUDE_CONFIG_DIR to a secret. It reads that secret from the OS credential store (the login Keychain on macOS, the Secret Service via secret-tool on Linux, the Credential Manager on Windows), exports it as VAR, and replaces itself with PROGRAM, so the token never passes through the terminal. Each entry is `[claude_accounts.\"<config dir>\"]` with `secret = \"<name>\"` and an optional `token_env` that defaults to CLAUDE_CODE_OAUTH_TOKEN.",
+                "The lane's own output; diagnostics on stderr.",
+                "Exits non-zero when the secret cannot be read or PROGRAM cannot start.",
+            ))
             .subcommand(
                 command(
                     "mcp",

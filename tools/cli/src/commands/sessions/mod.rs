@@ -19,6 +19,8 @@ mod close;
 mod contract;
 mod export;
 mod fork;
+mod lane_account;
+mod lane_exec;
 mod last_send;
 mod launch_flags;
 mod mcp;
@@ -33,7 +35,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 20] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 21] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -113,6 +115,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 20] = [
     SessionSubcommand {
         name: "export",
         run: |rest, _format| export::run(rest),
+    },
+    SessionSubcommand {
+        name: "lane-exec",
+        run: |rest, _format| lane_exec::run(rest),
     },
 ];
 

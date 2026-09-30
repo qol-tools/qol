@@ -50,6 +50,8 @@ pub struct CliScreenEvidence {
 pub struct CliLaunchProgram {
     pub program: String,
     pub args: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 impl CliLaunchProgram {
@@ -57,6 +59,7 @@ impl CliLaunchProgram {
         Self {
             program: program.into(),
             args: Vec::new(),
+            env: Vec::new(),
         }
     }
 }

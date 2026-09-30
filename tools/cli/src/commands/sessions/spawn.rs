@@ -150,6 +150,8 @@ struct SpawnConfigFile {
     default_agent_profile: Option<String>,
     #[serde(default)]
     enforce_agent_profiles: Option<bool>,
+    #[serde(default)]
+    claude_accounts: std::collections::BTreeMap<String, super::lane_account::ClaudeAccountSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,6 +239,7 @@ pub(super) fn wrap_launch(
     CliLaunchProgram {
         program: "systemd-run".to_owned(),
         args,
+        env: launch.env.clone(),
     }
 }
 
@@ -378,6 +381,17 @@ fn sessions_config_candidates() -> Vec<std::path::PathBuf> {
         );
     }
     candidates
+}
+
+pub(super) fn config_claude_accounts(
+) -> Result<std::collections::BTreeMap<String, super::lane_account::ClaudeAccountSpec>> {
+    let Some(path) = sessions_config_path() else {
+        return Ok(std::collections::BTreeMap::new());
+    };
+    let encoded = fs::read_to_string(&path).context("failed to read the sessions config")?;
+    let config: SpawnConfigFile =
+        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(config.claude_accounts)
 }
 
 pub(super) fn config_dispatch_policy() -> Result<DispatchPolicy> {
@@ -1530,6 +1544,7 @@ pub(super) fn spawn_or_reuse(
                     model,
                     effort,
                 )?);
+                super::lane_account::apply(&mut launch, &prepared.tool_id)?;
                 let resumed = key.is_some()
                     && task.is_some()
                     && pending.has_key_history(prepared.key.as_str())?;
@@ -2067,6 +2082,7 @@ pub(super) fn spawn_detached(
         model,
         effort,
     )?);
+    super::lane_account::apply(&mut launch, &prepared.tool_id)?;
     launch.args.push(prompt.to_owned());
     let request = SpawnRequest {
         identity: prepared.identity.clone(),
@@ -3634,6 +3650,7 @@ mod tests {
         let launch = CliLaunchProgram {
             program: "pi".to_owned(),
             args: vec!["--model".to_owned(), "flash-x".to_owned()],
+            env: Vec::new(),
         };
 
         let unwrapped = wrap_launch(&launch, None);
@@ -3669,6 +3686,7 @@ mod tests {
         let launch = CliLaunchProgram {
             program: "codex".to_owned(),
             args: Vec::new(),
+            env: Vec::new(),
         };
         let cap = SpawnCapConfig {
             enabled: true,

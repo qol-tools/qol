@@ -33,6 +33,7 @@ qol-watch = { path = "libs/watch" }
 qol-process = { path = "libs/process" }
 qol-runtime = { path = "libs/runtime" }
 qol-search = { path = "libs/search" }
+qol-secrets = { path = "libs/secrets" }
 qol-migrations = { path = "libs/migrations" }
 qol-apps = { path = "libs/apps" }
 qol-app-icon = { path = "libs/app-icon" }

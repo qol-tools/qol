@@ -6274,6 +6274,7 @@ dependencies = [
  "qol-process",
  "qol-profile-sync",
  "qol-runtime",
+ "qol-secrets",
  "qol-terminal-sessions",
  "qol-workspace",
  "ratatui",
@@ -7144,6 +7145,15 @@ name = "qol-search"
 version = "0.2.1"
 dependencies = [
  "serde",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-secrets"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 
