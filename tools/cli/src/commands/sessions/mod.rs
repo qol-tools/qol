@@ -20,6 +20,7 @@ mod contract;
 mod export;
 mod fork;
 mod last_send;
+mod launch_flags;
 mod mcp;
 mod spawn;
 mod watch;
@@ -152,7 +153,7 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
@@ -187,7 +188,10 @@ Details:
   the harness launch as --model); a selected agent profile's declared model is
   the default, and the spawn_model setting in the same file is the fallback.
   The tool_models mapping in the same file binds models to harnesses, and a
-  pair it does not declare is refused before launch.
+  pair it does not declare is refused before launch. --effort (low, medium,
+  high, xhigh, max) goes to harnesses that take one: claude as --effort, pi
+  as --thinking; every claude launch also skips permission prompts. spawn
+  and fork build these flags from the same source.
   --title names the new tab (the lane key by default), and
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,

@@ -494,16 +494,6 @@ pub(super) fn require_model_for_launch(model: Option<&str>) -> Result<()> {
     }
 }
 
-fn model_args(tool: &CliToolId, model: &str) -> Result<Vec<String>> {
-    let flag = match tool.as_str() {
-        "pi" | "codex" | "claude" | "kimi" => "--model",
-        other => bail!(
-            "tool `{other}` has no model override flag; launch it directly with the model instead"
-        ),
-    };
-    Ok(vec![flag.to_owned(), model.to_owned()])
-}
-
 pub(super) struct SpawnLocks {
     dir: PathBuf,
 }
@@ -919,6 +909,7 @@ fn run_lanes_with(
         &parsed.lanes,
         parsed.surface.as_deref(),
         parsed.model.as_deref(),
+        parsed.effort.as_deref(),
         config,
         cap.as_ref(),
         locks,
@@ -955,6 +946,7 @@ fn run_with(
         parsed.key.as_deref(),
         parsed.surface.as_deref(),
         parsed.model.as_deref(),
+        parsed.effort.as_deref(),
         parsed.title.as_deref(),
         config,
         cap.as_ref(),
@@ -1076,6 +1068,7 @@ struct SpawnArgs {
     key: Option<String>,
     surface: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     title: Option<String>,
     task: Option<String>,
     background: bool,
@@ -1099,12 +1092,13 @@ impl SpawnArgs {
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
+    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
     let mut surface = None;
     let mut model = None;
+    let mut effort = None;
     let mut title = None;
     let mut task = None;
     let mut background = false;
@@ -1139,6 +1133,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
             }
             "--model" => {
                 model = Some(flag_value(args, index, "--model", usage)?);
+                index += 2;
+            }
+            "--effort" => {
+                effort = Some(flag_value(args, index, "--effort", usage)?);
                 index += 2;
             }
             "--title" => {
@@ -1212,6 +1210,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         key,
         surface,
         model,
+        effort,
         title,
         task,
         background,
@@ -1288,6 +1287,7 @@ pub(super) fn spawn_lanes(
     lanes: &[LaneSpec],
     surface: Option<&str>,
     model: Option<&str>,
+    effort: Option<&str>,
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
     locks: &SpawnLocks,
@@ -1366,6 +1366,7 @@ pub(super) fn spawn_lanes(
             Some(lane.key.as_str()),
             surface,
             model,
+            effort,
             lane.title.as_deref(),
             config,
             cap,
@@ -1444,6 +1445,7 @@ pub(super) fn spawn_or_reuse(
     key: Option<&str>,
     surface: Option<&str>,
     model: Option<&str>,
+    effort: Option<&str>,
     title: Option<&str>,
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
@@ -1523,9 +1525,11 @@ pub(super) fn spawn_or_reuse(
                         );
                     }
                 }
-                if let Some(model) = model {
-                    launch.args.extend(model_args(&prepared.tool_id, model)?);
-                }
+                launch.args.extend(super::launch_flags::launch_flags(
+                    &prepared.tool_id,
+                    model,
+                    effort,
+                )?);
                 let resumed = key.is_some()
                     && task.is_some()
                     && pending.has_key_history(prepared.key.as_str())?;
@@ -2037,7 +2041,7 @@ pub(super) fn spawn_detached(
     key: &str,
     surface: Option<&str>,
     model: Option<&str>,
-    extra_args: &[String],
+    effort: Option<&str>,
     title: Option<&str>,
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
@@ -2058,10 +2062,11 @@ pub(super) fn spawn_detached(
         );
     }
     let mut launch = wrap_launch(&prepared.launch, cap);
-    if let Some(model) = model {
-        launch.args.extend(model_args(&prepared.tool_id, model)?);
-    }
-    launch.args.extend(extra_args.iter().cloned());
+    launch.args.extend(super::launch_flags::launch_flags(
+        &prepared.tool_id,
+        model,
+        effort,
+    )?);
     launch.args.push(prompt.to_owned());
     let request = SpawnRequest {
         identity: prepared.identity.clone(),
@@ -2653,6 +2658,7 @@ mod tests {
             key,
             surface,
             model,
+            None,
             title,
             config,
             cap.as_ref(),
@@ -3945,22 +3951,6 @@ mod tests {
             allowed_models_from(Some(vec!["kimi-k2".to_owned()]), Some("flash".to_owned())),
             vec!["kimi-k2".to_owned()]
         );
-    }
-
-    #[test]
-    fn model_args_map_registered_tools_and_reject_unknown_tools() {
-        for tool in ["pi", "codex", "claude", "kimi"] {
-            let args = model_args(&CliToolId::new(tool).unwrap(), "flash-x").unwrap();
-            assert_eq!(
-                args,
-                vec!["--model".to_owned(), "flash-x".to_owned()],
-                "tool: {tool}"
-            );
-        }
-        let error = model_args(&CliToolId::new("generic").unwrap(), "flash-x")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("no model override flag"), "{error}");
     }
 
     #[test]
@@ -5701,6 +5691,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             locks,
             ledger,
             background,
@@ -5742,6 +5733,7 @@ mod tests {
             "pi",
             &cwd,
             &lanes,
+            None,
             None,
             None,
             None,
@@ -6269,6 +6261,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &locks(&root),
             &ledger,
             None,
@@ -6322,6 +6315,7 @@ mod tests {
             "pi",
             &cwd,
             &lanes,
+            None,
             None,
             None,
             None,
