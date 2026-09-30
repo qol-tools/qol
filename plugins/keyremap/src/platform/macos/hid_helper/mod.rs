@@ -177,6 +177,10 @@ impl Shared {
         }
     }
 
+    fn seize_failed(&self) {
+        self.lock().watchdog.seize_failed(Instant::now());
+    }
+
     fn set_caps_light(&self, generation: u64, on: bool) {
         let mut state = self.lock();
         if state.watchdog.is_current(generation) {

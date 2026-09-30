@@ -35,7 +35,6 @@ type ValueCallback = extern "C" fn(*mut c_void, IOReturn, *mut c_void, IOHIDValu
 
 const OPTIONS_NONE: u32 = 0;
 const OPTIONS_SEIZE: u32 = 1;
-const RETURN_EXCLUSIVE_ACCESS: IOReturn = 0xE000_02C5_u32 as i32;
 const REQUEST_LISTEN_EVENT: u32 = 1;
 const ACCESS_GRANTED: u32 = 0;
 const APPLE_VENDOR_ID: i64 = 0x05AC;
@@ -122,6 +121,7 @@ struct Keyboard {
     apple: bool,
     modifiers: ModifierMapping,
     seized: bool,
+    unseizable: bool,
     pressed: PressedKeys,
 }
 
@@ -190,8 +190,11 @@ extern "C" fn tick(_timer: CFRunLoopTimerRef, info: *mut c_void) {
     let (action, caps_light) = devices.shared.tick();
     match action {
         Action::Seize => {
-            let any = devices.seize_all();
-            devices.shared.announce_seized(any);
+            let every = devices.seize_all();
+            if !every {
+                devices.shared.seize_failed();
+            }
+            devices.shared.announce_seized(every);
         }
         Action::Release => {
             devices.release_all();
@@ -226,6 +229,7 @@ extern "C" fn device_matched(
         apple: is_apple_keyboard(vendor, bool_property(device, "Built-In").unwrap_or(false)),
         modifiers: modifier_mapping(device),
         seized: false,
+        unseizable: false,
         pressed: PressedKeys::default(),
     });
     let country_code = number_property(device, "CountryCode").unwrap_or(0);
@@ -297,14 +301,11 @@ extern "C" fn value_changed(
 
 impl Devices {
     fn seize_all(&self) -> bool {
-        let mut conflicts = Vec::new();
         let context = ptr::from_ref(self).cast_mut().cast::<c_void>();
-        for keyboard in self
-            .keyboards
-            .borrow_mut()
-            .iter_mut()
-            .filter(|keyboard| !keyboard.seized)
-        {
+        let mut keyboards = self.keyboards.borrow_mut();
+        keyboards.sort_by_key(|keyboard| !keyboard.unseizable);
+        let mut unseizable = Vec::new();
+        for keyboard in keyboards.iter_mut().filter(|keyboard| !keyboard.seized) {
             match unsafe { IOHIDDeviceOpen(keyboard.device, OPTIONS_SEIZE) } {
                 0 => unsafe {
                     IOHIDDeviceRegisterInputValueCallback(
@@ -318,19 +319,35 @@ impl Devices {
                         kCFRunLoopDefaultMode,
                     );
                     keyboard.seized = true;
+                    keyboard.unseizable = false;
                     log::info!("seized {}", keyboard.name);
                 },
-                RETURN_EXCLUSIVE_ACCESS => {
-                    log::warn!("{} is held by another app; leaving it alone", keyboard.name);
-                    conflicts.push(keyboard.name.clone());
+                code => {
+                    if !keyboard.unseizable {
+                        log::warn!(
+                            "could not seize {} (IOReturn {code:#x}); every keyboard stays with the event tap until it can be",
+                            keyboard.name
+                        );
+                    }
+                    keyboard.unseizable = true;
+                    unseizable.push(keyboard.name.clone());
+                    break;
                 }
-                code => log::warn!("could not seize {}: IOReturn {code:#x}", keyboard.name),
             }
         }
-        self.publish(conflicts)
+        drop(keyboards);
+        if !unseizable.is_empty() {
+            self.release_seized();
+        }
+        self.publish(unseizable)
     }
 
     fn release_all(&self) {
+        self.release_seized();
+        self.publish(Vec::new());
+    }
+
+    fn release_seized(&self) {
         for keyboard in self
             .keyboards
             .borrow_mut()
@@ -342,7 +359,6 @@ impl Devices {
             keyboard.pressed.drain();
             log::info!("released {}", keyboard.name);
         }
-        self.publish(Vec::new());
     }
 
     fn close(&self, keyboard: &Keyboard) {

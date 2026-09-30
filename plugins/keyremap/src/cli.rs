@@ -392,11 +392,11 @@ fn helper_result(probe: &Probe<HelperState>) -> DoctorCheckResult {
         return DoctorCheckResult::warn(
             id,
             format!(
-                "Another app holds these keyboards: {}.",
+                "The keyboard helper cannot take {}, so every keyboard stays with the event tap and Secure Input can pause Key Remap.",
                 report.conflicts.join(", ")
             ),
         )
-        .with_fix("Quit the app that grabs the keyboard, such as Karabiner-Elements.");
+        .with_fix("Quit the app that holds that keyboard, such as Karabiner-Elements, or unplug it. The helper retries every second.");
     }
     if !report.virtual_keyboard_ready {
         return DoctorCheckResult::warn(

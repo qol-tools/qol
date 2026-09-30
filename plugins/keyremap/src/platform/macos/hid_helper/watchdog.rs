@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 pub(crate) const SILENCE_LIMIT: Duration = Duration::from_millis(200);
+pub(crate) const SEIZE_RETRY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -17,6 +18,7 @@ pub(crate) struct Watchdog {
     input_monitoring: bool,
     seized: bool,
     devices_changed: bool,
+    retry_at: Option<Instant>,
 }
 
 impl Watchdog {
@@ -56,21 +58,36 @@ impl Watchdog {
 
     pub(crate) fn device_arrived(&mut self) {
         self.devices_changed = true;
+        self.retry_at = None;
+    }
+
+    pub(crate) fn seize_failed(&mut self, now: Instant) {
+        self.seized = false;
+        self.retry_at = Some(now + SEIZE_RETRY);
     }
 
     pub(crate) fn tick(&mut self, now: Instant) -> Action {
         let heard_recently = self
             .last_heartbeat
             .is_some_and(|at| now.saturating_duration_since(at) <= SILENCE_LIMIT);
+        let retry_due = self.retry_at.is_none_or(|at| now >= at);
         let wanted = self.keyboard_ready && self.input_monitoring && heard_recently;
         let action = match (self.seized, wanted) {
-            (false, true) => Action::Seize,
+            (false, true) if retry_due => Action::Seize,
+            (false, true) => Action::Hold,
             (true, false) => Action::Release,
             (true, true) if self.devices_changed => Action::Seize,
             _ => Action::Hold,
         };
         self.devices_changed = false;
-        self.seized = wanted;
+        self.seized = match action {
+            Action::Seize => {
+                self.retry_at = None;
+                true
+            }
+            Action::Release => false,
+            Action::Hold => self.seized,
+        };
         action
     }
 }
@@ -100,6 +117,29 @@ mod tests {
             watchdog.tick(start + Duration::from_millis(25)),
             Action::Hold
         );
+    }
+
+    #[test]
+    fn a_failed_seize_is_retried_after_a_second_or_when_a_keyboard_arrives() {
+        let start = Instant::now();
+        let mut watchdog = ready();
+        watchdog.session_opened(1);
+        watchdog.heartbeat(1, start);
+        assert_eq!(watchdog.tick(start), Action::Seize);
+        watchdog.seize_failed(start);
+        assert!(!watchdog.accepts_emit(1));
+
+        let soon = start + Duration::from_millis(100);
+        watchdog.heartbeat(1, soon);
+        assert_eq!(watchdog.tick(soon), Action::Hold);
+
+        let later = start + SEIZE_RETRY;
+        watchdog.heartbeat(1, later);
+        assert_eq!(watchdog.tick(later), Action::Seize);
+
+        watchdog.seize_failed(later);
+        watchdog.device_arrived();
+        assert_eq!(watchdog.tick(later), Action::Seize);
     }
 
     #[test]
