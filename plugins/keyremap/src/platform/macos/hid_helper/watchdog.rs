@@ -42,8 +42,6 @@ impl Watchdog {
         self.session == Some(generation)
     }
 
-    /// An emit that lands after a release would press a key the release
-    /// already cleared, and nothing would ever let it go.
     pub(crate) fn accepts_emit(&self, generation: u64) -> bool {
         self.is_current(generation) && self.seized
     }
