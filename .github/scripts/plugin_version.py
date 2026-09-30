@@ -19,6 +19,7 @@ BREAKING_BODY_RE = re.compile(r"(^|\n)BREAKING[ -]CHANGE:", re.IGNORECASE)
 FEATURE_SUBJECT_RE = re.compile(r"^feat(\([^)]+\))?:", re.IGNORECASE)
 RELEASABLE_SUBJECT_RE = re.compile(r"^(feat|fix|perf)(\([^)]+\))?!?:", re.IGNORECASE)
 RELEASE_SUBJECT_RE = re.compile(r"^chore\(release\):", re.IGNORECASE)
+SQUASHED_SUBJECT_RE = re.compile(r"^\* (\S.*)$", re.MULTILINE)
 
 DEPENDENCY_TABLES = {"dependencies", "build-dependencies"}
 WORKSPACE_HACK_PACKAGE = "workspace-hack"
@@ -176,24 +177,30 @@ def is_release_commit(commit: Commit) -> bool:
     return RELEASE_SUBJECT_RE.match(commit.subject.strip()) is not None
 
 
+def commit_subjects(commit: Commit) -> list[str]:
+    return [commit.subject.strip(), *SQUASHED_SUBJECT_RE.findall(commit.body or "")]
+
+
 def is_releasable_commit(commit: Commit) -> bool:
     if is_release_commit(commit):
         return False
-    subject = commit.subject.strip()
-    body = commit.body or ""
-    if BREAKING_SUBJECT_RE.match(subject) or BREAKING_BODY_RE.search(body):
+    if BREAKING_BODY_RE.search(commit.body or ""):
         return True
-    return RELEASABLE_SUBJECT_RE.match(subject) is not None
+    return any(
+        BREAKING_SUBJECT_RE.match(subject) or RELEASABLE_SUBJECT_RE.match(subject)
+        for subject in commit_subjects(commit)
+    )
 
 
 def detect_bump(commits: list[Commit]) -> str:
     bump = "patch"
     for commit in commits:
-        subject = commit.subject.strip()
-        body = commit.body or ""
-        if BREAKING_SUBJECT_RE.match(subject) or BREAKING_BODY_RE.search(body):
+        subjects = commit_subjects(commit)
+        if BREAKING_BODY_RE.search(commit.body or "") or any(
+            BREAKING_SUBJECT_RE.match(subject) for subject in subjects
+        ):
             return "major"
-        if bump == "patch" and FEATURE_SUBJECT_RE.match(subject):
+        if any(FEATURE_SUBJECT_RE.match(subject) for subject in subjects):
             bump = "minor"
     return bump
 

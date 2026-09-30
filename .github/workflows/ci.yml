@@ -56,6 +56,24 @@ jobs:
       - name: Test commit-msg hook
         run: bash .githooks/commit-msg.test.sh
 
+      # The merge queue squashes a pull request into one commit titled by the
+      # pull request, and versioning reads that subject, so the queue refuses a
+      # title the commit-msg gate would refuse. A pull request run only warns,
+      # because editing the title does not rerun it.
+      - name: Squash subject is conventional
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          TITLE: ${{ github.event.pull_request.title || github.event.merge_group.head_commit.message }}
+        run: |
+          subject="${TITLE%%$'\n'*}"
+          printf '%s\n' "${subject% (#[0-9]*)}" > "$RUNNER_TEMP/subject"
+          if ! .githooks/commit-msg "$RUNNER_TEMP/subject"; then
+            level=warning
+            [[ "$GITHUB_EVENT_NAME" == merge_group ]] && level=error
+            echo "::${level}::the pull request title becomes the squash commit subject; retitle it as <type>(scope): summary"
+            [[ "$level" == warning ]]
+          fi
+
       - name: Test QoL Tray UI
         working-directory: apps/tray/ui
         run: |

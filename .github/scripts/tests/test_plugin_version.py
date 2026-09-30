@@ -524,6 +524,30 @@ class ReservedPluginIdsTests(unittest.TestCase):
         self.assertEqual(pv.AUTO_EXCLUDED_PLUGIN_IDS, {"qol-template"})
 
 
+class SquashMergeBumpTests(unittest.TestCase):
+    SQUASH = pv.Commit(
+        sha="1ef92dee2",
+        subject="Launcher and settings marks from one drawn set (#40)",
+        body="* feat(launcher): give every entry a drawn mark\n\nDetail.\n\n* fix(settings): align the rail",
+    )
+
+    def test_squashed_feature_is_releasable_and_bumps_minor(self):
+        self.assertTrue(pv.is_releasable_commit(self.SQUASH))
+        self.assertEqual(pv.detect_bump([self.SQUASH]), "minor")
+
+    def test_squashed_breaking_change_bumps_major(self):
+        commit = pv.Commit(sha="a", subject="Rework the protocol (#9)", body="* feat(peers)!: drop v1")
+        self.assertEqual(pv.detect_bump([commit]), "major")
+
+    def test_prose_bullets_do_not_release(self):
+        commit = pv.Commit(sha="b", subject="Tidy notes (#10)", body="* reworded the intro\n* docs: typo")
+        self.assertFalse(pv.is_releasable_commit(commit))
+
+    def test_fix_subject_stays_patch(self):
+        commit = pv.Commit(sha="c", subject="fix(peers): close gracefully", body="")
+        self.assertEqual(pv.detect_bump([commit]), "patch")
+
+
 class BinaryGateTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
