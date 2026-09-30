@@ -45,6 +45,8 @@ class NamespaceOfKey(unittest.TestCase):
              "v0-rust-ci-ubuntu-latest-Linux-x64-607b40e9"),
             ("ci-ubuntu-latest-1a2b3c4d", "ci-ubuntu-latest"),
             ("qol-tray-linux-607b40e9-23b0bf21", "qol-tray-linux-607b40e9"),
+            (f"qol-compiler-v1-Linux-X64-{'a' * 40}", "qol-compiler-v1-Linux-X64"),
+            (f"qol-compiler-v1-macOS-ARM64-{'b' * 40}", "qol-compiler-v1-macOS-ARM64"),
         ]
         for key, expected in cases:
             self.assertEqual(cp.namespace_of_key(key), expected, f"key: {key}")
@@ -57,12 +59,57 @@ class NamespaceOfKey(unittest.TestCase):
             "key-abcdefgh",
             "key-ABCDEF12",
             "key-1234567",
+            f"unrelated-{'a' * 40}",
+            f"qol-compiler-v1-Linux-X64-{'g' * 40}",
         ]
         for key in cases:
             self.assertEqual(cp.namespace_of_key(key), key, f"key: {key}")
 
 
 class PlanPrune(unittest.TestCase):
+    def test_size_budget_discards_superseded_caches_before_distinct_namespaces(self):
+        entries = [
+            cache_entry("ci-linux-11111111", stamp(NOW - timedelta(days=2))),
+            cache_entry("ci-linux-22222222", stamp(NOW - timedelta(days=1))),
+            cache_entry("ci-macos-11111111", stamp(NOW - timedelta(days=3))),
+        ]
+        for ceiling, expected in [(3000, []), (2000, [entries[0]])]:
+            with self.subTest(ceiling=ceiling):
+                self.assertEqual(cp.plan_prune(entries, 2, 14, NOW, ceiling), expected)
+
+    def test_size_budget_falls_back_to_oldest_access_for_distinct_namespaces(self):
+        entries = [
+            cache_entry("ci-linux-11111111", stamp(NOW - timedelta(days=3)), stamp(NOW)),
+            cache_entry("ci-macos-11111111", stamp(NOW), stamp(NOW - timedelta(days=1))),
+        ]
+        doomed = cp.plan_prune(entries, 2, 14, NOW, max_bytes=1000)
+        self.assertEqual(doomed, [entries[1]])
+
+    def test_expired_cache_bytes_do_not_evict_healthy_caches_twice(self):
+        entries = [
+            cache_entry("ci-linux-11111111", stamp(NOW - timedelta(days=20))),
+            cache_entry("ci-macos-11111111", stamp(NOW)),
+        ]
+        doomed = cp.plan_prune(entries, 2, 14, NOW, max_bytes=1000)
+        self.assertEqual(doomed, [entries[0]])
+
+    def test_oversized_single_cache_cannot_exceed_the_budget(self):
+        entry = cache_entry("ci-linux-11111111", stamp(NOW), size_in_bytes=1001)
+        self.assertEqual(cp.plan_prune([entry], 2, 14, NOW, max_bytes=1000), [entry])
+
+    def test_compiler_archives_keep_recent_commits_per_platform(self):
+        linux = "qol-compiler-v1-Linux-X64"
+        macos = "qol-compiler-v1-macOS-ARM64"
+        entries = [
+            cache_entry(f"{linux}-{'a' * 40}", stamp(NOW - timedelta(days=3))),
+            cache_entry(f"{linux}-{'b' * 40}", stamp(NOW - timedelta(days=2))),
+            cache_entry(f"{linux}-{'c' * 40}", stamp(NOW - timedelta(days=1))),
+            cache_entry(f"{macos}-{'a' * 40}", stamp(NOW - timedelta(days=3))),
+            cache_entry("ci-linux-607b40e9-12345678", stamp(NOW - timedelta(days=3))),
+        ]
+        doomed = cp.plan_prune(entries, keep=2, max_age_days=14, now=NOW)
+        self.assertEqual([entry["key"] for entry in doomed], [entries[0]["key"]])
+
     def test_keep_newest_per_namespace(self):
         entries = [
             cache_entry(
@@ -268,6 +315,17 @@ class Main(unittest.TestCase):
         ):
             self.assertEqual(cp.main(), 1)
         gh.assert_not_called()
+
+    def test_nonpositive_byte_budget_is_refused(self):
+        for limit in ["0", "-1"]:
+            with (
+                self.subTest(limit=limit),
+                patch("sys.argv", ["cache_prune.py", "--repo", "owner/repo", "--max-bytes", limit]),
+                patch.object(cp, "gh_api") as gh,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(cp.main(), 1)
+                gh.assert_not_called()
 
 
 if __name__ == "__main__":

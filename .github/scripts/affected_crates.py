@@ -15,7 +15,13 @@ import sys
 import tomllib
 from pathlib import Path
 
-GLOBAL_PREFIXES = (".github/workflows/", ".github/scripts/", ".cargo/", "vendor/")
+GLOBAL_PREFIXES = (
+    ".github/workflows/",
+    ".github/actions/",
+    ".github/scripts/",
+    ".cargo/",
+    "vendor/",
+)
 GLOBAL_FILES = {
     "Cargo.toml",
     "rust-toolchain.toml",

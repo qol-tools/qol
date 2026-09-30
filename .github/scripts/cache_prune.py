@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""Prune GitHub Actions build caches, keeping the newest N per key namespace.
-
-Cache keys carry a trailing lockfile-hash segment, e.g.
-`v0-rust-ci-ubuntu-latest-Linux-x64-607b40e9-23b0bf21`, so every Cargo.lock
-change deposits a new cache entry under the same logical namespace (the key
-with its trailing `-[0-9a-f]{8}` segment stripped). Entries are pruned down
-to the newest `--keep` per namespace by creation time, and anything whose
-last access is older than `--max-age-days` goes even when it would be kept.
-Deletes are by cache id, never by key prefix, so a cache a concurrent build
-just recreated under the same prefix is never harmed.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -26,12 +14,15 @@ from datetime import datetime, timedelta, timezone
 MUTATION_PAUSE_SECONDS = 0.5
 RETRY_PAUSE_SECONDS = 30
 RETRIES = 3
+MAX_CACHE_BYTES = 9 * 1024**3
 
 LOCKFILE_HASH = re.compile(r"-[0-9a-f]{8}$")
+COMPILER_CACHE_COMMIT = re.compile(r"^(qol-compiler-v\d+-.+)-[0-9a-f]{40}$")
 
 
 def namespace_of_key(key: str) -> str:
-    """The key with its trailing 8-hex lockfile-hash segment stripped."""
+    if match := COMPILER_CACHE_COMMIT.fullmatch(key):
+        return match[1]
     return LOCKFILE_HASH.sub("", key)
 
 
@@ -45,26 +36,50 @@ def parse_timestamp(value: str) -> datetime:
 
 
 def plan_prune(
-    caches: list[dict], keep: int, max_age_days: int, now: datetime
+    caches: list[dict], keep: int, max_age_days: int, now: datetime,
+    max_bytes: int = MAX_CACHE_BYTES,
 ) -> list[dict]:
-    """Return the entries to delete: past the newest `keep` per namespace,
-    plus anything unaccessed for more than `max_age_days`."""
     cutoff = now - timedelta(days=max_age_days)
     grouped: dict[str, list[dict]] = defaultdict(list)
     for cache in caches:
         grouped[namespace_of_key(cache["key"])].append(cache)
     doomed = []
+    newest_ids = set()
     for entries in grouped.values():
         entries.sort(
             key=lambda cache: parse_timestamp(cache["created_at"]), reverse=True
         )
+        newest_ids.add(entries[0]["id"])
         for position, cache in enumerate(entries):
             if position >= keep:
                 doomed.append(cache)
                 continue
             if parse_timestamp(cache["last_accessed_at"]) < cutoff:
                 doomed.append(cache)
+    doomed_ids = {cache["id"] for cache in doomed}
+    survivors = [cache for cache in caches if cache["id"] not in doomed_ids]
+    doomed.extend(over_budget(survivors, newest_ids, max_bytes))
     return sorted(doomed, key=lambda cache: cache["key"])
+
+
+def over_budget(caches: list[dict], newest_ids: set[int], max_bytes: int) -> list[dict]:
+    remaining_bytes = sum(cache.get("size_in_bytes", 0) for cache in caches)
+    candidates = sorted(
+        caches,
+        key=lambda cache: (
+            cache["id"] in newest_ids,
+            parse_timestamp(cache["last_accessed_at"]),
+            parse_timestamp(cache["created_at"]),
+            cache["id"],
+        ),
+    )
+    doomed = []
+    for cache in candidates:
+        if remaining_bytes <= max_bytes:
+            break
+        doomed.append(cache)
+        remaining_bytes -= cache.get("size_in_bytes", 0)
+    return doomed
 
 
 def json_stream(text: str) -> list[object]:
@@ -119,10 +134,13 @@ def delete_cache(repo: str, cache_id: int) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Prune GitHub Actions caches by age, revision count, and total bytes."
+    )
     parser.add_argument("--repo", help="OWNER/NAME; defaults to $GH_REPO")
     parser.add_argument("--keep", type=int, default=2)
     parser.add_argument("--max-age-days", type=int, default=14)
+    parser.add_argument("--max-bytes", type=int, default=MAX_CACHE_BYTES)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -136,6 +154,9 @@ def main() -> int:
     if args.max_age_days < 1:
         print("refusing to run with --max-age-days < 1", file=sys.stderr)
         return 1
+    if args.max_bytes < 1:
+        print("refusing to run with --max-bytes < 1", file=sys.stderr)
+        return 1
 
     try:
         caches = list_caches(repo)
@@ -144,7 +165,7 @@ def main() -> int:
         return 1
 
     doomed = plan_prune(
-        caches, args.keep, args.max_age_days, datetime.now(timezone.utc)
+        caches, args.keep, args.max_age_days, datetime.now(timezone.utc), args.max_bytes
     )
     total_bytes = sum(cache.get("size_in_bytes", 0) for cache in caches)
     freed_bytes = sum(cache.get("size_in_bytes", 0) for cache in doomed)

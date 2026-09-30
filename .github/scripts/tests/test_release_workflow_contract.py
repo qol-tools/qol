@@ -7,6 +7,37 @@ CARGO_GATE = re.compile(r"\bcargo (?:build|test|clippy|check|nextest run)\b")
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
+    def test_compiler_cache_preserves_dependency_keys_and_remains_opt_in(self):
+        action = (ROOT / ".github/actions/rust-setup/action.yml").read_text()
+        inputs = action.split("outputs:", 1)[0]
+        compiler_input = inputs.split("  compiler-cache:\n", 1)[1]
+        self.assertIn('default: "false"', compiler_input)
+        self.assertLess(
+            action.index("uses: Swatinem/rust-cache@"),
+            action.index("RUSTC_WRAPPER=sccache"),
+        )
+        self.assertIn("SCCACHE_CACHE_SIZE=512M", action)
+        self.assertRegex(action, r"tool: sccache@\d+\.\d+\.\d+")
+        self.assertIn("qol-compiler-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}", action)
+        self.assertIn("restore-keys: qol-compiler-v1-${{ runner.os }}-${{ runner.arch }}-", action)
+        self.assertNotIn("SCCACHE_GHA_ENABLED", action)
+
+    def test_compiler_cache_saves_only_main_and_publishes_statistics(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        self.assertIn('compiler-cache: "true"', check)
+        save = check.split("      - name: Save compiler cache\n", 1)[1]
+        for contract in [
+            "github.ref == 'refs/heads/main'",
+            "steps.rust_setup.outcome == 'success'",
+            "steps.rust_setup.outputs.compiler-cache-hit != 'true'",
+            "key: ${{ steps.rust_setup.outputs.compiler-cache-key }}",
+        ]:
+            self.assertIn(contract, save)
+        self.assertIn("sccache --show-stats --stats-format=json", check)
+        self.assertIn("name: compiler-cache-${{ matrix.os }}", check)
+        self.assertLess(check.index("cargo nextest run"), check.index("Save compiler cache"))
+
     def test_versioning_waits_for_main_ci(self):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
 

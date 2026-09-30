@@ -142,10 +142,12 @@ jobs:
           df -h /
 
       - uses: ./.github/actions/rust-setup
+        id: rust_setup
         if: matrix.skip != 'true'
         with:
           cache-key: ci-${{ matrix.os }}
           components: rustfmt, clippy
+          compiler-cache: "true"
 
       - name: Install cargo-hakari
         if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
@@ -284,6 +286,28 @@ jobs:
           if [ "$DOCTEST" = "true" ]; then
             cargo test --locked $TEST_ARGS --doc
           fi
+
+      - name: Record compiler cache statistics
+        if: always() && steps.rust_setup.outcome == 'success'
+        run: sccache --show-stats --stats-format=json > "${RUNNER_TEMP}/compiler-cache-report.json"
+
+      - name: Upload compiler cache statistics
+        if: always() && steps.rust_setup.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: compiler-cache-${{ matrix.os }}
+          path: ${{ runner.temp }}/compiler-cache-report.json
+          if-no-files-found: error
+
+      - name: Save compiler cache
+        if: >-
+          ${{ always() && !cancelled() && github.ref == 'refs/heads/main' &&
+          steps.rust_setup.outcome == 'success' &&
+          steps.rust_setup.outputs.compiler-cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/qol-compiler-cache
+          key: ${{ steps.rust_setup.outputs.compiler-cache-key }}
 
   process-windows:
     name: sandbox lifecycle (windows)
