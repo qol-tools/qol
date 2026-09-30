@@ -19,10 +19,10 @@ fn manifest(id: &str, uid: Option<&str>) -> PluginManifest {
             version: "1.0.0".to_string(),
             author: None,
             platforms: None,
+            icon: None,
         },
         menu: MenuConfig {
             label: "Test".to_string(),
-            icon: None,
             items: Vec::new(),
         },
         daemon: None,

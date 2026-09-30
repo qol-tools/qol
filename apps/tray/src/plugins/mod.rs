@@ -120,13 +120,13 @@ mod tests {
             version: "1.0.0".to_string(),
             author: None,
             platforms: None,
+            icon: None,
         };
         let manifest = PluginManifest {
             manifest_version: 1,
             plugin: plugin_info,
             menu: MenuConfig {
                 label: String::new(),
-                icon: None,
                 items: vec![],
             },
             daemon: None,

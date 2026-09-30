@@ -234,6 +234,8 @@ pub struct PluginInfo {
     pub author: Option<String>,
     #[serde(default)]
     pub platforms: Option<Vec<String>>,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 impl PluginInfo {
@@ -245,8 +247,6 @@ impl PluginInfo {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MenuConfig {
     pub label: String,
-    #[serde(default)]
-    pub icon: Option<String>,
     pub items: Vec<MenuItem>,
 }
 

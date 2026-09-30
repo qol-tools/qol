@@ -1,5 +1,6 @@
 pub mod css;
 pub mod depth;
+pub mod marks;
 pub mod motion;
 pub mod quiet;
 pub mod text;
@@ -8,6 +9,7 @@ pub use depth::{
     clear, solid, translucent, Alpha, Shadow, ShadowLayer, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
     OPACITY_DISABLED, OPACITY_REST, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
 };
+pub use marks::Mark;
 pub use motion::{
     Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED,
     WAIT_BEFORE_BUSY,

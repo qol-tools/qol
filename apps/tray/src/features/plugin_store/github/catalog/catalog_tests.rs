@@ -14,10 +14,10 @@ fn make_manifest(id: &str, name: &str, version: &str) -> PluginManifest {
             version: version.to_string(),
             author: None,
             platforms: None,
+            icon: None,
         },
         menu: MenuConfig {
             label: "Test".to_string(),
-            icon: None,
             items: vec![],
         },
         daemon: None,

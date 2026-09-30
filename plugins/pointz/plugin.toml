@@ -2,6 +2,7 @@
 id = "qol-pointz"
 uid = "9cb88d65-1d43-4fde-95b6-105761f0a14b"
 name = "PointZerver"
+icon = "pointz"
 description = "Control your PC from mobile devices"
 version = "1.46.2"
 author = "KMRH47"

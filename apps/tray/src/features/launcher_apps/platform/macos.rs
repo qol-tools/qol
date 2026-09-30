@@ -1,10 +1,15 @@
+use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
 use crate::shortcuts::model::{AppRef, ShortcutAction};
 use anyhow::{Context, Result};
+use qol_theme::Mark;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-pub(super) fn sync(entries: &[LauncherEntry], target: &Path) -> Result<()> {
+const ICON_FILE: &str = "icon";
+const ICON_PIXELS: u32 = 1024;
+
+pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) -> Result<()> {
     let dir = apps_dir().context("Could not determine home directory")?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create launcher apps dir {}", dir.display()))?;
@@ -17,7 +22,7 @@ pub(super) fn sync(entries: &[LauncherEntry], target: &Path) -> Result<()> {
             continue;
         };
         let app_dir = dir.join(app_name);
-        write_app_bundle(&app_dir, entry, target)?;
+        write_app_bundle(&app_dir, entry, target, marks)?;
     }
 
     clean_stale(&dir, &expected)?;
@@ -76,21 +81,32 @@ fn sanitized_display_name(entry: &LauncherEntry) -> String {
     entry.file_stem.clone()
 }
 
-fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, target: &Path) -> Result<()> {
+fn write_app_bundle(
+    app_dir: &Path,
+    entry: &LauncherEntry,
+    target: &Path,
+    marks: &MarkFiles,
+) -> Result<()> {
     if build_shortcut_script(entry).is_none() {
         super::verify_target(entry, target)?;
     }
     let contents_dir = app_dir.join("Contents");
     let macos_dir = contents_dir.join("MacOS");
+    let resources_dir = contents_dir.join("Resources");
     let run_path = macos_dir.join("run");
     let plist_path = contents_dir.join("Info.plist");
+    let icon_path = resources_dir.join(format!("{ICON_FILE}.icns"));
 
     let expected_script = build_script(target, entry);
     let expected_plist = build_info_plist(entry);
+    let expected_icon = icon_png(&entry.icon, marks).map(|png| icns(&png));
 
     if file_matches(&run_path, &expected_script)
         && file_matches(&plist_path, &expected_plist)
         && is_executable(&run_path)
+        && expected_icon
+            .as_ref()
+            .is_none_or(|icon| std::fs::read(&icon_path).is_ok_and(|current| &current == icon))
     {
         return Ok(());
     }
@@ -98,7 +114,57 @@ fn write_app_bundle(app_dir: &Path, entry: &LauncherEntry, target: &Path) -> Res
     std::fs::create_dir_all(&macos_dir)?;
     std::fs::write(&plist_path, &expected_plist)?;
     write_executable(&run_path, &expected_script)?;
+    if let Some(icon) = expected_icon {
+        std::fs::create_dir_all(&resources_dir)?;
+        std::fs::write(&icon_path, icon)?;
+    }
     Ok(())
+}
+
+fn icon_png(icon: &LauncherIcon, marks: &MarkFiles) -> Option<Vec<u8>> {
+    let mark = match icon {
+        LauncherIcon::Mark(mark) => *mark,
+        LauncherIcon::TargetApp(app) => match target_app_png(app) {
+            Some(png) => return Some(png),
+            None => Mark::App,
+        },
+    };
+    mark_png(&marks.svg(mark))
+}
+
+fn target_app_png(app: &AppRef) -> Option<Vec<u8>> {
+    let size = ICON_PIXELS as usize;
+    match app {
+        AppRef::Path { path } => qol_app_icon::icon_png_for_path(Path::new(path), size),
+        AppRef::BundleId { id } => qol_app_icon::icon_png_for_bundle_id(id, size),
+        AppRef::Name { .. } => None,
+    }
+}
+
+fn mark_png(svg: &str) -> Option<Vec<u8>> {
+    use resvg::{tiny_skia, usvg};
+
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
+    let mut pixmap = tiny_skia::Pixmap::new(ICON_PIXELS, ICON_PIXELS)?;
+    let scale = ICON_PIXELS as f32 / tree.size().width();
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    pixmap.encode_png().ok()
+}
+
+fn icns(png: &[u8]) -> Vec<u8> {
+    let entry_len = 8 + png.len();
+    let total_len = 8 + entry_len;
+    let mut icns = Vec::with_capacity(total_len);
+    icns.extend_from_slice(b"icns");
+    icns.extend_from_slice(&(total_len as u32).to_be_bytes());
+    icns.extend_from_slice(b"ic10");
+    icns.extend_from_slice(&(entry_len as u32).to_be_bytes());
+    icns.extend_from_slice(png);
+    icns
 }
 
 fn file_matches(path: &Path, expected: &str) -> bool {
@@ -123,6 +189,7 @@ fn build_info_plist(entry: &LauncherEntry) -> String {
          <plist version=\"1.0\">\n\
          <dict>\n\
          <key>CFBundleExecutable</key><string>run</string>\n\
+         <key>CFBundleIconFile</key><string>{}</string>\n\
          <key>CFBundleDisplayName</key><string>{}</string>\n\
          <key>CFBundleName</key><string>{}</string>\n\
          <key>CFBundleIdentifier</key><string>{}</string>\n\
@@ -132,7 +199,7 @@ fn build_info_plist(entry: &LauncherEntry) -> String {
          <key>LSUIElement</key><true/>\n\
          </dict>\n\
          </plist>\n",
-        name, name, entry.bundle_id
+        ICON_FILE, name, name, entry.bundle_id
     )
 }
 
@@ -252,6 +319,7 @@ mod tests {
             bundle_id: String::new(),
             exec_args: Vec::new(),
             shortcut_action: None,
+            icon: LauncherIcon::Mark(Mark::Qol),
         }
     }
 
@@ -263,6 +331,7 @@ mod tests {
             bundle_id: "com.qol-tools.shortcut.browser".to_string(),
             exec_args: vec!["exec".into(), "shortcut".into(), "browser".into()],
             shortcut_action: Some(action),
+            icon: LauncherIcon::Mark(Mark::Qol),
         }
     }
 
@@ -274,6 +343,7 @@ mod tests {
             bundle_id: "com.qol-tools.shortcut.browser".to_string(),
             exec_args: vec!["exec".into(), "shortcut".into(), "browser".into()],
             shortcut_action: None,
+            icon: LauncherIcon::Mark(Mark::Qol),
         }
     }
 
@@ -424,6 +494,31 @@ mod tests {
     }
 
     #[test]
+    fn icns_wraps_one_png_entry_with_big_endian_lengths() {
+        let icns = icns(b"PNG");
+
+        assert_eq!(&icns[..4], b"icns");
+        assert_eq!(u32::from_be_bytes(icns[4..8].try_into().unwrap()), 19);
+        assert_eq!(&icns[8..12], b"ic10");
+        assert_eq!(u32::from_be_bytes(icns[12..16].try_into().unwrap()), 11);
+        assert_eq!(&icns[16..], b"PNG");
+    }
+
+    #[test]
+    fn every_mark_rasterizes_to_a_png() {
+        for mark in Mark::ALL {
+            let png = mark_png(&mark.svg(0)).unwrap_or_else(|| panic!("{}", mark.name()));
+            assert!(png.starts_with(b"\x89PNG"), "{}", mark.name());
+        }
+    }
+
+    #[test]
+    fn info_plist_names_the_bundle_icon() {
+        assert!(build_info_plist(&entry("shortcut-a", "A"))
+            .contains("<key>CFBundleIconFile</key><string>icon</string>"));
+    }
+
+    #[test]
     fn build_script_keeps_qol_tray_for_command_entries() {
         let entry = LauncherEntry {
             file_stem: "command-shortcuts-add".to_string(),
@@ -432,6 +527,7 @@ mod tests {
             bundle_id: String::new(),
             exec_args: vec!["open".into(), "shortcuts/add".into()],
             shortcut_action: None,
+            icon: LauncherIcon::Mark(Mark::Qol),
         };
         let script = build_script(
             Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
@@ -459,6 +555,7 @@ mod tests {
                 bundle_id: String::new(),
                 exec_args: Vec::new(),
                 shortcut_action: None,
+                icon: LauncherIcon::Mark(Mark::Qol),
             });
 
             prop_assert!(!sanitized.is_empty());
@@ -479,6 +576,7 @@ mod tests {
             tmp.path(),
             &entry("command-shortcuts-add", "Add Shortcut"),
             &binary,
+            &MarkFiles::in_dir(tmp.path().join("marks"), 0),
         )
         .unwrap_err();
 
@@ -501,6 +599,7 @@ mod tests {
                 browser_override: None,
             }),
             &binary,
+            &MarkFiles::in_dir(tmp.path().join("marks"), 0),
         )
         .unwrap();
 

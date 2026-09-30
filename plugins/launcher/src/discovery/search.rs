@@ -508,6 +508,7 @@ mod tests {
             prompt: "qol memory".to_string(),
             query: "rows".to_string(),
             row_actions: Vec::new(),
+            icon: None,
         }];
 
         let results = filtered(

@@ -149,6 +149,7 @@ core-foundation = "0.10"
 core-graphics = "0.25"
 qol-gpui.workspace = true
 gpui.workspace = true
+resvg = { version = "0.45", default-features = false }
 
 [target.'cfg(all(target_os = "macos", not(target_arch = "x86_64")))'.dependencies]
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }

@@ -15,6 +15,10 @@ impl AppIconPlatform for Platform {
         icon_png_for_path(path, size)
     }
 
+    fn icon_png_for_bundle_id(&self, bundle_id: &str, size: usize) -> Option<Vec<u8>> {
+        icon_png_for_bundle_id(bundle_id, size)
+    }
+
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage> {
         icon_for_pid(pid, size)
     }
@@ -165,6 +169,18 @@ fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
         let ns_image = ws.iconForFile(&path);
         nsimage_to_rgba(&ns_image, size)
     })
+}
+
+fn icon_png_for_bundle_id(bundle_id: &str, size: usize) -> Option<Vec<u8>> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::NSString;
+
+    let path = objc2::rc::autoreleasepool(|_pool| {
+        let url = NSWorkspace::sharedWorkspace()
+            .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))?;
+        Some(url.path()?.to_string())
+    })?;
+    icon_png_for_path(Path::new(&path), size)
 }
 
 fn icon_png_for_path(path: &Path, size: usize) -> Option<Vec<u8>> {

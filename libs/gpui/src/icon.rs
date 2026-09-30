@@ -1,5 +1,6 @@
-use gpui::{div, img, px, App, IntoElement, ParentElement, RenderOnce, Styled, Window};
+use gpui::{div, img, px, App, Div, IntoElement, ParentElement, RenderOnce, Styled, Window};
 use qol_hotkeys::chord::Glyph;
+use qol_theme::Mark;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -184,13 +185,41 @@ pub fn icon(icon: Icon, size: f32, ink: u32) -> IconView {
 
 impl RenderOnce for IconView {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let size_px = (self.size * window.scale_factor()).round() as u32;
-        let image = crate::pictures::icon(self.icon.name(), &self.icon.markup(), self.ink, size_px);
-        div()
-            .flex_none()
-            .size(px(self.size))
-            .children(image.map(|image| img(image).size(px(self.size))))
+        tinted(
+            self.icon.name(),
+            &self.icon.markup(),
+            self.size,
+            self.ink,
+            window,
+        )
     }
+}
+
+#[derive(IntoElement)]
+pub struct MarkView {
+    mark: Mark,
+    size: f32,
+    line: u32,
+}
+
+pub fn mark(mark: Mark, size: f32, line: u32) -> MarkView {
+    MarkView { mark, size, line }
+}
+
+impl RenderOnce for MarkView {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let name = format!("mark-{}", self.mark.name());
+        tinted(&name, &self.mark.markup(), self.size, self.line, window)
+    }
+}
+
+fn tinted(name: &str, markup: &str, size: f32, ink: u32, window: &Window) -> Div {
+    let size_px = (size * window.scale_factor()).round() as u32;
+    let image = crate::pictures::icon(name, markup, ink, size_px);
+    div()
+        .flex_none()
+        .size(px(size))
+        .children(image.map(|image| img(image).size(px(size))))
 }
 
 #[cfg(test)]

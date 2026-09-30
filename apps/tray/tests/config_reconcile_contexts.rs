@@ -206,7 +206,8 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
     shortcut_store::save(&config).unwrap();
 
     let after_add = shortcut_store::load().unwrap();
-    let after_add_entries = launcher_apps::collect_shortcut_entries(&after_add.shortcuts);
+    let after_add_entries =
+        launcher_apps::collect_shortcut_entries(&after_add.shortcuts, &Default::default());
     assert_eq!(
         entry_stems(&after_add_entries),
         vec!["shortcut-alpha".to_string(), "shortcut-delta".to_string()],
@@ -219,8 +220,10 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
     )
     .unwrap();
     shortcut_store::save(&config).unwrap();
-    let after_enable_export =
-        launcher_apps::collect_shortcut_entries(&shortcut_store::load().unwrap().shortcuts);
+    let after_enable_export = launcher_apps::collect_shortcut_entries(
+        &shortcut_store::load().unwrap().shortcuts,
+        &Default::default(),
+    );
     assert_eq!(
         entry_stems(&after_enable_export),
         vec![
@@ -237,8 +240,10 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
     )
     .unwrap();
     shortcut_store::save(&config).unwrap();
-    let after_disable =
-        launcher_apps::collect_shortcut_entries(&shortcut_store::load().unwrap().shortcuts);
+    let after_disable = launcher_apps::collect_shortcut_entries(
+        &shortcut_store::load().unwrap().shortcuts,
+        &Default::default(),
+    );
     assert_eq!(
         entry_stems(&after_disable),
         vec!["shortcut-beta".to_string(), "shortcut-delta".to_string()],
@@ -247,8 +252,10 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
 
     shortcut_store::remove(&mut config, "delta").unwrap();
     shortcut_store::save(&config).unwrap();
-    let after_remove =
-        launcher_apps::collect_shortcut_entries(&shortcut_store::load().unwrap().shortcuts);
+    let after_remove = launcher_apps::collect_shortcut_entries(
+        &shortcut_store::load().unwrap().shortcuts,
+        &Default::default(),
+    );
     assert_eq!(
         entry_stems(&after_remove),
         vec!["shortcut-beta".to_string()],
@@ -276,8 +283,10 @@ async fn shortcut_exec_args_carry_id_for_each_derived_entry() {
     .unwrap();
     shortcut_store::save(&config).unwrap();
 
-    let entries =
-        launcher_apps::collect_shortcut_entries(&shortcut_store::load().unwrap().shortcuts);
+    let entries = launcher_apps::collect_shortcut_entries(
+        &shortcut_store::load().unwrap().shortcuts,
+        &Default::default(),
+    );
 
     let cases = [
         ("shortcut-docs", vec!["exec", "shortcut", "docs"]),

@@ -474,7 +474,10 @@ struct VisibleRows {
 pub(super) enum Shot {
     App(PathBuf),
     File(PathBuf),
-    Other(Option<String>),
+    Other {
+        summary: Option<String>,
+        art: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone)]
@@ -657,10 +660,20 @@ impl LauncherView {
                             }
                             (Shot::App(entry.path.clone()), Some(entry))
                         }
-                        Some(ResultItem::Flow(entry)) => {
-                            (Shot::Other(Some(entry.prompt.clone())), None)
-                        }
-                        _ => (Shot::Other(None), None),
+                        Some(ResultItem::Flow(entry)) => (
+                            Shot::Other {
+                                summary: Some(entry.prompt.clone()),
+                                art: entry.icon.clone(),
+                            },
+                            None,
+                        ),
+                        _ => (
+                            Shot::Other {
+                                summary: None,
+                                art: None,
+                            },
+                            None,
+                        ),
                     };
                     (shot, entry, strength, sizing::app_card(strength).height)
                 }
@@ -668,7 +681,7 @@ impl LauncherView {
             let key = match &shot {
                 Shot::App(path) => format!("app:{}", path.display()),
                 Shot::File(path) => format!("file:{}", path.display()),
-                Shot::Other(_) => format!("row:{name}"),
+                Shot::Other { .. } => format!("row:{name}"),
             };
             plans.push(Plan {
                 index,
@@ -886,14 +899,17 @@ impl LauncherView {
                     Shot::App(path) => self.face(path),
                     _ => None,
                 };
-                let summary = match shot {
-                    Shot::Other(summary) => summary.as_deref(),
-                    _ => face.and_then(|face| face.description.as_deref()),
+                let (summary, art) = match shot {
+                    Shot::Other { summary, art } => (summary.as_deref(), art.as_deref()),
+                    _ => (
+                        face.and_then(|face| face.description.as_deref()),
+                        face.and_then(|face| face.icon.as_deref()),
+                    ),
                 };
                 let card = view::app_card(view::AppCard {
                     name: &shown.name,
                     summary,
-                    art: face.and_then(|face| face.icon.as_deref()),
+                    art,
                     chosen: look.chosen,
                     lit: look.lit,
                     cue: look.cue,
@@ -932,12 +948,16 @@ impl LauncherView {
             ),
             _ => {
                 let path = plan.entry.map(|entry| entry.path.as_path());
+                let icon = match &plan.shown.shot {
+                    Shot::Other { art, .. } => art.as_deref(),
+                    _ => path
+                        .and_then(|path| self.face(path))
+                        .and_then(|face| face.icon.as_deref()),
+                };
                 let panel = about::panel(
                     About {
                         name,
-                        icon: path
-                            .and_then(|path| self.face(path))
-                            .and_then(|face| face.icon.as_deref()),
+                        icon,
                         about: path.and_then(|path| self.details.app(path)),
                         home,
                         copied: copied_item(feedback, name) == Some(PanelItem::CopyPath),

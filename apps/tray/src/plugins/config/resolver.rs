@@ -114,10 +114,10 @@ mod tests {
                 version: "1.0.0".to_string(),
                 author: None,
                 platforms: platforms.map(|v| v.into_iter().map(|s| s.to_string()).collect()),
+                icon: None,
             },
             menu: MenuConfig {
                 label: "p".to_string(),
-                icon: None,
                 items: vec![],
             },
             daemon: None,

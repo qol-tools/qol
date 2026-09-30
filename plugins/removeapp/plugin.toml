@@ -2,6 +2,7 @@
 id = "qol-removeapp"
 uid = "37aae6d0-ae74-4487-946a-32a635a9ef03"
 name = "Remove App"
+icon = "remove-app"
 description = "Uninstall an app and its leftovers"
 version = "0.61.2"
 author = "KMRH47"

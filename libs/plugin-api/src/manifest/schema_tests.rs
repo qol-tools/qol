@@ -10,6 +10,7 @@ fn make_plugin_info(platforms: Option<Vec<&str>>) -> PluginInfo {
         version: "1.0.0".to_string(),
         author: None,
         platforms: platforms.map(|items| items.into_iter().map(String::from).collect()),
+        icon: None,
     }
 }
 
@@ -389,10 +390,10 @@ fn parse_full_manifest() {
         version = "1.2.3"
         author = "Test Author"
         platforms = ["linux", "windows"]
+        icon = "bluetooth"
 
         [menu]
         label = "Test Menu"
-        icon = "test.png"
         items = [
             { type = "action", id = "run", label = "Run", action = "run" },
         ]
@@ -411,7 +412,7 @@ fn parse_full_manifest() {
         Some(vec!["linux".to_string(), "windows".to_string()])
     );
     assert_eq!(manifest.menu.label, "Test Menu");
-    assert_eq!(manifest.menu.icon, Some("test.png".to_string()));
+    assert_eq!(manifest.plugin.icon, Some("bluetooth".to_string()));
     assert_eq!(manifest.menu.items.len(), 1);
     assert!(manifest.daemon.is_some());
     let daemon = manifest.daemon.unwrap();

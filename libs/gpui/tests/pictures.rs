@@ -390,3 +390,14 @@ fn sample_spec(name: &str) -> String {
         other => other.to_owned(),
     }
 }
+
+#[test]
+fn every_launcher_mark_renders() {
+    for mark in qol_theme::Mark::ALL {
+        assert!(
+            qol_gpui::pictures::icon(mark.name(), &mark.markup(), 0, 48).is_some(),
+            "{} did not render",
+            mark.name()
+        );
+    }
+}
