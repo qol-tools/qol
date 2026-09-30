@@ -41,7 +41,7 @@ pub(crate) fn install() -> Result<String> {
     );
     let mut steps = Vec::new();
     let current = std::env::current_exe().context("find the running qol-keyremap binary")?;
-    match signing_identity() {
+    match qol_config::codesign_identity() {
         Some(identity) => {
             let signed = signed_copy(&current, &identity)?;
             let installed = install_file(&signed, HELPER_BINARY, 0o755);
@@ -215,12 +215,6 @@ fn virtual_keyboard_type_known() -> bool {
             String::from_utf8_lossy(&output.stdout)
                 .contains(&format!("\"{}\"", virtual_keyboard_id()))
         })
-}
-
-fn signing_identity() -> Option<String> {
-    let identity = fs::read_to_string(qol_config::codesign_identity_path()?).ok()?;
-    let identity = identity.trim();
-    (!identity.is_empty()).then(|| identity.to_string())
 }
 
 fn signed_copy(source: &Path, identity: &str) -> Result<PathBuf> {
