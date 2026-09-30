@@ -197,7 +197,7 @@ pub(super) fn changed(active: &ActiveAuthority) -> Result<Response, Error> {
     })
 }
 
-pub(super) fn attempt_name(state: &AttemptState) -> &'static str {
+pub(crate) fn attempt_name(state: &AttemptState) -> &'static str {
     match state {
         AttemptState::Unavailable {} => "unavailable",
         AttemptState::Queued {} => "queued",

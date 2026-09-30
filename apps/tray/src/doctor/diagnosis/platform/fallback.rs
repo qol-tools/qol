@@ -1,4 +1,5 @@
 use super::super::{AppKeyWriter, SymbolicHotkeyWriter};
+use crate::doctor::framework::CheckReport;
 use anyhow::{anyhow, Result};
 
 pub(crate) struct Platform;
@@ -17,4 +18,8 @@ impl AppKeyWriter for Platform {
             "Windows AppKey mutation is only supported on Windows"
         ))
     }
+}
+
+pub(crate) fn native_notifications_diagnosis() -> CheckReport {
+    CheckReport::ok("native notifications are not supported on this platform")
 }

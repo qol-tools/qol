@@ -1129,6 +1129,13 @@ struct InputHold {
     alive: Arc<AtomicBool>,
 }
 
+pub fn reassert_focus_while_current(
+    _title: String,
+    _gen: &'static std::sync::atomic::AtomicU64,
+    _commit_gen: u64,
+) {
+}
+
 pub fn register_native_display(_window: &gpui::Window) {}
 
 pub fn hold_input(title: &str) -> bool {

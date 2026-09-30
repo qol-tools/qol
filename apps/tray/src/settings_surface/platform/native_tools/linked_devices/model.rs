@@ -1,4 +1,5 @@
-use crate::features::linked_devices::settings::{CatalogOperation, InvitationInfo, Snapshot};
+use super::snapshot::Snapshot;
+use crate::features::linked_devices::settings::{CatalogOperation, InvitationInfo};
 use crate::plugins::PluginId;
 use qol_gpui::settings_panel::SettingsValueTone;
 use qol_peers::admin::{
@@ -625,7 +626,7 @@ fn outbound_rows(
     let detail = format!(
         "Waiting on the other device \u{b7} {}",
         attempt
-            .map(crate::features::linked_devices::settings::attempt_label)
+            .map(crate::features::linked_devices::enrollment::attempt_name)
             .unwrap_or("unavailable")
     );
     let mut rows = vec![Row::new("Outgoing request", detail.clone(), None)

@@ -1,4 +1,5 @@
 use super::super::{AppKeyWriter, SymbolicHotkeyWriter};
+use crate::doctor::framework::CheckReport;
 use anyhow::{anyhow, Context, Result};
 use std::process::Command;
 
@@ -40,4 +41,8 @@ fn is_safe_app_key(app_key: &str) -> bool {
         && app_key
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+pub(crate) fn native_notifications_diagnosis() -> CheckReport {
+    CheckReport::ok("native notifications are not supported on this platform")
 }

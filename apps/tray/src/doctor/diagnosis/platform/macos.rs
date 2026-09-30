@@ -1,5 +1,7 @@
-use super::super::{AppKeyWriter, SymbolicHotkeyWriter};
+use super::super::{AppKeyWriter, SymbolicHotkeyWriter, NATIVE_NOTIFICATIONS_ID};
+use crate::doctor::framework::CheckReport;
 use anyhow::{anyhow, Context, Result};
+use qol_plugin_daemon::notification::gate::NativeHandler;
 use std::process::Command;
 
 pub(crate) struct Platform;
@@ -38,4 +40,15 @@ impl AppKeyWriter for Platform {
             "Windows AppKey mutation is only supported on Windows"
         ))
     }
+}
+
+pub(crate) fn native_notifications_diagnosis() -> CheckReport {
+    if crate::features::notifications::native_handler() == NativeHandler::Qol {
+        return CheckReport::ok("native notifications are disabled; qol toasts are used");
+    }
+    CheckReport::warn(
+        "qol system notifications are attributed to Script Editor - disable them in System Settings > Notifications if unwanted",
+        NATIVE_NOTIFICATIONS_ID,
+        Vec::new(),
+    )
 }

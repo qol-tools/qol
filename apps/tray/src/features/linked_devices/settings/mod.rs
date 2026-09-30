@@ -1,14 +1,5 @@
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod snapshot;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) use snapshot::{load, Snapshot};
-
 use qol_peers::admin::Error;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use qol_peers::admin::{Request, Response};
 use qol_runtime::protocol::PeerAdminClientError;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use qol_runtime::PlatformStateClient;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -50,14 +41,6 @@ impl From<PeerAdminClientError> for Failure {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn request(client: &PlatformStateClient, request: Request) -> Result<Response, Failure> {
-    match client.peer_admin(request)? {
-        Response::Error { error } => Err(Failure::Authority(error)),
-        response => Ok(response),
-    }
-}
-
 #[derive(Deserialize, Serialize)]
 pub(crate) struct InvitationInfo {
     pub invitation: qol_peers::enrollment::InvitationId,
@@ -74,9 +57,4 @@ pub(crate) fn invitation_info(
         peer: invitation.inviter_pin().peer_id(),
         endpoints: invitation.endpoints().to_vec(),
     })
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn attempt_label(state: &qol_peers::admin::AttemptState) -> &'static str {
-    super::enrollment::attempt_name(state)
 }

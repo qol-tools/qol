@@ -8,7 +8,14 @@ use qol_peers::PeerId;
 use qol_plugin_api::operations::OperationKey;
 use qol_runtime::PlatformStateClient;
 
-use super::{request, Failure};
+use crate::features::linked_devices::settings::Failure;
+
+pub(crate) fn request(client: &PlatformStateClient, request: Request) -> Result<Response, Failure> {
+    match client.peer_admin(request)? {
+        Response::Error { error } => Err(Failure::Authority(error)),
+        response => Ok(response),
+    }
+}
 
 pub(crate) struct Snapshot {
     pub status: Status,

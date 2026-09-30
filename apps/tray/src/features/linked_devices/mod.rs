@@ -1,5 +1,5 @@
 mod administration;
-mod enrollment;
+pub(crate) mod enrollment;
 mod nearby;
 mod network;
 mod operations;
