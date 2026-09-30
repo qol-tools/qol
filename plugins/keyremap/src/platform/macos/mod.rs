@@ -78,6 +78,14 @@ impl PlatformAdapter for Adapter {
         Ok(CommandResult::success(""))
     }
 
+    fn install_hid_helper(&self) -> Result<CommandResult> {
+        Ok(summary_result(hid_helper::install::install()))
+    }
+
+    fn uninstall_hid_helper(&self) -> Result<CommandResult> {
+        Ok(summary_result(hid_helper::install::uninstall()))
+    }
+
     fn inspect_config(&self) -> Result<ConfigInspection> {
         let inspected = app::config::inspect_config()?;
         let issues = app::remap::validation_issues(&inspected.config);
@@ -101,4 +109,11 @@ impl PlatformAdapter for Adapter {
 fn action_result(sent: bool, success: &str, missing: &str) -> CommandResult {
     let message = if sent { success } else { missing };
     CommandResult::new("", format!("[keyremap] {message}\n"), 0)
+}
+
+fn summary_result(result: Result<String>) -> CommandResult {
+    match result {
+        Ok(summary) => CommandResult::success(format!("{summary}\n")),
+        Err(error) => CommandResult::runtime_error(format!("keyremap: {error:#}")),
+    }
 }

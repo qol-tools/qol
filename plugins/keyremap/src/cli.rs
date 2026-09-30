@@ -33,6 +33,8 @@ where
     let toggle = adapter.clone();
     let kill = adapter.clone();
     let helper = adapter.clone();
+    let install = adapter.clone();
+    let uninstall = adapter.clone();
 
     HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run and control native key, mouse, and scroll remapping.")
@@ -97,6 +99,31 @@ where
                 .run_result(move |context| {
                     no_args(context)?;
                     helper.hid_helper()
+                }),
+        )
+        .command(
+            Command::new("install-hid-helper")
+                .about("Install the root keyboard helper so Key Remap survives Secure Input.")
+                .usage(format!("sudo {PLUGIN_ID} install-hid-helper"))
+                .detail("Copies this binary to /Library/PrivilegedHelperTools and loads a LaunchDaemon for it.")
+                .detail("Starts the pqrs virtual keyboard daemon if nothing else runs it, and activates the driver.")
+                .output("One line per completed step on stdout.")
+                .exit_behavior("Exits non-zero without sudo, without the driver package, or when launchctl fails.")
+                .run_result(move |context| {
+                    no_args(context)?;
+                    install.install_hid_helper()
+                }),
+        )
+        .command(
+            Command::new("uninstall-hid-helper")
+                .about("Remove the root keyboard helper; Key Remap falls back to the event tap.")
+                .usage(format!("sudo {PLUGIN_ID} uninstall-hid-helper"))
+                .detail("Leaves the driver package installed, since other software may use it.")
+                .output("One line per completed step on stdout.")
+                .exit_behavior("Exits non-zero without sudo or when a file cannot be removed.")
+                .run_result(move |context| {
+                    no_args(context)?;
+                    uninstall.uninstall_hid_helper()
                 }),
         )
         .command(settings_command(settings))
@@ -287,6 +314,8 @@ mod tests {
         toggle: AtomicUsize,
         kill: AtomicUsize,
         hid_helper: AtomicUsize,
+        install: AtomicUsize,
+        uninstall: AtomicUsize,
         settings: AtomicUsize,
         config: AtomicUsize,
         trust: AtomicUsize,
@@ -328,6 +357,16 @@ mod tests {
 
         fn hid_helper(&self) -> Result<CommandResult> {
             self.calls.hid_helper.fetch_add(1, Ordering::SeqCst);
+            Ok(CommandResult::success(""))
+        }
+
+        fn install_hid_helper(&self) -> Result<CommandResult> {
+            self.calls.install.fetch_add(1, Ordering::SeqCst);
+            Ok(CommandResult::success(""))
+        }
+
+        fn uninstall_hid_helper(&self) -> Result<CommandResult> {
+            self.calls.uninstall.fetch_add(1, Ordering::SeqCst);
             Ok(CommandResult::success(""))
         }
 
@@ -468,6 +507,10 @@ mod tests {
             vec!["--kill", "help"],
             vec!["help", "hid-helper"],
             vec!["hid-helper", "help"],
+            vec!["help", "install-hid-helper"],
+            vec!["install-hid-helper", "help"],
+            vec!["help", "uninstall-hid-helper"],
+            vec!["uninstall-hid-helper", "help"],
             vec!["help", "settings"],
             vec!["--settings", "help"],
             vec!["doctor"],
@@ -487,6 +530,8 @@ mod tests {
             assert_eq!(calls.toggle.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.kill.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.hid_helper.load(Ordering::SeqCst), 0, "{args:?}");
+            assert_eq!(calls.install.load(Ordering::SeqCst), 0, "{args:?}");
+            assert_eq!(calls.uninstall.load(Ordering::SeqCst), 0, "{args:?}");
             assert_eq!(calls.settings.load(Ordering::SeqCst), 0, "{args:?}");
         }
     }

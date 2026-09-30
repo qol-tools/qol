@@ -54,6 +54,8 @@ pub(crate) trait PlatformAdapter: Clone + Send + Sync + 'static {
     fn toggle(&self) -> Result<CommandResult>;
     fn kill(&self) -> Result<CommandResult>;
     fn hid_helper(&self) -> Result<CommandResult>;
+    fn install_hid_helper(&self) -> Result<CommandResult>;
+    fn uninstall_hid_helper(&self) -> Result<CommandResult>;
     fn inspect_config(&self) -> Result<ConfigInspection>;
     fn trust_status(&self) -> TrustStatus;
 }

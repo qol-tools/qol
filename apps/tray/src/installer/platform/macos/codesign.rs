@@ -2,7 +2,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 const IDENTITY_ENV: &str = "QOL_CODESIGN_IDENTITY";
-const IDENTITY_FILE: &str = "codesign-identity";
 const AD_HOC: &str = "-";
 
 pub(crate) fn codesign_bundle(bundle_root: &Path) {
@@ -53,7 +52,7 @@ fn identity_from_env() -> Option<String> {
 }
 
 fn identity_path() -> Option<PathBuf> {
-    qol_config::config_dir().map(|dir| dir.join(IDENTITY_FILE))
+    qol_config::codesign_identity_path()
 }
 
 fn read_identity(path: &Path) -> Option<String> {
@@ -133,7 +132,7 @@ mod tests {
     #[test]
     fn identity_round_trips_through_the_config_file() {
         let dir = scratch_dir("round-trip");
-        let path = dir.join(IDENTITY_FILE);
+        let path = dir.join(qol_conventions::CODESIGN_IDENTITY_FILE);
 
         assert_eq!(read_identity(&path), None);
         write_identity(&path, "Test Signing Identity");
@@ -151,7 +150,9 @@ mod tests {
     #[test]
     fn remembering_creates_the_config_directory() {
         let dir = scratch_dir("create-parent");
-        let path = dir.join("nested").join(IDENTITY_FILE);
+        let path = dir
+            .join("nested")
+            .join(qol_conventions::CODESIGN_IDENTITY_FILE);
 
         write_identity(&path, "Test Signing Identity");
 

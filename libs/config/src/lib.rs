@@ -47,6 +47,10 @@ pub fn http_auth_token_path() -> Option<PathBuf> {
     config_dir().map(|path| path.join(qol_conventions::HTTP_AUTH_TOKEN_FILE))
 }
 
+pub fn codesign_identity_path() -> Option<PathBuf> {
+    config_dir().map(|path| path.join(qol_conventions::CODESIGN_IDENTITY_FILE))
+}
+
 pub fn runtime_dir() -> Option<PathBuf> {
     data_dir().map(|path| path.join("runtime"))
 }

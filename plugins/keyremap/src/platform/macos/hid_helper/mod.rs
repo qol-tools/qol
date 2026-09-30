@@ -1,5 +1,6 @@
 mod console;
 mod devices;
+pub(crate) mod install;
 pub(crate) mod protocol;
 pub(crate) mod report;
 mod server;
