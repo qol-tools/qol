@@ -73,14 +73,26 @@ impl TapState {
             .unwrap_or_else(|p| p.into_inner().clone())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn input(&self) -> &Arc<InputState> {
         &self.input
     }
 
-    #[allow(dead_code)]
     pub(crate) fn frontmost_bundle_id(&self) -> String {
         self.app_tracker.bundle_id_for_target(0)
+    }
+}
+
+impl super::input::backends::virtual_hid::KeyEnvironment for TapState {
+    fn config(&self) -> Arc<ResolvedConfig> {
+        TapState::config(self)
+    }
+
+    fn frontmost_bundle_id(&self) -> String {
+        TapState::frontmost_bundle_id(self)
+    }
+
+    fn input(&self) -> &Arc<InputState> {
+        TapState::input(self)
     }
 }
 
