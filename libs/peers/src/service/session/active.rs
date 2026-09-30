@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, future::Future, time::Duration};
 
 use tokio::{
-    io::{split, AsyncRead, AsyncWrite},
+    io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     time::{interval_at, timeout_at, Instant, MissedTickBehavior},
 };
 
@@ -62,13 +62,23 @@ pub(super) async fn run<S: AsyncRead + AsyncWrite + Unpin>(
             sender_nonce: authenticated.generation.local,
             recipient_nonce: authenticated.generation.remote,
         };
-        let _ = tokio::time::timeout(
-            UNLINK_DEADLINE,
-            write_json(&mut writer, &unlinked, FrameLimit::Normal),
-        )
+        let _ = tokio::time::timeout(UNLINK_DEADLINE, async {
+            if write_json(&mut writer, &unlinked, FrameLimit::Normal)
+                .await
+                .is_ok()
+                && writer.shutdown().await.is_ok()
+            {
+                await_peer_close_so_no_reset_discards_the_frame(&mut reader).await;
+            }
+        })
         .await;
     }
     outcome
+}
+
+async fn await_peer_close_so_no_reset_discards_the_frame<R: AsyncRead + Unpin>(reader: &mut R) {
+    let mut unread = [0; 1024];
+    while matches!(reader.read(&mut unread).await, Ok(1..)) {}
 }
 
 async fn receive<R: AsyncRead + Unpin>(
