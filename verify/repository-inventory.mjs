@@ -105,6 +105,7 @@ function inspect(entry) {
     const base = { ...entry, role: role(entry.path), package: owners.find(pkg => entry.path.startsWith(`${pkg.path}/`))?.name ?? null };
     if (entry.mode === '160000') return { ...base, type: 'gitlink', bytes: 0, lines: null, sha256: null };
     try {
+        if (realpathSync(dirname(path)) !== dirname(path)) throw new Error('Input path must not traverse a symlink.');
         const stat = lstatSync(path);
         const type = stat.isSymbolicLink() ? 'symlink' : 'file';
         if (!stat.isSymbolicLink() && !stat.isFile()) throw new Error('Expected a file or symlink');

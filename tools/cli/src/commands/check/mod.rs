@@ -555,6 +555,15 @@ fn run_checks(context: &CheckContext<'_>, report: &mut CheckReport) -> Result<()
         &mut guard,
     )?;
     run_ui_tests(context, report)?;
+    let mut inventory = context.command("node");
+    inventory.args(["--test", "verify/repository-inventory.test.mjs"]);
+    context.run(
+        report,
+        "repository-inventory-tests",
+        "tests",
+        "repository inventory",
+        &mut inventory,
+    )?;
     let mut scripts = context.command("python3");
     scripts
         .args(["-m", "unittest", "discover", "-s", ".github/scripts/tests"])

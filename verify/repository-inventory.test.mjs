@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -101,4 +101,31 @@ test('records symlink text without following targets and refuses output symlinks
     rmSync(join(checkout, 'reports/unsafe/report.json'));
     symlinkSync(join(root, 'missing-output'), join(checkout, 'reports/unsafe/report.json'));
     assert.notEqual(inventory(checkout, 'reports/unsafe').status, 0);
+});
+
+test('rejects tracked files beneath symlinked directories without reading external content', { skip: process.platform === 'win32' }, t => {
+    const { checkout, root, write } = fixture(t);
+    const paths = ['linked/first.js', 'linked/second.js'];
+    for (const path of paths) write(path, 'repository content\n');
+    execFileSync('git', ['add', '--', 'linked'], { cwd: checkout });
+    const outside = join(root, 'outside');
+    renameSync(join(checkout, 'linked'), outside);
+    const body = Array.from({ length: 16 }, (_, i) => `const private_value_${i} = "external-content-${i}";`).join('\n');
+    writeFileSync(join(outside, 'first.js'), `function first() {\n${body}\n}\n`);
+    writeFileSync(join(outside, 'second.js'), `function second() {\n${body}\n}\n`);
+    symlinkSync(outside, join(checkout, 'linked'));
+
+    const run = inventory(checkout);
+    assert.equal(run.status, 1, run.stderr);
+    const encoded = readFileSync(run.reportPath, 'utf8');
+    const report = JSON.parse(encoded);
+    assert.deepEqual(report.problems.map(problem => problem.path), paths);
+    for (const path of paths) {
+        const file = report.files.find(file => file.path === path);
+        assert.equal(file.type, 'unreadable', path);
+        assert.equal(file.sha256, null, path);
+        assert.equal(file.bytes, 0, path);
+    }
+    assert.ok(!encoded.includes('external-content-'));
+    assert.ok(!report.repeated_blocks.some(block => block.occurrences.some(row => paths.includes(row.path))));
 });
