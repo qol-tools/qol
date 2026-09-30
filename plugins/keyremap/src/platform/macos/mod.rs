@@ -6,6 +6,7 @@ mod hid_helper;
 mod input;
 #[allow(dead_code)]
 mod layout;
+mod secure_input;
 mod tap;
 #[allow(dead_code)]
 mod virtual_hid;

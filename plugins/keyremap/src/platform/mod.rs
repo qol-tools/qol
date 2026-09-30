@@ -35,6 +35,12 @@ impl TrustStatus {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SecureInputHolder {
+    pub(crate) pid: i32,
+    pub(crate) app: String,
+}
+
 pub(crate) struct ConfigInspection {
     pub(crate) source: bool,
     pub(crate) enabled: bool,

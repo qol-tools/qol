@@ -44,6 +44,7 @@ pub(crate) fn run() {
             ));
             super::tap::start_tap(Arc::clone(&state));
             virtual_hid::start(Arc::clone(&state), Arc::clone(&layouts));
+            super::secure_input::watch(Arc::clone(state.input()));
             (current_key_rules, state)
         })
     else {
