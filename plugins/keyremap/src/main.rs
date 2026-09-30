@@ -46,6 +46,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn manifest_declares_the_virtual_hid_driver_as_a_macos_system_dependency() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+        let system = manifest
+            .dependencies
+            .expect("plugin.toml must declare dependencies")
+            .system;
+        let driver = system
+            .iter()
+            .find(|dependency| dependency.name == "Karabiner-DriverKit-VirtualHIDDevice")
+            .expect("the virtual HID driver must be declared");
+        assert_eq!(driver.platforms, vec!["macos".to_string()]);
+        assert_eq!(driver.min_version, "8.6.0");
+        assert_eq!(driver.license, "Unlicense");
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn non_macos_run_exits_with_error_code() {

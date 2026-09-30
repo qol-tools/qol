@@ -44,3 +44,10 @@ items = []
 name = "qol-keyremap"
 repo = "qol-tools/qol-keyremap"
 pattern = "qol-keyremap-{os}-{arch}"
+
+[[dependencies.system]]
+name = "Karabiner-DriverKit-VirtualHIDDevice"
+platforms = ["macos"]
+min_version = "8.6.0"
+license = "Unlicense"
+url = "https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice"
