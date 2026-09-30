@@ -282,6 +282,85 @@ const DIGITS: [u16; 10] = [
 
 const FUNCTION_KEYS: [u16; 12] = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalLayout {
+    Ansi,
+    Iso,
+    Jis,
+}
+
+impl PhysicalLayout {
+    pub fn from_layout_type(kind: u32) -> Self {
+        match kind {
+            0x4953_4F20 => Self::Iso,
+            0x4A49_5320 => Self::Jis,
+            _ => Self::Ansi,
+        }
+    }
+}
+
+const ISO_SWAP: [(u16, u16); 2] = [(0x35, ISO_SECTION), (0x64, ANSI_GRAVE)];
+
+#[rustfmt::skip]
+const HID_TO_KEYCODE: &[(u16, u16)] = &[
+    (0x04, ANSI_A), (0x05, ANSI_B), (0x06, ANSI_C), (0x07, ANSI_D),
+    (0x08, ANSI_E), (0x09, ANSI_F), (0x0A, ANSI_G), (0x0B, ANSI_H),
+    (0x0C, ANSI_I), (0x0D, ANSI_J), (0x0E, ANSI_K), (0x0F, ANSI_L),
+    (0x10, ANSI_M), (0x11, ANSI_N), (0x12, ANSI_O), (0x13, ANSI_P),
+    (0x14, ANSI_Q), (0x15, ANSI_R), (0x16, ANSI_S), (0x17, ANSI_T),
+    (0x18, ANSI_U), (0x19, ANSI_V), (0x1A, ANSI_W), (0x1B, ANSI_X),
+    (0x1C, ANSI_Y), (0x1D, ANSI_Z),
+    (0x1E, ANSI_1), (0x1F, ANSI_2), (0x20, ANSI_3), (0x21, ANSI_4),
+    (0x22, ANSI_5), (0x23, ANSI_6), (0x24, ANSI_7), (0x25, ANSI_8),
+    (0x26, ANSI_9), (0x27, ANSI_0),
+    (0x28, RETURN), (0x29, ESCAPE), (0x2A, DELETE), (0x2B, TAB), (0x2C, SPACE),
+    (0x2D, ANSI_MINUS), (0x2E, ANSI_EQUAL), (0x2F, ANSI_LEFT_BRACKET),
+    (0x30, ANSI_RIGHT_BRACKET), (0x31, ANSI_BACKSLASH), (0x32, ANSI_BACKSLASH),
+    (0x33, ANSI_SEMICOLON), (0x34, ANSI_QUOTE), (0x35, ANSI_GRAVE),
+    (0x36, ANSI_COMMA), (0x37, ANSI_PERIOD), (0x38, ANSI_SLASH),
+    (0x39, 0x39),
+    (0x3A, F1), (0x3B, F2), (0x3C, F3), (0x3D, F4), (0x3E, F5), (0x3F, F6),
+    (0x40, F7), (0x41, F8), (0x42, F9), (0x43, F10), (0x44, F11), (0x45, F12),
+    (0x68, 0x69), (0x69, 0x6B), (0x6A, 0x71),
+    (0x6B, 0x6A), (0x6C, 0x40), (0x6D, 0x4F), (0x6E, 0x50), (0x6F, 0x5A),
+    (0x46, 0x69), (0x47, 0x6B), (0x48, 0x71),
+    (0x49, 0x72), (0x4A, HOME), (0x4B, PAGE_UP), (0x4C, FORWARD_DELETE),
+    (0x4D, END), (0x4E, PAGE_DOWN),
+    (0x4F, RIGHT_ARROW), (0x50, LEFT_ARROW), (0x51, DOWN_ARROW), (0x52, UP_ARROW),
+    (0x53, 0x47), (0x54, 0x4B), (0x55, 0x43), (0x56, 0x4E), (0x57, 0x45),
+    (0x58, 0x4C), (0x59, 0x53), (0x5A, 0x54), (0x5B, 0x55), (0x5C, 0x56),
+    (0x5D, 0x57), (0x5E, 0x58), (0x5F, 0x59), (0x60, 0x5B), (0x61, 0x5C),
+    (0x62, 0x52), (0x63, 0x41), (0x64, ISO_SECTION), (0x65, 0x6E), (0x67, 0x51),
+    (0x7F, 0x4A), (0x80, 0x48), (0x81, 0x49),
+    (0x87, 0x5E), (0x89, 0x5D), (0x90, 0x68), (0x91, 0x66),
+    (0xE0, 0x3B), (0xE1, 0x38), (0xE2, 0x3A), (0xE3, 0x37),
+    (0xE4, 0x3E), (0xE5, 0x3C), (0xE6, 0x3D), (0xE7, 0x36),
+];
+
+pub fn from_hid_usage(usage: u16, layout: PhysicalLayout) -> Option<u16> {
+    if layout == PhysicalLayout::Iso {
+        if let Some(&(_, code)) = ISO_SWAP.iter().find(|(from, _)| *from == usage) {
+            return Some(code);
+        }
+    }
+    HID_TO_KEYCODE
+        .iter()
+        .find(|(from, _)| *from == usage)
+        .map(|&(_, code)| code)
+}
+
+pub fn to_hid_usage(code: u16, layout: PhysicalLayout) -> Option<u16> {
+    if layout == PhysicalLayout::Iso {
+        if let Some(&(usage, _)) = ISO_SWAP.iter().find(|(_, to)| *to == code) {
+            return Some(usage);
+        }
+    }
+    HID_TO_KEYCODE
+        .iter()
+        .find(|(_, to)| *to == code)
+        .map(|&(usage, _)| usage)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +416,81 @@ mod tests {
         assert_eq!(key_name(ANSI_MINUS), "minus");
         assert_eq!(key_name(ISO_SECTION), "section");
         assert_eq!(key_name(u16::MAX), "unknown");
+    }
+
+    const LAYOUTS: [PhysicalLayout; 3] = [
+        PhysicalLayout::Ansi,
+        PhysicalLayout::Iso,
+        PhysicalLayout::Jis,
+    ];
+
+    #[test]
+    fn every_named_keycode_survives_a_trip_through_hid() {
+        for layout in LAYOUTS {
+            for code in 0..0x80u16 {
+                if key_name(code) == "unknown" {
+                    continue;
+                }
+                let usage = to_hid_usage(code, layout)
+                    .unwrap_or_else(|| panic!("{} has no HID usage", key_name(code)));
+                assert_eq!(
+                    from_hid_usage(usage, layout),
+                    Some(code),
+                    "{layout:?} {code:#04x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iso_keyboards_swap_the_grave_and_section_keys() {
+        assert_eq!(from_hid_usage(0x35, PhysicalLayout::Ansi), Some(ANSI_GRAVE));
+        assert_eq!(
+            from_hid_usage(0x64, PhysicalLayout::Ansi),
+            Some(ISO_SECTION)
+        );
+        assert_eq!(from_hid_usage(0x35, PhysicalLayout::Iso), Some(ISO_SECTION));
+        assert_eq!(from_hid_usage(0x64, PhysicalLayout::Iso), Some(ANSI_GRAVE));
+        assert_eq!(to_hid_usage(ISO_SECTION, PhysicalLayout::Iso), Some(0x35));
+        assert_eq!(to_hid_usage(ANSI_GRAVE, PhysicalLayout::Iso), Some(0x64));
+    }
+
+    #[test]
+    fn duplicate_usages_map_back_to_their_canonical_usage() {
+        assert_eq!(from_hid_usage(0x46, PhysicalLayout::Ansi), Some(0x69));
+        assert_eq!(to_hid_usage(0x69, PhysicalLayout::Ansi), Some(0x68));
+        assert_eq!(
+            from_hid_usage(0x32, PhysicalLayout::Ansi),
+            Some(ANSI_BACKSLASH)
+        );
+        assert_eq!(
+            to_hid_usage(ANSI_BACKSLASH, PhysicalLayout::Ansi),
+            Some(0x31)
+        );
+    }
+
+    #[test]
+    fn modifiers_and_caps_lock_have_usages() {
+        assert_eq!(from_hid_usage(0xE0, PhysicalLayout::Ansi), Some(0x3B));
+        assert_eq!(from_hid_usage(0xE6, PhysicalLayout::Ansi), Some(0x3D));
+        assert_eq!(from_hid_usage(0x39, PhysicalLayout::Ansi), Some(0x39));
+        assert_eq!(from_hid_usage(0x00, PhysicalLayout::Ansi), None);
+    }
+
+    #[test]
+    fn layout_type_fourccs_pick_the_physical_layout() {
+        assert_eq!(
+            PhysicalLayout::from_layout_type(0x4953_4F20),
+            PhysicalLayout::Iso
+        );
+        assert_eq!(
+            PhysicalLayout::from_layout_type(0x4A49_5320),
+            PhysicalLayout::Jis
+        );
+        assert_eq!(
+            PhysicalLayout::from_layout_type(0x414E_5349),
+            PhysicalLayout::Ansi
+        );
+        assert_eq!(PhysicalLayout::from_layout_type(0), PhysicalLayout::Ansi);
     }
 }

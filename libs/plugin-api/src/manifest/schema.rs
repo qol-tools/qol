@@ -212,6 +212,8 @@ fn default_shortcut_action() -> String {
 pub struct Dependencies {
     #[serde(default)]
     pub binaries: Vec<BinaryDependency>,
+    #[serde(default)]
+    pub system: Vec<SystemDependency>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -219,6 +221,15 @@ pub struct BinaryDependency {
     pub name: String,
     pub repo: String,
     pub pattern: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct SystemDependency {
+    pub name: String,
+    pub platforms: Vec<String>,
+    pub min_version: String,
+    pub license: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

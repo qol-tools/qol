@@ -2,23 +2,17 @@ use std::mem::ManuallyDrop;
 use std::os::raw::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, OnceLock, RwLock};
-
-static TRACE_KEYS: LazyLock<bool> =
-    LazyLock::new(|| std::env::var_os("QOL_KEYREMAP_TRACE").is_some());
+use std::sync::{Arc, RwLock};
 
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::{CFMachPort, CFMachPortInvalidate, CFMachPortRef};
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
-    CGEventFlags, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy,
-    CGEventType, CallbackResult, EventField,
+    CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    CallbackResult, EventField,
 };
 use core_graphics::sys::CGEventRef;
 use foreign_types_shared::ForeignType;
-use qol_hotkeys::macos_keycode as keycode;
-use qol_runtime::event_tap_trace::{TraceSink, QUEUE_DEPTH};
-use qol_runtime::keyremap_marker;
 
 type RawEventTapCallback = unsafe extern "C" fn(
     proxy: CGEventTapProxy,
@@ -41,21 +35,27 @@ extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
 }
 
-use super::app::remap::{
-    self, KeyAction, Modifiers, MouseAction, MouseButton, ResolvedConfig, ScrollAction,
-};
+use super::app::remap::{self, MouseAction, MouseButton, ResolvedConfig, ScrollAction};
 use super::app_tracker::AppTracker;
+use super::input::backends::event_tap::{self, build_flags, extract_modifiers};
+use super::input::{InputState, Strategy};
 
 pub struct TapState {
     config: RwLock<Arc<ResolvedConfig>>,
     app_tracker: Arc<AppTracker>,
+    input: Arc<InputState>,
 }
 
 impl TapState {
-    pub fn new(config: ResolvedConfig, app_tracker: Arc<AppTracker>) -> Self {
+    pub fn new(
+        config: ResolvedConfig,
+        app_tracker: Arc<AppTracker>,
+        input: Arc<InputState>,
+    ) -> Self {
         Self {
             config: RwLock::new(Arc::new(config)),
             app_tracker,
+            input,
         }
     }
 
@@ -66,11 +66,34 @@ impl TapState {
         }
     }
 
-    fn config(&self) -> Arc<ResolvedConfig> {
+    pub(crate) fn config(&self) -> Arc<ResolvedConfig> {
         self.config
             .read()
             .map(|g| g.clone())
             .unwrap_or_else(|p| p.into_inner().clone())
+    }
+
+    pub(crate) fn input(&self) -> &Arc<InputState> {
+        &self.input
+    }
+
+    pub(crate) fn key_target_bundle_id(&self) -> String {
+        self.app_tracker
+            .bundle_id_for_next_key(!super::secure_input::enabled())
+    }
+}
+
+impl super::input::backends::virtual_hid::KeyEnvironment for TapState {
+    fn config(&self) -> Arc<ResolvedConfig> {
+        TapState::config(self)
+    }
+
+    fn key_target_bundle_id(&self) -> String {
+        TapState::key_target_bundle_id(self)
+    }
+
+    fn input(&self) -> &Arc<InputState> {
+        TapState::input(self)
     }
 }
 
@@ -120,30 +143,49 @@ fn run_tap(state: Arc<TapState>) {
         CGEventType::ScrollWheel,
     ];
 
-    let tap = RawEventTap::new(
+    let session = open_tap(
         CGEventTapLocation::AnnotatedSession,
+        events,
+        Arc::clone(&state),
+        handle_event,
+    );
+    let hid = open_tap(
+        CGEventTapLocation::HID,
+        vec![CGEventType::KeyDown, CGEventType::KeyUp],
+        state,
+        stamp_virtual_key,
+    );
+    CFRunLoop::run_current();
+    drop((session, hid));
+}
+
+fn open_tap(
+    location: CGEventTapLocation,
+    events: Vec<CGEventType>,
+    state: Arc<TapState>,
+    handler: EventHandler,
+) -> RawEventTap {
+    let Ok(tap) = RawEventTap::new(
+        location,
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::Default,
         events,
         state,
-    );
-
-    let tap = match tap {
-        Ok(tap) => tap,
-        Err(()) => {
-            log::error!("failed to create event tap (even with Accessibility granted)");
-            std::process::exit(1);
-        }
+        handler,
+    ) else {
+        log::error!("failed to create event tap (even with Accessibility granted)");
+        std::process::exit(1);
     };
-
     let loop_source = tap
         .mach_port()
         .create_runloop_source(0)
         .expect("failed to create run loop source for event tap");
     CFRunLoop::get_current().add_source(&loop_source, unsafe { kCFRunLoopCommonModes });
     tap.enable();
-    CFRunLoop::run_current();
+    tap
 }
+
+type EventHandler = fn(&TapState, CGEventType, &core_graphics::event::CGEvent) -> CallbackResult;
 
 struct RawEventTap {
     mach_port: CFMachPort,
@@ -152,6 +194,7 @@ struct RawEventTap {
 
 struct RawEventTapState {
     state: Arc<TapState>,
+    handler: EventHandler,
     tap_port: AtomicUsize,
 }
 
@@ -162,9 +205,11 @@ impl RawEventTap {
         options: CGEventTapOptions,
         events: Vec<CGEventType>,
         state: Arc<TapState>,
+        handler: EventHandler,
     ) -> Result<Self, ()> {
         let callback_state = Box::new(RawEventTapState {
             state,
+            handler,
             tap_port: AtomicUsize::new(0),
         });
         let callback_ptr = Box::into_raw(callback_state);
@@ -263,11 +308,26 @@ fn event_tap_callback_inner(
     }
 
     let event = unsafe { ManuallyDrop::new(core_graphics::event::CGEvent::from_ptr(event_ref)) };
-    match handle_event(&callback_state.state, event_type, &event) {
+    match (callback_state.handler)(&callback_state.state, event_type, &event) {
         CallbackResult::Keep => event.as_ptr(),
         CallbackResult::Drop => ptr::null_mut(),
         CallbackResult::Replace(new_event) => ManuallyDrop::new(new_event).as_ptr(),
     }
+}
+
+fn stamp_virtual_key(
+    state: &TapState,
+    event_type: CGEventType,
+    event: &core_graphics::event::CGEvent,
+) -> CallbackResult {
+    if state.input.strategy.get() != Strategy::VirtualHid || !state.config().enabled {
+        return CallbackResult::Keep;
+    }
+    event_tap::stamp_marker(
+        &state.input.markers,
+        event,
+        matches!(event_type, CGEventType::KeyDown),
+    )
 }
 
 fn handle_event(
@@ -275,6 +335,15 @@ fn handle_event(
     event_type: CGEventType,
     event: &core_graphics::event::CGEvent,
 ) -> CallbackResult {
+    let target_pid =
+        i32::try_from(event.get_integer_value_field(EventField::EVENT_TARGET_UNIX_PROCESS_ID))
+            .unwrap_or_default();
+    if matches!(
+        event_type,
+        CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged
+    ) {
+        state.app_tracker.note_key_target(target_pid);
+    }
     if matches!(event_type, CGEventType::FlagsChanged) {
         return CallbackResult::Keep;
     }
@@ -283,15 +352,15 @@ fn handle_event(
     if !config.enabled {
         return CallbackResult::Keep;
     }
-    let target_pid =
-        i32::try_from(event.get_integer_value_field(EventField::EVENT_TARGET_UNIX_PROCESS_ID))
-            .unwrap_or_default();
     let bundle_id = state.app_tracker.bundle_id_for_target(target_pid);
 
     match event_type {
-        CGEventType::KeyDown | CGEventType::KeyUp => {
-            handle_key_event(config.as_ref(), event, target_pid, &bundle_id)
-        }
+        CGEventType::KeyDown | CGEventType::KeyUp => match state.input.strategy.get() {
+            Strategy::EventTap => {
+                event_tap::handle_key_event(config.as_ref(), event, target_pid, &bundle_id)
+            }
+            Strategy::VirtualHid => CallbackResult::Keep,
+        },
         CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => {
             handle_mouse_event(config.as_ref(), event, MouseButton::Left, &bundle_id)
         }
@@ -301,128 +370,6 @@ fn handle_event(
         CGEventType::ScrollWheel => handle_scroll_event(config.as_ref(), event, &bundle_id),
         _ => CallbackResult::Keep,
     }
-}
-
-fn event_character(event: &core_graphics::event::CGEvent) -> Option<String> {
-    extern "C" {
-        fn CGEventKeyboardGetUnicodeString(
-            event: core_graphics::sys::CGEventRef,
-            max_len: core::ffi::c_ulong,
-            actual_len: *mut core::ffi::c_ulong,
-            buf: *mut u16,
-        );
-    }
-    let mut buf = [0u16; 4];
-    let mut len: core::ffi::c_ulong = 0;
-    unsafe {
-        CGEventKeyboardGetUnicodeString(
-            event.as_ptr(),
-            buf.len() as core::ffi::c_ulong,
-            &mut len,
-            buf.as_mut_ptr(),
-        );
-    }
-    if len == 0 {
-        return None;
-    }
-    String::from_utf16(&buf[..len as usize]).ok()
-}
-
-fn tap_trace() -> &'static TraceSink {
-    static SINK: OnceLock<TraceSink> = OnceLock::new();
-    SINK.get_or_init(|| {
-        TraceSink::spawn("keyremap-tap-trace", QUEUE_DEPTH, |batch| {
-            for line in batch {
-                log::debug!("{line}");
-            }
-        })
-    })
-}
-
-fn handle_key_event(
-    config: &ResolvedConfig,
-    event: &core_graphics::event::CGEvent,
-    target_pid: i32,
-    bundle_id: &str,
-) -> CallbackResult {
-    let flags = event.get_flags();
-    let mods = extract_modifiers(flags);
-    let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
-    let event_char = if config.char_swap_rules.is_empty() {
-        None
-    } else {
-        event_character(event)
-    };
-
-    let action = remap::process_key_event(config, mods, keycode, event_char.as_deref(), bundle_id);
-
-    if cfg!(debug_assertions)
-        && *TRACE_KEYS
-        && (!matches!(action, KeyAction::Passthrough) || config.excluded_apps.contains(bundle_id))
-    {
-        tap_trace().offer(format!(
-            "[keyremap:dbg] target_pid={} app={} key=0x{:02X}({}) mods={:?} -> {:?}",
-            target_pid,
-            bundle_id,
-            keycode,
-            keycode::key_name(keycode),
-            mods,
-            action,
-        ));
-    }
-
-    match action {
-        KeyAction::Passthrough => CallbackResult::Keep,
-        KeyAction::Remap {
-            mods: new_mods,
-            key,
-        } => {
-            tag_remapped_key_event(event, mods, keycode);
-            let new_flags = build_flags(flags, mods, new_mods);
-            event.set_flags(new_flags);
-            event.set_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE, key as i64);
-            CallbackResult::Keep
-        }
-        KeyAction::Char { ref text } => {
-            tag_remapped_key_event(event, mods, keycode);
-            let clean_flags = strip_all_modifiers(flags);
-            event.set_flags(clean_flags);
-            // Set keycode to SPACE so dead-key positions (like ´ on Nordic)
-            // don't trigger the input method's dead-key state machine.
-            event
-                .set_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE, keycode::SPACE as i64);
-            event.set_string(text);
-            CallbackResult::Keep
-        }
-    }
-}
-
-fn tag_remapped_key_event(
-    event: &core_graphics::event::CGEvent,
-    original_mods: Modifiers,
-    original_key: u16,
-) {
-    event.set_integer_value_field(
-        EventField::EVENT_SOURCE_USER_DATA,
-        keyremap_marker::encode(marker_mod_bits(original_mods), original_key),
-    );
-}
-
-fn marker_mod_bits(mods: Modifiers) -> u8 {
-    let mut bits = 0;
-    if mods.ctrl {
-        bits |= keyremap_marker::MOD_CTRL;
-    }
-    if mods.shift {
-        bits |= keyremap_marker::MOD_SHIFT;
-    }
-    if mods.alt {
-        bits |= keyremap_marker::MOD_ALT;
-    }
-    if mods.cmd {
-        bits |= keyremap_marker::MOD_SUPER;
-    }
-    bits
 }
 
 fn handle_mouse_event(
@@ -460,58 +407,4 @@ fn handle_scroll_event(
             CallbackResult::Keep
         }
     }
-}
-
-fn strip_all_modifiers(flags: CGEventFlags) -> CGEventFlags {
-    let mut f = flags;
-    f.remove(CGEventFlags::CGEventFlagControl);
-    f.remove(CGEventFlags::CGEventFlagShift);
-    f.remove(CGEventFlags::CGEventFlagAlternate);
-    f.remove(CGEventFlags::CGEventFlagCommand);
-    f
-}
-
-/// NX_DEVICERALTKEYMASK — device-dependent bit for Right Alt/Option.
-const NX_DEVICERALTKEYMASK: u64 = 0x40;
-
-fn extract_modifiers(flags: CGEventFlags) -> Modifiers {
-    Modifiers {
-        ctrl: flags.contains(CGEventFlags::CGEventFlagControl),
-        shift: flags.contains(CGEventFlags::CGEventFlagShift),
-        alt: flags.contains(CGEventFlags::CGEventFlagAlternate),
-        cmd: flags.contains(CGEventFlags::CGEventFlagCommand),
-        ralt: (flags.bits() & NX_DEVICERALTKEYMASK) != 0,
-    }
-}
-
-fn build_flags(original: CGEventFlags, from: Modifiers, to: Modifiers) -> CGEventFlags {
-    let mut flags = original;
-
-    if from.ctrl && !to.ctrl {
-        flags.remove(CGEventFlags::CGEventFlagControl);
-    }
-    if from.shift && !to.shift {
-        flags.remove(CGEventFlags::CGEventFlagShift);
-    }
-    if from.alt && !to.alt {
-        flags.remove(CGEventFlags::CGEventFlagAlternate);
-    }
-    if from.cmd && !to.cmd {
-        flags.remove(CGEventFlags::CGEventFlagCommand);
-    }
-
-    if !from.ctrl && to.ctrl {
-        flags.insert(CGEventFlags::CGEventFlagControl);
-    }
-    if !from.shift && to.shift {
-        flags.insert(CGEventFlags::CGEventFlagShift);
-    }
-    if !from.alt && to.alt {
-        flags.insert(CGEventFlags::CGEventFlagAlternate);
-    }
-    if !from.cmd && to.cmd {
-        flags.insert(CGEventFlags::CGEventFlagCommand);
-    }
-
-    flags
 }

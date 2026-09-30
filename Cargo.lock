@@ -6274,6 +6274,7 @@ dependencies = [
  "qol-process",
  "qol-profile-sync",
  "qol-runtime",
+ "qol-secrets",
  "qol-terminal-sessions",
  "qol-workspace",
  "ratatui",
@@ -6542,6 +6543,7 @@ dependencies = [
  "proptest",
  "qol-artifact",
  "qol-build-identity",
+ "qol-config",
  "qol-conventions",
  "qol-fs",
  "qol-plugin-api",
@@ -6713,6 +6715,7 @@ dependencies = [
 name = "qol-hotkeys"
 version = "1.0.0"
 dependencies = [
+ "core-foundation 0.10.0",
  "workspace-hack",
 ]
 
@@ -7143,6 +7146,15 @@ name = "qol-search"
 version = "0.2.1"
 dependencies = [
  "serde",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-secrets"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 

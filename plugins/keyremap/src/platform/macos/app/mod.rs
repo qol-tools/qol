@@ -2,6 +2,16 @@ pub(crate) mod config;
 pub(crate) mod daemon;
 pub(crate) mod remap;
 
+use std::sync::mpsc::RecvTimeoutError;
+use std::sync::Arc;
+use std::time::Duration;
+
+use super::input::backends::virtual_hid;
+use super::input::InputState;
+use super::layout::{LayoutSnapshot, LayoutStore};
+
+const LAYOUT_POLL: Duration = Duration::from_secs(1);
+
 pub(crate) fn run() {
     let raw_config = config::load_config();
     let resolved = remap::resolve(&raw_config);
@@ -15,13 +25,26 @@ pub(crate) fn run() {
         resolved.excluded_apps.len(),
     );
 
+    let layouts = Arc::new(LayoutStore::new(
+        LayoutSnapshot::read_current().unwrap_or_else(|error| {
+            log::warn!("no keyboard layout to type characters with: {error}");
+            LayoutSnapshot::empty()
+        }),
+    ));
+
     let (tx, rx) = std::sync::mpsc::channel();
     let Some((mut current_key_rules, state)) =
         start_services_if_singleton(daemon::start_listener(tx), || {
             let app_tracker = super::app_tracker::AppTracker::start();
             let current_key_rules = resolved.key_rules.clone();
-            let state = std::sync::Arc::new(super::tap::TapState::new(resolved, app_tracker));
-            super::tap::start_tap(std::sync::Arc::clone(&state));
+            let state = Arc::new(super::tap::TapState::new(
+                resolved,
+                app_tracker,
+                Arc::new(InputState::default()),
+            ));
+            super::tap::start_tap(Arc::clone(&state));
+            virtual_hid::start(Arc::clone(&state), Arc::clone(&layouts));
+            super::secure_input::watch(Arc::clone(state.input()));
             (current_key_rules, state)
         })
     else {
@@ -33,7 +56,15 @@ pub(crate) fn run() {
 
     log::info!("daemon started");
 
-    for command in rx {
+    loop {
+        let command = match rx.recv_timeout(LAYOUT_POLL) {
+            Ok(command) => command,
+            Err(RecvTimeoutError::Timeout) => {
+                layouts.refresh();
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         match command {
             daemon::Command::Reload => {
                 let new_raw = config::load_config();
@@ -63,6 +94,7 @@ pub(crate) fn run() {
                 }
             }
         }
+        layouts.refresh();
     }
 
     daemon::cleanup();

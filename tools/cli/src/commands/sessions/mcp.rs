@@ -272,6 +272,7 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_spawn `model` must be a string".to_owned())
             })
             .transpose()?;
+        let effort = optional_string(&arguments, "effort", "session_spawn")?;
         let title = arguments
             .get("title")
             .map(|value| {
@@ -321,6 +322,7 @@ impl McpSessionServer {
             Some(key),
             surface.as_deref(),
             model_flag.as_deref(),
+            effort.as_deref(),
             title.as_deref(),
             self.spawn_surface,
             self.spawn_cap.as_ref(),
@@ -367,6 +369,7 @@ impl McpSessionServer {
             })?;
         let surface = optional_string(arguments, "surface", "session_spawn")?;
         let model_flag = optional_string(arguments, "model", "session_spawn")?;
+        let effort = optional_string(arguments, "effort", "session_spawn")?;
         let group = optional_string(arguments, "group", "session_spawn")?;
         let resume = arguments
             .get("resume")
@@ -389,6 +392,7 @@ impl McpSessionServer {
             &lanes,
             surface.as_deref(),
             model_flag.as_deref(),
+            effort.as_deref(),
             self.spawn_surface,
             self.spawn_cap.as_ref(),
             &self.locks,
@@ -1953,6 +1957,38 @@ mod tests {
             serde_json::from_str(waited["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(waited_outcome["completed"], true);
         assert_eq!(waited_outcome["completion_marker"], marker);
+    }
+
+    #[test]
+    fn a_claude_lane_launches_at_its_effort_without_permission_prompts() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], true, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("claude", "lane-one", None, &cwd);
+        arguments["model"] = json!("sonnet-x");
+        arguments["effort"] = json!("medium");
+        arguments["task"] = json!("implement and test the bounded change");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false, "{response}");
+
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(launch.program, "claude");
+        assert!(launch
+            .args
+            .contains(&"--dangerously-skip-permissions".to_owned()));
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--effort", "medium"]));
+        assert!(launch
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--model", "sonnet-x"]));
     }
 
     #[test]

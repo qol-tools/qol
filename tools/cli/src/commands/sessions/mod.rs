@@ -19,7 +19,10 @@ mod close;
 mod contract;
 mod export;
 mod fork;
+mod lane_account;
+mod lane_exec;
 mod last_send;
+mod launch_flags;
 mod mcp;
 mod spawn;
 mod watch;
@@ -32,7 +35,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 20] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 21] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -113,6 +116,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 20] = [
         name: "export",
         run: |rest, _format| export::run(rest),
     },
+    SessionSubcommand {
+        name: "lane-exec",
+        run: |rest, _format| lane_exec::run(rest),
+    },
 ];
 
 pub(super) fn marker_present(screen: &str, marker: &str) -> bool {
@@ -152,7 +159,7 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
@@ -187,7 +194,10 @@ Details:
   the harness launch as --model); a selected agent profile's declared model is
   the default, and the spawn_model setting in the same file is the fallback.
   The tool_models mapping in the same file binds models to harnesses, and a
-  pair it does not declare is refused before launch.
+  pair it does not declare is refused before launch. --effort (low, medium,
+  high, xhigh, max) goes to harnesses that take one: claude as --effort, pi
+  as --thinking; every claude launch also skips permission prompts. spawn
+  and fork build these flags from the same source.
   --title names the new tab (the lane key by default), and
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,
@@ -682,11 +692,15 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         let binding = single_binding(args, "qol sessions next [<session>]")?;
         pending.pending_round(&binding)?.into_iter().collect()
     };
+    let watched = qol_config::data_subdir("sessions")
+        .map(|dir| watch_owner::watched_tokens(&dir))
+        .unwrap_or_default();
     let rows = next_rows(
         &terminals,
         &CliSessionInterpreter::system(),
         &pending,
         &rounds,
+        &watched,
     )?;
     match output_format {
         OutputFormat::Json => println!(
@@ -733,6 +747,7 @@ fn next_rows(
     interpreter: &CliSessionInterpreter,
     pending: &bridge::PendingBridgeStore,
     rounds: &[bridge::PendingRound],
+    watched: &std::collections::HashSet<String>,
 ) -> Result<Vec<serde_json::Value>> {
     let live = terminals.discover().ok();
     let mut rows = Vec::with_capacity(rounds.len());
@@ -842,6 +857,15 @@ fn next_rows(
                     bridge::TIMEOUT_MAX_MS
                 ),
                 "instruction": format!("The implementation session went idle without emitting its completion signal; it was likely interrupted. Run the command: it nudges the session to continue or emit the signal, then waits in the foreground. If the kickstart never leaves the session's editor, or the session is hung on a provider error, clear the lane in one call with `qol sessions close {}` and spawn a fresh one.", round.session),
+            }));
+        } else if watched.contains(&round.session) {
+            rows.push(serde_json::json!({
+                "phase": "watched",
+                "session": round.session,
+                "agent_status": AgentStatus::of(round.agent_assignment.as_ref()),
+                "agent_assignment": round.agent_assignment,
+                "command": "",
+                "instruction": "Implementation is still running and a watcher owns this round: it wakes the session that delivered the round when it completes. End your turn now. Never wait on this round with session_bridge, qol sessions resume, bridge or wait.",
             }));
         } else {
             rows.push(serde_json::json!({
@@ -1238,6 +1262,7 @@ mod tests {
             &CliSessionInterpreter::system(),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
 
@@ -1325,6 +1350,7 @@ mod tests {
             &transcript_interpreter(Some(false)),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
 
@@ -1354,6 +1380,7 @@ mod tests {
             &transcript_interpreter(Some(true)),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
 
@@ -1386,6 +1413,7 @@ mod tests {
             &CliSessionInterpreter::system(),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
         assert_eq!(rows.len(), 2);
@@ -1403,6 +1431,33 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("qol sessions resume"));
+    }
+
+    #[test]
+    fn a_watcher_owned_round_tells_the_architect_to_end_its_turn_instead_of_waiting() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = test_store(&root);
+        let live = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        store
+            .start(&live, "QOL_BRIDGE_DONE_live", "v1:fake:8:800", false, None)
+            .unwrap();
+        let (terminals, _) = fake_terminals(vec![fake_facts("2", 200)]);
+        let watched = std::collections::HashSet::from(["v1:fake:2:200".to_owned()]);
+
+        let rows = next_rows(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store,
+            &store.pending_rounds().unwrap(),
+            &watched,
+        )
+        .unwrap();
+        assert_eq!(rows[0]["phase"], "watched");
+        assert_eq!(rows[0]["command"], "");
+        assert!(rows[0]["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("End your turn now"));
     }
 
     #[test]
@@ -1743,6 +1798,7 @@ mod tests {
             &CliSessionInterpreter::system(),
             &store,
             &store.pending_rounds().unwrap(),
+            &std::collections::HashSet::new(),
         )
         .unwrap();
         assert_eq!(rows.len(), 1);

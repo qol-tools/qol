@@ -1,36 +1,10 @@
-use core_foundation::base::{CFType, TCFType};
-use core_foundation::data::{CFData, CFDataRef};
-use core_foundation::string::CFStringRef;
+use qol_hotkeys::layout::{KeyLayout, SHIFT_STATE};
 use qol_hotkeys::macos_keycode;
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::sync::OnceLock;
 
 const KEYCODES: std::ops::Range<u16> = 0..0x80;
-const KEY_ACTION_DOWN: u16 = 0;
-const SHIFT_STATE: u32 = 0x02;
 const LEVELS: [u32; 2] = [0, SHIFT_STATE];
-
-#[link(name = "Carbon", kind = "framework")]
-extern "C" {
-    static kTISPropertyUnicodeKeyLayoutData: CFStringRef;
-    fn TISCopyCurrentKeyboardLayoutInputSource() -> *const c_void;
-    fn TISGetInputSourceProperty(source: *const c_void, key: CFStringRef) -> *const c_void;
-    fn LMGetKbdType() -> u8;
-    #[allow(clippy::too_many_arguments)]
-    fn UCKeyTranslate(
-        layout: *const c_void,
-        code: u16,
-        action: u16,
-        modifier_state: u32,
-        keyboard_type: u32,
-        options: u32,
-        dead_key_state: *mut u32,
-        max_length: usize,
-        actual_length: *mut usize,
-        chars: *mut u16,
-    ) -> i32;
-}
 
 pub(super) struct LayoutSymbols {
     by_code: HashMap<u16, char>,
@@ -40,7 +14,13 @@ pub(super) struct LayoutSymbols {
 impl LayoutSymbols {
     pub(super) fn current() -> &'static Self {
         static CURRENT: OnceLock<LayoutSymbols> = OnceLock::new();
-        CURRENT.get_or_init(|| read_current_layout().unwrap_or_else(Self::ansi))
+        CURRENT.get_or_init(|| match KeyLayout::current() {
+            Ok(layout) => Self::from_translation(|code, level| single_symbol(&layout, code, level)),
+            Err(error) => {
+                log::warn!("[hotkeys] {error}; using US positions");
+                Self::ansi()
+            }
+        })
     }
 
     pub(super) fn ansi() -> Self {
@@ -90,50 +70,12 @@ fn ansi_symbol(code: u16) -> Option<char> {
     })
 }
 
-fn read_current_layout() -> Option<LayoutSymbols> {
-    let source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
-    if source.is_null() {
-        log::warn!("[hotkeys] no keyboard layout to read symbol keys from; using US positions");
-        return None;
-    }
-    let source = unsafe { CFType::wrap_under_create_rule(source) };
-    let data = unsafe {
-        TISGetInputSourceProperty(source.as_CFTypeRef(), kTISPropertyUnicodeKeyLayoutData)
-    };
-    if data.is_null() {
-        log::warn!("[hotkeys] keyboard layout has no key map; using US positions");
-        return None;
-    }
-    let data = unsafe { CFData::wrap_under_get_rule(data as CFDataRef) };
-    let layout = data.bytes().as_ptr().cast::<c_void>();
-    let keyboard_type = u32::from(unsafe { LMGetKbdType() });
-    Some(LayoutSymbols::from_translation(|code, level| {
-        translate(layout, keyboard_type, code, level)
-    }))
-}
-
-fn translate(layout: *const c_void, keyboard_type: u32, code: u16, level: u32) -> Option<char> {
+fn single_symbol(layout: &KeyLayout, code: u16, level: u32) -> Option<char> {
     let mut dead_key_state = 0;
-    let mut length = 0;
-    let mut chars = [0u16; 4];
-    let status = unsafe {
-        UCKeyTranslate(
-            layout,
-            code,
-            KEY_ACTION_DOWN,
-            level,
-            keyboard_type,
-            0,
-            &mut dead_key_state,
-            chars.len(),
-            &mut length,
-            chars.as_mut_ptr(),
-        )
-    };
-    if status != 0 || length != 1 {
-        return None;
-    }
-    char::from_u32(u32::from(chars[0])).filter(|symbol| !symbol.is_control())
+    let text = layout.translate(code, level, &mut dead_key_state)?;
+    let mut chars = text.chars();
+    let symbol = chars.next()?;
+    (chars.next().is_none() && !symbol.is_control()).then_some(symbol)
 }
 
 #[cfg(test)]

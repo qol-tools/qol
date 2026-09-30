@@ -8,5 +8,12 @@ description = "Shared hotkey grammar and keycode adapters for qol-tools"
 [dependencies]
 workspace-hack.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
+[[test]]
+name = "macos_layout"
+harness = false
+
 [lints]
 workspace = true
