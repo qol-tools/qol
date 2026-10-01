@@ -214,7 +214,9 @@ impl Shared {
     fn device_arrived(&self, country_code: u64) {
         let mut state = self.lock();
         state.watchdog.device_arrived();
-        state.country_code.get_or_insert(country_code);
+        if state.country_code.is_none_or(|code| code == 0) {
+            state.country_code = Some(country_code);
+        }
     }
 
     fn publish_devices(&self, seized: Vec<String>, conflicts: Vec<String>) {
@@ -363,5 +365,20 @@ fn watch_virtual_keyboard(shared: &Shared, events: &Receiver<ClientEvent>) {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Shared;
+
+    #[test]
+    fn the_virtual_keyboard_takes_the_first_country_code_that_names_a_layout() {
+        let shared = Shared::default();
+        shared.device_arrived(0);
+        shared.device_arrived(13);
+        shared.device_arrived(33);
+        shared.device_arrived(0);
+        assert_eq!(shared.country_code(), Some(13));
     }
 }
