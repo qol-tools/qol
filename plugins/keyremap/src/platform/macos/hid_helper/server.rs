@@ -17,6 +17,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(1);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(1);
 const WRITE_TIMEOUT: Duration = Duration::from_millis(50);
+const MAX_HELLO: usize = 1024;
 
 extern "C" {
     fn getpeereid(socket: i32, uid: *mut u32, gid: *mut u32) -> i32;
@@ -113,13 +114,11 @@ fn accept(
         "peer uid {peer} is not the console user {}",
         owner.uid
     );
-    stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let mut writer = stream.try_clone()?;
-    let mut lines = BufReader::new(stream).lines();
-    let hello = lines
-        .next()
-        .context("the client closed before saying hello")??;
+    let mut reader = BufReader::new(stream);
+    let hello = read_hello(&mut reader, Instant::now() + HELLO_TIMEOUT)?;
+    let lines = reader.lines();
     let ToHelper::Hello { protocol, role } = protocol::parse_message(&hello)? else {
         bail!("the first message was not hello");
     };
@@ -156,6 +155,33 @@ fn accept(
         }
     }
     Ok(())
+}
+
+fn read_hello(reader: &mut BufReader<UnixStream>, deadline: Instant) -> Result<String> {
+    let mut hello = Vec::new();
+    while !hello.ends_with(b"\n") {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .context("the client did not say hello in time")?;
+        reader.get_ref().set_read_timeout(Some(left))?;
+        let available = reader.fill_buf()?;
+        ensure!(
+            !available.is_empty(),
+            "the client closed before saying hello"
+        );
+        let taken = available
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(available.len(), |end| end + 1);
+        hello.extend_from_slice(&available[..taken]);
+        reader.consume(taken);
+        ensure!(
+            hello.len() <= MAX_HELLO,
+            "the hello is longer than {MAX_HELLO} bytes"
+        );
+    }
+    Ok(String::from_utf8(hello)?)
 }
 
 fn read_session(generation: u64, lines: impl Iterator<Item = io::Result<String>>, shared: &Shared) {
@@ -217,6 +243,20 @@ mod tests {
         let mut line = String::new();
         BufReader::new(client).read_line(&mut line).unwrap();
         protocol::parse_message(&line).unwrap()
+    }
+
+    #[test]
+    fn a_hello_that_is_too_slow_or_too_long_is_refused() {
+        let shared = Arc::new(Shared::default());
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(b"{").unwrap();
+        let started = Instant::now();
+        assert!(accept(server, me(), None, &shared, &mut 0).is_err());
+        assert!(started.elapsed() < HELLO_TIMEOUT + Duration::from_millis(500));
+
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(&[b' '; MAX_HELLO + 1]).unwrap();
+        assert!(accept(server, me(), None, &shared, &mut 0).is_err());
     }
 
     #[test]
