@@ -203,7 +203,7 @@ Showing system dependencies in the tray's plugin page is out of scope for this c
 
 `qol-keyremap doctor` gains these checks:
 
-| Check | Fails when | Fix it names |
+| Check | Flags when | Fix it names |
 | --- | --- | --- |
 | `virtual_hid_driver` | The package is missing, older than `min_version`, or the extension is not activated | The package URL, then `install-hid-helper` |
 | `virtual_hid_daemon` | The pqrs daemon socket does not answer | `sudo qol-keyremap install-hid-helper` |
@@ -211,7 +211,7 @@ Showing system dependencies in the tray's plugin page is out of scope for this c
 | `secure_input` | Warns when an app holds Secure Input, and says which strategy is active | Names the app and its pid |
 | `layout_characters` | A character rule has no key sequence in the active layout | Names the rule |
 
-A missing driver is a warning, not a failure, because the event tap still works outside Secure Input.
+A missing driver, daemon or helper is a warning, not a failure, because the event tap still works outside Secure Input.
 
 ## Testing
 
