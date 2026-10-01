@@ -40,6 +40,9 @@ pub(crate) fn install() -> Result<String> {
     );
     let mut steps = Vec::new();
     let current = std::env::current_exe().context("find the running qol-keyremap binary")?;
+    if let Some(folder) = Path::new(HELPER_BINARY).parent() {
+        fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
+    }
     match qol_config::codesign_identity() {
         Some(identity) => {
             install_signed(&current, &identity)?;
