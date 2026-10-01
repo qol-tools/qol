@@ -1,10 +1,8 @@
 use crate::platform::macos::hid_helper::protocol::{
-    PAGE_APPLE_VENDOR_KEYBOARD, PAGE_APPLE_VENDOR_TOP_CASE, PAGE_CONSUMER, PAGE_KEYBOARD,
+    FIRST_MODIFIER, LAST_MODIFIER, PAGE_APPLE_VENDOR_KEYBOARD, PAGE_APPLE_VENDOR_TOP_CASE,
+    PAGE_CONSUMER, PAGE_KEYBOARD,
 };
 use crate::platform::macos::virtual_hid::client::request::{Keys, Request};
-
-const FIRST_MODIFIER: u16 = 0xE0;
-const LAST_MODIFIER: u16 = 0xE7;
 
 #[derive(Default)]
 struct KeySet(Keys);

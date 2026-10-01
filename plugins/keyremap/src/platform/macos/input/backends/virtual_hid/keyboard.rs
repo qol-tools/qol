@@ -2,7 +2,9 @@ use qol_hotkeys::macos_keycode::{self as keycode, PhysicalLayout};
 
 use super::fn_keys;
 use crate::platform::macos::app::remap::{self, KeyAction, Modifiers, ResolvedConfig};
-use crate::platform::macos::hid_helper::protocol::{PAGE_APPLE_VENDOR_TOP_CASE, PAGE_KEYBOARD};
+use crate::platform::macos::hid_helper::protocol::{
+    FIRST_MODIFIER, LAST_MODIFIER, PAGE_APPLE_VENDOR_TOP_CASE, PAGE_KEYBOARD,
+};
 use crate::platform::macos::input::marker_for;
 use crate::platform::macos::layout::{CharTable, KeyStroke};
 
@@ -10,8 +12,6 @@ const FN_USAGE: u16 = 0x03;
 const GRAVE_USAGE: u16 = 0x35;
 const NON_US_BACKSLASH_USAGE: u16 = 0x64;
 const CAPS_LOCK_USAGE: u16 = 0x39;
-const FIRST_MODIFIER: u16 = 0xE0;
-const LAST_MODIFIER: u16 = 0xE7;
 const LEFT_SHIFT: u8 = 0x02;
 const LEFT_OPTION: u8 = 0x04;
 

@@ -12,6 +12,7 @@ use super::protocol::SOCKET_PATH;
 use crate::platform::macos::virtual_hid::client::request::{
     VIRTUAL_KEYBOARD_PRODUCT_ID, VIRTUAL_KEYBOARD_VENDOR_ID,
 };
+use crate::platform::macos::virtual_hid::driver::{launchd_print, LAUNCHCTL};
 use crate::platform::macos::virtual_hid::{
     OWN_DAEMON_LABEL, PQRS_DAEMON_BINARY, PQRS_DAEMON_LABEL, PQRS_MANAGER_BINARY,
 };
@@ -25,7 +26,6 @@ pub(crate) const HELPER_PLIST: &str =
 pub(crate) const OWN_DAEMON_PLIST: &str =
     "/Library/LaunchDaemons/com.qol-tools.keyremap.vhid-daemon.plist";
 const HELPER_LOG: &str = "/var/log/com.qol-tools.keyremap.hid-helper.log";
-const LAUNCHCTL: &str = "/bin/launchctl";
 const BOOTSTRAP_ATTEMPTS: u32 = 5;
 const DEFAULTS: &str = "/usr/bin/defaults";
 const CODESIGN: &str = "/usr/bin/codesign";
@@ -99,10 +99,7 @@ pub(crate) fn uninstall() -> Result<String> {
 }
 
 pub(crate) fn launchd_loaded(label: &str) -> bool {
-    Command::new(LAUNCHCTL)
-        .args(["print", &format!("system/{label}")])
-        .output()
-        .is_ok_and(|output| output.status.success())
+    launchd_print(label).is_ok_and(|state| state.is_some())
 }
 
 pub(crate) fn helper_plist() -> String {

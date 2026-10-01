@@ -7,6 +7,8 @@ pub(crate) const PROTOCOL_VERSION: u32 = 1;
 pub(crate) const SOCKET_PATH: &str = "/var/run/com.qol-tools.keyremap.hid-helper.sock";
 
 pub(crate) const PAGE_KEYBOARD: u16 = 0x07;
+pub(crate) const FIRST_MODIFIER: u16 = 0xE0;
+pub(crate) const LAST_MODIFIER: u16 = 0xE7;
 pub(crate) const PAGE_CONSUMER: u16 = 0x0C;
 pub(crate) const PAGE_APPLE_VENDOR_KEYBOARD: u16 = 0xFF01;
 pub(crate) const PAGE_APPLE_VENDOR_TOP_CASE: u16 = 0x00FF;

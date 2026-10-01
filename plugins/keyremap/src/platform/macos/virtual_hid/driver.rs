@@ -3,6 +3,7 @@ use std::process::Command;
 use super::{OWN_DAEMON_LABEL, PQRS_DAEMON_LABEL};
 use crate::platform::{DriverState, ExtensionState, Probe};
 
+pub(crate) const LAUNCHCTL: &str = "/bin/launchctl";
 const PACKAGE_ID: &str = "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice";
 
 pub(crate) fn driver_state() -> Probe<DriverState> {
@@ -31,20 +32,23 @@ pub(crate) fn driver_state() -> Probe<DriverState> {
 
 pub(crate) fn daemon_running() -> Probe<bool> {
     for label in [PQRS_DAEMON_LABEL, OWN_DAEMON_LABEL] {
-        match Command::new("/bin/launchctl")
-            .args(["print", &format!("system/{label}")])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                if parse_launchd_running(&String::from_utf8_lossy(&output.stdout)) {
-                    return Probe::Known(true);
-                }
-            }
+        match launchd_print(label) {
+            Ok(Some(state)) if parse_launchd_running(&state) => return Probe::Known(true),
             Ok(_) => {}
             Err(error) => return Probe::Unknown(format!("could not run launchctl: {error}")),
         }
     }
     Probe::Known(false)
+}
+
+pub(crate) fn launchd_print(label: &str) -> std::io::Result<Option<String>> {
+    let output = Command::new(LAUNCHCTL)
+        .args(["print", &format!("system/{label}")])
+        .output()?;
+    Ok(output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
 fn parse_pkg_version(output: &str) -> Option<String> {
