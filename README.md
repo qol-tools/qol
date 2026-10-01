@@ -34,27 +34,9 @@ Install once, configure once. Your plugins, keybindings, and settings follow you
 
 ## Plugins
 
-<img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/shots/settings.webp" width="100%" alt="The qol settings panel, stepping through the Alt Tab, Display, OS Themes, Shot and Window Actions pages">
+<img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/assets/plugins.svg" width="100%" alt="The plugins inside qol, each with its icon, platforms and what it does">
 
-| Plugin | What it does | Runs on |
-|---|---|---|
-| Alt Tab | Better alt-tab experience with window previews | Linux, macOS |
-| Bluetooth | Reliably reconnect the Bluetooth devices you choose | Linux, macOS |
-| CLI Sessions | Always-on-top overview of live CLI sessions (Claude Code, Codex, any command) | Linux, macOS |
-| Controllers | Inspect connected game controllers and apply relevant driver-specific fixes | Linux |
-| Display | Display brightness, gamma, and mode control | Linux, macOS |
-| IDE Checkout | Local HTTP API for a browser extension to check out a git branch and open it in a configured app | Linux, macOS |
-| Key Remap | Remap keyboard and mouse shortcuts (Ctrl->Cmd, etc.) | macOS |
-| Launcher | Universal search with action modifiers | Linux, macOS |
-| Lights | Control lights through backend adapters | Linux, macOS |
-| OS Themes | Cursor effects and OS-wide theming | Linux |
-| PointZerver | Control your PC from mobile devices | Linux, macOS |
-| QoL Memory | Long-context memory: retrieve settled facts from your agent session history | Linux, macOS |
-| Remove App | Uninstall an app and its leftovers | Linux, macOS |
-| Shot | Capture screenshots and record screen regions | Linux, macOS |
-| Sound | Choose where sound plays and how loud | Linux |
-| Voice | Transcribe speech and route completed turns to live terminal sessions | Linux |
-| Window Actions | Window snapping, centering, and multi-monitor management | Linux, macOS |
+<img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/assets/screens.svg" width="100%" alt="Screenshots of the qol settings panel and launcher">
 
 ## License
 
