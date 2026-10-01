@@ -38,6 +38,7 @@ pub(crate) struct KeyContext<'a> {
     pub(crate) physical: PhysicalLayout,
     pub(crate) bundle_id: &'a str,
     pub(crate) fn_state: bool,
+    pub(crate) caps_lock: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,13 +130,28 @@ impl KeyboardState {
             return self.pass(usage, outputs);
         };
         let mods = modifiers_from_bits(self.physical_bits);
-        let event_char = if context.config.char_swap_rules.is_empty() {
+        let event_char = if context.config.char_swap_rules.is_empty() || mods.ctrl {
             None
         } else {
-            context.table.char_at(code, mods.shift, mods.alt)
+            context
+                .table
+                .char_at(code, mods.shift, mods.alt)
+                .map(|text| {
+                    if context.caps_lock {
+                        text.to_uppercase()
+                    } else {
+                        text.to_owned()
+                    }
+                })
         };
         let action = if context.config.enabled {
-            remap::process_key_event(context.config, mods, code, event_char, context.bundle_id)
+            remap::process_key_event(
+                context.config,
+                mods,
+                code,
+                event_char.as_deref(),
+                context.bundle_id,
+            )
         } else {
             KeyAction::Passthrough
         };
@@ -374,6 +390,7 @@ mod tests {
         table: CharTable,
         bundle: String,
         fn_state: bool,
+        caps_lock: bool,
         state: KeyboardState,
     }
 
@@ -384,6 +401,7 @@ mod tests {
                 table: table(),
                 bundle: "com.apple.TextEdit".to_string(),
                 fn_state: false,
+                caps_lock: false,
                 state: KeyboardState::default(),
             }
         }
@@ -395,6 +413,7 @@ mod tests {
                 physical: PhysicalLayout::Iso,
                 bundle_id: &self.bundle,
                 fn_state: self.fn_state,
+                caps_lock: self.caps_lock,
             };
             self.state.handle(page, usage, pressed, apple, &context)
         }
@@ -613,6 +632,27 @@ mod tests {
             fixture.release(0x35),
             vec![up(0x21), Output::Unmark { keycode: 0x15 }, up(0xE1)]
         );
+    }
+
+    #[test]
+    fn char_swaps_see_caps_lock_and_skip_ctrl_combos() {
+        let mut fixture = Fixture::new(config(json!({ "char_swaps": [["C", "$"]] })));
+        assert_eq!(fixture.press(0x06), vec![down(0x06)]);
+        fixture.release(0x06);
+        fixture.caps_lock = true;
+        assert_eq!(
+            fixture.press(0x06),
+            vec![
+                Output::Mark {
+                    keycode: 0x0A,
+                    marker: marker_for(Modifiers::NONE, 0x08)
+                },
+                down(0x35),
+            ]
+        );
+        fixture.release(0x06);
+        fixture.press(0xE0);
+        assert_eq!(fixture.press(0x06), vec![down(0x06)]);
     }
 
     #[test]

@@ -168,6 +168,7 @@ fn read_keys(
                     physical: layout.physical,
                     bundle_id: &bundle_id,
                     fn_state: apple && fn_keys_are_standard(),
+                    caps_lock: caps_lock_on(),
                 };
                 for output in keyboard.handle(usage_page, usage, pressed, apple, &context) {
                     apply(output, environment.input(), writer, caps_due, &mut warned)?;
