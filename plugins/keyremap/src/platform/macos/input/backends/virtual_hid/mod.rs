@@ -77,6 +77,7 @@ pub(crate) fn run_session(
     layouts: &LayoutStore,
 ) -> Result<()> {
     let result = session(stream, environment, layouts);
+    environment.input().markers.clear();
     if environment.input().strategy.set(Strategy::EventTap) == Strategy::VirtualHid {
         log::info!("key input is back on the event tap");
     }
@@ -175,6 +176,7 @@ fn read_keys(
             ToDaemon::Seized { active } => {
                 if !active {
                     keyboard.reset();
+                    environment.input().markers.clear();
                 }
                 let strategy = if active {
                     Strategy::VirtualHid
@@ -208,6 +210,7 @@ fn apply(
             },
         )?,
         Output::Mark { keycode, marker } => input.markers.insert(keycode, marker),
+        Output::Tap { keycode, marker } => input.markers.tap(keycode, marker, Instant::now()),
         Output::Unmark { keycode } => input.markers.release(keycode, Instant::now()),
         Output::MissingChar(text) => {
             if warned.insert(text.clone()) {
@@ -402,6 +405,11 @@ mod tests {
         drop(helper);
         assert!(session.join().unwrap().is_ok());
         assert_eq!(environment.input.strategy.get(), Strategy::EventTap);
+        assert!(environment
+            .input
+            .markers
+            .lookup(0x08, true, std::time::Instant::now())
+            .is_none());
     }
 
     #[test]

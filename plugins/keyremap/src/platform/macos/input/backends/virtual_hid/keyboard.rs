@@ -26,6 +26,7 @@ pub(crate) struct Emit {
 pub(crate) enum Output {
     Emit(Emit),
     Mark { keycode: u16, marker: i64 },
+    Tap { keycode: u16, marker: i64 },
     Unmark { keycode: u16 },
     MissingChar(String),
     CapsLock,
@@ -192,15 +193,12 @@ impl KeyboardState {
         };
         for &(stroke, stroke_usage) in rest {
             self.move_mods_to(stroke_bits(stroke), outputs);
-            outputs.push(Output::Mark {
+            outputs.push(Output::Tap {
                 keycode: stroke.keycode,
                 marker,
             });
             outputs.push(emit(PAGE_KEYBOARD, stroke_usage, true));
             outputs.push(emit(PAGE_KEYBOARD, stroke_usage, false));
-            outputs.push(Output::Unmark {
-                keycode: stroke.keycode,
-            });
         }
         let bits = stroke_bits(last);
         self.move_mods_to(bits, outputs);
@@ -538,13 +536,12 @@ mod tests {
             vec![
                 up(0xE6),
                 down(0xE2),
-                Output::Mark {
+                Output::Tap {
                     keycode: 0x1E,
                     marker
                 },
                 down(0x30),
                 up(0x30),
-                Output::Unmark { keycode: 0x1E },
                 up(0xE2),
                 Output::Mark {
                     keycode: keycode::SPACE,

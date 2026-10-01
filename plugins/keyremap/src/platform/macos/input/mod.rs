@@ -41,32 +41,65 @@ impl StrategyCell {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Marked {
+    marker: i64,
+    released: Option<Instant>,
+    down_pending: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct MarkerBook {
-    entries: Mutex<HashMap<u16, (i64, Option<Instant>)>>,
+    entries: Mutex<HashMap<u16, Marked>>,
 }
 
 impl MarkerBook {
     pub(crate) fn insert(&self, keycode: u16, marker: i64) {
-        self.entries().insert(keycode, (marker, None));
+        self.entries().insert(
+            keycode,
+            Marked {
+                marker,
+                released: None,
+                down_pending: false,
+            },
+        );
+    }
+
+    pub(crate) fn tap(&self, keycode: u16, marker: i64, now: Instant) {
+        self.entries().insert(
+            keycode,
+            Marked {
+                marker,
+                released: Some(now),
+                down_pending: true,
+            },
+        );
     }
 
     pub(crate) fn release(&self, keycode: u16, now: Instant) {
         if let Some(entry) = self.entries().get_mut(&keycode) {
-            entry.1 = Some(now);
+            entry.released = Some(now);
         }
+    }
+
+    pub(crate) fn clear(&self) {
+        self.entries().clear();
     }
 
     pub(crate) fn lookup(&self, keycode: u16, key_down: bool, now: Instant) -> Option<i64> {
         let mut entries = self.entries();
-        entries.retain(|_, (_, released)| {
-            released.is_none_or(|at| now.saturating_duration_since(at) <= MARKER_GRACE)
+        entries.retain(|_, entry| {
+            entry
+                .released
+                .is_none_or(|at| now.saturating_duration_since(at) <= MARKER_GRACE)
         });
-        let (marker, released) = entries.get(&keycode)?;
-        (!key_down || released.is_none()).then_some(*marker)
+        let entry = entries.get_mut(&keycode)?;
+        let marked =
+            !key_down || entry.released.is_none() || std::mem::take(&mut entry.down_pending);
+        marked.then_some(entry.marker)
     }
 
-    fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<u16, (i64, Option<Instant>)>> {
+    fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<u16, Marked>> {
         self.entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -129,6 +162,24 @@ mod tests {
             None
         );
         assert_eq!(book.lookup(0x09, true, start), None);
+    }
+
+    #[test]
+    fn a_tapped_key_is_marked_for_one_late_key_down_and_its_key_up() {
+        let book = MarkerBook::default();
+        let start = Instant::now();
+        book.tap(0x1E, 7, start);
+        assert_eq!(book.lookup(0x1E, true, start), Some(7));
+        assert_eq!(book.lookup(0x1E, true, start), None);
+        assert_eq!(book.lookup(0x1E, false, start), Some(7));
+    }
+
+    #[test]
+    fn clearing_forgets_a_key_that_was_never_released() {
+        let book = MarkerBook::default();
+        book.insert(0x08, 42);
+        book.clear();
+        assert_eq!(book.lookup(0x08, true, Instant::now()), None);
     }
 
     #[test]
