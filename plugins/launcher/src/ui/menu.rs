@@ -282,7 +282,7 @@ impl LauncherView {
                     .border(px(qol_gpui::theme::LINE))
                     .border_color(rgba(kit.washes.hairline_strong.packed()))
                     .bg(rgb(kit.palette.surface_raised))
-                    .shadow(qol_gpui::kit::float_shadow(kit.palette.text_primary)),
+                    .shadow(qol_gpui::kit::float_shadow(kit.washes.cast.rgb)),
                 kit.grounds.menu,
             )
         };
