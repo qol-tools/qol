@@ -209,16 +209,72 @@ fn pointer_over_window(title: &str) -> Option<bool> {
         .reply()
         .ok()?;
     let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
-    let left = i32::from(origin.dst_x);
-    let top = i32::from(origin.dst_y);
-    let x = i32::from(pointer.root_x);
-    let y = i32::from(pointer.root_y);
-    Some(
-        x >= left
-            && y >= top
-            && x < left + i32::from(geometry.width)
-            && y < top + i32::from(geometry.height),
+    let x = i32::from(pointer.root_x) - i32::from(origin.dst_x);
+    let y = i32::from(pointer.root_y) - i32::from(origin.dst_y);
+    if x < 0 || y < 0 || x >= i32::from(geometry.width) || y >= i32::from(geometry.height) {
+        return Some(false);
+    }
+    let Some(input) = shape::get_rectangles(&conn, wid, shape::SK::INPUT)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return Some(true);
+    };
+    Some(input.rectangles.iter().any(|rect| {
+        x >= i32::from(rect.x)
+            && y >= i32::from(rect.y)
+            && x < i32::from(rect.x) + i32::from(rect.width)
+            && y < i32::from(rect.y) + i32::from(rect.height)
+    }))
+}
+
+static INPUT_REGIONS: Mutex<BTreeMap<String, Rectangle>> = Mutex::new(BTreeMap::new());
+
+pub fn set_input_region_by_title(title: &str, x: i16, y: i16, width: u16, height: u16) -> bool {
+    let region = Rectangle {
+        x,
+        y,
+        width,
+        height,
+    };
+    if let Ok(mut regions) = INPUT_REGIONS.lock() {
+        regions.insert(title.to_string(), region);
+    }
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    set_input_rectangles(&conn, wid, &[region])
+}
+
+fn set_input_rectangles(conn: &impl Connection, wid: u32, rectangles: &[Rectangle]) -> bool {
+    shape::rectangles(
+        conn,
+        shape::SO::SET,
+        shape::SK::INPUT,
+        ClipOrdering::UNSORTED,
+        wid,
+        0,
+        0,
+        rectangles,
     )
+    .ok()
+    .and_then(|cookie| cookie.check().ok())
+    .is_some()
+}
+
+fn restore_input(conn: &impl Connection, wid: u32, title: &str) -> bool {
+    let region = INPUT_REGIONS
+        .lock()
+        .ok()
+        .and_then(|regions| regions.get(title).copied());
+    match region {
+        Some(region) => set_input_rectangles(conn, wid, &[region]),
+        None => set_input_passthrough(conn, wid, false),
+    }
 }
 
 pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
@@ -554,7 +610,11 @@ fn show_window_by_title_with_focus(
     );
     let clear_ok = clear_window_opacity(&conn, wid);
     store_card(title, wid, None);
-    let input_ok = set_input_passthrough(&conn, wid, input_passthrough);
+    let input_ok = if input_passthrough {
+        set_input_passthrough(&conn, wid, true)
+    } else {
+        restore_input(&conn, wid, title)
+    };
     #[cfg(debug_assertions)]
     let forced_map_failure = map_force_failure();
     #[cfg(not(debug_assertions))]

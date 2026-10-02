@@ -47,6 +47,16 @@ pub fn pointer_over_window_by_title(_title: &str) -> bool {
     false
 }
 
+pub fn set_input_region_by_title(
+    _title: &str,
+    _x: i16,
+    _y: i16,
+    _width: u16,
+    _height: u16,
+) -> bool {
+    false
+}
+
 pub fn make_override_redirect(_title: &str) -> bool {
     false
 }
