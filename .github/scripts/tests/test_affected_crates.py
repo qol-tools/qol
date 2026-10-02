@@ -136,6 +136,7 @@ class LocalPlannerContract(unittest.TestCase):
     def test_global_change_uses_full_workspace(self, changed_files, full_workspace):
         for path in [
             ".github/workflows/ci.yml",
+            ".github/actions/rust-setup/action.yml",
             ".gitattributes",
             ".gitmodules",
             ".config/hakari.toml",
