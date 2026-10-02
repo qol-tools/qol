@@ -3000,7 +3000,7 @@ mod tests {
             if tint.is_neutral()
                 && self
                     .fail_neutral
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
                         count.checked_sub(1)
                     })
                     .is_ok()
