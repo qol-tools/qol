@@ -25,9 +25,6 @@ async fn serve_plugin_index(
     if plugin_paths::has_custom_ui(&plugin_root) {
         return serve_file(&plugins_dir, &plugin_id, "index.html").await;
     }
-    if plugin_paths::has_config(&plugin_root) {
-        return super::server::assets::serve_auto_config().into_response();
-    }
     (StatusCode::NOT_FOUND, "No settings UI available").into_response()
 }
 

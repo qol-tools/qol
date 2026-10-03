@@ -315,28 +315,6 @@ pub fn local_base_url() -> String {
     format!("http://{LOCAL_HOST}:{DEFAULT_PORT}")
 }
 
-pub fn settings_url(plugin_id: &str) -> String {
-    local_hash_url(&format!("plugins/{plugin_id}/config"), DEFAULT_PORT)
-}
-
-pub fn local_hash_url(route: &str, port: u16) -> String {
-    let route = route.trim_start_matches('#').trim_start_matches('/');
-    let token = std::env::var(ENV_HTTP_TOKEN).ok();
-    local_hash_url_with_token(route, port, token.as_deref())
-}
-
-pub fn local_hash_url_with_token(route: &str, port: u16, token: Option<&str>) -> String {
-    let separator = if route.contains('?') { '&' } else { '?' };
-    match token.filter(|value| !value.is_empty()) {
-        Some(token) => {
-            format!(
-                "http://{LOCAL_HOST}:{port}/#{route}{separator}{HTTP_AUTH_FRAGMENT_KEY}={token}"
-            )
-        }
-        None => format!("http://{LOCAL_HOST}:{port}/#{route}"),
-    }
-}
-
 pub const CORE_PANEL_ID: &str = "core";
 
 const RESERVED_PLUGIN_IDS: &[&str] = &["qol-template", CORE_PANEL_ID];
@@ -368,26 +346,6 @@ mod tests {
     #[test]
     fn base_url_uses_the_default_port() {
         assert_eq!(local_base_url(), "http://127.0.0.1:42700");
-    }
-
-    #[test]
-    fn settings_url_targets_the_plugin_namespace() {
-        let previous = std::env::var_os(ENV_HTTP_TOKEN);
-        std::env::remove_var(ENV_HTTP_TOKEN);
-        let url = settings_url("plugin-foo");
-        match previous {
-            Some(value) => std::env::set_var(ENV_HTTP_TOKEN, value),
-            None => std::env::remove_var(ENV_HTTP_TOKEN),
-        }
-        assert_eq!(url, "http://127.0.0.1:42700/#plugins/plugin-foo/config");
-    }
-
-    #[test]
-    fn local_hash_url_carries_authentication_in_the_fragment() {
-        assert_eq!(
-            local_hash_url_with_token("shortcuts", 1234, Some("secret")),
-            "http://127.0.0.1:1234/#shortcuts?qol_token=secret"
-        );
     }
 
     #[test]

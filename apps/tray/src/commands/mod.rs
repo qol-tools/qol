@@ -1,4 +1,3 @@
-pub mod local_http;
 pub mod net;
 
 use qol_theme::Mark;
@@ -6,7 +5,6 @@ use qol_theme::Mark;
 pub struct ExportedCommand {
     pub id: &'static str,
     pub label: &'static str,
-    pub route: &'static str,
     pub core_action: &'static str,
     pub mark: Mark,
 }
@@ -20,42 +18,36 @@ pub const EXPORTED: &[ExportedCommand] = &[
     ExportedCommand {
         id: "shortcuts-add",
         label: "Add Shortcut",
-        route: "shortcuts/add",
         core_action: "shortcuts-add",
         mark: Mark::Shortcuts,
     },
     ExportedCommand {
         id: "shortcuts-open",
         label: "Shortcuts",
-        route: "shortcuts",
         core_action: "shortcuts",
         mark: Mark::Shortcuts,
     },
     ExportedCommand {
         id: "hotkeys-add",
         label: "Add Hotkey",
-        route: "hotkeys",
         core_action: "hotkeys-add",
         mark: Mark::Hotkeys,
     },
     ExportedCommand {
         id: "hotkeys-open",
         label: "Hotkeys",
-        route: "hotkeys",
         core_action: "hotkeys",
         mark: Mark::Hotkeys,
     },
     ExportedCommand {
         id: "updates-open",
         label: "Updates",
-        route: "plugins",
         core_action: "updates",
         mark: Mark::Updates,
     },
     ExportedCommand {
         id: "linked-devices-open",
         label: "Linked devices",
-        route: "linked-devices",
         core_action: "linked-devices",
         mark: Mark::LinkedDevices,
     },
@@ -64,33 +56,6 @@ pub const EXPORTED: &[ExportedCommand] = &[
 /// The launcher display label for a command: brand prefix + bare label.
 pub fn command_label(command: &ExportedCommand) -> String {
     format!("{QOL_COMMAND_PREFIX}{}", command.label)
-}
-
-/// Internal argv marker the macOS `openURLs` delegate uses to re-exec this
-/// binary as a pure courier: it forwards the `qol://` route (next argv) to the
-/// already-running daemon and exits, never starting a second daemon. Linux
-/// delivers the URL directly as `%u` argv and has no need for this.
-pub const URL_COURIER_FLAG: &str = "__url-courier";
-
-/// Extract the in-app route from a `qol://<route>` URL. Returns `None` for any
-/// other scheme or a blank route. The scheme match is case-insensitive per
-/// RFC 3986 (so `QOL://` works), and a route that is only slashes/whitespace is
-/// rejected. The route keeps its querystring verbatim; percent-decoding happens
-/// downstream in the same param parser the hash router uses.
-pub fn parse_qol_url(input: &str) -> Option<String> {
-    let scheme_end = input.find("://")?;
-    if !input[..scheme_end].eq_ignore_ascii_case("qol") {
-        return None;
-    }
-    let route = input[scheme_end + 3..]
-        .trim()
-        .trim_start_matches('/')
-        .trim();
-    if route.is_empty() {
-        None
-    } else {
-        Some(route.to_string())
-    }
 }
 
 #[cfg(test)]
@@ -104,13 +69,7 @@ mod tests {
         for c in EXPORTED {
             assert!(ids.insert(c.id), "duplicate command id: {}", c.id);
             assert!(!c.label.is_empty());
-            assert!(!c.route.is_empty());
             assert!(!c.core_action.is_empty());
-            assert!(
-                !c.route.starts_with('#') && !c.route.starts_with('/'),
-                "route must be bare: {}",
-                c.route
-            );
             assert!(
                 !c.label.contains("QoL"),
                 "label must be bare (prefix is applied by command_label): {}",
@@ -121,9 +80,7 @@ mod tests {
 
     #[test]
     fn add_shortcut_command_present() {
-        assert!(EXPORTED
-            .iter()
-            .any(|c| c.id == "shortcuts-add" && c.route == "shortcuts/add"));
+        assert!(EXPORTED.iter().any(|c| c.id == "shortcuts-add"));
     }
 
     #[test]
@@ -132,7 +89,6 @@ mod tests {
             .iter()
             .find(|c| c.id == "linked-devices-open")
             .expect("linked devices command");
-        assert_eq!(linked.route, "linked-devices");
         assert_eq!(command_label(linked), "QoL › Linked devices");
         assert_eq!(
             crate::plugins::action_executor::core_tool_for_action(linked.core_action),
@@ -156,61 +112,5 @@ mod tests {
     fn command_label_applies_brand_prefix() {
         let add = EXPORTED.iter().find(|c| c.id == "shortcuts-add").unwrap();
         assert_eq!(command_label(add), "QoL › Add Shortcut");
-    }
-
-    #[test]
-    fn parse_qol_url_extracts_route_with_querystring() {
-        assert_eq!(
-            parse_qol_url("qol://shortcuts/add?type=url&url=https://x&name=X"),
-            Some("shortcuts/add?type=url&url=https://x&name=X".to_string())
-        );
-        assert_eq!(
-            parse_qol_url("qol://shortcuts"),
-            Some("shortcuts".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_qol_url_strips_leading_slashes() {
-        assert_eq!(
-            parse_qol_url("qol:///shortcuts"),
-            Some("shortcuts".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_qol_url_rejects_other_schemes_and_empty() {
-        assert_eq!(parse_qol_url("https://example.com"), None);
-        assert_eq!(parse_qol_url("qol://"), None);
-        assert_eq!(parse_qol_url("shortcuts"), None);
-        assert_eq!(parse_qol_url("qol:///"), None);
-    }
-
-    #[test]
-    fn parse_qol_url_scheme_is_case_insensitive() {
-        assert_eq!(
-            parse_qol_url("QOL://shortcuts"),
-            Some("shortcuts".to_string())
-        );
-        assert_eq!(
-            parse_qol_url("Qol://shortcuts/add"),
-            Some("shortcuts/add".to_string())
-        );
-        assert_eq!(parse_qol_url("qOl://x?y=z"), Some("x?y=z".to_string()));
-    }
-
-    #[test]
-    fn parse_qol_url_rejects_whitespace_only_route() {
-        assert_eq!(parse_qol_url("qol://   "), None);
-        assert_eq!(parse_qol_url("qol://  /  "), None);
-    }
-
-    #[test]
-    fn parse_qol_url_first_scheme_separator_wins_over_querystring_url() {
-        // The `://` inside an embedded http URL must not be mistaken for the scheme.
-        assert_eq!(
-            parse_qol_url("qol://shortcuts/add?url=https://example.com"),
-            Some("shortcuts/add?url=https://example.com".to_string())
-        );
     }
 }

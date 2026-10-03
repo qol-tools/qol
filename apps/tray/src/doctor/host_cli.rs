@@ -66,13 +66,6 @@ where
             .output("Action result on stdout; diagnostics on stderr.")
             .exit_behavior("Exits non-zero when the action cannot be dispatched."),
     )
-    .command(
-        Command::new("open")
-            .about("Open the app at an in-app route.")
-            .usage("qol-tray open <route>")
-            .output("No output when the route opens successfully.")
-            .exit_behavior("Exits non-zero when the route cannot be opened."),
-    )
 }
 
 #[cfg(test)]
@@ -90,7 +83,7 @@ mod tests {
     fn help_apps_document_the_real_surface_for_each_binary() {
         let host = app_with_provider("qol-tray", || Ok(sample_report())).execute(args(&["help"]));
         assert!(host.stdout.contains("exec"));
-        assert!(host.stdout.contains("open"));
+        assert!(!host.stdout.contains("open"));
         assert!(host.stdout.contains("doctor"));
         assert!(!host.stdout.contains("\n  check"));
         assert!(!host.stdout.contains("\n  fix"));

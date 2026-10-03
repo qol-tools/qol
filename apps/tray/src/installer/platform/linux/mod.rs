@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use self::desktop_entry::{format_desktop_exec_command, DesktopExecArg};
+use self::desktop_entry::format_desktop_exec_command;
 use super::InstallerOps;
 
 pub(in crate::installer) mod desktop_entry;
@@ -145,7 +145,7 @@ fn write_if_changed(path: &Path, content: String) -> Result<bool> {
 }
 
 fn render_app_desktop_entry(binary_path: &Path) -> String {
-    let exec = format_desktop_exec_command(binary_path, &[DesktopExecArg::Url]);
+    let exec = format_desktop_exec_command(binary_path, &[]);
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
@@ -155,7 +155,6 @@ fn render_app_desktop_entry(binary_path: &Path) -> String {
          Icon={}\n\
          Terminal=false\n\
          Categories=Utility;\n\
-         MimeType=x-scheme-handler/qol;\n\
          StartupNotify=false\n",
         exec,
         qol_conventions::TRAY_ICON_NAME
@@ -192,9 +191,6 @@ fn refresh_caches() {
             .arg(dir.join("icons").join("hicolor"))
             .output();
     }
-    let _ = std::process::Command::new("xdg-mime")
-        .args(["default", "qol-tray.desktop", "x-scheme-handler/qol"])
-        .output();
 }
 
 #[cfg(test)]
@@ -202,12 +198,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_entry_registers_qol_scheme_and_passes_url() {
+    fn desktop_entry_launches_the_tray_without_a_url_scheme() {
         let entry = render_app_desktop_entry(Path::new("/home/u/.local/bin/qol-tray"));
-        assert!(entry.contains("MimeType=x-scheme-handler/qol;"));
+        assert!(!entry.contains("MimeType="));
         assert!(entry
             .lines()
-            .any(|line| line == "Exec=\"/home/u/.local/bin/qol-tray\" %u"));
+            .any(|line| line == "Exec=\"/home/u/.local/bin/qol-tray\""));
         assert!(entry.contains("Type=Application"));
     }
 

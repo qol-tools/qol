@@ -40,17 +40,6 @@ impl CoreTool {
         }
     }
 
-    pub(crate) fn fallback_route(self) -> &'static str {
-        match self {
-            Self::AddHotkey => "hotkeys",
-            Self::AddShortcut => "shortcuts/add",
-            Self::Hotkeys => "hotkeys",
-            Self::Shortcuts => "shortcuts",
-            Self::Updates => "plugins",
-            Self::LinkedDevices => "linked-devices",
-        }
-    }
-
     pub(crate) fn page_wire_id(self) -> &'static str {
         match self {
             Self::AddHotkey | Self::Hotkeys => "__core-hotkeys",
@@ -72,48 +61,11 @@ pub fn native_available() -> bool {
 }
 
 pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
-    let handled = platform::request(plugin_id)?;
-    finish_request(plugin_id, handled, crate::paths::open_web_ui)
+    platform::request(plugin_id)
 }
 
 pub(crate) fn request_core_tool(tool: CoreTool) -> anyhow::Result<bool> {
-    match platform::request(tool.wire_id()) {
-        Ok(true) => Ok(true),
-        result => {
-            let url = qol_conventions::local_hash_url(
-                tool.fallback_route(),
-                qol_conventions::DEFAULT_PORT,
-            );
-            crate::paths::open_web_ui(&url)?;
-            let reason = if result.is_ok() {
-                "platform_unsupported"
-            } else {
-                "native_failed"
-            };
-            qol_runtime::probe!(
-                "SURFACE_ACTIVATION",
-                "tool={} phase=fallback reason={reason} outcome=opened",
-                tool.wire_id()
-            );
-            Ok(true)
-        }
-    }
-}
-
-fn finish_request(
-    plugin_id: &str,
-    handled: bool,
-    open_url: impl FnOnce(&str) -> anyhow::Result<()>,
-) -> anyhow::Result<bool> {
-    if handled {
-        return Ok(true);
-    }
-    open_url(&qol_conventions::settings_url(plugin_id))?;
-    qol_runtime::probe!(
-        "SURFACE_ACTIVATION",
-        "plugin={plugin_id} phase=fallback reason=platform_unsupported outcome=opened"
-    );
-    Ok(true)
+    platform::request(tool.wire_id())
 }
 
 pub fn open_updates() -> anyhow::Result<bool> {
@@ -167,7 +119,7 @@ fn requested_boot(args: &[String]) -> Option<HostBoot> {
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_request, requested_boot, CoreTool, HostBoot, HOST_ARGUMENT};
+    use super::{requested_boot, CoreTool, HostBoot, HOST_ARGUMENT};
 
     #[test]
     fn native_availability_matches_platform_dispatch() {
@@ -191,29 +143,6 @@ mod tests {
             let args = args.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             assert_eq!(requested_boot(&args), expected, "args: {args:?}");
         }
-    }
-
-    #[test]
-    fn unsupported_native_surface_opens_browser_fallback() {
-        let mut opened = None;
-        let handled = finish_request("plugin-a", false, |url| {
-            opened = Some(url.to_string());
-            Ok(())
-        })
-        .unwrap();
-
-        assert!(handled);
-        assert_eq!(opened, Some(qol_conventions::settings_url("plugin-a")));
-    }
-
-    #[test]
-    fn handled_native_surface_skips_browser_fallback() {
-        let handled = finish_request("plugin-a", true, |_| {
-            panic!("handled native settings must not open the browser")
-        })
-        .unwrap();
-
-        assert!(handled);
     }
 
     #[test]

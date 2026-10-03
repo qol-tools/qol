@@ -24,16 +24,18 @@ pub fn open_with_default_app_checked(target: impl AsRef<OsStr>) -> io::Result<()
     )
 }
 
-/// Asks the running tray to focus this plugin in the unified settings window,
-/// falling back to the plugin's web settings page when no daemon answers.
+/// Asks the running tray to focus this plugin in the unified settings window.
 pub fn open_plugin_settings_via_tray(plugin_id: &str) -> io::Result<()> {
     let path = qol_conventions::api_routes::plugin_settings(plugin_id);
-    if let Ok((status, _)) = qol_plugin_api::host_exec::post_to_daemon(&path, "") {
-        if (200..300).contains(&status) {
-            return Ok(());
-        }
+    match qol_plugin_api::host_exec::post_to_daemon(&path, "") {
+        Ok((status, _)) if (200..300).contains(&status) => Ok(()),
+        Ok((status, _)) => Err(io::Error::other(format!(
+            "qol-tray refused to open {plugin_id} settings (HTTP {status})"
+        ))),
+        Err(error) => Err(io::Error::other(format!(
+            "qol-tray did not answer the {plugin_id} settings request: {error}"
+        ))),
     }
-    open_with_default_app(qol_conventions::settings_url(plugin_id))
 }
 
 /// Reveals an existing path in the platform file manager without blocking the

@@ -210,53 +210,15 @@ fn qol_tray_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Route stashed when a bare `qol://` URL arrives in argv on a Linux cold launch
-/// (daemon not yet running); opened once the server is listening. macOS cold
-/// launches do not use this - the daemon process never sees the URL in argv;
-/// it arrives post-launch via the `openURLs` delegate, which spawns a separate
-/// courier process classified by `host_cli`.
-static PENDING_COLD_ROUTE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
-fn open_pending_cold_route(route: &str) {
-    wait_for_server_ready();
-    let url = qol_tray::local_http::browser_url(route, DEFAULT_PORT);
-    let _ = qol_tray::paths::open_web_ui(&url);
-}
-
 fn run_startup_doctor() {
     let report = qol_tray::doctor::auto_fix_startup();
     log::info!("{}", qol_tray::doctor::startup_doctor_summary(&report));
-}
-
-/// Ask the running daemon to navigate an already-open UI tab to `route`.
-/// Returns true only when a tab was subscribed and the event was delivered;
-/// any connection error or `delivered:false` returns false so the caller
-/// falls back to opening a fresh browser tab.
-fn navigated_open_tab(route: &str) -> bool {
-    let body = serde_json::json!({ "route": route }).to_string();
-    match qol_plugin_api::host_exec::post_to_daemon("/api/navigate", &body) {
-        Ok((status, body)) if (200..300).contains(&status) => {
-            serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("delivered").and_then(|d| d.as_bool()))
-                .unwrap_or(false)
-        }
-        _ => false,
-    }
 }
 
 fn is_already_running() -> bool {
     use std::net::{SocketAddr, TcpStream};
     let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
-}
-
-fn wait_for_server_ready() -> bool {
-    qol_tray::net::wait_for_tcp_ready(
-        ([127, 0, 0, 1], DEFAULT_PORT).into(),
-        40,
-        Duration::from_millis(50),
-    )
 }
 
 struct InitResult {
@@ -323,10 +285,6 @@ fn app_init_inner(
         std::thread::spawn(show_first_run_welcome);
     }
     std::thread::spawn(confirm_host_update);
-    if let Some(route) = PENDING_COLD_ROUTE.get() {
-        let route = route.clone();
-        std::thread::spawn(move || open_pending_cold_route(&route));
-    }
     Ok((tray, init.plugin_manager))
 }
 

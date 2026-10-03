@@ -1,6 +1,4 @@
 use super::plugin_ui;
-pub(crate) mod assets;
-mod boot;
 #[cfg(feature = "dev")]
 mod dev_core_log_handlers;
 #[cfg(feature = "dev")]
@@ -36,14 +34,11 @@ pub(crate) mod security;
 mod settings;
 mod shortcut_handlers;
 mod types;
-mod ui_trace_handlers;
 
 use anyhow::Result;
 use axum::{
     http::{header, HeaderValue},
-    middleware,
-    routing::get,
-    Router,
+    middleware, Router,
 };
 use std::path::PathBuf;
 #[cfg(feature = "dev")]
@@ -130,7 +125,6 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
         app_state.promoted_to_stable.store(false, Ordering::Release);
         anyhow::bail!("failed to bind promoted runtime state socket");
     }
-    super::ACTIVE_SERVER_PORT.store(port, Ordering::Relaxed);
     tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app).await {
             log::error!("Promoted UI server error: {}", error);
@@ -284,7 +278,6 @@ fn api_router(app_state: AppState, http_security: security::HttpSecurity) -> Rou
         .merge(crate::features::auth::routes())
         .merge(meta_handlers::routes())
         .merge(shortcut_handlers::routes())
-        .merge(ui_trace_handlers::routes())
         .merge(logs_handlers::routes());
     #[cfg(feature = "dev")]
     let api = api.merge(dev_api_router());
@@ -329,8 +322,6 @@ fn assemble_app(
         .nest("/api/task-runner", task_runner)
         .nest("/api/mcp", mcp)
         .nest("/plugins", plugin_ui::router(plugins_dir))
-        .route("/", get(assets::serve_embedded_index))
-        .route("/{*path}", get(assets::serve_embedded))
         .layer(no_cache)
         .layer(middleware::from_fn_with_state(
             http_security,

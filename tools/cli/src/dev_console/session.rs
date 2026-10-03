@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::DefaultTerminal;
 
-use crate::dev_server::{probe_endpoints, toggle_dev_link, website_url, LinkToggle};
+use crate::dev_server::{probe_endpoints, toggle_dev_link, LinkToggle};
 use crate::host_facade;
 use crate::poller::Poller;
 
@@ -895,7 +895,7 @@ pub(super) fn act_row(dash: &mut Dash, modified: bool) {
         }
         Row::Web => {
             if !modified {
-                host_facade::open_url(&website_url());
+                open_endpoints(dash);
             }
         }
         Row::Plugins => {

@@ -125,9 +125,7 @@ fn write_info_plist(bundle_root: &Path) -> Result<()> {
     write_text_file(&plist_path, &info_plist_xml(env!("CARGO_PKG_VERSION")))
 }
 
-/// The bundle `Info.plist`. `CFBundleURLTypes` registers the `qol://` scheme so
-/// AppKit auto-installs the GetURL Apple-Event handler and bridges it to the
-/// `application:openURLs:` delegate (see `tray::platform::macos`).
+/// The bundle `Info.plist`.
 fn info_plist_xml(version: &str) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -147,17 +145,6 @@ fn info_plist_xml(version: &str) -> String {
          <string>{version}</string>\n\
          <key>CFBundleShortVersionString</key>\n\
          <string>{version}</string>\n\
-         <key>CFBundleURLTypes</key>\n\
-         <array>\n\
-         <dict>\n\
-         <key>CFBundleURLName</key>\n\
-         <string>{BUNDLE_ID}</string>\n\
-         <key>CFBundleURLSchemes</key>\n\
-         <array>\n\
-         <string>qol</string>\n\
-         </array>\n\
-         </dict>\n\
-         </array>\n\
          <key>LSUIElement</key>\n\
          <true/>\n\
          <key>LSMinimumSystemVersion</key>\n\
@@ -208,11 +195,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn info_plist_registers_qol_url_scheme() {
+    fn info_plist_describes_a_menu_bar_app_without_a_url_scheme() {
         let xml = info_plist_xml("9.9.9");
-        assert!(xml.contains("<key>CFBundleURLTypes</key>"));
-        assert!(xml.contains("<key>CFBundleURLSchemes</key>"));
-        assert!(xml.contains("<string>qol</string>"));
+        assert!(!xml.contains("CFBundleURLTypes"));
         assert!(xml.contains("<key>CFBundleIdentifier</key>"));
         assert!(xml.contains("<string>9.9.9</string>"));
         assert!(xml.contains("<key>LSUIElement</key>"));

@@ -1,5 +1,5 @@
 use crate::platform::AudioDevice;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use qol_audio::devices::{self, Device, Direction};
 use qol_config::contract::{audio_device_picture, AudioDirection};
 use qol_headless::DoctorCheckResult;
@@ -40,10 +40,6 @@ pub fn show_saved_notification(
         return;
     }
     qol_plugin_daemon::notification::send_notification(title, message);
-}
-
-pub fn open_url(url: &str) -> Result<()> {
-    qol_apps::desktop_integration::open_with_default_app(url).context("failed to open URL")
 }
 
 pub fn platform_supported_check() -> DoctorCheckResult {
