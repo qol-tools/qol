@@ -484,10 +484,10 @@ pub fn search_status_snapshot() -> Result<serde_json::Value> {
 }
 
 fn adapter_status_snapshot() -> Result<serde_json::Value> {
-    let adapter = adapter_health().ok();
+    let adapter = adapter_health()?;
     Ok(serde_json::json!({
-        "available": adapter.is_some(),
-        "powered": adapter.is_some_and(|adapter| adapter.powered),
+        "available": true,
+        "powered": adapter.powered,
     }))
 }
 
