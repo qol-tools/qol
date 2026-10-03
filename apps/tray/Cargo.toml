@@ -36,12 +36,6 @@ default = []
 dev = []
 sandbox = ["qol-host-fixes/sandbox"]
 linux_evdev = ["dep:evdev"]
-# Always embed the tray UI bytes in the binary, even in debug builds.
-# rust-embed debug builds resolve the ui/ folder against the compile-time
-# host path, so a debug tray shipped off-host (development bundle payload)
-# serves 404 for every UI asset. The bundle build enables this; host dev
-# builds keep the disk-backed debug reads for live UI editing.
-embedded-ui = ["rust-embed/debug-embed"]
 
 [dependencies]
 zeroize = "1"
@@ -101,9 +95,6 @@ global-hotkey = "0.7"
 
 # Event-driven channels for the hotkey listener (select! over reload + hotkey receivers)
 crossbeam-channel = "0.5"
-
-# Embed static files
-rust-embed = "8.0"
 
 semver = "1"
 

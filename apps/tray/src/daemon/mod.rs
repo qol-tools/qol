@@ -115,9 +115,6 @@ pub enum DaemonEvent {
     UpdateFailed {
         message: String,
     },
-    Navigate {
-        route: String,
-    },
     HotkeyRecorded {
         session_id: u64,
         key: String,
@@ -156,16 +153,6 @@ mod tests {
             json["status"],
             serde_json::json!({ "state": "recording", "elapsed_s": 12 })
         );
-    }
-
-    #[test]
-    fn navigate_serializes_with_route() {
-        let event = DaemonEvent::Navigate {
-            route: "shortcuts/add?type=url".to_string(),
-        };
-        let json = serde_json::to_value(&event).unwrap();
-        assert_eq!(json["type"], "navigate");
-        assert_eq!(json["route"], "shortcuts/add?type=url");
     }
 
     #[test]

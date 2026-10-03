@@ -4,11 +4,10 @@ use qol_theme::{
     dark_theme_with_accent_key, desktop_theme_preview, preset_accent_key, resolve_surface_override,
     runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Face, Grounds, Motion,
     PickerSurfacePalette, TextStyle, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE,
-    DARK_SYSTEM, DARK_TRAY_INTERNAL, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE,
-    HEIGHT_LADDER, HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE,
-    LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER,
-    SPACE_LADDER, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE, THEME_COLOR_SENTINEL,
-    WAIT_BEFORE_BUSY,
+    DARK_SYSTEM, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
+    HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
+    LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER,
+    STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE, THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
 };
 use std::{
     fs,
@@ -203,57 +202,6 @@ fn dark_css_emits_stable_token_names() {
 }
 
 #[test]
-fn tray_css_layers_tray_tokens_without_polluting_core() {
-    let core = css::dark_css();
-    assert!(!core.contains("--qol-tray-"));
-    assert!(!core.contains("--qol-accent-"));
-    assert!(!core.contains("--qol-reference-"));
-    assert!(!core.contains("--qol-system-overlay-"));
-
-    let tray = css::tray_css();
-    for line in core
-        .lines()
-        .filter(|line| line.contains("--qol-system-") && !line.contains("-surface-"))
-    {
-        assert!(tray.contains(line), "tray css must carry core token {line}");
-    }
-    assert!(
-        tray.contains("    --qol-system-surface-canvas: #0b0d12;\n"),
-        "tray css must use the retuned slate surfaces"
-    );
-    assert!(tray.contains("    --qol-system-overlay-surface-rgb: 18, 22, 30;\n"));
-    assert!(tray.contains("    --qol-reference-slate-750: #2a2b31;\n"));
-    assert!(tray.contains("    --qol-tray-blue-500: #4a9eff;\n"));
-    assert!(tray.contains("    --qol-tray-border-default-2: #3e485b;\n"));
-    assert!(tray.contains("    --qol-atmosphere-wood-bg: #120a05;\n"));
-    assert!(tray.contains("    --qol-accent-amber-hover: #ffc77a;\n"));
-}
-
-#[test]
-fn tray_theme_js_emits_accent_presets_from_theme() {
-    let js = css::tray_theme_js();
-    for preset in DARK_ACCENT_PRESETS {
-        assert!(
-            js.contains(&format!("key: \"{}\"", preset.key)),
-            "tray JS must emit {} preset key",
-            preset.key
-        );
-        assert!(
-            js.contains(&format!("label: \"{}\"", preset.label)),
-            "tray JS must emit {} preset label",
-            preset.key
-        );
-    }
-    assert!(js.contains(&format!("QOL_DEFAULT_ACCENT = \"{PROD_ACCENT_KEY}\"")));
-    assert!(js.contains(&format!(
-        "dissolveTargetColor: \"{}\"",
-        hex6(DARK_TRAY_INTERNAL.dissolve_target)
-    )));
-    assert!(js.contains("minimapActiveText: \"rgba(255, 255, 255, 0.98)\""));
-    assert!(js.contains("configColorThumbShadow: \"rgba(0, 0, 0, 0.5)\""));
-}
-
-#[test]
 fn plugin_lights_css_emits_component_token_names() {
     let css = css::plugin_lights_css();
     assert!(css.contains("    --qol-system-success-rgb: 74, 222, 128;\n"));
@@ -347,110 +295,9 @@ fn web_plugin_css_skips_default_accent_override_block() {
 }
 
 #[test]
-fn tray_theme_tokens_import_and_derive_generated_base() {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let theme_tokens_path = workspace.join("apps/tray/ui/styles/theme-tokens.css");
-    let theme_tokens = fs::read_to_string(&theme_tokens_path)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", theme_tokens_path.display()));
-    assert!(
-        theme_tokens.starts_with("@import \"./generated-theme-tokens.css\";\n\n:root {"),
-        "theme-tokens.css must import generated-theme-tokens.css before declaring aliases"
-    );
-
-    let required_derivations = [
-        "--accent-rgb: var(--qol-system-accent-rgb);",
-        "--accent-hover: var(--qol-accent-amber-hover);",
-        "--success-rgb: var(--qol-system-success-rgb);",
-        "--danger-rgb: var(--qol-system-danger-rgb);",
-        "--blue-400: var(--qol-reference-blue-400);",
-        "--green-400: var(--qol-reference-green-400);",
-        "--red-500: var(--qol-reference-red-500);",
-        "--amber-500: var(--qol-reference-amber-500);",
-        "--slate-750: var(--qol-reference-slate-750);",
-        "--slate-975: var(--qol-tray-slate-975);",
-        "--warning-rgb: var(--qol-system-warning-rgb);",
-        "--surface-canvas: var(--qol-system-surface-canvas);",
-        "--surface-elevated: var(--qol-system-surface-elevated);",
-        "--surface-raised: var(--qol-system-surface-raised);",
-        "--surface-hovered: var(--qol-system-surface-hovered);",
-        "--text-strong: var(--qol-system-text-primary);",
-        "--text-default: var(--qol-system-text-secondary);",
-        "--text-muted-2: var(--qol-system-text-muted);",
-        "--text-subtle: var(--qol-system-text-faint);",
-        "--border-weak: var(--qol-system-border-subtle);",
-        "--border-default-2: var(--qol-tray-border-default-2);",
-        "--border-strong: var(--qol-tray-border-strong);",
-        "--tui-bg-desktop: var(--qol-tray-tui-bg-desktop);",
-        "--tui-bg-panel: var(--qol-tray-tui-bg-panel);",
-        "--tui-bg-screen: var(--qol-tray-tui-bg-screen);",
-        "--tui-bg-card: var(--qol-tray-tui-bg-card);",
-    ];
-
-    for derivation in required_derivations {
-        assert!(
-            theme_tokens.contains(derivation),
-            "theme-tokens.css must derive `{derivation}` from generated theme tokens"
-        );
-    }
-
-    assert!(
-        !theme_tokens.contains("224, 172, 63"),
-        "theme-tokens.css must not hand-copy the default accent rgb fallback"
-    );
-    assert!(
-        !theme_tokens.contains("#ffc77a"),
-        "theme-tokens.css must not hand-copy the default accent hover"
-    );
-    assert!(
-        !theme_tokens.contains("#3e485b"),
-        "theme-tokens.css must not hand-copy tray border colors"
-    );
-}
-
-#[test]
-fn themed_tray_internals_do_not_use_raw_color_literals() {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let files = [
-        "apps/tray/ui/styles/theme-tokens.css",
-        "apps/tray/ui/fx/atmosphere/atmosphere.css",
-        "apps/tray/ui/fx/dissolve/engine.js",
-        "apps/tray/ui/fx/dissolve/gpu.js",
-        "apps/tray/ui/fx/dissolve/index.js",
-        "apps/tray/ui/fx/dissolve/worker.js",
-        "apps/tray/ui/lib/minimap-draw.js",
-        "apps/tray/ui/styles/plugin-config.css",
-        "apps/tray/ui/views/plugin-config/fields/QrCodeField.js",
-        "apps/tray/ui/views/plugin-config/fields/SliderField.js",
-        "apps/tray/ui/views/plugin-config/fields/ColorField.js",
-    ];
-    let mut violations = Vec::new();
-
-    for file in files {
-        let path = workspace.join(file);
-        let contents = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-        for (index, line) in contents.lines().enumerate() {
-            if has_raw_css_color(line) {
-                violations.push(format!("{file}:{}", index + 1));
-            }
-        }
-    }
-
-    assert!(
-        violations.is_empty(),
-        "themed tray internals must use generated theme tokens, not raw color literals:\n{}",
-        violations.join("\n")
-    );
-}
-
-#[test]
 fn generated_artifacts_are_current() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifacts = [
-        (
-            "apps/tray/ui/styles/generated-theme-tokens.css",
-            css::tray_css(),
-        ),
         (
             "plugins/lights/ui/generated-theme-tokens.css",
             css::plugin_lights_css(),
@@ -462,10 +309,6 @@ fn generated_artifacts_are_current() {
         (
             "plugins/alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/generated-theme-tokens.js",
             css::alt_tab_cinnamon_js(),
-        ),
-        (
-            "apps/tray/ui/lib/generated-theme-tokens.js",
-            css::tray_theme_js(),
         ),
     ];
 
@@ -786,7 +629,6 @@ fn raw_color_scanner_allows_tokenized_and_dynamic_forms() {
 fn generated_css_tokens_are_namespaced() {
     let profiles = [
         ("core", css::dark_css()),
-        ("tray-css", css::tray_css()),
         ("plugin-lights", css::plugin_lights_css()),
         ("plugin-keyremap", css::plugin_keyremap_css()),
     ];
@@ -882,106 +724,6 @@ fn tray_theme_identities_are_assigned() {
         qol_theme::RETRO_IDENTITY.font_ui
     );
     assert_eq!(qol_theme::MODERN_IDENTITY.font_data, "var(--font-mono)");
-}
-
-#[test]
-fn tray_css_emits_theme_override_blocks() {
-    let css = css::tray_css();
-    assert!(css.contains("--qol-system-overlay-surface-rgb: 18, 22, 30;"));
-    assert!(css.contains("--qol-system-scrim-rgb: 4, 5, 8;"));
-    assert!(
-        !css.contains(":root[data-qol-theme=\"slate\"]"),
-        "default theme needs no block"
-    );
-    let midnight_block = css
-        .split(":root[data-qol-theme=\"midnight\"]")
-        .nth(1)
-        .unwrap();
-    let midnight_block = midnight_block.split('}').next().unwrap();
-    assert!(midnight_block.contains("--qol-system-surface-canvas: #090b19;"));
-    assert!(
-        !midnight_block.contains("--qol-system-accent-rgb"),
-        "themes must not override accent"
-    );
-}
-
-#[test]
-fn tray_theme_js_emits_theme_metadata() {
-    let js = css::tray_theme_js();
-    assert!(js.contains("export const QOL_THEMES = ["));
-    assert!(js.contains(
-        "{ key: \"slate\", label: \"Slate\", accentKey: \"amber\", identityKey: \"retro\" },"
-    ));
-    assert!(js.contains(
-        "{ key: \"midnight\", label: \"Midnight\", accentKey: \"violet\", identityKey: \"modern\" },"
-    ));
-    assert!(js.contains("export const QOL_DEFAULT_THEME = \"slate\";"));
-}
-
-#[test]
-fn retro_identity_matches_legacy_hardcoded_values() {
-    let cases = [
-        ("--qol-identity-case-label", "uppercase"),
-        ("--qol-identity-tracking-label", "var(--ls-md)"),
-        ("--qol-identity-font-ui", "var(--font-mono)"),
-        ("--qol-identity-radius-xs", "3px"),
-        (
-            "--qol-identity-frame-border",
-            "var(--border-w-3) double var(--tui-line)",
-        ),
-        ("--qol-identity-frame-texture", "var(--tui-scanline)"),
-        ("--qol-identity-line", "var(--tui-line)"),
-        ("--qol-identity-line-soft", "var(--tui-line-soft)"),
-        ("--qol-identity-surface-inset", "var(--tui-bg-screen)"),
-        ("--qol-identity-surface-row", "var(--tui-bg-card)"),
-        ("--qol-identity-desktop-bg", "var(--tui-desktop-bg)"),
-        ("--qol-identity-prompt-display", "inline"),
-        ("--qol-identity-frame-radius", "var(--radius-md)"),
-        ("--qol-identity-frame-shadow", "none"),
-        (
-            "--qol-identity-card-border",
-            "var(--border-w-1) solid var(--tui-line-soft)",
-        ),
-        ("--qol-identity-cover-bg", "var(--tui-screen-bg)"),
-        ("--qol-identity-cover-scrim", "var(--ink-overlay-strong)"),
-        ("--qol-identity-minimap-slab-radius", "3"),
-    ];
-    let css = css::tray_css();
-    let base = css.split(":root[data-qol-theme").next().unwrap();
-    for (name, value) in cases {
-        assert!(base.contains(&format!("{name}: {value};")), "{name}");
-    }
-}
-
-#[test]
-fn tray_css_emits_identity_tokens_per_theme() {
-    let css = css::tray_css();
-    let base = css.split(":root[data-qol-theme").next().unwrap();
-    assert!(base.contains("--qol-identity-font-ui: var(--font-mono);"));
-    assert!(base.contains("--qol-identity-radius-md: 6px;"));
-    let midnight = css
-        .split(":root[data-qol-theme=\"midnight\"]")
-        .nth(1)
-        .unwrap();
-    let midnight = midnight.split('}').next().unwrap();
-    assert!(midnight.contains("--qol-identity-font-ui: var(--font-sans);"));
-    assert!(midnight.contains("--qol-identity-radius-md: 10px;"));
-    assert!(midnight.contains("--qol-identity-crt-band-display: none;"));
-    assert!(midnight.contains("--qol-identity-line: var(--qol-system-border-subtle);"));
-    assert!(midnight.contains("--qol-identity-line-soft: rgba(var(--paper-rgb), 0.07);"));
-    assert!(midnight.contains("--qol-identity-surface-inset: var(--qol-system-surface-raised);"));
-    assert!(midnight.contains("--qol-identity-surface-row: var(--qol-system-surface-raised);"));
-    assert!(midnight.contains("--qol-identity-desktop-bg: var(--surface-canvas);"));
-    assert!(midnight.contains("--qol-identity-prompt-display: none;"));
-    assert!(midnight.contains("--qol-identity-frame-bg: var(--surface-elevated);"));
-    assert!(midnight.contains("--qol-identity-cover-scrim: var(--qol-system-surface-raised);"));
-    assert!(midnight.contains("--qol-identity-frame-radius: var(--radius-xl);"));
-    assert!(midnight.contains("--qol-identity-frame-shadow: var(--qol-shadow-float);"));
-    assert_eq!(
-        css.matches(":root[data-qol-theme=").count(),
-        1,
-        "only the modern theme emits an override block"
-    );
 }
 
 #[test]
@@ -2874,116 +2616,6 @@ fn the_depth_ladders_hold_their_approved_values() {
     };
     assert_eq!(layers(qol_theme::SHADOW_FLOAT), [(1, 2, 5), (8, 20, 9)]);
     assert_eq!(layers(qol_theme::SHADOW_RAISED), [(1, 2, 9), (6, 16, 9)]);
-}
-
-fn css_declarations(css: &str) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    for chunk in css.split(['{', '}', ';']) {
-        let Some((property, value)) = chunk.split_once(':') else {
-            continue;
-        };
-        let property = property.trim();
-        if property.is_empty() || property.contains(char::is_whitespace) {
-            continue;
-        }
-        found.push((property.to_string(), value.trim().to_string()));
-    }
-    found
-}
-
-fn has_literal_time(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    for (at, _) in value.match_indices(['s']) {
-        let mut start = at;
-        if at > 0 && bytes[at - 1] == b'm' {
-            start -= 1;
-        }
-        let digits = value[..start]
-            .chars()
-            .rev()
-            .take_while(|c| c.is_ascii_digit() || *c == '.')
-            .count();
-        let boundary = value[..start - digits]
-            .chars()
-            .last()
-            .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-');
-        let after = value[at + 1..]
-            .chars()
-            .next()
-            .is_none_or(|c| !c.is_ascii_alphanumeric());
-        if digits > 0 && boundary && after {
-            return true;
-        }
-    }
-    false
-}
-
-#[test]
-fn the_web_settings_page_takes_sizes_times_and_shadows_from_the_theme() {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let styles = workspace.join("apps/tray/ui/styles");
-    let tokens = fs::read_to_string(styles.join("theme-tokens.css")).expect("read tokens");
-    let mut problems = Vec::new();
-    for (name, value) in css_declarations(&tokens) {
-        if (name.starts_with("--fs-") || name.starts_with("--dur-"))
-            && !value.starts_with("var(--qol-")
-        {
-            problems.push(format!("theme-tokens.css {name}: {value}"));
-        }
-    }
-    let mut files: Vec<_> = fs::read_dir(&styles)
-        .expect("read styles")
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|ext| ext == "css"))
-        .filter(|path| {
-            path.file_name()
-                .is_some_and(|name| name != "generated-theme-tokens.css")
-        })
-        .collect();
-    files.sort();
-    for path in files {
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let css = fs::read_to_string(&path).expect("read css");
-        for (property, value) in css_declarations(&css) {
-            let value = value.replace('\n', " ");
-            let bad = match property.as_str() {
-                "font-size" => {
-                    !(value.starts_with("var(--qol-")
-                        || value.starts_with("var(--fs-")
-                        || value == "0"
-                        || value == "inherit")
-                }
-                "transition" | "animation" | "transition-duration" | "animation-duration" => {
-                    has_literal_time(&value)
-                }
-                "box-shadow" => {
-                    !(value == "none"
-                        || value
-                            .split(", ")
-                            .all(|layer| layer.starts_with("var(--qol-")))
-                }
-                "border-left-color" => true,
-                "border-left" => {
-                    ["accent", "success", "danger", "warning"]
-                        .iter()
-                        .any(|hue| {
-                            value.contains(&format!("var(--{hue}"))
-                                || value.contains(&format!("--{hue}-rgb"))
-                        })
-                        && !value.starts_with("14px")
-                }
-                _ => false,
-            };
-            if bad {
-                problems.push(format!("{name} {property}: {value}"));
-            }
-        }
-    }
-    assert!(
-        problems.is_empty(),
-        "The web settings page sets text sizes, times and shadows through the generated --qol-* tokens and never draws a coloured side line.\n{}",
-        problems.join("\n")
-    );
 }
 
 #[test]

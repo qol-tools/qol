@@ -24,11 +24,6 @@ impl HttpSecurity {
     }
 }
 
-pub(crate) fn browser_url(route: &str, port: u16) -> String {
-    let token = current_token();
-    qol_conventions::local_hash_url_with_token(route, port, token.as_deref())
-}
-
 pub(crate) fn current_token() -> Option<String> {
     load_token().ok()
 }
