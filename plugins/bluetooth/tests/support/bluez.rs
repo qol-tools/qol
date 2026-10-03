@@ -20,6 +20,11 @@ const ADAPTER_IFACE: &str = "org.bluez.Adapter1";
 const OBJECTS_IFACE: &str = "org.freedesktop.DBus.ObjectManager";
 type Objects = HashMap<Path<'static>, HashMap<String, PropMap>>;
 
+enum AdapterUpdate {
+    Present(bool),
+    Absent,
+}
+
 #[derive(Default)]
 pub struct State {
     pub searching: bool,
@@ -35,6 +40,10 @@ pub struct State {
     pub pair_calls: usize,
     pub pairable: bool,
     pub paired_while_pairable: Option<bool>,
+    pub passive_inventory_reads: usize,
+    adapter_present: bool,
+    powered: bool,
+    adapter_update: Option<AdapterUpdate>,
     remove: bool,
     quit: bool,
 }
@@ -49,7 +58,7 @@ impl State {
         }
         if path == ADAPTER {
             put!("Address", "00:00:00:00:00:01".to_string());
-            put!("Powered", true);
+            put!("Powered", self.powered);
             put!("Discovering", self.searching);
             put!("Pairable", self.pairable);
         } else {
@@ -85,6 +94,9 @@ impl State {
     }
 
     fn objects(&self) -> Objects {
+        if !self.adapter_present {
+            return HashMap::new();
+        }
         let mut objects = Objects::from([(
             Path::from(ADAPTER),
             HashMap::from([(ADAPTER_IFACE.into(), self.properties(ADAPTER))]),
@@ -118,6 +130,44 @@ impl State {
         }
         objects
     }
+
+    fn apply_adapter_update(&mut self) -> Option<Message> {
+        let update = self.adapter_update.take()?;
+        let was_present = self.adapter_present;
+        let AdapterUpdate::Present(powered) = update else {
+            self.adapter_present = false;
+            return Some(
+                Message::new_signal("/", OBJECTS_IFACE, "InterfacesRemoved")
+                    .unwrap()
+                    .append2(Path::from(ADAPTER), vec![ADAPTER_IFACE.to_string()]),
+            );
+        };
+        self.adapter_present = true;
+        self.powered = powered;
+        if !was_present {
+            return Some(
+                Message::new_signal("/", OBJECTS_IFACE, "InterfacesAdded")
+                    .unwrap()
+                    .append2(
+                        Path::from(ADAPTER),
+                        HashMap::from([(ADAPTER_IFACE.to_string(), self.properties(ADAPTER))]),
+                    ),
+            );
+        }
+        let changed: PropMap = HashMap::from([(
+            "Powered".to_string(),
+            Variant(Box::new(powered) as Box<dyn dbus::arg::RefArg>),
+        )]);
+        Some(
+            Message::new_signal(
+                ADAPTER,
+                "org.freedesktop.DBus.Properties",
+                "PropertiesChanged",
+            )
+            .unwrap()
+            .append3(ADAPTER_IFACE, changed, Vec::<String>::new()),
+        )
+    }
 }
 
 struct Process(Child);
@@ -138,6 +188,26 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn start(automatic: bool, audio: bool, connected: bool) -> Self {
+        Self::start_with_state(
+            automatic,
+            State {
+                adapter_present: true,
+                powered: true,
+                present: true,
+                paired: !audio,
+                audio,
+                connected,
+                services_resolved: connected,
+                ..State::default()
+            },
+        )
+    }
+
+    pub fn without_adapter() -> Self {
+        Self::start_with_state(false, State::default())
+    }
+
+    fn start_with_state(automatic: bool, initial: State) -> Self {
         let root = tempfile::tempdir().unwrap();
         let mut bus = Process(
             Command::new("dbus-daemon")
@@ -152,14 +222,8 @@ impl Fixture {
             .read_line(&mut address)
             .unwrap();
         let address = address.trim().to_string();
-        let state = Arc::new(Mutex::new(State {
-            present: true,
-            paired: !audio,
-            audio,
-            connected,
-            services_resolved: connected,
-            ..State::default()
-        }));
+        let adapter_present = initial.adapter_present;
+        let state = Arc::new(Mutex::new(initial));
         let connection = SyncConnection::new_address(&address).unwrap();
         connection
             .request_name("org.bluez", false, true, false)
@@ -178,6 +242,9 @@ impl Fixture {
                 let mut state = shared.lock().unwrap();
                 if state.quit {
                     break;
+                }
+                if let Some(message) = state.apply_adapter_update() {
+                    connection.send(message).unwrap();
                 }
                 if state.remove {
                     state.remove = false;
@@ -234,7 +301,25 @@ impl Fixture {
             ),
             "daemon did not start"
         );
+        if adapter_present {
+            assert!(wait(
+                || fixture.response("adapter_status")["data"]["available"] == true,
+                Duration::from_secs(5)
+            ));
+        }
         fixture
+    }
+
+    pub fn set_adapter(&self, powered: Option<bool>) {
+        self.state.lock().unwrap().adapter_update = Some(match powered {
+            Some(powered) => AdapterUpdate::Present(powered),
+            None => AdapterUpdate::Absent,
+        });
+    }
+
+    pub fn response(&self, name: &str) -> Value {
+        self.request_response(name, Value::Null)
+            .expect("daemon must answer")
     }
 
     pub fn action(&self, name: &str) -> Value {
@@ -251,6 +336,12 @@ impl Fixture {
     }
 
     fn request(&self, name: &str, input: Value) -> Option<Value> {
+        let response = self.request_response(name, input)?;
+        assert_eq!(response["status"], "handled", "{response}");
+        Some(response["data"].clone())
+    }
+
+    fn request_response(&self, name: &str, input: Value) -> Option<Value> {
         let mut socket = UnixStream::connect(self.root.path().join("daemon.sock")).ok()?;
         socket
             .set_read_timeout(Some(Duration::from_secs(1)))
@@ -260,8 +351,7 @@ impl Fixture {
         let mut response = String::new();
         socket.read_to_string(&mut response).ok()?;
         let response: Value = serde_json::from_str(&response).ok()?;
-        assert_eq!(response["status"], "handled", "{response}");
-        Some(response["data"].clone())
+        Some(response)
     }
 }
 
@@ -289,6 +379,15 @@ fn handle(message: Message, connection: &SyncConnection, shared: &Mutex<State>) 
     let mut state = shared.lock().unwrap();
     let member = message.member().unwrap().to_string();
     let path = message.path().unwrap().to_string();
+    if path.starts_with(ADAPTER) && !state.adapter_present {
+        connection
+            .send(message.error(
+                &"org.freedesktop.DBus.Error.UnknownObject".into(),
+                c"Adapter is absent",
+            ))
+            .unwrap();
+        return;
+    }
     if path == DEVICE && !state.present {
         let name = "org.freedesktop.DBus.Error.UnknownObject".into();
         connection
@@ -297,7 +396,12 @@ fn handle(message: Message, connection: &SyncConnection, shared: &Mutex<State>) 
         return;
     }
     let reply = match member.as_str() {
-        "GetManagedObjects" => message.method_return().append1(state.objects()),
+        "GetManagedObjects" => {
+            if !message.get_auto_start() {
+                state.passive_inventory_reads += 1;
+            }
+            message.method_return().append1(state.objects())
+        }
         "GetAll" => message.method_return().append1(state.properties(&path)),
         "Get" => {
             let (_, key): (String, String) = message.read2().unwrap();
