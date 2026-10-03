@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
+mod inventory;
 mod media;
 mod operations;
 
@@ -30,7 +31,7 @@ use crate::bluetooth::{
     adapter_options, audio_output_degraded, audio_profile_repairable, connection_ready,
     devices_payload, has_audio_class, is_audio_device, managed_device_options, normalize_address,
     retry::{RetryPolicy, RetryState},
-    search_status_payload, supports_audio_sink, AdapterHealth, AdapterInfo, BackendCapabilities,
+    search_status_payload, supports_audio_sink, AdapterHealth, BackendCapabilities,
     DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, ReconnectFailure,
     ReconnectReport, ReconnectSelection,
 };
@@ -447,14 +448,15 @@ fn adapter_status_snapshot() -> Result<serde_json::Value> {
         .read()
         .map_err(|_| anyhow!("Bluetooth adapter state is unavailable"))?
         .clone();
-    Ok(adapter_status_payload(adapter.as_ref()))
+    adapter_status_payload(adapter.as_ref())
 }
 
-fn adapter_status_payload(adapter: Option<&AdapterHealth>) -> serde_json::Value {
-    serde_json::json!({
-        "available": adapter.is_some(),
-        "powered": adapter.is_some_and(|adapter| adapter.powered),
-    })
+fn adapter_status_payload(adapter: Option<&AdapterHealth>) -> Result<serde_json::Value> {
+    let adapter = adapter.context("Bluetooth adapter is unavailable")?;
+    Ok(serde_json::json!({
+        "available": true,
+        "powered": adapter.powered,
+    }))
 }
 
 fn adapter_available() -> Result<bool> {
@@ -512,7 +514,7 @@ fn current_managed_device_options() -> Result<Vec<DeviceOption>> {
 }
 
 fn current_adapter_options() -> Result<Vec<DeviceOption>> {
-    Ok(adapter_options(&runtime()?.block_on(adapter_inventory())?))
+    Ok(adapter_options(&inventory::adapters()?))
 }
 
 pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
@@ -583,36 +585,6 @@ async fn default_adapter() -> Result<Adapter> {
         }
     }
     bail!("configured Bluetooth adapter {target} was not found; set the adapter back to Automatic or reconnect it")
-}
-
-async fn adapter_inventory() -> Result<Vec<AdapterInfo>> {
-    let session = Session::new()
-        .await
-        .context("failed to connect to the BlueZ system service")?;
-    let mut adapters = Vec::new();
-    for name in session.adapter_names().await? {
-        let Ok(adapter) = session.adapter(&name) else {
-            continue;
-        };
-        let Ok(address) = adapter.address().await else {
-            continue;
-        };
-        let mut paired_count = 0;
-        for device_address in adapter.device_addresses().await.unwrap_or_default() {
-            let Ok(device) = adapter.device(device_address) else {
-                continue;
-            };
-            if device.is_paired().await.unwrap_or(false) {
-                paired_count += 1;
-            }
-        }
-        adapters.push(AdapterInfo {
-            name: name.clone(),
-            address: address.to_string().to_ascii_uppercase(),
-            paired_count,
-        });
-    }
-    Ok(adapters)
 }
 
 async fn ensure_powered(adapter: &Adapter, power_on_adapter: bool) -> Result<()> {
@@ -3141,28 +3113,25 @@ mod tests {
 
     #[test]
     fn adapter_status_payload_exposes_the_runtime_power_state() {
-        let payload = super::adapter_status_payload(Some(&super::AdapterHealth {
-            name: "hci0".into(),
-            address: "AA:BB:CC:DD:EE:FF".into(),
-            powered: true,
-        }));
-        assert_eq!(
-            payload,
-            serde_json::json!({
-                "available": true,
-                "powered": true,
-            })
-        );
+        for powered in [false, true] {
+            let payload = super::adapter_status_payload(Some(&super::AdapterHealth {
+                name: "hci0".into(),
+                address: "AA:BB:CC:DD:EE:FF".into(),
+                powered,
+            }))
+            .unwrap();
+            assert_eq!(
+                payload,
+                serde_json::json!({ "available": true, "powered": powered })
+            );
+        }
     }
 
     #[test]
     fn unavailable_adapter_status_is_immediate_and_explicit() {
         assert_eq!(
-            super::adapter_status_payload(None),
-            serde_json::json!({
-                "available": false,
-                "powered": false,
-            })
+            super::adapter_status_payload(None).unwrap_err().to_string(),
+            "Bluetooth adapter is unavailable"
         );
     }
 

@@ -8,6 +8,61 @@ use std::time::Duration;
 use bluez::{wait, Fixture};
 
 const RESPONSIVE: Duration = Duration::from_secs(1);
+const ADAPTER_RECOVERY: Duration = Duration::from_secs(8);
+
+#[test]
+fn missing_adapter_is_unavailable_instead_of_powered_off() {
+    let fixture = Fixture::without_adapter();
+    let response = fixture.response("adapter_status");
+    assert_eq!(response["status"], "error", "{response}");
+    assert!(response["data"].is_null(), "{response}");
+}
+
+#[test]
+fn adapter_status_tracks_external_power_removal_and_reappearance() {
+    let fixture = Fixture::start(false, false, false);
+    for (powered, budget) in [
+        (Some(false), RESPONSIVE),
+        (Some(true), RESPONSIVE),
+        (None, RESPONSIVE),
+        (Some(false), ADAPTER_RECOVERY),
+        (Some(true), RESPONSIVE),
+    ] {
+        fixture.set_adapter(powered);
+        assert!(
+            wait(
+                || {
+                    let response = fixture.response("adapter_status");
+                    match powered {
+                        Some(powered) => {
+                            response["status"] == "handled"
+                                && response["data"]["available"] == true
+                                && response["data"]["powered"] == powered
+                        }
+                        None => response["status"] == "error" && response["data"].is_null(),
+                    }
+                },
+                budget
+            ),
+            "platform power {powered:?}, reported {}",
+            fixture.response("adapter_status")
+        );
+    }
+}
+
+#[test]
+fn adapter_inventory_reads_platform_objects_without_requesting_service_start() {
+    let fixture = Fixture::start(false, false, false);
+    let before = fixture.state.lock().unwrap().passive_inventory_reads;
+    let options = fixture.action("adapter_options");
+    assert_eq!(options.as_array().unwrap().len(), 2, "{options}");
+    assert_eq!(options[0]["value"], "");
+    assert_eq!(options[1]["value"], "00:00:00:00:00:01");
+    assert_eq!(
+        fixture.state.lock().unwrap().passive_inventory_reads,
+        before + 1
+    );
+}
 
 #[test]
 fn audio_status_follows_the_live_transport_while_the_bluetooth_link_stays_connected() {
