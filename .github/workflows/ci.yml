@@ -149,13 +149,13 @@ jobs:
 
       - name: Install cargo-hakari
         if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
-        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-hakari
 
       - name: Install cargo-nextest
         if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
-        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29
         with:
           tool: cargo-nextest@0.9.143
 
