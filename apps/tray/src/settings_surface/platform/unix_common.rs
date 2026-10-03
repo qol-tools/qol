@@ -1026,7 +1026,7 @@ fn open_browser_fallback(plugin_id: &str, reason: &str) {
             qol_conventions::local_hash_url(tool.fallback_route(), qol_conventions::DEFAULT_PORT)
         })
         .unwrap_or_else(|| qol_conventions::settings_url(plugin_id));
-    let result = crate::paths::open_url(&url);
+    let result = crate::paths::open_web_ui(&url);
     #[cfg(not(debug_assertions))]
     let _ = (&reason, &result);
     qol_runtime::probe!(

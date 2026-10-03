@@ -74,13 +74,6 @@ jobs:
             [[ "$level" == warning ]]
           fi
 
-      - name: Test QoL Tray UI
-        working-directory: apps/tray/ui
-        run: |
-          mapfile -d '' tests < <(find . -type f -name '*.test.js' -print0)
-          ((${#tests[@]})) || { echo "No UI tests found" >&2; exit 1; }
-          node --test "${tests[@]}"
-
       - name: Test release scripts
         run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 

@@ -73,7 +73,7 @@ pub fn native_available() -> bool {
 
 pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
     let handled = platform::request(plugin_id)?;
-    finish_request(plugin_id, handled, crate::paths::open_url)
+    finish_request(plugin_id, handled, crate::paths::open_web_ui)
 }
 
 pub(crate) fn request_core_tool(tool: CoreTool) -> anyhow::Result<bool> {
@@ -84,7 +84,7 @@ pub(crate) fn request_core_tool(tool: CoreTool) -> anyhow::Result<bool> {
                 tool.fallback_route(),
                 qol_conventions::DEFAULT_PORT,
             );
-            crate::paths::open_url(&url)?;
+            crate::paths::open_web_ui(&url)?;
             let reason = if result.is_ok() {
                 "platform_unsupported"
             } else {

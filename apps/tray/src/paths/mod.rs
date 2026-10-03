@@ -302,6 +302,15 @@ pub fn open_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn open_web_ui(url: &str) -> Result<()> {
+    if !cfg!(feature = "web-ui") {
+        anyhow::bail!(
+            "the web UI is disabled; build qol-tray with --features web-ui to open {url}"
+        );
+    }
+    open_url(url)
+}
+
 #[cfg(feature = "dev")]
 pub fn repo_root_from_manifest_dir() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

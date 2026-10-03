@@ -220,7 +220,7 @@ static PENDING_COLD_ROUTE: std::sync::OnceLock<String> = std::sync::OnceLock::ne
 fn open_pending_cold_route(route: &str) {
     wait_for_server_ready();
     let url = qol_tray::local_http::browser_url(route, DEFAULT_PORT);
-    let _ = qol_tray::paths::open_url(&url);
+    let _ = qol_tray::paths::open_web_ui(&url);
 }
 
 fn run_startup_doctor() {

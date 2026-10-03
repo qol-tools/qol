@@ -119,7 +119,7 @@ fn forward_route(route: &str) -> i32 {
         return 0;
     }
     let url = qol_tray::local_http::browser_url(route, qol_conventions::DEFAULT_PORT);
-    match qol_tray::paths::open_url(&url) {
+    match qol_tray::paths::open_web_ui(&url) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("Failed to open {url}: {e}");

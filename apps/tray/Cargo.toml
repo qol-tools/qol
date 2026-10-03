@@ -42,6 +42,9 @@ linux_evdev = ["dep:evdev"]
 # serves 404 for every UI asset. The bundle build enables this; host dev
 # builds keep the disk-backed debug reads for live UI editing.
 embedded-ui = ["rust-embed/debug-embed"]
+# The browser UI is frozen; gpui is the only maintained UI. Without this
+# feature the tray never opens a browser tab.
+web-ui = []
 
 [dependencies]
 zeroize = "1"
