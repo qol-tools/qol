@@ -5,8 +5,7 @@ import { useDispatchAction } from '../../../lib/hooks/useDispatchAction.js';
 import { useQueryPoll } from '../../../lib/hooks/useQueryPoll.js';
 import { fieldSurfaceAttrs } from '../field-map.js';
 import { isActionRuntimeGated } from '../field-rules.js';
-import { queryFlag } from './query-data.js';
-import { actionLabel, actionShowsActivity, selectedActionName } from './action-state.js';
+import { actionLabel, actionRuntimeState, actionShowsActivity, selectedActionName } from './action-state.js';
 import { Button } from '../../../lib/components/Button.js';
 
 const PAIR_DURATION_S = 60;
@@ -19,7 +18,7 @@ export function ActionField({ field }) {
     const queryDef = ctx.runtime?.query?.[field.active_query];
     const interval = queryDef?.poll_interval_ms || DEFAULT_POLL_MS;
     const activeState = useQueryPoll(ctx.pluginId, field.active_query, interval);
-    const runtimeActive = queryFlag(activeState.data, field.active_value_from);
+    const { active: runtimeActive, unavailable } = actionRuntimeState(field, activeState);
     const isPairAction = field.action === 'pair';
     const stopPair = useDispatchAction(ctx.pluginId, 'stop_pair');
     const [pairing, setPairing] = useState(false);
@@ -33,7 +32,7 @@ export function ActionField({ field }) {
     }, [ctx, field.id]);
 
     const run = useCallback(() => {
-        if (primaryAction.pending || activeAction.pending || stopPair.pending || syncing) return;
+        if (primaryAction.pending || activeAction.pending || stopPair.pending || syncing || unavailable) return;
 
         if (field.active_action) {
             const actionName = selectedActionName(field, runtimeActive);
@@ -64,7 +63,7 @@ export function ActionField({ field }) {
                 timerRef.current = setTimeout(() => setPairing(false), PAIR_DURATION_S * 1000);
             })
             .catch(() => {});
-    }, [primaryAction, activeAction, stopPair, field.active_action, runtimeActive, isPairAction, pairing, syncing, activeState]);
+    }, [primaryAction, activeAction, stopPair, field.active_action, runtimeActive, isPairAction, pairing, syncing, unavailable, activeState]);
 
     const onKeyDown = useCallback((event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -75,26 +74,27 @@ export function ActionField({ field }) {
 
     const stateToggle = field.variant === 'toggle';
     const gated = isActionRuntimeGated(field, ctx.isRuntimeDisabled);
+    const inert = gated || unavailable;
     const busy = primaryAction.pending || activeAction.pending || stopPair.pending || syncing;
     const active = runtimeActive || (isPairAction && pairing);
     const variant = stateToggle
         ? (runtimeActive ? 'success' : 'ghost')
         : (active ? 'ghost' : field.variant || 'primary');
     const gatedMessage = gated ? 'Unavailable until the plugin connection is healthy.' : null;
-    const label = actionLabel(field, busy, runtimeActive, pairing);
+    const label = actionLabel(field, busy, runtimeActive, pairing, unavailable);
     const error = primaryAction.error || activeAction.error || stopPair.error || activeState.error;
 
     return html`
         <div ...${fieldSurfaceAttrs(field, ctx, 'field-group field-action')}
             onMouseDown=${onSelect}
             onFocus=${onSelect}
-            onKeyDown=${gated ? undefined : onKeyDown}>
+            onKeyDown=${inert ? undefined : onKeyDown}>
             <div class="field-action-row">
                 ${actionShowsActivity(field, active) && html`<span class="refresh-btn spinning"></span>`}
                 <${Button} type="button" variant=${`btn-${variant}`}
                         aria-pressed=${stateToggle ? runtimeActive : undefined}
-                        disabled=${busy || gated}
-                        onActivate=${gated ? undefined : run}>
+                        disabled=${busy || inert}
+                        onActivate=${inert ? undefined : run}>
                     ${label}
                 <//>
             </div>
