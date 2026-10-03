@@ -1787,6 +1787,15 @@ impl SettingsPanelView {
 
     fn dispatch_action(&mut self, cx: &mut Context<Self>) {
         let row_index = self.level().selected;
+        let Some(row) = self.level().rows.get(row_index) else {
+            return;
+        };
+        let Some(action) =
+            action_dispatch_plan(&row.control, &self.row_query_state(row_index)).map(str::to_owned)
+        else {
+            qol_runtime::probe!("SETTINGS_ACTION_STATE", "row={} outcome=blocked", row.id);
+            return;
+        };
         let Some(runtime) = self
             .source_for(row_index)
             .map(|source| source.runtime.clone())
@@ -1794,11 +1803,8 @@ impl SettingsPanelView {
             return;
         };
         let Some(RowControl::Action {
-            action,
-            active_action,
             active_query,
             active_value_from,
-            active,
             pending,
             error,
             ..
@@ -1810,15 +1816,6 @@ impl SettingsPanelView {
         else {
             return;
         };
-        if *pending {
-            return;
-        }
-        let action = if *active {
-            active_action.as_ref().unwrap_or(action)
-        } else {
-            action
-        }
-        .clone();
         *pending = true;
         *error = None;
         let refresh_query = active_query.clone();
@@ -4347,6 +4344,31 @@ fn item_count_label(count: usize) -> String {
     }
 }
 
+fn action_dispatch_plan<'a>(
+    control: &'a RowControl,
+    query_state: &RowQueryState,
+) -> Option<&'a str> {
+    let RowControl::Action {
+        action,
+        active_action,
+        active_query,
+        active,
+        pending,
+        ..
+    } = control
+    else {
+        return None;
+    };
+    if *pending || (active_query.is_some() && !matches!(query_state, RowQueryState::Ready)) {
+        return None;
+    }
+    Some(if *active {
+        active_action.as_deref().unwrap_or(action)
+    } else {
+        action
+    })
+}
+
 fn action_refresh_payload(
     result: &Result<Option<serde_json::Value>, String>,
     active_value_from: Option<&str>,
@@ -4819,25 +4841,26 @@ fn list_header_height(row: &Row) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_refresh_payload, action_shows_spinner, action_value_label, adjacent_visible_row,
-        apply_runtime_query, binary_state_label, clamp_selected, color_display, crumb_labels,
-        due_query_indices, escape_step, focus_level, format_number, header_is_redundant,
-        horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
-        live_card_sync_back, live_number_dispatch_plan, number_finish_plan, number_preview,
-        number_unit, parsed_color, parsed_number, pop_level, push_level, query_is_due,
-        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
-        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
-        stepped_number, text_or_placeholder, transition_in_flight, transition_policy, EscapeStep,
-        HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan,
-        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, TransitionAction,
-        TransitionTracker,
+        action_dispatch_plan, action_refresh_payload, action_shows_spinner, action_value_label,
+        adjacent_visible_row, apply_runtime_query, binary_state_label, clamp_selected,
+        color_display, crumb_labels, due_query_indices, escape_step, focus_level, format_number,
+        header_is_redundant, horizontal_step_direction, intent, list_fit_updates, live_card_level,
+        live_card_sync, live_card_sync_back, live_number_dispatch_plan, number_finish_plan,
+        number_preview, number_unit, parsed_color, parsed_number, pop_level, push_level,
+        query_is_due, rail_group_breaks, release_slider_dispatch, row_body_height,
+        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
+        source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
+        transition_policy, EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch,
+        NumberFinishPlan, ObjectArrayState, Row, RowControl, RowSection, SettingsDestination,
+        TransitionAction, TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
     use crate::settings_panel::object_array_row::{Entry, Item};
     use crate::settings_panel::rows::{
-        retire_number_holds, rows_from_resolved, visible_row_indices, LiveQuery, SliderHold,
+        retire_number_holds, rows_from_resolved, visible_row_indices, LiveQuery, RowQueryState,
+        SliderHold,
     };
     use crate::settings_panel::PanelSourceGroup;
 
@@ -5465,6 +5488,87 @@ default = "visible"
             action_value_label(true, false, false, true, false, &labels),
             "Dark"
         );
+    }
+
+    #[test]
+    fn action_dispatch_requires_a_successful_initial_query() {
+        let states = [
+            RowQueryState::Idle,
+            RowQueryState::Loading {
+                since: std::time::Instant::now(),
+            },
+            RowQueryState::Unavailable("query failed".into()),
+            RowQueryState::Ready,
+        ];
+        for query_state in states {
+            for (has_query, pending, expected) in [
+                (
+                    true,
+                    false,
+                    matches!(query_state, RowQueryState::Ready).then_some("start"),
+                ),
+                (false, false, Some("start")),
+                (true, true, None),
+                (false, true, None),
+            ] {
+                let control = RowControl::Action {
+                    action: "start".into(),
+                    active_action: Some("stop".into()),
+                    active_label: None,
+                    active_query: has_query.then(|| "status".into()),
+                    active_value_from: Some("active".into()),
+                    state_labels: Default::default(),
+                    active: false,
+                    pending,
+                    error: Some("previous action failed".into()),
+                };
+                assert_eq!(
+                    action_dispatch_plan(&control, &query_state),
+                    expected,
+                    "query_state={query_state:?} has_query={has_query} pending={pending}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn action_dispatch_recovers_from_failed_queries_without_using_stale_state() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.switch]
+type = "action"
+action = "start"
+active_action = "stop"
+active_query = "status"
+active_value_from = "active"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved, 0);
+        for (result, expected) in [
+            (Ok(serde_json::json!({"active": true})), Some("stop")),
+            (Err(String::from("query failed")), None),
+            (Err("query still failed".into()), None),
+            (Ok(serde_json::json!({"active": false})), Some("start")),
+            (Err("query failed again".into()), None),
+            (Ok(serde_json::json!({"active": true})), Some("stop")),
+        ] {
+            let query_state = match &result {
+                Ok(_) => RowQueryState::Ready,
+                Err(message) => RowQueryState::Unavailable(message.clone()),
+            };
+            apply_runtime_query(&mut rows, "status", result, &|_, _| false);
+            assert_eq!(
+                action_dispatch_plan(&rows[0].control, &query_state),
+                expected,
+                "query_state={query_state:?} control={:?}",
+                rows[0].control
+            );
+        }
     }
 
     #[test]
