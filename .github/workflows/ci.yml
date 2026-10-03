@@ -192,7 +192,7 @@ jobs:
         if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
-        run: cargo clippy --locked $CLIPPY_ARGS -- -D warnings
+        run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
 
       - name: Release profile check
         if: matrix.skip != 'true' && github.event_name == 'pull_request'
