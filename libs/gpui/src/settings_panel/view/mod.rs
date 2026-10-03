@@ -48,8 +48,8 @@ use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
 
-type SampledQueryResults =
-    std::sync::Arc<std::sync::Mutex<Vec<(String, Result<serde_json::Value, String>)>>>;
+type QueryResult = Result<serde_json::Value, String>;
+type SampledQueryResults = std::sync::Arc<std::sync::Mutex<Vec<(String, QueryResult)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
@@ -240,7 +240,7 @@ pub(super) struct SettingsPanelView {
     slider_pending: std::collections::HashSet<(usize, String)>,
     slider_holds: std::collections::HashMap<(usize, String), SliderHold>,
     frame_paced_samples: Option<SampledQueryResults>,
-    applied_query_payloads: std::collections::HashMap<String, Result<serde_json::Value, String>>,
+    applied_query_payloads: AppliedQueryPayloads,
     /// Per-source query freshness, so a row backed by a wedged daemon can say
     /// so instead of silently rendering its contract default. Keyed by source
     /// because query names repeat across plugins.
@@ -398,7 +398,7 @@ impl SettingsPanelView {
             slider_pending: std::collections::HashSet::new(),
             slider_holds: std::collections::HashMap::new(),
             frame_paced_samples: None,
-            applied_query_payloads: std::collections::HashMap::new(),
+            applied_query_payloads: AppliedQueryPayloads::default(),
             query_states: std::collections::HashMap::new(),
             frame_pump_armed: false,
             motion_tick: None,
@@ -1204,11 +1204,12 @@ impl SettingsPanelView {
         }
         let mut changed = false;
         for (query, result) in batch {
-            if self.applied_query_payloads.get(&query) == Some(&result) {
+            if !self
+                .applied_query_payloads
+                .changes(self.materialized_source, &query, &result)
+            {
                 continue;
             }
-            self.applied_query_payloads
-                .insert(query.clone(), result.clone());
             self.apply_query(&query, result, cx);
             changed = true;
         }
@@ -1221,13 +1222,11 @@ impl SettingsPanelView {
         result: Result<serde_json::Value, String>,
         cx: &mut Context<Self>,
     ) {
-        self.query_states.insert(
-            (self.materialized_source, query.to_string()),
-            match &result {
-                Ok(_) => RowQueryState::Ready,
-                Err(message) => RowQueryState::Unavailable(message.clone()),
-            },
-        );
+        let state = self
+            .applied_query_payloads
+            .record(self.materialized_source, query, &result);
+        self.query_states
+            .insert((self.materialized_source, query.to_string()), state);
         retire_number_holds(&self.stack[0].rows, &mut self.slider_holds, query, &result);
         let drag = self.slider_drag.clone();
         let pending = self.slider_pending.clone();
@@ -4369,6 +4368,32 @@ fn action_dispatch_plan<'a>(
     })
 }
 
+/// The last result applied per query, scoped to one source: query names are
+/// only unique within a source, so results from another source start fresh.
+#[derive(Default)]
+struct AppliedQueryPayloads {
+    source: Option<usize>,
+    payloads: std::collections::HashMap<String, QueryResult>,
+}
+
+impl AppliedQueryPayloads {
+    fn changes(&self, source: usize, query: &str, result: &QueryResult) -> bool {
+        self.source != Some(source) || self.payloads.get(query) != Some(result)
+    }
+
+    fn record(&mut self, source: usize, query: &str, result: &QueryResult) -> RowQueryState {
+        if self.source != Some(source) {
+            self.payloads.clear();
+            self.source = Some(source);
+        }
+        self.payloads.insert(query.to_string(), result.clone());
+        match result {
+            Ok(_) => RowQueryState::Ready,
+            Err(message) => RowQueryState::Unavailable(message.clone()),
+        }
+    }
+}
+
 fn action_refresh_payload(
     result: &Result<Option<serde_json::Value>, String>,
     active_value_from: Option<&str>,
@@ -4850,9 +4875,9 @@ mod tests {
         query_is_due, rail_group_breaks, release_slider_dispatch, row_body_height,
         schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
         source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
-        transition_policy, EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch,
-        NumberFinishPlan, ObjectArrayState, Row, RowControl, RowSection, SettingsDestination,
-        TransitionAction, TransitionTracker,
+        transition_policy, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level,
+        LevelHeader, LiveNumberDispatch, NumberFinishPlan, ObjectArrayState, Row, RowControl,
+        RowSection, SettingsDestination, TransitionAction, TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -5557,16 +5582,60 @@ active_value_from = "active"
             (Err("query failed again".into()), None),
             (Ok(serde_json::json!({"active": true})), Some("stop")),
         ] {
-            let query_state = match &result {
-                Ok(_) => RowQueryState::Ready,
-                Err(message) => RowQueryState::Unavailable(message.clone()),
-            };
+            let query_state = AppliedQueryPayloads::default().record(0, "status", &result);
             apply_runtime_query(&mut rows, "status", result, &|_, _| false);
             assert_eq!(
                 action_dispatch_plan(&rows[0].control, &query_state),
                 expected,
                 "query_state={query_state:?} control={:?}",
                 rows[0].control
+            );
+        }
+    }
+
+    #[test]
+    fn frame_paced_samples_recover_actions_after_a_failed_refresh_or_source_switch() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.switch]
+type = "action"
+action = "start"
+active_action = "stop"
+active_query = "status"
+active_value_from = "active"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let healthy = || Ok(serde_json::json!({"active": true}));
+        let failed = || Err("refresh failed".to_string());
+        let sample = |source| (source, healthy(), true);
+        let refresh = |source| (source, failed(), false);
+        for (case, steps, final_source) in [
+            ("failed refresh", vec![sample(0), refresh(0), sample(0)], 0),
+            ("source switch", vec![sample(0), sample(1)], 1),
+        ] {
+            let mut rows = rows_from_resolved(&resolved, 0);
+            let mut applied = AppliedQueryPayloads::default();
+            let mut query_states = std::collections::HashMap::new();
+            for (source, result, sampled) in steps {
+                if sampled && !applied.changes(source, "status", &result) {
+                    continue;
+                }
+                query_states.insert(source, applied.record(source, "status", &result));
+                apply_runtime_query(&mut rows, "status", result, &|_, _| false);
+            }
+            let last = query_states
+                .remove(&final_source)
+                .unwrap_or(RowQueryState::Idle);
+            assert_eq!(last, RowQueryState::Ready, "{case}");
+            assert_eq!(
+                action_dispatch_plan(&rows[0].control, &last),
+                Some("stop"),
+                "{case}"
             );
         }
     }
