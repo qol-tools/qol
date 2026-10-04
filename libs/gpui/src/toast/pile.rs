@@ -201,6 +201,18 @@ pub(super) fn layout(count: usize, grow: f32, open: f32, focus: &[f32]) -> Pile 
     }
 }
 
+pub(super) fn footprint(count: usize) -> (f32, f32) {
+    let mut states = vec![layout(count, 0.0, 0.0, &[]), layout(count, 1.0, 0.0, &[])];
+    for index in 0..count {
+        let mut focus = vec![0.0; count];
+        focus[index] = 1.0;
+        states.push(layout(count, 0.0, 1.0, &focus));
+    }
+    states.iter().fold((0.0, 0.0), |(width, height), pile| {
+        (width.max(pile.width), height.max(pile.height))
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Tween {
     from: f32,

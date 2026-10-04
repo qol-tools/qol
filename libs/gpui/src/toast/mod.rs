@@ -560,8 +560,8 @@ impl SlabPresenter {
                 state.rows.retain(|row| !stale_ids.contains(&row.id));
             }
 
-            let resting = pile::layout(state.rows.len(), 0.0, 0.0, &[]);
-            let size = size(px(resting.width.ceil()), px(resting.height.ceil()));
+            let (width, height) = pile::footprint(state.rows.len());
+            let size = size(px(width.ceil()), px(height.ceil()));
 
             let outcome = if state.surface.is_none() {
                 PushOutcome::Open { placement, size }
@@ -883,6 +883,7 @@ struct SlabToastView {
     grow: pile::Tween,
     open: pile::Tween,
     focus: Vec<(RowId, pile::Tween)>,
+    reach: [f32; 4],
     polling: bool,
     ring_ticking: bool,
     age_ticking: bool,
@@ -899,6 +900,7 @@ impl SlabToastView {
             grow: pile::Tween::at(0.0),
             open: pile::Tween::at(0.0),
             focus: Vec::new(),
+            reach: [0.0; 4],
             polling: false,
             ring_ticking: false,
             age_ticking: false,
@@ -1055,26 +1057,37 @@ impl Render for SlabToastView {
             || self.focus.iter().any(|(_, tween)| tween.moving(now));
 
         let shown = window.bounds().size;
-        let target = if moving {
-            size(
-                px(current
-                    .width
-                    .max(settled.width)
-                    .max(f32::from(shown.width))
-                    .ceil()),
-                px(current
-                    .height
-                    .max(settled.height)
-                    .max(f32::from(shown.height))
-                    .ceil()),
-            )
-        } else {
-            size(px(settled.width.ceil()), px(settled.height.ceil()))
-        };
+        let (width, height) = pile::footprint(count);
+        let target = size(px(width.ceil()), px(height.ceil()));
         if shown != target && self.dismisser.resize_window(target, window) {
             if let Some(origin) = self.host.anchored_origin(target) {
                 self.dismisser.reposition_window(origin);
             }
+        }
+        let (reach_width, reach_height) = if moving {
+            (
+                settled.width.max(self.reach[2]),
+                settled.height.max(self.reach[3]),
+            )
+        } else {
+            (settled.width, settled.height)
+        };
+        let reach = [
+            width - reach_width,
+            height - reach_height,
+            reach_width,
+            reach_height,
+        ];
+        if reach != self.reach
+            && crate::popup_window::set_input_region_by_title(
+                &self.dismisser.current_title(),
+                reach[0].max(0.0) as i16,
+                reach[1].max(0.0) as i16,
+                reach[2].ceil() as u16,
+                reach[3].ceil() as u16,
+            )
+        {
+            self.reach = reach;
         }
         if moving {
             window.request_animation_frame();
