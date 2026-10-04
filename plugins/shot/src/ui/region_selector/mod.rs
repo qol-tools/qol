@@ -27,7 +27,7 @@ const CHIP_W: f32 = 300.0;
 const CHIP_H: f32 = 30.0;
 const CHIP_TOP: f32 = qol_gpui::theme::SPACE_CELL;
 const SELECTOR_STATE_POLL_MS: u64 = 16;
-const MIN_DRAG_DISTANCE_PX: f64 = 6.0;
+const MIN_DRAG_DISTANCE_PX: f64 = 12.0;
 static SELECTOR_SEQ: AtomicU64 = AtomicU64::new(0);
 pub type RectMapper = Rc<dyn Fn(Rect) -> Option<Rect>>;
 
@@ -1681,6 +1681,14 @@ mod tests {
                 point(px(0.0), px(0.0)),
                 point(px(497.0), px(535.0)),
                 point(px(499.0), px(537.0)),
+            ),
+            None
+        );
+        assert_eq!(
+            selected_rect(
+                point(px(0.0), px(0.0)),
+                point(px(1133.0), px(646.0)),
+                point(px(1141.0), px(650.0)),
             ),
             None
         );

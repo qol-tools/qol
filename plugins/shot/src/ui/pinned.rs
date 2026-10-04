@@ -173,6 +173,10 @@ pub(crate) fn open_at_cursor<V: 'static>(
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> bool {
+    let content = PinnedContent {
+        size: pin_display_size(content.size),
+        ..content
+    };
     let tracker = MonitorTracker::start(cx);
     let pin_size = size(px(content.size.0), px(content.size.1));
     let token = match crate::ui::preview::fresh_cursor_token(&tracker, pin_size) {
@@ -1525,6 +1529,15 @@ fn action_row_fits(width: f32, height: f32) -> bool {
     width >= needed_width && height >= needed_height
 }
 
+fn pin_display_size((width, height): (f32, f32)) -> (f32, f32) {
+    if width <= 0.0 || height <= 0.0 {
+        return (width, height);
+    }
+    let grow = (MIN_DIM / width.min(height)).max(1.0);
+    let factor = grow.min((MAX_DIM / width.max(height)).max(1.0));
+    (width * factor, height * factor)
+}
+
 fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
     if width <= 0.0 || height <= 0.0 {
         return 1.0;
@@ -1538,7 +1551,7 @@ fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
 mod tests {
     use super::{
         action_row_fits, clamp_scale_factor, controls_visible, drag_bounds, hover_after_event,
-        resize_rect, PinRect,
+        pin_display_size, resize_rect, PinRect,
     };
     use gpui::ResizeEdge;
 
@@ -1779,6 +1792,23 @@ mod tests {
             assert!(
                 (clamped - expected).abs() < 0.001,
                 "factor={factor} size={width}x{height} got={clamped} want={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn pin_display_size_grows_tiny_images_to_the_minimum() {
+        let cases = [
+            ((8.0, 3.0), (128.0, 48.0)),
+            ((400.0, 300.0), (400.0, 300.0)),
+            ((4000.0, 2.0), (4096.0, 2.048)),
+            ((0.0, 10.0), (0.0, 10.0)),
+        ];
+        for (input, expected) in cases {
+            let (width, height) = pin_display_size(input);
+            assert!(
+                (width - expected.0).abs() < 0.001 && (height - expected.1).abs() < 0.001,
+                "input={input:?} got={width}x{height} want={expected:?}"
             );
         }
     }
