@@ -916,6 +916,15 @@ impl SlabToastView {
         cx.notify();
     }
 
+    fn point(&mut self, hovered: Option<RowId>, lit: bool, cx: &mut Context<Self>) {
+        if self.hovered != hovered || self.lit != lit {
+            self.hovered = hovered;
+            self.lit = lit;
+            cx.notify();
+        }
+        self.enter(cx);
+    }
+
     fn leave(&mut self, cx: &mut Context<Self>) {
         if !self.inside {
             return;
@@ -1135,14 +1144,8 @@ impl Render for SlabToastView {
             let mut element = place(div().id(card::card_id(id)), card.frame)
                 .opacity(card.opacity)
                 .occlude()
-                .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
-                    if *hovered {
-                        view.hovered = Some(id);
-                        view.enter(cx);
-                    } else if view.hovered == Some(id) {
-                        view.hovered = None;
-                    }
-                    cx.notify();
+                .on_mouse_move(cx.listener(move |view, _: &MouseMoveEvent, _, cx| {
+                    view.point(Some(id), false, cx)
                 }));
             if index > 0 && !open {
                 let opener = host.clone();
@@ -1187,9 +1190,13 @@ impl Render for SlabToastView {
             }
         }
         if let Some(strip) = current.strip {
+            let newest = rows[0].id;
             layers.push(
                 place(div().id("toast-strip"), strip.frame)
                     .occlude()
+                    .on_mouse_move(cx.listener(move |view, _: &MouseMoveEvent, _, cx| {
+                        view.point(Some(newest), false, cx)
+                    }))
                     .child(kit.window().shadow(Vec::new()).child(card::strip(
                         count,
                         strip.scale,
@@ -1211,13 +1218,9 @@ impl Render for SlabToastView {
                 place(div().id("toast-show-all"), band)
                     .occlude()
                     .cursor_pointer()
-                    .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
-                        view.lit = *hovered;
-                        if *hovered {
-                            view.enter(cx);
-                        }
-                        cx.notify();
-                    }))
+                    .on_mouse_move(
+                        cx.listener(|view, _: &MouseMoveEvent, _, cx| view.point(None, true, cx)),
+                    )
                     .on_click(move |_, _, cx| host.set_expanded(true, cx))
                     .child(card::show_all(current.words, kit))
                     .into_any_element(),
@@ -1235,7 +1238,9 @@ impl Render for SlabToastView {
             .id("toast-pile")
             .size_full()
             .relative()
-            .on_mouse_move(cx.listener(|view, _, _, cx| view.enter(cx)))
+            .on_mouse_move(
+                cx.listener(|view, _: &MouseMoveEvent, _, cx| view.point(None, false, cx)),
+            )
             .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
                 if *hovered {
                     view.enter(cx);
