@@ -205,6 +205,12 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
     })
 }
 
+pub fn work_area_within(
+    _monitor: gpui::Bounds<gpui::Pixels>,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    None
+}
+
 pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
     None
 }

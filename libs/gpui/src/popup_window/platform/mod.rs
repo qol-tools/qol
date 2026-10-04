@@ -31,7 +31,7 @@ pub use fallback::{
     sync_window_layout, sync_window_layout_by_title, visible_windows_by_title_prefix,
     window_backing_scale, window_bounds_primary_anchored, window_geometry_session,
     window_holds_input_focus, window_position_by_title, window_presentation_is_normal_by_title,
-    WindowGeometrySession,
+    work_area_within, WindowGeometrySession,
 };
 #[cfg(target_os = "linux")]
 pub use linux::{
@@ -47,7 +47,7 @@ pub use linux::{
     sync_window_layout, sync_window_layout_by_title, visible_windows_by_title_prefix,
     window_backing_scale, window_bounds_primary_anchored, window_geometry_session,
     window_holds_input_focus, window_position_by_title, window_presentation_is_normal_by_title,
-    WindowGeometrySession,
+    work_area_within, WindowGeometrySession,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{
@@ -63,7 +63,7 @@ pub use macos::{
     sync_window_layout, sync_window_layout_by_title, visible_windows_by_title_prefix,
     window_backing_scale, window_bounds_primary_anchored, window_geometry_session,
     window_holds_input_focus, window_position_by_title, window_presentation_is_normal_by_title,
-    WindowGeometrySession,
+    work_area_within, WindowGeometrySession,
 };
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

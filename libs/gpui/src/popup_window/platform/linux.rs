@@ -183,6 +183,54 @@ pub fn window_bounds_primary_anchored(window: &mut gpui::Window) -> gpui::Bounds
     window.bounds()
 }
 
+pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bounds<gpui::Pixels>> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[screen_num].root;
+    let cardinals = |name: &[u8]| -> Option<Vec<i64>> {
+        let atom = intern(&conn, name)?;
+        let reply = conn
+            .get_property(false, root, atom, AtomEnum::CARDINAL, 0, 1024)
+            .ok()?
+            .reply()
+            .ok()?;
+        let values: Vec<i64> = reply.value32()?.map(i64::from).collect();
+        Some(values)
+    };
+    let desktop = cardinals(b"_NET_CURRENT_DESKTOP")
+        .and_then(|values| values.first().copied())
+        .unwrap_or(0);
+    let areas = cardinals(format!("_GTK_WORKAREAS_D{desktop}").as_bytes())
+        .filter(|values| values.len() >= 4)
+        .or_else(|| {
+            cardinals(b"_NET_WORKAREA").map(|values| {
+                let start = (desktop as usize * 4).min(values.len().saturating_sub(4));
+                values[start..].iter().take(4).copied().collect()
+            })
+        })?;
+    let left = f64::from(monitor.origin.x) as i64;
+    let top = f64::from(monitor.origin.y) as i64;
+    let right = left + f64::from(monitor.size.width) as i64;
+    let bottom = top + f64::from(monitor.size.height) as i64;
+    areas
+        .chunks_exact(4)
+        .map(|area| {
+            (
+                area[0].max(left),
+                area[1].max(top),
+                (area[0] + area[2]).min(right),
+                (area[1] + area[3]).min(bottom),
+            )
+        })
+        .filter(|(x0, y0, x1, y1)| x1 > x0 && y1 > y0)
+        .max_by_key(|(x0, y0, x1, y1)| (x1 - x0) * (y1 - y0))
+        .map(|(x0, y0, x1, y1)| {
+            gpui::Bounds::new(
+                gpui::point(gpui::px(x0 as f32), gpui::px(y0 as f32)),
+                gpui::size(gpui::px((x1 - x0) as f32), gpui::px((y1 - y0) as f32)),
+            )
+        })
+}
+
 pub fn window_position_by_title(title: &str) -> Option<(i32, i32)> {
     let (conn, _screen_num, root, list_atom, name_atom, utf8_atom) = connect_with_atoms()?;
     let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;

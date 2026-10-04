@@ -39,6 +39,12 @@ pub fn window_bounds_primary_anchored(window: &mut gpui::Window) -> gpui::Bounds
     window.bounds()
 }
 
+pub fn work_area_within(
+    _monitor: gpui::Bounds<gpui::Pixels>,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    None
+}
+
 pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
     None
 }
