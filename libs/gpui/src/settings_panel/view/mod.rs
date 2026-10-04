@@ -268,6 +268,7 @@ pub(super) struct SettingsPanelState {
     pub(super) rows: Vec<Row>,
     pub(super) sections: Vec<RowSection>,
     pub(super) sources: Vec<SourceState>,
+    pub(super) query_states: std::collections::HashMap<(usize, String), RowQueryState>,
     pub(super) height_cap: f32,
 }
 
@@ -399,7 +400,7 @@ impl SettingsPanelView {
             slider_holds: std::collections::HashMap::new(),
             frame_paced_samples: None,
             applied_query_payloads: AppliedQueryPayloads::default(),
-            query_states: std::collections::HashMap::new(),
+            query_states: state.query_states,
             frame_pump_armed: false,
             motion_tick: None,
             sample_signal: None,
@@ -468,6 +469,7 @@ impl SettingsPanelView {
             view.open_selected_section();
         }
         view.resume_runtime_poll(cx);
+        view.answer_other_pages(cx);
         view
     }
 
@@ -854,7 +856,6 @@ impl SettingsPanelView {
 
     /// Moves the rail highlight and the page together, instantly: a page
     /// build is microseconds, so every keystroke lands on the next frame.
-    /// Only the landed source's queries wait for the rail to settle.
     fn select_source(&mut self, next: usize, cx: &mut Context<Self>) {
         if next == self.selected_source {
             return;
@@ -863,7 +864,12 @@ impl SettingsPanelView {
         let switch_started = std::time::Instant::now();
         self.selected_source = next;
         self.materialize_source(cx);
-        self.resume_poll_when_settled(cx);
+        if self.materialized_source_answered() {
+            self.resume_poll_when_settled(cx);
+        } else {
+            self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
+            self.resume_runtime_poll(cx);
+        }
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "SETTINGS_NAV",
@@ -917,6 +923,13 @@ impl SettingsPanelView {
             started.elapsed().as_micros()
         );
         cx.notify();
+    }
+
+    fn materialized_source_answered(&self) -> bool {
+        let source = self.materialized_source;
+        self.runtime_queries
+            .iter()
+            .all(|query| self.query_states.contains_key(&(source, query.clone())))
     }
 
     /// Starts the landed source's queries once the rail stops moving.
@@ -988,6 +1001,27 @@ impl SettingsPanelView {
         self.start_runtime_poll(initial_delay, cx);
     }
 
+    pub(super) fn answer_other_pages(&mut self, cx: &mut Context<Self>) {
+        let mut answers =
+            super::ask_other_pages(self.materialized_source, &self.stack[0].rows, &self.sources);
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                while let Some((source, query, result)) = answers.next().await {
+                    let open = this.update(&mut async_cx, |this, cx| {
+                        if source != this.materialized_source {
+                            this.apply_query(source, &query, result, cx);
+                        }
+                    });
+                    if open.is_err() {
+                        return;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     fn start_runtime_poll(
         &mut self,
         initial_delay: Option<std::time::Duration>,
@@ -1008,6 +1042,7 @@ impl SettingsPanelView {
         if self.runtime_queries.is_empty() {
             return;
         }
+        let source = self.materialized_source;
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
         let apply_tick = queries
@@ -1059,7 +1094,7 @@ impl SettingsPanelView {
                             }
                             if !batch.is_empty() {
                                 for (query, result) in batch {
-                                    this.apply_query(&query, result, cx);
+                                    this.apply_query(source, &query, result, cx);
                                 }
                                 cx.notify();
                             }
@@ -1203,7 +1238,7 @@ impl SettingsPanelView {
             {
                 continue;
             }
-            self.apply_query(&query, result, cx);
+            self.apply_query(self.materialized_source, &query, result, cx);
             changed = true;
         }
         changed
@@ -1211,24 +1246,35 @@ impl SettingsPanelView {
 
     fn apply_query(
         &mut self,
+        source: usize,
         query: &str,
         result: Result<serde_json::Value, String>,
         cx: &mut Context<Self>,
     ) {
-        let state = self
-            .applied_query_payloads
-            .record(self.materialized_source, query, &result);
-        self.query_states
-            .insert((self.materialized_source, query.to_string()), state);
-        retire_number_holds(&self.stack[0].rows, &mut self.slider_holds, query, &result);
+        let state = self.applied_query_payloads.record(source, query, &result);
+        self.query_states.insert((source, query.to_string()), state);
+        retire_number_holds(
+            &self.stack[0].rows,
+            &mut self.slider_holds,
+            source,
+            query,
+            &result,
+        );
         let drag = self.slider_drag.clone();
         let pending = self.slider_pending.clone();
         let holds = self.slider_holds.clone();
         let now = std::time::Instant::now();
-        apply_runtime_query(&mut self.root_mut().rows, query, result, &|index, id| {
-            slider_protected(drag.as_ref(), &pending, &holds, index, id, now)
-        });
+        apply_runtime_query(
+            &mut self.root_mut().rows,
+            source,
+            query,
+            result,
+            &|index, id| slider_protected(drag.as_ref(), &pending, &holds, index, id, now),
+        );
         self.height_revision += 1;
+        if source != self.materialized_source {
+            return;
+        }
         self.sync_list_card(query, cx);
         self.sync_item_card_input(query);
         self.sync_live_card(query);
@@ -1788,6 +1834,8 @@ impl SettingsPanelView {
             qol_runtime::probe!("SETTINGS_ACTION_STATE", "row={} outcome=blocked", row.id);
             return;
         };
+        let source = row.source;
+        let row_id = row.id.clone();
         let Some(runtime) = self
             .source_for(row_index)
             .map(|source| source.runtime.clone())
@@ -1813,13 +1861,22 @@ impl SettingsPanelView {
         let refresh_query = active_query.clone();
         let refresh_value_from = active_value_from.clone();
         #[cfg(debug_assertions)]
-        let plugin_id = self.panel.primary_plugin_id().to_string();
+        let plugin_id = self.sources[source].plugin_id.clone();
         #[cfg(debug_assertions)]
         let dispatched_action = action.clone();
         let rearm_poll_generation = refresh_query.is_some().then(|| {
             self.pause_runtime_poll();
             self.runtime_poll_generation
         });
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!(
+            "SETTINGS_ACTION_STATE",
+            "plugin={} row={} source={} action={} outcome=pending",
+            plugin_id,
+            row_id,
+            source,
+            dispatched_action
+        );
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
@@ -1842,26 +1899,24 @@ impl SettingsPanelView {
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     let (result, refreshed) = result;
-                    if let Some(RowControl::Action { pending, error, .. }) = this
-                        .level_mut()
-                        .rows
-                        .get_mut(row_index)
-                        .map(|row| &mut row.control)
-                    {
-                        *pending = false;
-                        *error = result.err();
-                    }
+                    complete_action(&mut this.stack, source, &row_id, result.err());
                     if let Some((query, result)) = refreshed {
-                        this.apply_query(&query, result, cx);
+                        this.apply_query(source, &query, result, cx);
                     }
                     #[cfg(debug_assertions)]
                     if let Some(RowControl::Action { active, error, .. }) =
-                        this.level().rows.get(row_index).map(|row| &row.control)
+                        this.root().rows.iter()
+                            .find(|row| row.source == source && row.id == row_id)
+                            .map(|row| &row.control)
                     {
                         qol_runtime::probe!(
                             "SETTINGS_ACTION_STATE",
-                            "plugin={} action={} active={} outcome={}",
+                            "plugin={} row={} source={} visible_source={} depth={} action={} active={} outcome={}",
                             plugin_id,
+                            row_id,
+                            source,
+                            this.materialized_source,
+                            this.stack.len() - 1,
                             dispatched_action,
                             active,
                             if error.is_some() { "error" } else { "applied" }
@@ -4347,6 +4402,22 @@ fn item_count_label(count: usize) -> String {
     }
 }
 
+fn complete_action(stack: &mut [Level], source: usize, id: &str, failure: Option<String>) {
+    let Some(root) = stack.first_mut() else {
+        return;
+    };
+    let Some(RowControl::Action { pending, error, .. }) = root
+        .rows
+        .iter_mut()
+        .find(|row| row.source == source && row.id == id)
+        .map(|row| &mut row.control)
+    else {
+        return;
+    };
+    *pending = false;
+    *error = failure;
+}
+
 fn action_dispatch_plan<'a>(
     control: &'a RowControl,
     query_state: &RowQueryState,
@@ -4872,11 +4943,11 @@ mod tests {
     use super::{
         action_dispatch_plan, action_refresh_payload, action_shows_spinner, action_value_label,
         adjacent_visible_row, apply_runtime_query, binary_state_label, clamp_selected,
-        color_display, crumb_labels, due_query_indices, escape_step, focus_level, format_number,
-        header_is_redundant, horizontal_step_direction, intent, list_fit_updates, live_card_level,
-        live_card_sync, live_card_sync_back, live_number_dispatch_plan, number_finish_plan,
-        number_preview, number_unit, parsed_color, parsed_number, pop_level, push_level,
-        query_is_due, rail_group_breaks, release_slider_dispatch, row_body_height,
+        color_display, complete_action, crumb_labels, due_query_indices, escape_step, focus_level,
+        format_number, header_is_redundant, horizontal_step_direction, intent, list_fit_updates,
+        live_card_level, live_card_sync, live_card_sync_back, live_number_dispatch_plan,
+        number_finish_plan, number_preview, number_unit, parsed_color, parsed_number, pop_level,
+        push_level, query_is_due, rail_group_breaks, release_slider_dispatch, row_body_height,
         schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
         source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
         transition_policy, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level,
@@ -5520,6 +5591,66 @@ default = "visible"
     }
 
     #[test]
+    fn action_completion_keeps_its_origin_after_navigation() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.switch]
+type = "action"
+action = "start"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        for source in [0, 1] {
+            for nested in [false, true] {
+                for failure in [None, Some("action failed".to_string())] {
+                    let mut root = level(0);
+                    root.rows = rows_from_resolved(&resolved, 0);
+                    root.rows.extend(rows_from_resolved(&resolved, 1));
+                    for row in &mut root.rows {
+                        let RowControl::Action { pending, .. } = &mut row.control else {
+                            panic!("expected action control");
+                        };
+                        *pending = true;
+                    }
+                    let mut stack = vec![root];
+                    if nested {
+                        let mut child = level(0);
+                        child.rows = rows_from_resolved(&resolved, source);
+                        stack.push(child);
+                    }
+                    complete_action(&mut stack, source, "switch", failure.clone());
+                    for row in &stack[0].rows {
+                        let RowControl::Action { pending, error, .. } = &row.control else {
+                            panic!("expected action control");
+                        };
+                        assert_eq!(
+                            *pending,
+                            row.source != source,
+                            "source={source} nested={nested}"
+                        );
+                        assert_eq!(
+                            error.as_ref(),
+                            (row.source == source).then_some(failure.as_ref()).flatten()
+                        );
+                    }
+                    if nested {
+                        let RowControl::Action { pending, error, .. } = &stack[1].rows[0].control
+                        else {
+                            panic!("expected action control");
+                        };
+                        assert!(!pending);
+                        assert!(error.is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn action_dispatch_requires_a_successful_initial_query() {
         let states = [
             RowQueryState::Idle,
@@ -5585,7 +5716,7 @@ active_value_from = "active"
             (Ok(serde_json::json!({"active": true})), Some("stop")),
         ] {
             let query_state = AppliedQueryPayloads::default().record(0, "status", &result);
-            apply_runtime_query(&mut rows, "status", result, &|_, _| false);
+            apply_runtime_query(&mut rows, 0, "status", result, &|_, _| false);
             assert_eq!(
                 action_dispatch_plan(&rows[0].control, &query_state),
                 expected,
@@ -5621,6 +5752,7 @@ active_value_from = "active"
             ("source switch", vec![sample(0), sample(1)], 1),
         ] {
             let mut rows = rows_from_resolved(&resolved, 0);
+            rows.extend(rows_from_resolved(&resolved, 1));
             let mut applied = AppliedQueryPayloads::default();
             let mut query_states = std::collections::HashMap::new();
             for (source, result, sampled) in steps {
@@ -5628,14 +5760,15 @@ active_value_from = "active"
                     continue;
                 }
                 query_states.insert(source, applied.record(source, "status", &result));
-                apply_runtime_query(&mut rows, "status", result, &|_, _| false);
+                apply_runtime_query(&mut rows, source, "status", result, &|_, _| false);
             }
             let last = query_states
                 .remove(&final_source)
                 .unwrap_or(RowQueryState::Idle);
             assert_eq!(last, RowQueryState::Ready, "{case}");
+            let target = rows.iter().find(|row| row.source == final_source).unwrap();
             assert_eq!(
-                action_dispatch_plan(&rows[0].control, &last),
+                action_dispatch_plan(&target.control, &last),
                 Some("stop"),
                 "{case}"
             );
@@ -6005,15 +6138,33 @@ active_value_from = "active"
     }
 
     #[test]
+    fn number_confirmation_only_retires_its_source_hold() {
+        let mut rows = vec![live_number_row(60.0), live_number_row(60.0)];
+        rows[1].source = 1;
+        let now = std::time::Instant::now();
+        for source in [0, 1] {
+            let mut holds = number_hold(60.0, Some(60.0), now + std::time::Duration::from_secs(10));
+            holds.insert(
+                (1, "brightness".to_string()),
+                holds[&(0, "brightness".to_string())],
+            );
+            let answer = Ok(serde_json::json!({"brightness": 60}));
+            retire_number_holds(&rows, &mut holds, source, "brightness", &answer);
+            assert!(!holds.contains_key(&(source, "brightness".to_string())));
+            assert!(holds.contains_key(&(1 - source, "brightness".to_string())));
+        }
+    }
+
+    #[test]
     fn a_stale_answer_after_the_dispatch_resolves_does_not_snap_the_number_back() {
         let mut rows = vec![live_number_row(60.0)];
         let now = std::time::Instant::now();
         let mut holds = number_hold(60.0, Some(60.0), now + std::time::Duration::from_secs(10));
         let stale = Ok(serde_json::json!({ "brightness": 45 }));
-        retire_number_holds(&rows, &mut holds, "brightness", &stale);
+        retire_number_holds(&rows, &mut holds, 0, "brightness", &stale);
         assert!(holds.contains_key(&(0usize, "brightness".to_string())));
         let pending = std::collections::HashSet::new();
-        apply_runtime_query(&mut rows, "brightness", stale, &|index, id| {
+        apply_runtime_query(&mut rows, 0, "brightness", stale, &|index, id| {
             slider_protected(None, &pending, &holds, index, id, now)
         });
         assert_eq!(live_number_value(&rows), 60.0);
@@ -6025,10 +6176,10 @@ active_value_from = "active"
         let now = std::time::Instant::now();
         let mut holds = number_hold(60.0, Some(60.0), now + std::time::Duration::from_secs(10));
         let answer = Ok(serde_json::json!({ "brightness": 60 }));
-        retire_number_holds(&rows, &mut holds, "brightness", &answer);
+        retire_number_holds(&rows, &mut holds, 0, "brightness", &answer);
         assert!(holds.is_empty());
         let pending = std::collections::HashSet::new();
-        apply_runtime_query(&mut rows, "brightness", answer, &|index, id| {
+        apply_runtime_query(&mut rows, 0, "brightness", answer, &|index, id| {
             slider_protected(None, &pending, &holds, index, id, now)
         });
         assert_eq!(live_number_value(&rows), 60.0);
@@ -6040,10 +6191,10 @@ active_value_from = "active"
         let now = std::time::Instant::now();
         let mut holds = number_hold(60.0, Some(60.0), now - std::time::Duration::from_secs(1));
         let answer = Ok(serde_json::json!({ "brightness": 45 }));
-        retire_number_holds(&rows, &mut holds, "brightness", &answer);
+        retire_number_holds(&rows, &mut holds, 0, "brightness", &answer);
         assert!(holds.is_empty());
         let pending = std::collections::HashSet::new();
-        apply_runtime_query(&mut rows, "brightness", answer, &|index, id| {
+        apply_runtime_query(&mut rows, 0, "brightness", answer, &|index, id| {
             slider_protected(None, &pending, &holds, index, id, now)
         });
         assert_eq!(live_number_value(&rows), 45.0);

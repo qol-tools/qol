@@ -29,7 +29,10 @@ use gpui::*;
 
 use crate::monitor::MonitorTracker;
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
-use rows::{rows_from_resolved, sections_from_resolved, Row, RowControl, RowSection};
+use rows::{
+    apply_runtime_query, rows_from_resolved, runtime_query_names, sections_from_resolved, Row,
+    RowControl, RowQueryState, RowSection,
+};
 use view::{SettingsPanelState, SettingsPanelView};
 
 const PANEL_COMPACT_WIDTH: f32 = 420.0;
@@ -275,7 +278,10 @@ pub struct PreparedSettingsPanel {
     rows: Vec<Row>,
     sections: Vec<RowSection>,
     sources: Vec<SourceState>,
+    query_states: QueryStates,
 }
+
+type QueryStates = std::collections::HashMap<(usize, String), RowQueryState>;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct FieldCopy {
@@ -442,8 +448,10 @@ impl SettingsWindowHost {
         let updated = active.surface.present(tracker, cx);
         if updated && resume_runtime_poll {
             let _ = active.surface.handle.update(cx, |root, _, cx| {
-                root.inner
-                    .update(cx, |view, cx| view.resume_runtime_poll(cx));
+                root.inner.update(cx, |view, cx| {
+                    view.resume_runtime_poll(cx);
+                    view.answer_other_pages(cx);
+                });
             });
         }
         if updated {
@@ -689,12 +697,71 @@ fn prepare_panel(
         }
         sources.push(prepared.state);
     }
+    let query_states = answer_opening_page(panel.focused_index(), &mut rows, &sources);
     Ok(PreparedSettingsPanel {
         panel,
         rows,
         sections,
         sources,
+        query_states,
     })
+}
+
+fn answer_opening_page(focused: usize, rows: &mut [Row], sources: &[SourceState]) -> QueryStates {
+    let mut states = QueryStates::new();
+    let queries = runtime_query_names(rows.iter().filter(|row| row.source == focused));
+    let Some(source) = sources.get(focused).filter(|_| !queries.is_empty()) else {
+        return states;
+    };
+    let runtime = source.runtime.clone();
+    let (sender, answers) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for query in queries {
+            let result = runtime.query(&query);
+            if sender.send((query, result)).is_err() {
+                return;
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + qol_theme::WAIT_BEFORE_BUSY;
+    while let Ok((query, result)) =
+        answers.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+    {
+        let state = match &result {
+            Ok(_) => RowQueryState::Ready,
+            Err(message) => RowQueryState::Unavailable(message.clone()),
+        };
+        states.insert((focused, query.clone()), state);
+        apply_runtime_query(rows, focused, &query, result, &|_, _| false);
+    }
+    states
+}
+
+type PageAnswer = (usize, String, Result<serde_json::Value, String>);
+
+fn ask_other_pages(
+    open: usize,
+    rows: &[Row],
+    sources: &[SourceState],
+) -> futures::channel::mpsc::UnboundedReceiver<PageAnswer> {
+    let (sender, answers) = futures::channel::mpsc::unbounded();
+    for (index, source) in sources.iter().enumerate() {
+        let queries = runtime_query_names(rows.iter().filter(|row| row.source == index));
+        if index == open || queries.is_empty() {
+            continue;
+        }
+        let runtime = source.runtime.clone();
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            for query in queries {
+                let result = runtime.query(&query);
+                if sender.unbounded_send((index, query, result)).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    answers
 }
 
 struct PreparedSource {
@@ -800,6 +867,7 @@ fn size_prepared_panel(
             rows: prepared.rows,
             sections: prepared.sections,
             sources: prepared.sources,
+            query_states: prepared.query_states,
             height_cap: available,
         },
         size: size(px(width), px(height)),
@@ -929,7 +997,92 @@ mod tests {
     };
     use crate::gamepad::GamepadMonitor;
     use crate::settings_panel::display_layout::{DisplayLayoutBindings, DisplayLayoutState};
-    use crate::settings_panel::rows::RowControl;
+    use crate::settings_panel::rows::{rows_from_resolved, RowControl, RowQueryState};
+
+    fn source(runtime: SettingsRuntime) -> super::SourceState {
+        super::SourceState {
+            plugin_id: "plugin".into(),
+            values: serde_json::json!({}),
+            path: None,
+            runtime,
+            daemon_port: None,
+            copy: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn the_opening_page_is_answered_before_the_window_shows_and_no_other_page_is_asked() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.switch]
+type = "action"
+action = "start"
+active_action = "stop"
+active_query = "status"
+active_value_from = "active"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved, 0);
+        rows.extend(rows_from_resolved(&resolved, 1));
+        let sources = [
+            source(SettingsRuntime::new(|_| {
+                Ok(serde_json::json!({"active": true}))
+            })),
+            source(SettingsRuntime::new(|query| {
+                panic!("page that is not open was asked for {query}")
+            })),
+        ];
+        let states = super::answer_opening_page(0, &mut rows, &sources);
+        assert_eq!(
+            states.into_iter().collect::<Vec<_>>(),
+            vec![((0, "status".to_string()), RowQueryState::Ready)]
+        );
+        let active = |row: &Row| matches!(row.control, RowControl::Action { active: true, .. });
+        assert!(active(&rows[0]));
+        assert!(!active(&rows[1]));
+    }
+
+    #[test]
+    fn every_page_but_the_open_one_is_asked_once_the_window_shows() {
+        use futures::StreamExt as _;
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.switch]
+type = "action"
+action = "start"
+active_query = "status"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = (0..3)
+            .flat_map(|index| rows_from_resolved(&resolved, index))
+            .collect::<Vec<_>>();
+        let sources = [
+            source(SettingsRuntime::new(|_| Ok(serde_json::json!("open")))),
+            source(SettingsRuntime::new(|_| Ok(serde_json::json!("ready")))),
+            source(SettingsRuntime::new(|_| Err("offline".to_string()))),
+        ];
+        let mut answers = futures::executor::block_on(
+            super::ask_other_pages(0, &rows, &sources).collect::<Vec<_>>(),
+        );
+        answers.sort_by_key(|(source, _, _)| *source);
+        assert_eq!(
+            answers,
+            vec![
+                (1, "status".to_string(), Ok(serde_json::json!("ready"))),
+                (2, "status".to_string(), Err("offline".to_string())),
+            ]
+        );
+    }
 
     fn row(control: RowControl) -> Row {
         Row {

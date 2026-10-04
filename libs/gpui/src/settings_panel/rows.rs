@@ -866,11 +866,16 @@ pub(super) fn runtime_query_names<'a>(rows: impl IntoIterator<Item = &'a Row>) -
 
 pub(super) fn apply_runtime_query(
     rows: &mut [Row],
+    source: usize,
     query: &str,
     result: Result<serde_json::Value, String>,
     slider_protected: &dyn Fn(usize, &str) -> bool,
 ) {
-    for (row_index, row) in rows.iter_mut().enumerate() {
+    for (row_index, row) in rows
+        .iter_mut()
+        .enumerate()
+        .filter(|(_, row)| row.source == source)
+    {
         match &mut row.control {
             RowControl::Select {
                 options,
@@ -1097,11 +1102,18 @@ pub(super) fn apply_runtime_query(
 pub(super) fn retire_number_holds(
     rows: &[Row],
     holds: &mut std::collections::HashMap<(usize, String), SliderHold>,
+    source: usize,
     query: &str,
     result: &Result<serde_json::Value, String>,
 ) {
     let now = std::time::Instant::now();
     holds.retain(|(row_index, _), hold| {
+        let Some(row) = rows.get(*row_index) else {
+            return false;
+        };
+        if row.source != source {
+            return true;
+        }
         let Some(RowControl::Number {
             live: Some(live), ..
         }) = rows.get(*row_index).map(|row| &row.control)
@@ -1402,7 +1414,67 @@ mod tests {
     use qol_config::object_array::ItemFieldKind;
 
     fn apply_query(rows: &mut [Row], query: &str, result: Result<serde_json::Value, String>) {
-        apply_runtime_query(rows, query, result, &|_, _| false);
+        apply_runtime_query(rows, 0, query, result, &|_, _| false);
+    }
+
+    #[test]
+    fn query_results_only_update_their_source() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.switch]
+type = "action"
+action = "start"
+active_query = "status"
+active_value_from = "active"
+
+[field.volume]
+type = "number"
+default = 10
+active_query = "status"
+active_value_from = "volume"
+
+[field.state]
+type = "status"
+query = "status"
+value_from = "label"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        for source in [0, 1] {
+            for result in [
+                Ok(serde_json::json!({"active": true, "volume": 80, "label": "Ready"})),
+                Err("query failed".to_string()),
+            ] {
+                let mut rows = rows_from_resolved(&resolved, 0);
+                rows.extend(rows_from_resolved(&resolved, 1));
+                let other = rows
+                    .iter()
+                    .filter(|row| row.source != source)
+                    .map(|row| format!("{:?}", row.control))
+                    .collect::<Vec<_>>();
+                let successful = result.is_ok();
+                apply_runtime_query(&mut rows, source, "status", result, &|_, _| false);
+                let unchanged = rows
+                    .iter()
+                    .filter(|row| row.source != source)
+                    .map(|row| format!("{:?}", row.control))
+                    .collect::<Vec<_>>();
+                assert_eq!(unchanged, other, "source={source} successful={successful}");
+                let target = rows
+                    .iter()
+                    .find(|row| row.source == source && row.id == "switch")
+                    .unwrap();
+                let RowControl::Action { active, error, .. } = &target.control else {
+                    panic!("expected action control");
+                };
+                assert_eq!(*active, successful);
+                assert_eq!(error.is_none(), successful);
+            }
+        }
     }
 
     const SPEC: &str = r#"
@@ -2363,6 +2435,7 @@ active_value_from = "volume"
         }
         apply_runtime_query(
             &mut rows,
+            0,
             "volume",
             Ok(serde_json::json!({ "volume": 35 })),
             &|index, id| index == 0 && id == "volume",
@@ -2695,6 +2768,7 @@ input = { address = "{address}" }
         );
         apply_runtime_query(
             &mut rows,
+            0,
             "volumes",
             Ok(serde_json::json!({
                 "items": [
