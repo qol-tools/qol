@@ -5,7 +5,6 @@ use std::fs::File;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,12 +12,9 @@ const SWIFT_HELPER_CACHE_DIR: &str = "qol-shot-swift";
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 pub(super) const SWIFT_PRELUDE: &str = include_str!("../macos_swift/prelude.swift");
-pub(super) const STATUS_OVERLAY_SWIFT: &str = include_str!("../macos_swift/status_overlay.swift");
 pub(super) const CLIPBOARD_WRITER_SWIFT: &str =
     include_str!("../macos_swift/clipboard_writer.swift");
 pub(super) const VIDEO_COMPOSER_SWIFT: &str = include_str!("../macos_swift/video_composer.swift");
-pub(super) const STATUS_OVERLAY_HELPER: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/status-overlay"));
 pub(super) const CLIPBOARD_WRITER_HELPER: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/clipboard-writer"));
 pub(super) const VIDEO_COMPOSER_HELPER: &[u8] =
@@ -36,28 +32,6 @@ pub(super) fn prewarm_swift_helper(
     thread::spawn(move || {
         let _ = ensure_swift_helper(name, body, embedded_helper);
     });
-}
-
-pub(super) fn spawn_source_swift(
-    body: &str,
-    configure: impl FnOnce(&mut Command),
-) -> Result<Child> {
-    let mut command = Command::new("swift");
-    command.arg("-").stdin(Stdio::piped());
-    configure(&mut command);
-    let mut child = command.spawn().context("failed to start Swift source")?;
-
-    let Some(stdin) = child.stdin.take() else {
-        return Err(anyhow!("failed to open Swift source stdin"));
-    };
-
-    write_swift_source(stdin, body).context("failed to write Swift source")?;
-    Ok(child)
-}
-
-fn write_swift_source(mut writer: impl Write, body: &str) -> std::io::Result<()> {
-    writer.write_all(SWIFT_PRELUDE.as_bytes())?;
-    writer.write_all(body.as_bytes())
 }
 
 pub(super) fn ensure_swift_helper(

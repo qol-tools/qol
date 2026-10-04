@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use futures::channel::oneshot;
 use gpui::*;
+use qol_plugin_daemon::notification::send_notification;
 
 use crate::capture::actions::ShotAction;
 use crate::capture::screenshot::CaptureFileReady;
@@ -182,7 +183,7 @@ pub(crate) fn open_at_cursor<V: 'static>(
                 "{trace} result=anchor-failed reason={error}"
             );
             log::warn!("pin cursor anchor failed: {error}");
-            platform::show_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE, 1800);
+            send_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE);
             return false;
         }
     };
@@ -194,7 +195,7 @@ pub(crate) fn open_at_cursor<V: 'static>(
                 "{trace} result=resolve-failed reason={error}"
             );
             log::warn!("pin placement resolve failed: {error}");
-            platform::show_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE, 1800);
+            send_notification(OPEN_FAILED_TOAST, ANCHOR_FAILED_MESSAGE);
             return false;
         }
     };
@@ -219,7 +220,7 @@ pub(crate) fn open_at_cursor<V: 'static>(
         placement.native_scale()
     );
     if !open(content, placement, dismiss, source_preview, cx) {
-        platform::show_notification(OPEN_FAILED_TOAST, OPEN_FAILED_MESSAGE, 1800);
+        send_notification(OPEN_FAILED_TOAST, OPEN_FAILED_MESSAGE);
         return false;
     }
     true
@@ -1036,7 +1037,7 @@ impl PinnedView {
         let path = self.path.clone();
         let perform = move || {
             action.perform(&path)?;
-            platform::show_notification(action.done_message(), &path.display().to_string(), 1400);
+            send_notification(action.done_message(), &path.display().to_string());
             Ok(())
         };
         if self.dismiss == PinnedDismiss::Remove {

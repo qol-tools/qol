@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use qol_headless::DoctorCheckResult;
-use qol_runtime::protocol::NotificationLevel;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,35 +18,6 @@ static FROZEN_CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn process_alive(pid: u32) -> bool {
     super::super::unix::process_alive(pid)
-}
-
-pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
-    let client = qol_runtime::PlatformStateClient::from_env();
-    if client.send_notification(title, message, NotificationLevel::Info) {
-        return;
-    }
-    qol_plugin_daemon::notification::send_notification(title, message);
-}
-
-pub fn show_saved_notification(
-    title: &str,
-    message: &str,
-    timeout_ms: u32,
-    target: crate::capture::completion::RevealTarget,
-) {
-    let client = qol_runtime::PlatformStateClient::from_env();
-    let payload = target.path().to_string_lossy().into_owned();
-    if client.send_notification_with_layout(
-        title,
-        message,
-        NotificationLevel::Info,
-        None,
-        Some(&payload),
-        Some(crate::capture::completion::corner_toast_layout()),
-    ) {
-        return;
-    }
-    show_notification(title, message, timeout_ms);
 }
 
 pub fn open_url(url: &str) -> Result<()> {

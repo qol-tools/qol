@@ -11,16 +11,14 @@ use crate::{Config, Rect};
 use super::conversion::{convert_recording, run_conversion_command};
 use super::display::{active_displays, rect_intersection, DisplayInfo};
 use super::labels::{monitor_label, path_label, rect_label};
-use super::overlay::{show_status_overlay, StatusOverlayLifecycle};
 use super::swift::{
-    ensure_swift_helper, prewarm_swift_helper, STATUS_OVERLAY_HELPER, STATUS_OVERLAY_SWIFT,
-    VIDEO_COMPOSER_HELPER, VIDEO_COMPOSER_SWIFT,
+    ensure_swift_helper, prewarm_swift_helper, VIDEO_COMPOSER_HELPER, VIDEO_COMPOSER_SWIFT,
 };
 use super::system::{
     capture_work_dir, ensure_capture_work_dir, move_file, open_path, output_format_label,
-    path_extension_is, paths_match, show_notification, signal_process, videos_dir,
-    wait_for_process_exit,
+    path_extension_is, paths_match, signal_process, videos_dir, wait_for_process_exit,
 };
+use qol_plugin_daemon::notification::send_notification;
 
 #[derive(Debug, Clone)]
 struct DisplayCaptureSegment {
@@ -99,10 +97,12 @@ pub(super) fn finalization_for(output_file: &Path) -> Finalization {
     }
 }
 
-pub fn recording_started(_session: &CaptureSession, _countdown_completed: bool) {
-    qol_runtime::probe!("SHOT_RECORD_NOTIFY", "stage=started");
-    show_notification("Recording started", "Press your hotkey to stop", 1200);
-    prewarm_recording_helpers();
+pub fn recording_started(_session: &CaptureSession) {
+    prewarm_swift_helper(
+        "video-composer",
+        VIDEO_COMPOSER_SWIFT,
+        VIDEO_COMPOSER_HELPER,
+    );
 }
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
@@ -133,7 +133,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
                         path_label(&reveal_file),
                         reencode_needed
                     );
-                    let message = show_recording_saved(&reveal_file, reencode_needed);
+                    let message = recording_saved_message(&reveal_file, reencode_needed);
                     (reveal_file, message)
                 }
                 Err(error) => {
@@ -154,12 +154,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
     }
 
     qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=open-videos");
-    show_status_overlay(
-        "Recording stopped",
-        "Opening Videos",
-        1800,
-        StatusOverlayLifecycle::ExitAfterHide,
-    );
+    send_notification("Recording stopped", "Opening Videos");
     let videos_dir = config
         .capture
         .open_folder_after_save
@@ -621,16 +616,9 @@ fn finalization_fallback(
     );
     let native_file = fallback_recording_file(session, capture_file);
     let reveal_file = relocate_fallback_recording(&native_file, output_file);
-    show_status_overlay(
-        "Conversion failed",
-        "Saved native recording instead",
-        3000,
-        StatusOverlayLifecycle::ExitAfterHide,
-    );
-    show_notification(
+    send_notification(
         "Recording conversion failed",
         &format!("Saved native recording instead. {}", error),
-        2500,
     );
     reveal_file
 }
@@ -666,58 +654,26 @@ fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
         path_label(output_file)
     );
     if !conversion_needed {
-        show_status_overlay(
-            "Recording stopped",
-            "Saving recording",
-            1800,
-            StatusOverlayLifecycle::KeepAlive,
-        );
-        show_notification("Recording stopped", "Saving recording", 1600);
+        send_notification("Recording stopped", "Saving recording");
         return;
     }
 
     let message = format!("Converting to {}", output_format_label(output_file));
-    show_status_overlay(
-        "Recording stopped",
-        &message,
-        2400,
-        StatusOverlayLifecycle::KeepAlive,
-    );
-    show_notification("Recording stopped", &message, 2200);
+    send_notification("Recording stopped", &message);
 }
 
-fn show_recording_saved(output_file: &Path, converted: bool) -> String {
+fn recording_saved_message(output_file: &Path, converted: bool) -> String {
     qol_runtime::probe!(
         "SHOT_RECORD_STATUS",
         "stage=saved output={} converted={converted}",
         path_label(output_file)
     );
     let format = output_format_label(output_file);
-    let message = if converted {
+    if converted {
         format!("Converted to {} in Videos", format)
     } else {
         format!("Saved as {} in Videos", format)
-    };
-    show_status_overlay(
-        "Recording saved",
-        &message,
-        2400,
-        StatusOverlayLifecycle::ExitAfterHide,
-    );
-    message
-}
-
-fn prewarm_recording_helpers() {
-    prewarm_swift_helper(
-        "status-overlay",
-        STATUS_OVERLAY_SWIFT,
-        STATUS_OVERLAY_HELPER,
-    );
-    prewarm_swift_helper(
-        "video-composer",
-        VIDEO_COMPOSER_SWIFT,
-        VIDEO_COMPOSER_HELPER,
-    );
+    }
 }
 
 fn wait_for_stable_file(output_file: &Path) -> Result<()> {

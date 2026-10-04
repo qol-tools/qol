@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use qol_plugin_daemon::notification::send_notification;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -155,10 +156,9 @@ fn start_recording(selected: Rect, config: &Config, feedback: StartedFeedback) -
     } else {
         let _ = platform::stop_capture(&session);
         remove_state_file();
-        platform::show_notification(
+        send_notification(
             "Recording failed",
             &format!("Check {}", platform::CAPTURE_LOG),
-            1600,
         );
         return Err(anyhow!("capture process exited immediately"));
     }
@@ -167,7 +167,16 @@ fn start_recording(selected: Rect, config: &Config, feedback: StartedFeedback) -
 }
 
 fn announce_recording_started(session: &platform::CaptureSession, feedback: StartedFeedback) {
-    platform::recording_started(session, feedback == StartedFeedback::Countdown);
+    match feedback {
+        StartedFeedback::Platform => {
+            send_notification("Recording started", "Press your hotkey to stop");
+        }
+        StartedFeedback::Countdown => qol_runtime::probe!(
+            "SHOT_RECORD_FEEDBACK",
+            "stage=started surface=none reason=countdown-complete"
+        ),
+    }
+    platform::recording_started(session);
 }
 
 fn prepare_recording_rect(selected: Rect) -> Result<Rect> {
@@ -179,13 +188,12 @@ fn prepare_recording_rect(selected: Rect) -> Result<Rect> {
     let rect = geometry::prepare_recording_rect(selected, &monitors, fallback_bounds);
     let even = geometry::even_dimensions(rect);
     if even.w < MIN_RECORDING_DIMENSION_PX || even.h < MIN_RECORDING_DIMENSION_PX {
-        platform::show_notification(
+        send_notification(
             "Recording failed",
             &format!(
                 "Selected area is too small: {}x{} (minimum {}x{})",
                 even.w, even.h, MIN_RECORDING_DIMENSION_PX, MIN_RECORDING_DIMENSION_PX
             ),
-            1200,
         );
         qol_runtime::probe!(
             "SHOT_RECORD_RECT",
@@ -225,7 +233,7 @@ fn stop_capture_processes(state: &platform::CaptureSession, config: &Config) -> 
             state.pid_list()
         );
         if platform::session_alive(state) {
-            platform::show_notification("Recording failed", "Could not stop capture process", 1800);
+            send_notification("Recording failed", "Could not stop capture process");
             return Err(error).context("capture process is still running after stop request");
         }
     }
