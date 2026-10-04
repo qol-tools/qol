@@ -291,6 +291,7 @@ fn build_cargo_plugin_batch_with_progress(
     command
         .arg("build")
         .arg("--workspace")
+        .arg("--keep-going")
         .arg("--message-format")
         .arg("json")
         .env("CARGO_TERM_PROGRESS_WHEN", "always")
