@@ -698,19 +698,20 @@ impl Render for LinkedDevicesView {
         }
         let rows = self.rows();
         self.sync_selection(&rows);
-        let busy = self.pending && focused && window.is_window_active() && !self.refresh_on_focus;
+        let loading = self.snapshot.is_none() && (self.pending || self.polling);
         let mut page = settings_page();
         if let Some((message, danger)) = &self.notice {
             page = page.child(SettingsFeedback::new(message.clone(), *danger));
         }
-        page = page.child(self.render_list(&rows, focused, cx));
-        if busy && self.snapshot.is_none() {
-            page = page.child(settings_busy_message(
+        page = if loading {
+            page.child(settings_busy_message(
                 "linked-devices-loading",
                 "Reading linking state",
                 kit(),
-            ));
-        }
+            ))
+        } else {
+            page.child(self.render_list(&rows, focused, cx))
+        };
         page.id("linked-devices-body")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))

@@ -193,7 +193,13 @@ pub fn file_card(
                         FactText::Bytes(bytes) => qol_gpui::format_bytes(*bytes),
                     };
                     tags::tag(text, tag_hue(fact.kind), TAG_ALPHA, pane.ink)
-                })),
+                }))
+                .when(card.details.is_none(), |row| {
+                    row.child(qol_gpui::Busy::ring(
+                        card_id("launcher-file-facts", index, card.name),
+                        rgb(pane.faint),
+                    ))
+                }),
         )
 }
 

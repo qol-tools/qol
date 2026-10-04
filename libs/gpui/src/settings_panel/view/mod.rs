@@ -116,11 +116,12 @@ fn transition_in_flight(started: Option<std::time::Instant>, now: std::time::Ins
 }
 
 /// Collapses the states of every query a row depends on into the one the row
-/// should show. Unavailable wins over loading, loading wins over ready, and a
-/// query still inside its grace period is treated as ready so healthy plugins
-/// never flash an indicator.
+/// should show. Unavailable wins over loading and loading wins over ready. A
+/// query the polled source has not answered yet is loading, so the row never
+/// passes its contract default off as the live value.
 fn rollup_query_state<'a>(
     states: impl Iterator<Item = Option<&'a RowQueryState>>,
+    polled: bool,
 ) -> RowQueryState {
     let mut rolled = RowQueryState::Idle;
     for state in states {
@@ -128,9 +129,8 @@ fn rollup_query_state<'a>(
             Some(RowQueryState::Unavailable(message)) => {
                 return RowQueryState::Unavailable(message.clone());
             }
-            Some(RowQueryState::Loading { since }) => {
-                rolled = RowQueryState::Loading { since: *since };
-            }
+            Some(RowQueryState::Loading) => rolled = RowQueryState::Loading,
+            None | Some(RowQueryState::Idle) if polled => rolled = RowQueryState::Loading,
             Some(RowQueryState::Ready) if rolled == RowQueryState::Idle => {
                 rolled = RowQueryState::Ready
             }
@@ -1007,13 +1007,6 @@ impl SettingsPanelView {
         }
         if self.runtime_queries.is_empty() {
             return;
-        }
-        let source = self.materialized_source;
-        let since = std::time::Instant::now();
-        for query in &self.runtime_queries {
-            self.query_states
-                .entry((source, query.clone()))
-                .or_insert(RowQueryState::Loading { since });
         }
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
@@ -2586,11 +2579,15 @@ impl SettingsPanelView {
     /// The freshness of a row's value: unavailable wins over loading, and a row
     /// with no runtime query is always idle.
     fn row_query_state(&self, index: usize) -> RowQueryState {
-        let row = &self.level().rows[index];
+        self.query_state_of(&self.level().rows[index])
+    }
+
+    fn query_state_of(&self, row: &Row) -> RowQueryState {
         rollup_query_state(
             row_query_names(row)
                 .into_iter()
                 .map(|query| self.query_states.get(&(row.source, query.to_string()))),
+            row.source == self.materialized_source,
         )
     }
 
@@ -2609,7 +2606,7 @@ impl SettingsPanelView {
                 .justify_end()
         };
         match self.row_query_state(index) {
-            RowQueryState::Loading { .. } => Some(cell().child(settings_query_spinner(
+            RowQueryState::Loading => Some(cell().child(settings_query_spinner(
                 ("settings-query-spinner", index),
                 row,
                 self.kit,
@@ -3096,12 +3093,19 @@ impl SettingsPanelView {
                 .pulse(),
             );
         }
-        header_status = header_status.child(settings_value_text(
-            self.display_value(index),
-            self.value_tone(index),
-            ground,
-            self.kit,
-        ));
+        header_status = match self.row_query_state(index) {
+            RowQueryState::Loading => header_status.child(settings_query_spinner(
+                ("settings-list-query-spinner", index),
+                ground,
+                self.kit,
+            )),
+            _ => header_status.child(settings_value_text(
+                self.display_value(index),
+                self.value_tone(index),
+                ground,
+                self.kit,
+            )),
+        };
         let mut container = div()
             .id(("settings-list", index))
             .relative()
@@ -3157,7 +3161,7 @@ impl SettingsPanelView {
     fn render_qr_code(&self, index: usize) -> Div {
         let row = &self.level().rows[index];
         let highlighted = index == self.level().selected && self.body_has_focus();
-        let loading = matches!(self.row_query_state(index), RowQueryState::Loading { .. });
+        let loading = matches!(self.row_query_state(index), RowQueryState::Loading);
         qr_code_display(
             row,
             index,
@@ -5519,9 +5523,7 @@ default = "visible"
     fn action_dispatch_requires_a_successful_initial_query() {
         let states = [
             RowQueryState::Idle,
-            RowQueryState::Loading {
-                since: std::time::Instant::now(),
-            },
+            RowQueryState::Loading,
             RowQueryState::Unavailable("query failed".into()),
             RowQueryState::Ready,
         ];
@@ -6899,42 +6901,41 @@ active_value_from = "active"
 #[cfg(test)]
 mod query_state_tests {
     use super::{rollup_query_state, RowQueryState};
-    use std::time::Instant;
 
-    fn rollup(states: &[Option<RowQueryState>]) -> RowQueryState {
-        rollup_query_state(states.iter().map(Option::as_ref))
+    fn rollup(states: &[Option<RowQueryState>], polled: bool) -> RowQueryState {
+        rollup_query_state(states.iter().map(Option::as_ref), polled)
     }
 
     /// A row backed by several queries is only as good as its worst one.
     #[test]
     fn the_worst_query_decides_what_the_row_shows() {
-        let waiting = RowQueryState::Loading {
-            since: Instant::now(),
-        };
+        let ready = || Some(RowQueryState::Ready);
         let cases = [
-            (
-                vec![Some(RowQueryState::Ready), Some(waiting.clone())],
-                "loading",
-            ),
+            (vec![ready(), Some(RowQueryState::Loading)], true, "loading"),
             (
                 vec![
-                    Some(RowQueryState::Ready),
-                    Some(waiting.clone()),
+                    ready(),
+                    Some(RowQueryState::Loading),
                     Some(RowQueryState::Unavailable("dead".into())),
                 ],
+                true,
                 "unavailable",
             ),
-            (vec![Some(RowQueryState::Ready), None], "ready"),
-            (vec![None, None], "idle"),
+            (vec![ready(), ready()], true, "ready"),
+            (vec![ready(), None], true, "loading"),
+            (vec![None, None], true, "loading"),
+            (vec![ready(), None], false, "ready"),
+            (vec![None, None], false, "idle"),
+            (vec![], true, "idle"),
         ];
-        for (states, expected) in cases {
-            let actual = match rollup(&states) {
+        for (states, polled, expected) in cases {
+            let actual = match rollup(&states, polled) {
                 RowQueryState::Idle => "idle",
-                RowQueryState::Loading { .. } => "loading",
+                RowQueryState::Loading => "loading",
                 RowQueryState::Ready => "ready",
                 RowQueryState::Unavailable(_) => "unavailable",
             };
-            assert_eq!(actual, expected, "states: {states:?}");
+            assert_eq!(actual, expected, "states: {states:?} polled: {polled}");
         }
     }
 }

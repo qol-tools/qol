@@ -172,13 +172,13 @@ pub(super) enum RowControl {
 /// showing its defaults, which is the silent failure the mission forbids.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) enum RowQueryState {
-    /// The row has no runtime query, or its poller has not started.
+    /// The row has no runtime query, or its source is not the one being polled.
     #[default]
     Idle,
-    /// A sample is in flight and no value has ever landed. `since` lets the
-    /// view hold the indicator back until a query is actually slow, so healthy
-    /// plugins never flash a spinner.
-    Loading { since: std::time::Instant },
+    /// The polled source has not answered yet, so the row's contract default
+    /// is not its value. `qol_gpui::Busy` holds the spinner back until the
+    /// wait is actually slow.
+    Loading,
     /// The last sample succeeded.
     Ready,
     /// The last sample failed or exceeded its budget.
