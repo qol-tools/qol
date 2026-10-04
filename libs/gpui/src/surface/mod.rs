@@ -138,7 +138,6 @@ pub struct OpenedSurface<V> {
     pub(crate) dismisser: SurfaceDismisser,
     kind: SurfaceKind,
     placement: MonitorPlacement,
-    bounds: Bounds<Pixels>,
     constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
@@ -352,7 +351,7 @@ impl Surface {
         self.open_on(monitor.as_ref(), cx, build)
     }
 
-    fn open_on<V: Render + 'static>(
+    pub(crate) fn open_on<V: Render + 'static>(
         self,
         monitor: Option<&ActiveMonitor>,
         cx: &mut App,
@@ -536,7 +535,6 @@ impl Surface {
             dismisser,
             kind: self.kind,
             placement: self.placement,
-            bounds,
             constrains_size,
             visible,
             reveal_pending,
@@ -964,12 +962,8 @@ fn reveal_cancelled(dismiss_state: &DismissState, dismiss_generation: u64) -> bo
 }
 
 impl<V> OpenedSurface<V> {
-    pub(crate) fn anchored_origin(&self, content: Size<Pixels>) -> Point<Pixels> {
-        RevealAnchor {
-            placement: self.placement,
-            bounds: self.bounds,
-        }
-        .origin_for(content)
+    pub(crate) fn placement(&self) -> MonitorPlacement {
+        self.placement
     }
 }
 

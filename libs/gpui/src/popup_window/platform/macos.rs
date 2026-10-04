@@ -205,6 +205,18 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
     })
 }
 
+pub struct EscapeGrab;
+
+impl EscapeGrab {
+    pub fn take_pressed(&self) -> bool {
+        false
+    }
+}
+
+pub fn grab_escape() -> Option<EscapeGrab> {
+    None
+}
+
 pub fn work_area_within(
     _monitor: gpui::Bounds<gpui::Pixels>,
 ) -> Option<gpui::Bounds<gpui::Pixels>> {

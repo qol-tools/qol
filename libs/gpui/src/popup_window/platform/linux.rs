@@ -183,6 +183,84 @@ pub fn window_bounds_primary_anchored(window: &mut gpui::Window) -> gpui::Bounds
     window.bounds()
 }
 
+const ESCAPE_KEYSYM: u32 = 0xff1b;
+const ESCAPE_POLL: Duration = Duration::from_millis(20);
+
+pub struct EscapeGrab {
+    pressed: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    conn: Arc<x11rb::rust_connection::RustConnection>,
+    root: Window,
+    keycode: u8,
+}
+
+impl EscapeGrab {
+    pub fn take_pressed(&self) -> bool {
+        self.pressed.swap(false, Ordering::AcqRel)
+    }
+}
+
+impl Drop for EscapeGrab {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = self.conn.ungrab_key(self.keycode, self.root, ModMask::ANY);
+        let _ = self.conn.flush();
+    }
+}
+
+pub fn grab_escape() -> Option<EscapeGrab> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[screen_num].root;
+    let first = conn.setup().min_keycode;
+    let count = conn.setup().max_keycode - first + 1;
+    let mapping = conn.get_keyboard_mapping(first, count).ok()?.reply().ok()?;
+    let per = usize::from(mapping.keysyms_per_keycode.max(1));
+    let index = mapping
+        .keysyms
+        .chunks(per)
+        .position(|keysyms| keysyms.contains(&ESCAPE_KEYSYM))?;
+    let keycode = first + u8::try_from(index).ok()?;
+    for locks in [
+        ModMask::from(0u16),
+        ModMask::M2,
+        ModMask::LOCK,
+        ModMask::M2 | ModMask::LOCK,
+    ] {
+        conn.grab_key(
+            false,
+            root,
+            locks,
+            keycode,
+            GrabMode::ASYNC,
+            GrabMode::ASYNC,
+        )
+        .ok()?
+        .check()
+        .ok()?;
+    }
+    let pressed = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let conn = Arc::new(conn);
+    let (seen, halt, events) = (pressed.clone(), stop.clone(), conn.clone());
+    std::thread::spawn(move || {
+        while !halt.load(Ordering::Acquire) {
+            while let Ok(Some(event)) = events.poll_for_event() {
+                if matches!(event, Event::KeyPress(_)) {
+                    seen.store(true, Ordering::Release);
+                }
+            }
+            std::thread::sleep(ESCAPE_POLL);
+        }
+    });
+    Some(EscapeGrab {
+        pressed,
+        stop,
+        conn,
+        root,
+        keycode,
+    })
+}
+
 pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bounds<gpui::Pixels>> {
     let (conn, screen_num) = x11rb::connect(None).ok()?;
     let root = conn.setup().roots[screen_num].root;

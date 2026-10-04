@@ -1,7 +1,10 @@
 use gpui::*;
 use qol_theme::TextStyle;
 
-use super::{row_lift, RowId, SlabPresenter, SlabSnapshotRow, DISMISS_WIDTH, PREVIEW_WIDTH};
+use super::{
+    row_lift, BannerPresenter, RowId, SlabPresenter, SlabSnapshotRow, Toast, DISMISS_WIDTH,
+    PREVIEW_WIDTH,
+};
 use crate::kit::Kit;
 use crate::text::{cased, TextStyled};
 
@@ -11,6 +14,35 @@ const RING_DIAMETER: f32 = 24.0;
 pub(super) struct Ring {
     pub remaining: f32,
     pub ink: u32,
+}
+
+#[derive(Clone)]
+pub(super) enum CardHost {
+    Slab(SlabPresenter),
+    Banner(BannerPresenter, Box<Toast>),
+}
+
+impl CardHost {
+    fn activate(&self, id: RowId, cx: &mut App) {
+        match self {
+            Self::Slab(host) => host.activate(id, cx),
+            Self::Banner(host, toast) => host.run(toast.activation.clone(), cx),
+        }
+    }
+
+    fn open_preview(&self, id: RowId, cx: &mut App) {
+        match self {
+            Self::Slab(host) => host.open_preview(id, cx),
+            Self::Banner(host, toast) => host.run(toast.preview_action.clone(), cx),
+        }
+    }
+
+    fn remove(&self, id: RowId, cx: &mut App) {
+        match self {
+            Self::Slab(host) => host.remove(id, cx),
+            Self::Banner(host, _) => host.dismiss(cx),
+        }
+    }
 }
 
 pub(super) struct CardParts {
@@ -25,17 +57,22 @@ pub(super) fn content(
     row: &SlabSnapshotRow,
     parts: CardParts,
     kit: Kit,
-    host: SlabPresenter,
+    host: Option<CardHost>,
 ) -> Div {
     let scale = parts.scale;
-    div()
+    let mut card = div()
         .size_full()
         .flex()
         .flex_row()
         .opacity(parts.content)
         .child(lead(row, scale, parts.interactive, kit, host.clone()))
         .child(text_zone(row, &parts, kit, host.clone()))
-        .child(dismiss(row, &parts, kit, host))
+        .child(dismiss(row, &parts, kit, host.clone()));
+    if let Some(host) = host.filter(|_| parts.interactive) {
+        let id = row.id;
+        card = card.on_mouse_down(MouseButton::Middle, move |_, _, cx| host.remove(id, cx));
+    }
+    card
 }
 
 fn lead(
@@ -43,7 +80,7 @@ fn lead(
     scale: f32,
     interactive: bool,
     kit: Kit,
-    host: SlabPresenter,
+    host: Option<CardHost>,
 ) -> AnyElement {
     let Some(preview) = &row.toast.preview else {
         return div()
@@ -59,9 +96,9 @@ fn lead(
         .flex()
         .overflow_hidden()
         .child(preview.render(row.toast.tone.color(kit)));
-    if !interactive || row.toast.preview_action.is_none() {
+    let Some(host) = host.filter(|_| interactive && row.toast.preview_action.is_some()) else {
         return slot.into_any_element();
-    }
+    };
     let id = row.id;
     crate::kit::kit()
         .pointable(
@@ -76,12 +113,12 @@ fn text_zone(
     row: &SlabSnapshotRow,
     parts: &CardParts,
     kit: Kit,
-    host: SlabPresenter,
+    host: Option<CardHost>,
 ) -> AnyElement {
     let column = text_column(row, parts, kit);
-    if !parts.interactive || row.toast.activation.is_none() {
+    let Some(host) = host.filter(|_| parts.interactive && row.toast.activation.is_some()) else {
         return column.into_any_element();
-    }
+    };
     let id = row.id;
     crate::kit::kit()
         .pointable(
@@ -110,6 +147,7 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
         .child(
             div()
                 .flex_none()
+                .pr(px(qol_theme::SPACE_INSET * scale))
                 .child(SharedString::from(cased(TextStyle::Label, &parts.age))),
         );
     let mut column = div()
@@ -164,7 +202,12 @@ fn path_line(head: String, tail: String, scale: f32, kit: Kit) -> Div {
     line.child(piece(tail))
 }
 
-fn dismiss(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: SlabPresenter) -> AnyElement {
+fn dismiss(
+    row: &SlabSnapshotRow,
+    parts: &CardParts,
+    kit: Kit,
+    host: Option<CardHost>,
+) -> AnyElement {
     let scale = parts.scale;
     let side = DISMISS_WIDTH * scale;
     let mut control = div()
@@ -184,9 +227,9 @@ fn dismiss(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: SlabPresent
     if let Some(ring) = parts.ring {
         control = control.child(ring_view(ring, scale, kit));
     }
-    if !parts.interactive {
+    let Some(host) = host.filter(|_| parts.interactive) else {
         return control.into_any_element();
-    }
+    };
     let id = row.id;
     crate::kit::kit()
         .pointable(control.cursor_pointer(), row_lift(row, kit))
@@ -275,9 +318,18 @@ pub(super) fn show_all(words: f32, kit: Kit) -> Div {
         .items_center()
         .justify_center()
         .opacity(words)
-        .text(TextStyle::Label)
-        .text_color(rgb(kit.grounds.pane.faint))
-        .child(SharedString::from(cased(TextStyle::Label, "Show all")))
+        .child(
+            div()
+                .px(px(qol_theme::SPACE_INSET))
+                .py(px(qol_theme::SPACE_STACK))
+                .bg(rgba(qol_theme::translucent(
+                    kit.grounds.pane.bg,
+                    qol_theme::Alpha::Strong,
+                )))
+                .text(TextStyle::Label)
+                .text_color(rgb(kit.grounds.pane.faint))
+                .child(SharedString::from(cased(TextStyle::Label, "Show all"))),
+        )
 }
 
 pub(super) fn card_id(id: RowId) -> (&'static str, u64) {

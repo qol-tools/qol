@@ -1612,8 +1612,8 @@ mod tests {
                 viewport,
             ),
             Some(Bounds::new(
-                point(px(3260.0), px(48.0)),
-                size(px(520.0), px(78.0)),
+                point(px(3300.0), px(48.0)),
+                size(px(440.0), px(84.0)),
             )),
             "the guide belongs to the physical display, not the full desktop viewport"
         );

@@ -4,23 +4,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::kit::Kit;
-use crate::monitor::MonitorTracker;
+use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::placement::{
     anchor_placement, Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN,
 };
 use crate::popup_window::{present_topmost, restore_composite, HiddenWindowsBarrier};
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
+use crate::text::TextStyled as _;
 
 mod card;
 mod pile;
 
 const COMPACT_WIDTH: f32 = 340.0;
 const COMPACT_HEIGHT: f32 = 76.0;
-const STATUS_WIDTH: f32 = 520.0;
-const STATUS_HEIGHT: f32 = 78.0;
 
 const PREVIEW_WIDTH: f32 = 72.0;
 const DISMISS_WIDTH: f32 = 44.0;
@@ -29,6 +29,7 @@ const HOVER_HOLD_RECHECK: Duration = Duration::from_millis(400);
 const POINTER_POLL: Duration = Duration::from_millis(60);
 const RING_TICK: Duration = Duration::from_millis(50);
 const AGE_TICK: Duration = Duration::from_secs(30);
+const WINDOW_ROOM: f32 = 4096.0;
 
 static TOAST_HOST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -51,7 +52,7 @@ impl ToastLayout {
     pub fn status() -> Self {
         Self {
             placement: MonitorPlacement::top_center(TOP_CENTER_MARGIN),
-            size: size(px(STATUS_WIDTH), px(STATUS_HEIGHT)),
+            size: size(px(pile::CARD_WIDTH), px(pile::CARD_HEIGHT)),
             style: ToastStyle::Status,
         }
     }
@@ -123,15 +124,6 @@ impl ToastTone {
             Self::Neutral | Self::Info | Self::Success => Some(qol_theme::STAY_BRIEF),
             Self::Warning => Some(qol_theme::STAY_LONG),
             Self::Danger => qol_theme::STAY_UNTIL_CLOSED,
-        }
-    }
-
-    fn notice(self) -> crate::kit::NoticeTone {
-        match self {
-            Self::Neutral | Self::Info => crate::kit::NoticeTone::Quiet,
-            Self::Success => crate::kit::NoticeTone::Done,
-            Self::Warning => crate::kit::NoticeTone::Attention,
-            Self::Danger => crate::kit::NoticeTone::Invalid,
         }
     }
 
@@ -279,7 +271,13 @@ impl Toast {
     }
 
     pub fn element(&self) -> Div {
-        toast_notice(self)
+        let row = SlabSnapshotRow {
+            id: RowId(0),
+            toast: self.clone(),
+            created: Instant::now(),
+            deadline: None,
+        };
+        lone_card(&row, None, Instant::now())
     }
 
     pub fn positioned(&self, bounds: Bounds<Pixels>) -> Div {
@@ -302,6 +300,7 @@ impl Toast {
 
     fn open(
         self,
+        host: BannerPresenter,
         tracker: &MonitorTracker,
         title: &str,
         cx: &mut App,
@@ -311,10 +310,7 @@ impl Toast {
             .placement(self.layout.placement())
             .size(self.layout.size())
             .open(tracker, cx, move |dismisser, _window, _cx| {
-                BannerToastView {
-                    toast: self,
-                    dismisser,
-                }
+                BannerToastView::new(self, host, dismisser)
             })
     }
 }
@@ -347,7 +343,7 @@ impl BannerPresenter {
         if !self.update_active(toast.clone(), cx) {
             self.close_active(cx);
             let layout = toast.layout;
-            let surface = toast.open(&self.tracker, &self.title, cx)?;
+            let surface = toast.open(self.clone(), &self.tracker, &self.title, cx)?;
             self.active
                 .borrow_mut()
                 .replace(ActiveToast { surface, layout });
@@ -377,7 +373,7 @@ impl BannerPresenter {
             .handle
             .update(cx, |root, _, cx| {
                 root.inner.update(cx, |view, cx| {
-                    view.toast = toast;
+                    view.show(toast);
                     cx.notify();
                 });
             })
@@ -386,6 +382,15 @@ impl BannerPresenter {
             *slot = None;
         }
         updated
+    }
+
+    fn run(&self, action: Option<Activation>, cx: &mut App) {
+        if let Some(action) = action {
+            if let Err(error) = action(cx) {
+                qol_runtime::probe!("TOAST_ACTIVATION", "presentation=banner error={error:#}");
+            }
+        }
+        self.dismiss(cx);
     }
 
     fn close_active(&self, cx: &mut App) {
@@ -415,28 +420,78 @@ impl BannerPresenter {
 }
 
 struct BannerToastView {
-    toast: Toast,
-    dismisser: SurfaceDismisser,
+    row: SlabSnapshotRow,
+    host: BannerPresenter,
+    _dismisser: SurfaceDismisser,
+}
+
+impl BannerToastView {
+    fn new(toast: Toast, host: BannerPresenter, dismisser: SurfaceDismisser) -> Self {
+        let mut view = Self {
+            row: SlabSnapshotRow {
+                id: RowId(0),
+                toast: toast.clone(),
+                created: Instant::now(),
+                deadline: None,
+            },
+            host,
+            _dismisser: dismisser,
+        };
+        view.show(toast);
+        view
+    }
+
+    fn show(&mut self, toast: Toast) {
+        let now = Instant::now();
+        self.row.deadline = toast.effective_timeout().map(|timeout| now + timeout);
+        self.row.created = now;
+        self.row.toast = toast;
+    }
 }
 
 impl Render for BannerToastView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut root = self.toast.element();
-        let Some(activation) = self.toast.activation.clone() else {
-            return root;
-        };
-        let dismisser = self.dismisser.clone();
-        root = root.cursor_pointer().on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |_this, _event, _window, cx| {
-                if let Err(error) = activation(cx) {
-                    qol_runtime::probe!("TOAST_ACTIVATION", "presentation=banner error={error:#}");
-                }
-                dismisser.dismiss(cx);
-            }),
-        );
-        root
+        let now = Instant::now();
+        if self.row.deadline.is_some_and(|deadline| deadline > now) {
+            cx.spawn(async move |view, cx| {
+                cx.background_executor().timer(RING_TICK).await;
+                let _ = view.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        lone_card(
+            &self.row,
+            Some(card::CardHost::Banner(
+                self.host.clone(),
+                Box::new(self.row.toast.clone()),
+            )),
+            now,
+        )
     }
+}
+
+fn lone_card(row: &SlabSnapshotRow, host: Option<card::CardHost>, now: Instant) -> Div {
+    let kit = crate::kit::kit();
+    let ring = row.toast.effective_timeout().map(|timeout| card::Ring {
+        remaining: row.deadline.map_or(1.0, |deadline| {
+            deadline.saturating_duration_since(now).as_secs_f32() / timeout.as_secs_f32()
+        }),
+        ink: row.toast.tone.color(kit),
+    });
+    kit.window()
+        .bg(rgb(row_ground(row, kit)))
+        .child(card::content(
+            row,
+            card::CardParts {
+                scale: 1.0,
+                content: 1.0,
+                interactive: host.is_some(),
+                ring,
+                age: pile::age_label(now.saturating_duration_since(row.created)),
+            },
+            kit,
+            host,
+        ))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -450,6 +505,7 @@ struct ToastRow {
     deadline: Option<Instant>,
 }
 
+#[derive(Clone)]
 struct SlabSnapshotRow {
     id: RowId,
     toast: Toast,
@@ -463,6 +519,8 @@ struct HostState {
     next_id: u64,
     next_generation: u64,
     expanded: bool,
+    monitor: Option<Bounds<Pixels>>,
+    watching: bool,
 }
 
 impl HostState {
@@ -480,10 +538,7 @@ pub struct SlabPresenter {
 }
 
 enum PushOutcome {
-    Open {
-        placement: MonitorPlacement,
-        size: Size<Pixels>,
-    },
+    Open { placement: MonitorPlacement },
     Notify,
 }
 
@@ -497,6 +552,8 @@ impl SlabPresenter {
                 next_id: 0,
                 next_generation: 0,
                 expanded: false,
+                monitor: None,
+                watching: false,
             })),
             title: title.into(),
         }
@@ -560,11 +617,8 @@ impl SlabPresenter {
                 state.rows.retain(|row| !stale_ids.contains(&row.id));
             }
 
-            let (width, height) = pile::footprint(state.rows.len());
-            let size = size(px(width.ceil()), px(height.ceil()));
-
             let outcome = if state.surface.is_none() {
-                PushOutcome::Open { placement, size }
+                PushOutcome::Open { placement }
             } else {
                 PushOutcome::Notify
             };
@@ -572,27 +626,12 @@ impl SlabPresenter {
         };
 
         match outcome {
-            PushOutcome::Open { placement, size } => {
-                let owner: &str = &self.title;
-                let host = self.clone();
-                let surface = Surface::new(SurfaceKind::Toast)
-                    .title(owner)
-                    .placement(placement)
-                    .size(size)
-                    .open(&self.tracker, cx, move |dismisser, _window, _cx| {
-                        SlabToastView::new(host, dismisser)
-                    });
-                match surface {
-                    Ok(surface) => {
-                        self.state.borrow_mut().surface.replace(surface);
-                        present_topmost(&self.title);
-                    }
-                    Err(error) => {
-                        let mut state = self.state.borrow_mut();
-                        state.rows.clear();
-                        state.expanded = false;
-                        return Err(error);
-                    }
+            PushOutcome::Open { placement } => {
+                if let Err(error) = self.open_surface(placement, 0.0, false, cx) {
+                    let mut state = self.state.borrow_mut();
+                    state.rows.clear();
+                    state.expanded = false;
+                    return Err(error);
                 }
             }
             PushOutcome::Notify => self.notify_view(cx),
@@ -738,10 +777,92 @@ impl SlabPresenter {
             }
             state.rows.is_empty()
         };
-        if remains_empty {
+        if remains_empty && self.state.borrow().surface.is_none() {
             self.close(cx);
         } else {
             self.notify_view(cx);
+        }
+    }
+
+    fn watch_monitor(&self, cx: &mut App) {
+        if std::mem::replace(&mut self.state.borrow_mut().watching, true) {
+            return;
+        }
+        let presenter = self.clone();
+        crate::event_router::spawn_runtime_event_router(
+            cx,
+            vec![crate::protocol::RuntimeEventKind::ActiveMonitorChanged],
+            move |cx, event| {
+                let monitor = ActiveMonitor::from_event(event).map(|monitor| monitor.bounds());
+                presenter.follow(monitor, cx);
+            },
+        );
+    }
+
+    fn open_surface(
+        &self,
+        placement: MonitorPlacement,
+        scroll: f32,
+        arriving: bool,
+        cx: &mut App,
+    ) -> Result<()> {
+        let monitor = self
+            .tracker
+            .snapshot_monitor()
+            .or_else(|| self.tracker.snapshot_cursor().map(|(monitor, _)| monitor));
+        let host = self.clone();
+        let surface = Surface::new(SurfaceKind::Toast)
+            .title(&*self.title)
+            .placement(placement)
+            .size(size(px(pile::WIDTH.ceil()), px(WINDOW_ROOM)))
+            .open_on(monitor.as_ref(), cx, move |dismisser, _window, _cx| {
+                SlabToastView::new(host, dismisser, scroll, arriving)
+            })?;
+        {
+            let mut state = self.state.borrow_mut();
+            state.surface.replace(surface);
+            state.monitor = monitor.map(|monitor| monitor.bounds());
+        }
+        present_topmost(&self.title);
+        self.watch_monitor(cx);
+        Ok(())
+    }
+
+    fn follow(&self, monitor: Option<Bounds<Pixels>>, cx: &mut App) {
+        let (placement, handle) = {
+            let state = self.state.borrow();
+            let Some(surface) = state.surface.as_ref() else {
+                return;
+            };
+            if monitor.is_none() || state.monitor == monitor {
+                return;
+            }
+            (surface.placement(), surface.handle)
+        };
+        let scroll = handle
+            .update(cx, |root, _, cx| {
+                root.inner.update(cx, |view, _| {
+                    view.escape = None;
+                    view.scroll.target()
+                })
+            })
+            .unwrap_or(0.0);
+        let surface = self.state.borrow_mut().surface.take();
+        if let Some(surface) = surface {
+            surface.dismisser.dismiss(cx);
+        }
+        restore_composite(&self.title);
+        let presenter = self.clone();
+        cx.defer(move |cx| {
+            if let Err(error) = presenter.open_surface(placement, scroll, true, cx) {
+                log::warn!("[toast] the stack could not move to the active monitor: {error:#}");
+            }
+        });
+    }
+
+    fn close_if_empty(&self, cx: &mut App) {
+        if self.state.borrow().rows.is_empty() {
+            self.close(cx);
         }
     }
 
@@ -777,14 +898,6 @@ impl SlabPresenter {
             })
             .collect();
         (rows, state.expanded)
-    }
-
-    fn anchored_origin(&self, content: Size<Pixels>) -> Option<Point<Pixels>> {
-        self.state
-            .borrow()
-            .surface
-            .as_ref()
-            .map(|surface| surface.anchored_origin(content))
     }
 }
 
@@ -874,6 +987,19 @@ fn arm_timer(
     .detach();
 }
 
+struct Shown {
+    row: SlabSnapshotRow,
+    pose: pile::Pose,
+    index: usize,
+    leaving: bool,
+}
+
+struct Glide {
+    start: Instant,
+    from: Vec<Shown>,
+    strip: Option<(pile::Pose, usize)>,
+}
+
 struct SlabToastView {
     host: SlabPresenter,
     dismisser: SurfaceDismisser,
@@ -884,13 +1010,28 @@ struct SlabToastView {
     open: pile::Tween,
     focus: Vec<(RowId, pile::Tween)>,
     reach: [f32; 4],
+    shown: Vec<Shown>,
+    strip_shown: Option<(pile::Pose, usize)>,
+    glide: Option<Glide>,
+    closing: bool,
+    scroll: pile::Tween,
+    scroll_max: f32,
+    arriving: bool,
+    arrival: Option<Instant>,
+    escape: Option<crate::popup_window::EscapeGrab>,
+    escape_armed: bool,
     polling: bool,
     ring_ticking: bool,
     age_ticking: bool,
 }
 
 impl SlabToastView {
-    fn new(host: SlabPresenter, dismisser: SurfaceDismisser) -> Self {
+    fn new(host: SlabPresenter, dismisser: SurfaceDismisser, scroll: f32, arriving: bool) -> Self {
+        let open = if host.state.borrow().expanded {
+            1.0
+        } else {
+            0.0
+        };
         Self {
             host,
             dismisser,
@@ -898,9 +1039,19 @@ impl SlabToastView {
             hovered: None,
             lit: false,
             grow: pile::Tween::at(0.0),
-            open: pile::Tween::at(0.0),
+            open: pile::Tween::at(open),
             focus: Vec::new(),
             reach: [0.0; 4],
+            shown: Vec::new(),
+            strip_shown: None,
+            glide: None,
+            closing: false,
+            scroll: pile::Tween::at(scroll),
+            scroll_max: 0.0,
+            arriving,
+            arrival: None,
+            escape: None,
+            escape_armed: false,
             polling: false,
             ring_ticking: false,
             age_ticking: false,
@@ -923,6 +1074,19 @@ impl SlabToastView {
             cx.notify();
         }
         self.enter(cx);
+    }
+
+    fn scroll_by(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let delta = f32::from(event.delta.pixel_delta(px(pile::CARD_HEIGHT / 2.0)).y);
+        self.scroll_step(delta, cx);
+    }
+
+    fn scroll_step(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let target = (self.scroll.target() + delta).clamp(0.0, self.scroll_max);
+        if target != self.scroll.target() {
+            self.scroll.toward(target, Instant::now());
+            cx.notify();
+        }
     }
 
     fn leave(&mut self, cx: &mut Context<Self>) {
@@ -978,7 +1142,11 @@ impl SlabToastView {
             self.polling = false;
             return None;
         }
-        Some(expanded && pointer.pressed && !pointer.inside)
+        let escaped = self
+            .escape
+            .as_ref()
+            .is_some_and(crate::popup_window::EscapeGrab::take_pressed);
+        Some(expanded && (escaped || (pointer.pressed && !pointer.inside)))
     }
 
     fn tick(&mut self, ring: bool, cx: &mut Context<Self>) {
@@ -1054,25 +1222,110 @@ impl Render for SlabToastView {
             .iter()
             .map(|row| self.focus_of(row.id).map_or(0.0, pile::Tween::target))
             .collect();
+        let shown = window.bounds().size;
+        let width = f32::from(shown.width);
+        let height = f32::from(shown.height);
+        self.scroll_max = if open {
+            pile::overflow(count, height)
+        } else {
+            0.0
+        };
+        if open != self.escape_armed {
+            self.escape_armed = open;
+            self.escape = open.then(crate::popup_window::grab_escape).flatten();
+            if open && self.escape.is_none() {
+                log::warn!("[toast] Escape cannot fold the open stack: the key grab failed");
+            }
+        }
+        if open {
+            self.ensure_polling(cx);
+            if self.scroll.target() > self.scroll_max {
+                self.scroll.toward(self.scroll_max, now);
+            }
+        } else if self.open.value(now) <= 0.0 {
+            self.scroll = pile::Tween::at(0.0);
+        }
+        let scroll = self.scroll.value(now);
         let current = pile::layout(
             count,
             self.grow.value(now),
             self.open.value(now),
             &focus_now,
+            scroll,
         );
-        let settled = pile::layout(count, self.grow.target(), self.open.target(), &focus_end);
+        let settled = pile::layout(
+            count,
+            self.grow.target(),
+            self.open.target(),
+            &focus_end,
+            self.scroll.target(),
+        );
+        let departed = self
+            .shown
+            .iter()
+            .any(|seen| !seen.leaving && rows.iter().all(|row| row.id != seen.row.id));
+        if departed {
+            self.glide = Some(Glide {
+                start: now,
+                from: std::mem::take(&mut self.shown),
+                strip: self.strip_shown.take(),
+            });
+        }
+        let glide_t = self.glide.as_ref().map_or(1.0, |glide| {
+            pile::GLIDE.progress(now.saturating_duration_since(glide.start))
+        });
+        if self
+            .glide
+            .as_ref()
+            .is_some_and(|glide| now.saturating_duration_since(glide.start) >= pile::GLIDE.duration)
+        {
+            self.glide = None;
+        }
+        let poses: Vec<pile::Pose> = (0..count)
+            .map(|index| {
+                let target = pile::Pose::of(current.cards[index], current.width, current.height);
+                self.glide
+                    .as_ref()
+                    .and_then(|glide| glide.from.iter().find(|seen| seen.row.id == rows[index].id))
+                    .map_or(target, |seen| seen.pose.toward(target, glide_t))
+            })
+            .collect();
+        let ghosts: Vec<Shown> = self.glide.as_ref().map_or(Vec::new(), |glide| {
+            glide
+                .from
+                .iter()
+                .filter(|seen| rows.iter().all(|row| row.id != seen.row.id))
+                .map(|seen| Shown {
+                    row: seen.row.clone(),
+                    pose: seen.pose.leaving(glide_t),
+                    index: seen.index,
+                    leaving: true,
+                })
+                .collect()
+        });
+        let strip_ghost = self
+            .glide
+            .as_ref()
+            .and_then(|glide| glide.strip)
+            .filter(|_| current.strip.is_none())
+            .map(|(pose, shown_count)| (pose.leaving(glide_t), shown_count));
+        let cards: Vec<pile::CardFrame> = poses
+            .iter()
+            .map(|pose| pose.card(current.width, current.height))
+            .collect();
+        if std::mem::take(&mut self.arriving) {
+            self.arrival = Some(now);
+        }
+        let arrival = self.arrival.map_or(1.0, |start| {
+            qol_theme::Motion::TRAVEL.progress(now.saturating_duration_since(start))
+        });
         let moving = self.grow.moving(now)
             || self.open.moving(now)
-            || self.focus.iter().any(|(_, tween)| tween.moving(now));
+            || arrival < 1.0
+            || self.focus.iter().any(|(_, tween)| tween.moving(now))
+            || self.scroll.moving(now)
+            || self.glide.is_some();
 
-        let shown = window.bounds().size;
-        let (width, height) = pile::footprint(count);
-        let target = size(px(width.ceil()), px(height.ceil()));
-        if shown != target && self.dismisser.resize_window(target, window) {
-            if let Some(origin) = self.host.anchored_origin(target) {
-                self.dismisser.reposition_window(origin);
-            }
-        }
         let (reach_width, reach_height) = if moving {
             (
                 settled.width.max(self.reach[2]),
@@ -1081,6 +1334,7 @@ impl Render for SlabToastView {
         } else {
             (settled.width, settled.height)
         };
+        let reach_height = reach_height.min(height);
         let reach = [
             width - reach_width,
             height - reach_height,
@@ -1114,10 +1368,8 @@ impl Render for SlabToastView {
         };
 
         let mut ring_running = false;
-        let card_view = |index: usize, view: &Self, ring_running: &mut bool| -> AnyElement {
-            let row = rows[index];
-            let card = current.cards[index];
-            let ring = row.toast.effective_timeout().map(|timeout| {
+        let ring_of = |row: &SlabSnapshotRow, view: &Self, ring_running: &mut bool| {
+            row.toast.effective_timeout().map(|timeout| {
                 if view.inside || open {
                     card::Ring {
                         remaining: 1.0,
@@ -1133,7 +1385,49 @@ impl Render for SlabToastView {
                         ink: row.toast.tone.color(kit),
                     }
                 }
-            });
+            })
+        };
+        let clipped = self.scroll_max > 0.0 || scroll > 0.0;
+        let deck_height = if clipped {
+            f32::from(frame.height) - current.strip.map_or(0.0, |strip| strip.frame.height)
+        } else {
+            f32::from(frame.height)
+        };
+        let (above, below) = if clipped {
+            (self.scroll_max - scroll, scroll)
+        } else {
+            (0.0, 0.0)
+        };
+        let edge_fade = |at: pile::Frame| {
+            pile::edge_fade(at.top + dy + at.height / 2.0, deck_height, above, below)
+        };
+        let ghost_view = |ghost: &Shown, view: &Self| -> AnyElement {
+            let card = ghost.pose.card(current.width, current.height);
+            let row = &ghost.row;
+            place(div().id(("toast-leaving", row.id.0)), card.frame)
+                .opacity(card.opacity * edge_fade(card.frame))
+                .child(
+                    kit.window()
+                        .bg(rgb(row_ground(row, kit)))
+                        .child(card::content(
+                            row,
+                            card::CardParts {
+                                scale: card.scale,
+                                content: card.content,
+                                interactive: false,
+                                ring: ring_of(row, view, &mut false),
+                                age: pile::age_label(now.saturating_duration_since(row.created)),
+                            },
+                            kit,
+                            Some(card::CardHost::Slab(view.host.clone())),
+                        )),
+                )
+                .into_any_element()
+        };
+        let card_view = |index: usize, view: &Self, ring_running: &mut bool| -> AnyElement {
+            let row = rows[index];
+            let card = cards[index];
+            let ring = ring_of(row, view, ring_running);
             let ground = if index > 0 && view.lit && !open {
                 row_lift(row, kit)
             } else {
@@ -1142,11 +1436,14 @@ impl Render for SlabToastView {
             let id = row.id;
             let host = view.host.clone();
             let mut element = place(div().id(card::card_id(id)), card.frame)
-                .opacity(card.opacity)
+                .opacity(card.opacity * edge_fade(card.frame))
                 .occlude()
                 .on_mouse_move(cx.listener(move |view, _: &MouseMoveEvent, _, cx| {
                     view.point(Some(id), false, cx)
-                }));
+                }))
+                .on_scroll_wheel(
+                    cx.listener(|view, event: &ScrollWheelEvent, _, cx| view.scroll_by(event, cx)),
+                );
             if index > 0 && !open {
                 let opener = host.clone();
                 element = element
@@ -1164,7 +1461,7 @@ impl Render for SlabToastView {
                         age: pile::age_label(now.saturating_duration_since(row.created)),
                     },
                     kit,
-                    host,
+                    Some(card::CardHost::Slab(host)),
                 )))
                 .into_any_element()
         };
@@ -1181,21 +1478,45 @@ impl Render for SlabToastView {
                     .into_any_element(),
             );
         }
+        let mut deck: Vec<AnyElement> = Vec::new();
+        let mut strips: Vec<AnyElement> = Vec::new();
+        let mut behind: Vec<&Shown> = ghosts.iter().filter(|ghost| ghost.index > 0).collect();
+        behind.sort_by_key(|ghost| std::cmp::Reverse(ghost.index));
+        for ghost in behind {
+            deck.push(ghost_view(ghost, self));
+        }
         let focused = rows
             .iter()
             .position(|row| open && self.hovered == Some(row.id));
         for index in (1..count).rev() {
-            if focused != Some(index) && current.cards[index].opacity > 0.01 {
-                layers.push(card_view(index, self, &mut ring_running));
+            if focused != Some(index) && cards[index].opacity > 0.01 {
+                deck.push(card_view(index, self, &mut ring_running));
             }
+        }
+        if let Some((pose, shown_count)) = strip_ghost {
+            let strip = pose.card(current.width, current.height);
+            strips.push(
+                place(div().id("toast-strip-leaving"), strip.frame)
+                    .opacity(strip.opacity)
+                    .child(kit.window().shadow(Vec::new()).child(card::strip(
+                        shown_count,
+                        strip.scale,
+                        kit,
+                        self.host.clone(),
+                    )))
+                    .into_any_element(),
+            );
         }
         if let Some(strip) = current.strip {
             let newest = rows[0].id;
-            layers.push(
+            strips.push(
                 place(div().id("toast-strip"), strip.frame)
                     .occlude()
                     .on_mouse_move(cx.listener(move |view, _: &MouseMoveEvent, _, cx| {
                         view.point(Some(newest), false, cx)
+                    }))
+                    .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
+                        view.scroll_by(event, cx)
                     }))
                     .child(kit.window().shadow(Vec::new()).child(card::strip(
                         count,
@@ -1206,12 +1527,115 @@ impl Render for SlabToastView {
                     .into_any_element(),
             );
         }
+        if !clipped {
+            deck.append(&mut strips);
+        }
         if count > 0 {
-            layers.push(card_view(0, self, &mut ring_running));
+            deck.push(card_view(0, self, &mut ring_running));
         }
         if let Some(index) = focused.filter(|index| *index > 0) {
-            layers.push(card_view(index, self, &mut ring_running));
+            deck.push(card_view(index, self, &mut ring_running));
         }
+        for ghost in ghosts.iter().filter(|ghost| ghost.index == 0) {
+            deck.push(ghost_view(ghost, self));
+        }
+        layers.push(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w_full()
+                .h(px(deck_height))
+                .overflow_hidden()
+                .children(deck)
+                .when(clipped, |deck| {
+                    let ground = kit.grounds.pane;
+                    let veil = qol_theme::translucent(ground.bg, qol_theme::Alpha::Strong);
+                    let bar = |edge: crate::scrollbar::OverflowEdge,
+                               id: &'static str,
+                               hidden: f32,
+                               step: f32| {
+                        let up = matches!(edge, crate::scrollbar::OverflowEdge::Top);
+                        let (start, end) = if up {
+                            (veil, qol_theme::clear(ground.bg))
+                        } else {
+                            (qol_theme::clear(ground.bg), veil)
+                        };
+                        let count = (hidden / pile::LIST_STEP).ceil();
+                        let words = if up { "older" } else { "newer" };
+                        div()
+                            .id(id)
+                            .absolute()
+                            .left_0()
+                            .w_full()
+                            .h(px(qol_theme::HEIGHT_HINT_BAR))
+                            .when(up, |bar| bar.top_0())
+                            .when(!up, |bar| bar.bottom_0())
+                            .occlude()
+                            .cursor_pointer()
+                            .bg(linear_gradient(
+                                180.0,
+                                linear_color_stop(rgba(start), 0.0),
+                                linear_color_stop(rgba(end), 1.0),
+                            ))
+                            .on_click(cx.listener(move |view, _, _, cx| view.scroll_step(step, cx)))
+                            .child(
+                                kit.pointable(
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(qol_theme::SPACE_SNUG)),
+                                    rgba(qol_theme::translucent(
+                                        kit.palette.accent,
+                                        qol_theme::Alpha::Halo,
+                                    )),
+                                )
+                                .text(qol_theme::TextStyle::Detail)
+                                .text_color(rgb(kit.palette.accent))
+                                .child(crate::scrollbar::chevron(edge, kit.palette.accent))
+                                .child(SharedString::from(format!("{count} {words}"))),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .w_full()
+                                    .h(px(crate::scrollbar::OVERFLOW_CHEVRON_STROKE))
+                                    .bg(rgb(kit.palette.accent))
+                                    .when(up, |line| line.top_0())
+                                    .when(!up, |line| line.bottom_0()),
+                            )
+                    };
+                    deck.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .w(px(pile::CARD_WIDTH))
+                            .h_full()
+                            .when(above >= 1.0, |cue| {
+                                cue.child(bar(
+                                    crate::scrollbar::OverflowEdge::Top,
+                                    "toast-scroll-up",
+                                    above,
+                                    pile::LIST_STEP,
+                                ))
+                            })
+                            .when(below >= 1.0, |cue| {
+                                cue.child(bar(
+                                    crate::scrollbar::OverflowEdge::Bottom,
+                                    "toast-scroll-down",
+                                    below,
+                                    -pile::LIST_STEP,
+                                ))
+                            }),
+                    )
+                })
+                .into_any_element(),
+        );
+        layers.append(&mut strips);
         if let Some(band) = current.band.filter(|_| current.words > 0.01) {
             let host = self.host.clone();
             layers.push(
@@ -1233,13 +1657,42 @@ impl Render for SlabToastView {
         if count > 0 {
             self.tick(false, cx);
         }
+        let gliding = self.glide.is_some();
+        self.strip_shown = current
+            .strip
+            .map(|strip| (pile::Pose::of(strip, current.width, current.height), count))
+            .or(strip_ghost.filter(|_| gliding));
+        self.shown = rows
+            .iter()
+            .zip(poses)
+            .enumerate()
+            .map(|(index, (row, pose))| Shown {
+                row: (*row).clone(),
+                pose,
+                index,
+                leaving: false,
+            })
+            .chain(ghosts.into_iter().filter(|_| gliding))
+            .collect();
+        if count > 0 {
+            self.closing = false;
+        } else if !gliding && !self.closing {
+            self.closing = true;
+            let host = self.host.clone();
+            cx.defer(move |cx| host.close_if_empty(cx));
+        }
 
         div()
             .id("toast-pile")
             .size_full()
             .relative()
+            .top(px((1.0 - arrival) * qol_theme::SPACE_INSET))
+            .opacity(arrival)
             .on_mouse_move(
                 cx.listener(|view, _: &MouseMoveEvent, _, cx| view.point(None, false, cx)),
+            )
+            .on_scroll_wheel(
+                cx.listener(|view, event: &ScrollWheelEvent, _, cx| view.scroll_by(event, cx)),
             )
             .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
                 if *hovered {
@@ -1250,15 +1703,6 @@ impl Render for SlabToastView {
             }))
             .children(layers)
     }
-}
-
-fn toast_notice(toast: &Toast) -> Div {
-    let kit = crate::kit::kit();
-    let detail = (!toast.message.is_empty()).then(|| toast.message.clone().into_any_element());
-    kit.notice(toast.tone.notice(), toast.title.clone(), detail)
-        .size_full()
-        .overflow_hidden()
-        .shadow(crate::kit::float_shadow(kit.palette.text_primary))
 }
 
 #[cfg(test)]
@@ -1278,7 +1722,7 @@ mod tests {
         assert_eq!(layout.placement(), corner);
         assert_eq!(layout.size().width.to_f64(), 700.0);
         assert_eq!(layout.size().height.to_f64(), 120.0);
-        assert_eq!(ToastLayout::status().size().width.to_f64(), 520.0);
+        assert_eq!(ToastLayout::status().size().width.to_f64(), 440.0);
     }
 
     #[test]
@@ -1361,7 +1805,7 @@ mod tests {
             (
                 ToastLayout::status(),
                 MonitorPlacement::top_center(TOP_CENTER_MARGIN),
-                (520.0, 78.0),
+                (440.0, 84.0),
             ),
         ];
 

@@ -135,7 +135,7 @@ fn paint_track(window: &mut Window, bounds: Bounds<Pixels>, state: CueState, ink
     ));
 }
 
-enum OverflowEdge {
+pub enum OverflowEdge {
     Top,
     Bottom,
 }
@@ -159,7 +159,6 @@ fn paint_overflow_edge(
 ) {
     let fade_h = px(OVERFLOW_FADE_HEIGHT).min(bounds.size.height);
     let rise = px(OVERFLOW_CHEVRON_RISE);
-    let half_chevron = px(OVERFLOW_CHEVRON_WIDTH / 2.0);
     let (band_top, centre_y, tip_y, wing_y, band_start, band_end) = match edge {
         OverflowEdge::Top => {
             let centre_y = bounds.top() + px(OVERFLOW_CUE_CENTRE);
@@ -216,13 +215,36 @@ fn paint_overflow_edge(
             linear_color_stop(rgba(clear), 1.0),
         ),
     ));
+    paint_chevron(window, center_x, tip_y, wing_y, rgba(ink.chevron));
+}
+
+fn paint_chevron(window: &mut Window, center_x: Pixels, tip_y: Pixels, wing_y: Pixels, ink: Rgba) {
+    let half_chevron = px(OVERFLOW_CHEVRON_WIDTH / 2.0);
     let mut path = PathBuilder::stroke(px(OVERFLOW_CHEVRON_STROKE));
     path.move_to(point(center_x - half_chevron, wing_y));
     path.line_to(point(center_x, tip_y));
     path.line_to(point(center_x + half_chevron, wing_y));
     if let Ok(path) = path.build() {
-        window.paint_path(path, rgba(ink.chevron));
+        window.paint_path(path, ink);
     }
+}
+
+pub fn chevron(edge: OverflowEdge, ink: u32) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let centre_y = bounds.center().y;
+            let half_rise = px(OVERFLOW_CHEVRON_RISE / 2.0);
+            let (tip_y, wing_y) = match edge {
+                OverflowEdge::Top => (centre_y - half_rise, centre_y + half_rise),
+                OverflowEdge::Bottom => (centre_y + half_rise, centre_y - half_rise),
+            };
+            paint_chevron(window, bounds.center().x, tip_y, wing_y, rgb(ink));
+        },
+    )
+    .flex_none()
+    .w(px(OVERFLOW_CHEVRON_WIDTH))
+    .h(px(OVERFLOW_CHEVRON_RISE + OVERFLOW_CHEVRON_STROKE))
 }
 
 #[cfg(test)]
