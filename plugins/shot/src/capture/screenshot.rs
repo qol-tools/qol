@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use qol_plugin_daemon::notification::send_notification;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -222,10 +223,9 @@ fn prepare_screenshot_rect(selected: Rect) -> Result<Rect> {
     };
     let rect = geometry::prepare_screenshot_rect(selected, &monitors, fallback_bounds);
     if rect.w <= 0 || rect.h <= 0 {
-        platform::show_notification(
+        send_notification(
             "Screenshot failed",
             &format!("Invalid area: {}x{}", rect.w, rect.h),
-            1200,
         );
         return Err(anyhow!("invalid screenshot area {}x{}", rect.w, rect.h));
     }
@@ -435,7 +435,7 @@ fn present_capture(output_file: &Path, completion: crate::capture::completion::P
         if let Err(error) = platform::copy_image_to_clipboard(output_file) {
             log::warn!("failed to copy screenshot to clipboard: {error:#}");
         }
-        platform::show_notification("Screenshot saved", &output_file.display().to_string(), 1800);
+        send_notification("Screenshot saved", &output_file.display().to_string());
         fallback.finish(crate::capture::completion::PreviewExit::Unavailable);
     }
 }

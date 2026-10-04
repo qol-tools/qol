@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use qol_headless::{
     Command, CommandResult, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput,
 };
+use qol_plugin_daemon::notification::send_notification;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -116,7 +117,7 @@ fn copy_path_command(binary_name: &'static str) -> Command {
 
 fn copy_latest(action: ShotAction) -> Result<CommandResult> {
     let path = actions::perform_on_latest(action)?;
-    platform::show_notification(action.done_message(), &path.display().to_string(), 1400);
+    send_notification(action.done_message(), &path.display().to_string());
     Ok(CommandResult::success(format!("{}\n", path.display())))
 }
 

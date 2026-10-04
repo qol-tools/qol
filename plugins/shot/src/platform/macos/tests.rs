@@ -345,18 +345,18 @@ fn format_label_uses_uppercase_extension() {
 #[test]
 fn swift_helper_hash_includes_prelude_and_body() {
     assert_eq!(
-        swift::swift_source_hash(swift::STATUS_OVERLAY_SWIFT),
-        swift::swift_source_hash_with_prelude(swift::SWIFT_PRELUDE, swift::STATUS_OVERLAY_SWIFT),
+        swift::swift_source_hash(swift::VIDEO_COMPOSER_SWIFT),
+        swift::swift_source_hash_with_prelude(swift::SWIFT_PRELUDE, swift::VIDEO_COMPOSER_SWIFT),
         "helper hash should use the shared Swift prelude"
     );
     assert_ne!(
-        swift::swift_source_hash(swift::STATUS_OVERLAY_SWIFT),
+        swift::swift_source_hash(swift::VIDEO_COMPOSER_SWIFT),
         swift::swift_source_hash(swift::CLIPBOARD_WRITER_SWIFT),
         "different helper bodies should use different cache keys"
     );
     assert_ne!(
-        swift::swift_source_hash(swift::STATUS_OVERLAY_SWIFT),
-        swift::swift_source_hash_with_prelude("changed prelude", swift::STATUS_OVERLAY_SWIFT),
+        swift::swift_source_hash(swift::VIDEO_COMPOSER_SWIFT),
+        swift::swift_source_hash_with_prelude("changed prelude", swift::VIDEO_COMPOSER_SWIFT),
         "prelude changes should invalidate cached helpers"
     );
 }

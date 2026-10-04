@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use gpui::{Pixels, Point};
 use qol_gpui::monitor::ActiveMonitor;
 use qol_headless::DoctorCheckResult;
@@ -93,7 +93,7 @@ pub fn recording_format(format: &str) -> String {
     format.to_string()
 }
 
-pub fn recording_started(_session: &CaptureSession, _countdown_completed: bool) {}
+pub fn recording_started(_session: &CaptureSession) {}
 
 pub fn recording_stopped(
     _session: &CaptureSession,
@@ -110,19 +110,6 @@ pub fn stop_capture(_session: &CaptureSession) -> Result<()> {
 
 pub fn process_alive(_pid: u32) -> bool {
     false
-}
-
-pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
-    qol_plugin_daemon::notification::send_notification(title, message);
-}
-
-pub fn show_saved_notification(
-    title: &str,
-    message: &str,
-    timeout_ms: u32,
-    _target: crate::capture::completion::RevealTarget,
-) {
-    show_notification(title, message, timeout_ms);
 }
 
 pub fn grab_preview_rgba(_rect: &Rect) -> Option<(Vec<u8>, u32, u32)> {

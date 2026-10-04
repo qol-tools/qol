@@ -1202,6 +1202,7 @@ mod tests {
         for (active, label) in [(false, None), (true, Some("Searching")), (false, None)] {
             super::super::super::rows::apply_runtime_query(
                 &mut rows,
+                0,
                 "search_status",
                 Ok(serde_json::json!({"searching":active})),
                 &|_, _| false,
@@ -1519,6 +1520,7 @@ mod tests {
         child.selected = 1;
         super::super::super::rows::apply_runtime_query(
             &mut rows,
+            0,
             "items",
             Ok(serde_json::json!({"items": [
                 {"id": "c", "name": "Gamma"},
@@ -1546,6 +1548,7 @@ mod tests {
         child.selected = 1;
         super::super::super::rows::apply_runtime_query(
             &mut rows,
+            0,
             "items",
             Ok(serde_json::json!({"items": [
                 {"id": "a", "name": "Alpha"},
@@ -1559,6 +1562,7 @@ mod tests {
         assert_eq!(child.rows[child.selected].id, "c");
         super::super::super::rows::apply_runtime_query(
             &mut rows,
+            0,
             "items",
             Ok(serde_json::json!({"items": []})),
             &|_, _| false,

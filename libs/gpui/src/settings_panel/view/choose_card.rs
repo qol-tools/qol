@@ -172,7 +172,7 @@ impl SettingsPanelView {
         let pending = row_query_names(row).into_iter().any(|name| {
             matches!(
                 self.query_states.get(&(row.source, name.to_string())),
-                None | Some(RowQueryState::Idle) | Some(RowQueryState::Loading { .. })
+                None | Some(RowQueryState::Idle) | Some(RowQueryState::Loading)
             )
         });
         pending.then_some(lookup_label)

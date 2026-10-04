@@ -122,10 +122,25 @@ impl PreviewLifecycle {
     }
 }
 
-pub(crate) fn corner_toast_layout() -> qol_runtime::protocol::NotificationLayout {
+fn corner_toast_layout() -> qol_runtime::protocol::NotificationLayout {
     qol_runtime::protocol::NotificationLayout {
         style: Some("compact".to_string()),
         ..Default::default()
+    }
+}
+
+fn show_saved_notification(title: &str, message: &str, target: &RevealTarget) {
+    let payload = target.path().to_string_lossy().into_owned();
+    let pushed = qol_runtime::PlatformStateClient::from_env().send_notification_with_layout(
+        title,
+        message,
+        qol_runtime::protocol::NotificationLevel::Info,
+        Some(("Open Folder", &payload)),
+        Some(&payload),
+        Some(corner_toast_layout()),
+    );
+    if !pushed {
+        qol_plugin_daemon::notification::send_notification(title, message);
     }
 }
 
@@ -155,11 +170,10 @@ impl PreviewCompletion {
         let Some(announcement) = self.announce() else {
             return;
         };
-        crate::platform::show_saved_notification(
+        show_saved_notification(
             announcement.title,
             &announcement.message,
-            8_000,
-            announcement.target.clone(),
+            &announcement.target,
         );
         if announcement.open_automatically {
             announcement.reveal_automatically();
@@ -196,7 +210,7 @@ pub(crate) fn background_saved(
     open_folder_after_save: bool,
 ) {
     let target = RevealTarget::new(path);
-    crate::platform::show_saved_notification(title, message, 8_000, target.clone());
+    show_saved_notification(title, message, &target);
     if !open_folder_after_save {
         trace_reveal("automatic", "disabled", path);
         return;

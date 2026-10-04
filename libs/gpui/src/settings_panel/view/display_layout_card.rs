@@ -8,13 +8,13 @@ use qol_config::contract::resolve_slider_action;
 
 use super::super::components::{
     display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_spinner,
-    settings_description, settings_label, settings_label_group, settings_message,
-    settings_value_text, ChoiceArt, DisplayLayoutTile, RowGround, SettingsChoiceValue,
-    SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
+    settings_busy_message, settings_description, settings_label, settings_label_group,
+    settings_message, settings_value_text, ChoiceArt, DisplayLayoutTile, RowGround,
+    SettingsChoiceValue, SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
 };
 use super::super::display_layout::{mode_label, nudge_step, Display, DisplayLayoutState, Rect};
 use super::super::form_nav::adjacent_visible_row;
-use super::super::rows::{Row, RowControl, RowSection};
+use super::super::rows::{Row, RowControl, RowQueryState, RowSection};
 use super::super::SettingsDestination;
 use super::choose_card::{label_parts, ChooseOrigin, ChooseState, ChooseTile};
 use super::list_card::{
@@ -519,6 +519,13 @@ impl SettingsPanelView {
         self.sync_scroll();
     }
 
+    fn display_layout_loading(&self) -> bool {
+        self.level()
+            .origin_row
+            .and_then(|row| self.root().rows.get(row))
+            .is_some_and(|row| self.query_state_of(row) == RowQueryState::Loading)
+    }
+
     pub(super) fn render_display_layout_card(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(state) = self.level().display_layout.as_ref() else {
             return Vec::new();
@@ -637,6 +644,13 @@ impl SettingsPanelView {
                         stage = stage.child(tile);
                     }
                 }
+            }
+            None if self.display_layout_loading() => {
+                stage = stage.child(settings_busy_message(
+                    "settings-display-layout-loading",
+                    "Loading displays",
+                    palette,
+                ));
             }
             None => {
                 stage = stage.child(settings_message("No displays detected", false, palette));

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use qol_plugin_daemon::notification::send_notification;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -96,7 +97,7 @@ pub(crate) fn perform_when_file_ready(
     );
     if let Err(error) = &result {
         log::warn!("{surface} action failed: {error:#}");
-        crate::platform::show_notification(action.error_message(), &error.to_string(), 3000);
+        send_notification(action.error_message(), &error.to_string());
     }
     result
 }

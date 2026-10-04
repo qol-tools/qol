@@ -3,7 +3,6 @@ mod conversion;
 mod display;
 mod labels;
 mod native_capture;
-mod overlay;
 mod recording;
 mod selector;
 mod selector_target;
@@ -42,7 +41,7 @@ pub use system::{
     capture_frozen_frame, configure_pin_window, external_services_check, grab_preview_rgba,
     list_audio_sinks, list_audio_sources, pin_focus, pin_release_focus, pin_resize_session,
     platform_supported_check, prepare_pin_window, process_alive, required_binaries_check,
-    show_notification, show_saved_notification, PinResizeSession,
+    PinResizeSession,
 };
 
 #[cfg(test)]

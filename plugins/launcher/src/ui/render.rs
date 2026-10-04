@@ -960,6 +960,7 @@ impl LauncherView {
                         name,
                         icon,
                         about: path.and_then(|path| self.details.app(path)),
+                        loading: path.is_some_and(|path| self.details.app(path).is_none()),
                         home,
                         copied: copied_item(feedback, name) == Some(PanelItem::CopyPath),
                         fill,

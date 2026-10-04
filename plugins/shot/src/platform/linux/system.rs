@@ -3,44 +3,10 @@ use anyhow::Result;
 use qol_audio::devices::{self, Device, Direction};
 use qol_config::contract::{audio_device_picture, AudioDirection};
 use qol_headless::DoctorCheckResult;
-use qol_runtime::protocol::NotificationLevel;
 use std::env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use x11rb::connection::Connection;
-
-pub fn show_notification(title: &str, message: &str, _timeout_ms: u32) {
-    let client = qol_runtime::PlatformStateClient::from_env();
-    if client.send_notification(title, message, NotificationLevel::Info) {
-        return;
-    }
-    qol_plugin_daemon::notification::send_notification(title, message);
-}
-
-/// Saved-file notification with a clickable "Open Folder" action. Pushes
-/// through the runtime channel with the action (payload = saved file path) so
-/// the tray owns the click-through; falls back to the shared gate-aware
-/// notification helper when the tray is unreachable (standalone run).
-pub fn show_saved_notification(
-    title: &str,
-    message: &str,
-    _timeout_ms: u32,
-    target: crate::capture::completion::RevealTarget,
-) {
-    let client = qol_runtime::PlatformStateClient::from_env();
-    let payload = target.path().to_string_lossy().into_owned();
-    if client.send_notification_with_layout(
-        title,
-        message,
-        NotificationLevel::Info,
-        Some(("Open Folder", &payload)),
-        Some(&payload),
-        Some(crate::capture::completion::corner_toast_layout()),
-    ) {
-        return;
-    }
-    qol_plugin_daemon::notification::send_notification(title, message);
-}
 
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::ok(

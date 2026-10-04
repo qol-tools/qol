@@ -13,6 +13,7 @@ use qol_gpui::history::UndoHistory;
 use qol_gpui::kit::next_selectable;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind};
+use qol_plugin_daemon::notification::send_notification;
 
 use crate::capture::actions::ShotAction;
 use crate::capture::annotation::{save_strokes, NormalizedPoint, PenStroke};
@@ -423,7 +424,7 @@ pub(crate) async fn open_from(
 fn report_open_failure(result: &str, path: &Path, error: anyhow::Error) -> bool {
     qol_runtime::probe!("SHOT_EDIT", "phase=open result={result}");
     log::warn!("screenshot editor open failed: {error:#}");
-    crate::platform::show_notification(OPEN_FAILED_TOAST, &path.display().to_string(), 1800);
+    send_notification(OPEN_FAILED_TOAST, &path.display().to_string());
     false
 }
 
@@ -806,10 +807,9 @@ impl EditorView {
                                         }
                                         EditorOutput::Action(action) => action.done_message(),
                                     };
-                                    crate::platform::show_notification(
+                                    send_notification(
                                         title,
                                         &view.document.path.display().to_string(),
-                                        1400,
                                     );
                                     view.close(cx);
                                 }

@@ -2,8 +2,8 @@ pub mod run;
 
 use gpui::prelude::*;
 use gpui::{
-    div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, FocusHandle, Focusable,
-    KeyDownEvent, WeakEntity, Window,
+    div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, ElementId, FocusHandle,
+    Focusable, KeyDownEvent, WeakEntity, Window,
 };
 use qol_gpui::kit::{Chip, NoticeTone};
 use qol_gpui::text::{cased, TextStyled};
@@ -881,14 +881,18 @@ fn app_row(
                     .child(cased(TextStyle::Label, "protected")),
             )
         })
-        .when_some(size, |d, size| {
-            d.child(
-                div()
-                    .flex_none()
-                    .text(TextStyle::Code)
-                    .text_color(rgb(ground.soft))
-                    .child(qol_gpui::format_bytes(size)),
+        .child(match size {
+            Some(size) => div()
+                .flex_none()
+                .text(TextStyle::Code)
+                .text_color(rgb(ground.soft))
+                .child(qol_gpui::format_bytes(size))
+                .into_any_element(),
+            None => qol_gpui::Busy::ring(
+                ElementId::Name(format!("qol-removeapp-row-size-{}", app.path.display()).into()),
+                rgb(ground.faint),
             )
+            .into_any_element(),
         });
     kit.highlight(row, selected)
 }

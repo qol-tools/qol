@@ -31,7 +31,7 @@ pub use recording::{
 use system::resolve_command;
 pub use system::{
     external_services_check, list_audio_sinks, list_audio_sources, platform_supported_check,
-    required_binaries_check, show_notification, show_saved_notification,
+    required_binaries_check,
 };
 pub use window::{
     configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, prepare_pin_window,

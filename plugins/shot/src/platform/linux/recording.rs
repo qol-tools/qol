@@ -12,7 +12,8 @@ use x11rb::rust_connection::RustConnection;
 use crate::platform::{CaptureProcess, CaptureSession};
 use crate::{Config, Rect};
 
-use super::{process_alive, show_notification};
+use super::process_alive;
+use qol_plugin_daemon::notification::send_notification;
 
 const CINNAMON_HELPER_ENV: &str = "QOL_SHOT_CINNAMON_CAPTURE_REQUEST";
 const CINNAMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -646,19 +647,10 @@ pub fn recording_format(format: &str) -> String {
     }
 }
 
-pub fn recording_started(_session: &CaptureSession, countdown_completed: bool) {
-    if countdown_completed {
-        qol_runtime::probe!(
-            "SHOT_RECORD_FEEDBACK",
-            "stage=started surface=none reason=countdown-complete"
-        );
-        return;
-    }
-    show_notification("Recording started", "Press your hotkey to stop", 1200);
-}
+pub fn recording_started(_session: &CaptureSession) {}
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
-    show_notification("Recording stopped", "Saving recording", 1800);
+    send_notification("Recording stopped", "Saving recording");
     let output_file = session.output_file.as_deref()?;
     let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
     if let Err(error) = wait_for_recording_file(session, capture_file) {
@@ -668,13 +660,12 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
                 "SHOT_RECORD_FINALIZE",
                 "stage=failed reason=empty-capture removed=true"
             );
-            show_notification("Recording failed", "No video frames were produced", 3000);
+            send_notification("Recording failed", "No video frames were produced");
             return None;
         }
-        show_notification(
+        send_notification(
             "Recording save delayed",
             "The recorder is still finalizing the file",
-            3000,
         );
         return None;
     }
@@ -685,10 +676,9 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
             Ok(()) => output_file.to_path_buf(),
             Err(error) => {
                 log::warn!("Cinnamon recording conversion failed: {error:#}");
-                show_notification(
+                send_notification(
                     "Recording conversion failed",
                     "Saved the synchronized WebM recording instead",
-                    3000,
                 );
                 capture_file.to_path_buf()
             }

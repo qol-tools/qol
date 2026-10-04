@@ -43,6 +43,7 @@ pub struct About<'a> {
     pub name: &'a str,
     pub icon: Option<&'a Path>,
     pub about: Option<&'a AppAbout>,
+    pub loading: bool,
     pub home: Option<&'a Path>,
     pub copied: bool,
     pub fill: u32,
@@ -171,6 +172,15 @@ pub fn panel(about: About<'_>, window: &mut Window, cx: &mut Context<LauncherVie
                 blocks.push(LINE_BLOCK, link(website.clone(), cx));
             }
         }
+    } else if about.loading {
+        blocks.space(BAND_AIR);
+        blocks.push(
+            LINE_BLOCK,
+            line_block().child(qol_gpui::Busy::ring(
+                "launcher-about-busy",
+                rgb(ground.faint),
+            )),
+        );
     }
     let height = 2.0 * SPACE_SNUG + blocks.height;
     let element = div()
