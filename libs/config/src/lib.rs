@@ -47,6 +47,27 @@ pub fn http_auth_token_path() -> Option<PathBuf> {
     config_dir().map(|path| path.join(qol_conventions::HTTP_AUTH_TOKEN_FILE))
 }
 
+pub fn codesign_identity_path() -> Option<PathBuf> {
+    config_dir().map(|path| path.join(qol_conventions::CODESIGN_IDENTITY_FILE))
+}
+
+/// The code signing identity from `QOL_CODESIGN_IDENTITY`, else the one
+/// qol-tray remembered in the config dir.
+pub fn codesign_identity() -> Option<String> {
+    non_blank(std::env::var(qol_conventions::CODESIGN_IDENTITY_ENV).ok())
+        .or_else(|| codesign_identity_at(&codesign_identity_path()?))
+}
+
+pub fn codesign_identity_at(path: &Path) -> Option<String> {
+    non_blank(fs::read_to_string(path).ok())
+}
+
+fn non_blank(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
 pub fn runtime_dir() -> Option<PathBuf> {
     data_dir().map(|path| path.join("runtime"))
 }
@@ -325,6 +346,28 @@ pub fn valid_install_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blank_codesign_identity_counts_as_none() {
+        assert_eq!(non_blank(None), None);
+        assert_eq!(non_blank(Some("   \n".into())), None);
+        assert_eq!(
+            non_blank(Some("  Test Signing Identity \n".into())).as_deref(),
+            Some("Test Signing Identity")
+        );
+    }
+
+    #[test]
+    fn the_remembered_codesign_identity_is_read_trimmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(qol_conventions::CODESIGN_IDENTITY_FILE);
+        assert_eq!(codesign_identity_at(&path), None);
+        fs::write(&path, "Test Signing Identity\n").unwrap();
+        assert_eq!(
+            codesign_identity_at(&path).as_deref(),
+            Some("Test Signing Identity")
+        );
+    }
 
     #[test]
     fn whole_floats_canonicalize_to_integers_for_typed_configs() {

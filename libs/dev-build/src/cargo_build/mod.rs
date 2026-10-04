@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crate::adapters::CargoPluginBuilder;
 use crate::types::BuildResult;
 
+pub use codesign::codesign_debug_binaries;
 pub use messages::{
     parse_cargo_message, select_binary_executable, CargoArtifact, CargoArtifactSelectionError,
     CargoMessage, CargoMessageError,

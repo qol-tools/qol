@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -11,24 +12,39 @@ struct AppSnapshot {
 }
 
 pub struct AppTracker {
-    snapshot: Arc<RwLock<AppSnapshot>>,
+    snapshot: RwLock<AppSnapshot>,
+    last_key_target: AtomicI32,
 }
 
 impl AppTracker {
     pub fn start() -> Arc<Self> {
-        let snapshot = Arc::new(RwLock::new(frontmost_app().unwrap_or_default()));
+        let tracker = Arc::new(Self::new(frontmost_app().unwrap_or_default()));
 
-        let poll_ref = Arc::clone(&snapshot);
+        let poll = Arc::clone(&tracker);
         std::thread::spawn(move || loop {
             if let Some(snapshot) = frontmost_app() {
-                if let Ok(mut guard) = poll_ref.write() {
-                    *guard = snapshot;
-                }
+                poll.update(snapshot);
             }
             std::thread::sleep(POLL_INTERVAL);
         });
 
-        Arc::new(Self { snapshot })
+        tracker
+    }
+
+    fn new(snapshot: AppSnapshot) -> Self {
+        Self {
+            snapshot: RwLock::new(snapshot),
+            last_key_target: AtomicI32::new(0),
+        }
+    }
+
+    fn update(&self, snapshot: AppSnapshot) {
+        if let Ok(mut guard) = self.snapshot.write() {
+            if guard.pid != snapshot.pid {
+                self.last_key_target.store(0, Ordering::Relaxed);
+            }
+            *guard = snapshot;
+        }
     }
 
     pub fn bundle_id_for_target(&self, target_pid: i32) -> String {
@@ -38,6 +54,32 @@ impl AppTracker {
                 bundle_id_for_event_target(snapshot.pid, &snapshot.bundle_id, target_pid).to_owned()
             })
             .unwrap_or_default()
+    }
+
+    pub fn note_key_target(&self, target_pid: i32) {
+        if target_pid > 0 {
+            self.last_key_target.store(target_pid, Ordering::Relaxed);
+        }
+    }
+
+    /// The app the next key goes to, judged by the last key the tap saw
+    /// arrive. A floating window such as a qol preview takes keys without
+    /// becoming the frontmost window, so the frontmost app alone would apply
+    /// the exclusions of the app underneath it. Under Secure Input the tap
+    /// sees nothing, so the last target is stale and the frontmost app wins.
+    pub fn bundle_id_for_next_key(&self, tap_sees_keys: bool) -> String {
+        self.bundle_id_for_target(next_key_target(
+            self.last_key_target.load(Ordering::Relaxed),
+            tap_sees_keys,
+        ))
+    }
+}
+
+fn next_key_target(last_key_target: i32, tap_sees_keys: bool) -> i32 {
+    if tap_sees_keys {
+        last_key_target
+    } else {
+        0
     }
 }
 
@@ -135,7 +177,45 @@ fn frontmost_app() -> Option<AppSnapshot> {
 
 #[cfg(test)]
 mod tests {
-    use super::bundle_id_for_event_target;
+    use super::{bundle_id_for_event_target, next_key_target, AppSnapshot, AppTracker};
+
+    fn snapshot(pid: i32, bundle_id: &str) -> AppSnapshot {
+        AppSnapshot {
+            pid,
+            bundle_id: bundle_id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_first_key_after_a_focus_change_goes_by_the_new_frontmost_app() {
+        let tracker = AppTracker::new(snapshot(10, "com.example.previous"));
+        tracker.note_key_target(10);
+        tracker.update(snapshot(20, "com.example.excluded"));
+        assert_eq!(tracker.bundle_id_for_next_key(true), "com.example.excluded");
+    }
+
+    #[test]
+    fn a_floating_window_keeps_its_key_target_while_the_frontmost_app_stays() {
+        let tracker = AppTracker::new(snapshot(10, "com.example.excluded"));
+        tracker.note_key_target(20);
+        tracker.update(snapshot(10, "com.example.excluded"));
+        assert_eq!(tracker.bundle_id_for_next_key(true), "");
+    }
+
+    #[test]
+    fn a_floating_window_taking_keys_does_not_inherit_the_exclusion_underneath() {
+        let (frontmost_pid, frontmost_bundle, preview_pid) = (10, "com.example.excluded", 20);
+        let target = next_key_target(preview_pid, true);
+        assert_eq!(
+            bundle_id_for_event_target(frontmost_pid, frontmost_bundle, target),
+            ""
+        );
+        let blind = next_key_target(preview_pid, false);
+        assert_eq!(
+            bundle_id_for_event_target(frontmost_pid, frontmost_bundle, blind),
+            frontmost_bundle
+        );
+    }
 
     #[test]
     fn event_target_does_not_inherit_another_process_exclusion() {

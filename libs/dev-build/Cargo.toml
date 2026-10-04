@@ -9,6 +9,7 @@ description = "Shared dev-linked plugin registry, build, and fingerprint trackin
 log.workspace = true
 qol-artifact.workspace = true
 qol-build-identity.workspace = true
+qol-config.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-plugin-api.workspace = true

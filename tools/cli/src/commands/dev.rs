@@ -745,6 +745,9 @@ fn build_plugins_batch(root: &Path, plugins: &[BuildablePlugin], verbose: bool) 
     )?;
     run_dev_step("build", StepKind::Pending, &label, &mut command, verbose)
         .context("plugin batch build failed")?;
+    for plan in &stale {
+        qol_dev_build::codesign_debug_binaries(&plan.plugin_id, &plan.path);
+    }
     persist_batch_fingerprints(&stale);
     Ok(())
 }

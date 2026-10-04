@@ -615,6 +615,7 @@ mod dependency_rules {
                     repo: "qol-tools/example".to_string(),
                     pattern: "runner-{os}-{arch}".to_string(),
                 }],
+                system: Vec::new(),
             }),
             ..base_manifest()
         };
@@ -631,11 +632,119 @@ mod dependency_rules {
                     repo: "qol-tools/example".to_string(),
                     pattern: "runner-{os}-{arch}".to_string(),
                 }],
+                system: Vec::new(),
             }),
             ..base_manifest()
         };
 
         assert!(manifest.validate().is_ok());
+    }
+
+    fn vhid() -> SystemDependency {
+        SystemDependency {
+            name: "Karabiner-DriverKit-VirtualHIDDevice".to_string(),
+            platforms: vec!["macos".to_string()],
+            min_version: "8.6.0".to_string(),
+            license: "Unlicense".to_string(),
+            url: "https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice".to_string(),
+        }
+    }
+
+    fn with_system(system: SystemDependency) -> PluginManifest {
+        PluginManifest {
+            dependencies: Some(Dependencies {
+                binaries: Vec::new(),
+                system: vec![system],
+            }),
+            ..base_manifest()
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_complete_system_dependency() {
+        assert!(with_system(vhid()).validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_a_system_dependency_with_an_unparseable_min_version() {
+        let error = with_system(SystemDependency {
+            min_version: "8.6".to_string(),
+            ..vhid()
+        })
+        .validate()
+        .unwrap_err();
+        assert!(error.to_string().contains("min_version"), "{error}");
+    }
+
+    #[test]
+    fn validate_rejects_a_system_dependency_with_an_unknown_platform() {
+        let error = with_system(SystemDependency {
+            platforms: vec!["darwin".to_string()],
+            ..vhid()
+        })
+        .validate()
+        .unwrap_err();
+        assert!(error.to_string().contains("darwin"), "{error}");
+    }
+
+    #[test]
+    fn validate_rejects_a_system_dependency_with_blank_fields() {
+        for blank in [
+            SystemDependency {
+                name: " ".to_string(),
+                ..vhid()
+            },
+            SystemDependency {
+                license: String::new(),
+                ..vhid()
+            },
+            SystemDependency {
+                url: String::new(),
+                ..vhid()
+            },
+            SystemDependency {
+                platforms: Vec::new(),
+                ..vhid()
+            },
+        ] {
+            assert!(with_system(blank).validate().is_err());
+        }
+    }
+
+    #[test]
+    fn parse_version_reads_three_numeric_parts_only() {
+        assert_eq!(parse_version("8.6.0"), Some((8, 6, 0)));
+        assert_eq!(parse_version("10.20.30"), Some((10, 20, 30)));
+        assert_eq!(parse_version("8.6"), None);
+        assert_eq!(parse_version("8.6.0.1"), None);
+        assert_eq!(parse_version("8.x.0"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn parse_and_validate_reads_system_dependencies_from_toml() {
+        let raw = r#"
+[plugin]
+id = "qol-example"
+uid = "e1bc6f9b-95e0-46c5-951b-6cc5de5c6d87"
+name = "Example"
+description = "Example"
+version = "1.0.0"
+
+[menu]
+label = "Example"
+items = []
+
+[[dependencies.system]]
+name = "Karabiner-DriverKit-VirtualHIDDevice"
+platforms = ["macos"]
+min_version = "8.6.0"
+license = "Unlicense"
+url = "https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice"
+"#;
+        let manifest = PluginManifest::parse_and_validate(raw).unwrap();
+        let system = &manifest.dependencies.unwrap().system;
+        assert_eq!(system, &vec![vhid()]);
     }
 }
 

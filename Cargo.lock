@@ -440,13 +440,13 @@ checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
-version = "0.1.89"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -6274,6 +6274,7 @@ dependencies = [
  "qol-process",
  "qol-profile-sync",
  "qol-runtime",
+ "qol-secrets",
  "qol-terminal-sessions",
  "qol-workspace",
  "ratatui",
@@ -6302,7 +6303,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.85.4"
+version = "0.86.2"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6386,7 +6387,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.47.4"
+version = "0.48.2"
 dependencies = [
  "anyhow",
  "bluer",
@@ -6454,7 +6455,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.68.4"
+version = "0.69.2"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6507,7 +6508,7 @@ dependencies = [
 
 [[package]]
 name = "qol-controllers"
-version = "0.38.4"
+version = "0.39.1"
 dependencies = [
  "anyhow",
  "evdev",
@@ -6542,6 +6543,7 @@ dependencies = [
  "proptest",
  "qol-artifact",
  "qol-build-identity",
+ "qol-config",
  "qol-conventions",
  "qol-fs",
  "qol-plugin-api",
@@ -6713,12 +6715,13 @@ dependencies = [
 name = "qol-hotkeys"
 version = "1.0.0"
 dependencies = [
+ "core-foundation 0.10.0",
  "workspace-hack",
 ]
 
 [[package]]
 name = "qol-ide-checkout"
-version = "1.45.0"
+version = "1.46.1"
 dependencies = [
  "log",
  "qol-apps",
@@ -6737,7 +6740,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.48.0"
+version = "1.49.1"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -6764,7 +6767,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.76.2"
+version = "1.77.2"
 dependencies = [
  "anyhow",
  "block2",
@@ -6806,7 +6809,7 @@ dependencies = [
 
 [[package]]
 name = "qol-lights"
-version = "1.49.0"
+version = "1.50.1"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -6855,7 +6858,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.15.1"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -6904,7 +6907,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.20.4"
+version = "0.21.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6934,7 +6937,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.51.4"
+version = "0.52.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -7040,7 +7043,7 @@ dependencies = [
 
 [[package]]
 name = "qol-pointz"
-version = "1.47.0"
+version = "1.48.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7096,7 +7099,7 @@ dependencies = [
 
 [[package]]
 name = "qol-removeapp"
-version = "0.61.4"
+version = "0.62.2"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7147,8 +7150,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-secrets"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "windows-sys 0.59.0",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-shot"
-version = "1.73.4"
+version = "1.74.2"
 dependencies = [
  "anyhow",
  "block2",
@@ -7185,7 +7197,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "log",
@@ -7247,7 +7259,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.78.5"
+version = "3.79.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -7328,7 +7340,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.35.0"
+version = "0.36.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -7369,7 +7381,7 @@ dependencies = [
 
 [[package]]
 name = "qol-window-actions"
-version = "2.46.1"
+version = "2.47.1"
 dependencies = [
  "log",
  "proptest",
@@ -9067,6 +9079,17 @@ name = "syn"
 version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
 dependencies = [
  "proc-macro2",
  "quote",

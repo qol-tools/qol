@@ -118,7 +118,7 @@ impl Kit {
             .bg(rgb(self.grounds.pane.bg))
             .border(px(LINE))
             .border_color(rgba(self.grounds.pane.edge.packed()))
-            .shadow(float_shadow(self.palette.text_primary))
+            .shadow(float_shadow(self.washes.cast.rgb))
     }
 
     pub fn heading(&self, title: impl Into<SharedString>, colophon: Option<SharedString>) -> Div {

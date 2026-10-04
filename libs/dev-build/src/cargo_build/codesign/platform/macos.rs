@@ -5,19 +5,13 @@ pub(in crate::cargo_build::codesign) fn codesign_debug_binaries(
     plugin_id: &str,
     plugin_path: &Path,
 ) {
-    let Some(identity) = codesign_identity() else {
+    let Some(identity) = qol_config::codesign_identity() else {
         return;
     };
 
     for binary in plugin_debug_binaries(plugin_path) {
         codesign_path(plugin_id, &identity, binary);
     }
-}
-
-fn codesign_identity() -> Option<String> {
-    std::env::var("QOL_CODESIGN_IDENTITY")
-        .ok()
-        .filter(|value| !value.is_empty())
 }
 
 fn plugin_debug_binaries(plugin_path: &Path) -> Vec<PathBuf> {

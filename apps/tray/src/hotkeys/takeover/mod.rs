@@ -1,6 +1,7 @@
 pub(crate) mod dconf;
 mod ledger;
 mod platform;
+pub(crate) mod spices;
 
 pub(crate) use dconf::{BindingEntry, BindingReach, MatchPolicy};
 
@@ -58,9 +59,16 @@ const BINDING_ROOTS: &[BindingRoot] = &[
     },
 ];
 
+const SPICE_ROOT: BindingRoot = BindingRoot {
+    dir: spices::ROOT,
+    match_policy: MatchPolicy::Subset,
+    schema: None,
+};
+
 pub(crate) fn match_policy_for(dir: &str) -> MatchPolicy {
     BINDING_ROOTS
         .iter()
+        .chain(std::iter::once(&SPICE_ROOT))
         .filter(|root| dir.starts_with(root.dir))
         .max_by_key(|root| root.dir.len())
         .map_or(MatchPolicy::Exact, |root| root.match_policy)
@@ -168,13 +176,33 @@ pub struct RestoreSummary {
 }
 
 pub(crate) fn scan() -> Scan {
-    assemble_scan(BINDING_ROOTS.iter().map(|root| {
+    let mut scan = assemble_scan(BINDING_ROOTS.iter().map(|root| {
         let sources = RootSources {
             dconf: Some(platform::dump(root.dir)),
             effective: root.schema.map(platform::list_schema),
         };
         (*root, sources)
-    }))
+    }));
+    extend_with_spices(&mut scan, platform::spice_configs());
+    scan
+}
+
+fn extend_with_spices(scan: &mut Scan, configs: Result<Vec<spices::SpiceConfig>, HostFailure>) {
+    match configs {
+        Ok(configs) => {
+            for config in configs {
+                scan.entries.extend(spices::parse_settings(
+                    &config.uuid,
+                    &config.config_id,
+                    &config.json,
+                ));
+            }
+        }
+        Err(failure) => {
+            scan.available |= !failure.tool_missing;
+            log_source_failure(&failure);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -262,6 +290,11 @@ struct HostStore;
 
 impl BindingStore for HostStore {
     fn read(&mut self, full_key: &str) -> Result<String, TakeoverError> {
+        if let Some(key) = spices::setting_key(full_key) {
+            let json = platform::read_spice(full_key)?;
+            return spices::read_binding(&json, key)
+                .ok_or_else(|| not_a_spice_keybinding(full_key));
+        }
         platform::read(full_key).map_err(TakeoverError::from)
     }
 
@@ -288,11 +321,33 @@ impl BindingStore for HostStore {
     }
 
     fn write(&mut self, full_key: &str, value: &str) -> Result<(), TakeoverError> {
+        if let Some(key) = spices::setting_key(full_key) {
+            return write_spice(full_key, |json| spices::write_binding(json, key, value));
+        }
         platform::write(full_key, value).map_err(TakeoverError::from)
     }
 
     fn reset(&mut self, full_key: &str) -> Result<(), TakeoverError> {
+        if let Some(key) = spices::setting_key(full_key) {
+            return write_spice(full_key, |json| spices::reset_binding(json, key));
+        }
         platform::reset(full_key).map_err(TakeoverError::from)
+    }
+}
+
+fn write_spice(
+    full_key: &str,
+    next: impl FnOnce(&str) -> Option<String>,
+) -> Result<(), TakeoverError> {
+    let json = platform::read_spice(full_key)?;
+    let next = next(&json).ok_or_else(|| not_a_spice_keybinding(full_key))?;
+    platform::write_spice(full_key, &next).map_err(TakeoverError::from)
+}
+
+fn not_a_spice_keybinding(full_key: &str) -> TakeoverError {
+    TakeoverError::HostRejected {
+        command: format!("edit {full_key}"),
+        detail: "not a Cinnamon keybinding setting".to_string(),
     }
 }
 
@@ -887,6 +942,41 @@ mod tests {
             assert_eq!(scan.available, available, "case: {label}");
             assert_eq!(scan.entries.len(), entries, "case: {label}");
         }
+    }
+
+    #[test]
+    fn enabled_spice_shortcuts_join_the_scan_and_resolve_to_subset_matching() {
+        let mut scan = Scan::default();
+        extend_with_spices(
+            &mut scan,
+            Ok(vec![spices::SpiceConfig {
+                uuid: "notifications@cinnamon.org".into(),
+                config_id: "notifications@cinnamon.org".into(),
+                json: r#"{"keyOpen": {"type": "keybinding", "default": "<Super>n", "value": "<Super>n"}}"#
+                    .into(),
+            }]),
+        );
+        assert_eq!(scan.entries.len(), 1);
+        let entry = &scan.entries[0];
+        assert_eq!(entry.key, "keyOpen");
+        assert_eq!(entry.values, vec!["<Super>n".to_string()]);
+        assert_eq!(match_policy_for(&entry.dir), MatchPolicy::Subset);
+        assert_eq!(schema_for(&entry.dir), None);
+
+        let mut missing = Scan::default();
+        extend_with_spices(
+            &mut missing,
+            Err(HostFailure {
+                command: "gsettings get org.cinnamon enabled-applets".into(),
+                detail: "No such schema".into(),
+                tool_missing: false,
+            }),
+        );
+        assert!(
+            missing.available,
+            "a refused read must not hide conflicts silently"
+        );
+        assert!(missing.entries.is_empty());
     }
 
     #[test]

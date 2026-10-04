@@ -1,3 +1,4 @@
+use super::super::spices::SpiceConfig;
 use super::super::{Compositor, HostFailure};
 
 const REASON: &str = "desktop keybinding takeover is only implemented for dconf desktops";
@@ -32,6 +33,18 @@ pub(crate) fn reset(_full_key: &str) -> Result<(), HostFailure> {
 
 pub(crate) fn get_schema_value(_schema: &str, _key: &str) -> Result<String, HostFailure> {
     Err(unsupported("gsettings"))
+}
+
+pub(crate) fn spice_configs() -> Result<Vec<SpiceConfig>, HostFailure> {
+    Ok(Vec::new())
+}
+
+pub(crate) fn read_spice(_full_key: &str) -> Result<String, HostFailure> {
+    Err(unsupported("cinnamon spice settings"))
+}
+
+pub(crate) fn write_spice(_full_key: &str, _json: &str) -> Result<(), HostFailure> {
+    Err(unsupported("cinnamon spice settings"))
 }
 
 pub(crate) fn compositor() -> Option<Compositor> {

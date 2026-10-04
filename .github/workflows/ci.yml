@@ -195,7 +195,7 @@ jobs:
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
           RUSTC_WRAPPER: ""
-        run: cargo clippy --locked $CLIPPY_ARGS -- -D warnings
+        run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
 
       - name: Release profile check
         if: matrix.skip != 'true' && github.event_name == 'pull_request'

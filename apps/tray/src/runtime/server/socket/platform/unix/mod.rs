@@ -196,7 +196,7 @@ impl SubscriptionLimiter {
 
     fn try_acquire(self: &Arc<Self>) -> Option<SubscriptionPermit> {
         self.active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (active < self.maximum).then_some(active + 1)
             })
             .ok()?;

@@ -17,7 +17,7 @@ use platform::{BuildPlatform, Platform};
 use qol_workspace::workspace_dev_features;
 use std::path::Path;
 
-pub use cargo_build::{CargoChild, CargoCommandPluginBuilder};
+pub use cargo_build::{codesign_debug_binaries, CargoChild, CargoCommandPluginBuilder};
 pub use fingerprint::fingerprint_plugin;
 pub use freshness::{plugin_binary_exists, plugin_binary_path};
 pub use planning::plan_linked_plugin_builds;

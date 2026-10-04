@@ -721,7 +721,7 @@ fn current_process_identity(pid: libc::pid_t) -> io::Result<Option<String>> {
 
 fn next_process_generation() -> io::Result<u64> {
     NEXT_PROCESS_GENERATION
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
             generation.checked_add(1)
         })
         .map_err(|_| io::Error::other("owned process generation counter exhausted"))

@@ -31,6 +31,22 @@ pub(super) fn owner_state_file(dir: &std::path::Path, owner_key: &str) -> std::p
     dir.join(format!("watch-owner-{owner_key}.json"))
 }
 
+pub(super) fn watched_tokens(dir: &std::path::Path) -> std::collections::HashSet<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return std::collections::HashSet::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("watch-owner-") && name.ends_with(".json")
+        })
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .flat_map(|encoded| serde_json::from_str::<Vec<String>>(&encoded).unwrap_or_default())
+        .collect()
+}
+
 pub(super) fn read_owner_tokens(dir: &std::path::Path, owner_key: &str) -> Vec<String> {
     match fs::read_to_string(owner_state_file(dir, owner_key)) {
         Ok(encoded) => serde_json::from_str::<Vec<String>>(&encoded).unwrap_or_default(),
@@ -271,6 +287,23 @@ impl ClientWatcher {
 mod tests {
     use super::*;
     use qol_terminal_sessions::SessionBinding;
+
+    #[test]
+    fn watched_tokens_gathers_every_owner_file_and_ignores_other_files() {
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(owner_state_file(root.path(), "a"), r#"["v1:k:1:1"]"#).unwrap();
+        fs::write(
+            owner_state_file(root.path(), "b"),
+            r#"["v1:k:2:2","v1:k:3:3"]"#,
+        )
+        .unwrap();
+        fs::write(root.path().join("wake-failed-x.json"), r#"["v1:k:9:9"]"#).unwrap();
+        let watched = watched_tokens(root.path());
+        assert_eq!(watched.len(), 3);
+        assert!(watched.contains("v1:k:2:2"));
+        assert!(!watched.contains("v1:k:9:9"));
+        assert!(watched_tokens(&root.path().join("missing")).is_empty());
+    }
 
     fn store(root: &tempfile::TempDir) -> PendingBridgeStore {
         PendingBridgeStore::with_dir(root.path().join("pending-bridge"))

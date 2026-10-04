@@ -8,7 +8,7 @@
 
 A portable quality-of-life layer for any computer you sit down at.
 
-<!-- TODO: hero demo gif -->
+<img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/shots/hero.webp" width="100%" alt="The qol launcher on Linux Mint, searching for qol, term and fir">
 
 </div>
 
@@ -31,6 +31,12 @@ qol dev
 ## About
 
 Install once, configure once. Your plugins, keybindings, and settings follow you: boot the tray on any machine and it becomes yours; pull away and the host is left as you found it.
+
+## Plugins
+
+<img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/assets/plugins.svg" width="100%" alt="The plugins inside qol, each with its icon, platforms and what it does">
+
+<img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/assets/screens.svg" width="100%" alt="Screenshots of the qol settings panel and launcher">
 
 ## License
 

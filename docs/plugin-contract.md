@@ -135,6 +135,10 @@ Sections:
   captured into `extras` and never rejected (forward-compat).
 - `[[dependencies.binaries]]`: `name` (basename charset), `repo`, `pattern` (e.g.
   `"plugin-x-{os}-{arch}"`). One binary keeps store release discovery simple.
+- `[[dependencies.system]]` (`SystemDependency`): `name`, `platforms` (subset of
+  `linux`, `macos`, `windows`), `min_version` (`MAJOR.MINOR.PATCH`), `license`,
+  `url`. Declares software the user installs outside qol, such as a driver. The
+  host does not install it; the plugin's `doctor` reports whether it is present.
 - `[config]` (`ConfigDeclarations`): per-field sync **scope** (`core` | `os` |
   `device`), separate from `qol-config.toml`. `"any"` is a legacy alias for `core`.
 

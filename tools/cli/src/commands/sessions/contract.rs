@@ -6,6 +6,14 @@ use serde_json::{json, Value};
 use super::agent_policy::{AgentAssignment, AgentStatus};
 use super::spawn::surface_token;
 
+fn effort_property() -> Value {
+    json!({
+        "type": "string",
+        "description": "Reasoning effort, passed to tools that take one: claude as --effort, pi as --thinking. Every lane of a set launches at it. A claude launch also starts with --dangerously-skip-permissions",
+        "enum": super::launch_flags::EFFORT_LEVELS,
+    })
+}
+
 #[derive(Serialize)]
 pub(crate) struct SpawnIdentityRow {
     pub(crate) key: String,
@@ -131,6 +139,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "Model override for the spawned session. Omit it: a selected agent profile's declared model is the default, then the spawn_model config. The tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models remains the spending allowlist, because tiers are billed per token and only the person paying picks one",
                     },
+                    "effort": effort_property(),
                     "title": {
                         "type": "string",
                         "description": "Tab title for the spawned session; defaults to the lane key",
@@ -235,11 +244,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, the tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models still governs spending.",
                     },
-                    "effort": {
-                        "type": "string",
-                        "description": "Reasoning effort for tools that take one (claude): low, medium, high, xhigh, max",
-                        "enum": ["low", "medium", "high", "xhigh", "max"],
-                    },
+                    "effort": effort_property(),
                     "brief": {
                         "type": "string",
                         "description": "Required problem statement. Write it for someone with none of your context: what is wrong, what you already know, what done looks like",

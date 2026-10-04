@@ -83,7 +83,7 @@ impl CaptureWorkerPool {
     ) -> Result<oneshot::Receiver<BlockingCaptureResult>, &'static str> {
         let admitted = self
             .active_workers
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (active < self.capacity).then_some(active + 1)
             })
             .is_ok();

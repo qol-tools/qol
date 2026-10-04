@@ -258,6 +258,7 @@ impl Render for LauncherView {
             }
             None => content_height,
         };
+        self.sync_input_region(width, target_height, window);
         let results_height = content_height
             - header_window_height()
             - if flow_active {

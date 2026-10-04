@@ -6,7 +6,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::{
-    DeliveryMode, ScreenReader, SessionBinding, SessionInventory, TerminalSessionService, TextInput,
+    DeliveryMode, ScreenReader, SessionBinding, SessionInventory, TerminalError,
+    TerminalSessionService, TextInput,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +25,7 @@ const FAULT_AFTER: Duration = Duration::from_secs(2 * 60);
 const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
 const WAKE_SNIPPET_MAX_BYTES: usize = 8 * 1024;
 const WAKE_COMPOSER_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const WAKE_COMPOSER_STATIC_POLLS: usize = 30;
-const WAKE_COMPOSER_MAX_ATTEMPTS: usize = 300;
+const WAKE_UNREADABLE_POLLS: usize = 30;
 const WATCH_ALL_KEY: &str = "watch-all";
 
 #[derive(Clone, Copy)]
@@ -2129,28 +2129,31 @@ fn composer_busy(screen: &str) -> bool {
     composer.is_some_and(|rest| rest.chars().any(|character| !character.is_whitespace()))
 }
 
-fn composer_draft_region(screen: &str) -> Option<String> {
-    let mut region_start = None;
-    for (index, line) in screen.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed
-            .strip_prefix("> ")
-            .or_else(|| trimmed.strip_prefix("❯ "))
-            .or_else(|| (trimmed == ">" || trimmed == "❯").then_some(""))
-            .is_some()
-        {
-            region_start = Some(index);
+enum ComposerWait {
+    Empty,
+    Gone,
+    Unreadable,
+}
+
+fn wait_for_empty_composer(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+    sleep: &mut dyn FnMut(Duration),
+    deferrals: &mut usize,
+) -> ComposerWait {
+    let mut unread = 0usize;
+    loop {
+        match terminals.read_screen_relaxed(binding) {
+            Ok(screen) if !composer_busy(&screen) => return ComposerWait::Empty,
+            Ok(_) => unread = 0,
+            Err(TerminalError::Unsupported { .. }) => return ComposerWait::Empty,
+            Err(_) if session_gone(terminals, binding) => return ComposerWait::Gone,
+            Err(_) if unread + 1 >= WAKE_UNREADABLE_POLLS => return ComposerWait::Unreadable,
+            Err(_) => unread += 1,
         }
+        sleep(WAKE_COMPOSER_POLL_INTERVAL);
+        *deferrals += 1;
     }
-    let start = region_start?;
-    Some(
-        screen
-            .lines()
-            .skip(start)
-            .map(str::trim_end)
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
 }
 
 fn deliver_wake(
@@ -2179,32 +2182,7 @@ fn deliver_wake(
                     }
                 } else {
                     let mut deferrals = 0usize;
-                    let mut static_polls = 0usize;
-                    let mut busy_cleared = false;
-                    if let Ok(mut screen) = terminals.read_screen_relaxed(&binding) {
-                        let mut previous_region = composer_draft_region(&screen);
-                        while composer_busy(&screen)
-                            && deferrals < WAKE_COMPOSER_MAX_ATTEMPTS
-                            && static_polls < WAKE_COMPOSER_STATIC_POLLS
-                        {
-                            sleep(WAKE_COMPOSER_POLL_INTERVAL);
-                            deferrals += 1;
-                            match terminals.read_screen_relaxed(&binding) {
-                                Ok(next) => {
-                                    let region = composer_draft_region(&next);
-                                    if region == previous_region {
-                                        static_polls += 1;
-                                    } else {
-                                        static_polls = 0;
-                                        previous_region = region;
-                                    }
-                                    screen = next;
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                        busy_cleared = !composer_busy(&screen);
-                    }
+                    let wait = wait_for_empty_composer(terminals, &binding, sleep, &mut deferrals);
                     if deferrals > 0 {
                         qol_runtime::probe!(
                             "CLI_SESSION_WATCH",
@@ -2220,25 +2198,40 @@ fn deliver_wake(
                             .and_then(|mut file| {
                                 file.write_all(
                                     format!(
-                                        "{} wake deferred driver={} polls={} static={} busy_cleared={}\n",
+                                        "{} wake deferred driver={} polls={} composer_empty={}\n",
                                         chrono::Utc::now().to_rfc3339(),
                                         driver,
                                         deferrals,
-                                        static_polls,
-                                        busy_cleared
+                                        matches!(wait, ComposerWait::Empty)
                                     )
                                     .as_bytes(),
                                 )
                             });
                     }
-                    match terminals.send_text(&binding, message, DeliveryMode::Submit) {
-                        Ok(()) => WakeDelivery {
-                            delivered: true,
-                            error: None,
+                    match wait {
+                        ComposerWait::Empty => match terminals.send_text(&binding, message, DeliveryMode::Submit) {
+                            Ok(()) => WakeDelivery {
+                                delivered: true,
+                                error: None,
+                            },
+                            Err(error) => WakeDelivery {
+                                delivered: false,
+                                error: Some(error.to_string()),
+                            },
                         },
-                        Err(error) => WakeDelivery {
+                        ComposerWait::Gone => WakeDelivery {
                             delivered: false,
-                            error: Some(error.to_string()),
+                            error: Some(
+                                "the initiator terminal closed while the wake waited for its draft to clear"
+                                    .to_owned(),
+                            ),
+                        },
+                        ComposerWait::Unreadable => WakeDelivery {
+                            delivered: false,
+                            error: Some(
+                                "the initiator screen could not be read, so the wake was not typed over a possible draft"
+                                    .to_owned(),
+                            ),
                         },
                     }
                 }
@@ -2520,6 +2513,8 @@ mod tests {
         Full,
     }
 
+    const UNREADABLE: &str = "<unreadable>";
+
     struct FakeBackend {
         id: BackendId,
         facts: SessionFacts,
@@ -2624,9 +2619,18 @@ mod tests {
             self.record(CallKind::Full);
             self.read_count.fetch_add(1, Ordering::Relaxed);
             if self.gone.load(Ordering::Relaxed) || !self.lane_alive() {
+                let driver = self.driver_facts.lock().unwrap().clone();
+                if driver.is_some_and(|driver| driver.id == *_target.session_id()) {
+                    return Ok(String::new());
+                }
                 return Err(TerminalError::TargetMissing(_target.clone()));
             }
-            Ok(self.next_screen())
+            match self.next_screen() {
+                screen if screen == UNREADABLE => {
+                    Err(TerminalError::TargetMissing(_target.clone()))
+                }
+                screen => Ok(screen),
+            }
         }
     }
 
@@ -4030,15 +4034,6 @@ mod tests {
     }
 
     #[test]
-    fn composer_draft_region_spans_from_the_prompt_line_to_the_end() {
-        assert_eq!(
-            composer_draft_region("> old message\n❯ draft\nstatus: running  ").as_deref(),
-            Some("❯ draft\nstatus: running")
-        );
-        assert_eq!(composer_draft_region("just output, no prompt"), None);
-    }
-
-    #[test]
     fn screen_tail_caps_at_64_kib_and_keeps_the_char_boundary() {
         let short = "a short screen";
         assert_eq!(screen_tail(short), short);
@@ -4781,8 +4776,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wake_delivers_when_the_draft_region_stops_changing() {
+    fn run_wake(backend: Arc<FakeBackend>) -> (Vec<serde_json::Value>, Arc<FakeBackend>, usize) {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
@@ -4795,14 +4789,6 @@ mod tests {
                 None,
             )
             .unwrap();
-        let backend = FakeBackend::new(
-            facts("7", 100),
-            vec![
-                "done\nQOL_BRIDGE_DONE_round".to_owned(),
-                "done\nQOL_BRIDGE_DONE_round".to_owned(),
-                "> draft".to_owned(),
-            ],
-        );
         let (terminals, backend) = harness(backend);
         let mut out = Vec::new();
         let mut sleeps = Vec::new();
@@ -4820,136 +4806,56 @@ mod tests {
             &mut |duration| sleeps.push(duration),
         )
         .unwrap();
-
-        let events = lines(&out);
-        assert_eq!(events.len(), 1, "events: {events:?}");
-        assert_eq!(events[0]["event"], "completed");
-        assert_eq!(events[0]["delivered"], true);
-        let sent = backend.sent.lock().unwrap();
-        assert_eq!(sent.len(), 1, "the wake must be sent exactly once");
-        drop(sent);
         let deferrals = sleeps
             .iter()
             .filter(|duration| **duration == WAKE_COMPOSER_POLL_INTERVAL)
             .count();
-        assert_eq!(
-            deferrals, WAKE_COMPOSER_STATIC_POLLS,
-            "an unchanged draft region must stop deferring after the static budget: {sleeps:?}"
-        );
+        (lines(&out), backend, deferrals)
     }
 
-    #[test]
-    fn wake_defers_while_the_draft_region_keeps_changing() {
-        let root = tempfile::TempDir::new().unwrap();
-        let pending = store(&root);
-        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
-        pending
-            .start(
-                &binding,
-                "QOL_BRIDGE_DONE_round",
-                "v1:fake:7:100",
-                false,
-                None,
-            )
-            .unwrap();
+    fn completed_then(rest: impl IntoIterator<Item = String>) -> Vec<String> {
         let mut screens = vec![
             "done\nQOL_BRIDGE_DONE_round".to_owned(),
             "done\nQOL_BRIDGE_DONE_round".to_owned(),
         ];
+        screens.extend(rest);
         screens
-            .extend((1..=WAKE_COMPOSER_MAX_ATTEMPTS + 1).map(|i| format!("> {}", "a".repeat(i))));
-        let backend = FakeBackend::new(facts("7", 100), screens);
-        let (terminals, backend) = harness(backend);
-        let mut out = Vec::new();
-        let mut sleeps = Vec::new();
-        watch_loop(
-            &terminals,
-            &CliSessionInterpreter::system(),
-            &pending,
-            &ledger(&root),
-            &locks(&root),
-            &[binding.token().to_owned()],
-            None,
-            &mut out,
-            root.path(),
-            fast_config(Duration::from_secs(3600)),
-            &mut |duration| sleeps.push(duration),
-        )
-        .unwrap();
+    }
 
-        let events = lines(&out);
-        assert_eq!(events.len(), 1, "events: {events:?}");
-        assert_eq!(events[0]["event"], "completed");
-        assert_eq!(events[0]["delivered"], true);
-        let sent = backend.sent.lock().unwrap();
-        assert_eq!(sent.len(), 1, "the wake must be sent exactly once");
-        drop(sent);
-        let deferrals = sleeps
-            .iter()
-            .filter(|duration| **duration == WAKE_COMPOSER_POLL_INTERVAL)
-            .count();
+    #[test]
+    fn an_untouched_draft_is_never_typed_over() {
+        let drafts = 400;
+        let screens = completed_then(
+            std::iter::repeat_n("❯ /compact".to_owned(), drafts).chain(["❯ ".to_owned()]),
+        );
+        let (events, backend, deferrals) = run_wake(FakeBackend::new(facts("7", 100), screens));
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
         assert_eq!(
-            deferrals, WAKE_COMPOSER_MAX_ATTEMPTS,
-            "a draft region that keeps changing must exhaust the attempt budget: {sleeps:?}"
+            deferrals, drafts,
+            "the wake waits for the draft to clear however long it sits"
         );
     }
 
     #[test]
-    fn wake_static_counter_resets_when_typing_resumes() {
-        let root = tempfile::TempDir::new().unwrap();
-        let pending = store(&root);
-        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
-        pending
-            .start(
-                &binding,
-                "QOL_BRIDGE_DONE_round",
-                "v1:fake:7:100",
-                false,
-                None,
-            )
-            .unwrap();
-        let identical_before_change = 10usize;
-        let mut screens = vec![
-            "done\nQOL_BRIDGE_DONE_round".to_owned(),
-            "done\nQOL_BRIDGE_DONE_round".to_owned(),
-        ];
-        screens.extend((0..=identical_before_change).map(|_| "> draft".to_owned()));
-        screens.push("> draft edited".to_owned());
-        let backend = FakeBackend::new(facts("7", 100), screens);
-        let (terminals, backend) = harness(backend);
-        let mut out = Vec::new();
-        let mut sleeps = Vec::new();
-        watch_loop(
-            &terminals,
-            &CliSessionInterpreter::system(),
-            &pending,
-            &ledger(&root),
-            &locks(&root),
-            &[binding.token().to_owned()],
-            None,
-            &mut out,
-            root.path(),
-            fast_config(Duration::from_secs(3600)),
-            &mut |duration| sleeps.push(duration),
-        )
-        .unwrap();
+    fn an_unreadable_screen_defers_the_wake_instead_of_typing_blind() {
+        let screens = completed_then([UNREADABLE, UNREADABLE, "idle"].map(str::to_owned));
+        let (events, backend, deferrals) = run_wake(FakeBackend::new(facts("7", 100), screens));
 
-        let events = lines(&out);
-        assert_eq!(events.len(), 1, "events: {events:?}");
-        assert_eq!(events[0]["event"], "completed");
-        assert_eq!(events[0]["delivered"], true);
-        let sent = backend.sent.lock().unwrap();
-        assert_eq!(sent.len(), 1, "the wake must be sent exactly once");
-        drop(sent);
-        let deferrals = sleeps
-            .iter()
-            .filter(|duration| **duration == WAKE_COMPOSER_POLL_INTERVAL)
-            .count();
-        assert_eq!(
-            deferrals,
-            identical_before_change + 1 + WAKE_COMPOSER_STATIC_POLLS,
-            "resumed typing must restart the static budget from zero: {sleeps:?}"
-        );
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        assert_eq!(deferrals, 2);
+    }
+
+    #[test]
+    fn a_screen_that_stays_unreadable_drops_the_wake_untyped() {
+        let screens = completed_then([UNREADABLE.to_owned()]);
+        let (events, backend, deferrals) = run_wake(FakeBackend::new(facts("7", 100), screens));
+
+        assert_eq!(events[0]["delivered"], false, "events: {events:?}");
+        assert!(backend.sent.lock().unwrap().is_empty());
+        assert_eq!(deferrals, WAKE_UNREADABLE_POLLS - 1);
     }
 
     #[test]
@@ -6537,7 +6443,7 @@ mod tests {
             None,
             None,
             Transcript::Silent,
-            vec!["> shell prompt".to_owned(); 2],
+            vec!["$ shell prompt".to_owned(); 2],
         );
         let body = (0..400)
             .map(|index| format!("report line {index}"))

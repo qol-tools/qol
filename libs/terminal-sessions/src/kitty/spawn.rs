@@ -68,6 +68,10 @@ pub(super) fn launch_argv(
         argv.push("--env".to_owned());
         argv.push(format!("PATH={path}"));
     }
+    for (name, value) in &request.launch.env {
+        argv.push("--env".to_owned());
+        argv.push(format!("{name}={value}"));
+    }
     argv.push("--cwd".to_owned());
     argv.push(cwd_string(request)?);
     if let Some(title) = &request.title {
@@ -130,6 +134,7 @@ mod tests {
             launch: CliLaunchProgram {
                 program: "codex".to_owned(),
                 args: vec!["--full-auto".to_owned(), "dir with spaces".to_owned()],
+                env: Vec::new(),
             },
             cwd: "/work/project".into(),
             title: title.map(str::to_owned),
@@ -178,6 +183,32 @@ mod tests {
                 "codex",
                 "--full-auto",
                 "dir with spaces",
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_argv_hands_the_launch_environment_to_the_new_window() {
+        let mut request = request(SpawnSurface::OsWindow, None);
+        request.launch.env = vec![(
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            "/home/u/.claude-x".to_owned(),
+        )];
+
+        let argv = launch_argv(&request, Some("/usr/bin"), None).unwrap();
+
+        assert_eq!(
+            argv[..9],
+            [
+                "@",
+                "launch",
+                "--type",
+                "os-window",
+                "--dont-take-focus",
+                "--env",
+                "PATH=/usr/bin",
+                "--env",
+                "CLAUDE_CONFIG_DIR=/home/u/.claude-x",
             ]
         );
     }

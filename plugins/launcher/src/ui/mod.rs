@@ -28,6 +28,7 @@ use crate::discovery::details::AppFace;
 use crate::discovery::entry_store::{BeforeTyping, EntryStore};
 use crate::discovery::{PreloadedEntries, SharedEntries};
 
+use layout::WINDOW_WIDTH;
 use menu::MenuKind;
 use state::LauncherState;
 
@@ -61,6 +62,7 @@ pub(crate) struct LauncherView {
     dismiss_requested_from: &'static str,
     click_away_monitor: Option<click_away::Monitor>,
     click_away_arm: click_away::ArmState,
+    input_region: Option<(i16, i16, u16, u16)>,
     pub(crate) is_showing: bool,
     pub(crate) showing_flag: Arc<std::sync::atomic::AtomicBool>,
     blur_guard: qol_gpui::ghost::BlurGuard,
@@ -121,6 +123,7 @@ impl LauncherView {
             dismiss_requested_from: "requested",
             click_away_monitor: None,
             click_away_arm: click_away::ArmState::default(),
+            input_region: None,
             is_showing: true,
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard,
@@ -274,6 +277,29 @@ impl LauncherView {
             }
         })
         .detach();
+    }
+
+    fn sync_input_region(&mut self, width: f32, height: f32, window: &Window) {
+        let scale = window.scale_factor();
+        let region = (
+            ((WINDOW_WIDTH - width) / 2.0 * scale).round() as i16,
+            0,
+            (width * scale).round() as u16,
+            (height * scale).ceil() as u16,
+        );
+        if self.input_region == Some(region) {
+            return;
+        }
+        let (x, y, width, height) = region;
+        if qol_gpui::popup_window::set_input_region_by_title(
+            &self.window_title,
+            x,
+            y,
+            width,
+            height,
+        ) {
+            self.input_region = Some(region);
+        }
     }
 
     fn stop_click_away_monitor(&mut self) {
