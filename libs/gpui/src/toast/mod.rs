@@ -1,5 +1,3 @@
-use crate::text::TextStyled;
-use qol_theme::TextStyle;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,25 +14,21 @@ use crate::placement::{
 use crate::popup_window::{present_topmost, restore_composite, HiddenWindowsBarrier};
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
 
+mod card;
+mod pile;
+
 const COMPACT_WIDTH: f32 = 340.0;
 const COMPACT_HEIGHT: f32 = 76.0;
 const STATUS_WIDTH: f32 = 520.0;
 const STATUS_HEIGHT: f32 = 78.0;
 
-const SLAB_WIDTH: f32 = 440.0;
-const ROW_HEIGHT: f32 = 68.0;
-const HEADER_HEIGHT: f32 = 30.0;
-const SUMMARY_HEIGHT: f32 = 36.0;
-const LIVE_BAND_HEIGHT: f32 = 20.0;
 const PREVIEW_WIDTH: f32 = 72.0;
 const DISMISS_WIDTH: f32 = 44.0;
-const GUTTER: f32 = 8.0;
-const TEXT_PAD: f32 = 16.0;
-const DOT_SLOT_WIDTH: f32 =
-    qol_theme::SPACE_PAD + qol_theme::STATUS_DOT + qol_theme::SPACE_CELL - TEXT_PAD;
 const MAX_ROWS_PER_GROUP: usize = 3;
-const MAX_VISIBLE_NON_LIVE_ROWS: usize = 4;
 const HOVER_HOLD_RECHECK: Duration = Duration::from_millis(400);
+const POINTER_POLL: Duration = Duration::from_millis(60);
+const RING_TICK: Duration = Duration::from_millis(50);
+const AGE_TICK: Duration = Duration::from_secs(30);
 
 static TOAST_HOST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -152,16 +146,6 @@ impl ToastTone {
     }
 }
 
-fn tone_dot(tone: ToastTone, kit: Kit) -> Div {
-    let halo = match tone {
-        ToastTone::Neutral | ToastTone::Info => 0,
-        ToastTone::Success => kit.washes.halo_success.packed(),
-        ToastTone::Warning => kit.washes.halo_attention.packed(),
-        ToastTone::Danger => kit.washes.halo_invalid.packed(),
-    };
-    kit.status_dot(tone.color(kit), halo)
-}
-
 fn row_ground(row: &SlabSnapshotRow, kit: Kit) -> u32 {
     if row.toast.live {
         kit.grounds.menu.bg
@@ -193,11 +177,11 @@ pub struct Toast {
     message_is_path: bool,
     timeout_explicit: bool,
     group: SharedString,
+    source: SharedString,
     key: Option<SharedString>,
     preview: Option<Rc<dyn crate::artifact::ArtifactPreview>>,
     preview_action: Option<Activation>,
     live: bool,
-    busy: bool,
 }
 
 impl Toast {
@@ -216,11 +200,11 @@ impl Toast {
             message_is_path: false,
             timeout_explicit: false,
             group: "".into(),
+            source: "".into(),
             key: None,
             preview: None,
             preview_action: None,
             live: false,
-            busy: false,
         }
     }
 
@@ -270,9 +254,8 @@ impl Toast {
         self
     }
 
-    /// Pairs the toast title with the shared Busy ring while work runs.
-    pub fn busy(mut self) -> Self {
-        self.busy = true;
+    pub fn source(mut self, source: impl Into<SharedString>) -> Self {
+        self.source = source.into();
         self
     }
 
@@ -334,32 +317,6 @@ impl Toast {
                 }
             })
     }
-}
-
-fn slab_height(live_rows: usize, visible_rows: usize, header: bool, summary: bool) -> f32 {
-    let header = if header { HEADER_HEIGHT } else { 0.0 };
-    let band = if live_rows > 0 { LIVE_BAND_HEIGHT } else { 0.0 };
-    let rows = (live_rows + visible_rows) as f32 * ROW_HEIGHT;
-    let summary = if summary { SUMMARY_HEIGHT } else { 0.0 };
-    header + band + rows + summary
-}
-
-fn visible_slab_counts(non_live_rows: usize, expanded: bool) -> (bool, usize, bool) {
-    let header = non_live_rows >= 2;
-    let visible = if expanded || non_live_rows <= MAX_VISIBLE_NON_LIVE_ROWS {
-        non_live_rows
-    } else {
-        MAX_VISIBLE_NON_LIVE_ROWS
-    };
-    let summary = !expanded && non_live_rows > MAX_VISIBLE_NON_LIVE_ROWS;
-    (header, visible, summary)
-}
-
-fn compute_slab_height(rows: &[SlabSnapshotRow], expanded: bool) -> f32 {
-    let live_rows = rows.iter().filter(|row| row.toast.live).count();
-    let non_live_rows = rows.len() - live_rows;
-    let (header, visible, summary) = visible_slab_counts(non_live_rows, expanded);
-    slab_height(live_rows, visible, header, summary)
 }
 
 struct ActiveToast {
@@ -489,11 +446,15 @@ struct ToastRow {
     id: RowId,
     toast: Toast,
     generation: u64,
+    created: Instant,
+    deadline: Option<Instant>,
 }
 
 struct SlabSnapshotRow {
     id: RowId,
     toast: Toast,
+    created: Instant,
+    deadline: Option<Instant>,
 }
 
 struct HostState {
@@ -521,7 +482,7 @@ pub struct SlabPresenter {
 enum PushOutcome {
     Open {
         placement: MonitorPlacement,
-        height: f32,
+        size: Size<Pixels>,
     },
     Notify,
 }
@@ -558,12 +519,16 @@ impl SlabPresenter {
 
             let row_id;
             let generation;
+            let created = Instant::now();
+            let deadline = timeout.map(|timeout| created + timeout);
             match target {
                 Some(index) => {
                     generation = state.next_generation();
                     let row = &mut state.rows[index];
                     row.generation = generation;
                     row.toast = toast;
+                    row.created = created;
+                    row.deadline = deadline;
                     row_id = row.id;
                 }
                 None => {
@@ -574,6 +539,8 @@ impl SlabPresenter {
                         id: row_id,
                         generation,
                         toast,
+                        created,
+                        deadline,
                     });
                 }
             }
@@ -593,18 +560,11 @@ impl SlabPresenter {
                 state.rows.retain(|row| !stale_ids.contains(&row.id));
             }
 
-            let snapshot: Vec<SlabSnapshotRow> = state
-                .rows
-                .iter()
-                .map(|row| SlabSnapshotRow {
-                    id: row.id,
-                    toast: row.toast.clone(),
-                })
-                .collect();
-            let height = compute_slab_height(&snapshot, state.expanded);
+            let resting = pile::layout(state.rows.len(), 0.0, 0.0, &[]);
+            let size = size(px(resting.width.ceil()), px(resting.height.ceil()));
 
             let outcome = if state.surface.is_none() {
-                PushOutcome::Open { placement, height }
+                PushOutcome::Open { placement, size }
             } else {
                 PushOutcome::Notify
             };
@@ -612,15 +572,15 @@ impl SlabPresenter {
         };
 
         match outcome {
-            PushOutcome::Open { placement, height } => {
+            PushOutcome::Open { placement, size } => {
                 let owner: &str = &self.title;
                 let host = self.clone();
                 let surface = Surface::new(SurfaceKind::Toast)
                     .title(owner)
                     .placement(placement)
-                    .size(size(px(SLAB_WIDTH), px(height)))
+                    .size(size)
                     .open(&self.tracker, cx, move |dismisser, _window, _cx| {
-                        SlabToastView { host, dismisser }
+                        SlabToastView::new(host, dismisser)
                     });
                 match surface {
                     Ok(surface) => {
@@ -665,12 +625,41 @@ impl SlabPresenter {
         self.drop_rows(&ids, cx);
     }
 
-    fn toggle_expanded(&self, cx: &mut App) {
+    fn set_expanded(&self, expanded: bool, cx: &mut App) {
         {
             let mut state = self.state.borrow_mut();
-            state.expanded = !state.expanded;
+            let expanded = expanded && state.rows.len() >= 2;
+            if state.expanded == expanded {
+                return;
+            }
+            state.expanded = expanded;
+        }
+        if !expanded {
+            self.restart_timers(cx);
         }
         self.notify_view(cx);
+    }
+
+    fn restart_timers(&self, cx: &mut App) {
+        let now = Instant::now();
+        let armed: Vec<(RowId, u64, Duration)> = {
+            let mut state = self.state.borrow_mut();
+            let mut armed = Vec::new();
+            for index in 0..state.rows.len() {
+                let Some(timeout) = state.rows[index].toast.effective_timeout() else {
+                    continue;
+                };
+                let generation = state.next_generation();
+                let row = &mut state.rows[index];
+                row.generation = generation;
+                row.deadline = Some(now + timeout);
+                armed.push((row.id, generation, timeout));
+            }
+            armed
+        };
+        for (id, generation, timeout) in armed {
+            arm_timer(self.clone(), id, generation, timeout, cx);
+        }
     }
 
     fn mark_row_failed(&self, id: RowId, error: anyhow::Error, cx: &mut App) {
@@ -685,6 +674,7 @@ impl SlabPresenter {
                 row.toast.title = error.to_string().into();
                 row.toast.timeout = None;
                 row.toast.timeout_explicit = true;
+                row.deadline = None;
             }
         }
         self.notify_view(cx);
@@ -717,17 +707,18 @@ impl SlabPresenter {
     }
 
     fn on_timer(&self, id: RowId, generation: u64, pointer_inside: bool, cx: &mut App) {
-        let owned = {
+        let (owned, expanded) = {
             let state = self.state.borrow();
-            state
+            let owned = state
                 .rows
                 .iter()
-                .any(|row| row.id == id && row.generation == generation)
+                .any(|row| row.id == id && row.generation == generation);
+            (owned, state.expanded)
         };
         if !owned {
             return;
         }
-        if pointer_inside {
+        if pointer_inside || expanded {
             arm_timer(self.clone(), id, generation, HOVER_HOLD_RECHECK, cx);
         } else {
             self.remove(id, cx);
@@ -742,6 +733,9 @@ impl SlabPresenter {
         let remains_empty = {
             let mut state = self.state.borrow_mut();
             state.rows.retain(|row| !ids.contains(&row.id));
+            if state.rows.len() < 2 {
+                state.expanded = false;
+            }
             state.rows.is_empty()
         };
         if remains_empty {
@@ -778,6 +772,8 @@ impl SlabPresenter {
             .map(|row| SlabSnapshotRow {
                 id: row.id,
                 toast: row.toast.clone(),
+                created: row.created,
+                deadline: row.deadline,
             })
             .collect();
         (rows, state.expanded)
@@ -881,291 +877,361 @@ fn arm_timer(
 struct SlabToastView {
     host: SlabPresenter,
     dismisser: SurfaceDismisser,
+    inside: bool,
+    hovered: Option<RowId>,
+    lit: bool,
+    grow: pile::Tween,
+    open: pile::Tween,
+    focus: Vec<(RowId, pile::Tween)>,
+    polling: bool,
+    ring_ticking: bool,
+    age_ticking: bool,
+}
+
+impl SlabToastView {
+    fn new(host: SlabPresenter, dismisser: SurfaceDismisser) -> Self {
+        Self {
+            host,
+            dismisser,
+            inside: false,
+            hovered: None,
+            lit: false,
+            grow: pile::Tween::at(0.0),
+            open: pile::Tween::at(0.0),
+            focus: Vec::new(),
+            polling: false,
+            ring_ticking: false,
+            age_ticking: false,
+        }
+    }
+
+    fn enter(&mut self, cx: &mut Context<Self>) {
+        if self.inside {
+            return;
+        }
+        self.inside = true;
+        self.ensure_polling(cx);
+        cx.notify();
+    }
+
+    fn leave(&mut self, cx: &mut Context<Self>) {
+        if !self.inside {
+            return;
+        }
+        self.inside = false;
+        self.hovered = None;
+        self.lit = false;
+        self.host.restart_timers(cx);
+        cx.notify();
+    }
+
+    fn ensure_polling(&mut self, cx: &mut Context<Self>) {
+        if self.polling {
+            return;
+        }
+        self.polling = true;
+        let title = self.host.title.to_string();
+        let host = self.host.clone();
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(POINTER_POLL).await;
+            let probe = title.clone();
+            let pointer = cx
+                .background_spawn(
+                    async move { crate::popup_window::pointer_on_window_by_title(&probe) },
+                )
+                .await;
+            let Ok(Some(fold)) = this.update(cx, |view, cx| view.on_pointer(pointer, cx)) else {
+                break;
+            };
+            if fold {
+                let _ = cx.update(|cx| host.set_expanded(false, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn on_pointer(
+        &mut self,
+        pointer: Option<crate::popup_window::PointerOnWindow>,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        let Some(pointer) = pointer else {
+            self.polling = false;
+            return None;
+        };
+        if !pointer.inside {
+            self.leave(cx);
+        }
+        let expanded = self.host.state.borrow().expanded;
+        if !self.inside && !expanded {
+            self.polling = false;
+            return None;
+        }
+        Some(expanded && pointer.pressed && !pointer.inside)
+    }
+
+    fn tick(&mut self, ring: bool, cx: &mut Context<Self>) {
+        let pending = if ring {
+            &mut self.ring_ticking
+        } else {
+            &mut self.age_ticking
+        };
+        if *pending {
+            return;
+        }
+        *pending = true;
+        let interval = if ring { RING_TICK } else { AGE_TICK };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(interval).await;
+            let _ = this.update(cx, |view, cx| {
+                if ring {
+                    view.ring_ticking = false;
+                } else {
+                    view.age_ticking = false;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn settle_focus(&mut self, rows: &[&SlabSnapshotRow], open: bool, now: Instant) {
+        self.focus
+            .retain(|(id, _)| rows.iter().any(|row| row.id == *id));
+        for row in rows {
+            let target = if open && self.hovered == Some(row.id) {
+                1.0
+            } else {
+                0.0
+            };
+            match self.focus.iter_mut().find(|(id, _)| *id == row.id) {
+                Some((_, tween)) => tween.toward(target, now),
+                None => {
+                    let mut tween = pile::Tween::at(0.0);
+                    tween.toward(target, now);
+                    self.focus.push((row.id, tween));
+                }
+            }
+        }
+    }
+
+    fn focus_of(&self, id: RowId) -> Option<&pile::Tween> {
+        self.focus
+            .iter()
+            .find(|(row, _)| *row == id)
+            .map(|(_, tween)| tween)
+    }
 }
 
 impl Render for SlabToastView {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = crate::kit::kit();
+        let now = Instant::now();
         let (snapshot, expanded) = self.host.slab_snapshot();
+        let rows: Vec<&SlabSnapshotRow> = snapshot.iter().rev().collect();
+        let count = rows.len();
+        let open = expanded && count >= 2;
 
-        let mut live_rows: Vec<SlabSnapshotRow> = Vec::new();
-        let mut list_rows: Vec<SlabSnapshotRow> = Vec::new();
-        for row in snapshot {
-            if row.toast.live {
-                live_rows.push(row);
-            } else {
-                list_rows.push(row);
-            }
-        }
-
-        let non_live_total = list_rows.len();
-        let (header_shown, visible_non_live, summary_shown) =
-            visible_slab_counts(non_live_total, expanded);
-        let hidden_count = non_live_total.saturating_sub(MAX_VISIBLE_NON_LIVE_ROWS);
-        let display_rows: Vec<SlabSnapshotRow> = if expanded {
-            list_rows
-        } else if non_live_total > visible_non_live {
-            list_rows.split_off(non_live_total - visible_non_live)
-        } else {
-            list_rows
-        };
-
-        let height = slab_height(
-            live_rows.len(),
-            display_rows.len(),
-            header_shown,
-            summary_shown,
+        self.grow.toward(if self.inside { 1.0 } else { 0.0 }, now);
+        self.open.toward(if open { 1.0 } else { 0.0 }, now);
+        self.settle_focus(&rows, open, now);
+        let focus_now: Vec<f32> = rows
+            .iter()
+            .map(|row| self.focus_of(row.id).map_or(0.0, |tween| tween.value(now)))
+            .collect();
+        let focus_end: Vec<f32> = rows
+            .iter()
+            .map(|row| self.focus_of(row.id).map_or(0.0, pile::Tween::target))
+            .collect();
+        let current = pile::layout(
+            count,
+            self.grow.value(now),
+            self.open.value(now),
+            &focus_now,
         );
-        let target = size(px(SLAB_WIDTH), px(height));
-        let grown = window.bounds().size != target && self.dismisser.resize_window(target, window);
-        if grown {
+        let settled = pile::layout(count, self.grow.target(), self.open.target(), &focus_end);
+        let moving = self.grow.moving(now)
+            || self.open.moving(now)
+            || self.focus.iter().any(|(_, tween)| tween.moving(now));
+
+        let shown = window.bounds().size;
+        let target = if moving {
+            size(
+                px(current
+                    .width
+                    .max(settled.width)
+                    .max(f32::from(shown.width))
+                    .ceil()),
+                px(current
+                    .height
+                    .max(settled.height)
+                    .max(f32::from(shown.height))
+                    .ceil()),
+            )
+        } else {
+            size(px(settled.width.ceil()), px(settled.height.ceil()))
+        };
+        if shown != target && self.dismisser.resize_window(target, window) {
             if let Some(origin) = self.host.anchored_origin(target) {
                 self.dismisser.reposition_window(origin);
             }
         }
-
-        let mut contents: Vec<AnyElement> = Vec::new();
-        if header_shown {
-            contents.push(slab_header(non_live_total, kit, self.host.clone()).into_any_element());
+        if moving {
+            window.request_animation_frame();
         }
-        if !live_rows.is_empty() {
-            contents.push(live_band_label(kit).into_any_element());
-            for row in &live_rows {
-                contents.push(slab_row_view(row, kit, self.host.clone()).into_any_element());
+        let frame = window.bounds().size;
+        let dx = f32::from(frame.width) - current.width;
+        let dy = f32::from(frame.height) - current.height;
+        let place = |element: Stateful<Div>, at: pile::Frame| {
+            element
+                .absolute()
+                .left(px(at.left + dx))
+                .top(px(at.top + dy))
+                .w(px(at.width))
+                .h(px(at.height))
+        };
+
+        let mut ring_running = false;
+        let card_view = |index: usize, view: &Self, ring_running: &mut bool| -> AnyElement {
+            let row = rows[index];
+            let card = current.cards[index];
+            let ring = row.toast.effective_timeout().map(|timeout| {
+                if view.inside || open {
+                    card::Ring {
+                        remaining: 1.0,
+                        ink: kit.grounds.pane.faint,
+                    }
+                } else {
+                    *ring_running = true;
+                    let left = row.deadline.map_or(Duration::ZERO, |deadline| {
+                        deadline.saturating_duration_since(now)
+                    });
+                    card::Ring {
+                        remaining: left.as_secs_f32() / timeout.as_secs_f32(),
+                        ink: row.toast.tone.color(kit),
+                    }
+                }
+            });
+            let ground = if index > 0 && view.lit && !open {
+                row_lift(row, kit)
+            } else {
+                rgb(row_ground(row, kit))
+            };
+            let id = row.id;
+            let host = view.host.clone();
+            let mut element = place(div().id(card::card_id(id)), card.frame)
+                .opacity(card.opacity)
+                .occlude()
+                .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+                    if *hovered {
+                        view.hovered = Some(id);
+                        view.enter(cx);
+                    } else if view.hovered == Some(id) {
+                        view.hovered = None;
+                    }
+                    cx.notify();
+                }));
+            if index > 0 && !open {
+                let opener = host.clone();
+                element = element
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| opener.set_expanded(true, cx));
+            }
+            element
+                .child(kit.window().bg(ground).child(card::content(
+                    row,
+                    card::CardParts {
+                        scale: card.scale,
+                        content: card.content,
+                        interactive: index == 0 || open,
+                        ring,
+                        age: pile::age_label(now.saturating_duration_since(row.created)),
+                    },
+                    kit,
+                    host,
+                )))
+                .into_any_element()
+        };
+
+        let mut layers: Vec<AnyElement> = Vec::new();
+        if open {
+            let host = self.host.clone();
+            layers.push(
+                div()
+                    .id("toast-fold")
+                    .absolute()
+                    .size_full()
+                    .on_click(move |_, _, cx| host.set_expanded(false, cx))
+                    .into_any_element(),
+            );
+        }
+        let focused = rows
+            .iter()
+            .position(|row| open && self.hovered == Some(row.id));
+        for index in (1..count).rev() {
+            if focused != Some(index) && current.cards[index].opacity > 0.01 {
+                layers.push(card_view(index, self, &mut ring_running));
             }
         }
-        for row in &display_rows {
-            contents.push(slab_row_view(row, kit, self.host.clone()).into_any_element());
+        if let Some(strip) = current.strip {
+            layers.push(
+                place(div().id("toast-strip"), strip.frame)
+                    .occlude()
+                    .child(kit.window().shadow(Vec::new()).child(card::strip(
+                        count,
+                        strip.scale,
+                        kit,
+                        self.host.clone(),
+                    )))
+                    .into_any_element(),
+            );
         }
-        if summary_shown {
-            contents.push(summary_row(hidden_count, kit, self.host.clone()).into_any_element());
+        if count > 0 {
+            layers.push(card_view(0, self, &mut ring_running));
+        }
+        if let Some(index) = focused.filter(|index| *index > 0) {
+            layers.push(card_view(index, self, &mut ring_running));
+        }
+        if let Some(band) = current.band.filter(|_| current.words > 0.01) {
+            let host = self.host.clone();
+            layers.push(
+                place(div().id("toast-show-all"), band)
+                    .occlude()
+                    .cursor_pointer()
+                    .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
+                        view.lit = *hovered;
+                        if *hovered {
+                            view.enter(cx);
+                        }
+                        cx.notify();
+                    }))
+                    .on_click(move |_, _, cx| host.set_expanded(true, cx))
+                    .child(card::show_all(current.words, kit))
+                    .into_any_element(),
+            );
         }
 
-        slab_root().children(contents)
-    }
-}
+        if ring_running {
+            self.tick(true, cx);
+        }
+        if count > 0 {
+            self.tick(false, cx);
+        }
 
-fn slab_root() -> Div {
-    crate::kit::kit().window().flex().flex_col()
-}
-
-fn slab_header(row_count: usize, kit: Kit, host: SlabPresenter) -> Div {
-    div()
-        .flex_none()
-        .h(px(HEADER_HEIGHT))
-        .flex()
-        .flex_row()
-        .items_center()
-        .px(px(12.0))
-        .text(TextStyle::Detail)
-        .text_color(rgb(kit.grounds.pane.faint))
-        .child(SharedString::from(format!("{row_count} notifications")))
-        .child(div().flex_1())
-        .child(
-            crate::kit::kit()
-                .pointable(
-                    div().id("toast-clear-all"),
-                    rgb(qol_theme::lift(kit.grounds.pane.bg, kit.grounds.pane.ink)),
-                )
-                .h_full()
-                .px(px(qol_theme::SPACE_INSET))
-                .flex()
-                .items_center()
-                .cursor_pointer()
-                .text(TextStyle::Detail)
-                .text_color(rgb(kit.grounds.pane.faint))
-                .child(SharedString::from("Clear all"))
-                .on_click(move |_, _, cx| host.clear_all(cx)),
-        )
-}
-
-fn live_band_label(kit: Kit) -> Div {
-    div()
-        .flex_none()
-        .h(px(LIVE_BAND_HEIGHT))
-        .flex()
-        .flex_row()
-        .items_center()
-        .px(px(16.0))
-        .text(TextStyle::Label)
-        .text_color(rgb(kit.grounds.pane.faint))
-        .child(SharedString::from("LIVE"))
-}
-
-fn summary_row(hidden_count: usize, kit: Kit, host: SlabPresenter) -> Stateful<Div> {
-    div()
-        .id("toast-summary")
-        .flex_none()
-        .h(px(SUMMARY_HEIGHT))
-        .pl(px(16.0))
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .bg(rgb(kit.grounds.menu.bg))
-        .text(TextStyle::Detail)
-        .text_color(rgb(kit.grounds.pane.faint))
-        .child(SharedString::from(format!(
-            "{hidden_count} older notifications"
-        )))
-        .on_click(move |_, _, cx| host.toggle_expanded(cx))
-}
-
-fn slab_row_view(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> Div {
-    let mut container = div()
-        .flex_none()
-        .h(px(ROW_HEIGHT))
-        .w_full()
-        .flex()
-        .flex_row();
-    if row.toast.live || row.toast.tone == ToastTone::Danger {
-        container = container.bg(rgb(row_ground(row, kit)));
-    }
-    container
-        .child(preview_zone(row, kit, host.clone()))
-        .child(text_zone(row, kit, host.clone()))
-        .child(gutter())
-        .child(dismiss_control(row, kit, host))
-}
-
-fn preview_zone(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> AnyElement {
-    let slot = preview_slot(row, kit);
-    if row.toast.preview_action.is_none() {
-        return slot.into_any_element();
-    }
-    let id = row.id;
-    crate::kit::kit()
-        .pointable(
-            slot.id(("toast-preview", id.0)).cursor_pointer(),
-            row_lift(row, kit),
-        )
-        .on_click(move |_, _, cx| host.open_preview(id, cx))
-        .into_any_element()
-}
-
-fn text_zone(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> AnyElement {
-    let column = text_column(row, kit);
-    if row.toast.activation.is_none() {
-        return column.into_any_element();
-    }
-    let id = row.id;
-    crate::kit::kit()
-        .pointable(
-            column.id(("toast-open", id.0)).cursor_pointer(),
-            row_lift(row, kit),
-        )
-        .on_click(move |_, _, cx| host.activate(id, cx))
-        .into_any_element()
-}
-
-fn gutter() -> Div {
-    div().flex_none().h_full().w(px(GUTTER))
-}
-
-fn preview_slot(row: &SlabSnapshotRow, kit: Kit) -> Div {
-    let slot = div().flex_none().h_full().flex().overflow_hidden();
-    match &row.toast.preview {
-        Some(preview) => slot
-            .w(px(PREVIEW_WIDTH))
-            .child(preview.render(row.toast.tone.color(kit))),
-        None => slot
-            .w(px(DOT_SLOT_WIDTH))
-            .items_center()
-            .pl(px(qol_theme::SPACE_PAD))
-            .child(tone_dot(row.toast.tone, kit)),
-    }
-}
-
-fn text_column(row: &SlabSnapshotRow, kit: Kit) -> Div {
-    let mut column = div()
-        .flex_1()
-        .min_w_0()
-        .overflow_hidden()
-        .h_full()
-        .flex()
-        .flex_col()
-        .justify_center()
-        .gap(px(qol_theme::SPACE_STACK))
-        .px(px(TEXT_PAD))
-        .child(
-            div()
-                .w_full()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(qol_theme::SPACE_TIGHT))
-                .children(row.toast.busy.then(|| {
-                    crate::busy::Busy::ring(("toast-busy", row.id.0), rgb(kit.grounds.pane.soft))
-                }))
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .text(TextStyle::ListName)
-                        .text_color(rgb(kit.grounds.pane.ink))
-                        .child(row.toast.title.clone()),
-                ),
-        );
-    if row.toast.message.is_empty() {
-        return column;
-    }
-    if row.toast.message_is_path {
-        let (head, tail) = crate::kit::path_label(&row.toast.message);
-        column = column.child(path_body_line(head, tail, kit));
-    } else {
-        column = column.child(
-            div()
-                .w_full()
-                .min_w_0()
-                .text(TextStyle::Detail)
-                .line_clamp(2)
-                .text_color(rgb(kit.grounds.pane.soft))
-                .child(row.toast.message.clone()),
-        );
-    }
-    column
-}
-
-fn path_body_line(head: String, tail: String, kit: Kit) -> Div {
-    let mut line = div().w_full().min_w_0().flex().flex_row().overflow_hidden();
-    if !head.is_empty() {
-        line = line.child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .text(TextStyle::Code)
-                .text_color(rgb(kit.grounds.pane.soft))
-                .child(SharedString::from(head)),
-        );
-    }
-    line.child(
         div()
-            .min_w_0()
-            .flex_1()
-            .text(TextStyle::Code)
-            .text_color(rgb(kit.grounds.pane.soft))
-            .child(SharedString::from(tail)),
-    )
-}
-
-fn dismiss_control(row: &SlabSnapshotRow, kit: Kit, host: SlabPresenter) -> Stateful<Div> {
-    let id = row.id;
-    let lift = row_lift(row, kit);
-    let control = div()
-        .id(("toast-dismiss", id.0))
-        .flex_none()
-        .w(px(DISMISS_WIDTH))
-        .h_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .child(crate::icon::icon(
-            crate::Icon::Close,
-            qol_theme::TEXT_MICRO,
-            kit.grounds.pane.soft,
-        ))
-        .on_click(move |_, _, cx| host.remove(id, cx));
-    crate::kit::kit().pointable(control, lift)
+            .id("toast-pile")
+            .size_full()
+            .relative()
+            .on_mouse_move(cx.listener(|view, _, _, cx| view.enter(cx)))
+            .on_hover(cx.listener(|view, hovered: &bool, _, cx| {
+                if *hovered {
+                    view.enter(cx);
+                } else {
+                    view.leave(cx);
+                }
+            }))
+            .children(layers)
+    }
 }
 
 fn toast_notice(toast: &Toast) -> Div {
@@ -1183,10 +1249,7 @@ mod tests {
 
     use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
 
-    use super::{
-        routed_presentation, slab_height, visible_slab_counts, Presentation, Toast, ToastLayout,
-        ToastStyle, ToastTone,
-    };
+    use super::{routed_presentation, Presentation, Toast, ToastLayout, ToastStyle, ToastTone};
 
     #[test]
     fn a_caller_overrides_the_preset_placement_and_size() {
@@ -1361,34 +1424,6 @@ mod tests {
     }
 
     #[test]
-    fn slab_height_matches_the_fixed_geometry() {
-        assert_eq!(slab_height(0, 1, false, false), 68.0);
-        assert_eq!(slab_height(0, 2, true, false), 166.0);
-        assert_eq!(slab_height(0, 4, true, true), 338.0);
-        assert_eq!(slab_height(1, 0, false, false), 88.0);
-        assert_eq!(slab_height(2, 1, true, false), 254.0);
-    }
-
-    #[test]
-    fn visible_rows_and_summary_follow_the_cap_and_expansion() {
-        let cases = [
-            ((1usize, false), (false, 1usize, false)),
-            ((2, false), (true, 2, false)),
-            ((4, false), (true, 4, false)),
-            ((5, false), (true, 4, true)),
-            ((7, false), (true, 4, true)),
-            ((5, true), (true, 5, false)),
-        ];
-        for ((non_live, expanded), expected) in cases {
-            assert_eq!(
-                visible_slab_counts(non_live, expanded),
-                expected,
-                "non_live={non_live} expanded={expanded}"
-            );
-        }
-    }
-
-    #[test]
     fn toast_host_routes_status_layouts_to_the_banner_and_compact_to_the_slab() {
         assert_eq!(ToastLayout::status().style(), ToastStyle::Status);
         assert_eq!(ToastLayout::compact().style(), ToastStyle::Compact);
@@ -1413,16 +1448,7 @@ mod tests {
             .new_leaf(Style {
                 size: TaffySize {
                     width: Dimension::length(super::PREVIEW_WIDTH),
-                    height: Dimension::length(super::ROW_HEIGHT),
-                },
-                ..Default::default()
-            })
-            .unwrap();
-        let gutter = tree
-            .new_leaf(Style {
-                size: TaffySize {
-                    width: Dimension::length(super::GUTTER),
-                    height: Dimension::length(super::ROW_HEIGHT),
+                    height: Dimension::length(super::pile::CARD_HEIGHT),
                 },
                 ..Default::default()
             })
@@ -1431,7 +1457,7 @@ mod tests {
             .new_leaf(Style {
                 size: TaffySize {
                     width: Dimension::length(super::DISMISS_WIDTH),
-                    height: Dimension::length(super::ROW_HEIGHT),
+                    height: Dimension::length(super::pile::CARD_HEIGHT),
                 },
                 ..Default::default()
             })
@@ -1519,8 +1545,8 @@ mod tests {
             .new_with_children(
                 Style {
                     size: TaffySize {
-                        width: Dimension::length(super::SLAB_WIDTH),
-                        height: Dimension::length(super::ROW_HEIGHT),
+                        width: Dimension::length(super::pile::CARD_WIDTH),
+                        height: Dimension::length(super::pile::CARD_HEIGHT),
                     },
                     flex_direction: FlexDirection::Row,
                     overflow: Point {
@@ -1529,14 +1555,14 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                &[preview, text_column, gutter, dismiss],
+                &[preview, text_column, dismiss],
             )
             .unwrap();
         tree.compute_layout(
             slab,
             TaffySize {
-                width: AvailableSpace::Definite(super::SLAB_WIDTH),
-                height: AvailableSpace::Definite(super::ROW_HEIGHT),
+                width: AvailableSpace::Definite(super::pile::CARD_WIDTH),
+                height: AvailableSpace::Definite(super::pile::CARD_HEIGHT),
             },
         )
         .unwrap();
@@ -1547,7 +1573,7 @@ mod tests {
         let tail = tree.layout(tail).unwrap();
         let message = tree.layout(message).unwrap();
         assert!(
-            column.location.x + column.size.width <= super::SLAB_WIDTH,
+            column.location.x + column.size.width <= super::pile::CARD_WIDTH,
             "the text column stays inside the slab"
         );
         assert!(

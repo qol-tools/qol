@@ -192,12 +192,26 @@ pub fn window_position_by_title(title: &str) -> Option<(i32, i32)> {
 }
 
 pub fn pointer_over_window_by_title(title: &str) -> bool {
-    pointer_over_window(title).unwrap_or(false)
+    pointer_on_window_by_title(title).is_some_and(|pointer| pointer.inside)
 }
 
-fn pointer_over_window(title: &str) -> Option<bool> {
+pub fn pointer_on_window_by_title(title: &str) -> Option<crate::popup_window::PointerOnWindow> {
     let (conn, _screen_num, root, list_atom, name_atom, utf8_atom) = connect_with_atoms()?;
     let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
+    let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
+    let pressed = u16::from(pointer.mask)
+        & u16::from(KeyButMask::BUTTON1 | KeyButMask::BUTTON2 | KeyButMask::BUTTON3)
+        != 0;
+    let inside = pointer_inside(&conn, root, wid, &pointer)?;
+    Some(crate::popup_window::PointerOnWindow { inside, pressed })
+}
+
+fn pointer_inside(
+    conn: &impl Connection,
+    root: Window,
+    wid: Window,
+    pointer: &QueryPointerReply,
+) -> Option<bool> {
     let attributes = conn.get_window_attributes(wid).ok()?.reply().ok()?;
     if attributes.map_state != MapState::VIEWABLE {
         return Some(false);
@@ -208,13 +222,12 @@ fn pointer_over_window(title: &str) -> Option<bool> {
         .ok()?
         .reply()
         .ok()?;
-    let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
     let x = i32::from(pointer.root_x) - i32::from(origin.dst_x);
     let y = i32::from(pointer.root_y) - i32::from(origin.dst_y);
     if x < 0 || y < 0 || x >= i32::from(geometry.width) || y >= i32::from(geometry.height) {
         return Some(false);
     }
-    let Some(input) = shape::get_rectangles(&conn, wid, shape::SK::INPUT)
+    let Some(input) = shape::get_rectangles(conn, wid, shape::SK::INPUT)
         .ok()
         .and_then(|cookie| cookie.reply().ok())
     else {

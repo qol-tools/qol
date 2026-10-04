@@ -745,6 +745,7 @@ fn confirm_host_update() {
     log::info!("qol-tray updated from v{}", from_version);
     let _ = qol_tray::settings_surface::wait_until_ready(Duration::from_secs(30));
     qol_tray::surfaces::show_plugin_notification(
+        "QoL Tray",
         "qol-tray updated",
         &format!("Now running v{}", qol_tray::updates::current_version()),
         qol_runtime::protocol::NotificationLevel::Info,

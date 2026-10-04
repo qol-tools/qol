@@ -95,6 +95,15 @@ pub trait TextStyled: gpui::Styled + Sized {
         self
     }
 
+    fn text_scaled(self, style: qol_theme::TextStyle, scale: f32) -> Self {
+        let mut styled = self.text(style);
+        styled
+            .text_style()
+            .get_or_insert_with(Default::default)
+            .font_size = Some(px(style.spec().size * scale).into());
+        styled
+    }
+
     fn wraps(mut self) -> Self {
         self.text_style()
             .get_or_insert_with(Default::default)

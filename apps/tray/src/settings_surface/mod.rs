@@ -81,6 +81,7 @@ pub fn apply_theme(native: &str, accent: &str) -> bool {
 }
 
 pub fn show_toast(
+    source: &str,
     title: &str,
     body: &str,
     level: &str,
@@ -88,7 +89,7 @@ pub fn show_toast(
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
 ) -> anyhow::Result<bool> {
-    platform::show_toast(title, body, level, action, artifact, layout)
+    platform::show_toast(source, title, body, level, action, artifact, layout)
 }
 
 pub fn prewarm() {

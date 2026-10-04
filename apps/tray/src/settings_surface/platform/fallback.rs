@@ -1,4 +1,5 @@
 pub(in crate::settings_surface) fn show_toast(
+    _source: &str,
     _title: &str,
     _body: &str,
     _level: &str,

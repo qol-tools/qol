@@ -43,6 +43,10 @@ pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
     None
 }
 
+pub fn pointer_on_window_by_title(_title: &str) -> Option<crate::popup_window::PointerOnWindow> {
+    None
+}
+
 pub fn pointer_over_window_by_title(_title: &str) -> bool {
     false
 }

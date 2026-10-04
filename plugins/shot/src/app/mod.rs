@@ -658,7 +658,6 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
                     "Recording stopped",
                     "Saving recording",
                 )
-                .busy()
                 .tone(qol_gpui::toast::ToastTone::Info),
             );
             let output_file = cx.background_spawn(async move { job.run() }).await;

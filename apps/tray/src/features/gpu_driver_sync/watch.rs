@@ -480,6 +480,7 @@ fn send_notification(observation: &Observation, intent: &PolicyIntent) {
         );
         show_plugin_notification(
             "QoL Tray",
+            "QoL Tray",
             &policy::notification_text(loaded, on_disk, intent),
             NotificationLevel::Error,
             None,

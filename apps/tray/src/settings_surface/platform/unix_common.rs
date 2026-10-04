@@ -21,12 +21,13 @@ use super::super::HostBoot;
 enum Command {
     Open(String),
     Toast {
+        source: String,
         title: String,
         body: String,
         level: String,
         action: Option<(String, String)>,
         artifact: Option<String>,
-        layout: Option<NotificationLayout>,
+        layout: Option<Box<NotificationLayout>>,
     },
     ThemeChanged,
     Kill,
@@ -432,6 +433,7 @@ fn spawn_command_loop(
                     LoopFlow::Continue
                 }
                 Command::Toast {
+                    source,
                     title,
                     body,
                     level,
@@ -440,7 +442,15 @@ fn spawn_command_loop(
                     layout,
                 } => {
                     show_toast_in_host(
-                        toast_host, title, body, level, action, artifact, layout, &cx,
+                        toast_host,
+                        source,
+                        title,
+                        body,
+                        level,
+                        action,
+                        artifact,
+                        layout.map(|layout| *layout),
+                        &cx,
                     );
                     LoopFlow::Continue
                 }
@@ -474,6 +484,7 @@ fn custom_notifier(toast_host: ToastHost) -> CustomPanelNotifier {
             message,
             ToastLayout::compact(),
         )
+        .source(qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME)
         .tone(match tone {
             CustomPanelNoticeTone::Success => ToastTone::Success,
             CustomPanelNoticeTone::Failure => ToastTone::Danger,
@@ -492,6 +503,7 @@ fn custom_notifier(toast_host: ToastHost) -> CustomPanelNotifier {
 #[allow(clippy::too_many_arguments)]
 fn show_toast_in_host(
     toast_host: ToastHost,
+    source: String,
     title: String,
     body: String,
     level: String,
@@ -517,6 +529,8 @@ fn show_toast_in_host(
             body,
             ToastLayout::for_push(anchor, width, height, style),
         )
+        .group(source.clone())
+        .source(source)
         .tone(toast_tone(&level));
         if let Some(path) = artifact {
             toast = toast.artifact(path);
@@ -908,6 +922,7 @@ fn forward_open(plugin_id: &str) -> bool {
 }
 
 pub(in crate::settings_surface) fn show_toast(
+    source: &str,
     title: &str,
     body: &str,
     level: &str,
@@ -923,6 +938,7 @@ pub(in crate::settings_surface) fn show_toast(
             &config,
             "toast",
             serde_json::json!({
+                "source": source,
                 "title": title,
                 "body": body,
                 "level": level,
@@ -977,9 +993,16 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
             let layout = request
                 .input
                 .get("layout")
-                .and_then(|value| serde_json::from_value::<NotificationLayout>(value.clone()).ok());
+                .and_then(|value| serde_json::from_value::<NotificationLayout>(value.clone()).ok())
+                .map(Box::new);
             match (title, body, level) {
                 (Some(title), Some(body), Some(level)) => ReadResult::Command(Command::Toast {
+                    source: request
+                        .input
+                        .get("source")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
                     title: title.to_string(),
                     body: body.to_string(),
                     level: level.to_string(),
@@ -1150,6 +1173,7 @@ mod tests {
         };
         match parse_request(&request) {
             ReadResult::Command(Command::Toast {
+                source,
                 title,
                 body,
                 level,
@@ -1157,6 +1181,7 @@ mod tests {
                 artifact,
                 layout,
             }) => {
+                assert_eq!(source, "");
                 assert_eq!(title, "title");
                 assert_eq!(body, "body");
                 assert_eq!(level, "warn");
