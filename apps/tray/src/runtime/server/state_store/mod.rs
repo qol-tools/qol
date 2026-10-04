@@ -11,8 +11,14 @@ use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::MonitorBounds;
 
 use super::super::state::{self, InputState, Stamped};
-use crate::desktop_state::SharedPlatform;
+use crate::desktop_state::{Platform, SharedPlatform};
 use subscribers::{SubscriberEntry, SubscriberId};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct FocusWindow {
+    id: Option<u32>,
+    fell_back: bool,
+}
 
 pub(crate) struct SharedState {
     input: Mutex<InputState>,
@@ -20,6 +26,7 @@ pub(crate) struct SharedState {
     cursor_pos: Mutex<Option<(f32, f32)>>,
     focused_window: Mutex<Option<MonitorBounds>>,
     last_focus_bounds: Mutex<Option<MonitorBounds>>,
+    focus_window: Mutex<FocusWindow>,
     subscribers: Mutex<Vec<SubscriberEntry>>,
     subscriber_changed: Condvar,
     next_subscriber_id: AtomicU64,
@@ -36,6 +43,7 @@ impl SharedState {
             cursor_pos: Mutex::new(None),
             focused_window: Mutex::new(None),
             last_focus_bounds: Mutex::new(None),
+            focus_window: Mutex::new(FocusWindow::default()),
             subscribers: Mutex::new(Vec::new()),
             subscriber_changed: Condvar::new(),
             next_subscriber_id: AtomicU64::new(1),
@@ -150,6 +158,7 @@ impl SharedState {
         if !facade.poll_focused_window() {
             return;
         }
+        self.track_focus_window(facade.as_ref());
         let Some(fresh_bounds) = facade.focused_window_bounds() else {
             return;
         };
@@ -164,7 +173,7 @@ impl SharedState {
             Some(focus) => focus.monitor != fresh_monitor,
             None => true,
         };
-        if needs_update {
+        if needs_update && !self.focus_fell_back() {
             input.focus = Some(Stamped {
                 monitor: fresh_monitor,
                 at: Instant::now(),
@@ -260,6 +269,22 @@ impl SharedState {
             *last_bounds = bounds;
         }
         changed
+    }
+
+    pub(super) fn track_focus_window(&self, platform: &dyn Platform) {
+        let id = platform.focused_window_id();
+        let mut tracked = lock_or_recover(&self.focus_window);
+        if tracked.id == id {
+            return;
+        }
+        let fell_back = tracked
+            .id
+            .is_some_and(|previous| !platform.window_open(previous));
+        *tracked = FocusWindow { id, fell_back };
+    }
+
+    pub(super) fn focus_fell_back(&self) -> bool {
+        lock_or_recover(&self.focus_window).fell_back
     }
 
     pub(super) fn set_cursor_pos(&self, cursor_pos: Option<(f32, f32)>) {
@@ -359,5 +384,83 @@ mod tests {
         shared.disarm_lifeline("qol-monitor");
 
         assert!(shared.armed_lifelines().is_empty());
+    }
+
+    struct Windows {
+        focused: Mutex<Option<u32>>,
+        open: Mutex<Vec<u32>>,
+    }
+
+    impl Windows {
+        fn new(focused: u32, open: &[u32]) -> Self {
+            Self {
+                focused: Mutex::new(Some(focused)),
+                open: Mutex::new(open.to_vec()),
+            }
+        }
+
+        fn focus(&self, id: u32) {
+            *lock_or_recover(&self.focused) = Some(id);
+        }
+
+        fn close(&self, id: u32) {
+            lock_or_recover(&self.open).retain(|open| *open != id);
+        }
+    }
+
+    impl Platform for Windows {
+        fn cursor_position(&self) -> Option<(f32, f32)> {
+            None
+        }
+
+        fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+            None
+        }
+
+        fn physical_monitors(&self) -> Vec<MonitorBounds> {
+            Vec::new()
+        }
+
+        fn focused_window_id(&self) -> Option<u32> {
+            *lock_or_recover(&self.focused)
+        }
+
+        fn window_open(&self, id: u32) -> bool {
+            lock_or_recover(&self.open).contains(&id)
+        }
+    }
+
+    #[test]
+    fn focus_moved_by_a_closing_window_falls_back() {
+        let shared = SharedState::new(Vec::new());
+        let windows = Windows::new(1, &[1, 2]);
+        shared.track_focus_window(&windows);
+        windows.close(1);
+        windows.focus(2);
+        shared.track_focus_window(&windows);
+        assert!(shared.focus_fell_back());
+    }
+
+    #[test]
+    fn focus_switched_between_open_windows_is_deliberate() {
+        let shared = SharedState::new(Vec::new());
+        let windows = Windows::new(1, &[1, 2]);
+        shared.track_focus_window(&windows);
+        windows.focus(2);
+        shared.track_focus_window(&windows);
+        assert!(!shared.focus_fell_back());
+    }
+
+    #[test]
+    fn a_fallback_ends_at_the_next_focus_switch() {
+        let shared = SharedState::new(Vec::new());
+        let windows = Windows::new(1, &[1, 2, 3]);
+        shared.track_focus_window(&windows);
+        windows.close(1);
+        windows.focus(2);
+        shared.track_focus_window(&windows);
+        windows.focus(3);
+        shared.track_focus_window(&windows);
+        assert!(!shared.focus_fell_back());
     }
 }

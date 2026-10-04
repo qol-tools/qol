@@ -89,6 +89,31 @@ impl Platform for LinuxQueries {
         xrandr_monitors()
     }
 
+    fn focused_window_id(&self) -> Option<u32> {
+        get_active_window_id(self.conn.as_ref()?, self.root, self.active_window_atom)
+    }
+
+    fn window_open(&self, id: u32) -> bool {
+        let Some(conn) = self.conn.as_ref() else {
+            return true;
+        };
+        if self.client_list_atom == 0 {
+            return true;
+        }
+        conn.get_property(
+            false,
+            self.root,
+            self.client_list_atom,
+            AtomEnum::WINDOW,
+            0,
+            4096,
+        )
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .and_then(|reply| reply.value32().map(|mut ids| ids.any(|open| open == id)))
+        .unwrap_or(true)
+    }
+
     fn window_list_fingerprint(&self) -> Option<u64> {
         let conn = self.conn.as_ref()?;
         let list_atom = if self.client_list_stacking_atom != 0 {

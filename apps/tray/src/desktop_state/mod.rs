@@ -32,6 +32,14 @@ pub(crate) trait Platform: Send + Sync {
     fn window_list_fingerprint(&self) -> Option<u64> {
         None
     }
+
+    fn focused_window_id(&self) -> Option<u32> {
+        None
+    }
+
+    fn window_open(&self, _id: u32) -> bool {
+        true
+    }
 }
 
 pub(crate) fn create_shared() -> SharedPlatform {

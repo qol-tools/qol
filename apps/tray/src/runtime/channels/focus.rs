@@ -32,6 +32,10 @@ impl FocusChannel {
     pub(crate) fn window_id(&self) -> Option<u32> {
         self.window_id
     }
+
+    pub(crate) fn platform(&self) -> &SharedPlatform {
+        &self.platform
+    }
 }
 
 impl Channel for FocusChannel {
