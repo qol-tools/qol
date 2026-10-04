@@ -83,9 +83,9 @@ jobs:
       - name: Plugin manifest versions agree
         run: python3 .github/scripts/plugin_version.py --check-manifests
 
-      - name: Reuse the pull request verdict
+      - name: Reuse a verdict this workflow already reached
         id: verdict
-        if: github.event_name == 'merge_group'
+        if: github.event_name == 'merge_group' || github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.event.merge_group.head_ref }}
@@ -101,6 +101,10 @@ jobs:
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
+    # A queue entry that reuses the pull request verdict still builds release
+    # binaries, which pull requests only check. The push that lands it has
+    # nothing left to prove.
+    if: ${{ !(github.event_name == 'push' && needs.plan.outputs.reused == 'true') }}
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     env:

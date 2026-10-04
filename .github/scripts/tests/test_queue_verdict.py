@@ -46,5 +46,18 @@ class ReusableTests(unittest.TestCase):
         self.assertFalse(qv.reusable("t1", "t1", other, "tests"))
 
 
+class PassedTests(unittest.TestCase):
+    def test_a_passed_queue_run_of_this_workflow_counts(self):
+        self.assertTrue(qv.passed([{"name": "tests", "conclusion": "success"}], "tests"))
+
+    def test_other_workflows_and_failures_do_not_count(self):
+        runs = [
+            {"name": "Versioning", "conclusion": "success"},
+            {"name": "tests", "conclusion": "failure"},
+        ]
+        self.assertFalse(qv.passed(runs, "tests"))
+        self.assertFalse(qv.passed([], "tests"))
+
+
 if __name__ == "__main__":
     unittest.main()
