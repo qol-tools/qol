@@ -147,7 +147,7 @@ if (
         out.write('  offending occurrences:\n');
         for (const line of constantHits.split('\n')) out.write(`    ${line}\n`);
         out.write('\n  fix:\n');
-        out.write('    - host constants: qol_conventions::{DEFAULT_PORT, STATE_SOCKET_PATH, ENV_STATE_SOCKET, ENV_PLUGIN_ID, ENV_DAEMON_SOCKET, ENV_DAEMON_REPLACE_EXISTING, ENV_DEV_*, DEV_*_ROUTE, settings_url}\n');
+        out.write('    - host constants: qol_conventions::{DEFAULT_PORT, STATE_SOCKET_PATH, ENV_STATE_SOCKET, ENV_PLUGIN_ID, ENV_DAEMON_SOCKET, ENV_DAEMON_REPLACE_EXISTING, ENV_DEV_*, DEV_*_ROUTE}\n');
         out.write('    - reserved ids  : qol_conventions::is_reserved_plugin_id\n');
         out.write('    - trace log     : qol_conventions::TRACE_LOG_PATH\n');
         out.write('    - plugin id     : qol_conventions::build::emit_plugin_id (from plugin.toml)\n');

@@ -13,17 +13,9 @@ use crate::daemon::Daemon;
 use crate::features::MenuProvider;
 use crate::plugins::{MenuItem as PluginMenuItem, PluginManager};
 use anyhow::Result;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub(crate) const DEFAULT_SERVER_PORT: u16 = qol_conventions::DEFAULT_PORT;
-const MENU_ITEM_ID: &str = "plugins";
 const SETTINGS_MENU_ITEM_ID: &str = "settings";
-static ACTIVE_SERVER_PORT: AtomicU16 = AtomicU16::new(DEFAULT_SERVER_PORT);
-
-fn server_port() -> u16 {
-    ACTIVE_SERVER_PORT.load(Ordering::Relaxed)
-}
 
 pub struct Plugins;
 
@@ -60,7 +52,6 @@ impl Plugins {
             core_log_controls,
         )
         .await?;
-        ACTIVE_SERVER_PORT.store(port, Ordering::Relaxed);
         log::info!("Plugin server started at http://127.0.0.1:{}", port);
         Ok(port)
     }
@@ -73,10 +64,6 @@ impl MenuProvider for Plugins {
 
     fn handle_event(&self, event_id: &str) -> Result<()> {
         log::info!("Plugins feature received event: {}", event_id);
-        if event_id.ends_with(&format!("::{}", MENU_ITEM_ID)) {
-            let url = server::security::browser_url("", server_port());
-            crate::paths::open_url(&url)?;
-        }
         if let Some(plugin_id) = settings_event_target(event_id) {
             let _ = crate::settings_surface::request(plugin_id);
         }
@@ -85,12 +72,7 @@ impl MenuProvider for Plugins {
 }
 
 fn menu_items_with(native_settings: bool) -> Vec<PluginMenuItem> {
-    let mut items = vec![PluginMenuItem::Action {
-        id: MENU_ITEM_ID.to_string(),
-        label: "🌐 Open Dashboard".to_string(),
-        action: crate::plugins::ActionType::Run,
-        config_key: None,
-    }];
+    let mut items = Vec::new();
     if native_settings {
         items.push(PluginMenuItem::Action {
             id: SETTINGS_MENU_ITEM_ID.to_string(),
@@ -117,13 +99,10 @@ mod tests {
     #[test]
     fn settings_item_appears_only_with_native_surface() {
         let with_native = menu_items_with(true);
-        assert_eq!(with_native.len(), 2);
-        assert_eq!(menu_item_id(&with_native[0]), MENU_ITEM_ID);
-        assert_eq!(menu_item_id(&with_native[1]), SETTINGS_MENU_ITEM_ID);
+        assert_eq!(with_native.len(), 1);
+        assert_eq!(menu_item_id(&with_native[0]), SETTINGS_MENU_ITEM_ID);
 
-        let without_native = menu_items_with(false);
-        assert_eq!(without_native.len(), 1);
-        assert_eq!(menu_item_id(&without_native[0]), MENU_ITEM_ID);
+        assert!(menu_items_with(false).is_empty());
     }
 
     fn menu_item_id(item: &PluginMenuItem) -> &str {

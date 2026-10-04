@@ -554,7 +554,6 @@ fn run_checks(context: &CheckContext<'_>, report: &mut CheckReport) -> Result<()
         "single source",
         &mut guard,
     )?;
-    run_ui_tests(context, report)?;
     let mut inventory = context.command("node");
     inventory.args(["--test", "verify/repository-inventory.test.mjs"]);
     context.run(
@@ -593,20 +592,6 @@ fn run_checks(context: &CheckContext<'_>, report: &mut CheckReport) -> Result<()
     context.run(report, "rustfmt", "format", "workspace", &mut format)?;
     let cargo = affected::load_plan(context.affected_path, context.platform)?;
     run_rust_checks(context, cargo, report)
-}
-
-fn run_ui_tests(context: &CheckContext<'_>, report: &mut CheckReport) -> Result<()> {
-    let ui_root = context.root.join("apps").join("tray").join("ui");
-    let tests = discover_ui_tests(&ui_root)?;
-    if tests.is_empty() {
-        bail!("no QoL Tray UI tests found");
-    }
-    let mut command = context.command("node");
-    command.current_dir(&ui_root).arg("--test");
-    for test in tests {
-        command.arg(test);
-    }
-    context.run(report, "ui-tests", "ui", "QoL Tray", &mut command)
 }
 
 fn run_rust_checks(
@@ -677,53 +662,10 @@ fn combine_results<const N: usize>(results: [Result<()>; N]) -> Result<()> {
     bail!(failures.join("\n"))
 }
 
-fn discover_ui_tests(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut tests = Vec::new();
-    collect_ui_tests(root, root, &mut tests)?;
-    tests.sort();
-    Ok(tests)
-}
-
-fn collect_ui_tests(root: &Path, directory: &Path, tests: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?
-    {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_ui_tests(root, &entry.path(), tests)?;
-            continue;
-        }
-        let path = entry.path();
-        if !file_type.is_file() || !path.to_string_lossy().ends_with(".test.js") {
-            continue;
-        }
-        tests.push(path.strip_prefix(root)?.to_path_buf());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::test_support::{commit_file, git, repository, rustfmt_available};
     use super::*;
-
-    #[test]
-    fn ui_test_discovery_is_recursive_and_sorted() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::create_dir_all(directory.path().join("nested")).unwrap();
-        fs::write(directory.path().join("z.test.js"), "").unwrap();
-        fs::write(directory.path().join("nested/a.test.js"), "").unwrap();
-        fs::write(directory.path().join("nested/no.js"), "").unwrap();
-
-        assert_eq!(
-            discover_ui_tests(directory.path()).unwrap(),
-            [
-                PathBuf::from("nested/a.test.js"),
-                PathBuf::from("z.test.js")
-            ]
-        );
-    }
 
     #[test]
     fn explicit_base_overrides_the_default_comparison_base() {

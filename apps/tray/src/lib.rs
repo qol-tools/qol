@@ -26,7 +26,7 @@ mod testing;
 pub mod tray;
 pub mod updates;
 
-pub use commands::{local_http, net};
+pub use commands::net;
 pub use daemon::reconcile;
 pub use features::github_auth::credentials;
 pub use installer::{housekeeping, mode};

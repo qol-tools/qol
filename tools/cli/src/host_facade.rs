@@ -14,10 +14,6 @@ pub(crate) fn qol_tray_running() -> bool {
     Platform.qol_tray_running()
 }
 
-pub(crate) fn open_url(url: &str) {
-    let _ = qol_apps::desktop_integration::open_with_default_app(url);
-}
-
 pub(crate) fn open_path(dir: &std::path::Path) -> Result<OpenPathOutcome> {
     Platform.open_path(dir)
 }

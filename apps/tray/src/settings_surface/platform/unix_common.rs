@@ -309,7 +309,6 @@ pub(in crate::settings_surface) fn run(boot: HostBoot) -> anyhow::Result<()> {
                     "SURFACE_ACTIVATION",
                     "plugin={plugin_id} phase=host outcome=failed error={error}"
                 );
-                open_browser_fallback(&plugin_id, "host_failed");
             }
             result
         }
@@ -638,7 +637,6 @@ async fn activate(
                     "tool={} phase=activate outcome=failed error={error}",
                     tool.wire_id()
                 );
-                open_browser_fallback(&plugin_id, "activation_failed");
             }
         }
         return;
@@ -666,7 +664,6 @@ async fn activate(
                 "SURFACE_ACTIVATION",
                 "plugin={plugin_id} phase=activate outcome=app_update_failed error={error}"
             );
-            open_browser_fallback(&plugin_id, "activation_failed");
             return;
         }
     }
@@ -727,7 +724,6 @@ async fn activate(
                 "SURFACE_ACTIVATION",
                 "plugin={plugin_id} phase=activate outcome=failed error={error}"
             );
-            open_browser_fallback(&plugin_id, "activation_failed");
         }
     }
 }
@@ -1018,22 +1014,6 @@ fn activation_name(activation: SettingsActivation) -> &'static str {
         SettingsActivation::Opened => "opened",
         SettingsActivation::Replaced => "replaced",
     }
-}
-
-fn open_browser_fallback(plugin_id: &str, reason: &str) {
-    let url = super::super::CoreTool::from_wire_id(plugin_id)
-        .map(|tool| {
-            qol_conventions::local_hash_url(tool.fallback_route(), qol_conventions::DEFAULT_PORT)
-        })
-        .unwrap_or_else(|| qol_conventions::settings_url(plugin_id));
-    let result = crate::paths::open_url(&url);
-    #[cfg(not(debug_assertions))]
-    let _ = (&reason, &result);
-    qol_runtime::probe!(
-        "SURFACE_ACTIVATION",
-        "plugin={plugin_id} phase=fallback reason={reason} outcome={}",
-        if result.is_ok() { "opened" } else { "failed" }
-    );
 }
 
 #[cfg(test)]
