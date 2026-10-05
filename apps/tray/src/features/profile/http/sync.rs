@@ -7,8 +7,20 @@ use axum::{
     Json,
 };
 
+#[derive(serde::Serialize)]
+struct SyncStatusResponse {
+    #[serde(flatten)]
+    status: crate::features::profile::sync::SyncStatus,
+    github_connect: crate::features::profile::sync::GitHubConnectState,
+}
+
 pub(crate) async fn get_sync_status(State(state): State<super::ProfileHttpState>) -> Response {
-    match tokio::task::spawn_blocking(move || state.sync_service.status()).await {
+    match tokio::task::spawn_blocking(move || SyncStatusResponse {
+        status: state.sync_service.status(),
+        github_connect: state.github_connect.state(),
+    })
+    .await
+    {
         Ok(status) => Json(status).into_response(),
         Err(error) => {
             log::error!("get_sync_status join error: {}", error);
@@ -65,6 +77,20 @@ pub(crate) async fn bootstrap_sync_github(
     State(state): State<super::ProfileHttpState>,
 ) -> impl IntoResponse {
     match state.sync_service.bootstrap_github_connect().await {
+        Ok(result) => sync_result_response(&state, result),
+        Err(error) => sync_error_response(error),
+    }
+}
+
+pub(crate) async fn connect_sync_github(State(state): State<super::ProfileHttpState>) -> Response {
+    match state.github_connect.start().await {
+        Ok(connect) => Json(connect).into_response(),
+        Err(error) => (StatusCode::BAD_GATEWAY, format!("{error:#}")).into_response(),
+    }
+}
+
+pub(crate) async fn sync_now(State(state): State<super::ProfileHttpState>) -> impl IntoResponse {
+    match state.sync_service.sync_now().await {
         Ok(result) => sync_result_response(&state, result),
         Err(error) => sync_error_response(error),
     }

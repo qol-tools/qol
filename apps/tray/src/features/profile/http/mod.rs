@@ -22,6 +22,7 @@ pub(crate) struct ProfileHttpState {
     pub(crate) plugin_manager: Arc<Mutex<crate::plugins::PluginManager>>,
     pub(crate) daemon: crate::daemon::Daemon,
     pub(crate) sync_service: Arc<crate::features::profile::sync::SyncService>,
+    pub(crate) github_connect: Arc<crate::features::profile::sync::GitHubConnect>,
 }
 
 pub(crate) fn routes<S>() -> Router<S>
@@ -38,7 +39,9 @@ where
         .route("/sync/providers", get(sync::get_sync_providers))
         .route("/sync/status", get(sync::get_sync_status))
         .route("/sync/github/bootstrap", post(sync::bootstrap_sync_github))
+        .route("/sync/github/connect", post(sync::connect_sync_github))
         .route("/sync/connect", post(sync::connect_sync))
+        .route("/sync/now", post(sync::sync_now))
         .route("/sync/pull", post(sync::pull_sync))
         .route("/sync/push", post(sync::push_sync))
         .route("/sync/disconnect", post(sync::disconnect_sync))

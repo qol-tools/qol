@@ -1,6 +1,8 @@
+mod github_connect;
 pub(crate) mod scope;
 mod service;
 
+pub(crate) use github_connect::{GitHubConnect, GitHubConnectState};
 pub use qol_profile_sync::{
     ConflictChoice, ResolvableConflict, Side, SyncActionResult, SyncBackupEntry, SyncBackupPreview,
     SyncConnectRequest, SyncHealth, SyncIncident, SyncIncidentKind, SyncStatus,

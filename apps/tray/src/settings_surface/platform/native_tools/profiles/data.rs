@@ -7,7 +7,6 @@ use serde::Deserialize;
 use super::super::data::{request_json, request_text, REQUEST_TIMEOUT};
 
 const SYNC_TIMEOUT: Duration = Duration::from_secs(120);
-const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub(super) struct Profile {
@@ -48,35 +47,27 @@ pub(super) struct SyncStatus {
     pub(super) backup_count: usize,
     #[serde(default)]
     pub(super) latest_backup_file: Option<String>,
+    pub(super) github_connect: GitHubConnect,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(super) enum GitHubConnect {
+    Idle,
+    Waiting {
+        user_code: String,
+        verification_uri: String,
+    },
+    Connecting,
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub(super) struct Backup {
     pub(super) file_name: String,
     pub(super) size_bytes: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub(super) struct SignIn {
-    pub(super) session_id: String,
-    pub(super) user_code: String,
-    pub(super) verification_uri: String,
-    pub(super) interval: u64,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum SignInState {
-    Pending,
-    Authorized,
-    Failed,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub(super) struct SignInPoll {
-    pub(super) state: SignInState,
-    #[serde(default)]
-    pub(super) error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,14 +98,13 @@ pub(super) fn use_profile(name: &str) -> anyhow::Result<()> {
     .map(drop)
 }
 
-pub(super) fn create_profile(name: &str, from: &str) -> anyhow::Result<()> {
-    let body = serde_json::json!({ "name": name, "from": from }).to_string();
+pub(super) fn create_profile(name: &str) -> anyhow::Result<()> {
+    let body = serde_json::json!({ "name": name }).to_string();
     request_text(Method::Post, "/api/profiles", Some(&body), REQUEST_TIMEOUT).map(drop)
 }
 
 pub(super) fn sync_now() -> anyhow::Result<()> {
-    request_text(Method::Post, "/api/sync/pull", Some("{}"), SYNC_TIMEOUT)?;
-    request_text(Method::Post, "/api/sync/push", Some("{}"), SYNC_TIMEOUT).map(drop)
+    request_text(Method::Post, "/api/sync/now", Some("{}"), SYNC_TIMEOUT).map(drop)
 }
 
 pub(super) fn set_auto_sync(on: bool) -> anyhow::Result<()> {
@@ -132,29 +122,13 @@ pub(super) fn disconnect() -> anyhow::Result<()> {
     .map(drop)
 }
 
-pub(super) fn start_sign_in() -> anyhow::Result<SignIn> {
-    let body = serde_json::json!({ "provider": "github" }).to_string();
+pub(super) fn connect_github() -> anyhow::Result<GitHubConnect> {
     request_json(
         Method::Post,
-        "/api/auth/reauth",
-        Some(&body),
-        SIGN_IN_TIMEOUT,
-    )
-}
-
-pub(super) fn poll_sign_in(session_id: &str) -> anyhow::Result<SignInPoll> {
-    let route = format!("/api/github-auth/poll/{session_id}");
-    request_json(Method::Post, &route, Some("{}"), SIGN_IN_TIMEOUT)
-}
-
-pub(super) fn connect() -> anyhow::Result<()> {
-    request_text(
-        Method::Post,
-        "/api/sync/github/bootstrap",
+        "/api/sync/github/connect",
         Some("{}"),
-        SYNC_TIMEOUT,
+        REQUEST_TIMEOUT,
     )
-    .map(drop)
 }
 
 pub(super) fn open_backup(file_name: &str) -> anyhow::Result<()> {

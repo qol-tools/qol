@@ -89,6 +89,27 @@ pub fn recreate_private_dir(path: &Path) -> io::Result<()> {
     create_private_dir(path)
 }
 
+pub fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if kind.is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("refusing to copy symlink {}", entry.path().display()),
+            ));
+        }
+        if kind.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 fn atomic_write_inner(
     path: &Path,
     content: &[u8],
@@ -149,6 +170,31 @@ fn preserve_permissions(path: &Path, file: &fs::File) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn copy_dir_all_copies_nested_files_and_refuses_symlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir_all(source.join("inner")).unwrap();
+        fs::write(source.join("top.json"), "1").unwrap();
+        fs::write(source.join("inner/deep.json"), "2").unwrap();
+        let destination = temp.path().join("destination");
+        copy_dir_all(&source, &destination).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("top.json")).unwrap(),
+            "1"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("inner/deep.json")).unwrap(),
+            "2"
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(source.join("top.json"), source.join("link")).unwrap();
+            let refused = copy_dir_all(&source, &temp.path().join("again")).unwrap_err();
+            assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
 
     #[test]
     fn atomic_write_creates_parents_and_writes_exact_content() {

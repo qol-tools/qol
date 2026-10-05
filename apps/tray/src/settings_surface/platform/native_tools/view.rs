@@ -900,7 +900,7 @@ impl NativeToolsView {
                     on_sliver: Some(Rc::clone(&on_sliver)),
                 },
             );
-            return deck_shell(deck);
+            return deck::shell(deck);
         }
         if let Some(editor) = self.render_mode_card(&self.mode, &self.editor_crumb(), cx) {
             let closing = self.choose_closing.map(|choose| {
@@ -921,14 +921,14 @@ impl NativeToolsView {
                     on_sliver: Some(Rc::clone(&on_sliver)),
                 },
             );
-            return deck_shell(deck);
+            return deck::shell(deck);
         }
         let leaving = match &self.closing {
             Some((mode, crumb)) => self.render_mode_card(mode, crumb, cx),
             None => None,
         };
         match leaving {
-            Some(card) => deck_shell(deck::reveal(
+            Some(card) => deck::shell(deck::reveal(
                 kit,
                 self.page(self.render_list(cx)),
                 self.page(card),
@@ -952,20 +952,11 @@ impl NativeToolsView {
     }
 
     fn measure_body_bounds(&self) -> impl IntoElement {
-        let bounds = Rc::clone(&self.body_bounds);
-        canvas(
-            move |measured, _, _| bounds.set(Some(measured)),
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .inset_0()
+        deck::body_recorder(Rc::clone(&self.body_bounds))
     }
 
     fn body_width(&self) -> f32 {
-        self.body_bounds
-            .get()
-            .map(|bounds| bounds.size.width.to_f64() as f32)
-            .unwrap_or(0.0)
+        deck::body_width(self.body_bounds.get())
     }
 
     fn sliver_click(cx: &mut Context<Self>) -> deck::SliverClick {
@@ -990,7 +981,7 @@ impl NativeToolsView {
     }
 
     fn list_mark(&self) -> Option<f32> {
-        row_mark(
+        deck::row_mark(
             &self.list_bounds,
             self.list().selected,
             self.body_bounds.get(),
@@ -998,7 +989,7 @@ impl NativeToolsView {
     }
 
     fn field_mark(&self, index: usize) -> Option<f32> {
-        row_mark(&self.field_bounds, index, self.body_bounds.get())
+        deck::row_mark(&self.field_bounds, index, self.body_bounds.get())
     }
 
     fn page(&self, body: AnyElement) -> Div {
@@ -1103,7 +1094,7 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(settings_label(format!("+ {label}"), kit))
-            .child(bounds_recorder(Rc::clone(&self.list_bounds), 0))
+            .child(deck::bounds_recorder(Rc::clone(&self.list_bounds), 0))
             .into_any_element()
     }
 
@@ -1134,7 +1125,10 @@ impl NativeToolsView {
                 kit,
             ))
             .child(settings_value_group().child(kit.value(kind)))
-            .child(bounds_recorder(Rc::clone(&self.list_bounds), item + 1))
+            .child(deck::bounds_recorder(
+                Rc::clone(&self.list_bounds),
+                item + 1,
+            ))
             .into_any_element()
     }
 
@@ -1186,7 +1180,10 @@ impl NativeToolsView {
                         kit,
                     )),
             )
-            .child(bounds_recorder(Rc::clone(&self.list_bounds), item + 1))
+            .child(deck::bounds_recorder(
+                Rc::clone(&self.list_bounds),
+                item + 1,
+            ))
             .into_any_element()
     }
 
@@ -1424,7 +1421,7 @@ impl NativeToolsView {
             }))
             .child(settings_label(label, kit))
             .child(SettingsToggle::new(value, row, kit))
-            .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
+            .child(deck::bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
 
@@ -1457,7 +1454,7 @@ impl NativeToolsView {
                 context,
                 kit,
             ))
-            .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
+            .child(deck::bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
 
@@ -1485,7 +1482,7 @@ impl NativeToolsView {
             }))
             .child(settings_label(label, kit))
             .child(field)
-            .child(bounds_recorder(Rc::clone(&self.field_bounds), index))
+            .child(deck::bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
     }
 
@@ -1515,7 +1512,7 @@ impl NativeToolsView {
                 row,
                 kit,
             ))
-            .child(bounds_recorder(Rc::clone(&self.field_bounds), 3))
+            .child(deck::bounds_recorder(Rc::clone(&self.field_bounds), 3))
             .into_any_element()
     }
 
@@ -2089,39 +2086,6 @@ fn shortcut_field_is_text(draft: &ShortcutDraft, selected: usize) -> bool {
         (ShortcutActionKind::Url, 7) => draft.browser_override,
         _ => false,
     }
-}
-
-fn bounds_recorder(store: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>, index: usize) -> AnyElement {
-    canvas(
-        move |bounds, _, _| {
-            store.borrow_mut().insert(index, bounds);
-        },
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .inset_0()
-    .into_any_element()
-}
-
-fn row_mark(
-    rows: &RefCell<HashMap<usize, Bounds<Pixels>>>,
-    index: usize,
-    body: Option<Bounds<Pixels>>,
-) -> Option<f32> {
-    let row = rows.borrow().get(&index).copied()?;
-    let body = body?;
-    Some((row.origin.y + row.size.height / 2.0 - body.origin.y).to_f64() as f32)
-}
-
-fn deck_shell(deck: Div) -> AnyElement {
-    div()
-        .flex_1()
-        .min_h_0()
-        .flex()
-        .flex_row()
-        .items_start()
-        .child(deck)
-        .into_any_element()
 }
 
 impl Focusable for NativeToolsView {
