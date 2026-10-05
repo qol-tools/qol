@@ -4,7 +4,7 @@ uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
 name = "Sound"
 icon = "sound"
 description = "Choose where sound plays and how loud"
-version = "0.8.0"
+version = "0.9.0"
 author = "KMRH47"
 platforms = ["linux"]
 
