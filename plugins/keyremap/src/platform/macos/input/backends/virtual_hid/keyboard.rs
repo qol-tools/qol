@@ -1,6 +1,7 @@
 use qol_hotkeys::macos_keycode::{self as keycode, PhysicalLayout};
 
 use super::fn_keys;
+use crate::platform::macos::app::config::{ModifierKeys, ModifierTarget};
 use crate::platform::macos::app::remap::{self, KeyAction, Modifiers, ResolvedConfig};
 use crate::platform::macos::hid_helper::protocol::{PAGE_APPLE_VENDOR_TOP_CASE, PAGE_KEYBOARD};
 use crate::platform::macos::input::marker_for;
@@ -10,6 +11,7 @@ const FN_USAGE: u16 = 0x03;
 const GRAVE_USAGE: u16 = 0x35;
 const NON_US_BACKSLASH_USAGE: u16 = 0x64;
 const CAPS_LOCK_USAGE: u16 = 0x39;
+const ESCAPE_USAGE: u16 = 0x29;
 const FIRST_MODIFIER: u16 = 0xE0;
 const LAST_MODIFIER: u16 = 0xE7;
 const LEFT_SHIFT: u8 = 0x02;
@@ -39,6 +41,8 @@ pub(crate) struct KeyContext<'a> {
     pub(crate) fn_state: bool,
 }
 
+type Usage = (u16, u16);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
     Pass { page: u16, usage: u16 },
@@ -52,6 +56,7 @@ pub(crate) struct KeyboardState {
     emitted_bits: u8,
     fn_down: bool,
     held: Vec<(u16, Held)>,
+    substituted: Vec<(Usage, Option<Usage>)>,
 }
 
 impl KeyboardState {
@@ -68,6 +73,11 @@ impl KeyboardState {
             apple_iso_usage(usage)
         } else {
             usage
+        };
+        let Some((page, usage)) =
+            self.substitute(page, usage, pressed, &context.config.modifier_keys)
+        else {
+            return outputs;
         };
         match page {
             PAGE_KEYBOARD if (FIRST_MODIFIER..=LAST_MODIFIER).contains(&usage) => {
@@ -86,6 +96,31 @@ impl KeyboardState {
 
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    fn substitute(
+        &mut self,
+        page: u16,
+        usage: u16,
+        pressed: bool,
+        keys: &ModifierKeys,
+    ) -> Option<Usage> {
+        let Some((source, right)) = modifier_source(page, usage) else {
+            return Some((page, usage));
+        };
+        if !pressed {
+            return match self
+                .substituted
+                .iter()
+                .position(|(held, _)| *held == (page, usage))
+            {
+                Some(index) => self.substituted.remove(index).1,
+                None => Some((page, usage)),
+            };
+        }
+        let target = target_usage(keys.target_for(source), right);
+        self.substituted.push(((page, usage), target));
+        target
     }
 
     fn modifier(&mut self, usage: u16, pressed: bool, outputs: &mut Vec<Output>) {
@@ -312,6 +347,33 @@ fn emit(page: u16, usage: u16, pressed: bool) -> Output {
         usage,
         pressed,
     })
+}
+
+fn modifier_source(page: u16, usage: u16) -> Option<(ModifierTarget, bool)> {
+    match (page, usage) {
+        (PAGE_KEYBOARD, CAPS_LOCK_USAGE) => Some((ModifierTarget::CapsLock, false)),
+        (PAGE_KEYBOARD, 0xE0) => Some((ModifierTarget::Control, false)),
+        (PAGE_KEYBOARD, 0xE4) => Some((ModifierTarget::Control, true)),
+        (PAGE_KEYBOARD, 0xE2) => Some((ModifierTarget::Option, false)),
+        (PAGE_KEYBOARD, 0xE6) => Some((ModifierTarget::Option, true)),
+        (PAGE_KEYBOARD, 0xE3) => Some((ModifierTarget::Command, false)),
+        (PAGE_KEYBOARD, 0xE7) => Some((ModifierTarget::Command, true)),
+        (PAGE_APPLE_VENDOR_TOP_CASE, FN_USAGE) => Some((ModifierTarget::Fn, false)),
+        _ => None,
+    }
+}
+
+fn target_usage(target: ModifierTarget, right: bool) -> Option<Usage> {
+    let side = |left: u16, right_usage: u16| if right { right_usage } else { left };
+    match target {
+        ModifierTarget::CapsLock => Some((PAGE_KEYBOARD, CAPS_LOCK_USAGE)),
+        ModifierTarget::Control => Some((PAGE_KEYBOARD, side(0xE0, 0xE4))),
+        ModifierTarget::Option => Some((PAGE_KEYBOARD, side(0xE2, 0xE6))),
+        ModifierTarget::Command => Some((PAGE_KEYBOARD, side(0xE3, 0xE7))),
+        ModifierTarget::Fn => Some((PAGE_APPLE_VENDOR_TOP_CASE, FN_USAGE)),
+        ModifierTarget::Escape => Some((PAGE_KEYBOARD, ESCAPE_USAGE)),
+        ModifierTarget::None => None,
+    }
 }
 
 fn apple_iso_usage(usage: u16) -> u16 {
@@ -680,6 +742,102 @@ mod tests {
                 cmd: true,
                 ..Modifiers::NONE
             }
+        );
+    }
+
+    fn modifier_keys(keys: serde_json::Value) -> ResolvedConfig {
+        config(json!({ "modifier_keys": keys }))
+    }
+
+    #[test]
+    fn modifier_keys_default_to_themselves() {
+        let mut fixture = Fixture::new(config(json!({})));
+        assert_eq!(fixture.press(0xE3), vec![down(0xE3)]);
+        assert_eq!(fixture.release(0xE3), vec![up(0xE3)]);
+        assert_eq!(fixture.press(0xE4), vec![down(0xE4)]);
+        assert_eq!(fixture.release(0xE4), vec![up(0xE4)]);
+    }
+
+    #[test]
+    fn caps_lock_as_control_holds_control_without_toggling_caps() {
+        let mut fixture = Fixture::new(modifier_keys(json!({ "caps_lock": "control" })));
+        assert_eq!(fixture.press(0x39), vec![down(0xE0)]);
+        assert_eq!(fixture.release(0x39), vec![up(0xE0)]);
+    }
+
+    #[test]
+    fn swapped_command_and_control_keep_their_side() {
+        let mut fixture = Fixture::new(modifier_keys(
+            json!({ "control": "command", "command": "control" }),
+        ));
+        assert_eq!(fixture.press(0xE7), vec![down(0xE4)]);
+        assert_eq!(fixture.release(0xE7), vec![up(0xE4)]);
+        assert_eq!(fixture.press(0xE0), vec![down(0xE3)]);
+        assert_eq!(fixture.release(0xE0), vec![up(0xE3)]);
+    }
+
+    #[test]
+    fn caps_lock_as_escape_types_escape() {
+        let mut fixture = Fixture::new(modifier_keys(json!({ "caps_lock": "escape" })));
+        assert_eq!(fixture.press(0x39), vec![down(ESCAPE_USAGE)]);
+        assert_eq!(fixture.release(0x39), vec![up(ESCAPE_USAGE)]);
+    }
+
+    #[test]
+    fn no_action_swallows_the_key() {
+        let mut fixture = Fixture::new(modifier_keys(json!({ "option": "none" })));
+        assert_eq!(fixture.press(0xE2), vec![]);
+        assert_eq!(fixture.release(0xE2), vec![]);
+    }
+
+    #[test]
+    fn globe_as_control_holds_control_and_control_as_globe_holds_fn() {
+        let mut fixture = Fixture::new(modifier_keys(json!({ "fn": "control", "control": "fn" })));
+        assert_eq!(
+            fixture.key(PAGE_APPLE_VENDOR_TOP_CASE, FN_USAGE, true, true),
+            vec![down(0xE0)]
+        );
+        assert_eq!(
+            fixture.key(PAGE_APPLE_VENDOR_TOP_CASE, FN_USAGE, false, true),
+            vec![up(0xE0)]
+        );
+        assert_eq!(
+            fixture.press(0xE0),
+            vec![emit(PAGE_APPLE_VENDOR_TOP_CASE, FN_USAGE, true)]
+        );
+        assert!(fixture.state.fn_down);
+        assert_eq!(
+            fixture.release(0xE0),
+            vec![emit(PAGE_APPLE_VENDOR_TOP_CASE, FN_USAGE, false)]
+        );
+        assert!(!fixture.state.fn_down);
+    }
+
+    #[test]
+    fn release_follows_the_target_chosen_at_press_across_a_reload() {
+        let mut fixture = Fixture::new(modifier_keys(json!({ "caps_lock": "control" })));
+        assert_eq!(fixture.press(0x39), vec![down(0xE0)]);
+        fixture.config = config(json!({}));
+        assert_eq!(fixture.release(0x39), vec![up(0xE0)]);
+    }
+
+    #[test]
+    fn key_rules_see_the_remapped_modifier() {
+        let mut keys = rules();
+        keys.modifier_keys = serde_json::from_value(json!({ "command": "control" })).unwrap();
+        let mut fixture = Fixture::new(keys);
+        assert_eq!(fixture.press(0xE3), vec![down(0xE0)]);
+        assert_eq!(
+            fixture.press(0x06),
+            vec![
+                up(0xE0),
+                down(0xE3),
+                Output::Mark {
+                    keycode: 0x08,
+                    marker: marker_for(CTRL, 0x08)
+                },
+                down(0x06),
+            ]
         );
     }
 }
