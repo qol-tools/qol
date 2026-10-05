@@ -26,6 +26,18 @@ impl PopupPresentation for Platform {
     }
 }
 
+pub struct InputWatch;
+
+impl InputWatch {
+    pub async fn next(&mut self) -> Option<crate::popup_window::InputEvent> {
+        None
+    }
+}
+
+pub fn watch_input(_title: &str) -> Option<InputWatch> {
+    None
+}
+
 fn composite_owner(title: &str) -> &str {
     title.split('@').next().unwrap_or(title)
 }

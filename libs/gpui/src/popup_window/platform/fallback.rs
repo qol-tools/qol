@@ -8,6 +8,18 @@ impl PopupPresentation for Platform {
     fn restore_composite(_title: &str) {}
 }
 
+pub struct InputWatch;
+
+impl InputWatch {
+    pub async fn next(&mut self) -> Option<crate::popup_window::InputEvent> {
+        None
+    }
+}
+
+pub fn watch_input(_title: &str) -> Option<InputWatch> {
+    None
+}
+
 #[derive(Clone)]
 pub struct WindowGeometrySession;
 

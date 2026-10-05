@@ -289,6 +289,11 @@ pub(super) fn overflow(count: usize, room: f32) -> f32 {
     (layout(count, 0.0, 1.0, &[], 0.0).height + LIST_GAP - room).max(0.0)
 }
 
+pub(super) fn contains(rect: [f32; 4], x: f32, y: f32) -> bool {
+    let [left, top, width, height] = rect;
+    x >= left && x <= left + width && y >= top && y <= top + height
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Tween {
     from: f32,
@@ -334,6 +339,17 @@ mod tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.01
+    }
+
+    #[test]
+    fn a_point_outside_the_card_rect_is_not_contained() {
+        let rect = [10.0, 100.0, 50.0, 40.0];
+        assert!(contains(rect, 10.0, 100.0));
+        assert!(contains(rect, 60.0, 140.0));
+        assert!(!contains(rect, 9.0, 120.0));
+        assert!(!contains(rect, 30.0, 99.0));
+        assert!(!contains(rect, 61.0, 120.0));
+        assert!(!contains(rect, 30.0, 141.0));
     }
 
     #[test]
