@@ -28,6 +28,7 @@ pub fn atomic_write_durable_mode(path: &Path, content: &[u8], mode: u32) -> io::
     atomic_write_inner(path, content, true, false, Some(mode))
 }
 
+/// Flushes the directory entry for `path` to disk.
 pub fn sync_directory(path: &Path) -> io::Result<()> {
     platform::sync_parent(path)
 }
