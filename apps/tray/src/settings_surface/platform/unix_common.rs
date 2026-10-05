@@ -16,7 +16,7 @@ use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout};
 
-use super::super::HostBoot;
+use crate::settings_surface::{CoreTool, HostBoot};
 #[derive(Debug)]
 enum Command {
     Open(String),
@@ -168,7 +168,7 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
         spawn_started.elapsed().as_millis()
     );
     let mut command = std::process::Command::new(executable);
-    command.arg(super::super::HOST_ARGUMENT);
+    command.arg(crate::settings_surface::HOST_ARGUMENT);
     if let Some(plugin_id) = plugin_id {
         command.arg(plugin_id);
     }
@@ -205,55 +205,6 @@ fn spawn_host(plugin_id: Option<&str>) -> anyhow::Result<()> {
     );
     spawned?;
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-const USER_HZ: u64 = 100;
-
-#[cfg(target_os = "linux")]
-fn process_elapsed_ms() -> Option<u64> {
-    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
-    let start_ticks = stat
-        .rsplit_once(')')?
-        .1
-        .split_ascii_whitespace()
-        .nth(19)?
-        .parse::<u64>()
-        .ok()?;
-    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
-    let uptime_ms = (uptime
-        .split_ascii_whitespace()
-        .next()?
-        .parse::<f64>()
-        .ok()?
-        * 1000.0) as u64;
-    uptime_ms.checked_sub(start_ticks * 1000 / USER_HZ)
-}
-
-#[cfg(target_os = "macos")]
-fn process_elapsed_ms() -> Option<u64> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>();
-    let read = unsafe {
-        libc::proc_pidinfo(
-            libc::getpid(),
-            libc::PROC_PIDTBSDINFO,
-            0,
-            std::ptr::from_mut(&mut info).cast(),
-            i32::try_from(size).ok()?,
-        )
-    };
-    if read != i32::try_from(size).ok()? {
-        return None;
-    }
-    let started = std::time::UNIX_EPOCH.checked_add(std::time::Duration::new(
-        info.pbi_start_tvsec,
-        u32::try_from(info.pbi_start_tvusec * 1000).ok()?,
-    ))?;
-    std::time::SystemTime::now()
-        .duration_since(started)
-        .ok()
-        .map(|elapsed| elapsed.as_millis() as u64)
 }
 
 pub(in crate::settings_surface) fn apply_theme(native: &str, accent: &str) -> bool {
@@ -392,7 +343,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
         "plugin={boot_label} phase=host outcome=started elapsed_ms={}",
-        process_elapsed_ms().map_or_else(|| "unavailable".to_owned(), |ms| ms.to_string())
+        super::process_elapsed_ms().map_or_else(|| "unavailable".to_owned(), |ms| ms.to_string())
     );
     Application::new().run(move |cx: &mut App| {
         qol_gpui::fonts::install(cx);
@@ -585,8 +536,7 @@ async fn refresh_open_panel(
             panel.focus = Some(focus);
             match qol_gpui::settings_panel::prepare_many_from_async(panel, runtimes, cx).await {
                 Ok(prepared) => {
-                    let custom_factories =
-                        super::native_tools::factories(super::super::CoreTool::Plugins);
+                    let custom_factories = super::native_tools::factories(CoreTool::Plugins);
                     cx.update(move |cx| {
                         host.borrow_mut()
                             .refresh_prepared(prepared, custom_factories, &tracker, cx)
@@ -609,12 +559,9 @@ async fn activate(
     plugin_id: String,
     cx: &gpui::AsyncApp,
 ) {
-    if let Some(tool) = super::super::CoreTool::from_wire_id(&plugin_id) {
+    if let Some(tool) = CoreTool::from_wire_id(&plugin_id) {
         let page_id = tool.page_wire_id().to_string();
-        let focused = if matches!(
-            tool,
-            super::super::CoreTool::AddHotkey | super::super::CoreTool::AddShortcut
-        ) {
+        let focused = if matches!(tool, CoreTool::AddHotkey | CoreTool::AddShortcut) {
             Ok(false)
         } else {
             let activation_host = host.clone();
@@ -658,11 +605,7 @@ async fn activate(
                             let custom_factories = super::native_tools::factories(tool);
                             cx.update(move |cx| {
                                 let mut host = activation_host.borrow_mut();
-                                if matches!(
-                                    tool,
-                                    super::super::CoreTool::AddHotkey
-                                        | super::super::CoreTool::AddShortcut
-                                ) {
+                                if matches!(tool, CoreTool::AddHotkey | CoreTool::AddShortcut) {
                                     host.activate_prepared_with_custom_force(
                                         prepared,
                                         custom_factories,
@@ -751,8 +694,7 @@ async fn activate(
                 match qol_gpui::settings_panel::prepare_many_from_async(panel, runtimes, cx).await {
                     Ok(prepared) => {
                         let activation_host = host.clone();
-                        let custom_factories =
-                            super::native_tools::factories(super::super::CoreTool::Shortcuts);
+                        let custom_factories = super::native_tools::factories(CoreTool::Shortcuts);
                         cx.update(move |cx| {
                             activation_host.borrow_mut().activate_prepared_with_custom(
                                 prepared,
@@ -865,36 +807,16 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
         .expect("core panel has one source")];
     let mut runtimes = vec![core_runtime];
     for (tool, heading, mark) in [
+        (CoreTool::Shortcuts, "Shortcuts", qol_theme::Mark::Shortcuts),
+        (CoreTool::Hotkeys, "Hotkeys", qol_theme::Mark::Hotkeys),
+        (CoreTool::Updates, "Updates", qol_theme::Mark::Updates),
         (
-            super::super::CoreTool::Shortcuts,
-            "Shortcuts",
-            qol_theme::Mark::Shortcuts,
-        ),
-        (
-            super::super::CoreTool::Hotkeys,
-            "Hotkeys",
-            qol_theme::Mark::Hotkeys,
-        ),
-        (
-            super::super::CoreTool::Updates,
-            "Updates",
-            qol_theme::Mark::Updates,
-        ),
-        (
-            super::super::CoreTool::LinkedDevices,
+            CoreTool::LinkedDevices,
             "Linked devices",
             qol_theme::Mark::LinkedDevices,
         ),
-        (
-            super::super::CoreTool::Profiles,
-            "Profiles",
-            qol_theme::Mark::Profiles,
-        ),
-        (
-            super::super::CoreTool::Plugins,
-            "Plugins",
-            qol_theme::Mark::Plugins,
-        ),
+        (CoreTool::Profiles, "Profiles", qol_theme::Mark::Profiles),
+        (CoreTool::Plugins, "Plugins", qol_theme::Mark::Plugins),
     ] {
         sources.push(PanelSource {
             plugin_id: tool.wire_id().to_string(),
@@ -980,7 +902,7 @@ fn forward_open(plugin_id: &str) -> bool {
 }
 
 pub(in crate::settings_surface) fn show_toast(
-    source: super::super::ToastSource<'_>,
+    source: crate::settings_surface::ToastSource<'_>,
     title: &str,
     body: &str,
     level: &str,

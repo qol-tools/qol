@@ -465,8 +465,8 @@ fn backup_kind(file_name: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::data::Incident;
     use super::*;
-    use crate::settings_surface::platform::native_tools::profiles::data::Incident;
 
     fn profile(name: &str, active: bool, plugins: usize) -> Profile {
         Profile {
