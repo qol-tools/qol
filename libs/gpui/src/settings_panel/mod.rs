@@ -422,6 +422,70 @@ impl SettingsWindowHost {
         Ok(SettingsActivation::Opened)
     }
 
+    /// The plugin id of the rail row the open panel has selected.
+    pub fn active_source_id(&mut self, cx: &mut App) -> Option<String> {
+        if !self.active_is_open(cx) {
+            return None;
+        }
+        let active = self.active.as_ref()?;
+        active
+            .surface
+            .handle
+            .update(cx, |root, _, cx| {
+                root.inner.read(cx).selected_source_id().map(str::to_string)
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Rebuilds the open panel from a freshly loaded one, so the rail matches
+    /// the installed plugins. Custom pages move over with their state, and the
+    /// selected rail row and focus stay where they were. Returns false when no
+    /// panel is open.
+    pub fn refresh_prepared(
+        &mut self,
+        prepared: PreparedSettingsPanel,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
+        tracker: &MonitorTracker,
+        cx: &mut App,
+    ) -> anyhow::Result<bool> {
+        if !self.active_is_open(cx) {
+            return Ok(false);
+        }
+        let prepared = size_prepared_panel(prepared, tracker)?;
+        let notify = self.notifier();
+        let Some(active) = self.active.as_mut() else {
+            return Ok(false);
+        };
+        let dismisser = active.surface.dismisser.clone();
+        let visible = active.surface.is_visible();
+        active.surface.resize(prepared.size, cx)?;
+        active.surface.handle.update(cx, move |root, window, cx| {
+            let carried = root.inner.update(cx, |view, _| {
+                view.pause_runtime_poll();
+                view.take_pages()
+            });
+            let inner = cx.new(|cx| {
+                SettingsPanelView::new_carrying(
+                    prepared.panel,
+                    prepared.state,
+                    dismisser,
+                    custom_factories,
+                    notify,
+                    carried,
+                    cx,
+                )
+            });
+            if !visible {
+                inner.update(cx, |view, _| view.pause_runtime_poll());
+            }
+            inner.read(cx).take_focus(window);
+            root.inner = inner;
+            cx.notify();
+        })?;
+        Ok(true)
+    }
+
     fn retarget_active_source(&mut self, plugin_id: &str, cx: &mut App) -> bool {
         let Some(active) = self.active.as_mut() else {
             return false;

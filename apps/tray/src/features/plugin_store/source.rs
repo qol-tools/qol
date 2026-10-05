@@ -34,10 +34,16 @@ impl PluginSource {
         format!("https://github.com/{}.git", self.repo)
     }
 
+    pub(crate) fn html_url(&self) -> String {
+        format!("https://github.com/{}", self.repo)
+    }
+
     pub(crate) fn plugin_subdir_html_url(&self, plugin_dir: &str) -> String {
         format!(
-            "https://github.com/{}/tree/{}/plugins/{}",
-            self.repo, self.git_ref, plugin_dir
+            "{}/tree/{}/plugins/{}",
+            self.html_url(),
+            self.git_ref,
+            plugin_dir
         )
     }
 
@@ -67,19 +73,55 @@ impl PluginSource {
     }
 }
 
+const USER_SOURCE_REF: &str = "HEAD";
+
 pub(super) fn builtin_sources() -> Vec<PluginSource> {
     if let Some(override_sources) = test_sources_override() {
         return override_sources;
     }
+    sources_with(super::user_sources::load())
+}
+
+fn sources_with(user_repos: Vec<String>) -> Vec<PluginSource> {
+    let mut sources = default_builtin_sources();
+    sources.extend(user_repos.into_iter().map(user_source));
+    sources
+}
+
+pub(super) fn default_source_repos() -> Vec<String> {
     default_builtin_sources()
+        .into_iter()
+        .map(|source| source.repo)
+        .collect()
 }
 
 fn default_builtin_sources() -> Vec<PluginSource> {
     vec![PluginSource::new("core", "qol-tools/qol", "main")]
 }
 
-pub(crate) fn resolve_source_for_plugin(_plugin_id: &str) -> Option<PluginSource> {
-    builtin_sources().into_iter().next()
+fn user_source(repo: String) -> PluginSource {
+    PluginSource::new(repo.clone(), repo, USER_SOURCE_REF)
+}
+
+pub(crate) fn resolve_source_for_plugin(plugin_id: &str) -> Option<PluginSource> {
+    let repo_url = super::github::read_cache()
+        .and_then(|cache| {
+            cache
+                .plugins
+                .into_iter()
+                .find(|plugin| plugin.id == plugin_id)
+        })
+        .map(|plugin| plugin.repo_url);
+    source_for_repo_url(builtin_sources(), repo_url.as_deref())
+}
+
+fn source_for_repo_url(sources: Vec<PluginSource>, repo_url: Option<&str>) -> Option<PluginSource> {
+    let matched = repo_url.and_then(|url| {
+        sources
+            .iter()
+            .position(|source| url.starts_with(&format!("{}/", source.html_url())))
+    });
+    sources.into_iter().nth(matched.unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -218,6 +260,8 @@ mod tests {
     #[test]
     fn builtin_sources_has_one_core_entry() {
         let _env = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let _paths = crate::paths::push_test_path_root(tmp.path());
         let sources = builtin_sources();
         assert_eq!(sources.len(), 1, "v1 ships one source: {:?}", sources);
         let core = &sources[0];
@@ -264,6 +308,8 @@ mod tests {
     #[tokio::test]
     async fn builtin_sources_falls_back_to_default_after_override_dropped() {
         let _env = crate::test_support::env_lock().lock().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let _paths = crate::paths::push_test_path_root(tmp.path());
         {
             let _guard = test_seam::install(vec![PluginSource::new(
                 "fixture",
@@ -279,6 +325,53 @@ mod tests {
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].name, "core");
         assert_eq!(sources[0].repo, "qol-tools/qol");
+    }
+
+    #[test]
+    fn builtin_sources_follow_the_default_with_user_sources() {
+        let sources = sources_with(vec!["me/plugins".to_string()]);
+        let repos: Vec<&str> = sources.iter().map(|s| s.repo.as_str()).collect();
+        assert_eq!(repos, ["qol-tools/qol", "me/plugins"]);
+        assert_eq!(sources[1].git_ref, USER_SOURCE_REF);
+        assert_eq!(default_source_repos(), ["qol-tools/qol"]);
+    }
+
+    #[test]
+    fn source_for_repo_url_matches_the_source_repo_and_falls_back_to_the_first() {
+        let core = PluginSource::new("core", "qol-tools/qol", "main");
+        let user = user_source("me/qol".to_string());
+        let sources = vec![core.clone(), user.clone()];
+        let cases: &[(&str, Option<&str>, &PluginSource)] = &[
+            (
+                "user repo",
+                Some("https://github.com/me/qol/tree/HEAD/plugins/x"),
+                &user,
+            ),
+            (
+                "core repo",
+                Some("https://github.com/qol-tools/qol/tree/main/plugins/x"),
+                &core,
+            ),
+            (
+                "repo name prefix only",
+                Some("https://github.com/me/qolx/tree/HEAD/plugins/x"),
+                &core,
+            ),
+            (
+                "unknown repo",
+                Some("https://github.com/other/repo/tree/main/plugins/x"),
+                &core,
+            ),
+            ("not cached", None, &core),
+        ];
+        for (name, repo_url, expected) in cases {
+            assert_eq!(
+                source_for_repo_url(sources.clone(), *repo_url).as_ref(),
+                Some(*expected),
+                "case: {name}"
+            );
+        }
+        assert_eq!(source_for_repo_url(Vec::new(), None), None);
     }
 
     #[test]

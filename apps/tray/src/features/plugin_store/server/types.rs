@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "dev")]
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::broadcast;
 
@@ -45,6 +45,7 @@ pub(super) struct AppState {
     pub(super) installed_cache: InstalledCache,
     pub(super) plugins_cache: Arc<RwLock<Option<PluginCache>>>,
     pub(super) plugins_revalidating: Arc<AtomicBool>,
+    pub(super) plugins_revalidation_failed_at: Arc<AtomicU64>,
     #[cfg(feature = "dev")]
     pub(super) daemon_health:
         tokio::sync::watch::Receiver<crate::plugins::daemon_health::HealthSnapshot>,
@@ -97,6 +98,7 @@ impl AppState {
             installed_cache: Arc::new(Mutex::new(None)),
             plugins_cache: Arc::new(RwLock::new(super::super::github::read_cache())),
             plugins_revalidating: Arc::new(AtomicBool::new(false)),
+            plugins_revalidation_failed_at: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "dev")]
             dev_state: Arc::new(crate::dev::state::DevState::new()),
             #[cfg(feature = "dev")]

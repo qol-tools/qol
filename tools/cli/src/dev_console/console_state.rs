@@ -21,7 +21,7 @@ pub(super) struct ConsoleState {
 }
 
 fn console_state_path() -> Option<PathBuf> {
-    qol_config::config_dir().map(|dir| dir.join("dev/console.json"))
+    qol_config::dev_console_state_path()
 }
 
 pub(super) fn load_console_state() -> ConsoleState {

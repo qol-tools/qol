@@ -21,7 +21,7 @@ use super::disk::DiskPanel;
 use super::doctor::{spawn_doctor, spawn_doctor_probe, DoctorMode, DoctorPanel, DoctorRun};
 use super::emu_panel::{ActiveSandboxRun, EmuDetail, EmuState};
 use super::feature_flags::{
-    feature_flag_brick_layout, toggle_feature_flag, FeatureFlagPanel, FeatureFlags, FEATURE_FLAGS,
+    feature_flag_brick_layout, FeatureFlagPanel, FeatureFlags, FEATURE_FLAGS,
 };
 use super::filters::{filter_brick_layout, FilterState, FilterStrategy, LogFilter, ViewFilters};
 use super::log_pane::{DevLogFile, LogPane};
@@ -717,7 +717,8 @@ impl Dash {
         let Some(def) = FEATURE_FLAGS.get(self.feature_panel.selected) else {
             return;
         };
-        toggle_feature_flag(def.flag);
+        self.features.toggle(def.flag);
+        self.mark_state_dirty();
     }
 
     pub(super) fn toggle_worktrees_panel(&mut self) {

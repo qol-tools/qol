@@ -9,6 +9,7 @@ mod media_cover_handlers;
 mod media_icon_handlers;
 mod notifications_handlers;
 mod plugin_config_handlers;
+mod plugins_handlers;
 mod shortcut_handlers;
 mod theme_handlers;
 mod update_handlers;

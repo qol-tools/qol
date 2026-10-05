@@ -10,7 +10,9 @@ use super::render_util::{accent, panel_width, render_bottom_panel};
 use super::Dash;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum FeatureFlag {}
+pub(super) enum FeatureFlag {
+    PluginSources,
+}
 
 pub(super) struct FeatureFlagDef {
     pub(super) flag: FeatureFlag,
@@ -18,7 +20,11 @@ pub(super) struct FeatureFlagDef {
     pub(super) label: &'static str,
 }
 
-pub(super) const FEATURE_FLAGS: &[FeatureFlagDef] = &[];
+pub(super) const FEATURE_FLAGS: &[FeatureFlagDef] = &[FeatureFlagDef {
+    flag: FeatureFlag::PluginSources,
+    id: qol_config::feature_flags::PLUGIN_SOURCES.id,
+    label: qol_config::feature_flags::PLUGIN_SOURCES.label,
+}];
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(super) struct FeatureFlags {
@@ -28,6 +34,14 @@ pub(super) struct FeatureFlags {
 impl FeatureFlags {
     pub(super) fn enabled(&self, flag: FeatureFlag) -> bool {
         self.enabled.contains(&flag)
+    }
+
+    pub(super) fn toggle(&mut self, flag: FeatureFlag) {
+        if let Some(index) = self.enabled.iter().position(|known| *known == flag) {
+            self.enabled.remove(index);
+        } else {
+            self.enabled.push(flag);
+        }
     }
 
     pub(super) fn ids(&self) -> Vec<String> {
@@ -59,10 +73,6 @@ impl FeatureFlagPanel {
     pub(super) fn is_active(&self) -> bool {
         self.open
     }
-}
-
-pub(super) fn toggle_feature_flag(flag: FeatureFlag) {
-    match flag {}
 }
 
 pub(super) fn draw_feature_flags_panel(

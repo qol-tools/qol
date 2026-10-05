@@ -727,10 +727,8 @@ fn value_tone(tone: ValueTone) -> SettingsValueTone {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::{CheckRow, Summary, TargetRow, ValueTone};
     use super::{fade_opacity, navigable, nearest_navigable, PageRow, Selection};
-    use crate::settings_surface::platform::native_tools::updates::model::{
-        CheckRow, Summary, TargetRow, ValueTone,
-    };
     use std::time::Duration;
 
     fn summary() -> Summary {
