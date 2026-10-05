@@ -48,6 +48,38 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("github.token", check)
         self.assertNotIn("cache_prune.py", check)
 
+    def test_queue_entry_that_reuses_a_verdict_builds_under_its_own_name(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        self.assertIn("if: ${{ needs.plan.outputs.reused != 'true' }}", check)
+        build = workflow.split("  release-build:\n", 1)[1].split("  gate:\n", 1)[0]
+        for contract in [
+            "name: release build (${{ matrix.os }})",
+            "github.event_name == 'merge_group' && needs.plan.outputs.reused == 'true'",
+            "RUSTFLAGS: -D warnings",
+            "cache-key: ci-${{ matrix.os }}",
+            "cargo build --release --locked $BUILD_ARGS",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, build)
+        self.assertNotIn("actions: write", build)
+        self.assertNotIn("github.token", build)
+
+    def test_one_gate_job_carries_the_merge_verdict(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]
+        for contract in [
+            "name: merge gate",
+            "needs: [plan, check, release-build, process-windows]",
+            "if: ${{ always() && github.event_name != 'push' }}",
+            '[ "$PLAN" = success ] || exit 1',
+            '*" failure "*|*" cancelled "*) exit 1 ;;',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, gate)
+        report = workflow.split("  queue-report:\n", 1)[1]
+        self.assertIn("needs: [plan, check, release-build, process-windows]", report)
+
     def test_no_workflow_wraps_the_compiler(self):
         sources = [ROOT / ".github/actions/rust-setup/action.yml"]
         sources.extend((ROOT / ".github/workflows").glob("*.yml"))

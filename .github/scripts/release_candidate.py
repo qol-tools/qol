@@ -33,6 +33,11 @@ REQUIRED_CI_JOBS = {
     "lint + test (ubuntu-latest)",
     "lint + test (macos-latest)",
 }
+QUEUE_BUILD_CI_JOBS = {
+    PLAN_CI_JOB,
+    "release build (ubuntu-latest)",
+    "release build (macos-latest)",
+}
 
 
 @dataclass(frozen=True)
@@ -137,11 +142,16 @@ def successful_ci_run(runs: list[dict], sha: str) -> dict:
     return max(matches, key=lambda run: run.get("run_started_at", ""))
 
 
-def require_source_ci(sha: str, runs: list[dict], jobs: list[dict]) -> dict:
+def require_source_ci(
+    sha: str,
+    runs: list[dict],
+    jobs: list[dict],
+    required: set[str] = REQUIRED_CI_JOBS,
+) -> dict:
     run = successful_ci_run(runs, sha)
     conclusions = {job.get("name"): job.get("conclusion") for job in jobs}
     missing = sorted(
-        name for name in REQUIRED_CI_JOBS if conclusions.get(name) != "success"
+        name for name in required if conclusions.get(name) != "success"
     )
     if missing:
         raise RuntimeError(
@@ -402,7 +412,10 @@ def queue_ci_evidence(repo: str, sha: str, landed_run: dict) -> dict:
             f"CI run {landed_run.get('id')} reused a merge queue verdict, "
             f"but the merge queue {error}"
         ) from error
-    return require_source_ci(sha, runs, ci_run_jobs(repo, run["id"]))
+    jobs = ci_run_jobs(repo, run["id"])
+    reused = reused_queue_verdict(jobs)
+    required = QUEUE_BUILD_CI_JOBS if reused else REQUIRED_CI_JOBS
+    return require_source_ci(sha, runs, jobs, required)
 
 
 def settled_ci(repo: str, sha: str, runs: list[dict], jobs: list[dict]) -> dict:
