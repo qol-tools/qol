@@ -253,6 +253,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("pages: write", deploy)
         self.assertNotIn("secrets.", deploy)
 
+    def test_registry_backfill_pushes_only_from_main(self):
+        workflow = (ROOT / ".github/workflows/plugin-registry-backfill.yml").read_text()
+        backfill = workflow.split("  backfill:\n", 1)[1]
+        self.assertIn("if: github.ref == 'refs/heads/main'", backfill)
+        self.assertIn("packages: write", backfill)
+
     def test_tray_publish_claims_latest(self):
         workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
 
