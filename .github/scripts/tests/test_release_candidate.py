@@ -248,6 +248,52 @@ class SourceCiTests(unittest.TestCase):
         self.assertIn(f"head_sha={sha}", gh_json.call_args_list[2].args[0])
 
     @patch.object(rc, "gh_json")
+    def test_queue_run_that_reused_the_pull_request_needs_its_release_builds(
+        self, gh_json
+    ):
+        sha = "a" * 40
+        landed = {
+            "id": 42,
+            "path": ".github/workflows/ci.yml",
+            "event": "push",
+            "status": "completed",
+            "head_sha": sha,
+            "conclusion": "success",
+        }
+        queued = {"id": 41, "head_sha": sha, "conclusion": "success"}
+        plan = {"name": "Plan affected crates", "conclusion": "success"}
+        skipped = {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"}
+        ubuntu = {"name": "release build (ubuntu-latest)", "conclusion": "success"}
+        macos = {"name": "release build (macos-latest)", "conclusion": "success"}
+        cases = [
+            ([plan, skipped, ubuntu, macos], None),
+            ([plan, skipped, ubuntu], "release build \\(macos-latest\\)"),
+            (
+                [plan, skipped, ubuntu, {**macos, "conclusion": "failure"}],
+                "release build \\(macos-latest\\)",
+            ),
+            ([plan, skipped], "lacks successful jobs"),
+        ]
+        for queue_jobs, message in cases:
+            with self.subTest(queue_jobs=queue_jobs):
+                gh_json.side_effect = [
+                    landed,
+                    {"jobs": [plan, skipped]},
+                    {"workflow_runs": [queued]},
+                    {"jobs": queue_jobs},
+                ]
+                if message is None:
+                    evidence = rc.source_ci_evidence(
+                        "qol-tools/qol", sha, Path("/repo"), run_id=42
+                    )
+                    self.assertEqual(evidence["id"], 41)
+                    continue
+                with self.assertRaisesRegex(RuntimeError, message):
+                    rc.source_ci_evidence(
+                        "qol-tools/qol", sha, Path("/repo"), run_id=42
+                    )
+
+    @patch.object(rc, "gh_json")
     def test_landed_push_rejects_a_missing_or_incomplete_queue_run(self, gh_json):
         sha = "a" * 40
         landed = {

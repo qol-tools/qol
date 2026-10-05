@@ -134,10 +134,9 @@ jobs:
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
-    # A queue entry that reuses the pull request verdict still builds release
-    # binaries, which pull requests only check. The push that lands it has
-    # nothing left to prove.
-    if: ${{ !(github.event_name == 'push' && needs.plan.outputs.reused == 'true') }}
+    # A run that reuses a verdict has nothing left to lint or test. A queue
+    # entry still builds release binaries, in the release build job below.
+    if: ${{ needs.plan.outputs.reused != 'true' }}
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     env:
@@ -179,13 +178,13 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install cargo-hakari
-        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
         with:
           tool: cargo-hakari
 
       - name: Install cargo-nextest
-        if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: matrix.skip != 'true'
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73
         with:
           tool: cargo-nextest@0.9.143
@@ -195,7 +194,7 @@ jobs:
       # with workspace builds. Both checks exit non-zero when a manifest
       # changed without regenerating it.
       - name: Workspace-hack is current
-        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         run: |
           cargo hakari generate --diff
           cargo hakari manage-deps --dry-run
@@ -206,7 +205,7 @@ jobs:
       # `--no-deps` cannot stand in here: it skips resolution and exits 0
       # against a stale lockfile.
       - name: Lockfile is current
-        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         run: |
           if error=$(cargo metadata --locked --format-version 1 2>&1 >/dev/null); then
             exit 0
@@ -216,11 +215,11 @@ jobs:
           exit 1
 
       - name: Format
-        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: matrix.skip != 'true'
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
@@ -247,7 +246,7 @@ jobs:
         run: cargo build --release --locked $BUILD_ARGS
 
       - name: Test
-        if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
           DOCTEST: ${{ matrix.doctest }}
@@ -313,7 +312,7 @@ jobs:
           fi
 
       - name: Test
-        if: runner.os == 'macOS' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
+        if: runner.os == 'macOS' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
           DOCTEST: ${{ matrix.doctest }}
@@ -352,11 +351,76 @@ jobs:
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
 
+  # Pull requests only check the release profile, so a queue entry that reuses
+  # the pull request verdict builds it here, under the name of what it does.
+  # A run that reuses nothing builds it inside lint + test.
+  release-build:
+    name: release build (${{ matrix.os }})
+    needs: plan
+    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.reused == 'true' }}
+    env:
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            build_args: ${{ needs.plan.outputs.ubuntu_build }}
+            skip: ${{ needs.plan.outputs.ubuntu_skip }}
+          - os: macos-latest
+            build_args: ${{ needs.plan.outputs.macos_build }}
+            skip: ${{ needs.plan.outputs.macos_skip }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.skip != 'true'
+
+      - name: Free disk space
+        if: runner.os == 'Linux' && matrix.skip != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - uses: ./.github/actions/rust-setup
+        if: matrix.skip != 'true'
+        with:
+          cache-key: ci-${{ matrix.os }}
+
+      - name: Release profile build
+        if: matrix.skip != 'true'
+        env:
+          BUILD_ARGS: ${{ matrix.build_args }}
+        run: cargo build --release --locked $BUILD_ARGS
+
+  # The one check the merge queue ruleset requires. A skipped job reports no
+  # status under its matrix name, so requiring the jobs themselves would leave
+  # a pull request waiting on a check that never arrives. A push is exempt so a
+  # skipped run stays skipped for Versioning.
+  gate:
+    name: merge gate
+    needs: [plan, check, release-build, process-windows]
+    if: ${{ always() && github.event_name != 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          PLAN: ${{ needs.plan.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "plan: $PLAN, all: $RESULTS"
+          [ "$PLAN" = success ] || exit 1
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
+
   # GitHub only marks a queue removal on the pull request timeline, so a failed
   # queue run says which jobs failed on the pull request itself.
   queue-report:
     name: Report merge queue failure
-    needs: [plan, check, process-windows]
+    needs: [plan, check, release-build, process-windows]
     if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
