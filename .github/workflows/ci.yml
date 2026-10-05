@@ -144,7 +144,6 @@ jobs:
         with:
           cache-key: ci-${{ matrix.os }}
           components: rustfmt, clippy
-          compiler-cache: "true"
 
       - name: Install cargo-hakari
         if: runner.os == 'Linux' && matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
@@ -191,11 +190,17 @@ jobs:
         if: matrix.skip != 'true' && needs.plan.outputs.reused != 'true'
         env:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
-          RUSTC_WRAPPER: ""
         run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
 
+      # A release check compiles different units from a release build, so only
+      # a run that checks can put them in the build cache. Pull requests never
+      # save it, so the main run that saves a new entry checks as well, and
+      # pull requests stop recompiling every third-party crate.
       - name: Release profile check
-        if: matrix.skip != 'true' && github.event_name == 'pull_request'
+        if: >-
+          ${{ matrix.skip != 'true' && (github.event_name == 'pull_request' ||
+          (github.ref == 'refs/heads/main' &&
+          steps.rust_setup.outputs.build-cache-hit != 'true')) }}
         env:
           BUILD_ARGS: ${{ matrix.build_args }}
           RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
@@ -284,61 +289,6 @@ jobs:
           if [ "$DOCTEST" = "true" ]; then
             cargo test --locked $TEST_ARGS --doc
           fi
-
-      - name: Record compiler cache statistics
-        if: always() && !cancelled() && steps.rust_setup.outcome == 'success'
-        run: sccache --show-stats --stats-format=json > "${RUNNER_TEMP}/compiler-cache-report.json"
-
-      - name: Upload compiler cache statistics
-        if: always() && !cancelled() && steps.rust_setup.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: compiler-cache-${{ matrix.os }}
-          path: ${{ runner.temp }}/compiler-cache-report.json
-          if-no-files-found: error
-          overwrite: true
-
-      - name: Flush compiler cache
-        if: >-
-          ${{ !cancelled() && github.ref == 'refs/heads/main' &&
-          steps.rust_setup.outcome == 'success' &&
-          steps.rust_setup.outputs.compiler-cache-hit != 'true' }}
-        run: sccache --stop-server || true
-
-      - name: Save compiler cache
-        if: >-
-          ${{ !cancelled() && github.ref == 'refs/heads/main' &&
-          steps.rust_setup.outcome == 'success' &&
-          steps.rust_setup.outputs.compiler-cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: ${{ steps.rust_setup.outputs.compiler-cache-path }}
-          key: ${{ steps.rust_setup.outputs.compiler-cache-key }}
-
-  # Deleting caches needs an actions:write token, which must never reach the
-  # check job: every build script, proc macro and test compiled there could
-  # read it. This job runs repository scripts only, without stored credentials.
-  compiler-cache-retire:
-    name: Retire superseded compiler archives
-    needs: check
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.check.result != 'skipped' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
-
-      - name: Retire superseded compiler archives
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: python3 .github/scripts/cache_prune.py --retire-compiler-caches "$GITHUB_SHA" --ref "$GITHUB_REF"
 
   process-windows:
     name: sandbox lifecycle (windows)

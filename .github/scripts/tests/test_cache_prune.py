@@ -39,23 +39,12 @@ def cache_entry(key, created_at, last_accessed_at=None, size_in_bytes=1000):
 
 
 class NamespaceOfKey(unittest.TestCase):
-    def test_generated_compiler_keys_match_the_restore_namespace(self):
-        for runner, arch in [("Linux", "X64"), ("macOS", "ARM64")]:
-            config = cp.compiler_cache_config({
-                "RUNNER_OS": runner, "RUNNER_ARCH": arch,
-                "RUNNER_TEMP": "/tmp/compiler cache", "GITHUB_SHA": "a" * 40,
-            })
-            self.assertEqual(cp.namespace_of_key(config["key"]) + "-", config["prefix"])
-            self.assertEqual(config["capacity"], str(cp.COMPILER_CACHE_BYTES))
-
     def test_strips_trailing_hex_segment(self):
         cases = [
             ("v0-rust-ci-ubuntu-latest-Linux-x64-607b40e9-23b0bf21",
              "v0-rust-ci-ubuntu-latest-Linux-x64-607b40e9"),
             ("ci-ubuntu-latest-1a2b3c4d", "ci-ubuntu-latest"),
             ("qol-tray-linux-607b40e9-23b0bf21", "qol-tray-linux-607b40e9"),
-            (f"qol-compiler-v1-Linux-X64-{'a' * 40}", "qol-compiler-v1-Linux-X64"),
-            (f"qol-compiler-v1-macOS-ARM64-{'b' * 40}", "qol-compiler-v1-macOS-ARM64"),
         ]
         for key, expected in cases:
             self.assertEqual(cp.namespace_of_key(key), expected, f"key: {key}")
@@ -69,7 +58,6 @@ class NamespaceOfKey(unittest.TestCase):
             "key-ABCDEF12",
             "key-1234567",
             f"unrelated-{'a' * 40}",
-            f"qol-compiler-v1-Linux-X64-{'g' * 40}",
         ]
         for key in cases:
             self.assertEqual(cp.namespace_of_key(key), key, f"key: {key}")
@@ -93,16 +81,11 @@ class PlanPrune(unittest.TestCase):
             with self.subTest(entries=[c["id"] for c in entries], budget=budget):
                 self.assertEqual(cp.plan_prune(entries, 2, 14, NOW, budget), expected)
 
-    def test_compiler_cache_yields_to_current_dependency_cache(self):
-        release = cache_entry("plugin-release-linux-11111111", stamp(NOW - timedelta(days=5)))
-        compiler = cache_entry(f"{cp.COMPILER_CACHE_PREFIX}Linux-X64-{'a' * 40}", stamp(NOW))
-        self.assertEqual(cp.plan_prune([release, compiler], 2, 14, NOW, 1000), [compiler])
-
     def test_retention_counts_do_not_mix_cache_refs(self):
-        key = f"{cp.COMPILER_CACHE_PREFIX}Linux-X64-"
-        main = cache_entry(key + "a" * 40, stamp(NOW - timedelta(days=2)))
-        old_pr = cache_entry(key + "b" * 40, stamp(NOW - timedelta(days=1)))
-        new_pr = cache_entry(key + "c" * 40, stamp(NOW))
+        key = "ci-linux-"
+        main = cache_entry(key + "a" * 8, stamp(NOW - timedelta(days=2)))
+        old_pr = cache_entry(key + "b" * 8, stamp(NOW - timedelta(days=1)))
+        new_pr = cache_entry(key + "c" * 8, stamp(NOW))
         old_pr["ref"] = new_pr["ref"] = "refs/pull/44/merge"
         self.assertEqual(cp.plan_prune([main, old_pr, new_pr], 1, 14, NOW), [old_pr])
 
@@ -135,19 +118,6 @@ class PlanPrune(unittest.TestCase):
     def test_oversized_single_cache_cannot_exceed_the_budget(self):
         entry = cache_entry("ci-linux-11111111", stamp(NOW), size_in_bytes=1001)
         self.assertEqual(cp.plan_prune([entry], 2, 14, NOW, max_bytes=1000), [entry])
-
-    def test_compiler_archives_keep_recent_commits_per_platform(self):
-        linux = "qol-compiler-v1-Linux-X64"
-        macos = "qol-compiler-v1-macOS-ARM64"
-        entries = [
-            cache_entry(f"{linux}-{'a' * 40}", stamp(NOW - timedelta(days=3))),
-            cache_entry(f"{linux}-{'b' * 40}", stamp(NOW - timedelta(days=2))),
-            cache_entry(f"{linux}-{'c' * 40}", stamp(NOW - timedelta(days=1))),
-            cache_entry(f"{macos}-{'a' * 40}", stamp(NOW - timedelta(days=3))),
-            cache_entry("ci-linux-607b40e9-12345678", stamp(NOW - timedelta(days=3))),
-        ]
-        doomed = cp.plan_prune(entries, keep=2, max_age_days=14, now=NOW)
-        self.assertEqual([entry["key"] for entry in doomed], [entries[0]["key"]])
 
     def test_keep_newest_per_namespace(self):
         entries = [
@@ -259,29 +229,6 @@ class Fixture(unittest.TestCase):
 
 
 class Main(unittest.TestCase):
-    def test_compiler_config_needs_no_repository_or_github_access(self):
-        environment = {"RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
-                       "RUNNER_TEMP": "/tmp/compiler cache", "GITHUB_SHA": "a" * 40}
-        with (
-            patch("sys.argv", ["cache_prune.py", "--compiler-cache-config"]),
-            patch.dict(os.environ, environment, clear=True),
-            patch.object(cp, "gh_api") as gh,
-            contextlib.redirect_stdout(io.StringIO()) as out,
-        ):
-            self.assertEqual(cp.main(), 0)
-        config = dict(line.split("=", 1) for line in out.getvalue().splitlines())
-        self.assertEqual(config, cp.compiler_cache_config(environment))
-        gh.assert_not_called()
-
-    def test_compiler_config_rejects_missing_or_multiline_inputs(self):
-        base = {"RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
-                "RUNNER_TEMP": "/tmp/cache", "GITHUB_SHA": "a" * 40}
-        for overrides in [{"RUNNER_TEMP": "/tmp/cache\ninjected=1"}, {"GITHUB_SHA": "bad"}, {"RUNNER_OS": "Linux\n"}]:
-            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
-                cp.compiler_cache_config(base | overrides)
-        with self.assertRaises(KeyError):
-            cp.compiler_cache_config({})
-
     def test_max_bytes_reaches_the_deletion_plan(self):
         now = datetime.now(timezone.utc)
         entries = [
@@ -296,48 +243,6 @@ class Main(unittest.TestCase):
         ):
             self.assertEqual(cp.main(), 0)
         delete.assert_called_once_with("owner/repo", entries[0]["id"])
-
-    def test_retire_mode_only_retires_archives_older_than_this_commits_saves(self):
-        now = datetime.now(timezone.utc)
-        linux = cp.COMPILER_CACHE_PREFIX + "Linux-X64-"
-        macos = cp.COMPILER_CACHE_PREFIX + "macOS-ARM64-"
-        old_linux = cache_entry(linux + "a" * 40, stamp(now - timedelta(days=1)))
-        old_macos = cache_entry(macos + "a" * 40, stamp(now - timedelta(days=1)))
-        saved_linux = cache_entry(linux + "b" * 40, stamp(now))
-        saved_macos = cache_entry(macos + "b" * 40, stamp(now))
-        expired = cache_entry("ci-linux-11111111", stamp(now - timedelta(days=30)),
-                              size_in_bytes=cp.MAX_CACHE_BYTES)
-        foreign = dict(old_linux, id=next(_IDS), ref="refs/pull/44/merge")
-        everything = [old_linux, old_macos, saved_linux, saved_macos, expired, foreign]
-        for entries, expected in [
-            (everything, {old_linux["id"], old_macos["id"]}),
-            ([old_linux, old_macos, saved_linux, expired], {old_linux["id"]}),
-            ([old_linux, old_macos, expired, foreign], set()),
-            ([], set()),
-        ]:
-            with (
-                self.subTest(entries=[entry["key"] for entry in entries]),
-                patch("sys.argv", ["cache_prune.py", "--repo", "owner/repo",
-                                   "--retire-compiler-caches", "b" * 40, "--ref", "refs/heads/main"]),
-                patch.object(cp, "list_caches", return_value=entries),
-                patch.object(cp, "delete_cache") as delete,
-                contextlib.redirect_stdout(io.StringIO()),
-            ):
-                self.assertEqual(cp.main(), 0)
-                self.assertEqual({call.args[1] for call in delete.call_args_list}, expected)
-
-    def test_retire_mode_requires_a_commit_sha_and_explicit_ref(self):
-        for arguments in [["--retire-compiler-caches", "b" * 39, "--ref", "refs/heads/main"],
-                          ["--retire-compiler-caches", "B" * 40, "--ref", "refs/heads/main"],
-                          ["--retire-compiler-caches", "b" * 40]]:
-            with (
-                self.subTest(arguments=arguments),
-                patch("sys.argv", ["cache_prune.py", "--repo", "owner/repo", *arguments]),
-                patch.object(cp, "gh_api") as gh,
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                self.assertEqual(cp.main(), 1)
-                gh.assert_not_called()
 
     def test_dry_run_prints_plan_without_deleting(self):
         now = datetime.now(timezone.utc)
@@ -445,51 +350,6 @@ class Main(unittest.TestCase):
             ):
                 self.assertEqual(cp.main(), 1)
                 gh.assert_not_called()
-
-
-class CompilerRetirement(unittest.TestCase):
-    def test_replacement_only_retires_older_archives_in_the_same_namespace_and_ref(self):
-        prefix = cp.COMPILER_CACHE_PREFIX + "Linux-X64-"
-        old = cache_entry(prefix + "a" * 40, stamp(NOW - timedelta(days=1)))
-        saved = cache_entry(prefix + "b" * 40, stamp(NOW))
-        newer = cache_entry(prefix + "c" * 40, stamp(NOW))
-        foreign = dict(old, id=next(_IDS), ref="refs/pull/44/merge")
-        macos = cache_entry(f"{cp.COMPILER_CACHE_PREFIX}macOS-ARM64-{'a' * 40}", old["created_at"])
-        release = cache_entry("plugin-release-linux-12345678", old["created_at"])
-        entries = [newer, foreign, macos, release, saved, old]
-        self.assertEqual(cp.replaced_compiler_caches(entries, saved["key"], saved["ref"]), [old])
-        self.assertEqual(cp.replaced_compiler_caches(entries, newer["key"], newer["ref"]), [saved, old])
-
-    def test_missing_replacement_never_retires_existing_archives(self):
-        key = f"{cp.COMPILER_CACHE_PREFIX}Linux-X64-{'a' * 40}"
-        foreign = cache_entry(key, stamp(NOW))
-        foreign["ref"] = "refs/pull/44/merge"
-        for entries in [[], [foreign]]:
-            with self.subTest(entries=entries), self.assertRaises(LookupError):
-                cp.replaced_compiler_caches(entries, key, "refs/heads/main")
-
-    def test_upload_bursts_keep_one_archive_per_platform_and_current_releases(self):
-        release = cache_entry("plugin-release-linux-12345678", stamp(NOW),
-                              size_in_bytes=cp.MAX_CACHE_BYTES - 2 * cp.COMPILER_CACHE_BYTES)
-        entries = [release]
-        for push in range(20):
-            now = NOW + timedelta(minutes=push)
-            doomed = {c["id"] for c in cp.plan_prune(entries, 2, 14, now)}
-            entries = [c for c in entries if c["id"] not in doomed]
-            saves = [
-                cache_entry(f"{cp.COMPILER_CACHE_PREFIX}{platform}-{push:040x}", stamp(now),
-                            size_in_bytes=cp.COMPILER_CACHE_BYTES)
-                for platform in ["Linux-X64", "macOS-ARM64"]
-            ]
-            entries.extend(saves)
-            for saved in reversed(saves):
-                retired = {c["id"] for c in cp.replaced_compiler_caches(entries, saved["key"], saved["ref"])}
-                entries = [c for c in entries if c["id"] not in retired]
-                doomed = {c["id"] for c in cp.plan_prune(entries, 2, 14, now)}
-                entries = [c for c in entries if c["id"] not in doomed]
-            self.assertIn(release, entries)
-            self.assertEqual(len(entries), 3)
-            self.assertLessEqual(sum(c["size_in_bytes"] for c in entries), cp.MAX_CACHE_BYTES)
 
 
 if __name__ == "__main__":

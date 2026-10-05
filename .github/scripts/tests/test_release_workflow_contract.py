@@ -13,98 +13,47 @@ def named_step(document, name, indent):
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
-    def test_compiler_cache_preserves_dependency_keys_and_remains_opt_in(self):
+    def test_setup_reports_whether_the_build_cache_will_be_saved(self):
         action = (ROOT / ".github/actions/rust-setup/action.yml").read_text()
-        inputs = action.split("outputs:", 1)[0]
-        compiler_input = inputs.split("  compiler-cache:\n", 1)[1]
-        self.assertIn('default: "false"', compiler_input)
-        self.assertLess(
-            action.index("uses: Swatinem/rust-cache@"),
-            action.index("RUSTC_WRAPPER=sccache"),
-        )
-        self.assertIn("SCCACHE_CACHE_SIZE=${COMPILER_CACHE_CAPACITY}", action)
-        self.assertRegex(action, r"tool: sccache@\d+\.\d+\.\d+")
-        self.assertNotIn("SCCACHE_GHA_ENABLED", action)
-        for name in ["Configure", "Install", "Restore", "Enable"]:
-            with self.subTest(step=name):
-                step = named_step(action, f"{name} compiler cache", "    ")
-                self.assertIn("if: inputs.compiler-cache == 'true'", step)
+        cache = named_step(action, "Restore or save build cache", "    ")
+        self.assertIn("id: build-cache", cache)
+        self.assertIn("uses: Swatinem/rust-cache@", cache)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' }}", cache)
+        outputs = action.split("outputs:\n", 1)[1].split("runs:\n", 1)[0]
+        self.assertIn("build-cache-hit:", outputs)
+        self.assertIn("value: ${{ steps.build-cache.outputs.cache-hit }}", outputs)
 
-    def test_only_ci_check_opts_into_compiler_cache(self):
-        enabled = []
-        for path in (ROOT / ".github/workflows").glob("*.yml"):
-            for match in re.finditer(r'''^\s+compiler-cache:\s*["']?true["']?\s*$''', path.read_text(), re.M):
-                enabled.append(path.name)
-        self.assertEqual(enabled, ["ci.yml"])
+    def test_main_run_that_saves_the_build_cache_also_checks_the_release_profile(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
-        self.assertIn('compiler-cache: "true"', check)
-
-    def test_compiler_cache_contract_flows_from_the_policy_owner(self):
-        action = (ROOT / ".github/actions/rust-setup/action.yml").read_text()
-        configure = named_step(action, "Configure compiler cache", "    ")
-        self.assertIn('cache_prune.py --compiler-cache-config >> "${GITHUB_OUTPUT}"', configure)
-        restore = named_step(action, "Restore compiler cache", "    ")
-        for field, output in [("path", "path"), ("key", "key"), ("restore-keys", "prefix")]:
-            self.assertIn(f"{field}: ${{{{ steps.compiler-config.outputs.{output} }}}}", restore)
-        enable = named_step(action, "Enable compiler cache", "    ")
-        self.assertIn("COMPILER_CACHE_PATH: ${{ steps.compiler-config.outputs.path }}", enable)
-        self.assertIn("COMPILER_CACHE_CAPACITY: ${{ steps.compiler-config.outputs.capacity }}", enable)
-        self.assertIn("SCCACHE_DIR=${COMPILER_CACHE_PATH}", enable)
-        outputs = action.split("outputs:\n", 1)[1].split("runs:\n", 1)[0]
-        self.assertIn("compiler-cache-path:", outputs)
-        self.assertIn("value: ${{ steps.compiler-config.outputs.path }}", outputs)
-
-    def test_compiler_cache_saves_only_main_and_publishes_statistics(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  compiler-cache-retire:\n", 1)[0]
-        self.assertIn('compiler-cache: "true"', check)
-        for name in ["Flush compiler cache", "Save compiler cache"]:
-            with self.subTest(step=name):
-                step = named_step(check, name, "      ")
-                for contract in [
-                    "!cancelled()",
-                    "github.ref == 'refs/heads/main'",
-                    "steps.rust_setup.outcome == 'success'",
-                    "steps.rust_setup.outputs.compiler-cache-hit != 'true'",
-                ]:
-                    self.assertIn(contract, step)
-        self.assertIn("sccache --stop-server || true", named_step(check, "Flush compiler cache", "      "))
-        save = named_step(check, "Save compiler cache", "      ")
-        self.assertIn("key: ${{ steps.rust_setup.outputs.compiler-cache-key }}", save)
-        self.assertIn("path: ${{ steps.rust_setup.outputs.compiler-cache-path }}", save)
-        for name in ["Record compiler cache statistics", "Upload compiler cache statistics"]:
-            with self.subTest(step=name):
-                self.assertIn("!cancelled()", named_step(check, name, "      "))
-        upload = named_step(check, "Upload compiler cache statistics", "      ")
-        self.assertIn("overwrite: true", upload)
-        self.assertIn("sccache --show-stats --stats-format=json", check)
-        self.assertIn("name: compiler-cache-${{ matrix.os }}", check)
-        self.assertLess(check.index("cargo nextest run"), check.index("Flush compiler cache"))
-        self.assertLess(check.index("Flush compiler cache"), check.index("Save compiler cache"))
+        self.assertIn("id: rust_setup", check)
+        step = named_step(check, "Release profile check", "      ")
+        for contract in [
+            "matrix.skip != 'true'",
+            "github.event_name == 'pull_request' ||",
+            "github.ref == 'refs/heads/main'",
+            "steps.rust_setup.outputs.build-cache-hit != 'true'",
+            "cargo check --release --locked $BUILD_ARGS",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, step)
+        build = named_step(check, "Release profile build", "      ")
+        self.assertIn("github.event_name != 'pull_request'", build)
+        self.assertIn("cargo build --release --locked $BUILD_ARGS", build)
 
     def test_build_jobs_never_hold_a_cache_deletion_token(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  compiler-cache-retire:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
         self.assertNotIn("actions: write", check)
         self.assertNotIn("github.token", check)
         self.assertNotIn("cache_prune.py", check)
-        retire = workflow.split("  compiler-cache-retire:\n", 1)[1].split("  process-windows:\n", 1)[0]
-        self.assertIn("needs: check", retire)
-        self.assertIn("github.ref == 'refs/heads/main'", retire)
-        self.assertIn("needs.check.result != 'skipped'", retire)
-        self.assertIn("permissions:\n      contents: read\n      actions: write\n", retire)
-        self.assertIn("persist-credentials: false", retire)
-        self.assertIn("sparse-checkout: .github/scripts", retire)
-        self.assertNotIn("rust-setup", retire)
-        self.assertNotRegex(retire, CARGO_GATE)
-        step = named_step(retire, "Retire superseded compiler archives", "      ")
-        self.assertIn("continue-on-error: true", step)
-        self.assertIn('--retire-compiler-caches "$GITHUB_SHA" --ref "$GITHUB_REF"', step)
 
-    def test_clippy_does_not_use_the_uncacheable_driver_wrapper(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertIn('RUSTC_WRAPPER: ""', named_step(workflow, "Clippy", "      "))
+    def test_no_workflow_wraps_the_compiler(self):
+        sources = [ROOT / ".github/actions/rust-setup/action.yml"]
+        sources.extend((ROOT / ".github/workflows").glob("*.yml"))
+        for path in sources:
+            with self.subTest(path=path.name):
+                self.assertNotIn("RUSTC_WRAPPER", path.read_text())
 
     def test_versioning_waits_for_main_ci(self):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
