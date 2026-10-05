@@ -120,6 +120,9 @@ fn bootstrap_allowed_for_bundle_root(bundle_root: &Path, home: Option<&Path>) ->
     bundle_root.starts_with(home.join("Applications"))
 }
 
+const BLUETOOTH_USAGE: &str =
+    "QoL Tray reconnects the Bluetooth devices you choose and lists nearby devices to pair.";
+
 fn write_info_plist(bundle_root: &Path) -> Result<()> {
     let plist_path = bundle_root.join("Contents").join("Info.plist");
     write_text_file(&plist_path, &info_plist_xml(env!("CARGO_PKG_VERSION")))
@@ -149,6 +152,8 @@ fn info_plist_xml(version: &str) -> String {
          <true/>\n\
          <key>LSMinimumSystemVersion</key>\n\
          <string>11.0</string>\n\
+         <key>NSBluetoothAlwaysUsageDescription</key>\n\
+         <string>{BLUETOOTH_USAGE}</string>\n\
          </dict>\n\
          </plist>\n"
     )
@@ -201,6 +206,14 @@ mod tests {
         assert!(xml.contains("<key>CFBundleIdentifier</key>"));
         assert!(xml.contains("<string>9.9.9</string>"));
         assert!(xml.contains("<key>LSUIElement</key>"));
+    }
+
+    #[test]
+    fn info_plist_declares_bluetooth_usage_so_tcc_does_not_kill_the_plugin() {
+        let xml = info_plist_xml("9.9.9");
+        assert!(xml.contains(&format!(
+            "<key>NSBluetoothAlwaysUsageDescription</key>\n<string>{BLUETOOTH_USAGE}</string>"
+        )));
     }
 
     #[test]

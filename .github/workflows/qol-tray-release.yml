@@ -179,6 +179,8 @@ jobs:
           <true/>
           <key>LSMinimumSystemVersion</key>
           <string>11.0</string>
+          <key>NSBluetoothAlwaysUsageDescription</key>
+          <string>QoL Tray reconnects the Bluetooth devices you choose and lists nearby devices to pair.</string>
           </dict>
           </plist>
           EOF
