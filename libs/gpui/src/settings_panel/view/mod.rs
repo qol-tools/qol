@@ -700,7 +700,7 @@ impl SettingsPanelView {
     /// Focuses this panel after it replaced another one in the same window,
     /// whose focus handle no longer exists.
     pub(super) fn take_focus(&self, window: &mut Window) {
-        window.focus(&self.focus_target());
+        self.focus_the_target(window);
     }
 
     fn focus_target(&self) -> FocusHandle {
@@ -715,8 +715,14 @@ impl SettingsPanelView {
     /// The only place settings scope moves gpui focus. Runs after every transition and on every
     /// render: when focus is inside the panel but not on the target, move it there.
     fn reconcile_focus(&self, window: &mut Window, cx: &App) {
+        if self.focus_handle.contains_focused(window, cx) {
+            self.focus_the_target(window);
+        }
+    }
+
+    fn focus_the_target(&self, window: &mut Window) {
         let target = self.focus_target();
-        if !target.is_focused(window) && self.focus_handle.contains_focused(window, cx) {
+        if !target.is_focused(window) {
             window.focus(&target);
         }
     }
