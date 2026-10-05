@@ -14,6 +14,55 @@ pub struct RemapConfig {
     pub key_rules: Vec<KeyRule>,
     pub mouse_rules: Vec<MouseRule>,
     pub scroll_rules: Vec<ScrollRule>,
+    pub modifier_keys: ModifierKeys,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModifierTarget {
+    CapsLock,
+    Control,
+    Option,
+    Command,
+    Fn,
+    Escape,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModifierKeys {
+    pub caps_lock: ModifierTarget,
+    pub control: ModifierTarget,
+    pub option: ModifierTarget,
+    pub command: ModifierTarget,
+    #[serde(rename = "fn")]
+    pub fn_key: ModifierTarget,
+}
+
+impl ModifierKeys {
+    pub fn target_for(&self, source: ModifierTarget) -> ModifierTarget {
+        match source {
+            ModifierTarget::CapsLock => self.caps_lock,
+            ModifierTarget::Control => self.control,
+            ModifierTarget::Option => self.option,
+            ModifierTarget::Command => self.command,
+            ModifierTarget::Fn => self.fn_key,
+            other => other,
+        }
+    }
+}
+
+impl Default for ModifierKeys {
+    fn default() -> Self {
+        Self {
+            caps_lock: ModifierTarget::CapsLock,
+            control: ModifierTarget::Control,
+            option: ModifierTarget::Option,
+            command: ModifierTarget::Command,
+            fn_key: ModifierTarget::Fn,
+        }
+    }
 }
 
 fn default_enabled() -> bool {
@@ -113,6 +162,17 @@ mod tests {
         assert!(!config.key_rules.is_empty());
         assert!(!config.mouse_rules.is_empty());
         assert!(!config.scroll_rules.is_empty());
+        assert_eq!(config.modifier_keys, ModifierKeys::default());
+    }
+
+    #[test]
+    fn modifier_keys_fill_unset_keys_with_themselves() {
+        let config: RemapConfig =
+            serde_json::from_value(serde_json::json!({ "modifier_keys": { "fn": "control" } }))
+                .unwrap();
+        assert_eq!(config.modifier_keys.fn_key, ModifierTarget::Control);
+        assert_eq!(config.modifier_keys.caps_lock, ModifierTarget::CapsLock);
+        assert_eq!(config.modifier_keys.command, ModifierTarget::Command);
     }
 
     #[test]

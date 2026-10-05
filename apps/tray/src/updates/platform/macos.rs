@@ -236,9 +236,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     });
     install_result?;
 
-    if dev_override || codesign::configured_identity().is_some() {
-        codesign::codesign_bundle(&current_bundle);
-    }
+    codesign::codesign_bundle(&current_bundle);
 
     events.send(DaemonEvent::UpdateComplete);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

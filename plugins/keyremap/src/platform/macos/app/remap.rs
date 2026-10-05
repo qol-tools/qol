@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use qol_hotkeys::macos_keycode as keycode;
 
-use super::config::{CharRule, KeyRule, MouseRule, RemapConfig, ScrollRule};
+use super::config::{CharRule, KeyRule, ModifierKeys, MouseRule, RemapConfig, ScrollRule};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Modifiers {
@@ -68,6 +68,7 @@ pub struct ResolvedConfig {
     pub key_rules: Vec<ResolvedKeyRule>,
     pub mouse_rules: Vec<ResolvedMouseRule>,
     pub scroll_rules: Vec<ResolvedScrollRule>,
+    pub modifier_keys: ModifierKeys,
 }
 
 pub struct ResolvedCharRule {
@@ -348,6 +349,7 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
             .iter()
             .filter_map(resolve_scroll_rule)
             .collect(),
+        modifier_keys: config.modifier_keys,
     }
 }
 
@@ -774,6 +776,7 @@ mod tests {
     #[test]
     fn semantic_validation_reports_values_the_runtime_would_skip() {
         let raw = RemapConfig {
+            modifier_keys: ModifierKeys::default(),
             enabled: true,
             excluded_apps: vec![String::new()],
             char_swaps: vec![(String::new(), "$".into())],
@@ -805,6 +808,7 @@ mod tests {
     #[test]
     fn bare_key_rule_only_matches_without_modifiers() {
         let raw = RemapConfig {
+            modifier_keys: ModifierKeys::default(),
             enabled: true,
             excluded_apps: vec![],
             char_swaps: vec![],
@@ -855,6 +859,7 @@ mod tests {
     #[test]
     fn symbol_key_rule_can_emit_literal_char() {
         let raw = RemapConfig {
+            modifier_keys: ModifierKeys::default(),
             enabled: true,
             excluded_apps: vec![],
             char_swaps: vec![],
@@ -886,6 +891,7 @@ mod tests {
     #[test]
     fn char_swaps_are_bidirectional() {
         let raw = RemapConfig {
+            modifier_keys: ModifierKeys::default(),
             enabled: true,
             excluded_apps: vec!["com.excluded.app".into()],
             char_swaps: vec![("<".into(), "$".into())],
@@ -983,6 +989,7 @@ mod tests {
             app in arb_bundle_id(),
         ) {
             let empty = RemapConfig {
+                modifier_keys: ModifierKeys::default(),
                 enabled: true,
                 excluded_apps: vec![],
                 char_swaps: vec![],
@@ -1027,6 +1034,7 @@ mod tests {
             })
         ) {
             let raw = RemapConfig {
+                modifier_keys: ModifierKeys::default(),
                 enabled: true,
                 excluded_apps: vec![],
                 char_swaps: vec![],

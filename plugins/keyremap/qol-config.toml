@@ -122,3 +122,142 @@ default = [
 from_mods = "string_array"
 to_mods = "string_array"
 global = "boolean"
+
+[section.modifier_keys]
+label = "Modifier keys"
+description = "Choose what each modifier key does, like the macOS Modifier Keys setting. Needs the keyboard helper."
+
+[field.modifier_caps_lock]
+type = "select"
+config_key = "modifier_keys.caps_lock"
+label = "Caps Lock key"
+section = "modifier_keys"
+default = "caps_lock"
+card_description = "What Caps Lock acts as."
+options = ["caps_lock", "control", "option", "command", "fn", "escape", "none"]
+
+[field.modifier_caps_lock.option_labels]
+caps_lock = "Caps Lock"
+control = "Control"
+option = "Option"
+command = "Command"
+fn = "Globe / fn"
+escape = "Escape"
+none = "No action"
+
+[field.modifier_caps_lock.option_pictures]
+caps_lock = "letters:⇪"
+control = "letters:⌃"
+option = "letters:⌥"
+command = "letters:⌘"
+fn = "letters:fn"
+escape = "letters:esc"
+none = "letters:—"
+
+[field.modifier_control]
+type = "select"
+config_key = "modifier_keys.control"
+label = "Control key"
+section = "modifier_keys"
+default = "control"
+card_description = "What Control acts as."
+options = ["caps_lock", "control", "option", "command", "fn", "escape", "none"]
+
+[field.modifier_control.option_labels]
+caps_lock = "Caps Lock"
+control = "Control"
+option = "Option"
+command = "Command"
+fn = "Globe / fn"
+escape = "Escape"
+none = "No action"
+
+[field.modifier_control.option_pictures]
+caps_lock = "letters:⇪"
+control = "letters:⌃"
+option = "letters:⌥"
+command = "letters:⌘"
+fn = "letters:fn"
+escape = "letters:esc"
+none = "letters:—"
+
+[field.modifier_option]
+type = "select"
+config_key = "modifier_keys.option"
+label = "Option key"
+section = "modifier_keys"
+default = "option"
+card_description = "What Option acts as."
+options = ["caps_lock", "control", "option", "command", "fn", "escape", "none"]
+
+[field.modifier_option.option_labels]
+caps_lock = "Caps Lock"
+control = "Control"
+option = "Option"
+command = "Command"
+fn = "Globe / fn"
+escape = "Escape"
+none = "No action"
+
+[field.modifier_option.option_pictures]
+caps_lock = "letters:⇪"
+control = "letters:⌃"
+option = "letters:⌥"
+command = "letters:⌘"
+fn = "letters:fn"
+escape = "letters:esc"
+none = "letters:—"
+
+[field.modifier_command]
+type = "select"
+config_key = "modifier_keys.command"
+label = "Command key"
+section = "modifier_keys"
+default = "command"
+card_description = "What Command acts as."
+options = ["caps_lock", "control", "option", "command", "fn", "escape", "none"]
+
+[field.modifier_command.option_labels]
+caps_lock = "Caps Lock"
+control = "Control"
+option = "Option"
+command = "Command"
+fn = "Globe / fn"
+escape = "Escape"
+none = "No action"
+
+[field.modifier_command.option_pictures]
+caps_lock = "letters:⇪"
+control = "letters:⌃"
+option = "letters:⌥"
+command = "letters:⌘"
+fn = "letters:fn"
+escape = "letters:esc"
+none = "letters:—"
+
+[field.modifier_fn]
+type = "select"
+config_key = "modifier_keys.fn"
+label = "Globe / fn key"
+section = "modifier_keys"
+default = "fn"
+card_description = "What Globe / fn acts as."
+options = ["caps_lock", "control", "option", "command", "fn", "escape", "none"]
+
+[field.modifier_fn.option_labels]
+caps_lock = "Caps Lock"
+control = "Control"
+option = "Option"
+command = "Command"
+fn = "Globe / fn"
+escape = "Escape"
+none = "No action"
+
+[field.modifier_fn.option_pictures]
+caps_lock = "letters:⇪"
+control = "letters:⌃"
+option = "letters:⌥"
+command = "letters:⌘"
+fn = "letters:fn"
+escape = "letters:esc"
+none = "letters:—"
