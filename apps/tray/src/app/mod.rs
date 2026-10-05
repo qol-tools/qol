@@ -138,6 +138,8 @@ pub(crate) fn run() -> Result<()> {
         log_binding_restore("startup", hotkeys::restore_desktop_bindings());
     }
 
+    std::thread::spawn(qol_tray::features::notifications::sync_notification_inhibit);
+
     log::info!("Starting QoL Tray daemon...");
 
     let peer_runtime = Arc::new(Mutex::new(None));

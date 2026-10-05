@@ -95,7 +95,13 @@ fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> H
             &as_str(field, value)?,
         ),
         "residency" => set_residency(as_bool(field, value)?),
-        "handler" => crate::features::notifications::set_native_handler(as_handler(field, value)?),
+        "handler" => {
+            let previous = crate::features::notifications::native_handler();
+            let result =
+                crate::features::notifications::set_native_handler(as_handler(field, value)?);
+            crate::features::notifications::apply_native_handler(previous);
+            result
+        }
         _ => return Err(Box::new(bad_request(&format!("unknown field: {field}")))),
     };
     result.map_err(|error| Box::new(bad_request(&format!("{error:#}"))))

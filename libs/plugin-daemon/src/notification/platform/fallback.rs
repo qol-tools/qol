@@ -11,6 +11,8 @@ impl NotificationPlatform for Platform {
         None
     }
 
+    fn set_os_banners(&self, _showing: bool) {}
+
     fn acquire_inhibit(&self) -> Option<NotificationInhibit> {
         None
     }

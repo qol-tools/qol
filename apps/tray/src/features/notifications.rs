@@ -78,12 +78,17 @@ pub fn native_handler() -> NativeHandler {
 }
 
 pub fn set_native_handler(handler: NativeHandler) -> Result<()> {
-    let result = update_settings(|settings| {
+    update_settings(|settings| {
         settings.use_system_notifications = handler == NativeHandler::Both;
         settings.handler = handler;
-    });
+    })
+}
+
+pub fn apply_native_handler(previous: NativeHandler) {
+    if previous == NativeHandler::Qol && native_handler() != NativeHandler::Qol {
+        qol_plugin_daemon::notification::platform::set_os_banners(true);
+    }
     sync_notification_inhibit();
-    result
 }
 
 #[cfg(target_os = "linux")]
@@ -98,6 +103,7 @@ pub fn sync_notification_inhibit() {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if native_handler() == NativeHandler::Qol {
+            qol_plugin_daemon::notification::platform::set_os_banners(false);
             if held.is_none() {
                 *held = qol_plugin_daemon::notification::platform::acquire_inhibit();
             }
