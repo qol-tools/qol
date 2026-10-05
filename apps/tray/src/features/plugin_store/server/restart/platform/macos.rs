@@ -1,5 +1,4 @@
 use super::RestartPlatformOps;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 
 pub(super) struct Platform;
@@ -28,8 +27,8 @@ impl RestartPlatformOps for Platform {
         extern "C" fn do_exec(ctx: *mut std::ffi::c_void) {
             let (binary, args) = unsafe { *Box::from_raw(ctx as *mut ExecData) };
             crate::lifeline_handoff::prepare_for_exec();
-            let error = std::process::Command::new(&binary).args(&args).exec();
-            log::error!("exec restart failed: {}", error);
+            let error = crate::relaunch::spawn_successor_and_exit(&binary, &args);
+            log::error!("restart failed: {}", error);
             std::process::exit(1);
         }
 
