@@ -4,9 +4,10 @@ use super::snapshot::{self, Snapshot};
 use crate::features::linked_devices::settings::{self, CatalogOperation, Failure, InvitationInfo};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, AsyncApp, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent,
-    Render, ScrollWheelEvent, WeakEntity, Window,
+    div, AnyElement, App, AsyncApp, ClipboardItem, Context, Div, FocusHandle, Focusable,
+    KeyDownEvent, Render, ScrollWheelEvent, WeakEntity, Window,
 };
+use qol_gpui::deck;
 use qol_gpui::key::Key;
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
@@ -28,10 +29,27 @@ use qol_peers::enrollment::ExportedInvitation;
 use qol_peers::PeerId;
 use qol_runtime::local_http::Method;
 use qol_runtime::PlatformStateClient;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 const MAX_VISIBLE: usize = 9;
 const DANGER_VERBS: [&str; 5] = ["unlink", "remove", "abandon", "decline", "reject"];
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
+const CARD_DEPTH: usize = 1;
+const CARD_ANIMATION: &str = "linked-devices-card-slide";
+const PAGE_IDS: [&str; 4] = [
+    "linked-devices-list",
+    "linked-devices-row",
+    "linked-devices-spinner",
+    "linked-devices-action",
+];
+const CARD_IDS: [&str; 4] = [
+    "linked-devices-card-list",
+    "linked-devices-card-row",
+    "linked-devices-card-spinner",
+    "linked-devices-card-action",
+];
 
 enum Editing {
     None,
@@ -45,6 +63,12 @@ pub(super) struct LinkedDevicesView {
     catalog: Option<Vec<CatalogOperation>>,
     withheld: Vec<crate::plugins::PluginId>,
     open: Option<(PeerId, usize)>,
+    closing: Option<PeerId>,
+    step: usize,
+    motion: Option<deck::Motion>,
+    mark: Option<f32>,
+    body_bounds: deck::BodyBounds,
+    row_bounds: deck::RowBounds,
     stopped: bool,
     enabling: bool,
     source: Option<(ExportedInvitation, InvitationInfo)>,
@@ -75,6 +99,12 @@ impl LinkedDevicesView {
             catalog: None,
             withheld: Vec::new(),
             open: None,
+            closing: None,
+            step: 0,
+            motion: None,
+            mark: None,
+            body_bounds: Rc::new(Cell::new(None)),
+            row_bounds: Rc::new(RefCell::new(HashMap::new())),
             stopped: false,
             enabling: false,
             source: None,
@@ -248,6 +278,10 @@ impl LinkedDevicesView {
 
     fn card(&self) -> Option<(String, Vec<Row>)> {
         let (peer_id, _) = self.open?;
+        self.card_for(peer_id)
+    }
+
+    fn card_for(&self, peer_id: PeerId) -> Option<(String, Vec<Row>)> {
         model::card(
             self.snapshot.as_ref(),
             self.catalog.as_deref(),
@@ -256,11 +290,45 @@ impl LinkedDevicesView {
         )
     }
 
+    fn open_card(&mut self, peer_id: PeerId) {
+        self.mark = deck::row_mark(&self.row_bounds, self.selected, self.body_bounds.get());
+        self.closing = None;
+        self.open = Some((peer_id, self.selected));
+        self.selected = 0;
+        self.list.reset();
+        self.step = self.step.wrapping_add(1);
+        self.motion = Some(deck::Motion::Push);
+    }
+
     fn close_card(&mut self) {
         if let Some((_, selected)) = self.open.take() {
             self.selected = selected;
             self.list.selected = selected;
         }
+    }
+
+    fn leave(&mut self, cx: &mut Context<Self>) {
+        let Some((peer_id, _)) = self.open else {
+            return;
+        };
+        self.closing = Some(peer_id);
+        self.close_card();
+        self.step = self.step.wrapping_add(1);
+        self.motion = None;
+        deck::after_transition(cx, |view, cx| {
+            view.closing = None;
+            cx.notify();
+        });
+    }
+
+    fn sliver_click(cx: &mut Context<Self>) -> deck::SliverClick {
+        let view = cx.weak_entity();
+        Rc::new(move |_, _, cx| {
+            let _ = view.update(cx, |view, cx| {
+                view.leave(cx);
+                cx.notify();
+            });
+        })
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -314,11 +382,7 @@ impl LinkedDevicesView {
                     None => self.withheld.push(plugin),
                 }
             }
-            Action::Open(peer_id) => {
-                self.open = Some((peer_id, self.selected));
-                self.selected = 0;
-                self.list.reset();
-            }
+            Action::Open(peer_id) => self.open_card(peer_id),
             Action::Paste => self.paste(cx),
             Action::Copy => {
                 if let Some(Response::Invitation { document, .. }) = &self.invitation {
@@ -331,7 +395,7 @@ impl LinkedDevicesView {
             }
             Action::Send(request) => {
                 if matches!(request, Request::Nearby { .. } | Request::Revoke { .. }) {
-                    self.close_card();
+                    self.leave(cx);
                 }
                 self.work(Some(request), cx)
             }
@@ -449,7 +513,7 @@ impl LinkedDevicesView {
         match escape_step(usize::from(self.open.is_some()), false, true) {
             EscapeStep::CloseFilter => {}
             EscapeStep::PopCard => {
-                self.close_card();
+                self.leave(cx);
                 cx.notify();
             }
             EscapeStep::AscendRail | EscapeStep::Dismiss => {
@@ -516,12 +580,14 @@ impl LinkedDevicesView {
 
     fn render_row(
         &self,
+        card: bool,
         index: usize,
         row: &Row,
         current_group: bool,
         focused: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let [_, row_id, spinner_id, action_id] = ids(card);
         let kit = kit();
         if row.header {
             return SettingsGroupHeader::new(
@@ -539,10 +605,7 @@ impl LinkedDevicesView {
         let busy = selected && self.pending;
         let mut values = settings_value_group();
         if busy && row.control != Control::Chip {
-            values = values.child(settings_action_spinner(
-                ("linked-devices-spinner", index),
-                kit,
-            ));
+            values = values.child(settings_action_spinner((spinner_id, index), kit));
         }
         values = match &row.control {
             _ if editing_name => values.child(settings_value_text(
@@ -557,7 +620,7 @@ impl LinkedDevicesView {
             Control::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
             Control::Chip => values.children(row.verb.map(|verb| {
                 settings_action_affordance(
-                    ("linked-devices-action", index),
+                    (action_id, index),
                     verb,
                     DANGER_VERBS.contains(&verb).then_some("danger"),
                     busy,
@@ -567,7 +630,7 @@ impl LinkedDevicesView {
             })),
             Control::None => values,
         };
-        SettingsRow::setting(("linked-devices-row", index), kit)
+        SettingsRow::setting((row_id, index), kit)
             .selected(selected, focused)
             .on_click(cx.listener(move |view, _, _, cx| {
                 if !matches!(view.editing, Editing::None) {
@@ -586,17 +649,24 @@ impl LinkedDevicesView {
                 kit,
             ))
             .child(values)
+            .children((!card).then(|| deck::bounds_recorder(Rc::clone(&self.row_bounds), index)))
             .into_any_element()
     }
 
-    fn render_list(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_list(
+        &self,
+        card: bool,
+        rows: &[Row],
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let total = rows.len();
         let cursor_group = rows
             .get(..=self.selected.min(total.saturating_sub(1)))
             .and_then(|seen| seen.iter().rposition(|row| row.header));
         let range = self.list.visible_range(total);
         let mut list = settings_list()
-            .id("linked-devices-list")
+            .id(ids(card)[0])
             .on_scroll_wheel(
                 cx.listener(|view: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let steps = wheel_rows(&event.delta, qol_theme::HEIGHT_SETTING_ROW);
@@ -608,6 +678,7 @@ impl LinkedDevicesView {
             );
         for index in range.clone() {
             list = list.child(self.render_row(
+                card,
                 index,
                 &rows[index],
                 cursor_group == Some(index),
@@ -624,6 +695,44 @@ impl LinkedDevicesView {
             kit().grounds.pane,
         ))
         .into_any_element()
+    }
+
+    fn render_page(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> Div {
+        let mut page = settings_page();
+        if let Some((message, danger)) = &self.notice {
+            page = page.child(SettingsFeedback::new(message.clone(), *danger));
+        }
+        page.child(self.render_list(self.open.is_some(), rows, focused, cx))
+    }
+
+    fn render_deck(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> AnyElement {
+        let kit = kit();
+        let width = deck::body_width(self.body_bounds.get());
+        let front = self.render_page(rows, focused, cx);
+        if self.open.is_some() {
+            return deck::shell(deck::render(
+                kit,
+                front,
+                deck::DeckFrame {
+                    depth: CARD_DEPTH,
+                    slide: deck::slide(self.step, self.motion, CARD_DEPTH, width),
+                    closing: None,
+                    animation_id: CARD_ANIMATION,
+                    marks: vec![self.mark],
+                    on_sliver: Some(Self::sliver_click(cx)),
+                },
+            ));
+        }
+        let Some((_, leaving)) = self.closing.and_then(|peer_id| self.card_for(peer_id)) else {
+            return front.into_any_element();
+        };
+        let card = settings_page().child(self.render_list(true, &leaving, false, cx));
+        deck::shell(deck::reveal(
+            kit,
+            front,
+            card,
+            deck::exit(self.step, CARD_DEPTH, width),
+        ))
     }
 }
 
@@ -699,22 +808,39 @@ impl Render for LinkedDevicesView {
         let rows = self.rows();
         self.sync_selection(&rows);
         let loading = self.snapshot.is_none() && (self.pending || self.polling);
-        let mut page = settings_page();
-        if let Some((message, danger)) = &self.notice {
-            page = page.child(SettingsFeedback::new(message.clone(), *danger));
-        }
-        page = if loading {
+        let body = if loading {
+            let mut page = settings_page();
+            if let Some((message, danger)) = &self.notice {
+                page = page.child(SettingsFeedback::new(message.clone(), *danger));
+            }
             page.child(settings_busy_message(
                 "linked-devices-loading",
                 "Reading linking state",
                 kit(),
             ))
+            .into_any_element()
         } else {
-            page.child(self.render_list(&rows, focused, cx))
+            self.render_deck(&rows, focused, cx)
         };
-        page.id("linked-devices-body")
+        div()
+            .id("linked-devices-body")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(deck::body_recorder(Rc::clone(&self.body_bounds)))
+            .child(body)
+    }
+}
+
+fn ids(card: bool) -> [&'static str; 4] {
+    if card {
+        CARD_IDS
+    } else {
+        PAGE_IDS
     }
 }
 

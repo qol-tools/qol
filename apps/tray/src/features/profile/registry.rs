@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde::Serialize;
 use std::path::Path;
 
@@ -15,12 +15,7 @@ pub struct ProfileSummary {
 }
 
 pub fn ensure_profile_dirs_for(name: &str) -> Result<()> {
-    let store = super::ProfileScopeStore::new(
-        paths::profile_dir()?,
-        name.to_string(),
-        paths::current_os_subdir().to_string(),
-    )?;
-    store.ensure_dirs()
+    scope_store(name)?.ensure_dirs()
 }
 
 pub fn load_sync_target() -> Result<Option<SyncTarget>> {
@@ -61,7 +56,7 @@ pub fn profile_summaries() -> Result<Vec<ProfileSummary>> {
     list_profiles()?
         .into_iter()
         .map(|name| {
-            let plugins = count_plugin_configs(&scope_store(&name)?.core_plugin_configs_dir());
+            let plugins = scope_store(&name)?.core_plugin_config_count();
             Ok(ProfileSummary {
                 active: name == active,
                 name,
@@ -71,33 +66,25 @@ pub fn profile_summaries() -> Result<Vec<ProfileSummary>> {
         .collect()
 }
 
-pub fn create_profile(name: &str, from: Option<&str>) -> Result<()> {
+pub fn create_profile_from_active(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("Type a name first.");
+    }
     if !paths::is_safe_path_component(name) {
-        bail!("A profile name uses letters, digits, - and _, and does not start with -");
+        bail!("A profile name uses letters, digits, - and _, and does not start with -.");
     }
     if list_profiles()?.iter().any(|existing| existing == name) {
-        bail!("{name} already exists");
+        bail!("{name} already exists.");
     }
     let target = scope_store(name)?;
     if target.dir().exists() {
-        bail!("{name} is already a folder in the profile directory");
+        bail!("{name} is already a folder in the profile directory.");
     }
-    if let Some(from) = from {
-        let source = scope_store(from)?;
-        if !is_profile_dir(&source.dir()) {
-            bail!("{from} is not a profile");
-        }
-        copy_tree(&source.core_dir(), &target.core_dir())?;
-        copy_tree(
-            &source.dir().join(super::scope_store::OS_SUBDIR),
-            &target.dir().join(super::scope_store::OS_SUBDIR),
-        )?;
-        if source.manifest_path().is_file() {
-            std::fs::copy(source.manifest_path(), target.manifest_path())
-                .with_context(|| format!("copy the manifest of {from}"))?;
-        }
+    let source = scope_store(&paths::active_profile_name())?;
+    if !source.exists() {
+        return target.ensure_dirs();
     }
-    target.ensure_dirs()
+    source.copy_into(&target)
 }
 
 fn scope_store(name: &str) -> Result<super::ProfileScopeStore> {
@@ -109,39 +96,10 @@ fn scope_store(name: &str) -> Result<super::ProfileScopeStore> {
 }
 
 fn is_profile_dir(dir: &Path) -> bool {
-    let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    scope_store(name)
-        .is_ok_and(|store| store.core_dir().is_dir() || store.manifest_path().is_file())
-}
-
-fn count_plugin_configs(dir: &Path) -> usize {
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-fn copy_tree(from: &Path, to: &Path) -> Result<()> {
-    if !from.is_dir() {
-        return Ok(());
-    }
-    for entry in walkdir::WalkDir::new(from) {
-        let entry = entry?;
-        let destination = to.join(entry.path().strip_prefix(from)?);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&destination)?;
-        } else if entry.file_type().is_file() {
-            std::fs::copy(entry.path(), &destination)
-                .with_context(|| format!("copy {}", entry.path().display()))?;
-        }
-    }
-    Ok(())
+    dir.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| scope_store(name).ok())
+        .is_some_and(|store| store.exists())
 }
 
 pub fn switch_active_profile(daemon: &Daemon, name: &str) -> Result<()> {
@@ -173,6 +131,42 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let guard = paths::push_test_path_root(tmp.path());
         (tmp, guard)
+    }
+
+    #[test]
+    fn a_new_profile_starts_as_a_copy_of_the_profile_in_use() {
+        let (_tmp, _guard) = fresh_env();
+        ensure_profile_dirs_for("default").unwrap();
+        let active = scope_store("default").unwrap();
+        std::fs::write(active.core_plugin_configs_dir().join("a.json"), "{}").unwrap();
+        std::fs::create_dir_all(paths::profile_dir().unwrap().join("plugin-configs")).unwrap();
+
+        create_profile_from_active("work").unwrap();
+
+        assert_eq!(
+            profile_summaries().unwrap(),
+            [
+                ProfileSummary {
+                    name: "default".to_string(),
+                    active: true,
+                    plugins: 1,
+                },
+                ProfileSummary {
+                    name: "work".to_string(),
+                    active: false,
+                    plugins: 1,
+                },
+            ]
+        );
+        assert_eq!(
+            create_profile_from_active("work").unwrap_err().to_string(),
+            "work already exists."
+        );
+        assert_eq!(
+            create_profile_from_active("").unwrap_err().to_string(),
+            "Type a name first."
+        );
+        assert!(create_profile_from_active("-work").is_err());
     }
 
     #[test]

@@ -10,8 +10,6 @@ use crate::features::profile::registry;
 #[derive(serde::Deserialize)]
 struct CreateProfileRequest {
     name: String,
-    #[serde(default)]
-    from: Option<String>,
 }
 
 pub(crate) async fn list_profiles() -> Response {
@@ -31,7 +29,7 @@ pub(crate) async fn create_profile(body: Bytes) -> Response {
         Err(response) => return *response,
     };
     let created = tokio::task::spawn_blocking(move || {
-        registry::create_profile(&request.name, request.from.as_deref())
+        registry::create_profile_from_active(&request.name)
             .and_then(|()| registry::profile_summaries())
     })
     .await;

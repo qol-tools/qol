@@ -1,7 +1,7 @@
 use qol_gpui::settings_panel::SettingsValueTone;
 
 use super::super::updates::model::long_age;
-use super::data::{Backup, Health, Profile, SignIn, Snapshot, SyncStatus};
+use super::data::{Backup, GitHubConnect, Health, Profile, Snapshot, SyncStatus};
 
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -12,12 +12,6 @@ pub(super) enum Level {
     Main,
     Profiles,
     Backups,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Busy {
-    Sync,
-    Connect,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,8 +120,7 @@ impl Row {
 
 pub(super) struct Page<'a> {
     pub(super) snapshot: &'a Snapshot,
-    pub(super) sign_in: Option<&'a SignIn>,
-    pub(super) busy: Option<Busy>,
+    pub(super) syncing: bool,
     pub(super) note: Option<&'a str>,
     pub(super) naming: bool,
     pub(super) now_secs: i64,
@@ -160,8 +153,8 @@ pub(super) fn main_rows(page: &Page<'_>) -> Vec<Row> {
         .verb("open"),
     );
     rows.push(Row::header("sync", "keep your profiles on every computer"));
-    rows.push(status_row(sync, page.sign_in, page.busy, page.now_secs));
-    if sync.configured && page.sign_in.is_none() {
+    rows.push(status_row(sync, page.syncing, page.now_secs));
+    if sync.configured {
         let on = sync.pull_on_launch && sync.push_on_change;
         rows.push(
             Row::new(
@@ -291,10 +284,27 @@ pub(super) fn backup_rows(backups: Option<&[Backup]>) -> Vec<Row> {
     rows
 }
 
-fn status_row(sync: &SyncStatus, sign_in: Option<&SignIn>, busy: Option<Busy>, now: i64) -> Row {
-    match busy {
-        Some(Busy::Sync) => return Row::new("Syncing", repo_text(sync), None).spinner(),
-        Some(Busy::Connect) => {
+fn status_row(sync: &SyncStatus, syncing: bool, now: i64) -> Row {
+    if syncing {
+        return Row::new("Syncing", repo_text(sync), None).spinner();
+    }
+    match &sync.github_connect {
+        GitHubConnect::Waiting {
+            user_code,
+            verification_uri,
+        } => {
+            return Row::new(
+                "Waiting for GitHub",
+                format!(
+                    "Enter {user_code} at {}. The code is copied.",
+                    strip_scheme(verification_uri)
+                ),
+                Some(Action::OpenGitHub),
+            )
+            .dot(Dot::Warning)
+            .chip("open github")
+        }
+        GitHubConnect::Connecting => {
             return Row::new(
                 "Connecting to GitHub",
                 "Bringing your profiles to this computer",
@@ -302,28 +312,20 @@ fn status_row(sync: &SyncStatus, sign_in: Option<&SignIn>, busy: Option<Busy>, n
             )
             .spinner()
         }
-        None => {}
-    }
-    if let Some(sign_in) = sign_in {
-        return Row::new(
-            "Waiting for GitHub",
-            format!(
-                "Enter {} at {}. The code is copied.",
-                sign_in.user_code,
-                strip_scheme(&sign_in.verification_uri)
-            ),
-            Some(Action::OpenGitHub),
-        )
-        .dot(Dot::Warning)
-        .chip("open github");
+        GitHubConnect::Idle | GitHubConnect::Failed { .. } => {}
     }
     if !sync.configured {
-        return Row::new(
-            "Not syncing",
-            "Sign in to GitHub to keep this setup on every computer",
-            Some(Action::Connect),
-        )
-        .dot(Dot::Idle)
+        return match &sync.github_connect {
+            GitHubConnect::Failed { message } => {
+                Row::new("Not syncing", message.clone(), Some(Action::Connect)).dot(Dot::Danger)
+            }
+            _ => Row::new(
+                "Not syncing",
+                "Sign in to GitHub to keep this setup on every computer",
+                Some(Action::Connect),
+            )
+            .dot(Dot::Idle),
+        }
         .chip("connect");
     }
     match sync.health {
@@ -456,26 +458,9 @@ fn backup_when(file_name: &str) -> Option<String> {
 fn backup_kind(file_name: &str) -> &'static str {
     if file_name.ends_with("-conflict.json") {
         "Saved when both sides had changes"
-    } else if file_name.ends_with("-remote-applied.json") {
-        "Saved before GitHub's setup was applied"
     } else {
         "Saved before sync replaced it"
     }
-}
-
-pub(super) fn valid_name(name: &str, profiles: &[Profile]) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("Type a name first.".to_string());
-    }
-    if !crate::paths::is_safe_path_component(name) {
-        return Err(
-            "A profile name uses letters, digits, - and _, and does not start with -.".to_string(),
-        );
-    }
-    if profiles.iter().any(|profile| profile.name == name) {
-        return Err(format!("{name} already exists."));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -505,6 +490,7 @@ mod tests {
             last_error: None,
             backup_count: 9,
             latest_backup_file: Some("20260811-103430-conflict.json".to_string()),
+            github_connect: GitHubConnect::Idle,
         }
     }
 
@@ -525,8 +511,7 @@ mod tests {
     fn page(snapshot: &Snapshot) -> Page<'_> {
         Page {
             snapshot,
-            sign_in: None,
-            busy: None,
+            syncing: false,
             note: None,
             naming: false,
             now_secs: chrono::DateTime::parse_from_rfc3339("2026-10-05T10:04:00+00:00")
@@ -597,22 +582,35 @@ mod tests {
 
     #[test]
     fn a_pending_sign_in_shows_the_code_and_opens_github() {
-        let snapshot = snapshot(false);
-        let sign_in = SignIn {
-            session_id: "s".to_string(),
+        let mut snapshot = snapshot(false);
+        snapshot.sync.github_connect = GitHubConnect::Waiting {
             user_code: "WDJB-MJHT".to_string(),
             verification_uri: "https://github.com/login/device".to_string(),
-            interval: 5,
         };
-        let mut page = page(&snapshot);
-        page.sign_in = Some(&sign_in);
-        let rows = main_rows(&page);
+        let rows = main_rows(&page(&snapshot));
         assert_eq!(rows[3].label, "Waiting for GitHub");
         assert_eq!(
             rows[3].detail,
             "Enter WDJB-MJHT at github.com/login/device. The code is copied."
         );
         assert_eq!(rows[3].action, Some(Action::OpenGitHub));
+        snapshot.sync.github_connect = GitHubConnect::Connecting;
+        let rows = main_rows(&page(&snapshot));
+        assert_eq!(rows[3].label, "Connecting to GitHub");
+        assert!(rows[3].spinner);
+    }
+
+    #[test]
+    fn a_failed_sign_in_says_why_and_offers_connect_again() {
+        let mut snapshot = snapshot(false);
+        snapshot.sync.github_connect = GitHubConnect::Failed {
+            message: "The code expired.".to_string(),
+        };
+        let rows = main_rows(&page(&snapshot));
+        assert_eq!(rows[3].label, "Not syncing");
+        assert_eq!(rows[3].detail, "The code expired.");
+        assert_eq!(rows[3].dot, Some(Dot::Danger));
+        assert_eq!(rows[3].action, Some(Action::Connect));
     }
 
     #[test]
@@ -674,7 +672,7 @@ mod tests {
                 size_bytes: 97_280,
             },
             Backup {
-                file_name: "20260426-075742-remote-applied.json".to_string(),
+                file_name: "20260426-075742-pushed.json".to_string(),
                 size_bytes: 7_900,
             },
         ]));
@@ -683,25 +681,12 @@ mod tests {
             ["backups", "11 Aug 2026, 10:34", "26 Apr 2026, 07:57"]
         );
         assert_eq!(rows[1].detail, "Saved when both sides had changes");
-        assert_eq!(rows[2].detail, "Saved before GitHub's setup was applied");
+        assert_eq!(rows[2].detail, "Saved before sync replaced it");
         assert_eq!(
             rows[1].action,
             Some(Action::OpenBackup(
                 "20260811-103430-conflict.json".to_string()
             ))
         );
-    }
-
-    #[test]
-    fn names_must_be_new_and_safe() {
-        let profiles = vec![profile("default", true, 0)];
-        assert!(valid_name("home", &profiles).is_ok());
-        assert_eq!(valid_name("", &profiles).unwrap_err(), "Type a name first.");
-        assert_eq!(
-            valid_name("default", &profiles).unwrap_err(),
-            "default already exists."
-        );
-        assert!(valid_name("my home", &profiles).is_err());
-        assert!(valid_name("-home", &profiles).is_err());
     }
 }

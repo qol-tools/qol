@@ -129,13 +129,18 @@ items = []
             panic!("poison the plugin manager mutex");
         }));
 
+        let sync_service = Arc::new(
+            crate::features::profile::sync::SyncService::new(plugins_dir.clone()).unwrap(),
+        );
         let state = super::super::ProfileHttpState {
             plugins_dir: plugins_dir.clone(),
             plugin_manager: manager,
             daemon: crate::daemon::Daemon::new(),
-            sync_service: Arc::new(
-                crate::features::profile::sync::SyncService::new(plugins_dir.clone()).unwrap(),
-            ),
+            github_connect: Arc::new(crate::features::profile::sync::GitHubConnect::new(
+                Arc::new(crate::features::github_auth::GitHubAuthService::new()),
+                sync_service.clone(),
+            )),
+            sync_service,
         };
 
         let exported = export_plugins(&state);

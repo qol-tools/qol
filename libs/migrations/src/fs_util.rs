@@ -17,7 +17,7 @@ pub(crate) fn move_into_archive(src: &Path, archive_dir: &Path) -> Result<PathBu
         Ok(()) => Ok(dst),
         Err(_) => {
             if src.is_dir() {
-                copy_dir_all(src, &dst).context("copying dir to archive")?;
+                qol_fs::copy_dir_all(src, &dst).context("copying dir to archive")?;
                 std::fs::remove_dir_all(src).context("removing source dir after archive copy")?;
             } else {
                 std::fs::copy(src, &dst).context("copying file to archive")?;
@@ -39,27 +39,6 @@ fn ensure_tree_has_no_symlink(path: &Path) -> Result<()> {
     }
     for entry in std::fs::read_dir(path)? {
         ensure_tree_has_no_symlink(&entry?.path())?;
-    }
-    Ok(())
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let dst_path = dst.join(entry.file_name());
-        if ty.is_symlink() {
-            anyhow::bail!(
-                "refusing to archive symlink during migration: {}",
-                entry.path().display()
-            );
-        }
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst_path)?;
-        } else {
-            std::fs::copy(entry.path(), dst_path)?;
-        }
     }
     Ok(())
 }

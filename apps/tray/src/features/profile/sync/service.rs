@@ -206,6 +206,16 @@ impl SyncService {
         .context("join sync dirty-check")?
     }
 
+    pub async fn sync_now(&self) -> Result<SyncActionResult> {
+        let pulled = self.manual_pull().await?;
+        if !self.snapshot_state().conflicts.is_empty() {
+            return Ok(pulled);
+        }
+        let mut pushed = self.manual_push().await?;
+        pushed.applied_remote |= pulled.applied_remote;
+        Ok(pushed)
+    }
+
     pub fn set_auto_sync(&self, on: bool) -> Result<SyncStatus> {
         let toggles = SyncToggles {
             pull_on_launch: on,
@@ -595,6 +605,10 @@ fn trace_path_kind(path: &Path) -> &'static str {
         return "file";
     }
     "other"
+}
+
+pub(crate) fn has_github_access() -> bool {
+    require_github_token().is_ok()
 }
 
 fn require_github_token() -> Result<String> {

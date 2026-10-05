@@ -1,3 +1,7 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use gpui::*;
 
 use crate::kit::Kit;
@@ -17,6 +21,8 @@ pub struct Slide {
 }
 
 pub type SliverClick = std::rc::Rc<dyn Fn(usize, &mut Window, &mut App)>;
+pub type RowBounds = Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>;
+pub type BodyBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 pub struct DeckFrame {
     pub depth: usize,
@@ -302,6 +308,46 @@ pub fn render(kit: Kit, card: Div, frame: DeckFrame) -> Div {
         )
         .child(front)
         .children(leaving)
+}
+
+pub fn bounds_recorder(store: RowBounds, index: usize) -> AnyElement {
+    canvas(
+        move |bounds, _, _| {
+            store.borrow_mut().insert(index, bounds);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
+    .into_any_element()
+}
+
+pub fn body_recorder(store: BodyBounds) -> impl IntoElement {
+    canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
+        .absolute()
+        .inset_0()
+}
+
+pub fn body_width(body: Option<Bounds<Pixels>>) -> f32 {
+    body.map(|bounds| bounds.size.width.to_f64() as f32)
+        .unwrap_or(0.0)
+}
+
+pub fn row_mark(rows: &RowBounds, index: usize, body: Option<Bounds<Pixels>>) -> Option<f32> {
+    let row = rows.borrow().get(&index).copied()?;
+    let body = body?;
+    Some((row.origin.y + row.size.height / 2.0 - body.origin.y).to_f64() as f32)
+}
+
+pub fn shell(deck: Div) -> AnyElement {
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_row()
+        .items_start()
+        .child(deck)
+        .into_any_element()
 }
 
 #[cfg(test)]

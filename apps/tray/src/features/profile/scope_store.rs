@@ -253,6 +253,38 @@ impl ProfileScopeStore {
         Ok(())
     }
 
+    pub fn exists(&self) -> bool {
+        self.core_dir().is_dir() || self.manifest_path().is_file()
+    }
+
+    pub fn core_plugin_config_count(&self) -> usize {
+        std::fs::read_dir(self.core_plugin_configs_dir())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn copy_into(&self, target: &Self) -> Result<()> {
+        for (from, to) in [
+            (self.core_dir(), target.core_dir()),
+            (self.dir().join(OS_SUBDIR), target.dir().join(OS_SUBDIR)),
+        ] {
+            if from.is_dir() {
+                qol_fs::copy_dir_all(&from, &to)
+                    .map_err(|e| anyhow!("copy {} to {}: {e}", from.display(), to.display()))?;
+            }
+        }
+        if self.manifest_path().is_file() {
+            std::fs::copy(self.manifest_path(), target.manifest_path())
+                .map_err(|e| anyhow!("copy the manifest of {}: {e}", self.profile_name))?;
+        }
+        target.ensure_dirs()
+    }
+
     pub fn is_sync_allowlisted(rel: &Path) -> bool {
         qol_profile_sync::is_sync_allowlisted(rel)
     }
@@ -284,6 +316,32 @@ mod tests {
             ProfileScopeStore::new(tmp.path().to_path_buf(), name.to_string(), os.to_string())
                 .unwrap();
         (tmp, store)
+    }
+
+    #[test]
+    fn copy_into_carries_core_os_and_manifest_and_leaves_device_behind() {
+        let (_tmp, source) = store("default", "linux");
+        source.ensure_dirs().unwrap();
+        std::fs::write(source.core_plugin_configs_dir().join("a.json"), "{}").unwrap();
+        std::fs::write(source.core_plugin_configs_dir().join("b.json"), "{}").unwrap();
+        std::fs::write(source.os_dir().join("hotkeys.json"), "{}").unwrap();
+        std::fs::write(source.device_dir().join("local.json"), "{}").unwrap();
+        std::fs::write(source.manifest_path(), "{}").unwrap();
+        let target = ProfileScopeStore::new(
+            source.profile_root().to_path_buf(),
+            "work".to_string(),
+            "linux".to_string(),
+        )
+        .unwrap();
+        assert!(!target.exists());
+
+        source.copy_into(&target).unwrap();
+
+        assert!(target.exists());
+        assert_eq!(target.core_plugin_config_count(), 2);
+        assert!(target.os_dir().join("hotkeys.json").is_file());
+        assert!(target.manifest_path().is_file());
+        assert!(!target.device_dir().join("local.json").exists());
     }
 
     #[test]

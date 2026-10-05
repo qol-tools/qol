@@ -1,3 +1,6 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::prelude::*;
@@ -5,6 +8,7 @@ use gpui::{
     div, px, AnyElement, App, AsyncApp, ClipboardItem, Context, Div, FocusHandle, Focusable,
     KeyDownEvent, PathPromptOptions, Render, ScrollWheelEvent, WeakEntity, Window,
 };
+use qol_gpui::deck;
 use qol_gpui::key::Key;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::pictures::PictureContext;
@@ -23,12 +27,14 @@ use qol_gpui::settings_panel::{
 };
 use qol_gpui::text_edit::{self, TextField};
 
-use super::data::{self, Backup, SignIn, SignInState, Snapshot};
-use super::model::{self, Action, Busy, Dot, Level, Page, Row, Value};
+use super::data::{self, Backup, GitHubConnect, Snapshot};
+use super::model::{self, Action, Dot, Level, Page, Row, Value};
 
 const MAX_VISIBLE: usize = 10;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_NAME_BYTES: usize = 64;
+const CARD_DEPTH: usize = 1;
+const CARD_ANIMATION: &str = "profiles-card-slide";
 
 pub(super) struct ProfilesView {
     focus: FocusHandle,
@@ -38,8 +44,13 @@ pub(super) struct ProfilesView {
     backups: Option<Vec<Backup>>,
     level: Level,
     return_to: usize,
-    sign_in: Option<SignIn>,
-    busy: Option<Busy>,
+    closing: Option<Level>,
+    step: usize,
+    motion: Option<deck::Motion>,
+    mark: Option<f32>,
+    body_bounds: deck::BodyBounds,
+    row_bounds: deck::RowBounds,
+    syncing: bool,
     pending: bool,
     note: Option<String>,
     naming: bool,
@@ -64,8 +75,13 @@ impl ProfilesView {
             backups: None,
             level: Level::Main,
             return_to: 1,
-            sign_in: None,
-            busy: None,
+            closing: None,
+            step: 0,
+            motion: None,
+            mark: None,
+            body_bounds: Rc::new(Cell::new(None)),
+            row_bounds: Rc::new(RefCell::new(HashMap::new())),
+            syncing: false,
             pending: false,
             note: None,
             naming: false,
@@ -78,18 +94,21 @@ impl ProfilesView {
     }
 
     fn rows(&self) -> Vec<Row> {
+        self.rows_for(self.level)
+    }
+
+    fn rows_for(&self, level: Level) -> Vec<Row> {
         let Some(snapshot) = &self.snapshot else {
             return Vec::new();
         };
         let page = Page {
             snapshot,
-            sign_in: self.sign_in.as_ref(),
-            busy: self.busy,
+            syncing: self.syncing,
             note: self.note.as_deref(),
             naming: self.naming,
             now_secs: chrono::Utc::now().timestamp(),
         };
-        match self.level {
+        match level {
             Level::Main => model::main_rows(&page),
             Level::Profiles => model::profile_rows(&page),
             Level::Backups => model::backup_rows(self.backups.as_deref()),
@@ -155,7 +174,7 @@ impl ProfilesView {
                 let snapshot = cx.background_spawn(async { data::load() }).await;
                 let _ = this.update(&mut cx, |view, cx| {
                     view.pending = false;
-                    view.busy = None;
+                    view.syncing = false;
                     if let Ok(snapshot) = snapshot {
                         view.snapshot = Some(snapshot);
                     }
@@ -189,18 +208,42 @@ impl ProfilesView {
     fn enter(&mut self, level: Level, selected: usize) {
         if self.level == Level::Main {
             self.return_to = self.selected;
+            self.mark = deck::row_mark(&self.row_bounds, self.selected, self.body_bounds.get());
         }
+        self.closing = None;
         self.level = level;
         self.selected = selected;
         self.list.reset();
+        self.step = self.step.wrapping_add(1);
+        self.motion = Some(deck::Motion::Push);
     }
 
-    fn leave(&mut self) {
+    fn leave(&mut self, cx: &mut Context<Self>) {
+        if self.level == Level::Main {
+            return;
+        }
+        self.closing = Some(self.level);
         self.level = Level::Main;
         self.naming = false;
         self.field.clear();
         self.selected = self.return_to;
         self.list.reset();
+        self.step = self.step.wrapping_add(1);
+        self.motion = None;
+        deck::after_transition(cx, |view, cx| {
+            view.closing = None;
+            cx.notify();
+        });
+    }
+
+    fn sliver_click(cx: &mut Context<Self>) -> deck::SliverClick {
+        let view = cx.weak_entity();
+        Rc::new(move |_, _, cx| {
+            let _ = view.update(cx, |view, cx| {
+                view.leave(cx);
+                cx.notify();
+            });
+        })
     }
 
     fn activate(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
@@ -223,9 +266,9 @@ impl ProfilesView {
                 let target = name.clone();
                 self.run(
                     move || data::use_profile(&target),
-                    move |view, (), _| {
+                    move |view, (), cx| {
                         view.note = Some(format!("Switched from {was} just now"));
-                        view.leave();
+                        view.leave(cx);
                         view.selected = 1;
                     },
                     cx,
@@ -233,14 +276,29 @@ impl ProfilesView {
             }
             Action::NewProfile => self.new_profile(cx),
             Action::Sync => {
-                self.busy = Some(Busy::Sync);
+                self.syncing = true;
                 self.run(data::sync_now, |_, (), _| {}, cx);
             }
-            Action::Connect => self.connect(cx),
+            Action::Connect => self.run(
+                data::connect_github,
+                |_, connect, cx| {
+                    if let GitHubConnect::Waiting { user_code, .. } = connect {
+                        cx.write_to_clipboard(ClipboardItem::new_string(user_code));
+                    }
+                },
+                cx,
+            ),
             Action::OpenGitHub => {
-                if let Some(sign_in) = &self.sign_in {
-                    cx.write_to_clipboard(ClipboardItem::new_string(sign_in.user_code.clone()));
-                    let uri = sign_in.verification_uri.clone();
+                if let Some(GitHubConnect::Waiting {
+                    user_code,
+                    verification_uri,
+                }) = self
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.sync.github_connect)
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(user_code.clone()));
+                    let uri = verification_uri.clone();
                     cx.background_spawn(async move { crate::paths::open_url(&uri) })
                         .detach();
                 }
@@ -283,17 +341,9 @@ impl ProfilesView {
             return;
         }
         let name = self.field.text().trim().to_owned();
-        let Some(snapshot) = &self.snapshot else {
-            return;
-        };
-        if let Err(message) = model::valid_name(&name, &snapshot.profiles) {
-            self.tell(CustomPanelNoticeTone::Failure, message, cx);
-            return;
-        }
-        let from = self.active_name().unwrap_or_else(|| "default".to_string());
         let created = name.clone();
         self.run(
-            move || data::create_profile(&name, &from),
+            move || data::create_profile(&name),
             move |view, (), cx| {
                 view.naming = false;
                 view.field.clear();
@@ -313,80 +363,6 @@ impl ProfilesView {
             },
             cx,
         );
-    }
-
-    fn connect(&mut self, cx: &mut Context<Self>) {
-        let has_token = self
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.sync.has_github_token);
-        if has_token {
-            self.busy = Some(Busy::Connect);
-            self.run(data::connect, |_, (), _| {}, cx);
-            return;
-        }
-        self.run(
-            data::start_sign_in,
-            |view, sign_in, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(sign_in.user_code.clone()));
-                let session = sign_in.session_id.clone();
-                let interval = Duration::from_secs(sign_in.interval.max(1));
-                view.sign_in = Some(sign_in);
-                view.watch_sign_in(session, interval, cx);
-            },
-            cx,
-        );
-    }
-
-    fn watch_sign_in(&mut self, session: String, interval: Duration, cx: &mut Context<Self>) {
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut cx = cx.clone();
-            async move {
-                loop {
-                    cx.background_executor().timer(interval).await;
-                    let watching = this
-                        .update(&mut cx, |view, _| {
-                            view.sign_in
-                                .as_ref()
-                                .is_some_and(|sign_in| sign_in.session_id == session)
-                        })
-                        .unwrap_or(false);
-                    if !watching {
-                        break;
-                    }
-                    let id = session.clone();
-                    let poll = cx
-                        .background_spawn(async move { data::poll_sign_in(&id) })
-                        .await;
-                    let state = match &poll {
-                        Ok(poll) => poll.state,
-                        Err(_) => continue,
-                    };
-                    if state == SignInState::Pending {
-                        continue;
-                    }
-                    let error = poll.ok().and_then(|poll| poll.error);
-                    let _ = this.update(&mut cx, |view, cx| {
-                        view.sign_in = None;
-                        if state == SignInState::Authorized {
-                            view.busy = Some(Busy::Connect);
-                            view.run(data::connect, |_, (), _| {}, cx);
-                        } else {
-                            view.tell(
-                                CustomPanelNoticeTone::Failure,
-                                error.unwrap_or_else(|| {
-                                    "GitHub did not accept the sign-in.".to_string()
-                                }),
-                                cx,
-                            );
-                        }
-                        cx.notify();
-                    });
-                    break;
-                }
-            }
-        })
-        .detach();
     }
 
     fn export(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -487,7 +463,7 @@ impl ProfilesView {
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match escape_step(usize::from(self.level != Level::Main), false, true) {
             EscapeStep::CloseFilter => {}
-            EscapeStep::PopCard => self.leave(),
+            EscapeStep::PopCard => self.leave(cx),
             EscapeStep::AscendRail | EscapeStep::Dismiss => (self.on_back)(window, cx),
         }
         cx.notify();
@@ -645,6 +621,7 @@ impl ProfilesView {
 
     fn render_row(
         &self,
+        level: Level,
         index: usize,
         row: &Row,
         current_group: bool,
@@ -664,7 +641,7 @@ impl ProfilesView {
         let selected = self.selected == index;
         let ground = RowGround::of(selected, focused);
         let action = row.action.clone();
-        SettingsRow::setting(("profiles-row", index), kit)
+        SettingsRow::setting((row_id(level), index), kit)
             .selected(selected, focused)
             .on_click(cx.listener(move |view, _, window, cx| {
                 if view.naming && action != Some(Action::NewProfile) {
@@ -678,17 +655,27 @@ impl ProfilesView {
             }))
             .child(self.render_label(index, row, ground, kit))
             .child(self.render_values(index, row, selected, ground, kit))
+            .children(
+                (level == Level::Main)
+                    .then(|| deck::bounds_recorder(Rc::clone(&self.row_bounds), index)),
+            )
             .into_any_element()
     }
 
-    fn render_list(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_list(
+        &self,
+        level: Level,
+        rows: &[Row],
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let total = rows.len();
         let cursor_group = rows
             .get(..=self.selected.min(total.saturating_sub(1)))
             .and_then(|seen| seen.iter().rposition(|row| row.header));
         let range = self.list.visible_range(total);
         let mut list = settings_list()
-            .id("profiles-list")
+            .id(list_id(level))
             .on_scroll_wheel(
                 cx.listener(|view: &mut Self, event: &ScrollWheelEvent, _, cx| {
                     let steps = wheel_rows(&event.delta, qol_theme::HEIGHT_SETTING_ROW);
@@ -700,6 +687,7 @@ impl ProfilesView {
             );
         for index in range.clone() {
             list = list.child(self.render_row(
+                level,
                 index,
                 &rows[index],
                 cursor_group == Some(index),
@@ -716,6 +704,36 @@ impl ProfilesView {
             kit().grounds.pane,
         ))
         .into_any_element()
+    }
+
+    fn render_deck(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> AnyElement {
+        let kit = kit();
+        let width = deck::body_width(self.body_bounds.get());
+        let page = self.render_list(self.level, rows, focused, cx);
+        if self.level != Level::Main {
+            return deck::shell(deck::render(
+                kit,
+                settings_page().child(page),
+                deck::DeckFrame {
+                    depth: CARD_DEPTH,
+                    slide: deck::slide(self.step, self.motion, CARD_DEPTH, width),
+                    closing: None,
+                    animation_id: CARD_ANIMATION,
+                    marks: vec![self.mark],
+                    on_sliver: Some(Self::sliver_click(cx)),
+                },
+            ));
+        }
+        let Some(leaving) = self.closing else {
+            return settings_page().child(page).into_any_element();
+        };
+        let card = self.render_list(leaving, &self.rows_for(leaving), false, cx);
+        deck::shell(deck::reveal(
+            kit,
+            settings_page().child(page),
+            settings_page().child(card),
+            deck::exit(self.step, CARD_DEPTH, width),
+        ))
     }
 }
 
@@ -765,19 +783,28 @@ impl Render for ProfilesView {
         let focused = self.focus.is_focused(window);
         let rows = self.rows();
         self.sync_selection(&rows);
-        let page = settings_page();
-        let page = if self.snapshot.is_none() {
-            page.child(settings_busy_message(
-                "profiles-loading",
-                "Reading your profiles",
-                kit(),
-            ))
+        let body = if self.snapshot.is_none() {
+            settings_page()
+                .child(settings_busy_message(
+                    "profiles-loading",
+                    "Reading your profiles",
+                    kit(),
+                ))
+                .into_any_element()
         } else {
-            page.child(self.render_list(&rows, focused, cx))
+            self.render_deck(&rows, focused, cx)
         };
-        page.id("profiles-body")
+        div()
+            .id("profiles-body")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(deck::body_recorder(Rc::clone(&self.body_bounds)))
+            .child(body)
     }
 }
 
@@ -789,4 +816,20 @@ fn status_dot(dot: Dot, kit: Kit) -> Div {
         Dot::Danger => (kit.palette.danger, kit.washes.halo_invalid.packed()),
     };
     kit.status_dot(tone, halo)
+}
+
+fn list_id(level: Level) -> &'static str {
+    match level {
+        Level::Main => "profiles-list",
+        Level::Profiles => "profiles-card-list",
+        Level::Backups => "backups-card-list",
+    }
+}
+
+fn row_id(level: Level) -> &'static str {
+    match level {
+        Level::Main => "profiles-row",
+        Level::Profiles => "profiles-card-row",
+        Level::Backups => "backups-card-row",
+    }
 }

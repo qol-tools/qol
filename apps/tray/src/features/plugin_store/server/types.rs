@@ -41,6 +41,7 @@ pub(super) struct AppState {
     pub(super) shutdown_tx: broadcast::Sender<()>,
     pub(super) github_auth_service: Arc<crate::features::github_auth::GitHubAuthService>,
     pub(super) sync_service: Arc<crate::features::profile::sync::SyncService>,
+    pub(super) github_connect: Arc<crate::features::profile::sync::GitHubConnect>,
     pub(super) installed_cache: InstalledCache,
     pub(super) plugins_cache: Arc<RwLock<Option<PluginCache>>>,
     pub(super) plugins_revalidating: Arc<AtomicBool>,
@@ -77,6 +78,10 @@ impl AppState {
         >,
     ) -> anyhow::Result<(Self, PathBuf)> {
         let plugins_dir = PluginLoader::default_plugin_dir()?;
+        let github_connect = Arc::new(crate::features::profile::sync::GitHubConnect::new(
+            github_auth_service.clone(),
+            sync_service.clone(),
+        ));
         let state = Self {
             plugins_dir: plugins_dir.clone(),
             #[cfg(feature = "dev")]
@@ -86,6 +91,7 @@ impl AppState {
             shutdown_tx,
             github_auth_service,
             sync_service,
+            github_connect,
             #[cfg(feature = "dev")]
             daemon_health,
             installed_cache: Arc::new(Mutex::new(None)),
@@ -120,6 +126,7 @@ impl FromRef<AppState> for crate::features::profile::http::ProfileHttpState {
             plugin_manager: state.plugin_manager.clone(),
             daemon: state.daemon.clone(),
             sync_service: state.sync_service.clone(),
+            github_connect: state.github_connect.clone(),
         }
     }
 }
