@@ -841,6 +841,11 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
             "Linked devices",
             qol_theme::Mark::LinkedDevices,
         ),
+        (
+            super::super::CoreTool::Profiles,
+            "Profiles",
+            qol_theme::Mark::Profiles,
+        ),
     ] {
         sources.push(PanelSource {
             plugin_id: tool.wire_id().to_string(),

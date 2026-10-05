@@ -1,4 +1,5 @@
 mod import_export;
+mod profiles;
 mod sync;
 
 use axum::{
@@ -31,6 +32,9 @@ where
     Router::new()
         .route("/config/export", get(import_export::export_config))
         .route("/config/import", post(import_export::import_config))
+        .route("/profiles", get(profiles::list_profiles))
+        .route("/profiles", post(profiles::create_profile))
+        .route("/sync/auto", post(sync::set_auto_sync))
         .route("/sync/providers", get(sync::get_sync_providers))
         .route("/sync/status", get(sync::get_sync_status))
         .route("/sync/github/bootstrap", post(sync::bootstrap_sync_github))

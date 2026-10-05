@@ -1,6 +1,7 @@
 mod data;
 mod linked_devices;
 mod model;
+mod profiles;
 mod updates;
 mod view;
 
@@ -28,6 +29,10 @@ pub(super) fn factories(target: CoreTool) -> Vec<(String, CustomPanelFactory)> {
         (
             CoreTool::LinkedDevices.wire_id().to_string(),
             linked_devices::factory(),
+        ),
+        (
+            CoreTool::Profiles.wire_id().to_string(),
+            profiles::factory(),
         ),
     ]
 }

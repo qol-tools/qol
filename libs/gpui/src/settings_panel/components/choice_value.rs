@@ -56,6 +56,7 @@ pub struct SettingsChoiceValue {
     context: PictureContext,
     kit: Kit,
     word_color: Option<u32>,
+    chevron: bool,
 }
 
 impl SettingsChoiceValue {
@@ -73,7 +74,13 @@ impl SettingsChoiceValue {
             context,
             kit,
             word_color: None,
+            chevron: true,
         }
+    }
+
+    pub fn chevron(mut self, chevron: bool) -> Self {
+        self.chevron = chevron;
+        self
     }
 
     pub fn word_color(mut self, color: Option<u32>) -> Self {
@@ -91,6 +98,7 @@ impl RenderOnce for SettingsChoiceValue {
             context,
             kit,
             word_color,
+            chevron,
         } = self;
         let font = window.text_style().font();
         let text = crate::text::truncate_to_width(
@@ -161,28 +169,6 @@ impl RenderOnce for SettingsChoiceValue {
         } else {
             art_box.children(art_image(Tone::Awake))
         };
-        let chevron = pictures::chevron(
-            tones.chevron,
-            (CHOICE_CHEVRON_WIDTH * scale).round() as u32,
-            (CHOICE_CHEVRON_HEIGHT * scale).round() as u32,
-        )
-        .map(|image| {
-            img(image)
-                .w(px(CHOICE_CHEVRON_WIDTH))
-                .h(px(CHOICE_CHEVRON_HEIGHT))
-        });
-        let arrow = div()
-            .flex_none()
-            .w(px(CHOICE_CHEVRON_WIDTH))
-            .h(px(CHOICE_CHEVRON_HEIGHT))
-            .children(chevron);
-        let arrow = if tones.wakes_on_hover {
-            arrow
-                .opacity(tones.chevron_opacity)
-                .group_hover(SETTINGS_ROW_GROUP, |style| style.opacity(1.0))
-        } else {
-            arrow
-        };
         let word = div()
             .flex_none()
             .max_w(px(CHOICE_WORD_MAX_WIDTH))
@@ -199,7 +185,48 @@ impl RenderOnce for SettingsChoiceValue {
             .gap(px(qol_theme::SPACE_CELL))
             .child(word.child(text))
             .child(art_box)
-            .child(arrow)
+            .children(chevron.then(|| SettingsChevron::new(row, kit)))
+    }
+}
+
+#[derive(IntoElement)]
+pub struct SettingsChevron {
+    row: RowGround,
+    kit: Kit,
+}
+
+impl SettingsChevron {
+    pub fn new(row: RowGround, kit: Kit) -> Self {
+        Self { row, kit }
+    }
+}
+
+impl RenderOnce for SettingsChevron {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let tones = choice_tones(self.row, self.kit);
+        let scale = window.scale_factor();
+        let chevron = pictures::chevron(
+            tones.chevron,
+            (CHOICE_CHEVRON_WIDTH * scale).round() as u32,
+            (CHOICE_CHEVRON_HEIGHT * scale).round() as u32,
+        )
+        .map(|image| {
+            img(image)
+                .w(px(CHOICE_CHEVRON_WIDTH))
+                .h(px(CHOICE_CHEVRON_HEIGHT))
+        });
+        let arrow = div()
+            .flex_none()
+            .w(px(CHOICE_CHEVRON_WIDTH))
+            .h(px(CHOICE_CHEVRON_HEIGHT))
+            .children(chevron);
+        if tones.wakes_on_hover {
+            arrow
+                .opacity(tones.chevron_opacity)
+                .group_hover(SETTINGS_ROW_GROUP, |style| style.opacity(1.0))
+        } else {
+            arrow
+        }
     }
 }
 

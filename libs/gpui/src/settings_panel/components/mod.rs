@@ -22,7 +22,7 @@ mod text_field;
 mod tile;
 mod toggle;
 
-pub use choice_value::{ChoiceArt, SettingsChoiceValue};
+pub use choice_value::{ChoiceArt, SettingsChevron, SettingsChoiceValue};
 pub use display_layout_tile::{
     display_layout_ghost, display_layout_stage, display_layout_tile, display_layout_tile_style,
     DisplayLayoutTile, DisplayLayoutTileStyle,

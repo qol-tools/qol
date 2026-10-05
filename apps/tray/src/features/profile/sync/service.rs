@@ -206,6 +206,16 @@ impl SyncService {
         .context("join sync dirty-check")?
     }
 
+    pub fn set_auto_sync(&self, on: bool) -> Result<SyncStatus> {
+        let toggles = SyncToggles {
+            pull_on_launch: on,
+            push_on_change: on,
+        };
+        save_toggles(&sync_paths()?, toggles)?;
+        *self.toggles_mut() = toggles;
+        Ok(self.status())
+    }
+
     pub fn list_conflicts(&self) -> Vec<ResolvableConflict> {
         self.snapshot_state().conflicts
     }

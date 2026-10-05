@@ -187,6 +187,7 @@ pub(crate) fn core_tool_for_action(action_id: &str) -> Option<crate::settings_su
         "hotkeys-add" => Some(CoreTool::AddHotkey),
         "updates" => Some(CoreTool::Updates),
         "linked-devices" => Some(CoreTool::LinkedDevices),
+        "profiles" => Some(CoreTool::Profiles),
         _ => None,
     }
 }

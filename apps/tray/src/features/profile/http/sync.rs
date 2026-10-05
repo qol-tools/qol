@@ -17,6 +17,29 @@ pub(crate) async fn get_sync_status(State(state): State<super::ProfileHttpState>
     }
 }
 
+#[derive(serde::Deserialize)]
+struct AutoSyncRequest {
+    on: bool,
+}
+
+pub(crate) async fn set_auto_sync(
+    State(state): State<super::ProfileHttpState>,
+    body: Bytes,
+) -> Response {
+    let request = match super::parse_json_body::<AutoSyncRequest>(body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    match tokio::task::spawn_blocking(move || state.sync_service.set_auto_sync(request.on)).await {
+        Ok(Ok(status)) => Json(status).into_response(),
+        Ok(Err(error)) => sync_error_response(error),
+        Err(error) => {
+            log::error!("set_auto_sync join error: {}", error);
+            (StatusCode::INTERNAL_SERVER_ERROR, "auto sync join error").into_response()
+        }
+    }
+}
+
 pub(crate) async fn get_sync_providers(
     State(_state): State<super::ProfileHttpState>,
 ) -> impl IntoResponse {
