@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import importlib.util
 import os
 import subprocess
@@ -109,18 +110,23 @@ class PluginDirTests(unittest.TestCase):
         files.mkdir()
         (files / "qol-shot-linux-x86_64").write_bytes(b"binary")
         release = pa.release_content("qol-shot-v1.0.0", "HEAD", files)
+        tree = gzip.compress(pa.tree_tar(release))
         same = published_manifest(release)
         other_binary = published_manifest({**release, "assets": {"qol-shot-linux-x86_64": "sha256:x"}})
         other_revision = published_manifest({**release, "revision": "0" * 40})
+        extra_tree = {**same, "layers": [*same["layers"], same["layers"][0]]}
         cases = [
-            ("absent", None, 0, 1),
-            ("same release", same, 0, 0),
-            ("other binary", other_binary, 1, 0),
-            ("other revision", other_revision, 1, 0),
+            ("absent", None, tree, 0, 1),
+            ("same release", same, tree, 0, 0),
+            ("same release, other gzip", same, gzip.compress(pa.tree_tar(release), 1), 0, 0),
+            ("other tree", same, gzip.compress(b"swapped scripts"), 1, 0),
+            ("second tree layer", extra_tree, tree, 1, 0),
+            ("other binary", other_binary, tree, 1, 0),
+            ("other revision", other_revision, tree, 1, 0),
         ]
-        for label, published, status, pushes in cases:
+        for label, published, served_tree, status, pushes in cases:
             with self.subTest(label):
-                registry = FakeRegistry(published)
+                registry = FakeRegistry(published, served_tree)
                 original = pa.Registry
                 pa.Registry = lambda reference, plain_http: registry
                 try:
@@ -141,12 +147,16 @@ class PluginDirTests(unittest.TestCase):
 class FakeRegistry:
     reference = "r"
 
-    def __init__(self, published: dict | None) -> None:
+    def __init__(self, published: dict | None, tree: bytes) -> None:
         self.published = published
+        self.tree = tree
         self.pushes: list[list[str]] = []
 
     def published_manifest(self, tag: str) -> dict | None:
         return self.published
+
+    def blob(self, digest: str) -> bytes:
+        return self.tree
 
     def oras(self, args: list[str], cwd: Path | None = None) -> str:
         self.pushes.append(args)

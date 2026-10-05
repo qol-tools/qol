@@ -5,8 +5,9 @@ One artifact per release tag `<plugin-id>-vX.Y.Z`: plugin.toml at the tagged
 revision is the config blob, the plugin directory at that revision is one tree
 layer, and every release asset is one layer named after its file. Artifacts are
 never overwritten: pushing a tag the registry already holds succeeds only when
-it holds the same revision, plugin.toml and assets, so a failed release job can
-be rerun.
+it holds the same revision, plugin.toml, assets and plugin tree, so a failed
+release job can be rerun. The tree is compared uncompressed because gzip output
+may differ between git versions.
 
 `push` publishes the release being built. `backfill` publishes releases that
 predate the registry from their GitHub release assets, skipping tags the
@@ -16,6 +17,7 @@ registry already holds.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import shutil
@@ -108,17 +110,29 @@ def release_content(tag: str, revision: str, files: Path) -> dict:
     }
 
 
-def holds_release(manifest: dict, release: dict) -> bool:
+def tree_tar(release: dict) -> bytes:
+    archive = ["git", "archive", "--format=tar"]
+    source = f"{release['revision']}:plugins/{release['plugin_dir']}"
+    return subprocess.run([*archive, source], check=True, capture_output=True).stdout
+
+
+def holds_release(registry: Registry, manifest: dict, release: dict) -> bool:
+    layers = manifest["layers"]
+    trees = [layer for layer in layers if layer["mediaType"] == TREE_MEDIA_TYPE]
     assets = {
         layer.get("annotations", {}).get(TITLE_ANNOTATION): layer["digest"]
-        for layer in manifest["layers"]
+        for layer in layers
         if layer["mediaType"] != TREE_MEDIA_TYPE
     }
-    return (
-        manifest.get("annotations", {}).get(REVISION_ANNOTATION) == release["revision"]
-        and manifest["config"]["digest"] == sha256_digest(release["config"].encode())
-        and assets == release["assets"]
-    )
+    if (
+        len(trees) != 1
+        or len(layers) != 1 + len(assets)
+        or manifest.get("annotations", {}).get(REVISION_ANNOTATION) != release["revision"]
+        or manifest["config"]["digest"] != sha256_digest(release["config"].encode())
+        or assets != release["assets"]
+    ):
+        return False
+    return gzip.decompress(registry.blob(trees[0]["digest"])) == tree_tar(release)
 
 
 def publish(registry: Registry, tag: str, release: dict, files: Path, source: str) -> None:
@@ -151,7 +165,7 @@ def push(args: argparse.Namespace) -> int:
         publish(registry, args.tag, release, args.files, args.source)
         print(f"pushed {args.registry}:{args.tag}")
         return 0
-    if holds_release(published, release):
+    if holds_release(registry, published, release):
         print(f"{args.registry}:{args.tag} already holds this release")
         return 0
     print(

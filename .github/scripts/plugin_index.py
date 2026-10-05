@@ -45,12 +45,17 @@ class Registry:
         self.reference = reference
         self.plain_http = plain_http
 
-    def oras(self, args: list[str], cwd: Path | None = None) -> str:
+    def oras(self, args: list[str], cwd: Path | None = None, text: bool = True):
         flags = ["--plain-http"] if self.plain_http else []
         result = subprocess.run(
-            ["oras", *args, *flags], check=True, capture_output=True, text=True, cwd=cwd
+            ["oras", *args, *flags], check=True, capture_output=True, text=text, cwd=cwd
         )
         return result.stdout
+
+    def blob(self, digest: str) -> bytes:
+        return self.oras(
+            ["blob", "fetch", "--output", "-", f"{self.reference}@{digest}"], text=False
+        )
 
     def tags(self) -> list[str]:
         return self.oras(["repo", "tags", self.reference]).split()
