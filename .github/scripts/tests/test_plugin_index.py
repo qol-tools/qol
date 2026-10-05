@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import sys
 import unittest
@@ -13,11 +14,15 @@ _SPEC.loader.exec_module(pi)
 LOCATION = {"url": "https://ghcr.io", "repository": "qol-tools/plugins"}
 
 
+def sha(label: str) -> str:
+    return f"sha256:{hashlib.sha256(label.encode()).hexdigest()}"
+
+
 def manifest(*layers: dict, plugin_dir: str = "alt-tab") -> dict:
     return {"layers": list(layers), "annotations": {pi.DIR_ANNOTATION: plugin_dir}}
 
 
-def tree_layer(digest: str = "sha256:tree") -> dict:
+def tree_layer(digest: str = sha("tree")) -> dict:
     return {"mediaType": pi.TREE_MEDIA_TYPE, "digest": digest, "size": 10}
 
 
@@ -38,8 +43,8 @@ def fake_fetch(tag: str) -> dict:
     plugin_id, _ = pi.parse_tag(tag)
     version = tag.removeprefix(f"{plugin_id}-v")
     return pi.version_entry(
-        f"sha256:{tag}",
-        manifest(tree_layer(), asset_layer(f"{plugin_id}-linux-x86_64", f"sha256:bin-{tag}")),
+        sha(tag),
+        manifest(tree_layer(), asset_layer(f"{plugin_id}-linux-x86_64", sha(f"bin-{tag}"))),
         plugin_toml(plugin_id, version),
     )
 
@@ -47,42 +52,59 @@ def fake_fetch(tag: str) -> dict:
 class VersionEntryTests(unittest.TestCase):
     def test_splits_tree_from_assets_by_media_type(self):
         entry = pi.version_entry(
-            "sha256:m",
+            sha("m"),
             manifest(
-                tree_layer("sha256:t"),
-                asset_layer("qol-alt-tab-linux-x86_64", "sha256:a"),
-                asset_layer("IBM-Plex-OFL.txt", "sha256:o"),
+                tree_layer(sha("t")),
+                asset_layer("qol-alt-tab-linux-x86_64", sha("a")),
+                asset_layer("IBM-Plex-OFL.txt", sha("o")),
             ),
             plugin_toml("qol-alt-tab", "1.0.0"),
         )
-        self.assertEqual(entry["manifest_digest"], "sha256:m")
+        self.assertEqual(entry["manifest_digest"], sha("m"))
         self.assertEqual(entry["dir"], "alt-tab")
-        self.assertEqual(entry["tree"], {"digest": "sha256:t", "size": 10})
+        self.assertEqual(entry["tree"], {"digest": sha("t"), "size": 10})
         self.assertEqual(
             entry["assets"],
             {
-                "qol-alt-tab-linux-x86_64": {"digest": "sha256:a", "size": 20},
-                "IBM-Plex-OFL.txt": {"digest": "sha256:o", "size": 20},
+                "qol-alt-tab-linux-x86_64": {"digest": sha("a"), "size": 20},
+                "IBM-Plex-OFL.txt": {"digest": sha("o"), "size": 20},
             },
         )
 
     def test_requires_exactly_one_tree_layer(self):
         cases = [
-            manifest(asset_layer("a", "sha256:a")),
-            manifest(tree_layer("sha256:t1"), tree_layer("sha256:t2")),
+            manifest(asset_layer("a", sha("a"))),
+            manifest(tree_layer(sha("t1")), tree_layer(sha("t2"))),
         ]
         for case in cases:
             with self.subTest(layers=len(case["layers"])):
                 with self.assertRaises(ValueError):
-                    pi.version_entry("sha256:m", case, plugin_toml("p", "1.0.0"))
+                    pi.version_entry(sha("m"), case, plugin_toml("p", "1.0.0"))
 
+    def test_refuses_malformed_layers(self):
+        untitled = asset_layer("a", sha("a"))
+        del untitled["annotations"]
+        cases = {
+            "short digest": manifest(tree_layer("sha256:t")),
+            "other algorithm": manifest(tree_layer("sha512:" + "0" * 128)),
+            "negative size": manifest({**tree_layer(), "size": -1}),
+            "string size": manifest({**tree_layer(), "size": "10"}),
+            "untitled asset": manifest(tree_layer(), untitled),
+            "repeated title": manifest(
+                tree_layer(), asset_layer("bin", sha("a")), asset_layer("bin", sha("b"))
+            ),
+        }
+        for label, case in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError):
+                    pi.version_entry(sha("m"), case, plugin_toml("p", "1.0.0"))
 
     def test_requires_a_plain_plugin_directory_name(self):
         for plugin_dir in ["", "plugins/alt-tab", "..", ".hidden"]:
             with self.subTest(plugin_dir=plugin_dir):
                 with self.assertRaises(ValueError):
                     pi.version_entry(
-                        "sha256:m",
+                        sha("m"),
                         manifest(tree_layer(), plugin_dir=plugin_dir),
                         plugin_toml("p", "1.0.0"),
                     )
@@ -118,6 +140,41 @@ class BuildIndexTests(unittest.TestCase):
     def test_empty_registry_builds_an_empty_index(self):
         index = pi.build_index([], fake_fetch, LOCATION, keep=3, serial=1)
         self.assertEqual(index["plugins"], {})
+
+
+def index_of(*versions: tuple[str, str, str]) -> dict:
+    plugins: dict = {}
+    for plugin_id, version, digest in versions:
+        plugin = plugins.setdefault(plugin_id, {"latest": version, "versions": {}})
+        plugin["versions"][version] = {"manifest_digest": digest}
+    return {"plugins": plugins}
+
+
+class AppendOnlyTests(unittest.TestCase):
+    def test_a_listed_version_may_never_change_its_manifest(self):
+        previous = index_of(("qol-shot", "1.0.0", sha("one")), ("qol-shot", "0.9.0", sha("old")))
+        cases = [
+            ("unchanged", index_of(("qol-shot", "1.0.0", sha("one"))), True),
+            ("new version", index_of(("qol-shot", "1.1.0", sha("two"))), True),
+            ("first index", index_of(("qol-shot", "1.0.0", sha("one"))), True),
+            ("pushed over", index_of(("qol-shot", "1.0.0", sha("evil"))), False),
+        ]
+        for label, index, allowed in cases:
+            with self.subTest(label):
+                before = {} if label == "first index" else previous
+                if allowed:
+                    pi.require_append_only(before, index)
+                    continue
+                with self.assertRaisesRegex(ValueError, "qol-shot 1.0.0"):
+                    pi.require_append_only(before, index)
+
+    def test_changes_list_added_then_removed_versions(self):
+        previous = index_of(("qol-shot", "0.9.0", sha("old")), ("qol-shot", "1.0.0", sha("one")))
+        index = index_of(("qol-shot", "1.0.0", sha("one")), ("qol-launcher", "2.0.0", sha("l")))
+        self.assertEqual(
+            pi.index_changes(previous, index),
+            ["+ qol-launcher 2.0.0", "- qol-shot 0.9.0"],
+        )
 
 
 class RegistryLocationTests(unittest.TestCase):

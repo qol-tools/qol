@@ -218,26 +218,27 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('gh release edit "$tag" --draft=false --latest=false', workflow)
         self.assertNotIn("--latest=true", workflow)
 
-    def test_plugin_publish_pushes_the_registry_artifact_first(self):
+    def test_plugin_registry_push_runs_after_the_github_release(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        release = workflow.split("  release:\n", 1)[1].split("  index:\n", 1)[0]
-        self.assertIn("packages: write", release)
-        push = named_step(release, "Publish registry artifact", "      ")
+        release = workflow.split("  release:\n", 1)[1].split("  registry:\n", 1)[0]
+        registry = workflow.split("  registry:\n", 1)[1].split("  index:\n", 1)[0]
+        self.assertNotIn("packages: write", release)
+        self.assertNotIn("oras", release)
+        self.assertIn("needs: release", registry)
+        self.assertIn("packages: write", registry)
+        self.assertIn("ref: ${{ env.RELEASE_REF }}", registry)
+        push = named_step(registry, "Push registry artifact", "      ")
         for contract in [
             '--registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins"',
             'push --tag "${RELEASE_TAG}" --files release_files',
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, push)
-        self.assertLess(
-            release.index("name: Publish registry artifact"),
-            release.index("name: Create or update release"),
-        )
 
     def test_plugin_release_refreshes_the_signed_index(self):
         release = (ROOT / ".github/workflows/release.yml").read_text()
         dispatch = release.split("  index:\n", 1)[1]
-        self.assertIn("needs: release", dispatch)
+        self.assertIn("needs: registry", dispatch)
         self.assertIn("actions: write", dispatch)
         self.assertIn("gh workflow run plugin-index.yml --ref main", dispatch)
 
@@ -252,6 +253,40 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("pages: write", build)
         self.assertIn("pages: write", deploy)
         self.assertNotIn("secrets.", deploy)
+
+    def test_plugin_index_signs_append_only_and_checks_the_shipped_key(self):
+        workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()
+        build = workflow.split("  build:\n", 1)[1].split("  deploy:\n", 1)[0]
+        public_key = re.search(r"^  PUBLIC_KEY: (\S+)$", workflow, re.MULTILINE).group(1)
+        self.assertTrue((ROOT / public_key).is_file(), public_key)
+        self.assertIn(str(Path(public_key).parent), build)
+        self.assertNotIn("apt-get", workflow)
+
+        install = named_step(build, "Install minisign", "      ")
+        self.assertIn('sha256sum --check --strict', install)
+        fetch = named_step(build, "Fetch the deployed index", "      ")
+        self.assertIn('minisign -V -p "${PUBLIC_KEY}" -m previous/index.json', fetch)
+        index = named_step(build, "Build index", "      ")
+        self.assertIn("--previous previous/index.json", index)
+        sign = named_step(build, "Sign index", "      ")
+        self.assertIn("trap 'rm -f \"${key}\"' EXIT", sign)
+        self.assertIn("< /dev/null", sign)
+        verify = named_step(build, "Verify with the key the tray ships", "      ")
+        self.assertIn('minisign -V -p "${PUBLIC_KEY}" -m site/plugins/index.json', verify)
+
+        secret_steps = [step for step in build.split("\n      - ") if "secrets." in step]
+        self.assertEqual(len(secret_steps), 1)
+        self.assertIn("name: Sign index", secret_steps[0])
+        order = [
+            "name: Install minisign",
+            "name: Fetch the deployed index",
+            "name: Build index",
+            "name: Sign index",
+            "name: Verify with the key the tray ships",
+            "actions/upload-pages-artifact",
+        ]
+        positions = [build.index(marker) for marker in order]
+        self.assertEqual(positions, sorted(positions))
 
     def test_registry_backfill_pushes_only_from_main(self):
         workflow = (ROOT / ".github/workflows/plugin-registry-backfill.yml").read_text()

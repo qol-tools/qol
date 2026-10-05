@@ -131,12 +131,52 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish release
+    name: Publish GitHub release
     needs: [setup, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir -p release_files
+          find artifacts -type f -exec cp {} release_files/ \;
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${RELEASE_TAG}"
+          {
+            echo "### Plugin release"
+            echo
+            echo "- Tag: \`${tag}\`"
+            echo "- Ref: \`${RELEASE_REF}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; immutable releases are never updated" >&2
+            exit 1
+          fi
+          gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*
+          gh release edit "$tag" --draft=false --latest=false
+
+  # Runs after the GitHub release so a registry failure never holds back the
+  # release every installed tray reads. Rerunnable: a tag that already holds
+  # this release is accepted, different content is refused.
+  registry:
+    name: Publish registry artifact
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -162,38 +202,20 @@ jobs:
         with:
           version: 1.3.4
 
-      - name: Publish registry artifact
+      - name: Push registry artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           printf '%s' "${GH_TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
           python3 .github/scripts/plugin_artifact.py \
             --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
             --source "https://github.com/${GITHUB_REPOSITORY}" \
             push --tag "${RELEASE_TAG}" --files release_files
 
-      - name: Create or update release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          tag="${RELEASE_TAG}"
-          {
-            echo "### Plugin release"
-            echo
-            echo "- Tag: \`${tag}\`"
-            echo "- Ref: \`${RELEASE_REF}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release ${tag} already exists; immutable releases are never updated" >&2
-            exit 1
-          fi
-          gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*
-          gh release edit "$tag" --draft=false --latest=false
-
   index:
     name: Refresh plugin index
-    needs: release
+    needs: registry
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
