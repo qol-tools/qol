@@ -1,3 +1,4 @@
+use super::unavailable;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -66,12 +67,13 @@ impl IndexDocument {
         let plugin = self
             .plugins
             .get(plugin_id)
-            .with_context(|| format!("the plugin index does not list {plugin_id}"))?;
+            .ok_or_else(|| unavailable(format!("the plugin index does not list {plugin_id}")))?;
         let version = version.unwrap_or(&plugin.latest);
-        let files = plugin
-            .versions
-            .get(version)
-            .with_context(|| format!("the plugin index does not list {plugin_id} {version}"))?;
+        let files = plugin.versions.get(version).ok_or_else(|| {
+            unavailable(format!(
+                "the plugin index does not list {plugin_id} {version}"
+            ))
+        })?;
         Ok(IndexedRelease {
             plugin_id: plugin_id.to_string(),
             version: version.to_string(),

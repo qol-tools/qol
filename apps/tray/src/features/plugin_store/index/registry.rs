@@ -1,5 +1,6 @@
 use super::document::{Blob, IndexedRelease, RegistryLocation};
-use super::fetch::{get, http_client};
+use super::fetch::{blob_client, get, read_body};
+use super::unavailable;
 use crate::features::plugin_store::release_integrity;
 use anyhow::{Context, Result};
 use reqwest::header::WWW_AUTHENTICATE;
@@ -15,7 +16,7 @@ pub(crate) async fn download_asset(
     let Some(blob) = release.files.assets.get(asset_name) else {
         return Ok(false);
     };
-    let bytes = fetch_blob(&http_client(), &release.registry, blob, asset_name).await?;
+    let bytes = fetch_blob(&blob_client(), &release.registry, blob, asset_name).await?;
     qol_fs::atomic_write(destination, &bytes)
         .with_context(|| format!("failed to write {asset_name} to {}", destination.display()))?;
     Ok(true)
@@ -30,14 +31,16 @@ pub(super) async fn fetch_blob(
     let url = blob_url(registry, &blob.digest);
     let mut response = send(client.get(&url), &url).await?;
     if response.status() == StatusCode::UNAUTHORIZED {
-        let token = anonymous_token(client, registry, &response).await?;
+        let token = anonymous_token(client, registry, &response)
+            .await
+            .map_err(|error| unavailable(format!("{url} refused an anonymous pull: {error:#}")))?;
         response = send(client.get(&url).bearer_auth(token), &url).await?;
     }
     let status = response.status();
     if !status.is_success() {
-        anyhow::bail!("{url} answered {status}");
+        return Err(unavailable(format!("{url} answered {status}")));
     }
-    let bytes = response.bytes().await?;
+    let bytes = read_body(&url, response.bytes()).await?;
     if bytes.len() as u64 != blob.size {
         anyhow::bail!(
             "{label} is {} bytes but the plugin index says {}",
@@ -69,7 +72,7 @@ async fn send(request: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Re
     request
         .send()
         .await
-        .with_context(|| format!("could not reach {url}"))
+        .map_err(|error| unavailable(format!("could not reach {url}: {error}")))
 }
 
 #[derive(Deserialize)]

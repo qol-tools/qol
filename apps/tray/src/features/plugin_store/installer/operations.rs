@@ -1,5 +1,5 @@
 use super::super::index::{self, IndexLocation};
-use super::super::source::{PluginSource, SourceCatalog};
+use super::super::source::PluginSource;
 use super::dependency::{install_dependencies, AssetOrigin};
 use super::source::{
     clone_source_repo, find_plugin_source_dir, prepare_update_repo, resolve_latest_plugin_version,
@@ -36,14 +36,12 @@ async fn resolve_install_source(
     match install_source {
         InstallSource::TaggedVersion(_) => Ok(install_source),
         InstallSource::Latest => {
-            let version = match &source.catalog {
-                SourceCatalog::GitHubReleases => {
-                    resolve_latest_plugin_version(source, plugin_id).await?
-                }
-                SourceCatalog::SignedIndex(location) => {
-                    index::latest_version(location, plugin_id).await?
-                }
-            };
+            let version = source
+                .read_catalog(
+                    |location| index::latest_version(location, plugin_id),
+                    || resolve_latest_plugin_version(source, plugin_id),
+                )
+                .await?;
             Ok(InstallSource::TaggedVersion(version))
         }
     }
@@ -176,36 +174,15 @@ fn extracted_plugin_path(clone_dir: &Path) -> PathBuf {
 }
 
 async fn install_plugin(plan: &InstallPlan<'_>) -> Result<()> {
-    match &plan.source.catalog {
-        SourceCatalog::GitHubReleases => {
-            clone_source_repo(
-                plan.source,
-                &plan.clone_dir,
-                plan.plugin_id,
-                &plan.install_source,
-            )
-            .await?;
-            extract_plugin_subdir(&plan.clone_dir, &plan.extracted_dir, plan.plugin_id).await?;
-            install_dependencies(
-                plan.source,
-                plan.plugin_id,
-                &plan.extracted_dir,
-                &plan.install_source,
-                AssetOrigin::GitHubRelease,
-            )
-            .await?;
-        }
-        SourceCatalog::SignedIndex(location) => {
-            stage_from_index(
-                location,
-                plan.source,
-                plan.plugin_id,
-                &plan.install_source,
-                &plan.extracted_dir,
-            )
-            .await?;
-        }
-    }
+    stage_plugin(
+        plan.source,
+        plan.plugin_id,
+        &plan.install_source,
+        &plan.clone_dir,
+        &plan.extracted_dir,
+        Checkout::Fresh,
+    )
+    .await?;
     validate_staged_contract(&plan.extracted_dir, &load_installed_registry()?)?;
     finalize_install(&plan.extracted_dir, &plan.target_dir).await?;
     log::info!("Plugin {} installed successfully", plan.plugin_id);
@@ -219,40 +196,75 @@ async fn update_plugin(plan: &UpdatePlan<'_>) -> Result<()> {
         plan.source.name,
         plan.source.repo
     );
-    match &plan.source.catalog {
-        SourceCatalog::GitHubReleases => {
-            prepare_update_repo(
-                plan.source,
-                plan.clone_dir.as_path(),
-                plan.plugin_id,
-                &plan.install_source,
-            )
-            .await?;
-            extract_plugin_subdir(&plan.clone_dir, &plan.extracted_dir, plan.plugin_id).await?;
-            install_dependencies(
-                plan.source,
-                plan.plugin_id,
-                &plan.extracted_dir,
-                &plan.install_source,
-                AssetOrigin::GitHubRelease,
-            )
-            .await?;
-        }
-        SourceCatalog::SignedIndex(location) => {
-            stage_from_index(
-                location,
-                plan.source,
-                plan.plugin_id,
-                &plan.install_source,
-                &plan.extracted_dir,
-            )
-            .await?;
-        }
-    }
+    stage_plugin(
+        plan.source,
+        plan.plugin_id,
+        &plan.install_source,
+        &plan.clone_dir,
+        &plan.extracted_dir,
+        Checkout::Update,
+    )
+    .await?;
     validate_staged_contract(&plan.extracted_dir, &load_installed_registry()?)?;
     swap_plugin_dirs(&plan.plugin_dir, &plan.extracted_dir, &plan.backup_dir).await?;
     log::info!("Plugin {} updated successfully", plan.plugin_id);
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum Checkout {
+    Fresh,
+    Update,
+}
+
+async fn stage_plugin(
+    source: &PluginSource,
+    plugin_id: &str,
+    install_source: &InstallSource,
+    clone_dir: &Path,
+    extracted_dir: &Path,
+    checkout: Checkout,
+) -> Result<()> {
+    source
+        .read_catalog(
+            |location| stage_from_index(location, source, plugin_id, install_source, extracted_dir),
+            || {
+                stage_from_github(
+                    source,
+                    plugin_id,
+                    install_source,
+                    clone_dir,
+                    extracted_dir,
+                    checkout,
+                )
+            },
+        )
+        .await
+}
+
+async fn stage_from_github(
+    source: &PluginSource,
+    plugin_id: &str,
+    install_source: &InstallSource,
+    clone_dir: &Path,
+    extracted_dir: &Path,
+    checkout: Checkout,
+) -> Result<()> {
+    match checkout {
+        Checkout::Fresh => clone_source_repo(source, clone_dir, plugin_id, install_source).await?,
+        Checkout::Update => {
+            prepare_update_repo(source, clone_dir, plugin_id, install_source).await?
+        }
+    }
+    extract_plugin_subdir(clone_dir, extracted_dir, plugin_id).await?;
+    install_dependencies(
+        source,
+        plugin_id,
+        extracted_dir,
+        install_source,
+        AssetOrigin::GitHubRelease,
+    )
+    .await
 }
 
 async fn stage_from_index(

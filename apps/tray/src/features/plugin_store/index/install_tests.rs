@@ -222,6 +222,7 @@ async fn install_refuses_files_that_do_not_match_the_index() {
         format!("{tampered:#}").contains("SHA-256 mismatch"),
         "{tampered:#}"
     );
+    assert!(!super::is_unavailable(&tampered), "{tampered:#}");
     assert!(!plugins_dir.join(PLUGIN_ID).exists());
 
     let impostor = Signer::new();
@@ -232,5 +233,40 @@ async fn install_refuses_files_that_do_not_match_the_index() {
         format!("{unsigned:#}").contains("signature"),
         "{unsigned:#}"
     );
+    assert!(!super::is_unavailable(&unsigned), "{unsigned:#}");
     assert!(!plugins_dir.join(PLUGIN_ID).exists());
+}
+
+#[tokio::test]
+async fn an_index_or_blob_that_cannot_be_reached_is_unavailable() {
+    let _env = crate::test_support::env_lock().lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let _paths = crate::paths::push_test_path_root(tmp.path());
+    let server = Server::start().await;
+    let signer = Signer::new();
+    server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
+    let missing_index = IndexLocation {
+        url: format!("{}/missing/index.json", server.base),
+        public_key: signer.public_key(),
+    };
+
+    let not_served = super::latest_version(&missing_index, PLUGIN_ID)
+        .await
+        .unwrap_err();
+    let not_listed = super::latest_version(&server.location(&signer), "qol-missing")
+        .await
+        .unwrap_err();
+    server.published.lock().unwrap().blobs.clear();
+    let blob_gone = super::stage_release(
+        &server.location(&signer),
+        PLUGIN_ID,
+        None,
+        &tmp.path().join("staging"),
+    )
+    .await
+    .unwrap_err();
+
+    for error in [not_served, not_listed, blob_gone] {
+        assert!(super::is_unavailable(&error), "{error:#}");
+    }
 }

@@ -10,9 +10,7 @@ use super::super::super::github::{
     CACHE_FORMAT_VERSION, CACHE_TTL_SECS,
 };
 use super::super::super::index;
-use super::super::super::source::{
-    builtin_sources, fold_collected_plugins, PluginSource, SourceCatalog,
-};
+use super::super::super::source::{builtin_sources, fold_collected_plugins, PluginSource};
 use super::super::helpers::{read_installed_plugin_dirs, read_plugin_version};
 use super::super::types::{AppState, PluginInfo, PluginsResponse};
 
@@ -165,10 +163,12 @@ async fn revalidate_from_sources() -> anyhow::Result<Vec<PluginMetadata>> {
 }
 
 async fn list_source_plugins(source: PluginSource) -> anyhow::Result<Vec<PluginMetadata>> {
-    match &source.catalog {
-        SourceCatalog::SignedIndex(location) => index::list_plugins(&source, location).await,
-        SourceCatalog::GitHubReleases => GitHubClient::new(source).list_plugins().await,
-    }
+    source
+        .read_catalog(
+            |location| index::list_plugins(&source, location),
+            || async { GitHubClient::new(source.clone()).list_plugins().await },
+        )
+        .await
 }
 
 fn plugins_dir() -> Result<std::path::PathBuf, (StatusCode, String)> {

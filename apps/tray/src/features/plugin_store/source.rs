@@ -1,7 +1,8 @@
-use crate::features::plugin_store::index::IndexLocation;
+use crate::features::plugin_store::index::{self, IndexLocation};
 use crate::features::plugin_store::release_assets::{resolve_asset_pattern, PlatformTarget};
 use crate::plugins::manifest::BinaryDependency;
 use crate::version::normalize_semver_tag;
+use std::future::Future;
 
 pub(crate) const RELEASES_PER_PAGE: usize = 100;
 
@@ -37,6 +38,30 @@ impl PluginSource {
         Self {
             catalog: SourceCatalog::SignedIndex(location),
             ..self
+        }
+    }
+
+    pub(crate) async fn read_catalog<'a, T, I, G>(
+        &'a self,
+        from_index: impl FnOnce(&'a IndexLocation) -> I,
+        from_github: impl FnOnce() -> G,
+    ) -> anyhow::Result<T>
+    where
+        I: Future<Output = anyhow::Result<T>>,
+        G: Future<Output = anyhow::Result<T>>,
+    {
+        let SourceCatalog::SignedIndex(location) = &self.catalog else {
+            return from_github().await;
+        };
+        match from_index(location).await {
+            Err(error) if index::is_unavailable(&error) => {
+                log::warn!(
+                    "The plugin index for source {} is unavailable, using GitHub Releases: {error:#}",
+                    self.name
+                );
+                from_github().await
+            }
+            result => result,
         }
     }
 

@@ -1,20 +1,23 @@
 use super::document::{self, IndexDocument};
-use super::IndexLocation;
+use super::{unavailable, IndexLocation};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const SERIALS_FILE: &str = "plugin-index-serials.json";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) async fn load(location: &IndexLocation) -> Result<IndexDocument> {
     let client = http_client();
-    let body = get(&client, &location.url).await?.bytes().await?;
+    let body = read_body(&location.url, get(&client, &location.url).await?.bytes()).await?;
     let signature_url = format!("{}.minisig", location.url);
-    let signature = get(&client, &signature_url).await?.text().await?;
+    let signature = read_body(&signature_url, get(&client, &signature_url).await?.text()).await?;
     let document = document::verify(&body, &signature, &location.public_key)?;
-    accept_serial(&serials_path()?, &location.url, document.serial)?;
+    let serials = crate::paths::base_data_dir()?.join(SERIALS_FILE);
+    accept_serial(&serials, &location.url, document.serial)?;
     qol_runtime::probe!(
         "PLUGIN_INDEX",
         "event=loaded url={} serial={} plugins={}",
@@ -26,8 +29,19 @@ pub(super) async fn load(location: &IndexLocation) -> Result<IndexDocument> {
 }
 
 pub(super) fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
+    build_client(reqwest::Client::builder().timeout(REQUEST_TIMEOUT))
+}
+
+pub(super) fn blob_client() -> reqwest::Client {
+    build_client(
+        reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT),
+    )
+}
+
+fn build_client(builder: reqwest::ClientBuilder) -> reqwest::Client {
+    builder
         .user_agent("qol-tray")
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
@@ -38,16 +52,20 @@ pub(super) async fn get(client: &reqwest::Client, url: &str) -> Result<reqwest::
         .get(url)
         .send()
         .await
-        .with_context(|| format!("could not reach {url}"))?;
+        .map_err(|error| unavailable(format!("could not reach {url}: {error}")))?;
     let status = response.status();
     if !status.is_success() {
-        anyhow::bail!("{url} answered {status}");
+        return Err(unavailable(format!("{url} answered {status}")));
     }
     Ok(response)
 }
 
-fn serials_path() -> Result<PathBuf> {
-    Ok(crate::paths::base_data_dir()?.join(SERIALS_FILE))
+pub(super) async fn read_body<T>(
+    url: &str,
+    body: impl std::future::Future<Output = reqwest::Result<T>>,
+) -> Result<T> {
+    body.await
+        .map_err(|error| unavailable(format!("could not read {url}: {error}")))
 }
 
 fn accept_serial(path: &Path, url: &str, serial: u64) -> Result<()> {

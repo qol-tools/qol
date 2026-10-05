@@ -1,5 +1,5 @@
 use super::document::IndexedRelease;
-use super::fetch::{self, http_client};
+use super::fetch::{self, blob_client};
 use super::registry::fetch_blob;
 use super::IndexLocation;
 use anyhow::{Context, Result};
@@ -42,16 +42,30 @@ pub(crate) async fn load_config_contract(
 async fn unpack_release_tree(release: &IndexedRelease, plugin_dir: &Path) -> Result<()> {
     let label = format!("{} {} plugin tree", release.plugin_id, release.version);
     let tree = fetch_blob(
-        &http_client(),
+        &blob_client(),
         &release.registry,
         &release.files.tree,
         &label,
     )
     .await?;
-    let plugin_dir = plugin_dir.to_path_buf();
-    tokio::task::spawn_blocking(move || unpack_tree(&tree, &plugin_dir))
+    let staging_dir = plugin_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || unpack_tree(&tree, &staging_dir))
         .await
-        .context("plugin tree unpacking stopped")?
+        .context("plugin tree unpacking stopped")??;
+    require_release_identity(&release.plugin_id, &release.version, plugin_dir)
+}
+
+fn require_release_identity(plugin_id: &str, version: &str, plugin_dir: &Path) -> Result<()> {
+    let manifest = crate::plugins::PluginManifest::read_from_dir(plugin_dir)?;
+    let declared_id = manifest.plugin.require_declared_id()?;
+    if declared_id.as_str() != plugin_id || manifest.plugin.version != version {
+        anyhow::bail!(
+            "the plugin tree for {plugin_id} {version} declares {} {}",
+            declared_id.as_str(),
+            manifest.plugin.version
+        );
+    }
+    Ok(())
 }
 
 fn unpack_tree(bytes: &[u8], plugin_dir: &Path) -> Result<()> {
@@ -142,5 +156,27 @@ mod tests {
         let bytes = builder.into_inner().unwrap().finish().unwrap();
 
         assert!(unpack_tree(&bytes, &tmp.path().join("staging")).is_err());
+    }
+
+    #[test]
+    fn staged_tree_must_declare_the_indexed_id_and_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cases: &[(&str, &str, bool)] = &[
+            ("qol-shot", "1.0.0", true),
+            ("qol-launcher", "1.0.0", false),
+            ("qol-shot", "2.0.0", false),
+        ];
+        for (declared_id, declared_version, accepted) in cases {
+            let manifest = format!(
+                "[plugin]\nid = \"{declared_id}\"\nname = \"x\"\ndescription = \"\"\nversion = \"{declared_version}\"\n\n[menu]\nlabel = \"x\"\nitems = []\n"
+            );
+            std::fs::write(tmp.path().join("plugin.toml"), manifest).unwrap();
+            let result = require_release_identity("qol-shot", "1.0.0", tmp.path());
+            assert_eq!(
+                result.is_ok(),
+                *accepted,
+                "{declared_id} {declared_version}: {result:?}"
+            );
+        }
     }
 }
