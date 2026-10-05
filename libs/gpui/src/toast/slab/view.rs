@@ -7,7 +7,9 @@ use gpui::*;
 use super::super::card::{self, Ring};
 use super::super::{pile, RowId, SlabSnapshotRow, Tick, AGE_TICK, POINTER_POLL, RING_TICK};
 use super::SlabPresenter;
-use crate::popup_window::{EscapeGrab, PointerOnWindow, WindowGeometrySession};
+use crate::popup_window::{
+    EscapeGrab, InputEvent, InputWatch, PointerOnWindow, WindowGeometrySession,
+};
 use crate::surface::SurfaceDismisser;
 use crate::text::TextStyled as _;
 
@@ -36,6 +38,7 @@ pub(super) struct SlabToastView {
     open: pile::Tween,
     focus: Vec<(RowId, pile::Tween)>,
     reach: [f32; 4],
+    touch: [f32; 4],
     shown: Vec<Shown>,
     strip_shown: Option<(pile::Pose, usize)>,
     glide: Option<Glide>,
@@ -47,6 +50,7 @@ pub(super) struct SlabToastView {
     escape: Option<EscapeGrab>,
     escape_armed: bool,
     polling: bool,
+    listening: bool,
     ring: Tick,
     age: Tick,
 }
@@ -75,6 +79,7 @@ impl SlabToastView {
             open: pile::Tween::at(open),
             focus: Vec::new(),
             reach: [0.0; 4],
+            touch: [0.0; 4],
             shown: Vec::new(),
             strip_shown: None,
             glide: None,
@@ -86,6 +91,7 @@ impl SlabToastView {
             escape: None,
             escape_armed: false,
             polling: false,
+            listening: false,
             ring: Tick::default(),
             age: Tick::default(),
         }
@@ -104,6 +110,18 @@ impl SlabToastView {
         self.host.set_hovering(true);
         self.ensure_polling(cx);
         cx.notify();
+    }
+
+    fn touches(&self, position: Point<Pixels>) -> bool {
+        pile::contains(self.touch, f32::from(position.x), f32::from(position.y))
+    }
+
+    fn sweep(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.touches(position) {
+            self.point(None, false, cx);
+        } else {
+            self.leave(cx);
+        }
     }
 
     fn point(&mut self, hovered: Option<RowId>, lit: bool, cx: &mut Context<Self>) {
@@ -172,7 +190,37 @@ impl SlabToastView {
             return;
         }
         self.polling = true;
-        self.poll_pointer(cx);
+        match crate::popup_window::watch_input(&self.dismisser.current_title()) {
+            Some(watch) => self.listen(watch, cx),
+            None => self.poll_pointer(cx),
+        }
+    }
+
+    fn listen(&mut self, mut watch: InputWatch, cx: &mut Context<Self>) {
+        self.listening = true;
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = watch.next().await {
+                let live = this.update(cx, |view, cx| {
+                    view.on_input(event, cx);
+                    view.polling
+                });
+                if !live.unwrap_or(false) {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |view, _| {
+                view.listening = false;
+                view.polling = false;
+            });
+        })
+        .detach();
+    }
+
+    fn on_input(&mut self, event: InputEvent, cx: &mut Context<Self>) {
+        match event {
+            InputEvent::Pointer(pointer) => self.on_pointer(Some(pointer), cx),
+            InputEvent::Escape => self.fold(cx),
+        }
     }
 
     fn poll_pointer(&mut self, cx: &mut Context<Self>) {
@@ -181,12 +229,25 @@ impl SlabToastView {
             let _ = this.update(cx, |view, cx| {
                 view.on_session(
                     WindowGeometrySession::pointer_on,
-                    |view, pointer, cx| view.on_pointer(pointer.flatten(), cx),
+                    |view, pointer, cx| {
+                        view.on_pointer(pointer.flatten(), cx);
+                        if view.polling {
+                            view.poll_pointer(cx);
+                        }
+                    },
                     cx,
                 )
             });
         })
         .detach();
+    }
+
+    fn fold(&mut self, cx: &mut Context<Self>) {
+        if !self.host.state.borrow().expanded {
+            return;
+        }
+        let host = self.host.clone();
+        cx.defer(move |cx| host.set_expanded(false, cx));
     }
 
     fn on_pointer(&mut self, pointer: Option<PointerOnWindow>, cx: &mut Context<Self>) {
@@ -204,11 +265,9 @@ impl SlabToastView {
             return;
         }
         let escaped = self.escape.as_ref().is_some_and(EscapeGrab::take_pressed);
-        if expanded && (escaped || (pointer.pressed && !pointer.inside)) {
-            let host = self.host.clone();
-            cx.defer(move |cx| host.set_expanded(false, cx));
+        if escaped || (pointer.pressed && !pointer.inside) {
+            self.fold(cx);
         }
-        self.poll_pointer(cx);
     }
 
     fn reach_input(&mut self, reach: [f32; 4], cx: &mut Context<Self>) {
@@ -289,7 +348,7 @@ impl Render for SlabToastView {
         if escapable != self.escape_armed {
             self.escape_armed = escapable;
             self.escape = escapable.then(crate::popup_window::grab_escape).flatten();
-            if escapable && self.escape.is_none() {
+            if escapable && self.escape.is_none() && !self.listening {
                 log::warn!("[toast] Escape cannot fold the open stack: the key grab failed");
             }
         }
@@ -384,22 +443,20 @@ impl Render for SlabToastView {
 
         let (reach_width, reach_height) = if moving {
             (
-                settled.width.max(self.reach[2]),
-                settled.height.max(self.reach[3]),
+                settled.width.max(self.touch[2]),
+                settled.height.max(self.touch[3]),
             )
         } else {
             (settled.width, settled.height)
         };
         let reach_height = reach_height.min(height);
-        self.reach_input(
-            [
-                width - reach_width,
-                height - reach_height,
-                reach_width,
-                reach_height,
-            ],
-            cx,
-        );
+        self.touch = [
+            width - reach_width,
+            height - reach_height,
+            reach_width,
+            reach_height,
+        ];
+        self.reach_input(self.touch, cx);
         if moving {
             window.request_animation_frame();
         }
@@ -729,7 +786,15 @@ impl Render for SlabToastView {
             .top(px((1.0 - arrival) * qol_theme::SPACE_INSET))
             .opacity(arrival)
             .on_mouse_move(
-                cx.listener(|view, _: &MouseMoveEvent, _, cx| view.point(None, false, cx)),
+                cx.listener(|view, event: &MouseMoveEvent, _, cx| view.sweep(event.position, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                    if !view.touches(event.position) {
+                        view.fold(cx);
+                    }
+                }),
             )
             .on_scroll_wheel(
                 cx.listener(|view, event: &ScrollWheelEvent, _, cx| view.scroll_by(event, cx)),

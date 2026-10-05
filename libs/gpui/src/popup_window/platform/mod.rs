@@ -67,11 +67,17 @@ pub use macos::{
 };
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub use fallback::{hold_input, input_held, register_native_display, release_input};
+pub use fallback::{
+    hold_input, input_held, register_native_display, release_input, watch_input, InputWatch,
+};
 #[cfg(target_os = "linux")]
-pub use linux::{hold_input, input_held, register_native_display, release_input};
+pub use linux::{
+    hold_input, input_held, register_native_display, release_input, watch_input, InputWatch,
+};
 #[cfg(target_os = "macos")]
-pub use macos::{hold_input, input_held, register_native_display, release_input};
+pub use macos::{
+    hold_input, input_held, register_native_display, release_input, watch_input, InputWatch,
+};
 
 pub fn present_topmost(title: &str) {
     <ActivePlatform as PopupPresentation>::present_topmost(title);
