@@ -129,13 +129,14 @@ fn handle_push_notification(
         "[runtime/socket] PUSH notification from {plugin_id}: {title} (action={})",
         action.map(|(label, _)| label).unwrap_or("-")
     );
-    let source = crate::plugins::paths::resolve_plugin_root(plugin_id)
-        .ok()
-        .and_then(|root| crate::plugins::manifest::PluginManifest::read_from_dir(&root).ok())
-        .map(|manifest| manifest.plugin.name)
-        .unwrap_or_else(|| qol_conventions::plugin_id::short_name(plugin_id).to_string());
     crate::surfaces::show_plugin_notification(
-        &source, title, body, level, action, artifact, layout,
+        Some(plugin_id),
+        title,
+        body,
+        level,
+        action,
+        artifact,
+        layout,
     );
 }
 

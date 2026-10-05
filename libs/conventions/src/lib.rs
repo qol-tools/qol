@@ -16,6 +16,7 @@ pub const RUNTIME_PIDS_DIR_PATH: &str = "/tmp/qol-tray/pids";
 pub const SETTINGS_SURFACE_SOCKET_FILE: &str = "settings-surface.sock";
 pub const SETTINGS_SURFACE_APP_ID: &str = "qol-settings-surface";
 pub const SETTINGS_SURFACE_DISPLAY_NAME: &str = "QoL Settings";
+pub const TRAY_DISPLAY_NAME: &str = "QoL Tray";
 pub const TRAY_ICON_NAME: &str = "qol-tray";
 pub const HTTP_AUTH_TOKEN_FILE: &str = ".http-token";
 pub const CODESIGN_IDENTITY_FILE: &str = "codesign-identity";

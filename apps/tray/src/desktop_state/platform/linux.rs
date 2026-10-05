@@ -1,4 +1,4 @@
-use crate::desktop_state::Platform;
+use crate::desktop_state::{FocusedWindow, Platform};
 use qol_runtime::{display::x11, MonitorBounds};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
@@ -68,6 +68,10 @@ impl Platform for LinuxQueries {
     }
 
     fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+        self.focused_window().map(|focused| focused.monitor)
+    }
+
+    fn focused_window(&self) -> Option<FocusedWindow> {
         let conn = self.conn.as_ref()?;
         let window_id = get_active_window_id(conn, self.root, self.active_window_atom)?;
         let pid = window_pid(conn, window_id, self.wm_pid_atom);
@@ -82,23 +86,20 @@ impl Platform for LinuxQueries {
         if ignored {
             return None;
         }
-        bounds
+        Some(FocusedWindow {
+            id: Some(window_id),
+            monitor: bounds?,
+        })
     }
 
     fn physical_monitors(&self) -> Vec<MonitorBounds> {
         xrandr_monitors()
     }
 
-    fn focused_window_id(&self) -> Option<u32> {
-        get_active_window_id(self.conn.as_ref()?, self.root, self.active_window_atom)
-    }
-
-    fn window_open(&self, id: u32) -> bool {
-        let Some(conn) = self.conn.as_ref() else {
-            return true;
-        };
+    fn window_open(&self, id: u32) -> Option<bool> {
+        let conn = self.conn.as_ref()?;
         if self.client_list_atom == 0 {
-            return true;
+            return None;
         }
         conn.get_property(
             false,
@@ -111,7 +112,6 @@ impl Platform for LinuxQueries {
         .ok()
         .and_then(|cookie| cookie.reply().ok())
         .and_then(|reply| reply.value32().map(|mut ids| ids.any(|open| open == id)))
-        .unwrap_or(true)
     }
 
     fn window_list_fingerprint(&self) -> Option<u64> {

@@ -33,12 +33,8 @@ pub(crate) trait Platform: Send + Sync {
         None
     }
 
-    fn focused_window_id(&self) -> Option<u32> {
+    fn window_open(&self, _id: u32) -> Option<bool> {
         None
-    }
-
-    fn window_open(&self, _id: u32) -> bool {
-        true
     }
 }
 

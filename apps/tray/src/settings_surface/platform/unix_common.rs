@@ -21,6 +21,7 @@ use super::super::HostBoot;
 enum Command {
     Open(String),
     Toast {
+        group: String,
         source: String,
         title: String,
         body: String,
@@ -433,6 +434,7 @@ fn spawn_command_loop(
                     LoopFlow::Continue
                 }
                 Command::Toast {
+                    group,
                     source,
                     title,
                     body,
@@ -443,6 +445,7 @@ fn spawn_command_loop(
                 } => {
                     show_toast_in_host(
                         toast_host,
+                        group,
                         source,
                         title,
                         body,
@@ -503,6 +506,7 @@ fn custom_notifier(toast_host: ToastHost) -> CustomPanelNotifier {
 #[allow(clippy::too_many_arguments)]
 fn show_toast_in_host(
     toast_host: ToastHost,
+    group: String,
     source: String,
     title: String,
     body: String,
@@ -529,7 +533,7 @@ fn show_toast_in_host(
             body,
             ToastLayout::for_push(anchor, width, height, style),
         )
-        .group(source.clone())
+        .group(group)
         .source(source)
         .tone(toast_tone(&level));
         if let Some(path) = artifact {
@@ -922,7 +926,7 @@ fn forward_open(plugin_id: &str) -> bool {
 }
 
 pub(in crate::settings_surface) fn show_toast(
-    source: &str,
+    source: super::super::ToastSource<'_>,
     title: &str,
     body: &str,
     level: &str,
@@ -938,7 +942,8 @@ pub(in crate::settings_surface) fn show_toast(
             &config,
             "toast",
             serde_json::json!({
-                "source": source,
+                "group": source.group,
+                "source": source.name,
                 "title": title,
                 "body": body,
                 "level": level,
@@ -967,6 +972,13 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
             .map(|plugin_id| ReadResult::Command(Command::Open(plugin_id.to_string())))
             .unwrap_or_else(|| ReadResult::Error("open requires a valid plugin_id".into())),
         "toast" => {
+            let text = |key: &str| {
+                request
+                    .input
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            };
             let title = request
                 .input
                 .get("title")
@@ -997,12 +1009,8 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                 .map(Box::new);
             match (title, body, level) {
                 (Some(title), Some(body), Some(level)) => ReadResult::Command(Command::Toast {
-                    source: request
-                        .input
-                        .get("source")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
+                    group: text("group").or(text("source")).unwrap_or_default(),
+                    source: text("source").unwrap_or_default(),
                     title: title.to_string(),
                     body: body.to_string(),
                     level: level.to_string(),
@@ -1157,6 +1165,29 @@ mod tests {
     }
 
     #[test]
+    fn toast_protocol_groups_by_plugin_id_and_names_the_plugin() {
+        let toast = |input: serde_json::Value| match parse_request(&DaemonRequest {
+            action: "toast".into(),
+            input,
+        }) {
+            ReadResult::Command(Command::Toast { group, source, .. }) => (group, source),
+            _ => panic!("toast request did not parse as a command"),
+        };
+        assert_eq!(
+            toast(serde_json::json!({
+                "group": "qol-shot", "source": "Shot", "title": "t", "body": "b", "level": "info",
+            })),
+            ("qol-shot".to_string(), "Shot".to_string())
+        );
+        assert_eq!(
+            toast(serde_json::json!({
+                "source": "Shot", "title": "t", "body": "b", "level": "info",
+            })),
+            ("Shot".to_string(), "Shot".to_string())
+        );
+    }
+
+    #[test]
     fn toast_protocol_accepts_complete_payloads_and_drops_invalid_actions() {
         let existing = tempfile::tempdir().unwrap();
         let existing_path = existing.path().join("target");
@@ -1173,6 +1204,7 @@ mod tests {
         };
         match parse_request(&request) {
             ReadResult::Command(Command::Toast {
+                group,
                 source,
                 title,
                 body,
@@ -1181,6 +1213,7 @@ mod tests {
                 artifact,
                 layout,
             }) => {
+                assert_eq!(group, "");
                 assert_eq!(source, "");
                 assert_eq!(title, "title");
                 assert_eq!(body, "body");

@@ -3,7 +3,7 @@ pub mod native_notifications;
 use qol_runtime::protocol::{NotificationLayout, NotificationLevel};
 
 pub fn show_plugin_notification(
-    source: &str,
+    plugin_id: Option<&str>,
     title: &str,
     body: &str,
     level: NotificationLevel,
@@ -14,7 +14,13 @@ pub fn show_plugin_notification(
     let system_notifications = crate::features::notifications::use_system_notifications();
     let toast_shown = !system_notifications
         && crate::settings_surface::show_toast(
-            source,
+            crate::settings_surface::ToastSource {
+                group: plugin_id.unwrap_or(qol_conventions::TRAY_DISPLAY_NAME),
+                name: &plugin_id.map_or_else(
+                    || qol_conventions::TRAY_DISPLAY_NAME.to_string(),
+                    crate::plugins::display_name,
+                ),
+            },
             title,
             body,
             notification_level_name(level),

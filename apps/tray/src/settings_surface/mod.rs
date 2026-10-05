@@ -80,8 +80,14 @@ pub fn apply_theme(native: &str, accent: &str) -> bool {
     platform::apply_theme(native, accent)
 }
 
+#[derive(Clone, Copy)]
+pub struct ToastSource<'a> {
+    pub group: &'a str,
+    pub name: &'a str,
+}
+
 pub fn show_toast(
-    source: &str,
+    source: ToastSource<'_>,
     title: &str,
     body: &str,
     level: &str,
