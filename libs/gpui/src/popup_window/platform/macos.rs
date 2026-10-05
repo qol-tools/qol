@@ -1,16 +1,20 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 use std::sync::{Mutex, Once, PoisonError};
 
+use block2::{DynBlock, RcBlock};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use futures::StreamExt as _;
 use objc2::rc::Retained;
-use objc2::runtime::NSObject;
+use objc2::runtime::{AnyObject, NSObject};
 use objc2::AnyThread;
 use objc2_app_kit::{
-    NSApplication, NSApplicationDidResignActiveNotification, NSColor, NSFloatingWindowLevel,
-    NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
-    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowDidResignKeyNotification,
-    NSWindowStyleMask,
+    NSApplication, NSApplicationDidResignActiveNotification, NSColor, NSEvent, NSEventMask,
+    NSEventType, NSFloatingWindowLevel, NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen,
+    NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
+    NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize,
@@ -27,6 +31,7 @@ type CFIndex = isize;
 
 const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1 << 0;
 const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 16;
+const K_VK_ESCAPE: u16 = 53;
 const K_CF_NUMBER_INT_TYPE: u64 = 3;
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
@@ -80,6 +85,11 @@ fn forget_window_number(title: &str) {
     if let Some(map) = registry.as_mut() {
         map.remove(title);
     }
+}
+
+fn pointer_inside(frame: NSRect, pointer: NSPoint) -> bool {
+    let (x, y) = (pointer.x - frame.origin.x, pointer.y - frame.origin.y);
+    x >= 0.0 && y >= 0.0 && x < frame.size.width && y < frame.size.height
 }
 
 fn onscreen_window_numbers() -> Vec<u32> {
@@ -223,6 +233,63 @@ impl EscapeGrab {
 
 pub fn grab_escape() -> Option<EscapeGrab> {
     None
+}
+
+pub struct InputWatch {
+    token: Retained<AnyObject>,
+    _handler: RcBlock<dyn Fn(NonNull<NSEvent>)>,
+    events: UnboundedReceiver<crate::popup_window::InputEvent>,
+}
+
+impl InputWatch {
+    pub async fn next(&mut self) -> Option<crate::popup_window::InputEvent> {
+        self.events.next().await
+    }
+}
+
+impl Drop for InputWatch {
+    fn drop(&mut self) {
+        unsafe { NSEvent::removeMonitor(&self.token) };
+    }
+}
+
+fn input_event_for(title: &str, event: &NSEvent) -> Option<crate::popup_window::InputEvent> {
+    use crate::popup_window::{InputEvent, PointerOnWindow};
+    let kind = event.r#type();
+    if kind == NSEventType::KeyDown {
+        return (event.keyCode() == K_VK_ESCAPE).then_some(InputEvent::Escape);
+    }
+    let inside = resolve_window(title).is_some_and(|window| {
+        window.isVisible() && pointer_inside(window.frame(), NSEvent::mouseLocation())
+    });
+    Some(InputEvent::Pointer(PointerOnWindow {
+        inside,
+        pressed: kind != NSEventType::MouseMoved,
+    }))
+}
+
+pub fn watch_input(title: &str) -> Option<InputWatch> {
+    let (sender, events) = unbounded();
+    let title = title.to_owned();
+    let handler = RcBlock::new(move |event: NonNull<NSEvent>| {
+        if let Some(input) = input_event_for(&title, unsafe { event.as_ref() }) {
+            let _ = sender.unbounded_send(input);
+        }
+    });
+    let handler_ref: &DynBlock<dyn Fn(NonNull<NSEvent>)> = &handler;
+    let token = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+        NSEventMask::MouseMoved
+            | NSEventMask::LeftMouseDown
+            | NSEventMask::RightMouseDown
+            | NSEventMask::OtherMouseDown
+            | NSEventMask::KeyDown,
+        handler_ref,
+    )?;
+    Some(InputWatch {
+        token,
+        _handler: handler,
+        events,
+    })
 }
 
 pub fn work_area_within(
@@ -1050,11 +1117,29 @@ pub fn window_holds_input_focus(title: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cocoa_bottom_edge, cocoa_origin_from_primary_anchored,
+        cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_inside,
         primary_anchored_from_screen_relative,
     };
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     const PRIMARY_HEIGHT: f64 = 1080.0;
+
+    fn window() -> NSRect {
+        NSRect::new(NSPoint::new(100.0, 200.0), NSSize::new(440.0, 600.0))
+    }
+
+    #[test]
+    fn a_pointer_outside_the_window_is_not_inside() {
+        assert!(!pointer_inside(window(), NSPoint::new(99.0, 300.0)));
+        assert!(!pointer_inside(window(), NSPoint::new(300.0, 801.0)));
+        assert!(!pointer_inside(window(), NSPoint::new(540.0, 300.0)));
+    }
+
+    #[test]
+    fn a_pointer_within_the_window_frame_is_inside() {
+        assert!(pointer_inside(window(), NSPoint::new(101.0, 201.0)));
+        assert!(pointer_inside(window(), NSPoint::new(539.0, 799.0)));
+    }
 
     struct Screen {
         origin_x: f64,

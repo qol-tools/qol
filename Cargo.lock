@@ -6627,6 +6627,7 @@ name = "qol-gpui"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "block2",
  "futures",
  "gpui",
  "image",
