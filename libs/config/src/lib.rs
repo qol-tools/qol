@@ -1,5 +1,6 @@
 pub mod contract;
 pub mod defaults;
+pub mod feature_flags;
 mod inspection;
 pub mod normalized;
 pub mod object_array;
@@ -41,6 +42,10 @@ pub fn data_dir() -> Option<PathBuf> {
 
 pub fn config_dir() -> Option<PathBuf> {
     resolve_namespaced(dirs::config_dir())
+}
+
+pub fn dev_console_state_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("dev/console.json"))
 }
 
 pub fn http_auth_token_path() -> Option<PathBuf> {

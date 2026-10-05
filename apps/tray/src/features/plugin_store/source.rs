@@ -79,8 +79,12 @@ pub(super) fn builtin_sources() -> Vec<PluginSource> {
     if let Some(override_sources) = test_sources_override() {
         return override_sources;
     }
+    sources_with(super::user_sources::load())
+}
+
+fn sources_with(user_repos: Vec<String>) -> Vec<PluginSource> {
     let mut sources = default_builtin_sources();
-    sources.extend(super::user_sources::load().into_iter().map(user_source));
+    sources.extend(user_repos.into_iter().map(user_source));
     sources
 }
 
@@ -325,12 +329,7 @@ mod tests {
 
     #[test]
     fn builtin_sources_follow_the_default_with_user_sources() {
-        let _env = crate::test_support::env_lock().blocking_lock();
-        let tmp = tempfile::tempdir().unwrap();
-        let _paths = crate::paths::push_test_path_root(tmp.path());
-        super::super::user_sources::add("me/plugins", &default_source_repos()).unwrap();
-
-        let sources = builtin_sources();
+        let sources = sources_with(vec!["me/plugins".to_string()]);
         let repos: Vec<&str> = sources.iter().map(|s| s.repo.as_str()).collect();
         assert_eq!(repos, ["qol-tools/qol", "me/plugins"]);
         assert_eq!(sources[1].git_ref, USER_SOURCE_REF);

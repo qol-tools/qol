@@ -8,6 +8,13 @@ const DUPLICATE_REPO: &str = "That source is already added";
 const BUILTIN_REPO: &str = "The default source cannot be removed";
 const UNKNOWN_REPO: &str = "Unknown source";
 const SAVE_FAILED: &str = "The sources could not be saved";
+const NOT_AVAILABLE: &str = "Adding sources is not available yet";
+
+/// Adding sources stays behind a feature flag until a source can be something
+/// other than a GitHub repository laid out like qol-tools/qol.
+pub(crate) fn enabled() -> bool {
+    qol_config::feature_flags::enabled(&qol_config::feature_flags::PLUGIN_SOURCES)
+}
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct UserSourcesFile {
@@ -16,6 +23,27 @@ struct UserSourcesFile {
 }
 
 pub(crate) fn load() -> Vec<String> {
+    if !enabled() {
+        return Vec::new();
+    }
+    stored()
+}
+
+pub(crate) fn add(repo: &str, builtin: &[String]) -> Result<String, String> {
+    if !enabled() {
+        return Err(NOT_AVAILABLE.to_string());
+    }
+    store_added(repo, builtin)
+}
+
+pub(crate) fn remove(repo: &str, builtin: &[String]) -> Result<(), String> {
+    if !enabled() {
+        return Err(NOT_AVAILABLE.to_string());
+    }
+    store_removed(repo, builtin)
+}
+
+fn stored() -> Vec<String> {
     match path().and_then(|path| crate::file_io::load_json_or_default::<UserSourcesFile>(&path)) {
         Ok(file) => file.repos,
         Err(error) => {
@@ -25,14 +53,14 @@ pub(crate) fn load() -> Vec<String> {
     }
 }
 
-pub(crate) fn add(repo: &str, builtin: &[String]) -> Result<String, String> {
-    let (repo, repos) = with_added(load(), builtin, repo)?;
+fn store_added(repo: &str, builtin: &[String]) -> Result<String, String> {
+    let (repo, repos) = with_added(stored(), builtin, repo)?;
     save(repos)?;
     Ok(repo)
 }
 
-pub(crate) fn remove(repo: &str, builtin: &[String]) -> Result<(), String> {
-    let repos = with_removed(load(), builtin, repo)?;
+fn store_removed(repo: &str, builtin: &[String]) -> Result<(), String> {
+    let repos = with_removed(stored(), builtin, repo)?;
     save(repos)
 }
 
@@ -194,18 +222,24 @@ mod tests {
     fn user_sources_round_trip_through_the_config_file() {
         let tmp = tempfile::tempdir().unwrap();
         let _paths = crate::paths::push_test_path_root(tmp.path());
-        assert!(load().is_empty());
+        assert!(stored().is_empty());
 
-        assert_eq!(add("me/plugins", &builtin()), Ok("me/plugins".to_string()));
-        assert_eq!(add("you/more", &builtin()), Ok("you/more".to_string()));
-        assert_eq!(load(), ["me/plugins", "you/more"]);
         assert_eq!(
-            add("me/plugins", &builtin()),
+            store_added("me/plugins", &builtin()),
+            Ok("me/plugins".to_string())
+        );
+        assert_eq!(
+            store_added("you/more", &builtin()),
+            Ok("you/more".to_string())
+        );
+        assert_eq!(stored(), ["me/plugins", "you/more"]);
+        assert_eq!(
+            store_added("me/plugins", &builtin()),
             Err(DUPLICATE_REPO.to_string())
         );
 
-        assert_eq!(remove("me/plugins", &builtin()), Ok(()));
-        assert_eq!(load(), ["you/more"]);
+        assert_eq!(store_removed("me/plugins", &builtin()), Ok(()));
+        assert_eq!(stored(), ["you/more"]);
         assert!(path().unwrap().starts_with(tmp.path()));
     }
 }

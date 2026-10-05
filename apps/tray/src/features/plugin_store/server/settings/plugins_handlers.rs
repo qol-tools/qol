@@ -44,6 +44,7 @@ struct PluginView {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 struct PluginsPayload {
     revalidating: bool,
+    can_add_sources: bool,
     sources: Vec<SourcePayload>,
     plugins: Vec<PluginPayload>,
 }
@@ -339,11 +340,17 @@ fn collect_payload(state: &AppState) -> HttpResult<PluginsPayload> {
             repo: source.repo,
         })
         .collect();
-    Ok(build_payload(catalog.revalidating, sources, views))
+    Ok(build_payload(
+        catalog.revalidating,
+        user_sources::enabled(),
+        sources,
+        views,
+    ))
 }
 
 fn build_payload(
     revalidating: bool,
+    can_add_sources: bool,
     sources: Vec<SourcePayload>,
     mut views: Vec<PluginView>,
 ) -> PluginsPayload {
@@ -355,6 +362,7 @@ fn build_payload(
     });
     PluginsPayload {
         revalidating,
+        can_add_sources,
         sources,
         plugins: views.into_iter().map(plugin_payload).collect(),
     }
@@ -457,6 +465,7 @@ mod tests {
         removing.job = job(JobState::Removing, 4, Some("ignored"));
         let payload = build_payload(
             true,
+            false,
             vec![SourcePayload {
                 repo: "qol-tools/qol".to_string(),
                 builtin: true,
@@ -467,6 +476,7 @@ mod tests {
             serde_json::to_value(&payload).unwrap(),
             serde_json::json!({
                 "revalidating": true,
+                "can_add_sources": false,
                 "sources": [{ "repo": "qol-tools/qol", "builtin": true }],
                 "plugins": [
                     {
@@ -506,6 +516,7 @@ mod tests {
         let available = view("plugin-0", "Alpha", None);
 
         let payload = build_payload(
+            false,
             false,
             Vec::new(),
             vec![

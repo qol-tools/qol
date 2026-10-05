@@ -1432,7 +1432,10 @@ mod tests {
         let text = render_text(&mut dash);
         assert!(text.contains("feature flags"), "missing feature panel");
         assert!(text.contains("select flag"), "missing feature keys");
-        assert!(text.contains("no feature flags"), "missing empty state");
+        assert!(
+            text.contains("plugin.sources"),
+            "missing the plugin sources flag"
+        );
         assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         assert!(
             !dash.trace_details_enabled(),
@@ -1440,12 +1443,15 @@ mod tests {
         );
 
         edit_feature_flags(&mut dash, KeyCode::Enter);
+        assert_eq!(dash.features.ids(), ["plugin.sources"]);
+        assert!(dash.state_dirty, "a toggled flag is saved");
         assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         assert!(
             !dash.trace_details_enabled(),
             "renderer flag must not toggle details"
         );
         edit_feature_flags(&mut dash, KeyCode::Char(' '));
+        assert!(dash.features.ids().is_empty());
         assert_eq!(dash.trace_renderer(), TraceRenderer::Rust);
         edit_feature_flags(&mut dash, KeyCode::Esc);
         assert!(!dash.feature_panel.is_active(), "esc closes feature panel");

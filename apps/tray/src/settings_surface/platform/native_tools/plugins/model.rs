@@ -38,6 +38,8 @@ pub(super) struct CatalogPlugin {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub(super) struct Snapshot {
     #[serde(default)]
+    pub(super) can_add_sources: bool,
+    #[serde(default)]
     pub(super) sources: Vec<Source>,
     #[serde(default)]
     pub(super) plugins: Vec<CatalogPlugin>,
@@ -194,20 +196,22 @@ pub(super) fn plugin_rows(snapshot: &Snapshot, visit: &Visit<'_>) -> Vec<Row> {
 }
 
 pub(super) fn source_rows(snapshot: &Snapshot, naming: bool) -> Vec<Row> {
-    let add = if naming {
-        Row::new(
-            RowKind::Field,
-            "New source",
-            Some("Type owner/repo, then Enter.".to_string()),
-        )
-        .enter(Enter::CommitAdd, "add")
-    } else {
-        Row::new(RowKind::Add, "+ Add source", None).enter(Enter::StartAdd, "add")
-    };
-    let mut rows = vec![add];
+    let mut rows = Vec::new();
+    if snapshot.can_add_sources {
+        rows.push(if naming {
+            Row::new(
+                RowKind::Field,
+                "New source",
+                Some("Type owner/repo, then Enter.".to_string()),
+            )
+            .enter(Enter::CommitAdd, "add")
+        } else {
+            Row::new(RowKind::Add, "+ Add source", None).enter(Enter::StartAdd, "add")
+        });
+    }
     rows.extend(snapshot.sources.iter().map(|source| {
         let row = source_row(source);
-        if source.builtin {
+        if source.builtin || !snapshot.can_add_sources {
             row
         } else {
             row.delete(RowAction::RemoveSource(source.repo.clone()), "remove")
@@ -320,6 +324,7 @@ mod tests {
 
     fn snapshot(plugins: Vec<CatalogPlugin>) -> Snapshot {
         Snapshot {
+            can_add_sources: true,
             sources: vec![
                 Source {
                     repo: "qol-tools/qol".to_string(),
@@ -632,6 +637,15 @@ mod tests {
         assert_eq!(typing[0].kind, RowKind::Field);
         assert_eq!(typing[0].enter, Some((Enter::CommitAdd, "add")));
         assert_eq!(typing.len(), rows.len());
+    }
+
+    #[test]
+    fn the_sources_page_only_lists_sources_while_adding_is_off() {
+        let mut snapshot = snapshot(Vec::new());
+        snapshot.can_add_sources = false;
+        let rows = source_rows(&snapshot, false);
+        assert_eq!(labels(&rows), ["qol-tools/qol", "me/tools"]);
+        assert!(rows.iter().all(|row| row.delete.is_none()));
     }
 
     #[test]
