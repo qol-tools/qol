@@ -135,9 +135,22 @@ fn paint_track(window: &mut Window, bounds: Bounds<Pixels>, state: CueState, ink
     ));
 }
 
+#[derive(Clone, Copy)]
 pub enum OverflowEdge {
     Top,
     Bottom,
+}
+
+pub fn overflow_fade(edge: OverflowEdge, edge_ink: u32, clear: u32) -> Background {
+    let (start, end) = match edge {
+        OverflowEdge::Top => (edge_ink, clear),
+        OverflowEdge::Bottom => (clear, edge_ink),
+    };
+    linear_gradient(
+        180.0,
+        linear_color_stop(rgba(start), 0.0),
+        linear_color_stop(rgba(end), 1.0),
+    )
 }
 
 pub fn overflow_edges(
@@ -159,7 +172,7 @@ fn paint_overflow_edge(
 ) {
     let fade_h = px(OVERFLOW_FADE_HEIGHT).min(bounds.size.height);
     let rise = px(OVERFLOW_CHEVRON_RISE);
-    let (band_top, centre_y, tip_y, wing_y, band_start, band_end) = match edge {
+    let (band_top, centre_y, tip_y, wing_y) = match edge {
         OverflowEdge::Top => {
             let centre_y = bounds.top() + px(OVERFLOW_CUE_CENTRE);
             (
@@ -167,8 +180,6 @@ fn paint_overflow_edge(
                 centre_y,
                 centre_y - rise * 0.5,
                 centre_y + rise * 0.5,
-                qol_theme::solid(ink.surface),
-                qol_theme::clear(ink.surface),
             )
         }
         OverflowEdge::Bottom => {
@@ -178,8 +189,6 @@ fn paint_overflow_edge(
                 centre_y,
                 centre_y + rise * 0.5,
                 centre_y - rise * 0.5,
-                qol_theme::clear(ink.surface),
-                qol_theme::solid(ink.surface),
             )
         }
     };
@@ -188,10 +197,10 @@ fn paint_overflow_edge(
             point(bounds.left(), band_top),
             size(bounds.size.width, fade_h),
         ),
-        linear_gradient(
-            180.0,
-            linear_color_stop(rgba(band_start), 0.0),
-            linear_color_stop(rgba(band_end), 1.0),
+        overflow_fade(
+            edge,
+            qol_theme::solid(ink.surface),
+            qol_theme::clear(ink.surface),
         ),
     ));
     let clear = ink.streak & 0xffff_ff00;

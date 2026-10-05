@@ -1,14 +1,12 @@
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use gpui::*;
 use qol_theme::TextStyle;
 
-use super::{
-    row_lift, BannerPresenter, RowId, SlabPresenter, SlabSnapshotRow, Toast, DISMISS_WIDTH,
-    PREVIEW_WIDTH,
-};
+use super::{RowId, SlabSnapshotRow, ToastTone};
 use crate::kit::Kit;
 use crate::text::{cased, TextStyled};
-
-const RING_DIAMETER: f32 = 24.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct Ring {
@@ -16,33 +14,68 @@ pub(super) struct Ring {
     pub ink: u32,
 }
 
-#[derive(Clone)]
-pub(super) enum CardHost {
-    Slab(SlabPresenter),
-    Banner(BannerPresenter, Box<Toast>),
+#[derive(Clone, Copy)]
+pub(super) enum CardAct {
+    Open,
+    Preview,
+    Close,
 }
 
-impl CardHost {
-    fn activate(&self, id: RowId, cx: &mut App) {
-        match self {
-            Self::Slab(host) => host.activate(id, cx),
-            Self::Banner(host, toast) => host.run(toast.activation.clone(), cx),
-        }
-    }
+pub(super) trait CardHost {
+    fn act(&self, id: RowId, act: CardAct, cx: &mut App);
+}
 
-    fn open_preview(&self, id: RowId, cx: &mut App) {
-        match self {
-            Self::Slab(host) => host.open_preview(id, cx),
-            Self::Banner(host, toast) => host.run(toast.preview_action.clone(), cx),
-        }
-    }
+pub(super) type Host = Rc<dyn CardHost>;
 
-    fn remove(&self, id: RowId, cx: &mut App) {
-        match self {
-            Self::Slab(host) => host.remove(id, cx),
-            Self::Banner(host, _) => host.dismiss(cx),
-        }
+pub(super) fn row_ground(row: &SlabSnapshotRow, kit: Kit) -> u32 {
+    if row.toast.live {
+        kit.grounds.menu.bg
+    } else {
+        tone_ground(row.toast.tone, kit)
     }
+}
+
+pub(super) fn row_lift(row: &SlabSnapshotRow, kit: Kit) -> Rgba {
+    rgb(qol_theme::lift(row_ground(row, kit), kit.grounds.pane.ink))
+}
+
+fn tone_ground(tone: ToastTone, kit: Kit) -> u32 {
+    if tone == ToastTone::Danger {
+        kit.grounds.invalid.bg
+    } else {
+        kit.grounds.pane.bg
+    }
+}
+
+pub(super) fn age_label(age: Duration) -> String {
+    let minutes = age.as_secs() / 60;
+    match minutes {
+        0 => "now".to_string(),
+        1..=59 => format!("{minutes} min"),
+        _ => format!("{} h", minutes / 60),
+    }
+}
+
+pub(super) fn lone(row: &SlabSnapshotRow, host: Option<Host>, now: Instant) -> Div {
+    let kit = crate::kit::kit();
+    let ring = row.toast.effective_timeout().map(|timeout| Ring {
+        remaining: row.deadline.map_or(1.0, |deadline| {
+            deadline.saturating_duration_since(now).as_secs_f32() / timeout.as_secs_f32()
+        }),
+        ink: row.toast.tone.color(kit),
+    });
+    kit.window().bg(rgb(row_ground(row, kit))).child(content(
+        row,
+        CardParts {
+            scale: 1.0,
+            content: 1.0,
+            interactive: host.is_some(),
+            ring,
+            age: age_label(now.saturating_duration_since(row.created)),
+        },
+        kit,
+        host,
+    ))
 }
 
 pub(super) struct CardParts {
@@ -57,7 +90,7 @@ pub(super) fn content(
     row: &SlabSnapshotRow,
     parts: CardParts,
     kit: Kit,
-    host: Option<CardHost>,
+    host: Option<Host>,
 ) -> Div {
     let scale = parts.scale;
     let mut card = div()
@@ -70,7 +103,9 @@ pub(super) fn content(
         .child(dismiss(row, &parts, kit, host.clone()));
     if let Some(host) = host.filter(|_| parts.interactive) {
         let id = row.id;
-        card = card.on_mouse_down(MouseButton::Middle, move |_, _, cx| host.remove(id, cx));
+        card = card.on_mouse_down(MouseButton::Middle, move |_, _, cx| {
+            host.act(id, CardAct::Close, cx)
+        });
     }
     card
 }
@@ -80,7 +115,7 @@ fn lead(
     scale: f32,
     interactive: bool,
     kit: Kit,
-    host: Option<CardHost>,
+    host: Option<Host>,
 ) -> AnyElement {
     let Some(preview) = &row.toast.preview else {
         return div()
@@ -91,7 +126,7 @@ fn lead(
     let slot = div()
         .flex_none()
         .h_full()
-        .w(px(PREVIEW_WIDTH * scale))
+        .w(px(qol_theme::toast::PREVIEW * scale))
         .mr(px(qol_theme::SPACE_CELL * scale))
         .flex()
         .overflow_hidden()
@@ -105,16 +140,11 @@ fn lead(
             slot.id(("toast-preview", id.0)).cursor_pointer(),
             row_lift(row, kit),
         )
-        .on_click(move |_, _, cx| host.open_preview(id, cx))
+        .on_click(move |_, _, cx| host.act(id, CardAct::Preview, cx))
         .into_any_element()
 }
 
-fn text_zone(
-    row: &SlabSnapshotRow,
-    parts: &CardParts,
-    kit: Kit,
-    host: Option<CardHost>,
-) -> AnyElement {
+fn text_zone(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Host>) -> AnyElement {
     let column = text_column(row, parts, kit);
     let Some(host) = host.filter(|_| parts.interactive && row.toast.activation.is_some()) else {
         return column.into_any_element();
@@ -125,7 +155,7 @@ fn text_zone(
             column.id(("toast-open", id.0)).cursor_pointer(),
             row_lift(row, kit),
         )
-        .on_click(move |_, _, cx| host.activate(id, cx))
+        .on_click(move |_, _, cx| host.act(id, CardAct::Open, cx))
         .into_any_element()
 }
 
@@ -202,14 +232,9 @@ fn path_line(head: String, tail: String, scale: f32, kit: Kit) -> Div {
     line.child(piece(tail))
 }
 
-fn dismiss(
-    row: &SlabSnapshotRow,
-    parts: &CardParts,
-    kit: Kit,
-    host: Option<CardHost>,
-) -> AnyElement {
+fn dismiss(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Host>) -> AnyElement {
     let scale = parts.scale;
-    let side = DISMISS_WIDTH * scale;
+    let side = qol_theme::toast::CLOSE * scale;
     let mut control = div()
         .id(("toast-dismiss", row.id.0))
         .flex_none()
@@ -233,12 +258,12 @@ fn dismiss(
     let id = row.id;
     crate::kit::kit()
         .pointable(control.cursor_pointer(), row_lift(row, kit))
-        .on_click(move |_, _, cx| host.remove(id, cx))
+        .on_click(move |_, _, cx| host.act(id, CardAct::Close, cx))
         .into_any_element()
 }
 
 fn ring_view(ring: Ring, scale: f32, kit: Kit) -> Div {
-    let diameter = RING_DIAMETER * scale;
+    let diameter = qol_theme::toast::RING * scale;
     let stroke = qol_theme::LINE * scale;
     let well = kit.grounds.pane.well.packed();
     div().absolute().size(px(diameter)).child(
@@ -280,7 +305,12 @@ fn ring_view(ring: Ring, scale: f32, kit: Kit) -> Div {
     )
 }
 
-pub(super) fn strip(count: usize, scale: f32, kit: Kit, host: SlabPresenter) -> Div {
+pub(super) fn strip(
+    count: usize,
+    scale: f32,
+    kit: Kit,
+    clear_all: impl Fn(&mut App) + 'static,
+) -> Div {
     let ground = kit.grounds.pane;
     div()
         .size_full()
@@ -305,7 +335,7 @@ pub(super) fn strip(count: usize, scale: f32, kit: Kit, host: SlabPresenter) -> 
                 .cursor_pointer()
                 .text_color(rgb(ground.soft))
                 .child(SharedString::from("Clear all"))
-                .on_click(move |_, _, cx| host.clear_all(cx)),
+                .on_click(move |_, _, cx| clear_all(cx)),
         )
 }
 
@@ -334,4 +364,25 @@ pub(super) fn show_all(words: f32, kit: Kit) -> Div {
 
 pub(super) fn card_id(id: RowId) -> (&'static str, u64) {
     ("toast-card", id.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::age_label;
+
+    #[test]
+    fn ages_read_now_then_minutes_then_hours() {
+        let cases = [
+            (0, "now"),
+            (59, "now"),
+            (60, "1 min"),
+            (3599, "59 min"),
+            (7200, "2 h"),
+        ];
+        for (seconds, expected) in cases {
+            assert_eq!(age_label(Duration::from_secs(seconds)), expected);
+        }
+    }
 }

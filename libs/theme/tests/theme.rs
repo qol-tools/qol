@@ -2701,9 +2701,10 @@ fn every_heading_notice_and_empty_list_is_a_kit_part() {
     );
 }
 
-const FRAMED_WINDOWS: [&str; 8] = [
+const FRAMED_WINDOWS: [&str; 9] = [
     "libs/gpui/src/settings_panel/view/mod.rs",
-    "libs/gpui/src/toast/mod.rs",
+    "libs/gpui/src/toast/card.rs",
+    "libs/gpui/src/toast/slab/view.rs",
     "plugins/cli-sessions/src/ui/render.rs",
     "plugins/launcher/src/ui/render.rs",
     "plugins/removeapp/src/ui/mod.rs",

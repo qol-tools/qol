@@ -1,21 +1,21 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use qol_theme::Motion;
 
-pub(super) const CARD_WIDTH: f32 = 440.0;
-pub(super) const CARD_HEIGHT: f32 = 84.0;
+pub(super) const CARD_WIDTH: f32 = qol_theme::toast::WIDTH;
+pub(super) const CARD_HEIGHT: f32 = qol_theme::toast::HEIGHT;
 pub(super) const STRIP_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
-pub(super) const GROW: f32 = 1.2;
+const GROW: f32 = qol_theme::toast::GROW;
 pub(super) const WIDTH: f32 = CARD_WIDTH * GROW;
 const EDGE_STEP: f32 = qol_theme::SPACE_SNUG;
 const EDGE_INSET: f32 = qol_theme::SPACE_CELL;
 const MAX_EDGES: usize = 3;
-const EDGE_BAND: f32 = 32.0;
-pub(super) const WORDS_ROW: f32 = 24.0;
+const EDGE_BAND: f32 = qol_theme::toast::FAN;
+pub(super) const WORDS_ROW: f32 = qol_theme::toast::SHOW_ALL_ROW;
 pub(super) const WORDS_RISE: f32 = qol_theme::SPACE_TIGHT;
 const LIST_GAP: f32 = qol_theme::SPACE_INSET;
-const LEAVE_SCALE: f32 = 0.92;
-const EDGE_FLOOR: f32 = 0.3;
+const LEAVE_SCALE: f32 = qol_theme::toast::LEAVE_SCALE;
+const EDGE_FLOOR: f32 = qol_theme::toast::EDGE_FLOOR;
 pub(super) const GLIDE: Motion = Motion::QUICK;
 pub(super) const LIST_STEP: f32 = CARD_HEIGHT + LIST_GAP;
 
@@ -328,15 +328,6 @@ impl Tween {
     }
 }
 
-pub(super) fn age_label(age: Duration) -> String {
-    let minutes = age.as_secs() / 60;
-    match minutes {
-        0 => "now".to_string(),
-        1..=59 => format!("{minutes} min"),
-        _ => format!("{} h", minutes / 60),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,20 +534,6 @@ mod tests {
             edge_fade(room / 2.0, room, LIST_STEP, LIST_STEP),
             1.0
         ));
-    }
-
-    #[test]
-    fn ages_read_now_then_minutes_then_hours() {
-        let cases = [
-            (0, "now"),
-            (59, "now"),
-            (60, "1 min"),
-            (3599, "59 min"),
-            (7200, "2 h"),
-        ];
-        for (seconds, expected) in cases {
-            assert_eq!(age_label(Duration::from_secs(seconds)), expected);
-        }
     }
 
     #[test]

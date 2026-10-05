@@ -96,6 +96,7 @@ pub struct WindowGeometrySession {
     root: u32,
     wid: u32,
     target: u32,
+    title: Arc<str>,
 }
 
 pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
@@ -111,6 +112,7 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
         root,
         wid,
         target,
+        title: title.into(),
     })
 }
 
@@ -166,6 +168,15 @@ impl WindowGeometrySession {
         ))
     }
 
+    pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
+        pointer_on(&*self.conn, self.root, self.wid)
+    }
+
+    pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
+        let region = remember_input_region(&self.title, x, y, width, height);
+        set_input_rectangles(&*self.conn, self.wid, &[region])
+    }
+
     pub fn anchor_content(&self, right: bool, bottom: bool) {
         let gravity = match (right, bottom) {
             (false, false) => Gravity::NORTH_WEST,
@@ -184,11 +195,10 @@ pub fn window_bounds_primary_anchored(window: &mut gpui::Window) -> gpui::Bounds
 }
 
 const ESCAPE_KEYSYM: u32 = 0xff1b;
-const ESCAPE_POLL: Duration = Duration::from_millis(20);
 
 pub struct EscapeGrab {
     pressed: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
+    stop_write: i32,
     conn: Arc<x11rb::rust_connection::RustConnection>,
     root: Window,
     keycode: u8,
@@ -202,7 +212,7 @@ impl EscapeGrab {
 
 impl Drop for EscapeGrab {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        signal_stop(self.stop_write);
         let _ = self.conn.ungrab_key(self.keycode, self.root, ModMask::ANY);
         let _ = self.conn.flush();
     }
@@ -238,27 +248,41 @@ pub fn grab_escape() -> Option<EscapeGrab> {
         .check()
         .ok()?;
     }
+    conn.flush().ok()?;
+    let (stop_read, stop_write) = stop_pipe()?;
     let pressed = Arc::new(AtomicBool::new(false));
-    let stop = Arc::new(AtomicBool::new(false));
     let conn = Arc::new(conn);
-    let (seen, halt, events) = (pressed.clone(), stop.clone(), conn.clone());
-    std::thread::spawn(move || {
-        while !halt.load(Ordering::Acquire) {
-            while let Ok(Some(event)) = events.poll_for_event() {
-                if matches!(event, Event::KeyPress(_)) {
-                    seen.store(true, Ordering::Release);
+    let fd = conn.stream().as_raw_fd();
+    let (seen, events) = (pressed.clone(), conn.clone());
+    let spawned = std::thread::Builder::new()
+        .name("qol-escape-grab".to_string())
+        .spawn(move || {
+            while wait_for_x11(fd, stop_read) {
+                while let Ok(Some(event)) = events.poll_for_event() {
+                    if matches!(event, Event::KeyPress(_)) {
+                        seen.store(true, Ordering::Release);
+                    }
                 }
             }
-            std::thread::sleep(ESCAPE_POLL);
-        }
-    });
-    Some(EscapeGrab {
+            unsafe {
+                libc::close(stop_read);
+            }
+        })
+        .is_ok();
+    let grab = EscapeGrab {
         pressed,
-        stop,
+        stop_write,
         conn,
         root,
         keycode,
-    })
+    };
+    if !spawned {
+        unsafe {
+            libc::close(stop_read);
+        }
+        return None;
+    }
+    Some(grab)
 }
 
 pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bounds<gpui::Pixels>> {
@@ -290,7 +314,9 @@ pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bou
     let right = left + f64::from(monitor.size.width) as i64;
     let bottom = top + f64::from(monitor.size.height) as i64;
     areas
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|area| {
             (
                 area[0].max(left),
@@ -324,11 +350,19 @@ pub fn pointer_over_window_by_title(title: &str) -> bool {
 pub fn pointer_on_window_by_title(title: &str) -> Option<crate::popup_window::PointerOnWindow> {
     let (conn, _screen_num, root, list_atom, name_atom, utf8_atom) = connect_with_atoms()?;
     let wid = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title)?;
+    pointer_on(&conn, root, wid)
+}
+
+fn pointer_on(
+    conn: &impl Connection,
+    root: Window,
+    wid: Window,
+) -> Option<crate::popup_window::PointerOnWindow> {
     let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
     let pressed = u16::from(pointer.mask)
         & u16::from(KeyButMask::BUTTON1 | KeyButMask::BUTTON2 | KeyButMask::BUTTON3)
         != 0;
-    let inside = pointer_inside(&conn, root, wid, &pointer)?;
+    let inside = pointer_inside(conn, root, wid, &pointer)?;
     Some(crate::popup_window::PointerOnWindow { inside, pressed })
 }
 
@@ -370,6 +404,18 @@ fn pointer_inside(
 static INPUT_REGIONS: Mutex<BTreeMap<String, Rectangle>> = Mutex::new(BTreeMap::new());
 
 pub fn set_input_region_by_title(title: &str, x: i16, y: i16, width: u16, height: u16) -> bool {
+    let region = remember_input_region(title, x, y, width, height);
+    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
+    else {
+        return false;
+    };
+    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
+        return false;
+    };
+    set_input_rectangles(&conn, wid, &[region])
+}
+
+fn remember_input_region(title: &str, x: i16, y: i16, width: u16, height: u16) -> Rectangle {
     let region = Rectangle {
         x,
         y,
@@ -379,14 +425,7 @@ pub fn set_input_region_by_title(title: &str, x: i16, y: i16, width: u16, height
     if let Ok(mut regions) = INPUT_REGIONS.lock() {
         regions.insert(title.to_string(), region);
     }
-    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
-    else {
-        return false;
-    };
-    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        return false;
-    };
-    set_input_rectangles(&conn, wid, &[region])
+    region
 }
 
 fn set_input_rectangles(conn: &impl Connection, wid: u32, rectangles: &[Rectangle]) -> bool {
@@ -1321,7 +1360,7 @@ pub fn release_focus_by_title(title: &str) {
 
 static INPUT_HELD: AtomicBool = AtomicBool::new(false);
 static INPUT_HOLD: Mutex<Option<InputHold>> = Mutex::new(None);
-const INPUT_HOLD_STOP: &[u8] = b"q";
+const STOP_SIGNAL: &[u8] = b"q";
 
 struct InputHold {
     stop_write: i32,
@@ -1344,15 +1383,13 @@ pub fn hold_input(title: &str) -> bool {
         qol_runtime::probe!("INPUT_HOLD", "title={title} armed=false");
         return false;
     };
-    let mut stop_fds = [0 as libc::c_int; 2];
-    if unsafe { libc::pipe(stop_fds.as_mut_ptr()) } != 0 {
+    let Some((stop_read, stop_write)) = stop_pipe() else {
         qol_runtime::probe!(
             "INPUT_HOLD",
             "title={title} wid={wid} armed=false pipe=false"
         );
         return false;
-    }
-    let [stop_read, stop_write] = stop_fds;
+    };
     let alive = Arc::new(AtomicBool::new(true));
     let stored = INPUT_HOLD
         .lock()
@@ -1398,10 +1435,50 @@ fn stop_input_hold_thread() {
     let hold = INPUT_HOLD.lock().ok().and_then(|mut slot| slot.take());
     if let Some(hold) = hold {
         hold.alive.store(false, Ordering::Relaxed);
-        unsafe {
-            libc::write(hold.stop_write, INPUT_HOLD_STOP.as_ptr().cast(), 1);
-            libc::close(hold.stop_write);
+        signal_stop(hold.stop_write);
+    }
+}
+
+fn stop_pipe() -> Option<(i32, i32)> {
+    let mut fds = [0 as libc::c_int; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    Some((fds[0], fds[1]))
+}
+
+fn signal_stop(stop_write: i32) {
+    unsafe {
+        libc::write(stop_write, STOP_SIGNAL.as_ptr().cast(), 1);
+        libc::close(stop_write);
+    }
+}
+
+fn wait_for_x11(fd: i32, stop_read: i32) -> bool {
+    loop {
+        let mut fds = [
+            libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stop_read,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        if ready < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return false;
         }
+        if ready == 0 {
+            continue;
+        }
+        return fds[1].revents == 0 && fds[0].revents & libc::POLLIN != 0;
     }
 }
 
@@ -1439,35 +1516,7 @@ fn input_hold_loop(
     alive: Arc<AtomicBool>,
 ) {
     let mut refocus_times: Vec<Instant> = Vec::new();
-    'outer: loop {
-        let mut fds = [
-            libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: stop_read,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
-        if ready < 0 {
-            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            break;
-        }
-        if ready == 0 {
-            continue;
-        }
-        if fds[1].revents != 0 {
-            break;
-        }
-        if fds[0].revents & libc::POLLIN == 0 {
-            break;
-        }
+    'outer: while wait_for_x11(fd, stop_read) {
         while let Ok(Some(event)) = conn.poll_for_event() {
             let Event::FocusOut(focus) = event else {
                 continue;

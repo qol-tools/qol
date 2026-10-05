@@ -4,6 +4,7 @@ pub mod marks;
 pub mod motion;
 pub mod quiet;
 pub mod text;
+pub mod toast;
 
 pub use depth::{
     clear, solid, translucent, Alpha, Shadow, ShadowLayer, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,

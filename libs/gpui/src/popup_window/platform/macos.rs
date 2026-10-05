@@ -196,6 +196,14 @@ impl WindowGeometrySession {
         None
     }
 
+    pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
+        None
+    }
+
+    pub fn set_input_region(&self, _x: i16, _y: i16, _width: u16, _height: u16) -> bool {
+        false
+    }
+
     pub fn anchor_content(&self, _right: bool, _bottom: bool) {}
 }
 
