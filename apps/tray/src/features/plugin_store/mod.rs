@@ -1,4 +1,5 @@
 pub(crate) mod github;
+mod index;
 pub mod installer;
 mod platform;
 pub(crate) use platform::display_label as host_os_label;

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::source::PluginSource;
+use super::source::{PluginSource, SourceCatalog};
 
 mod command;
 mod dependency;
@@ -24,6 +24,15 @@ const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) enum InstallSource {
     Latest,
     TaggedVersion(String),
+}
+
+impl InstallSource {
+    fn version(&self) -> Option<&str> {
+        match self {
+            Self::Latest => None,
+            Self::TaggedVersion(version) => Some(version),
+        }
+    }
 }
 
 pub(crate) struct PluginInstaller {
@@ -138,12 +147,26 @@ impl PluginInstaller {
             }
             _ => InstallSource::Latest,
         };
-        let result = source::clone_source_repo(source, &staging_dir, plugin_id, &install_source)
-            .await
-            .and_then(|_| {
-                let plugin_subdir = source::find_plugin_source_dir(&staging_dir, plugin_id)?;
-                crate::plugins::config::load_config_contract_from_root(&plugin_subdir)
-            });
+        let result = match &source.catalog {
+            SourceCatalog::GitHubReleases => {
+                source::clone_source_repo(source, &staging_dir, plugin_id, &install_source)
+                    .await
+                    .and_then(|_| {
+                        let plugin_subdir =
+                            source::find_plugin_source_dir(&staging_dir, plugin_id)?;
+                        crate::plugins::config::load_config_contract_from_root(&plugin_subdir)
+                    })
+            }
+            SourceCatalog::SignedIndex(location) => {
+                super::index::load_config_contract(
+                    location,
+                    plugin_id,
+                    install_source.version(),
+                    &staging_dir,
+                )
+                .await
+            }
+        };
         staging::cleanup_temp_dir(&staging_dir).await;
         result
     }

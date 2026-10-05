@@ -131,13 +131,19 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish GitHub release
+    name: Publish release
     needs: [setup, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+      packages: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+
       - name: Download artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -147,6 +153,24 @@ jobs:
         run: |
           mkdir -p release_files
           find artifacts -type f -exec cp {} release_files/ \;
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+        with:
+          version: 1.3.4
+
+      - name: Publish registry artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "${GH_TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          python3 .github/scripts/plugin_artifact.py \
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
+            --source "https://github.com/${GITHUB_REPOSITORY}" \
+            push --tag "${RELEASE_TAG}" --files release_files
 
       - name: Create or update release
         env:
@@ -166,3 +190,17 @@ jobs:
           fi
           gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*
           gh release edit "$tag" --draft=false --latest=false
+
+  index:
+    name: Refresh plugin index
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the index build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run plugin-index.yml --ref main

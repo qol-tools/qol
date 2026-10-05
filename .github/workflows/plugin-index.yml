@@ -1,0 +1,76 @@
+name: Publish plugin index
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+# One build at a time. GitHub keeps only the newest pending run, and every run
+# rebuilds the whole index from the registry, so skipped runs lose nothing.
+concurrency:
+  group: plugin-index
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and sign index
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: plugin-index
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+        with:
+          version: 1.3.4
+
+      - name: Build index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GH_TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          python3 .github/scripts/plugin_index.py \
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
+            --output site/plugins/index.json | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Sign index
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.PLUGIN_INDEX_MINISIGN_KEY }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          key="${RUNNER_TEMP}/plugin-index.key"
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "${key}"
+          minisign -S -s "${key}" -m site/plugins/index.json -x site/plugins/index.json.minisig -t "qol plugin index"
+          rm -f "${key}"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

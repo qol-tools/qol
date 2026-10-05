@@ -15,7 +15,7 @@ pub(crate) use token::{build_github_request, get_stored_token, send_checked};
 
 use super::source::PluginSource;
 use anyhow::Result;
-use catalog::build_plugin_metadata;
+pub(in crate::features::plugin_store) use catalog::build_plugin_metadata;
 use tree::collect_plugin_dirs;
 
 pub(crate) const CACHE_TTL_SECS: u64 = 3600;

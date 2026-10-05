@@ -218,6 +218,41 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('gh release edit "$tag" --draft=false --latest=false', workflow)
         self.assertNotIn("--latest=true", workflow)
 
+    def test_plugin_publish_pushes_the_registry_artifact_first(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        release = workflow.split("  release:\n", 1)[1].split("  index:\n", 1)[0]
+        self.assertIn("packages: write", release)
+        push = named_step(release, "Publish registry artifact", "      ")
+        for contract in [
+            '--registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins"',
+            'push --tag "${RELEASE_TAG}" --files release_files',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, push)
+        self.assertLess(
+            release.index("name: Publish registry artifact"),
+            release.index("name: Create or update release"),
+        )
+
+    def test_plugin_release_refreshes_the_signed_index(self):
+        release = (ROOT / ".github/workflows/release.yml").read_text()
+        dispatch = release.split("  index:\n", 1)[1]
+        self.assertIn("needs: release", dispatch)
+        self.assertIn("actions: write", dispatch)
+        self.assertIn("gh workflow run plugin-index.yml --ref main", dispatch)
+
+        workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()
+        build = workflow.split("  build:\n", 1)[1].split("  deploy:\n", 1)[0]
+        deploy = workflow.split("  deploy:\n", 1)[1]
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("environment: plugin-index", build)
+        self.assertIn("if: github.ref == 'refs/heads/main'", build)
+        self.assertIn("secrets.PLUGIN_INDEX_MINISIGN_KEY", build)
+        self.assertIn("-x site/plugins/index.json.minisig", build)
+        self.assertNotIn("pages: write", build)
+        self.assertIn("pages: write", deploy)
+        self.assertNotIn("secrets.", deploy)
+
     def test_tray_publish_claims_latest(self):
         workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
 

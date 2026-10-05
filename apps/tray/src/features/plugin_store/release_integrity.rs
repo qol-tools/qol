@@ -93,10 +93,18 @@ pub(crate) fn verify_file(asset: &GitHubAsset, path: &Path) -> Result<()> {
 }
 
 fn verify_bytes(asset: &GitHubAsset, bytes: &[u8]) -> Result<()> {
-    let expected = expected_sha256(asset)?;
+    let label = format!("release asset '{}'", asset.name);
+    compare_sha256(expected_sha256(asset)?, bytes, &label)
+}
+
+pub(crate) fn verify_sha256(digest: &str, bytes: &[u8], label: &str) -> Result<()> {
+    compare_sha256(parse_sha256(digest, label)?, bytes, label)
+}
+
+fn compare_sha256(expected: [u8; 32], bytes: &[u8], label: &str) -> Result<()> {
     let actual: [u8; 32] = Sha256::digest(bytes).into();
     if actual != expected {
-        anyhow::bail!("SHA-256 mismatch for release asset '{}'", asset.name);
+        anyhow::bail!("SHA-256 mismatch for {}", label);
     }
     Ok(())
 }
@@ -106,11 +114,15 @@ fn expected_sha256(asset: &GitHubAsset) -> Result<[u8; 32]> {
         .digest
         .as_deref()
         .with_context(|| format!("release asset '{}' has no digest", asset.name))?;
+    parse_sha256(digest, &format!("release asset '{}'", asset.name))
+}
+
+fn parse_sha256(digest: &str, label: &str) -> Result<[u8; 32]> {
     let encoded = digest
         .strip_prefix("sha256:")
-        .with_context(|| format!("release asset '{}' has an unsupported digest", asset.name))?;
+        .with_context(|| format!("{} has an unsupported digest", label))?;
     if encoded.len() != 64 {
-        anyhow::bail!("release asset '{}' has an invalid SHA-256", asset.name);
+        anyhow::bail!("{} has an invalid SHA-256", label);
     }
     let mut decoded = [0_u8; 32];
     for (index, pair) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {

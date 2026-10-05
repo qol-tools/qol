@@ -1,3 +1,4 @@
+use crate::features::plugin_store::index::IndexLocation;
 use crate::features::plugin_store::release_assets::{resolve_asset_pattern, PlatformTarget};
 use crate::plugins::manifest::BinaryDependency;
 use crate::version::normalize_semver_tag;
@@ -9,6 +10,13 @@ pub(crate) struct PluginSource {
     pub(crate) name: String,
     pub(crate) repo: String,
     pub(crate) git_ref: String,
+    pub(crate) catalog: SourceCatalog,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceCatalog {
+    GitHubReleases,
+    SignedIndex(IndexLocation),
 }
 
 impl PluginSource {
@@ -21,6 +29,14 @@ impl PluginSource {
             name: name.into(),
             repo: repo.into(),
             git_ref: git_ref.into(),
+            catalog: SourceCatalog::GitHubReleases,
+        }
+    }
+
+    pub(crate) fn with_signed_index(self, location: IndexLocation) -> Self {
+        Self {
+            catalog: SourceCatalog::SignedIndex(location),
+            ..self
         }
     }
 
@@ -96,7 +112,8 @@ pub(super) fn default_source_repos() -> Vec<String> {
 }
 
 fn default_builtin_sources() -> Vec<PluginSource> {
-    vec![PluginSource::new("core", "qol-tools/qol", "main")]
+    vec![PluginSource::new("core", "qol-tools/qol", "main")
+        .with_signed_index(crate::features::plugin_store::index::core_index())]
 }
 
 fn user_source(repo: String) -> PluginSource {
@@ -268,6 +285,10 @@ mod tests {
         assert_eq!(core.name, "core");
         assert_eq!(core.repo, "qol-tools/qol");
         assert_eq!(core.git_ref, "main");
+        assert_eq!(
+            core.catalog,
+            SourceCatalog::SignedIndex(crate::features::plugin_store::index::core_index())
+        );
     }
 
     #[test]

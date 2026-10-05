@@ -3,7 +3,7 @@ use anyhow::Result;
 
 mod catalog_resolver;
 
-pub(super) use catalog_resolver::build_plugin_metadata;
+pub(in crate::features::plugin_store) use catalog_resolver::build_plugin_metadata;
 pub(crate) use catalog_resolver::{CachedPlugin, PluginMetadata};
 
 pub(super) async fn manifest_from_response(
