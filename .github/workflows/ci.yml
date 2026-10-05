@@ -83,6 +83,35 @@ jobs:
       - name: Plugin manifest versions agree
         run: python3 .github/scripts/plugin_version.py --check-manifests
 
+      # qac lint runs the qol-project edit-time hooks over whole files. main
+      # still carries older findings, so the gate lints only the files this
+      # change adds or modifies, and touching such a file means fixing it.
+      # A push is exempt: a red main run would stop Versioning, and the queue
+      # has already linted every pull request. A pull request run is a merge
+      # commit, so its first parent is the base it was merged onto.
+      - name: qac lint changed files
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          base="${BASE_SHA:-$(git rev-parse HEAD^1)}"
+          mapfile -d '' changed < <(git diff --name-only --diff-filter=ACMR -z "$base" HEAD)
+          if [ "${#changed[@]}" -eq 0 ]; then
+            echo "no added or modified files"
+            exit 0
+          fi
+          git clone --quiet --depth 1 https://github.com/qol-tools/qol-skills "$RUNNER_TEMP/qol-skills"
+          node "$RUNNER_TEMP/qol-skills/plugins/qol-project/scripts/qac.mjs" lint "${changed[@]}" > "$RUNNER_TEMP/qac.json" || true
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            for (const f of r.findings) {
+              const line = f.lines?.[0] ? `,line=${f.lines[0]}` : "";
+              console.log(`::error file=${f.file}${line},title=${f.hook}::${f.summary}`);
+            }
+            console.log(`qac lint: ${r.files} files, ${r.findings.length} findings`);
+            process.exit(r.findings.length ? 1 : 0);
+          ' "$RUNNER_TEMP/qac.json"
+
       - name: Reuse a verdict this workflow already reached
         id: verdict
         if: github.event_name == 'merge_group' || github.event_name == 'push'
