@@ -846,6 +846,11 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
             "Profiles",
             qol_theme::Mark::Profiles,
         ),
+        (
+            super::super::CoreTool::Plugins,
+            "Plugins",
+            qol_theme::Mark::Plugins,
+        ),
     ] {
         sources.push(PanelSource {
             plugin_id: tool.wire_id().to_string(),

@@ -15,6 +15,7 @@ pub(crate) enum CoreTool {
     Updates,
     LinkedDevices,
     Profiles,
+    Plugins,
 }
 
 impl CoreTool {
@@ -27,6 +28,7 @@ impl CoreTool {
             Self::Updates => "__core-updates",
             Self::LinkedDevices => "__core-linked-devices",
             Self::Profiles => "__core-profiles",
+            Self::Plugins => "__core-plugins",
         }
     }
 
@@ -39,6 +41,7 @@ impl CoreTool {
             "__core-updates" => Some(Self::Updates),
             "__core-linked-devices" => Some(Self::LinkedDevices),
             "__core-profiles" => Some(Self::Profiles),
+            "__core-plugins" => Some(Self::Plugins),
             _ => None,
         }
     }
@@ -50,6 +53,7 @@ impl CoreTool {
             Self::Updates => "__core-updates",
             Self::LinkedDevices => "__core-linked-devices",
             Self::Profiles => "__core-profiles",
+            Self::Plugins => "__core-plugins",
         }
     }
 }
@@ -166,6 +170,7 @@ mod tests {
             CoreTool::Updates,
             CoreTool::LinkedDevices,
             CoreTool::Profiles,
+            CoreTool::Plugins,
         ] {
             assert_eq!(CoreTool::from_wire_id(tool.wire_id()), Some(tool));
             assert!(tool.wire_id().starts_with("__core-"));

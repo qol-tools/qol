@@ -104,9 +104,11 @@ struct AttentionPayload {
 }
 
 #[derive(Default, Deserialize)]
-struct CoreActionRequest {
+pub(super) struct CoreActionRequest {
     #[serde(default)]
-    id: Option<String>,
+    pub(super) id: Option<String>,
+    #[serde(default)]
+    pub(super) repo: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -167,7 +169,8 @@ pub(super) async fn post_core_action(
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
         "stop_updates" => stop_updates_action(),
-        _ => action_error(StatusCode::NOT_FOUND, "Unknown action"),
+        _ => super::plugins_handlers::post_plugins_action(&state, &action, &request)
+            .unwrap_or_else(|| action_error(StatusCode::NOT_FOUND, "Unknown action")),
     }
 }
 
@@ -318,9 +321,13 @@ fn plugin_views(state: &AppState) -> Result<Vec<PluginView>, StatusCode> {
             current: plugin.version,
             latest: plugin.available_version,
             dev_linked: plugin.source == Some("dev_linked"),
-            job: jobs.get(plugin.id.as_str()).cloned(),
+            job: update_job(jobs.get(plugin.id.as_str())),
         })
         .collect())
+}
+
+fn update_job(job: Option<&UpdateJob>) -> Option<UpdateJob> {
+    job.filter(|job| job.state != JobState::Removing).cloned()
 }
 
 fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload {
@@ -423,7 +430,7 @@ fn plugin_row_state(plugin: &PluginView) -> RowState {
 fn job_row_state(job: &UpdateJob) -> RowState {
     match job.state {
         JobState::Queued => RowState::Queued,
-        JobState::Updating => RowState::Updating,
+        JobState::Updating | JobState::Removing => RowState::Updating,
         JobState::Failed => RowState::Failed,
     }
 }
@@ -529,7 +536,7 @@ fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<UpdateTa
         .collect()
 }
 
-fn action_ok(message: &str) -> Response {
+pub(super) fn action_ok(message: &str) -> Response {
     Json(CoreActionResponse {
         success: true,
         message: message.to_string(),
@@ -537,7 +544,7 @@ fn action_ok(message: &str) -> Response {
     .into_response()
 }
 
-fn action_error(status: StatusCode, message: impl Into<String>) -> Response {
+pub(super) fn action_error(status: StatusCode, message: impl Into<String>) -> Response {
     (
         status,
         Json(CoreActionResponse {
@@ -569,6 +576,7 @@ mod tests {
             state,
             progress: None,
             reason: reason.map(str::to_string),
+            order: 0,
         })
     }
 
@@ -698,6 +706,17 @@ mod tests {
         assert_eq!(plugin_row_state(&released), RowState::Updating);
         released.job = job(JobState::Failed, Some("No connection to GitHub"));
         assert_eq!(plugin_row_state(&released), RowState::Failed);
+    }
+
+    #[test]
+    fn a_removing_plugin_shows_on_the_updates_page_with_no_job() {
+        let removing = job(JobState::Removing, None);
+        assert_eq!(update_job(removing.as_ref()), None);
+        for state in [JobState::Queued, JobState::Updating, JobState::Failed] {
+            let kept = job(state, None);
+            assert_eq!(update_job(kept.as_ref()), kept, "state: {state:?}");
+        }
+        assert_eq!(update_job(None), None);
     }
 
     #[test]

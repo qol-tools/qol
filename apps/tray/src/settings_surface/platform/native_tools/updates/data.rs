@@ -18,7 +18,7 @@ pub(super) fn load() -> anyhow::Result<UpdatesSnapshot> {
     request_json(Method::Get, UPDATES_QUERY, None, REQUEST_TIMEOUT)
 }
 
-pub(super) fn action(name: &str, body: Option<&str>) -> anyhow::Result<()> {
+pub(in super::super) fn action(name: &str, body: Option<&str>) -> anyhow::Result<()> {
     let route = format!("/api/core/actions/{name}");
     match request_text(Method::Post, &route, body, REQUEST_TIMEOUT) {
         Ok(body) => outcome(&body),

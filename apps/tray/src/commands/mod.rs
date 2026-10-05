@@ -57,6 +57,12 @@ pub const EXPORTED: &[ExportedCommand] = &[
         core_action: "profiles",
         mark: Mark::Profiles,
     },
+    ExportedCommand {
+        id: "plugins-open",
+        label: "Plugins",
+        core_action: "plugins",
+        mark: Mark::Plugins,
+    },
 ];
 
 /// The launcher display label for a command: brand prefix + bare label.

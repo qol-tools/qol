@@ -25,6 +25,9 @@ pub(in super::super) async fn get_core_query(
     if query == super::update_handlers::ATTENTION_QUERY {
         return super::update_handlers::get_attention(state).await;
     }
+    if query == super::plugins_handlers::PLUGINS_QUERY {
+        return super::plugins_handlers::get_plugins(state).await;
+    }
     blocking("core query", move || get_core_query_inner(&query)).await
 }
 

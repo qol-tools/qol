@@ -7,6 +7,7 @@ mod release_assets;
 pub(crate) mod release_integrity;
 pub(crate) mod server;
 pub(crate) mod source;
+mod user_sources;
 mod validation;
 
 use crate::daemon::Daemon;
