@@ -11,8 +11,22 @@ use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::MonitorBounds;
 
 use super::super::state::{self, InputState, Stamped};
-use crate::desktop_state::SharedPlatform;
+use crate::desktop_state::{Platform, SharedPlatform};
 use subscribers::{SubscriberEntry, SubscriberId};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Fallback {
+    #[default]
+    None,
+    Pending,
+    Holding(MonitorBounds),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct FocusWindow {
+    id: Option<u32>,
+    fallback: Fallback,
+}
 
 pub(crate) struct SharedState {
     input: Mutex<InputState>,
@@ -20,6 +34,7 @@ pub(crate) struct SharedState {
     cursor_pos: Mutex<Option<(f32, f32)>>,
     focused_window: Mutex<Option<MonitorBounds>>,
     last_focus_bounds: Mutex<Option<MonitorBounds>>,
+    focus_window: Mutex<FocusWindow>,
     subscribers: Mutex<Vec<SubscriberEntry>>,
     subscriber_changed: Condvar,
     next_subscriber_id: AtomicU64,
@@ -36,6 +51,7 @@ impl SharedState {
             cursor_pos: Mutex::new(None),
             focused_window: Mutex::new(None),
             last_focus_bounds: Mutex::new(None),
+            focus_window: Mutex::new(FocusWindow::default()),
             subscribers: Mutex::new(Vec::new()),
             subscriber_changed: Condvar::new(),
             next_subscriber_id: AtomicU64::new(1),
@@ -150,9 +166,11 @@ impl SharedState {
         if !facade.poll_focused_window() {
             return;
         }
-        let Some(fresh_bounds) = facade.focused_window_bounds() else {
+        let Some(focused) = facade.focused_window() else {
             return;
         };
+        self.track_focus_window(focused.id, facade.as_ref());
+        let fresh_bounds = focused.monitor;
         let monitors = self.monitors();
         let Some(fresh_monitor) = state::monitor_for_bounds(&monitors, &fresh_bounds) else {
             return;
@@ -164,7 +182,7 @@ impl SharedState {
             Some(focus) => focus.monitor != fresh_monitor,
             None => true,
         };
-        if needs_update {
+        if needs_update && !self.holds_focus(Some(fresh_bounds)) {
             input.focus = Some(Stamped {
                 monitor: fresh_monitor,
                 at: Instant::now(),
@@ -260,6 +278,46 @@ impl SharedState {
             *last_bounds = bounds;
         }
         changed
+    }
+
+    pub(super) fn track_focus_window(&self, id: Option<u32>, platform: &dyn Platform) {
+        let mut tracked = lock_or_recover(&self.focus_window);
+        if id.is_none() || tracked.id == id {
+            return;
+        }
+        let closed = tracked
+            .id
+            .is_some_and(|previous| platform.window_open(previous) == Some(false));
+        *tracked = FocusWindow {
+            id,
+            fallback: if closed {
+                Fallback::Pending
+            } else {
+                Fallback::None
+            },
+        };
+    }
+
+    pub(super) fn holds_focus(&self, bounds: Option<MonitorBounds>) -> bool {
+        let mut tracked = lock_or_recover(&self.focus_window);
+        match tracked.fallback {
+            Fallback::None => false,
+            Fallback::Pending => {
+                if let Some(bounds) = bounds {
+                    tracked.fallback = Fallback::Holding(bounds);
+                }
+                true
+            }
+            Fallback::Holding(held) if Some(held) == bounds => true,
+            Fallback::Holding(_) => {
+                tracked.fallback = Fallback::None;
+                false
+            }
+        }
+    }
+
+    pub(super) fn focus_held(&self) -> bool {
+        lock_or_recover(&self.focus_window).fallback != Fallback::None
     }
 
     pub(super) fn set_cursor_pos(&self, cursor_pos: Option<(f32, f32)>) {
@@ -359,5 +417,112 @@ mod tests {
         shared.disarm_lifeline("qol-monitor");
 
         assert!(shared.armed_lifelines().is_empty());
+    }
+
+    struct Windows {
+        open: Mutex<Vec<u32>>,
+    }
+
+    impl Windows {
+        fn new(open: &[u32]) -> Self {
+            Self {
+                open: Mutex::new(open.to_vec()),
+            }
+        }
+
+        fn close(&self, id: u32) {
+            lock_or_recover(&self.open).retain(|open| *open != id);
+        }
+    }
+
+    impl Platform for Windows {
+        fn cursor_position(&self) -> Option<(f32, f32)> {
+            None
+        }
+
+        fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+            None
+        }
+
+        fn physical_monitors(&self) -> Vec<MonitorBounds> {
+            Vec::new()
+        }
+
+        fn window_open(&self, id: u32) -> Option<bool> {
+            Some(lock_or_recover(&self.open).contains(&id))
+        }
+    }
+
+    fn at(x: f32) -> MonitorBounds {
+        MonitorBounds {
+            x,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        }
+    }
+
+    fn fallen_back(windows: &Windows) -> SharedState {
+        let shared = SharedState::new(Vec::new());
+        shared.track_focus_window(Some(1), windows);
+        windows.close(1);
+        shared.track_focus_window(Some(2), windows);
+        shared
+    }
+
+    #[test]
+    fn focus_moved_by_a_closing_window_falls_back() {
+        let windows = Windows::new(&[1, 2]);
+        let shared = fallen_back(&windows);
+        assert!(shared.focus_held());
+        assert!(shared.holds_focus(Some(at(0.0))));
+    }
+
+    #[test]
+    fn focus_switched_between_open_windows_is_deliberate() {
+        let shared = SharedState::new(Vec::new());
+        let windows = Windows::new(&[1, 2]);
+        shared.track_focus_window(Some(1), &windows);
+        shared.track_focus_window(Some(2), &windows);
+        assert!(!shared.holds_focus(Some(at(0.0))));
+    }
+
+    #[test]
+    fn a_fallback_ends_at_the_next_focus_switch() {
+        let windows = Windows::new(&[1, 2, 3]);
+        let shared = fallen_back(&windows);
+        shared.track_focus_window(Some(3), &windows);
+        assert!(!shared.holds_focus(Some(at(0.0))));
+    }
+
+    #[test]
+    fn a_window_moved_after_a_fallback_moves_focus() {
+        let windows = Windows::new(&[1, 2]);
+        let shared = fallen_back(&windows);
+        assert!(shared.holds_focus(Some(at(0.0))));
+        assert!(shared.holds_focus(Some(at(0.0))));
+        assert!(!shared.holds_focus(Some(at(800.0))));
+        assert!(!shared.focus_held());
+        assert!(!shared.holds_focus(Some(at(0.0))));
+    }
+
+    #[test]
+    fn an_unanswerable_window_list_never_counts_as_a_fallback() {
+        struct Blind;
+        impl Platform for Blind {
+            fn cursor_position(&self) -> Option<(f32, f32)> {
+                None
+            }
+            fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+                None
+            }
+            fn physical_monitors(&self) -> Vec<MonitorBounds> {
+                Vec::new()
+            }
+        }
+        let shared = SharedState::new(Vec::new());
+        shared.track_focus_window(Some(1), &Blind);
+        shared.track_focus_window(Some(2), &Blind);
+        assert!(!shared.focus_held());
     }
 }

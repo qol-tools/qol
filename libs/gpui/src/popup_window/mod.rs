@@ -13,6 +13,12 @@ const COMPOSITOR_SAMPLE_INTERVAL: Duration = Duration::from_millis(16);
 const COMPOSITOR_CLEAR_SAMPLES: usize = 3;
 const COMPOSITOR_MAX_WAIT: Duration = Duration::from_millis(750);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PointerOnWindow {
+    pub inside: bool,
+    pub pressed: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HiddenWindowsBarrier {
     pub cleared: bool,
@@ -64,17 +70,17 @@ pub async fn wait_for_hidden_windows(
 pub use platform::{
     capture_focus_return, configure_keepalive_window, configure_overlay_window,
     configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
-    focus_window_by_title, hide_for_capture, hide_invisible, hide_window_by_title,
+    focus_window_by_title, grab_escape, hide_for_capture, hide_invisible, hide_window_by_title,
     hide_windows_by_title_prefix, hold_input, input_held, make_override_redirect,
-    park_window_by_title, pinned_window_kind, pointer_over_window_by_title,
-    prepare_window_reveal_by_title, present_topmost, register_native_display,
-    release_focus_by_title, release_input, reposition_window_by_title, restore_composite,
-    set_input_region_by_title, set_override_redirect_by_title, set_unmap_hide,
+    park_window_by_title, pinned_window_kind, pointer_on_window_by_title,
+    pointer_over_window_by_title, prepare_window_reveal_by_title, present_topmost,
+    register_native_display, release_focus_by_title, release_input, reposition_window_by_title,
+    restore_composite, set_input_region_by_title, set_override_redirect_by_title, set_unmap_hide,
     set_window_type_dock_by_title, show_window_by_title, show_window_interactive_by_title,
     show_window_passive_by_title, sync_window_layout, sync_window_layout_by_title,
     visible_windows_by_title_prefix, window_backing_scale, window_bounds_primary_anchored,
     window_geometry_session, window_holds_input_focus, window_position_by_title,
-    window_presentation_is_normal_by_title, WindowGeometrySession,
+    window_presentation_is_normal_by_title, work_area_within, EscapeGrab, WindowGeometrySession,
 };
 
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";

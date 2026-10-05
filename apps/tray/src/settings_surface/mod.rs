@@ -80,7 +80,14 @@ pub fn apply_theme(native: &str, accent: &str) -> bool {
     platform::apply_theme(native, accent)
 }
 
+#[derive(Clone, Copy)]
+pub struct ToastSource<'a> {
+    pub group: &'a str,
+    pub name: &'a str,
+}
+
 pub fn show_toast(
+    source: ToastSource<'_>,
     title: &str,
     body: &str,
     level: &str,
@@ -88,7 +95,7 @@ pub fn show_toast(
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
 ) -> anyhow::Result<bool> {
-    platform::show_toast(title, body, level, action, artifact, layout)
+    platform::show_toast(source, title, body, level, action, artifact, layout)
 }
 
 pub fn prewarm() {

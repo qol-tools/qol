@@ -196,6 +196,14 @@ impl WindowGeometrySession {
         None
     }
 
+    pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
+        None
+    }
+
+    pub fn set_input_region(&self, _x: i16, _y: i16, _width: u16, _height: u16) -> bool {
+        false
+    }
+
     pub fn anchor_content(&self, _right: bool, _bottom: bool) {}
 }
 
@@ -205,7 +213,29 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
     })
 }
 
+pub struct EscapeGrab;
+
+impl EscapeGrab {
+    pub fn take_pressed(&self) -> bool {
+        false
+    }
+}
+
+pub fn grab_escape() -> Option<EscapeGrab> {
+    None
+}
+
+pub fn work_area_within(
+    _monitor: gpui::Bounds<gpui::Pixels>,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    None
+}
+
 pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
+    None
+}
+
+pub fn pointer_on_window_by_title(_title: &str) -> Option<crate::popup_window::PointerOnWindow> {
     None
 }
 

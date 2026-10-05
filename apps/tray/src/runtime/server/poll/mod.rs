@@ -99,7 +99,7 @@ impl PollRuntime {
             mon_list,
             monitors_changed,
             cursor_moved,
-            self.focus.window_id(),
+            self.focus.window_id().filter(|_| !self.shared.focus_held()),
         );
         if events.is_empty() {
             return;
@@ -171,13 +171,16 @@ impl PollRuntime {
 
         if poll_focus {
             self.focus.poll();
+            self.shared
+                .track_focus_window(self.focus.window_id(), self.focus.platform().as_ref());
             self.last_focus_poll = Instant::now();
         }
         let focus_bounds = self.focus.bounds();
         self.shared.store_focused_window(focus_bounds);
         let focus_monitor =
             focus_bounds.and_then(|bounds| state::monitor_for_bounds(mon_list, &bounds));
-        let focus_changed = self.shared.remember_focus_bounds(focus_bounds);
+        let focus_changed = self.shared.remember_focus_bounds(focus_bounds)
+            && !self.shared.holds_focus(focus_bounds);
 
         TickSample {
             committed: self.poller.current() >= self.commit_threshold,

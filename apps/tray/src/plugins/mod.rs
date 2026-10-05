@@ -39,6 +39,14 @@ pub(crate) use execution_contract::{
     validate_execution_contract_for_source,
 };
 
+pub(crate) fn display_name(plugin_id: &str) -> String {
+    paths::resolve_plugin_root(plugin_id)
+        .ok()
+        .and_then(|root| PluginManifest::read_from_dir(&root).ok())
+        .map(|manifest| manifest.plugin.name)
+        .unwrap_or_else(|| qol_conventions::plugin_id::short_name(plugin_id).to_string())
+}
+
 #[derive(Debug)]
 pub struct Plugin {
     pub id: PluginId,

@@ -479,6 +479,7 @@ fn send_notification(observation: &Observation, intent: &PolicyIntent) {
             intent.as_str()
         );
         show_plugin_notification(
+            None,
             "QoL Tray",
             &policy::notification_text(loaded, on_disk, intent),
             NotificationLevel::Error,

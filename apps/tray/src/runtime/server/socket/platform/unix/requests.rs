@@ -129,7 +129,15 @@ fn handle_push_notification(
         "[runtime/socket] PUSH notification from {plugin_id}: {title} (action={})",
         action.map(|(label, _)| label).unwrap_or("-")
     );
-    crate::surfaces::show_plugin_notification(title, body, level, action, artifact, layout);
+    crate::surfaces::show_plugin_notification(
+        Some(plugin_id),
+        title,
+        body,
+        level,
+        action,
+        artifact,
+        layout,
+    );
 }
 
 fn resolve_action<'a>(

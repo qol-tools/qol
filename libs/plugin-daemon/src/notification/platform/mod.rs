@@ -28,6 +28,7 @@ pub use windows::NotificationInhibit;
 pub(super) trait NotificationPlatform {
     fn send_notification(&self, title: &str, message: &str) -> bool;
     fn os_do_not_disturb(&self) -> Option<bool>;
+    fn set_os_banners(&self, showing: bool);
     fn acquire_inhibit(&self) -> Option<NotificationInhibit>;
 }
 
@@ -37,6 +38,10 @@ pub(super) fn send_notification(title: &str, message: &str) -> bool {
 
 pub fn os_do_not_disturb() -> Option<bool> {
     imp::Platform.os_do_not_disturb()
+}
+
+pub fn set_os_banners(showing: bool) {
+    imp::Platform.set_os_banners(showing)
 }
 
 pub fn acquire_inhibit() -> Option<NotificationInhibit> {

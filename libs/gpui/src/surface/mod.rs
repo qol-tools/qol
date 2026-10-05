@@ -138,7 +138,6 @@ pub struct OpenedSurface<V> {
     pub(crate) dismisser: SurfaceDismisser,
     kind: SurfaceKind,
     placement: MonitorPlacement,
-    bounds: Bounds<Pixels>,
     constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
@@ -352,7 +351,7 @@ impl Surface {
         self.open_on(monitor.as_ref(), cx, build)
     }
 
-    fn open_on<V: Render + 'static>(
+    pub(crate) fn open_on<V: Render + 'static>(
         self,
         monitor: Option<&ActiveMonitor>,
         cx: &mut App,
@@ -536,7 +535,6 @@ impl Surface {
             dismisser,
             kind: self.kind,
             placement: self.placement,
-            bounds,
             constrains_size,
             visible,
             reveal_pending,
@@ -544,7 +542,8 @@ impl Surface {
     }
 
     fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
-        self.placement.bounds(monitor.bounds(), self.size)
+        self.placement
+            .bounds(placement_area(self.kind, monitor.bounds()), self.size)
     }
 
     fn window_kind(&self) -> WindowKind {
@@ -634,6 +633,13 @@ fn supports_native_reveal_gate() -> bool {
 fn constrain_native_size(title: &str, size: Size<Pixels>) -> bool {
     !supports_native_reveal_gate()
         || crate::popup_window::set_window_fixed_size_by_title(title, size)
+}
+
+fn placement_area(kind: SurfaceKind, monitor: Bounds<Pixels>) -> Bounds<Pixels> {
+    match kind {
+        SurfaceKind::Toast => crate::popup_window::work_area_within(monitor).unwrap_or(monitor),
+        SurfaceKind::Panel | SurfaceKind::OverlayPanel => monitor,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -956,12 +962,8 @@ fn reveal_cancelled(dismiss_state: &DismissState, dismiss_generation: u64) -> bo
 }
 
 impl<V> OpenedSurface<V> {
-    pub(crate) fn anchored_origin(&self, content: Size<Pixels>) -> Point<Pixels> {
-        RevealAnchor {
-            placement: self.placement,
-            bounds: self.bounds,
-        }
-        .origin_for(content)
+    pub(crate) fn placement(&self) -> MonitorPlacement {
+        self.placement
     }
 }
 
@@ -1002,7 +1004,9 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 self.reveal_pending.set(false);
             }
             let bounds = match (self.kind, tracker.snapshot_monitor()) {
-                (_, Some(monitor)) => self.placement.bounds(monitor.bounds(), self.size()),
+                (_, Some(monitor)) => self
+                    .placement
+                    .bounds(placement_area(self.kind, monitor.bounds()), self.size()),
                 (SurfaceKind::Toast, None) => return false,
                 (SurfaceKind::Panel | SurfaceKind::OverlayPanel, None) => {
                     Bounds::centered(None, self.size(), cx)

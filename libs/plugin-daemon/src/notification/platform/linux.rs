@@ -23,22 +23,14 @@ impl NotificationPlatform for Platform {
     }
 
     fn os_do_not_disturb(&self) -> Option<bool> {
-        let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok()?;
-        if desktop.contains("X-Cinnamon") {
-            return gsettings_bool(
-                "org.cinnamon.desktop.notifications",
-                "display-notifications",
-            )
-            .map(|displaying| !displaying);
+        let (schema, key) = banner_setting()?;
+        parse_gsettings_bool(&gsettings(&["get", schema, key])?).map(|showing| !showing)
+    }
+
+    fn set_os_banners(&self, showing: bool) {
+        if let Some((schema, key)) = banner_setting() {
+            gsettings(&["set", schema, key, if showing { "true" } else { "false" }]);
         }
-        if desktop.contains("GNOME") {
-            return gsettings_bool("org.gnome.desktop.notifications", "show-banners")
-                .map(|showing| !showing);
-        }
-        if desktop.contains("KDE") {
-            return None;
-        }
-        None
     }
 
     fn acquire_inhibit(&self) -> Option<NotificationInhibit> {
@@ -91,9 +83,23 @@ fn acquire_inhibit_blocking() -> Option<NotificationInhibit> {
     Some(NotificationInhibit { connection, cookie })
 }
 
-fn gsettings_bool(schema: &str, key: &str) -> Option<bool> {
+fn banner_setting() -> Option<(&'static str, &'static str)> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok()?;
+    if desktop.contains("X-Cinnamon") {
+        return Some((
+            "org.cinnamon.desktop.notifications",
+            "display-notifications",
+        ));
+    }
+    if desktop.contains("GNOME") {
+        return Some(("org.gnome.desktop.notifications", "show-banners"));
+    }
+    None
+}
+
+fn gsettings(args: &[&str]) -> Option<String> {
     let mut child = Command::new("gsettings")
-        .args(["get", schema, key])
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -113,7 +119,7 @@ fn gsettings_bool(schema: &str, key: &str) -> Option<bool> {
     }
     let mut output = String::new();
     child.stdout.as_mut()?.read_to_string(&mut output).ok()?;
-    parse_gsettings_bool(&output)
+    Some(output)
 }
 
 fn parse_gsettings_bool(output: &str) -> Option<bool> {

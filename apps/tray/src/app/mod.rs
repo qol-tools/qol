@@ -138,6 +138,8 @@ pub(crate) fn run() -> Result<()> {
         log_binding_restore("startup", hotkeys::restore_desktop_bindings());
     }
 
+    std::thread::spawn(qol_tray::features::notifications::sync_notification_inhibit);
+
     log::info!("Starting QoL Tray daemon...");
 
     let peer_runtime = Arc::new(Mutex::new(None));
@@ -745,6 +747,7 @@ fn confirm_host_update() {
     log::info!("qol-tray updated from v{}", from_version);
     let _ = qol_tray::settings_surface::wait_until_ready(Duration::from_secs(30));
     qol_tray::surfaces::show_plugin_notification(
+        None,
         "qol-tray updated",
         &format!("Now running v{}", qol_tray::updates::current_version()),
         qol_runtime::protocol::NotificationLevel::Info,
