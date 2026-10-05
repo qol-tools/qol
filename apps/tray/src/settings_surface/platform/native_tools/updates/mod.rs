@@ -1,5 +1,5 @@
 mod data;
-mod model;
+pub(super) mod model;
 mod view;
 
 use std::rc::Rc;

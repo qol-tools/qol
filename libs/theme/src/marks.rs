@@ -8,6 +8,7 @@ pub enum Mark {
     Hotkeys,
     Updates,
     LinkedDevices,
+    Profiles,
     App,
     Link,
     PluginAction,
@@ -33,13 +34,14 @@ pub enum Mark {
 const LINE_LIFT: f32 = 0.25;
 
 impl Mark {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Qol,
         Self::Settings,
         Self::Shortcuts,
         Self::Hotkeys,
         Self::Updates,
         Self::LinkedDevices,
+        Self::Profiles,
         Self::App,
         Self::Link,
         Self::PluginAction,
@@ -70,6 +72,7 @@ impl Mark {
             Self::Hotkeys => "hotkeys",
             Self::Updates => "updates",
             Self::LinkedDevices => "linked-devices",
+            Self::Profiles => "profiles",
             Self::App => "app",
             Self::Link => "link",
             Self::PluginAction => "plugin-action",
@@ -135,6 +138,9 @@ impl Mark {
             }
             Self::LinkedDevices => {
                 r#"<rect x="5" y="9" width="27" height="20" rx="3"/><path d="M13 37h11M18.5 29v8"/><rect x="34" y="17" width="10" height="21" rx="3"/><path stroke-width="4" d="M39 33h.01"/>"#
+            }
+            Self::Profiles => {
+                r#"<rect x="5" y="10" width="38" height="28" rx="3"/><circle cx="17" cy="21" r="4.5"/><path d="M10 32c1.5-3.5 4-5 7-5s5.5 1.5 7 5M29 20h8M29 27h6"/>"#
             }
             Self::App => {
                 r#"<rect x="8" y="8" width="13" height="13" rx="3.5"/><rect x="27" y="8" width="13" height="13" rx="3.5"/><rect x="8" y="27" width="13" height="13" rx="3.5"/><rect x="27" y="27" width="13" height="13" rx="3.5"/>"#

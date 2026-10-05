@@ -51,6 +51,12 @@ pub const EXPORTED: &[ExportedCommand] = &[
         core_action: "linked-devices",
         mark: Mark::LinkedDevices,
     },
+    ExportedCommand {
+        id: "profiles-open",
+        label: "Profiles",
+        core_action: "profiles",
+        mark: Mark::Profiles,
+    },
 ];
 
 /// The launcher display label for a command: brand prefix + bare label.

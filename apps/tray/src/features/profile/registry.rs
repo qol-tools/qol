@@ -1,9 +1,18 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use serde::Serialize;
+use std::path::Path;
 
 use crate::daemon::Daemon;
 use crate::paths;
 
 pub use qol_profile_sync::SyncTarget;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProfileSummary {
+    pub name: String,
+    pub active: bool,
+    pub plugins: usize,
+}
 
 pub fn ensure_profile_dirs_for(name: &str) -> Result<()> {
     let store = super::ProfileScopeStore::new(
@@ -39,12 +48,100 @@ pub fn list_profiles() -> Result<Vec<String>> {
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if paths::is_safe_path_component(&name) {
+        if paths::is_safe_path_component(&name) && is_profile_dir(&entry.path()) {
             names.push(name);
         }
     }
     names.sort();
     Ok(names)
+}
+
+pub fn profile_summaries() -> Result<Vec<ProfileSummary>> {
+    let active = paths::active_profile_name();
+    list_profiles()?
+        .into_iter()
+        .map(|name| {
+            let plugins = count_plugin_configs(&scope_store(&name)?.core_plugin_configs_dir());
+            Ok(ProfileSummary {
+                active: name == active,
+                name,
+                plugins,
+            })
+        })
+        .collect()
+}
+
+pub fn create_profile(name: &str, from: Option<&str>) -> Result<()> {
+    if !paths::is_safe_path_component(name) {
+        bail!("A profile name uses letters, digits, - and _, and does not start with -");
+    }
+    if list_profiles()?.iter().any(|existing| existing == name) {
+        bail!("{name} already exists");
+    }
+    let target = scope_store(name)?;
+    if target.dir().exists() {
+        bail!("{name} is already a folder in the profile directory");
+    }
+    if let Some(from) = from {
+        let source = scope_store(from)?;
+        if !is_profile_dir(&source.dir()) {
+            bail!("{from} is not a profile");
+        }
+        copy_tree(&source.core_dir(), &target.core_dir())?;
+        copy_tree(
+            &source.dir().join(super::scope_store::OS_SUBDIR),
+            &target.dir().join(super::scope_store::OS_SUBDIR),
+        )?;
+        if source.manifest_path().is_file() {
+            std::fs::copy(source.manifest_path(), target.manifest_path())
+                .with_context(|| format!("copy the manifest of {from}"))?;
+        }
+    }
+    target.ensure_dirs()
+}
+
+fn scope_store(name: &str) -> Result<super::ProfileScopeStore> {
+    super::ProfileScopeStore::new(
+        paths::profile_dir()?,
+        name.to_string(),
+        paths::current_os_subdir().to_string(),
+    )
+}
+
+fn is_profile_dir(dir: &Path) -> bool {
+    let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    scope_store(name)
+        .is_ok_and(|store| store.core_dir().is_dir() || store.manifest_path().is_file())
+}
+
+fn count_plugin_configs(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    if !from.is_dir() {
+        return Ok(());
+    }
+    for entry in walkdir::WalkDir::new(from) {
+        let entry = entry?;
+        let destination = to.join(entry.path().strip_prefix(from)?);
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(&destination)?;
+        } else if entry.file_type().is_file() {
+            std::fs::copy(entry.path(), &destination)
+                .with_context(|| format!("copy {}", entry.path().display()))?;
+        }
+    }
+    Ok(())
 }
 
 pub fn switch_active_profile(daemon: &Daemon, name: &str) -> Result<()> {

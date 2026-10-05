@@ -14,6 +14,7 @@ pub(crate) enum CoreTool {
     Shortcuts,
     Updates,
     LinkedDevices,
+    Profiles,
 }
 
 impl CoreTool {
@@ -25,6 +26,7 @@ impl CoreTool {
             Self::Shortcuts => "__core-shortcuts",
             Self::Updates => "__core-updates",
             Self::LinkedDevices => "__core-linked-devices",
+            Self::Profiles => "__core-profiles",
         }
     }
 
@@ -36,6 +38,7 @@ impl CoreTool {
             "__core-shortcuts" => Some(Self::Shortcuts),
             "__core-updates" => Some(Self::Updates),
             "__core-linked-devices" => Some(Self::LinkedDevices),
+            "__core-profiles" => Some(Self::Profiles),
             _ => None,
         }
     }
@@ -46,6 +49,7 @@ impl CoreTool {
             Self::AddShortcut | Self::Shortcuts => "__core-shortcuts",
             Self::Updates => "__core-updates",
             Self::LinkedDevices => "__core-linked-devices",
+            Self::Profiles => "__core-profiles",
         }
     }
 }
@@ -161,6 +165,7 @@ mod tests {
             CoreTool::Shortcuts,
             CoreTool::Updates,
             CoreTool::LinkedDevices,
+            CoreTool::Profiles,
         ] {
             assert_eq!(CoreTool::from_wire_id(tool.wire_id()), Some(tool));
             assert!(tool.wire_id().starts_with("__core-"));

@@ -389,7 +389,7 @@ pub(super) fn age_text(secs: Option<u64>) -> String {
     }
 }
 
-pub(super) fn long_age(secs: u64) -> String {
+pub(in super::super) fn long_age(secs: u64) -> String {
     if secs < 60 {
         "less than a minute".to_string()
     } else if secs < 3600 {
