@@ -88,6 +88,10 @@ pub fn apply_theme(native: &str, accent: &str) -> bool {
     platform::apply_theme(native, accent)
 }
 
+pub fn plugins_changed() -> bool {
+    platform::plugins_changed()
+}
+
 #[derive(Clone, Copy)]
 pub struct ToastSource<'a> {
     pub group: &'a str,

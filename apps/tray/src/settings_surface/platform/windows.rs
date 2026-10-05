@@ -28,6 +28,10 @@ pub(in crate::settings_surface) fn apply_theme(_native: &str, _accent: &str) -> 
     false
 }
 
+pub(in crate::settings_surface) fn plugins_changed() -> bool {
+    false
+}
+
 pub(in crate::settings_surface) fn prewarm() {}
 
 pub(in crate::settings_surface) fn wait_until_ready(_timeout: std::time::Duration) -> bool {

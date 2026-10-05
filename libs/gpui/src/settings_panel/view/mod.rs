@@ -6,7 +6,7 @@ mod structured_list_editor;
 use crate::key::Key;
 use crate::kit::Chip;
 use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use futures::StreamExt as _;
@@ -207,8 +207,20 @@ impl SampleSignal {
     }
 }
 
+type ParentLink = Rc<RefCell<WeakEntity<SettingsPanelView>>>;
+
+/// The custom pages of a panel that is being rebuilt, so the rebuilt panel
+/// shows the same page instances with their state intact.
+#[derive(Default)]
+pub(super) struct CarriedPages {
+    link: Option<ParentLink>,
+    views: Vec<(String, CustomPanelView)>,
+    source_menu: bool,
+}
+
 pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
+    parent_link: ParentLink,
     stack: Vec<Level>,
     runtime: SettingsRuntime,
     runtime_queries: Vec<String>,
@@ -325,6 +337,33 @@ impl SettingsPanelView {
         notify: CustomPanelNotifier,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_carrying(
+            panel,
+            state,
+            dismisser,
+            custom_factories,
+            notify,
+            CarriedPages::default(),
+            cx,
+        )
+    }
+
+    pub(super) fn new_carrying(
+        panel: SettingsPanel,
+        state: SettingsPanelState,
+        dismisser: SurfaceDismisser,
+        custom_factories: Vec<(String, CustomPanelFactory)>,
+        notify: CustomPanelNotifier,
+        carried: CarriedPages,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let CarriedPages {
+            link,
+            views: mut carried_views,
+            source_menu: carried_source_menu,
+        } = carried;
+        let parent_link = link.unwrap_or_else(|| Rc::new(RefCell::new(cx.weak_entity())));
+        *parent_link.borrow_mut() = cx.weak_entity();
         let row_bounds = (0..state.rows.len())
             .map(|_| Rc::new(Cell::new(None)))
             .collect();
@@ -356,6 +395,7 @@ impl SettingsPanelView {
         };
         let mut view = Self {
             panel,
+            parent_link: Rc::clone(&parent_link),
             runtime: state
                 .sources
                 .get(focused_source)
@@ -418,10 +458,9 @@ impl SettingsPanelView {
             attention: std::collections::HashSet::new(),
             attention_error_logged: false,
         };
-        let parent = cx.weak_entity();
-        let parent_for_change = parent.clone();
+        let change_link = Rc::clone(&parent_link);
         let on_change: CustomPanelInvalidator = Rc::new(move |app| {
-            let parent = parent_for_change.clone();
+            let parent = change_link.borrow().clone();
             app.defer(move |app| {
                 let _ = parent.update(app, |_, cx| cx.notify());
             });
@@ -431,12 +470,19 @@ impl SettingsPanelView {
             .sources
             .iter()
             .map(|source| {
+                if let Some(index) = carried_views
+                    .iter()
+                    .position(|(plugin_id, _)| plugin_id == &source.plugin_id)
+                {
+                    return Some(carried_views.swap_remove(index).1);
+                }
                 custom_factories
                     .iter()
                     .find(|(plugin_id, _)| plugin_id == &source.plugin_id)
                     .map(|(_, factory)| {
-                        let parent = parent.clone();
+                        let back_link = Rc::clone(&parent_link);
                         let on_back: CustomPanelCallback = Rc::new(move |window, app| {
+                            let parent = back_link.borrow().clone();
                             let _ = parent.update(app, |view, cx| view.custom_back(window, cx));
                         });
                         factory(
@@ -464,7 +510,7 @@ impl SettingsPanelView {
         view.level_mut().selected_section = selected_section;
         let first_visible = view.current_visible_rows().into_iter().next().unwrap_or(0);
         view.level_mut().selected = first_visible;
-        if view.panel_names_a_source() {
+        if view.panel_names_a_source() && !carried_source_menu {
             view.set_source_menu(false);
             view.open_selected_section();
         }
@@ -629,6 +675,34 @@ impl SettingsPanelView {
 
     /// Where keyboard focus belongs, decided from panel state alone: the custom body while a core
     /// tool page is open, otherwise the panel itself (rail or contract body).
+    /// Hands the custom pages to the panel that replaces this one.
+    pub(super) fn take_pages(&mut self) -> CarriedPages {
+        let views = self
+            .panel
+            .sources
+            .iter()
+            .zip(std::mem::take(&mut self.custom_views))
+            .filter_map(|(source, view)| view.map(|view| (source.plugin_id.clone(), view)))
+            .collect();
+        CarriedPages {
+            link: Some(Rc::clone(&self.parent_link)),
+            views,
+            source_menu: self.source_menu,
+        }
+    }
+
+    pub(super) fn selected_source_id(&self) -> Option<&str> {
+        self.sources
+            .get(self.selected_source)
+            .map(|source| source.plugin_id.as_str())
+    }
+
+    /// Focuses this panel after it replaced another one in the same window,
+    /// whose focus handle no longer exists.
+    pub(super) fn take_focus(&self, window: &mut Window) {
+        window.focus(&self.focus_target());
+    }
+
     fn focus_target(&self) -> FocusHandle {
         if self.body_has_focus() && self.current_source_is_custom() {
             if let Some(custom) = self.custom_view() {

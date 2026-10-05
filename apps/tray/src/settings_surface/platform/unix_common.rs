@@ -31,6 +31,7 @@ enum Command {
         layout: Option<Box<NotificationLayout>>,
     },
     ThemeChanged,
+    PluginsChanged,
     Kill,
 }
 
@@ -259,6 +260,10 @@ pub(in crate::settings_surface) fn apply_theme(native: &str, accent: &str) -> bo
     core_daemon::send_action(&config(), &format!("theme {native} {accent}"), true)
 }
 
+pub(in crate::settings_surface) fn plugins_changed() -> bool {
+    core_daemon::send_action(&config(), "plugins", true)
+}
+
 pub(in crate::settings_surface) fn stop() -> bool {
     let config = config();
     qol_runtime::probe!(
@@ -461,6 +466,10 @@ fn spawn_command_loop(
                     let _ = cx.update(|cx| cx.refresh_windows());
                     LoopFlow::Continue
                 }
+                Command::PluginsChanged => {
+                    refresh_open_panel(host, tracker, &cx).await;
+                    LoopFlow::Continue
+                }
                 Command::Kill => {
                     qol_runtime::probe!(
                         "SURFACE_ACTIVATION",
@@ -556,6 +565,41 @@ fn toast_tone(level: &str) -> ToastTone {
         "warn" => ToastTone::Warning,
         "error" => ToastTone::Danger,
         _ => ToastTone::Neutral,
+    }
+}
+
+async fn refresh_open_panel(
+    host: Rc<RefCell<SettingsWindowHost>>,
+    tracker: MonitorTracker,
+    cx: &gpui::AsyncApp,
+) {
+    let focus_host = host.clone();
+    let Ok(Some(focus)) = cx.update(move |cx| focus_host.borrow_mut().active_source_id(cx)) else {
+        return;
+    };
+    let loaded = cx
+        .background_spawn(async move { load_unified_panel() })
+        .await;
+    let refreshed = match loaded {
+        Ok((mut panel, runtimes)) => {
+            panel.focus = Some(focus);
+            match qol_gpui::settings_panel::prepare_many_from_async(panel, runtimes, cx).await {
+                Ok(prepared) => {
+                    let custom_factories =
+                        super::native_tools::factories(super::super::CoreTool::Plugins);
+                    cx.update(move |cx| {
+                        host.borrow_mut()
+                            .refresh_prepared(prepared, custom_factories, &tracker, cx)
+                    })
+                    .and_then(|result| result)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = refreshed {
+        log::warn!("Settings panel could not reload its plugin list: {error:#}");
     }
 }
 
@@ -971,6 +1015,7 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     match request.action.as_str() {
         "ping" => ReadResult::Handled,
         "kill" => ReadResult::Command(Command::Kill),
+        "plugins" => ReadResult::Command(Command::PluginsChanged),
         action if action == "theme" || action.starts_with("theme ") => {
             ReadResult::Command(Command::ThemeChanged)
         }
@@ -1172,6 +1217,18 @@ mod tests {
                 "plugin_id={plugin_id:?}"
             );
         }
+    }
+
+    #[test]
+    fn plugins_request_reloads_the_open_panel() {
+        let request = DaemonRequest {
+            action: "plugins".into(),
+            input: serde_json::Value::Null,
+        };
+        assert!(matches!(
+            parse_request(&request),
+            ReadResult::Command(Command::PluginsChanged)
+        ));
     }
 
     #[test]

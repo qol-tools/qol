@@ -25,6 +25,7 @@ pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallRes
     };
 
     reload_plugin_and_notify(state, id);
+    tokio::task::spawn_blocking(crate::settings_surface::plugins_changed);
     log::info!("Plugin {} uninstalled successfully", id);
     success_uninstall_result(&uninstall_message(removed_installed_copy, unlinked_dev))
 }
