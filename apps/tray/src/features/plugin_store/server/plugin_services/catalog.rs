@@ -80,8 +80,18 @@ fn present_state(
     }
 }
 
+const FAILED_REVALIDATION_RETRY_SECS: u64 = 60;
+
+fn retry_due(failed_at: u64, now: u64) -> bool {
+    failed_at == 0 || now.saturating_sub(failed_at) >= FAILED_REVALIDATION_RETRY_SECS
+}
+
 fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
     if !(stale || refresh) {
+        return;
+    }
+    let failed_at = state.plugins_revalidation_failed_at.load(Ordering::SeqCst);
+    if !refresh && !retry_due(failed_at, current_timestamp()) {
         return;
     }
     if state
@@ -93,9 +103,15 @@ fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
     }
     let cache = state.plugins_cache.clone();
     let flag = state.plugins_revalidating.clone();
+    let failed_at = state.plugins_revalidation_failed_at.clone();
     let events = state.daemon.events.clone();
     tokio::spawn(async move {
         let result = revalidate_from_sources().await;
+        let failed = !matches!(&result, Ok(plugins) if !plugins.is_empty());
+        failed_at.store(
+            if failed { current_timestamp() } else { 0 },
+            Ordering::SeqCst,
+        );
         match result {
             Ok(plugins) if plugins.is_empty() => {
                 log::warn!("Plugin revalidation returned empty list; keeping previous cache");
@@ -227,6 +243,20 @@ mod tests {
         ];
         for (name, snap, refresh, expected) in cases {
             assert_eq!(is_stale(*snap, *refresh), *expected, "case: {}", name);
+        }
+    }
+
+    #[test]
+    fn failed_revalidation_waits_before_retrying() {
+        let cases: &[(&str, u64, u64, bool)] = &[
+            ("never failed", 0, 10_000, true),
+            ("failed just now", 10_000, 10_000, false),
+            ("failed inside the wait", 10_000, 10_059, false),
+            ("wait elapsed", 10_000, 10_060, true),
+            ("clock went back", 10_000, 9_000, false),
+        ];
+        for (name, failed_at, now, expected) in cases {
+            assert_eq!(retry_due(*failed_at, *now), *expected, "case: {}", name);
         }
     }
 

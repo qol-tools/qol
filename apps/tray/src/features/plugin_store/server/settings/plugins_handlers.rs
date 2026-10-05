@@ -99,6 +99,11 @@ fn install_action(state: &AppState, id: Option<&str>) -> Response {
         Ok(installed) => installed,
         Err(response) => return *response,
     };
+    match catalog_ids(state) {
+        Ok(catalog) if catalog.contains(&id) || installed.contains(&id) => {}
+        Ok(_) => return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}")),
+        Err(response) => return *response,
+    }
     let refusal = install_refusal(
         installed.contains(&id),
         jobs::get(&id).map(|job| job.state),
@@ -267,6 +272,16 @@ fn installed_ids(state: &AppState) -> HttpResult<HashSet<String>> {
         .plugins
         .iter()
         .map(|plugin| plugin.id.as_str().to_string())
+        .collect())
+}
+
+fn catalog_ids(state: &AppState) -> HttpResult<HashSet<String>> {
+    let catalog = plugin_services::list_plugins(state, false)
+        .map_err(|(status, message)| Box::new(action_error(status, message)))?;
+    Ok(catalog
+        .plugins
+        .into_iter()
+        .map(|plugin| plugin.id)
         .collect())
 }
 
