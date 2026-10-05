@@ -26,8 +26,10 @@ TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ATTESTATION_PREFIX = "qol/release-candidate"
 HOST_ID = "qol-tray"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+PLAN_CI_JOB = "Plan affected crates"
+CHECK_CI_JOB_PREFIX = "lint + test ("
 REQUIRED_CI_JOBS = {
-    "Plan affected crates",
+    PLAN_CI_JOB,
     "lint + test (ubuntu-latest)",
     "lint + test (macos-latest)",
 }
@@ -146,6 +148,20 @@ def require_source_ci(sha: str, runs: list[dict], jobs: list[dict]) -> dict:
             f"CI run {run.get('id')} lacks successful jobs: {', '.join(missing)}"
         )
     return run
+
+
+def reused_queue_verdict(jobs: list[dict]) -> bool:
+    conclusions = {job.get("name"): job.get("conclusion") for job in jobs}
+    checks = [
+        conclusion
+        for name, conclusion in conclusions.items()
+        if str(name).startswith(CHECK_CI_JOB_PREFIX)
+    ]
+    return (
+        conclusions.get(PLAN_CI_JOB) == "success"
+        and bool(checks)
+        and all(conclusion == "skipped" for conclusion in checks)
+    )
 
 
 def latest_attestation(tag: ReleaseTag, statuses: list[dict]) -> dict | None:
@@ -313,7 +329,7 @@ def gh_paginated_list(args: list[str]) -> list[dict]:
     return [item for page in pages for item in page]
 
 
-def completed_ci_runs(repo: str, sha: str) -> list[dict]:
+def completed_ci_runs(repo: str, sha: str, event: str = "push") -> list[dict]:
     payload = gh_json(
         [
             "--method",
@@ -322,7 +338,7 @@ def completed_ci_runs(repo: str, sha: str) -> list[dict]:
             "-f",
             f"head_sha={sha}",
             "-f",
-            "event=push",
+            f"event={event}",
             "-f",
             "status=completed",
             "-f",
@@ -356,9 +372,7 @@ def exact_ci_run(repo: str, run_id: int) -> dict:
     return payload
 
 
-def require_triggered_ci(
-    run: dict, run_id: int, sha: str, jobs: list[dict]
-) -> dict:
+def require_triggered_provenance(run: dict, run_id: int, sha: str) -> None:
     expected = {
         "id": run_id,
         "path": CI_WORKFLOW_PATH,
@@ -377,7 +391,24 @@ def require_triggered_ci(
             f"triggering CI run {run_id} has invalid provenance: "
             + ", ".join(mismatches)
         )
-    return require_source_ci(sha, [run], jobs)
+
+
+def queue_ci_evidence(repo: str, sha: str, landed_run: dict) -> dict:
+    runs = completed_ci_runs(repo, sha, "merge_group")
+    try:
+        run = successful_ci_run(runs, sha)
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"CI run {landed_run.get('id')} reused a merge queue verdict, "
+            f"but the merge queue {error}"
+        ) from error
+    return require_source_ci(sha, runs, ci_run_jobs(repo, run["id"]))
+
+
+def settled_ci(repo: str, sha: str, runs: list[dict], jobs: list[dict]) -> dict:
+    if reused_queue_verdict(jobs):
+        return queue_ci_evidence(repo, sha, successful_ci_run(runs, sha))
+    return require_source_ci(sha, runs, jobs)
 
 
 def source_ci_evidence(
@@ -385,9 +416,8 @@ def source_ci_evidence(
 ) -> dict:
     if run_id is not None:
         run = exact_ci_run(repo, run_id)
-        evidence = require_triggered_ci(
-            run, run_id, sha, ci_run_jobs(repo, run_id)
-        )
+        require_triggered_provenance(run, run_id, sha)
+        evidence = settled_ci(repo, sha, [run], ci_run_jobs(repo, run_id))
         return {**evidence, "source_sha": sha, "ci_sha": sha}
     ci_sha = sha
     runs = completed_ci_runs(repo, ci_sha)
@@ -404,7 +434,7 @@ def source_ci_evidence(
             ) from exact_error
         runs = completed_ci_runs(repo, ci_sha)
         run = successful_ci_run(runs, ci_sha)
-    evidence = require_source_ci(ci_sha, runs, ci_run_jobs(repo, run["id"]))
+    evidence = settled_ci(repo, ci_sha, runs, ci_run_jobs(repo, run["id"]))
     return {**evidence, "source_sha": sha, "ci_sha": ci_sha}
 
 

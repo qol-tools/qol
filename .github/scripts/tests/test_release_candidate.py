@@ -205,12 +205,113 @@ class SourceCiTests(unittest.TestCase):
             ],
         )
 
-    def test_trigger_rejects_wrong_run_provenance(self):
+    @patch.object(rc, "gh_json")
+    def test_landed_push_uses_the_merge_queue_run_it_reused(self, gh_json):
         sha = "a" * 40
-        jobs = [
+        landed = {
+            "id": 42,
+            "path": ".github/workflows/ci.yml",
+            "event": "push",
+            "status": "completed",
+            "head_sha": sha,
+            "conclusion": "success",
+            "html_url": "https://example.invalid/42",
+        }
+        queued = {
+            "id": 41,
+            "head_sha": sha,
+            "conclusion": "success",
+            "html_url": "https://example.invalid/41",
+        }
+        landed_jobs = [
+            {"name": "Plan affected crates", "conclusion": "success"},
+            {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"},
+        ]
+        queued_jobs = [
             {"name": name, "conclusion": "success"}
             for name in rc.REQUIRED_CI_JOBS
         ]
+        gh_json.side_effect = [
+            landed,
+            {"jobs": landed_jobs},
+            {"workflow_runs": [queued]},
+            {"jobs": queued_jobs},
+        ]
+
+        evidence = rc.source_ci_evidence(
+            "qol-tools/qol", sha, Path("/repo"), run_id=42
+        )
+
+        self.assertEqual(evidence["id"], 41)
+        self.assertEqual(evidence["ci_sha"], sha)
+        self.assertIn("event=merge_group", gh_json.call_args_list[2].args[0])
+        self.assertIn(f"head_sha={sha}", gh_json.call_args_list[2].args[0])
+
+    @patch.object(rc, "gh_json")
+    def test_landed_push_rejects_a_missing_or_incomplete_queue_run(self, gh_json):
+        sha = "a" * 40
+        landed = {
+            "id": 42,
+            "path": ".github/workflows/ci.yml",
+            "event": "push",
+            "status": "completed",
+            "head_sha": sha,
+            "conclusion": "success",
+        }
+        landed_jobs = [
+            {"name": "Plan affected crates", "conclusion": "success"},
+            {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"},
+        ]
+        queued = {"id": 41, "head_sha": sha, "conclusion": "success"}
+        cases = [
+            ([], [], "reused a merge queue verdict"),
+            (
+                [{**queued, "conclusion": "failure"}],
+                [],
+                "reused a merge queue verdict",
+            ),
+            (
+                [queued],
+                [{"name": "Plan affected crates", "conclusion": "success"}],
+                "lacks successful jobs",
+            ),
+        ]
+        for queue_runs, queue_jobs, message in cases:
+            with self.subTest(queue_runs=queue_runs, queue_jobs=queue_jobs):
+                gh_json.side_effect = [
+                    landed,
+                    {"jobs": landed_jobs},
+                    {"workflow_runs": queue_runs},
+                    {"jobs": queue_jobs},
+                ]
+                with self.assertRaisesRegex(RuntimeError, message):
+                    rc.source_ci_evidence(
+                        "qol-tools/qol", sha, Path("/repo"), run_id=42
+                    )
+
+    def test_skipped_checks_count_as_reuse_only_beside_a_passed_plan(self):
+        plan = {"name": "Plan affected crates", "conclusion": "success"}
+        skipped = {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"}
+        cases = [
+            ([plan, skipped], True),
+            ([skipped], False),
+            ([plan], False),
+            ([{**plan, "conclusion": "failure"}, skipped], False),
+            (
+                [
+                    plan,
+                    skipped,
+                    {"name": "lint + test (macos-latest)", "conclusion": "failure"},
+                ],
+                False,
+            ),
+        ]
+        for jobs, expected in cases:
+            with self.subTest(jobs=jobs):
+                self.assertEqual(rc.reused_queue_verdict(jobs), expected)
+
+    def test_trigger_rejects_wrong_run_provenance(self):
+        sha = "a" * 40
         fields = {
             "id": 42,
             "path": ".github/workflows/ci.yml",
@@ -231,7 +332,7 @@ class SourceCiTests(unittest.TestCase):
             with self.subTest(name=name):
                 run = {**fields, name: value}
                 with self.assertRaisesRegex(RuntimeError, "invalid provenance"):
-                    rc.require_triggered_ci(run, 42, sha, jobs)
+                    rc.require_triggered_provenance(run, 42, sha)
 
     @patch.object(rc.plugin_version, "verified_version_bump_parent")
     @patch.object(rc, "gh_json")
