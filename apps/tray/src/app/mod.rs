@@ -54,6 +54,7 @@ pub(crate) fn run() -> Result<()> {
     qol_tray::logging::log_build_identity();
 
     qol_tray::lifeline_handoff::adopt_handed_off_fds();
+    qol_tray::relaunch::wait_for_predecessor();
 
     let generation = qol_tray::dev_generation::current();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();

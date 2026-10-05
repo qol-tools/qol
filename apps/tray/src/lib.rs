@@ -15,6 +15,7 @@ pub mod paths;
 pub mod plugins;
 pub mod process;
 pub mod profile;
+pub mod relaunch;
 pub mod runtime;
 pub mod settings_surface;
 pub mod shortcuts;

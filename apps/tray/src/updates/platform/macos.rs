@@ -247,8 +247,6 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
 }
 
 fn exec_restart_on_main_thread() -> Result<()> {
-    use std::os::unix::process::CommandExt;
-
     let binary = std::env::current_exe()?;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
 
@@ -267,13 +265,13 @@ fn exec_restart_on_main_thread() -> Result<()> {
     extern "C" fn do_exec(ctx: *mut std::ffi::c_void) {
         let (binary, args) = unsafe { *Box::from_raw(ctx as *mut ExecData) };
         log::debug!(
-            "exec'ing: {} (exists={}, args={:?})",
+            "relaunching: {} (exists={}, args={:?})",
             binary.display(),
             binary.exists(),
             args
         );
-        let error = std::process::Command::new(&binary).args(&args).exec();
-        log::error!("update exec restart failed: {error}");
+        let error = crate::relaunch::spawn_successor_and_exit(&binary, &args);
+        log::error!("update restart failed: {error}");
         std::process::exit(1);
     }
 
