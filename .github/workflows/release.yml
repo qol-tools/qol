@@ -130,49 +130,11 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  release:
-    name: Publish GitHub release
-    needs: [setup, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          path: artifacts
-
-      - name: Collect release files
-        run: |
-          mkdir -p release_files
-          find artifacts -type f -exec cp {} release_files/ \;
-
-      - name: Create or update release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          tag="${RELEASE_TAG}"
-          {
-            echo "### Plugin release"
-            echo
-            echo "- Tag: \`${tag}\`"
-            echo "- Ref: \`${RELEASE_REF}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release ${tag} already exists; immutable releases are never updated" >&2
-            exit 1
-          fi
-          gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*
-          gh release edit "$tag" --draft=false --latest=false
-
-  # Runs after the GitHub release so a registry failure never holds back the
-  # release every installed tray reads. Rerunnable: a tag that already holds
-  # this release is accepted, different content is refused.
+  # Rerunnable: a tag that already holds this release is accepted, different
+  # content is refused.
   registry:
     name: Publish registry artifact
-    needs: release
+    needs: [setup, build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

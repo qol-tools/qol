@@ -208,22 +208,16 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             self.assertIn(contract, workflow)
 
-    def test_plugin_publish_never_claims_latest(self):
+    def test_plugins_publish_no_github_release(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
 
-        self.assertIn(
-            'gh release create "$tag" --draft --title "$tag" --generate-notes --latest=false release_files/*',
-            workflow,
-        )
-        self.assertIn('gh release edit "$tag" --draft=false --latest=false', workflow)
-        self.assertNotIn("--latest=true", workflow)
+        self.assertNotIn("gh release", workflow)
+        self.assertNotIn("contents: write", workflow)
 
-    def test_plugin_registry_push_runs_after_the_github_release(self):
+    def test_plugin_registry_push_runs_after_the_build(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        release = workflow.split("  release:\n", 1)[1].split("  registry:\n", 1)[0]
         registry = workflow.split("  registry:\n", 1)[1].split("  index:\n", 1)[0]
-        self.assertNotIn("packages: write", release)
-        self.assertIn("needs: release", registry)
+        self.assertIn("needs: [setup, build]", registry)
         self.assertIn("packages: write", registry)
         self.assertIn("ref: ${{ env.RELEASE_REF }}", registry)
         push = named_step(registry, "Push registry artifact", "      ")
