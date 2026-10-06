@@ -2,9 +2,10 @@
 
 # qol
 
-<a href="https://github.com/qol-tools/qol/actions"><img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/assets/status.svg" width="100%" alt="Build status: tests, qol-tray, plugins, registry and index, each with its pieces, whether they passed and how long they took"></a>
-
 A portable quality-of-life layer for any computer you sit down at.
+
+<a href="https://github.com/qol-tools/qol/actions"><img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/assets/status.svg" width="100%" alt="Build status: tests, qol-tray, plugins, registry and index, each with its pieces, whether they passed and how long they took"></a>
+<br>
 
 <img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/shots/hero.webp" width="100%" alt="The qol launcher on Linux Mint, searching for qol, term and fir">
 
