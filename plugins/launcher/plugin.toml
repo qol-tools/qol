@@ -4,7 +4,7 @@ uid = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1"
 name = "Launcher"
 icon = "launcher"
 description = "Universal search with action modifiers"
-version = "1.80.1"
+version = "1.80.2"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 

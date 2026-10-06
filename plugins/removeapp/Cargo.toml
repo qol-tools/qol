@@ -1,6 +1,6 @@
 [package]
 name = "qol-removeapp"
-version = "0.65.1"
+version = "0.65.2"
 edition = "2021"
 description = "Uninstall an app and its leftovers for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
