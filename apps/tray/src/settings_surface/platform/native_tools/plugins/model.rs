@@ -18,6 +18,7 @@ pub(super) enum PluginState {
 pub(super) struct Source {
     pub(super) repo: String,
     pub(super) builtin: bool,
+    pub(super) index: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -160,10 +161,7 @@ pub(super) fn plugin_rows(snapshot: &Snapshot, visit: &Visit<'_>) -> Vec<Row> {
         .collect::<Vec<_>>();
     not_installed.sort_by_key(|plugin| plugin.name.to_lowercase());
     if !not_installed.is_empty() {
-        rows.push(Row::header(
-            "not installed",
-            "in the releases of your sources.",
-        ));
+        rows.push(Row::header("not installed", "offered by your sources."));
         rows.extend(not_installed.into_iter().map(not_installed_row));
     }
 
@@ -229,10 +227,11 @@ fn awaits_answer(state: PluginState) -> bool {
 }
 
 fn source_row(source: &Source) -> Row {
-    let row = Row::item(
-        &source.repo,
-        Some(format!("GitHub releases, github.com/{}", source.repo)),
-    );
+    let origin = match &source.index {
+        Some(url) => format!("Signed index, {}", url.trim_start_matches("https://")),
+        None => format!("GitHub releases, github.com/{}", source.repo),
+    };
+    let row = Row::item(&source.repo, Some(origin));
     if source.builtin {
         row.value("default", SettingsValueTone::Normal)
     } else {
@@ -329,10 +328,12 @@ mod tests {
                 Source {
                     repo: "qol-tools/qol".to_string(),
                     builtin: true,
+                    index: Some("https://qol-tools.github.io/qol/plugins/index.json".to_string()),
                 },
                 Source {
                     repo: "me/tools".to_string(),
                     builtin: false,
+                    index: None,
                 },
             ],
             plugins,
@@ -391,7 +392,7 @@ mod tests {
             headers,
             [
                 ("sources", Some("where plugins come from.")),
-                ("not installed", Some("in the releases of your sources.")),
+                ("not installed", Some("offered by your sources.")),
                 ("installed", Some("running on this computer.")),
             ]
         );
@@ -419,7 +420,7 @@ mod tests {
         let builtin = row(&rows, "qol-tools/qol");
         assert_eq!(
             builtin.description.as_deref(),
-            Some("GitHub releases, github.com/qol-tools/qol")
+            Some("Signed index, qol-tools.github.io/qol/plugins/index.json")
         );
         assert_eq!(builtin.value.as_deref(), Some("default"));
         assert_eq!(builtin.enter, Some((Enter::OpenSources, "open")));

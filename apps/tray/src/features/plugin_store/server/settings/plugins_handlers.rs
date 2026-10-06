@@ -11,7 +11,7 @@ use super::super::plugin_services;
 use super::super::types::AppState;
 use super::http_json;
 use super::update_handlers::{action_error, action_ok, CoreActionRequest};
-use crate::features::plugin_store::source::{builtin_sources, default_source_repos};
+use crate::features::plugin_store::source::{builtin_sources, default_source_repos, SourceCatalog};
 use crate::features::plugin_store::user_sources;
 use crate::updates::jobs::{self, JobState, UpdateJob};
 
@@ -53,6 +53,7 @@ struct PluginsPayload {
 struct SourcePayload {
     repo: String,
     builtin: bool,
+    index: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -337,6 +338,10 @@ fn collect_payload(state: &AppState) -> HttpResult<PluginsPayload> {
         .into_iter()
         .map(|source| SourcePayload {
             builtin: defaults.contains(&source.repo),
+            index: match source.catalog {
+                SourceCatalog::SignedIndex(location) => Some(location.url),
+                SourceCatalog::GitHubReleases => None,
+            },
             repo: source.repo,
         })
         .collect();
@@ -469,6 +474,7 @@ mod tests {
             vec![SourcePayload {
                 repo: "qol-tools/qol".to_string(),
                 builtin: true,
+                index: Some("https://qol-tools.github.io/qol/plugins/index.json".to_string()),
             }],
             vec![failed, removing],
         );
@@ -477,7 +483,11 @@ mod tests {
             serde_json::json!({
                 "revalidating": true,
                 "can_add_sources": false,
-                "sources": [{ "repo": "qol-tools/qol", "builtin": true }],
+                "sources": [{
+                    "repo": "qol-tools/qol",
+                    "builtin": true,
+                    "index": "https://qol-tools.github.io/qol/plugins/index.json"
+                }],
                 "plugins": [
                     {
                         "id": "qol-lights",
