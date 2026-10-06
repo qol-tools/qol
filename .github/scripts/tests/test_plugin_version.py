@@ -489,6 +489,33 @@ class RootManifestImpactTests(unittest.TestCase):
         self.assertFalse(impact.affects_all)
         self.assertEqual(impact.dependencies, frozenset({"qol-fs"}))
 
+    def test_unclassified_sections_affect_all_only_when_they_change(self):
+        lints = '[workspace.lints.clippy]\nprint_stdout = "deny"\n\n'
+        profile = "[profile.dev.package.png]\nopt-level = 2\n"
+        workspace = '[workspace]\nresolver = "2"\nmembers = ["plugins/fixture"]\n\n'
+        dependency = '[workspace.dependencies]\nqol-fs = { path = "libs/fs" }\n\n'
+        cases = [
+            ("lints added", workspace + lints + profile, True, frozenset()),
+            (
+                "dependency added beside unchanged lints",
+                workspace + dependency + lints + profile,
+                False,
+                frozenset({"qol-fs"}),
+            ),
+            (
+                "lints changed",
+                workspace + dependency + lints.replace("deny", "warn") + profile,
+                True,
+                frozenset(),
+            ),
+        ]
+        for label, text, affects_all, dependencies in cases:
+            with self.subTest(label):
+                self.write_root(text)
+                impact = pv.root_manifest_impact(self.root, self.commit())
+                self.assertEqual(impact.affects_all, affects_all)
+                self.assertEqual(impact.dependencies, dependencies)
+
 
 class HighestVersionTagTests(unittest.TestCase):
     def test_picks_highest_semver_for_prefix(self):
