@@ -107,6 +107,9 @@ flate2 = "1"
 tar = "0.4"
 tempfile = "3.8"
 
+# Plugin index signature
+qol-plugin-index.workspace = true
+
 qol-runtime.workspace = true
 qol-apps.workspace = true
 qol-app-icon.workspace = true
@@ -161,6 +164,8 @@ qol-plugin-daemon.workspace = true
 qol-build-identity.workspace = true
 
 [dev-dependencies]
+minisign-verify = "0.3"
+qol-plugin-index = { workspace = true, features = ["test-signer"] }
 proptest = "1.6"
 tower = { version = "0.5", features = ["util"] }
 

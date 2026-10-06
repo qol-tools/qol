@@ -1,3 +1,4 @@
+use super::super::index::IndexedRelease;
 use super::super::release_assets::{resolve_asset_pattern, PlatformTarget};
 use super::super::source::PluginSource;
 use super::InstallSource;
@@ -16,14 +17,21 @@ pub(super) async fn set_executable_permissions(path: &Path) -> Result<()> {
     source_build::set_executable_permissions(path).await
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AssetOrigin<'a> {
+    GitHubRelease,
+    Index(&'a IndexedRelease),
+}
+
 pub(super) async fn install_dependencies(
     source: &PluginSource,
     plugin_id: &str,
     plugin_dir: &Path,
     install_source: &InstallSource,
+    origin: AssetOrigin<'_>,
 ) -> Result<()> {
     let manifest = load_plugin_manifest(plugin_dir).await?;
-    let installer = DependencyInstaller::new(source, plugin_id, plugin_dir, install_source);
+    let installer = DependencyInstaller::new(source, plugin_id, plugin_dir, install_source, origin);
     installer.install_manifest_binaries(&manifest).await?;
     validate_execution_contract(plugin_id, plugin_dir, &manifest)?;
     Ok(())
@@ -34,6 +42,7 @@ struct DependencyInstaller<'a> {
     plugin_id: &'a str,
     plugin_dir: &'a Path,
     install_source: &'a InstallSource,
+    origin: AssetOrigin<'a>,
 }
 
 impl<'a> DependencyInstaller<'a> {
@@ -42,12 +51,14 @@ impl<'a> DependencyInstaller<'a> {
         plugin_id: &'a str,
         plugin_dir: &'a Path,
         install_source: &'a InstallSource,
+        origin: AssetOrigin<'a>,
     ) -> Self {
         Self {
             source,
             plugin_id,
             plugin_dir,
             install_source,
+            origin,
         }
     }
 
@@ -77,6 +88,7 @@ impl<'a> DependencyInstaller<'a> {
             self.plugin_dir,
             dependency,
             self.install_source,
+            self.origin,
         )?;
         ensure_dependency_binary(&plan).await?;
         set_executable_permissions(&plan.binary_path).await?;
@@ -93,6 +105,7 @@ pub(super) struct DependencyPlan<'a> {
     pub(super) asset_name: String,
     pub(super) binary_path: PathBuf,
     pub(super) release_tag: ReleaseTagPick,
+    pub(super) origin: AssetOrigin<'a>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +121,7 @@ impl<'a> DependencyPlan<'a> {
         plugin_dir: &'a Path,
         dependency: &'a crate::plugins::manifest::BinaryDependency,
         install_source: &InstallSource,
+        origin: AssetOrigin<'a>,
     ) -> Result<Self> {
         Ok(Self {
             source,
@@ -117,6 +131,7 @@ impl<'a> DependencyPlan<'a> {
             binary_path: source_build::dependency_binary_output_path(plugin_dir, &dependency.name),
             dependency,
             release_tag: release_tag(source, plugin_id, install_source),
+            origin,
         })
     }
 
@@ -217,6 +232,7 @@ mod tests {
             &plugin_dir,
             &dep,
             &InstallSource::TaggedVersion("1.2.3".to_string()),
+            AssetOrigin::GitHubRelease,
         )
         .expect("plan constructs on the test host");
         assert_eq!(

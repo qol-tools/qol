@@ -1,8 +1,23 @@
-use super::{DependencyPlan, ReleaseTagPick};
+use super::{AssetOrigin, DependencyPlan, ReleaseTagPick};
+use crate::features::plugin_store::index;
 use crate::features::plugin_store::release_integrity::{self, GitHubRelease};
 use anyhow::Result;
 
 pub(super) async fn download_dependency_binary(plan: &DependencyPlan<'_>) -> Result<bool> {
+    match plan.origin {
+        AssetOrigin::GitHubRelease => download_from_github_release(plan).await,
+        AssetOrigin::Index(release) => {
+            log::info!("Fetching {} from the plugin index", plan.asset_name);
+            let found = index::download_asset(release, &plan.asset_name, &plan.binary_path).await?;
+            if !found {
+                return missing_asset(plan);
+            }
+            Ok(true)
+        }
+    }
+}
+
+async fn download_from_github_release(plan: &DependencyPlan<'_>) -> Result<bool> {
     log::info!(
         "Fetching {} from {} ({:?})",
         plan.asset_name,

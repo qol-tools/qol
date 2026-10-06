@@ -1,6 +1,8 @@
+use crate::features::plugin_store::index::{self, IndexLocation};
 use crate::features::plugin_store::release_assets::{resolve_asset_pattern, PlatformTarget};
 use crate::plugins::manifest::BinaryDependency;
 use crate::version::normalize_semver_tag;
+use std::future::Future;
 
 pub(crate) const RELEASES_PER_PAGE: usize = 100;
 
@@ -9,6 +11,13 @@ pub(crate) struct PluginSource {
     pub(crate) name: String,
     pub(crate) repo: String,
     pub(crate) git_ref: String,
+    pub(crate) catalog: SourceCatalog,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceCatalog {
+    GitHubReleases,
+    SignedIndex(IndexLocation),
 }
 
 impl PluginSource {
@@ -21,6 +30,38 @@ impl PluginSource {
             name: name.into(),
             repo: repo.into(),
             git_ref: git_ref.into(),
+            catalog: SourceCatalog::GitHubReleases,
+        }
+    }
+
+    pub(crate) fn with_signed_index(self, location: IndexLocation) -> Self {
+        Self {
+            catalog: SourceCatalog::SignedIndex(location),
+            ..self
+        }
+    }
+
+    pub(crate) async fn read_catalog<'a, T, I, G>(
+        &'a self,
+        from_index: impl FnOnce(&'a IndexLocation) -> I,
+        from_github: impl FnOnce() -> G,
+    ) -> anyhow::Result<T>
+    where
+        I: Future<Output = anyhow::Result<T>>,
+        G: Future<Output = anyhow::Result<T>>,
+    {
+        let SourceCatalog::SignedIndex(location) = &self.catalog else {
+            return from_github().await;
+        };
+        match from_index(location).await {
+            Err(error) if index::is_unavailable(&error) => {
+                log::warn!(
+                    "The plugin index for source {} is unavailable, using GitHub Releases: {error:#}",
+                    self.name
+                );
+                from_github().await
+            }
+            result => result,
         }
     }
 
@@ -96,7 +137,8 @@ pub(super) fn default_source_repos() -> Vec<String> {
 }
 
 fn default_builtin_sources() -> Vec<PluginSource> {
-    vec![PluginSource::new("core", "qol-tools/qol", "main")]
+    vec![PluginSource::new("core", "qol-tools/qol", "main")
+        .with_signed_index(crate::features::plugin_store::index::core_index())]
 }
 
 fn user_source(repo: String) -> PluginSource {
@@ -268,6 +310,10 @@ mod tests {
         assert_eq!(core.name, "core");
         assert_eq!(core.repo, "qol-tools/qol");
         assert_eq!(core.git_ref, "main");
+        assert_eq!(
+            core.catalog,
+            SourceCatalog::SignedIndex(crate::features::plugin_store::index::core_index())
+        );
     }
 
     #[test]

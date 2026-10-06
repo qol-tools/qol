@@ -1,0 +1,24 @@
+[package]
+name = "qol-plugin-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Publishes plugin releases to the plugin registry and builds the plugin index"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+flate2 = "1"
+pico-args = "0.5"
+qol-plugin-index.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
+ureq = "2.12"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[lints]
+workspace = true

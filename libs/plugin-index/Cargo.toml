@@ -1,0 +1,27 @@
+[package]
+name = "qol-plugin-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The signed plugin index format, shared by the CI tool that writes it and the tray that reads it"
+
+[features]
+test-signer = ["dep:base64", "dep:blake2b_simd", "dep:ed25519-compact"]
+
+[dependencies]
+anyhow = "1.0"
+base64 = { version = "0.22", optional = true }
+blake2b_simd = { version = "1", default-features = false, optional = true }
+ed25519-compact = { version = "2", default-features = false, optional = true }
+minisign-verify = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+url = "2.5"
+
+[dev-dependencies]
+base64 = "0.22"
+blake2b_simd = { version = "1", default-features = false }
+ed25519-compact = { version = "2", default-features = false }
+
+[lints]
+workspace = true

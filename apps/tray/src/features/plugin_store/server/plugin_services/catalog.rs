@@ -9,7 +9,8 @@ use super::super::super::github::{
     current_timestamp, write_cache, GitHubClient, PluginCache, PluginMetadata,
     CACHE_FORMAT_VERSION, CACHE_TTL_SECS,
 };
-use super::super::super::source::{builtin_sources, fold_collected_plugins};
+use super::super::super::index;
+use super::super::super::source::{builtin_sources, fold_collected_plugins, PluginSource};
 use super::super::helpers::{read_installed_plugin_dirs, read_plugin_version};
 use super::super::types::{AppState, PluginInfo, PluginsResponse};
 
@@ -144,8 +145,7 @@ async fn revalidate_from_sources() -> anyhow::Result<Vec<PluginMetadata>> {
     let mut last_error: Option<anyhow::Error> = None;
     for source in sources {
         let source_label = format!("{} ({})", source.name, source.repo);
-        let client = GitHubClient::new(source);
-        match client.list_plugins().await {
+        match list_source_plugins(source).await {
             Ok(plugins) => buckets.push(plugins),
             Err(error) => {
                 log::warn!("Source {} discovery failed: {:#}", source_label, error);
@@ -160,6 +160,15 @@ async fn revalidate_from_sources() -> anyhow::Result<Vec<PluginMetadata>> {
         }
     }
     Ok(folded)
+}
+
+async fn list_source_plugins(source: PluginSource) -> anyhow::Result<Vec<PluginMetadata>> {
+    source
+        .read_catalog(
+            |location| index::list_plugins(&source, location),
+            || async { GitHubClient::new(source.clone()).list_plugins().await },
+        )
+        .await
 }
 
 fn plugins_dir() -> Result<std::path::PathBuf, (StatusCode, String)> {

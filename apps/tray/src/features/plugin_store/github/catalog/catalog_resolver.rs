@@ -2,7 +2,7 @@ use super::super::super::source::PluginSource;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-pub(in crate::features::plugin_store::github) fn build_plugin_metadata(
+pub(in crate::features::plugin_store) fn build_plugin_metadata(
     plugin_dir: &str,
     source: &PluginSource,
     manifest: crate::plugins::PluginManifest,

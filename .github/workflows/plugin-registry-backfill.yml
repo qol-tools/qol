@@ -1,0 +1,64 @@
+name: Backfill plugin registry
+
+# Pushes the latest GitHub release of each plugin, then rebuilds
+# the index. Tags already in the registry are skipped, so reruns are safe.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: plugin-registry-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: Push existing releases
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: plugin-registry
+          system-dependencies: "false"
+
+      # Built in its own step, which holds no token.
+      - name: Build registry tool
+        run: cargo build --locked -p qol-plugin-registry
+
+      - name: Push releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target/debug/qol-plugin-registry backfill \
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
+            --source "https://github.com/${GITHUB_REPOSITORY}" \
+            --github-repo "${GITHUB_REPOSITORY}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  index:
+    name: Refresh plugin index
+    needs: backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the index build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run plugin-index.yml --ref main

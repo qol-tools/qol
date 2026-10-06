@@ -579,17 +579,16 @@ def root_manifest_impact(root: Path, sha: str) -> RootImpact:
         if before_workspace.get(key) != after_workspace.get(key):
             return RootImpact(affects_all=True, dependencies=frozenset())
 
-    before_root_keys = set(before) - {"workspace"}
-    after_root_keys = set(after) - {"workspace"}
-    classified_root_keys = ROOT_MANIFEST_AFFECT_ALL_SECTIONS
-    if before_root_keys - classified_root_keys or after_root_keys - classified_root_keys:
+    unclassified_root_keys = (set(before) | set(after)) - {"workspace"} - ROOT_MANIFEST_AFFECT_ALL_SECTIONS
+    if any(before.get(key) != after.get(key) for key in unclassified_root_keys):
         return RootImpact(affects_all=True, dependencies=frozenset())
 
-    before_workspace_keys = set(before_workspace)
-    after_workspace_keys = set(after_workspace)
-    if (
-        before_workspace_keys - ROOT_WORKSPACE_CLASSIFIED_FIELDS
-        or after_workspace_keys - ROOT_WORKSPACE_CLASSIFIED_FIELDS
+    unclassified_workspace_keys = (
+        set(before_workspace) | set(after_workspace)
+    ) - ROOT_WORKSPACE_CLASSIFIED_FIELDS
+    if any(
+        before_workspace.get(key) != after_workspace.get(key)
+        for key in unclassified_workspace_keys
     ):
         return RootImpact(affects_all=True, dependencies=frozenset())
 
