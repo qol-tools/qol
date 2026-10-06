@@ -61,18 +61,20 @@ class PushArgsTests(unittest.TestCase):
 
 
 class BackfillTagsTests(unittest.TestCase):
-    def test_keeps_release_tags_of_current_plugins_only(self):
+    def test_keeps_the_latest_release_of_each_current_plugin(self):
         tags = [
             "qol-alt-tab-v0.89.0",
             "qol-alt-tab-v0.88.0",
+            "qol-sound-v0.9.0",
+            "qol-sound-v0.10.0",
             "plugin-alt-tab-v0.40.0",
             "qol-tray-v3.82.0",
             "qol-shot-v1.77.0",
             "not-a-release",
         ]
-        selected = pa.backfill_tags(tags, {"qol-alt-tab", "qol-shot"})
+        selected = pa.backfill_tags(tags, {"qol-alt-tab", "qol-shot", "qol-sound"})
         self.assertEqual(
-            selected, ["qol-alt-tab-v0.88.0", "qol-alt-tab-v0.89.0", "qol-shot-v1.77.0"]
+            selected, ["qol-alt-tab-v0.89.0", "qol-shot-v1.77.0", "qol-sound-v0.10.0"]
         )
 
 

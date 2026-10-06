@@ -9,8 +9,8 @@ it holds the same revision, plugin.toml, assets and plugin tree, so a failed
 release job can be rerun. The tree is compared uncompressed because gzip output
 may differ between git versions.
 
-`push` publishes the release being built. `backfill` publishes releases that
-predate the registry from their GitHub release assets, skipping tags the
+`push` publishes the release being built. `backfill` publishes the latest
+release of each plugin from its GitHub release assets, skipping a tag the
 registry already holds.
 """
 
@@ -186,12 +186,13 @@ def current_plugin_ids(root: Path) -> set[str]:
 
 
 def backfill_tags(release_tags: list[str], plugin_ids: set[str]) -> list[str]:
-    selected = []
+    latest: dict[str, tuple[tuple[int, int, int], str]] = {}
     for tag in release_tags:
         parsed = parse_tag(tag)
         if parsed is not None and parsed[0] in plugin_ids:
-            selected.append(tag)
-    return sorted(selected)
+            plugin_id, number = parsed
+            latest[plugin_id] = max(latest.get(plugin_id, (number, tag)), (number, tag))
+    return sorted(tag for _, tag in latest.values())
 
 
 def backfill(args: argparse.Namespace) -> int:

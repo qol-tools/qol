@@ -1,6 +1,6 @@
 name: Backfill plugin registry
 
-# Pushes plugin releases published before the registry existed, then rebuilds
+# Pushes the latest GitHub release of each plugin, then rebuilds
 # the index. Tags already in the registry are skipped, so reruns are safe.
 on:
   workflow_dispatch:
