@@ -9,7 +9,7 @@ mod stage;
 pub(crate) use catalog::list_plugins;
 pub(crate) use document::IndexedRelease;
 pub(crate) use registry::download_asset;
-pub(crate) use stage::{latest_version, load_config_contract, stage_release};
+pub(crate) use stage::{load_config_contract, stage_release};
 
 const CORE_INDEX_URL: &str = "https://qol-tools.github.io/qol/plugins/index.json";
 const CORE_INDEX_PUBLIC_KEY_FILE: &str = include_str!("plugin-index.pub");

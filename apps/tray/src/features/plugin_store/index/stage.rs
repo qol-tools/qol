@@ -5,10 +5,6 @@ use super::IndexLocation;
 use anyhow::{Context, Result};
 use std::path::Path;
 
-pub(crate) async fn latest_version(location: &IndexLocation, plugin_id: &str) -> Result<String> {
-    Ok(release(&fetch::load(location).await?, plugin_id, None)?.version)
-}
-
 pub(crate) async fn stage_release(
     location: &IndexLocation,
     plugin_id: &str,

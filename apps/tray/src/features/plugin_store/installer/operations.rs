@@ -17,7 +17,6 @@ pub(super) async fn install(
     plugin_id: &str,
     install_source: InstallSource,
 ) -> Result<()> {
-    let install_source = resolve_install_source(source, plugin_id, install_source).await?;
     let plan = InstallPlan::new(plugins_dir, source, plugin_id, install_source);
     if active_is_live_source(plugin_id) {
         clear_stale_fallback(&plan.target_dir, plugin_id).await;
@@ -26,25 +25,6 @@ pub(super) async fn install(
     }
     let result = install_plugin(&plan).await;
     finish_with_cleanup(&plan.clone_dir, &plan.extracted_dir, result).await
-}
-
-async fn resolve_install_source(
-    source: &PluginSource,
-    plugin_id: &str,
-    install_source: InstallSource,
-) -> Result<InstallSource> {
-    match install_source {
-        InstallSource::TaggedVersion(_) => Ok(install_source),
-        InstallSource::Latest => {
-            let version = source
-                .read_catalog(
-                    |location| index::latest_version(location, plugin_id),
-                    || resolve_latest_plugin_version(source, plugin_id),
-                )
-                .await?;
-            Ok(InstallSource::TaggedVersion(version))
-        }
-    }
 }
 
 fn active_is_live_source(plugin_id: &str) -> bool {
@@ -87,7 +67,6 @@ pub(super) async fn update(
     plugin_id: &str,
     install_source: InstallSource,
 ) -> Result<()> {
-    let install_source = resolve_install_source(source, plugin_id, install_source).await?;
     let plan = UpdatePlan::new(plugins_dir, source, plugin_id, install_source);
     ensure_installed(&plan.plugin_dir, plugin_id)?;
     let result = update_plugin(&plan).await;
@@ -250,6 +229,12 @@ async fn stage_from_github(
     extracted_dir: &Path,
     checkout: Checkout,
 ) -> Result<()> {
+    let install_source = &match install_source {
+        InstallSource::Latest => {
+            InstallSource::TaggedVersion(resolve_latest_plugin_version(source, plugin_id).await?)
+        }
+        tagged => tagged.clone(),
+    };
     match checkout {
         Checkout::Fresh => clone_source_repo(source, clone_dir, plugin_id, install_source).await?,
         Checkout::Update => {

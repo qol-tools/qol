@@ -25,6 +25,7 @@ struct Published {
     signature: String,
     blobs: HashMap<String, Vec<u8>>,
     tokens_issued: usize,
+    indexes_served: usize,
 }
 
 #[derive(Clone)]
@@ -109,7 +110,9 @@ fn platform_asset_names() -> Vec<String> {
 }
 
 async fn serve_index(State(server): State<Server>) -> Vec<u8> {
-    server.published.lock().unwrap().index.clone()
+    let mut published = server.published.lock().unwrap();
+    published.indexes_served += 1;
+    published.index.clone()
 }
 
 async fn serve_signature(State(server): State<Server>) -> String {
@@ -199,6 +202,7 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
     assert_eq!(installed_version(&plugins_dir), "1.0.0");
     assert_eq!(installed_binary(&plugins_dir), b"binary one");
     assert_eq!(server.published.lock().unwrap().tokens_issued, 1);
+    assert_eq!(server.published.lock().unwrap().indexes_served, 3);
 
     server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
     let replayed = installer.update(&source, PLUGIN_ID).await.unwrap_err();
@@ -253,21 +257,17 @@ async fn an_index_or_blob_that_cannot_be_reached_is_unavailable() {
         public_key: signer.public_key(),
     };
 
-    let not_served = super::latest_version(&missing_index, PLUGIN_ID)
+    let staging = tmp.path().join("staging");
+    let not_served = super::stage_release(&missing_index, PLUGIN_ID, None, &staging)
         .await
         .unwrap_err();
-    let not_listed = super::latest_version(&server.location(&signer), "qol-missing")
+    let not_listed = super::stage_release(&server.location(&signer), "qol-missing", None, &staging)
         .await
         .unwrap_err();
     server.published.lock().unwrap().blobs.clear();
-    let blob_gone = super::stage_release(
-        &server.location(&signer),
-        PLUGIN_ID,
-        None,
-        &tmp.path().join("staging"),
-    )
-    .await
-    .unwrap_err();
+    let blob_gone = super::stage_release(&server.location(&signer), PLUGIN_ID, None, &staging)
+        .await
+        .unwrap_err();
 
     for error in [not_served, not_listed, blob_gone] {
         assert!(super::is_unavailable(&error), "{error:#}");
