@@ -1,4 +1,6 @@
 mod challenge;
+#[cfg(any(test, feature = "test-signer"))]
+pub mod test_signer;
 
 pub use challenge::BearerChallenge;
 
@@ -66,6 +68,7 @@ pub fn verify(body: &[u8], signature: &str, public_key: &str) -> Result<IndexDoc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_signer::TestSigner;
 
     fn index(serial: u64) -> IndexDocument {
         let version = IndexedVersion {
@@ -95,33 +98,21 @@ mod tests {
         }
     }
 
-    fn sign(keypair: &minisign::KeyPair, body: &[u8]) -> String {
-        minisign::sign(
-            Some(&keypair.pk),
-            &keypair.sk,
-            body,
-            Some("qol plugin index"),
-            None,
-        )
-        .unwrap()
-        .into_string()
-    }
-
     #[test]
     fn verify_accepts_only_the_signed_bytes_under_the_pinned_key() {
-        let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
-        let other = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let signer = TestSigner::generate();
+        let other = TestSigner::generate();
         let body = serde_json::to_vec(&index(7)).unwrap();
-        let signature = sign(&signer, &body);
+        let signature = signer.sign(&body);
         let mut tampered = body.clone();
         tampered[body.len() - 2] = b' ';
-        let key = signer.pk.to_base64();
+        let key = signer.public_key();
 
         assert_eq!(verify(&body, &signature, &key).unwrap(), index(7));
         let refused: &[(&str, &[u8], String, String)] = &[
             ("tampered body", &tampered, signature.clone(), key.clone()),
-            ("other key", &body, signature.clone(), other.pk.to_base64()),
-            ("other signature", &body, sign(&other, &body), key.clone()),
+            ("other key", &body, signature.clone(), other.public_key()),
+            ("other signature", &body, other.sign(&body), key.clone()),
             (
                 "garbage signature",
                 &body,
@@ -139,11 +130,11 @@ mod tests {
 
     #[test]
     fn verify_refuses_a_signed_index_with_an_unknown_schema() {
-        let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let signer = TestSigner::generate();
         let mut document = index(1);
         document.schema = 2;
         let body = serde_json::to_vec(&document).unwrap();
-        let error = verify(&body, &sign(&signer, &body), &signer.pk.to_base64()).unwrap_err();
+        let error = verify(&body, &signer.sign(&body), &signer.public_key()).unwrap_err();
         assert!(error.to_string().contains("schema 2"), "{error:#}");
     }
 

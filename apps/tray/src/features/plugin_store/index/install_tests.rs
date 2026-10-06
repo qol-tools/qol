@@ -172,7 +172,7 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
     let plugins_dir = tmp.path().join("plugins");
     std::fs::create_dir_all(&plugins_dir).unwrap();
     let server = Server::start().await;
-    let signer = Signer::new();
+    let signer = Signer::generate();
     let source = PluginSource::new("core", "qol-tools/qol", "main")
         .with_signed_index(server.location(&signer));
     let installer = PluginInstaller::new(plugins_dir.clone());
@@ -217,7 +217,7 @@ async fn install_refuses_files_that_do_not_match_the_index() {
     let plugins_dir = tmp.path().join("plugins");
     std::fs::create_dir_all(&plugins_dir).unwrap();
     let server = Server::start().await;
-    let signer = Signer::new();
+    let signer = Signer::generate();
     let installer = PluginInstaller::new(plugins_dir.clone());
 
     server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
@@ -232,7 +232,7 @@ async fn install_refuses_files_that_do_not_match_the_index() {
     assert!(!super::is_unavailable(&tampered), "{tampered:#}");
     assert!(!plugins_dir.join(PLUGIN_ID).exists());
 
-    let impostor = Signer::new();
+    let impostor = Signer::generate();
     let wrong_key = PluginSource::new("core", "qol-tools/qol", "main")
         .with_signed_index(server.location(&impostor));
     let unsigned = installer.install(&wrong_key, PLUGIN_ID).await.unwrap_err();
@@ -250,7 +250,7 @@ async fn an_index_or_blob_that_cannot_be_reached_is_unavailable() {
     let tmp = tempfile::tempdir().unwrap();
     let _paths = crate::paths::push_test_path_root(tmp.path());
     let server = Server::start().await;
-    let signer = Signer::new();
+    let signer = Signer::generate();
     server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
     let missing_index = IndexLocation {
         url: format!("{}/missing/index.json", server.base),

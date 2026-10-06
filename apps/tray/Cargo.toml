@@ -164,8 +164,8 @@ qol-plugin-daemon.workspace = true
 qol-build-identity.workspace = true
 
 [dev-dependencies]
-minisign = "0.10"
 minisign-verify = "0.3"
+qol-plugin-index = { workspace = true, features = ["test-signer"] }
 proptest = "1.6"
 tower = { version = "0.5", features = ["util"] }
 

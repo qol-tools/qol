@@ -39,33 +39,7 @@ pub(super) fn release(
 pub(super) mod fixtures {
     use serde_json::{json, Value};
 
-    pub(crate) struct Signer {
-        keypair: minisign::KeyPair,
-    }
-
-    impl Signer {
-        pub(crate) fn new() -> Self {
-            Self {
-                keypair: minisign::KeyPair::generate_unencrypted_keypair().expect("test keypair"),
-            }
-        }
-
-        pub(crate) fn public_key(&self) -> String {
-            self.keypair.pk.to_base64()
-        }
-
-        pub(crate) fn sign(&self, body: &[u8]) -> String {
-            minisign::sign(
-                Some(&self.keypair.pk),
-                &self.keypair.sk,
-                body,
-                Some("qol plugin index"),
-                None,
-            )
-            .expect("test signature")
-            .into_string()
-        }
-    }
+    pub(crate) use qol_plugin_index::test_signer::TestSigner as Signer;
 
     pub(crate) fn blob(digest: &str, size: u64) -> Value {
         json!({ "digest": digest, "size": size })
@@ -115,7 +89,7 @@ mod tests {
 
     #[test]
     fn release_picks_latest_or_the_requested_version() {
-        let signer = Signer::new();
+        let signer = Signer::generate();
         let body = two_version_index(1);
         let document = verify(&body, &signer.sign(&body), &signer.public_key()).unwrap();
         let cases: &[(Option<&str>, &str, &str)] = &[
