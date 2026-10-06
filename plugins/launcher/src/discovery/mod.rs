@@ -11,7 +11,7 @@ mod trace;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use qol_apps::AppEntry;
 use qol_plugin_api::launcher_flows::{self, FlowEntry};
@@ -129,6 +129,7 @@ pub(crate) fn merge_file_roots(
 
 const DEBOUNCE: Duration = Duration::from_secs(2);
 const RECV_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_PENDING: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 struct AppCache {
@@ -137,12 +138,13 @@ struct AppCache {
 }
 
 impl AppCache {
-    fn rescan(&mut self, root: &AppRoot) {
-        let entries = platform::scan_root(root);
-        for entry in &entries {
-            self.faces.remove(&entry.path);
-        }
-        self.by_root.insert(root.path.clone(), entries);
+    fn rescan(&mut self, root: &AppRoot, changed: &HashSet<PathBuf>) {
+        self.by_root
+            .insert(root.path.clone(), platform::scan_root(root));
+        let live: HashSet<&PathBuf> = self.by_root.values().flatten().map(|e| &e.path).collect();
+        self.faces.retain(|path, _| {
+            live.contains(path) && !changed.iter().any(|stale| path.starts_with(stale))
+        });
     }
 
     fn fill_faces(&mut self) -> bool {
@@ -163,7 +165,7 @@ impl AppCache {
 
     fn rescan_all(&mut self, roots: &[AppRoot]) {
         for root in roots {
-            self.rescan(root);
+            self.rescan(root, &HashSet::from([root.path.clone()]));
         }
     }
 
@@ -202,13 +204,6 @@ fn publish(
         guard.loaded_once = true;
     }
     let _ = published.send(fresh);
-}
-
-fn is_app_relevant(path: &Path) -> bool {
-    match path.extension() {
-        Some(ext) => ext == "desktop",
-        None => true,
-    }
 }
 
 fn find_containing_root<'a>(path: &Path, roots: &'a [AppRoot]) -> Option<&'a AppRoot> {
@@ -269,13 +264,7 @@ pub(crate) fn start(
         let fs_tx = tx.clone();
         let mut watch_roots = roots
             .iter()
-            .map(|root| {
-                if root.watch_recursive() {
-                    WatchRoot::deep(root.path.clone())
-                } else {
-                    WatchRoot::shallow(root.path.clone())
-                }
-            })
+            .map(platform::app_watch_root)
             .collect::<Vec<_>>();
         watch_roots.extend(
             file_roots
@@ -306,42 +295,41 @@ pub(crate) fn start(
 
         spawn_host_subscriber(tx);
 
-        let mut dirty: HashSet<PathBuf> = HashSet::new();
+        let mut dirty: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
         let mut dirty_files: HashSet<PathBuf> = HashSet::new();
+        let mut pending_since: Option<Instant> = None;
         loop {
-            let timeout = if !dirty.is_empty() || !dirty_files.is_empty() {
-                DEBOUNCE
-            } else {
-                RECV_TIMEOUT
+            let timeout = match pending_since {
+                Some(since) => DEBOUNCE.min(MAX_PENDING.saturating_sub(since.elapsed())),
+                None => RECV_TIMEOUT,
             };
-            match rx.recv_timeout(timeout) {
+            let timed_out = match rx.recv_timeout(timeout) {
                 Ok(WatchSignal::FsPaths(paths)) => {
                     for path in &paths {
-                        if !is_app_relevant(path) {
-                            if find_containing_file_root(path, &file_roots).is_some() {
-                                dirty_files.insert(path.clone());
-                            }
-                            continue;
-                        }
                         if let Some(root) = find_containing_root(path, &roots) {
-                            dirty.insert(root.path.clone());
+                            if let Some(app) = platform::app_change(root, path) {
+                                dirty.entry(root.path.clone()).or_default().insert(app);
+                            }
                         }
                         if find_containing_file_root(path, &file_roots).is_some() {
                             dirty_files.insert(path.clone());
                         }
                     }
-                    continue;
+                    false
                 }
                 Ok(WatchSignal::FsFailed(e)) => {
                     log::warn!("index: watcher error: {e}");
-                    continue;
+                    false
                 }
                 Ok(WatchSignal::HostHint(dir)) => {
                     let fresh_flows = Arc::new(load_flow_entries());
                     let flows_changed = fresh_flows.as_ref() != flow_entries.as_ref();
                     flow_entries = fresh_flows;
                     if let Some(root) = find_containing_root(&dir, &roots) {
-                        dirty.insert(root.path.clone());
+                        dirty
+                            .entry(root.path.clone())
+                            .or_default()
+                            .insert(root.path.clone());
                         log::debug!(
                             "index: host hint for {} -> rescan {}",
                             dir.display(),
@@ -355,20 +343,26 @@ pub(crate) fn start(
                             dir.display()
                         );
                     }
-                    continue;
+                    false
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => true,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            }
+            };
 
             if dirty.is_empty() && dirty_files.is_empty() {
+                pending_since = None;
                 continue;
             }
+            let since = *pending_since.get_or_insert_with(Instant::now);
+            if !timed_out && since.elapsed() < MAX_PENDING {
+                continue;
+            }
+            pending_since = None;
 
-            let dirty_now: Vec<PathBuf> = dirty.drain().collect();
-            for dirty_path in &dirty_now {
+            let dirty_now: Vec<(PathBuf, HashSet<PathBuf>)> = dirty.drain().collect();
+            for (dirty_path, changed) in &dirty_now {
                 if let Some(root) = roots.iter().find(|r| r.path == *dirty_path) {
-                    cache.rescan(root);
+                    cache.rescan(root, changed);
                 }
             }
             log::debug!(
@@ -376,7 +370,11 @@ pub(crate) fn start(
                 dirty_now.len(),
                 dirty_now
                     .iter()
-                    .map(|p| p.display().to_string())
+                    .map(|(root, changed)| format!(
+                        "{} ({} changed)",
+                        root.display(),
+                        changed.len()
+                    ))
                     .collect::<Vec<_>>()
                     .join(", ")
             );

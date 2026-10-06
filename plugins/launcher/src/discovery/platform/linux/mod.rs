@@ -6,6 +6,8 @@ mod recent;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use qol_watch::WatchRoot;
+
 use super::super::details::{AppAbout, AppFace};
 use super::super::AppEntry;
 use super::AppRoot;
@@ -20,6 +22,21 @@ pub fn app_roots() -> Vec<AppRoot> {
 
 pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
     qol_apps::desktop::scan_desktop_root(root)
+}
+
+pub fn app_watch_root(root: &AppRoot) -> WatchRoot {
+    if root.watch_recursive() {
+        WatchRoot::deep(root.path.clone())
+    } else {
+        WatchRoot::shallow(root.path.clone())
+    }
+}
+
+pub fn app_change(_root: &AppRoot, path: &Path) -> Option<PathBuf> {
+    match path.extension() {
+        Some(extension) if extension != "desktop" => None,
+        _ => Some(path.to_path_buf()),
+    }
 }
 
 pub fn app_face(entry: &AppEntry) -> AppFace {

@@ -18,6 +18,8 @@ use windows as imp;
 
 use std::path::{Path, PathBuf};
 
+use qol_watch::WatchRoot;
+
 use super::details::{AppAbout, AppFace};
 use super::AppEntry;
 pub use qol_apps::AppRoot;
@@ -32,6 +34,14 @@ pub fn app_roots() -> Vec<AppRoot> {
 
 pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
     imp::scan_root(root)
+}
+
+pub fn app_watch_root(root: &AppRoot) -> WatchRoot {
+    imp::app_watch_root(root)
+}
+
+pub fn app_change(root: &AppRoot, path: &Path) -> Option<PathBuf> {
+    imp::app_change(root, path)
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {
