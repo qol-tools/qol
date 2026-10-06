@@ -18,6 +18,12 @@ inputs:
     description: Comma-separated rustup components to install (optional)
     required: false
     default: ""
+  system-dependencies:
+    description: >-
+      Install the Linux GUI libraries the workspace links against; "false"
+      for jobs that build only a command-line tool
+    required: false
+    default: "true"
 
 outputs:
   build-cache-hit:
@@ -46,7 +52,7 @@ runs:
         cache-on-failure: true
 
     - name: Install Linux system dependencies
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && inputs.system-dependencies == 'true'
       shell: bash
       run: |
         sudo apt-get update

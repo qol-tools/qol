@@ -108,7 +108,7 @@ tar = "0.4"
 tempfile = "3.8"
 
 # Plugin index signature
-minisign-verify = "0.3"
+qol-plugin-index.workspace = true
 
 qol-runtime.workspace = true
 qol-apps.workspace = true
@@ -165,6 +165,7 @@ qol-build-identity.workspace = true
 
 [dev-dependencies]
 minisign = "0.10"
+minisign-verify = "0.3"
 proptest = "1.6"
 tower = { version = "0.5", features = ["util"] }
 

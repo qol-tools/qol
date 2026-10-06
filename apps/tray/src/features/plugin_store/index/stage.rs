@@ -1,4 +1,4 @@
-use super::document::IndexedRelease;
+use super::document::{release, IndexedRelease};
 use super::fetch::{self, blob_client};
 use super::registry::fetch_blob;
 use super::IndexLocation;
@@ -6,10 +6,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 pub(crate) async fn latest_version(location: &IndexLocation, plugin_id: &str) -> Result<String> {
-    Ok(fetch::load(location)
-        .await?
-        .release(plugin_id, None)?
-        .version)
+    Ok(release(&fetch::load(location).await?, plugin_id, None)?.version)
 }
 
 pub(crate) async fn stage_release(
@@ -18,7 +15,7 @@ pub(crate) async fn stage_release(
     version: Option<&str>,
     plugin_dir: &Path,
 ) -> Result<IndexedRelease> {
-    let release = fetch::load(location).await?.release(plugin_id, version)?;
+    let release = release(&fetch::load(location).await?, plugin_id, version)?;
     unpack_release_tree(&release, plugin_dir).await?;
     log::info!(
         "Staged {} {} from the plugin index",
@@ -34,7 +31,7 @@ pub(crate) async fn load_config_contract(
     version: Option<&str>,
     plugin_dir: &Path,
 ) -> Result<Option<qol_config::contract::ConfigSpec>> {
-    let release = fetch::load(location).await?.release(plugin_id, version)?;
+    let release = release(&fetch::load(location).await?, plugin_id, version)?;
     unpack_release_tree(&release, plugin_dir).await?;
     crate::plugins::config::load_config_contract_from_root(plugin_dir)
 }

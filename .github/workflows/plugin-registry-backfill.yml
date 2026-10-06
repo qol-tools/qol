@@ -20,33 +20,43 @@ jobs:
     permissions:
       contents: read
       packages: write
-      actions: write
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: ./.github/actions/rust-setup
         with:
-          python-version: "3.12"
+          cache-key: plugin-registry
+          system-dependencies: "false"
 
-      - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
-        with:
-          version: 1.3.4
+      # Built in its own step, which holds no token.
+      - name: Build registry tool
+        run: cargo build --locked -p qol-plugin-registry
 
       - name: Push releases
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
         run: |
           set -euo pipefail
-          printf '%s' "${GH_TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
-          python3 .github/scripts/plugin_artifact.py \
+          target/debug/qol-plugin-registry backfill \
             --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
             --source "https://github.com/${GITHUB_REPOSITORY}" \
-            backfill | tee -a "${GITHUB_STEP_SUMMARY}"
+            --github-repo "${GITHUB_REPOSITORY}" | tee -a "${GITHUB_STEP_SUMMARY}"
 
+  index:
+    name: Refresh plugin index
+    needs: backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
       - name: Dispatch the index build
         env:
           GH_TOKEN: ${{ github.token }}

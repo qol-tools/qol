@@ -3,10 +3,15 @@ use super::fetch::{blob_client, get, read_body};
 use super::unavailable;
 use crate::features::plugin_store::release_integrity;
 use anyhow::{Context, Result};
+use qol_plugin_index::BearerChallenge;
 use reqwest::header::WWW_AUTHENTICATE;
-use reqwest::{StatusCode, Url};
+use reqwest::StatusCode;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{LazyLock, Mutex};
+
+static PULL_TOKENS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::default);
 
 pub(crate) async fn download_asset(
     release: &IndexedRelease,
@@ -29,11 +34,17 @@ pub(super) async fn fetch_blob(
     label: &str,
 ) -> Result<Vec<u8>> {
     let url = blob_url(registry, &blob.digest);
-    let mut response = send(client.get(&url), &url).await?;
+    let scope = format!("{}/{}", registry.url, registry.repository);
+    let mut request = client.get(&url);
+    if let Some(token) = remembered_token(&scope) {
+        request = request.bearer_auth(token);
+    }
+    let mut response = send(request, &url).await?;
     if response.status() == StatusCode::UNAUTHORIZED {
         let token = anonymous_token(client, registry, &response)
             .await
             .map_err(|error| unavailable(format!("{url} refused an anonymous pull: {error:#}")))?;
+        remember_token(&scope, &token);
         response = send(client.get(&url).bearer_auth(token), &url).await?;
     }
     let status = response.status();
@@ -75,6 +86,16 @@ async fn send(request: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Re
         .map_err(|error| unavailable(format!("could not reach {url}: {error}")))
 }
 
+fn remembered_token(scope: &str) -> Option<String> {
+    PULL_TOKENS.lock().ok()?.get(scope).cloned()
+}
+
+fn remember_token(scope: &str, token: &str) {
+    if let Ok(mut tokens) = PULL_TOKENS.lock() {
+        tokens.insert(scope.to_string(), token.to_string());
+    }
+}
+
 #[derive(Deserialize)]
 struct TokenResponse {
     token: Option<String>,
@@ -99,87 +120,6 @@ async fn anonymous_token(
         .context("the registry token response has no token")
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct BearerChallenge {
-    realm: String,
-    service: Option<String>,
-    scope: Option<String>,
-}
-
-impl BearerChallenge {
-    fn parse(header: &str) -> Result<Self> {
-        let (scheme, params) = header.trim().split_once(' ').unwrap_or((header, ""));
-        if !scheme.eq_ignore_ascii_case("bearer") {
-            anyhow::bail!("the registry asked for {scheme} credentials");
-        }
-        let mut realm = None;
-        let mut service = None;
-        let mut scope = None;
-        for (key, value) in challenge_params(params) {
-            match key.as_str() {
-                "realm" => realm = Some(value),
-                "service" => service = Some(value),
-                "scope" => scope = Some(value),
-                _ => {}
-            }
-        }
-        Ok(Self {
-            realm: realm.context("the registry bearer challenge has no realm")?,
-            service,
-            scope,
-        })
-    }
-
-    fn token_url(&self, registry: &RegistryLocation) -> Result<Url> {
-        let mut url = Url::parse(&self.realm).context("the registry token realm is not a URL")?;
-        let registry_url = Url::parse(&registry.url).context("the registry URL is invalid")?;
-        if url.scheme() != "https" && url.origin() != registry_url.origin() {
-            anyhow::bail!("refusing a non-HTTPS token realm {}", self.realm);
-        }
-        {
-            let mut query = url.query_pairs_mut();
-            if let Some(service) = &self.service {
-                query.append_pair("service", service);
-            }
-            if let Some(scope) = &self.scope {
-                query.append_pair("scope", scope);
-            }
-        }
-        Ok(url)
-    }
-}
-
-fn challenge_params(params: &str) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    let mut rest = params.trim();
-    while let Some((key, after_key)) = rest.split_once('=') {
-        let (value, after_value) = challenge_value(after_key.trim_start());
-        pairs.push((key.trim().to_ascii_lowercase(), value));
-        rest = after_value
-            .trim_start()
-            .trim_start_matches(',')
-            .trim_start();
-    }
-    pairs
-}
-
-fn challenge_value(input: &str) -> (String, &str) {
-    let Some(quoted) = input.strip_prefix('"') else {
-        let end = input.find(',').unwrap_or(input.len());
-        return (input[..end].trim().to_string(), &input[end..]);
-    };
-    let mut value = String::new();
-    let mut chars = quoted.char_indices();
-    while let Some((index, ch)) = chars.next() {
-        match ch {
-            '"' => return (value, &quoted[index + 1..]),
-            '\\' => value.extend(chars.next().map(|(_, escaped)| escaped)),
-            _ => value.push(ch),
-        }
-    }
-    (value, "")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,55 +129,6 @@ mod tests {
             url: url.to_string(),
             repository: "qol-tools/plugins".to_string(),
         }
-    }
-
-    #[test]
-    fn parses_bearer_challenges_with_quoted_commas() {
-        let cases: &[(&str, BearerChallenge)] = &[
-            (
-                r#"Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:qol-tools/plugins:pull""#,
-                BearerChallenge {
-                    realm: "https://ghcr.io/token".to_string(),
-                    service: Some("ghcr.io".to_string()),
-                    scope: Some("repository:qol-tools/plugins:pull".to_string()),
-                },
-            ),
-            (
-                r#"bearer realm="https://auth.example/token", scope="repository:a/b:pull,push""#,
-                BearerChallenge {
-                    realm: "https://auth.example/token".to_string(),
-                    service: None,
-                    scope: Some("repository:a/b:pull,push".to_string()),
-                },
-            ),
-        ];
-        for (header, expected) in cases {
-            assert_eq!(
-                &BearerChallenge::parse(header).unwrap(),
-                expected,
-                "{header}"
-            );
-        }
-        assert!(BearerChallenge::parse(r#"Basic realm="x""#).is_err());
-        assert!(BearerChallenge::parse(r#"Bearer service="ghcr.io""#).is_err());
-    }
-
-    #[test]
-    fn token_url_carries_service_and_scope_and_refuses_plain_http_elsewhere() {
-        let challenge = BearerChallenge::parse(
-            r#"Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:qol-tools/plugins:pull""#,
-        )
-        .unwrap();
-        let url = challenge.token_url(&registry("https://ghcr.io")).unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aqol-tools%2Fplugins%3Apull"
-        );
-
-        let local =
-            BearerChallenge::parse(r#"Bearer realm="http://127.0.0.1:5000/token""#).unwrap();
-        assert!(local.token_url(&registry("http://127.0.0.1:5000")).is_ok());
-        assert!(local.token_url(&registry("https://ghcr.io")).is_err());
     }
 
     #[test]

@@ -6,7 +6,7 @@ on:
 permissions: {}
 
 # One build at a time. GitHub keeps only the newest pending run, and every run
-# rebuilds the whole index from the registry, so skipped runs lose nothing.
+# reads every tag in the registry, so skipped runs lose nothing.
 concurrency:
   group: plugin-index
   cancel-in-progress: false
@@ -17,30 +17,66 @@ env:
   PUBLIC_KEY: apps/tray/src/features/plugin_store/index/plugin-index.pub
 
 jobs:
+  # Versions the deployed index already lists are copied from it, never
+  # re-read, so a listed version cannot change and only new tags cost requests.
   build:
-    name: Build and sign index
+    name: Build index
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: plugin-index
     permissions:
       contents: read
       packages: read
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: |
-            .github/scripts
-            apps/tray/src/features/plugin_store/index
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: ./.github/actions/rust-setup
         with:
-          python-version: "3.12"
+          cache-key: plugin-registry
+          system-dependencies: "false"
 
-      - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+      - name: Build registry tool
+        run: cargo build --locked -p qol-plugin-registry
+
+      - name: Build index
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+          INDEX_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/plugins/index.json
+        run: |
+          set -euo pipefail
+          target/debug/qol-plugin-registry index \
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
+            --public-key "${PUBLIC_KEY}" \
+            --previous-url "${INDEX_URL}" \
+            --output index.json | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          version: 1.3.4
+          name: plugin-index
+          path: index.json
+          retention-days: 1
+          if-no-files-found: error
+
+  # The signing key lives only in this job, which compiles nothing and runs
+  # only the pinned minisign binary.
+  sign:
+    name: Sign index
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: plugin-index
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: apps/tray/src/features/plugin_store/index
 
       - name: Install minisign
         run: |
@@ -53,43 +89,10 @@ jobs:
           sudo install -m 0755 "${RUNNER_TEMP}/minisign-linux/x86_64/minisign" /usr/local/bin/minisign
           minisign -v
 
-      # Published versions may never change, so the build compares the registry
-      # against the index users already trust. Only a missing index starts over.
-      - name: Fetch the deployed index
-        env:
-          INDEX_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/plugins/index.json
-        run: |
-          set -euo pipefail
-          mkdir -p previous
-          status="$(curl -sS -o previous/index.json -w '%{http_code}' "${INDEX_URL}")"
-          case "${status}" in
-            200)
-              curl -fsS -o previous/index.json.minisig "${INDEX_URL}.minisig"
-              minisign -V -p "${PUBLIC_KEY}" -m previous/index.json -x previous/index.json.minisig
-              ;;
-            404)
-              rm -f previous/index.json
-              echo "No deployed index yet; this build starts the history." | tee -a "${GITHUB_STEP_SUMMARY}"
-              ;;
-            *)
-              echo "::error::${INDEX_URL} answered ${status}"
-              exit 1
-              ;;
-          esac
-
-      - name: Build index
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          printf '%s' "${GH_TOKEN}" | oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
-          previous=()
-          if [[ -f previous/index.json ]]; then
-            previous=(--previous previous/index.json)
-          fi
-          python3 .github/scripts/plugin_index.py \
-            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
-            --output site/plugins/index.json "${previous[@]}" | tee -a "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: plugin-index
+          path: site/plugins
 
       - name: Sign index
         env:
@@ -110,7 +113,7 @@ jobs:
 
   deploy:
     name: Deploy to Pages
-    needs: build
+    needs: sign
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:

@@ -24,6 +24,7 @@ struct Published {
     index: Vec<u8>,
     signature: String,
     blobs: HashMap<String, Vec<u8>>,
+    tokens_issued: usize,
 }
 
 #[derive(Clone)]
@@ -115,7 +116,8 @@ async fn serve_signature(State(server): State<Server>) -> String {
     server.published.lock().unwrap().signature.clone()
 }
 
-async fn serve_token() -> Json<Value> {
+async fn serve_token(State(server): State<Server>) -> Json<Value> {
+    server.published.lock().unwrap().tokens_issued += 1;
     Json(json!({ "token": TOKEN }))
 }
 
@@ -196,6 +198,7 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
         .unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.0.0");
     assert_eq!(installed_binary(&plugins_dir), b"binary one");
+    assert_eq!(server.published.lock().unwrap().tokens_issued, 1);
 
     server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
     let replayed = installer.update(&source, PLUGIN_ID).await.unwrap_err();

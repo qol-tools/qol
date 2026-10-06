@@ -223,17 +223,37 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         release = workflow.split("  release:\n", 1)[1].split("  registry:\n", 1)[0]
         registry = workflow.split("  registry:\n", 1)[1].split("  index:\n", 1)[0]
         self.assertNotIn("packages: write", release)
-        self.assertNotIn("oras", release)
         self.assertIn("needs: release", registry)
         self.assertIn("packages: write", registry)
         self.assertIn("ref: ${{ env.RELEASE_REF }}", registry)
         push = named_step(registry, "Push registry artifact", "      ")
         for contract in [
+            "set -euo pipefail",
             '--registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins"',
-            'push --tag "${RELEASE_TAG}" --files release_files',
+            '--tag "${RELEASE_TAG}" --files release_files',
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, push)
+
+    def test_registry_tool_compiles_in_a_step_that_holds_no_token(self):
+        jobs = {
+            "release.yml": ("  registry:\n", "  index:\n"),
+            "plugin-index.yml": ("  build:\n", "  sign:\n"),
+            "plugin-registry-backfill.yml": ("  backfill:\n", "  index:\n"),
+        }
+        for name, (begin, finish) in jobs.items():
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text()
+                job = workflow.split(begin, 1)[1].split(finish, 1)[0]
+                self.assertIn("persist-credentials: false", job)
+                self.assertIn("cache-key: plugin-registry", job)
+                self.assertIn('system-dependencies: "false"', job)
+                self.assertNotIn("actions: write", job)
+                build = named_step(job, "Build registry tool", "      ")
+                self.assertIn("cargo build --locked -p qol-plugin-registry", build)
+                self.assertNotIn("github.token", build)
+                self.assertNotIn("secrets.", build)
+                self.assertEqual(job.count("cargo "), 1)
 
     def test_plugin_release_refreshes_the_signed_index(self):
         release = (ROOT / ".github/workflows/release.yml").read_text()
@@ -243,56 +263,75 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("gh workflow run plugin-index.yml --ref main", dispatch)
 
         workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()
-        build = workflow.split("  build:\n", 1)[1].split("  deploy:\n", 1)[0]
+        build = workflow.split("  build:\n", 1)[1].split("  sign:\n", 1)[0]
+        sign = workflow.split("  sign:\n", 1)[1].split("  deploy:\n", 1)[0]
         deploy = workflow.split("  deploy:\n", 1)[1]
         self.assertIn("cancel-in-progress: false", workflow)
-        self.assertIn("environment: plugin-index", build)
         self.assertIn("if: github.ref == 'refs/heads/main'", build)
-        self.assertIn("secrets.PLUGIN_INDEX_MINISIGN_KEY", build)
-        self.assertIn("-x site/plugins/index.json.minisig", build)
-        self.assertNotIn("pages: write", build)
+        self.assertNotIn("environment:", build)
+        self.assertNotIn("secrets.", build)
+        self.assertIn("needs: build", sign)
+        self.assertIn("environment: plugin-index", sign)
+        self.assertIn("secrets.PLUGIN_INDEX_MINISIGN_KEY", sign)
+        self.assertIn("-x site/plugins/index.json.minisig", sign)
+        for job in (build, sign):
+            self.assertNotIn("pages: write", job)
+        self.assertIn("needs: sign", deploy)
         self.assertIn("pages: write", deploy)
         self.assertNotIn("secrets.", deploy)
 
-    def test_plugin_index_signs_append_only_and_checks_the_shipped_key(self):
+    def test_plugin_index_signs_in_a_job_that_compiles_nothing(self):
         workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()
-        build = workflow.split("  build:\n", 1)[1].split("  deploy:\n", 1)[0]
+        build = workflow.split("  build:\n", 1)[1].split("  sign:\n", 1)[0]
+        sign = workflow.split("  sign:\n", 1)[1].split("  deploy:\n", 1)[0]
         public_key = re.search(r"^  PUBLIC_KEY: (\S+)$", workflow, re.MULTILINE).group(1)
         self.assertTrue((ROOT / public_key).is_file(), public_key)
-        self.assertIn(str(Path(public_key).parent), build)
         self.assertNotIn("apt-get", workflow)
 
-        install = named_step(build, "Install minisign", "      ")
-        self.assertIn('sha256sum --check --strict', install)
-        fetch = named_step(build, "Fetch the deployed index", "      ")
-        self.assertIn('minisign -V -p "${PUBLIC_KEY}" -m previous/index.json', fetch)
         index = named_step(build, "Build index", "      ")
-        self.assertIn("--previous previous/index.json", index)
-        sign = named_step(build, "Sign index", "      ")
-        self.assertIn("trap 'rm -f \"${key}\"' EXIT", sign)
-        self.assertIn("< /dev/null", sign)
-        verify = named_step(build, "Verify with the key the tray ships", "      ")
+        for contract in [
+            "set -euo pipefail",
+            '--public-key "${PUBLIC_KEY}"',
+            '--previous-url "${INDEX_URL}"',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, index)
+
+        for compiles in ["cargo", "rust-setup", "github.token"]:
+            with self.subTest(compiles=compiles):
+                self.assertNotIn(compiles, sign)
+        self.assertIn(str(Path(public_key).parent), sign)
+        install = named_step(sign, "Install minisign", "      ")
+        self.assertIn("sha256sum --check --strict", install)
+        signing = named_step(sign, "Sign index", "      ")
+        self.assertIn("trap 'rm -f \"${key}\"' EXIT", signing)
+        self.assertIn("< /dev/null", signing)
+        verify = named_step(sign, "Verify with the key the tray ships", "      ")
         self.assertIn('minisign -V -p "${PUBLIC_KEY}" -m site/plugins/index.json', verify)
 
-        secret_steps = [step for step in build.split("\n      - ") if "secrets." in step]
+        secret_steps = [step for step in workflow.split("\n      - ") if "secrets." in step]
         self.assertEqual(len(secret_steps), 1)
         self.assertIn("name: Sign index", secret_steps[0])
         order = [
-            "name: Install minisign",
-            "name: Fetch the deployed index",
-            "name: Build index",
-            "name: Sign index",
-            "name: Verify with the key the tray ships",
+            "- name: Install minisign",
+            "actions/download-artifact",
+            "- name: Sign index",
+            "- name: Verify with the key the tray ships",
             "actions/upload-pages-artifact",
         ]
-        positions = [build.index(marker) for marker in order]
+        positions = [sign.index(marker) for marker in order]
         self.assertEqual(positions, sorted(positions))
 
     def test_registry_backfill_pushes_only_from_main(self):
         workflow = (ROOT / ".github/workflows/plugin-registry-backfill.yml").read_text()
-        backfill = workflow.split("  backfill:\n", 1)[1]
+        backfill = workflow.split("  backfill:\n", 1)[1].split("  index:\n", 1)[0]
+        dispatch = workflow.split("  index:\n", 1)[1]
         self.assertIn("if: github.ref == 'refs/heads/main'", backfill)
         self.assertIn("packages: write", backfill)
+        self.assertIn("fetch-depth: 0", backfill)
+        self.assertIn("needs: backfill", dispatch)
+        self.assertIn("actions: write", dispatch)
+        self.assertNotIn("cargo", dispatch)
 
     def test_tray_publish_claims_latest(self):
         workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()

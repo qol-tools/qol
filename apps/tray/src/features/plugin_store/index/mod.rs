@@ -23,12 +23,7 @@ pub(crate) struct IndexLocation {
 pub(crate) fn core_index() -> IndexLocation {
     IndexLocation {
         url: CORE_INDEX_URL.to_string(),
-        public_key: CORE_INDEX_PUBLIC_KEY_FILE
-            .lines()
-            .last()
-            .unwrap_or_default()
-            .trim()
-            .to_string(),
+        public_key: qol_plugin_index::public_key_line(CORE_INDEX_PUBLIC_KEY_FILE).to_string(),
     }
 }
 
