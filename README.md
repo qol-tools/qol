@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>qol<br><sub>A portable quality-of-life layer for any computer you sit down at.</sub></h1>
+<h1>qol<br><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme/tagline-dark.svg"><img src=".github/readme/tagline-light.svg" alt="A portable quality-of-life layer for any computer you sit down at."></picture></h1>
 
 <a href="https://github.com/qol-tools/qol/actions"><img src="https://raw.githubusercontent.com/KMRH47/KMRH47/main/assets/status.svg" width="100%" alt="Build status: tests, qol-tray, plugins, registry and index, each with its pieces, whether they passed and how long they took"></a>
 
