@@ -229,7 +229,6 @@ async fn install_refuses_files_that_do_not_match_the_index() {
         format!("{tampered:#}").contains("SHA-256 mismatch"),
         "{tampered:#}"
     );
-    assert!(!super::is_unavailable(&tampered), "{tampered:#}");
     assert!(!plugins_dir.join(PLUGIN_ID).exists());
 
     let impostor = Signer::generate();
@@ -240,12 +239,11 @@ async fn install_refuses_files_that_do_not_match_the_index() {
         format!("{unsigned:#}").contains("signature"),
         "{unsigned:#}"
     );
-    assert!(!super::is_unavailable(&unsigned), "{unsigned:#}");
     assert!(!plugins_dir.join(PLUGIN_ID).exists());
 }
 
 #[tokio::test]
-async fn an_index_or_blob_that_cannot_be_reached_is_unavailable() {
+async fn an_index_or_blob_that_cannot_be_reached_names_what_failed() {
     let _env = crate::test_support::env_lock().lock().await;
     let tmp = tempfile::tempdir().unwrap();
     let _paths = crate::paths::push_test_path_root(tmp.path());
@@ -269,7 +267,11 @@ async fn an_index_or_blob_that_cannot_be_reached_is_unavailable() {
         .await
         .unwrap_err();
 
-    for error in [not_served, not_listed, blob_gone] {
-        assert!(super::is_unavailable(&error), "{error:#}");
+    for (error, cause) in [
+        (not_served, "answered 404"),
+        (not_listed, "does not list qol-missing"),
+        (blob_gone, "answered 404"),
+    ] {
+        assert!(format!("{error:#}").contains(cause), "{error:#}");
     }
 }

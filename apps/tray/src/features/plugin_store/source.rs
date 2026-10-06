@@ -1,4 +1,4 @@
-use crate::features::plugin_store::index::{self, IndexLocation};
+use crate::features::plugin_store::index::IndexLocation;
 use crate::features::plugin_store::release_assets::{resolve_asset_pattern, PlatformTarget};
 use crate::plugins::manifest::BinaryDependency;
 use crate::version::normalize_semver_tag;
@@ -53,16 +53,7 @@ impl PluginSource {
         let SourceCatalog::SignedIndex(location) = &self.catalog else {
             return from_github().await;
         };
-        match from_index(location).await {
-            Err(error) if index::is_unavailable(&error) => {
-                log::warn!(
-                    "The plugin index for source {} is unavailable, using GitHub Releases: {error:#}",
-                    self.name
-                );
-                from_github().await
-            }
-            result => result,
-        }
+        from_index(location).await
     }
 
     pub(crate) fn repo_clone_url(&self) -> String {

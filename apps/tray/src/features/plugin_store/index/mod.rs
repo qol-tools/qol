@@ -27,25 +27,6 @@ pub(crate) fn core_index() -> IndexLocation {
     }
 }
 
-#[derive(Debug)]
-struct Unavailable(String);
-
-impl std::fmt::Display for Unavailable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Unavailable {}
-
-fn unavailable(message: String) -> anyhow::Error {
-    anyhow::Error::new(Unavailable(message))
-}
-
-pub(crate) fn is_unavailable(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| cause.is::<Unavailable>())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,7 +43,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_an_unavailable_index_falls_back_to_github_releases() {
+    async fn an_indexed_source_never_reads_github_releases() {
         let indexed =
             PluginSource::new("core", "qol-tools/qol", "main").with_signed_index(core_index());
         let github_only = PluginSource::new("user", "someone/plugins", "main");
@@ -70,13 +51,8 @@ mod tests {
             (&indexed, Ok("index"), Ok("index")),
             (
                 &indexed,
-                Err(unavailable("index.json answered 404".to_string())),
-                Ok("github"),
-            ),
-            (
-                &indexed,
-                Err(unavailable("index.json answered 404".to_string()).context("listing")),
-                Ok("github"),
+                Err(anyhow::anyhow!("index.json answered 404")),
+                Err("answered 404"),
             ),
             (
                 &indexed,

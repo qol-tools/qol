@@ -1,6 +1,5 @@
 use super::document::{Blob, IndexedRelease, RegistryLocation};
 use super::fetch::{blob_client, get, read_body};
-use super::unavailable;
 use crate::features::plugin_store::release_integrity;
 use anyhow::{Context, Result};
 use qol_plugin_index::BearerChallenge;
@@ -43,13 +42,13 @@ pub(super) async fn fetch_blob(
     if response.status() == StatusCode::UNAUTHORIZED {
         let token = anonymous_token(client, registry, &response)
             .await
-            .map_err(|error| unavailable(format!("{url} refused an anonymous pull: {error:#}")))?;
+            .map_err(|error| anyhow::anyhow!("{url} refused an anonymous pull: {error:#}"))?;
         remember_token(&scope, &token);
         response = send(client.get(&url).bearer_auth(token), &url).await?;
     }
     let status = response.status();
     if !status.is_success() {
-        return Err(unavailable(format!("{url} answered {status}")));
+        return Err(anyhow::anyhow!("{url} answered {status}"));
     }
     let bytes = read_body(&url, response.bytes()).await?;
     if bytes.len() as u64 != blob.size {
@@ -83,7 +82,7 @@ async fn send(request: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Re
     request
         .send()
         .await
-        .map_err(|error| unavailable(format!("could not reach {url}: {error}")))
+        .map_err(|error| anyhow::anyhow!("could not reach {url}: {error}"))
 }
 
 fn remembered_token(scope: &str) -> Option<String> {
