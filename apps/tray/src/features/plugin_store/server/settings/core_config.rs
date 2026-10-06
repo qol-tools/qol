@@ -12,6 +12,8 @@ use super::http_json::{self, blocking};
 
 type HttpResult<T> = Result<T, Box<Response>>;
 
+const MESSAGE_SECONDS_MAX: f64 = 15.0;
+
 #[derive(Serialize)]
 struct CoreConfigResponse {
     theme: String,
@@ -20,6 +22,7 @@ struct CoreConfigResponse {
     profile: String,
     residency: bool,
     handler: NativeHandler,
+    message_seconds: u64,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +39,7 @@ fn current_config() -> CoreConfigResponse {
         profile: crate::paths::active_profile_name(),
         residency: qol_host_fixes::residency::HostResidency::current().is_resident(),
         handler: crate::features::notifications::native_handler(),
+        message_seconds: crate::features::notifications::message_seconds(),
     }
 }
 
@@ -102,6 +106,9 @@ fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> H
             crate::features::notifications::apply_native_handler(previous);
             result
         }
+        "message_seconds" => {
+            crate::features::notifications::set_message_seconds(as_seconds(field, value)?)
+        }
         _ => return Err(Box::new(bad_request(&format!("unknown field: {field}")))),
     };
     result.map_err(|error| Box::new(bad_request(&format!("{error:#}"))))
@@ -129,6 +136,19 @@ fn as_bool(field: &str, value: &serde_json::Value) -> HttpResult<bool> {
     value
         .as_bool()
         .ok_or_else(|| Box::new(bad_request(&format!("{field} expects a boolean"))))
+}
+
+fn as_seconds(field: &str, value: &serde_json::Value) -> HttpResult<u64> {
+    value
+        .as_f64()
+        .map(f64::round)
+        .filter(|seconds| (1.0..=MESSAGE_SECONDS_MAX).contains(seconds))
+        .map(|seconds| seconds as u64)
+        .ok_or_else(|| {
+            Box::new(bad_request(&format!(
+                "{field} expects 1 to {MESSAGE_SECONDS_MAX} seconds"
+            )))
+        })
 }
 
 fn as_handler(field: &str, value: &serde_json::Value) -> HttpResult<NativeHandler> {

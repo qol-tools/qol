@@ -1118,7 +1118,8 @@ impl Render for RegionSelector {
                 self.guide_subtitle(),
                 ToastLayout::status(),
             )
-            .tone(ToastTone::Info);
+            .tone(ToastTone::Info)
+            .mark(qol_gpui::theme::Mark::Shot);
             root = root.child(guide.positioned(bounds));
         }
 

@@ -1,15 +1,14 @@
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-use super::super::card::{self, Ring};
-use super::super::{pile, RowId, SlabSnapshotRow, Tick, AGE_TICK, POINTER_POLL, RING_TICK};
+use super::super::card;
+use super::super::shape::InputShape;
+use super::super::{pile, RowId, SlabSnapshotRow, Tick, AGE_TICK};
 use super::SlabPresenter;
-use crate::popup_window::{
-    EscapeGrab, InputEvent, InputWatch, PointerOnWindow, WindowGeometrySession,
-};
+use crate::popup_window::{EscapeGrab, InputEvent, PointerOnWindow};
 use crate::surface::SurfaceDismisser;
 use crate::text::TextStyled as _;
 
@@ -30,14 +29,13 @@ pub(super) struct SlabToastView {
     host: SlabPresenter,
     card: card::Host,
     dismisser: SurfaceDismisser,
-    session: Option<WindowGeometrySession>,
     inside: bool,
     hovered: Option<RowId>,
     lit: bool,
     grow: pile::Tween,
     open: pile::Tween,
     focus: Vec<(RowId, pile::Tween)>,
-    reach: [f32; 4],
+    shape: InputShape,
     touch: [f32; 4],
     shown: Vec<Shown>,
     strip_shown: Option<(pile::Pose, usize)>,
@@ -49,9 +47,6 @@ pub(super) struct SlabToastView {
     arrival: Option<Instant>,
     escape: Option<EscapeGrab>,
     escape_armed: bool,
-    polling: bool,
-    listening: bool,
-    ring: Tick,
     age: Tick,
 }
 
@@ -71,14 +66,13 @@ impl SlabToastView {
             card: Rc::new(host.clone()),
             host,
             dismisser,
-            session: None,
             inside: false,
             hovered: None,
             lit: false,
             grow: pile::Tween::at(0.0),
             open: pile::Tween::at(open),
             focus: Vec::new(),
-            reach: [0.0; 4],
+            shape: InputShape::default(),
             touch: [0.0; 4],
             shown: Vec::new(),
             strip_shown: None,
@@ -90,9 +84,6 @@ impl SlabToastView {
             arrival: None,
             escape: None,
             escape_armed: false,
-            polling: false,
-            listening: false,
-            ring: Tick::default(),
             age: Tick::default(),
         }
     }
@@ -158,88 +149,19 @@ impl SlabToastView {
         cx.notify();
     }
 
-    fn on_session<R: Send + 'static>(
-        &mut self,
-        work: impl FnOnce(&WindowGeometrySession) -> R + Send + 'static,
-        done: impl FnOnce(&mut Self, Option<R>, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        let session = self.session.clone();
-        let title = self.dismisser.current_title();
-        cx.spawn(async move |this, cx| {
-            let (session, result) = cx
-                .background_spawn(async move {
-                    let session =
-                        session.or_else(|| crate::popup_window::window_geometry_session(&title));
-                    let result = session.as_ref().map(work);
-                    (session, result)
-                })
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                if view.session.is_none() {
-                    view.session = session;
-                }
-                done(view, result, cx);
-            });
-        })
-        .detach();
-    }
-
     fn ensure_polling(&mut self, cx: &mut Context<Self>) {
-        if self.polling {
-            return;
-        }
-        self.polling = true;
-        match crate::popup_window::watch_input(&self.dismisser.current_title()) {
-            Some(watch) => self.listen(watch, cx),
-            None => self.poll_pointer(cx),
-        }
-    }
-
-    fn listen(&mut self, mut watch: InputWatch, cx: &mut Context<Self>) {
-        self.listening = true;
-        cx.spawn(async move |this, cx| {
-            while let Some(event) = watch.next().await {
-                let live = this.update(cx, |view, cx| {
-                    view.on_input(event, cx);
-                    view.polling
-                });
-                if !live.unwrap_or(false) {
-                    break;
-                }
-            }
-            let _ = this.update(cx, |view, _| {
-                view.listening = false;
-                view.polling = false;
-            });
-        })
-        .detach();
-    }
-
-    fn on_input(&mut self, event: InputEvent, cx: &mut Context<Self>) {
-        match event {
-            InputEvent::Pointer(pointer) => self.on_pointer(Some(pointer), cx),
-            InputEvent::Escape => self.fold(cx),
-        }
-    }
-
-    fn poll_pointer(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(POINTER_POLL).await;
-            let _ = this.update(cx, |view, cx| {
-                view.on_session(
-                    WindowGeometrySession::pointer_on,
-                    |view, pointer, cx| {
-                        view.on_pointer(pointer.flatten(), cx);
-                        if view.polling {
-                            view.poll_pointer(cx);
-                        }
-                    },
-                    cx,
-                )
-            });
-        })
-        .detach();
+        let title = self.dismisser.current_title();
+        self.shape.sense(
+            title,
+            |view: &mut Self| &mut view.shape,
+            |view: &Self| view.dismisser.current_title(),
+            |view, event, cx| match event {
+                Some(InputEvent::Escape) => view.fold(cx),
+                Some(InputEvent::Pointer(pointer)) => view.on_pointer(Some(pointer), cx),
+                None => view.on_pointer(None, cx),
+            },
+            cx,
+        );
     }
 
     fn fold(&mut self, cx: &mut Context<Self>) {
@@ -252,7 +174,7 @@ impl SlabToastView {
 
     fn on_pointer(&mut self, pointer: Option<PointerOnWindow>, cx: &mut Context<Self>) {
         let Some(pointer) = pointer else {
-            self.polling = false;
+            self.shape.rest();
             self.leave(cx);
             return;
         };
@@ -261,7 +183,7 @@ impl SlabToastView {
         }
         let expanded = self.host.state.borrow().expanded;
         if !self.inside && !expanded {
-            self.polling = false;
+            self.shape.rest();
             return;
         }
         let escaped = self.escape.as_ref().is_some_and(EscapeGrab::take_pressed);
@@ -271,21 +193,9 @@ impl SlabToastView {
     }
 
     fn reach_input(&mut self, reach: [f32; 4], cx: &mut Context<Self>) {
-        if reach == self.reach {
-            return;
-        }
-        self.reach = reach;
-        let (x, y) = (reach[0].max(0.0) as i16, reach[1].max(0.0) as i16);
-        let (width, height) = (reach[2].ceil() as u16, reach[3].ceil() as u16);
-        self.on_session(
-            move |session| session.set_input_region(x, y, width, height),
-            move |view, applied, _| {
-                if applied != Some(true) && view.reach == reach {
-                    view.reach = [f32::NAN; 4];
-                }
-            },
-            cx,
-        );
+        let title = self.dismisser.current_title();
+        self.shape
+            .reach(title, |view: &mut Self| &mut view.shape, reach, cx);
     }
 
     fn settle_focus(&mut self, rows: &[&SlabSnapshotRow], open: bool, now: Instant) {
@@ -348,7 +258,7 @@ impl Render for SlabToastView {
         if escapable != self.escape_armed {
             self.escape_armed = escapable;
             self.escape = escapable.then(crate::popup_window::grab_escape).flatten();
-            if escapable && self.escape.is_none() && !self.listening {
+            if escapable && self.escape.is_none() && !self.shape.listening() {
                 log::warn!("[toast] Escape cannot fold the open stack: the key grab failed");
             }
         }
@@ -472,25 +382,19 @@ impl Render for SlabToastView {
                 .h(px(at.height))
         };
 
-        let mut ring_running = false;
-        let ring_of = |row: &SlabSnapshotRow, view: &Self, ring_running: &mut bool| {
-            row.toast.effective_timeout().map(|timeout| {
-                if view.inside || open {
-                    Ring {
-                        remaining: 1.0,
-                        ink: kit.grounds.pane.faint,
-                    }
-                } else {
-                    *ring_running = true;
-                    let left = row.deadline.map_or(Duration::ZERO, |deadline| {
-                        deadline.saturating_duration_since(now)
-                    });
-                    Ring {
-                        remaining: left.as_secs_f32() / timeout.as_secs_f32(),
-                        ink: row.toast.tone.color(kit),
-                    }
-                }
-            })
+        let folded = 1.0 - self.open.value(now);
+        let timer_shown = |row: &SlabSnapshotRow, index: usize, content: f32| {
+            if index == 0 && row.toast.effective_timeout().is_some() {
+                content * folded
+            } else {
+                0.0
+            }
+        };
+        let mut counting = false;
+        let left_of = |row: &SlabSnapshotRow, view: &Self, counting: &mut bool| {
+            let left = card::counting(row, view.inside || open, now);
+            *counting |= left.is_some();
+            left.unwrap_or(1.0)
         };
         let clipped = self.scroll_max > 0.0 || scroll > 0.0;
         let deck_height = if clipped {
@@ -511,7 +415,7 @@ impl Render for SlabToastView {
             let row = &ghost.row;
             place(div().id(("toast-leaving", row.id.0)), frame.frame)
                 .opacity(frame.opacity * edge_fade(frame.frame))
-                .child(
+                .child(card::ruled(
                     kit.window()
                         .bg(rgb(card::row_ground(row, kit)))
                         .child(card::content(
@@ -520,25 +424,34 @@ impl Render for SlabToastView {
                                 scale: frame.scale,
                                 content: frame.content,
                                 interactive: false,
-                                ring: ring_of(row, view, &mut false),
                                 age: card::age_label(now.saturating_duration_since(row.created)),
                             },
                             kit,
                             None,
                         )),
-                )
+                    left_of(row, view, &mut false),
+                    timer_shown(row, ghost.index, frame.content),
+                    frame.scale,
+                    kit,
+                ))
                 .into_any_element()
         };
-        let card_view = |index: usize, view: &Self, ring_running: &mut bool| -> AnyElement {
+        let card_view = |index: usize, view: &Self, counting: &mut bool| -> AnyElement {
             let row = rows[index];
             let frame = cards[index];
-            let ring = ring_of(row, view, ring_running);
+            let left = left_of(row, view, counting);
+            let id = row.id;
+            let interactive = index == 0 || open;
             let ground = if index > 0 && view.lit && !open {
                 card::row_lift(row, kit)
             } else {
                 rgb(card::row_ground(row, kit))
             };
-            let id = row.id;
+            let mut window = kit.window().bg(ground);
+            if interactive && (row.toast.activation.is_some() || row.toast.preview_action.is_some())
+            {
+                window = kit.pointable(window, card::row_lift(row, kit));
+            }
             let mut element = place(div().id(card::card_id(id)), frame.frame)
                 .opacity(frame.opacity * edge_fade(frame.frame))
                 .occlude()
@@ -555,18 +468,23 @@ impl Render for SlabToastView {
                     .on_click(move |_, _, cx| opener.set_expanded(true, cx));
             }
             element
-                .child(kit.window().bg(ground).child(card::content(
-                    row,
-                    card::CardParts {
-                        scale: frame.scale,
-                        content: frame.content,
-                        interactive: index == 0 || open,
-                        ring,
-                        age: card::age_label(now.saturating_duration_since(row.created)),
-                    },
+                .child(card::ruled(
+                    window.child(card::content(
+                        row,
+                        card::CardParts {
+                            scale: frame.scale,
+                            content: frame.content,
+                            interactive,
+                            age: card::age_label(now.saturating_duration_since(row.created)),
+                        },
+                        kit,
+                        Some(view.card.clone()),
+                    )),
+                    left,
+                    timer_shown(row, index, frame.content),
+                    frame.scale,
                     kit,
-                    Some(view.card.clone()),
-                )))
+                ))
                 .into_any_element()
         };
         let strip_of = |shown_count: usize, scale: f32, view: &Self| {
@@ -602,7 +520,7 @@ impl Render for SlabToastView {
             .position(|row| open && self.hovered == Some(row.id));
         for index in (1..count).rev() {
             if focused != Some(index) && cards[index].opacity > 0.01 {
-                deck.push(card_view(index, self, &mut ring_running));
+                deck.push(card_view(index, self, &mut counting));
             }
         }
         if let Some((pose, shown_count)) = strip_ghost {
@@ -633,10 +551,10 @@ impl Render for SlabToastView {
             deck.append(&mut strips);
         }
         if count > 0 {
-            deck.push(card_view(0, self, &mut ring_running));
+            deck.push(card_view(0, self, &mut counting));
         }
         if let Some(index) = focused.filter(|index| *index > 0) {
-            deck.push(card_view(index, self, &mut ring_running));
+            deck.push(card_view(index, self, &mut counting));
         }
         for ghost in ghosts.iter().filter(|ghost| ghost.index == 0) {
             deck.push(ghost_view(ghost, self));
@@ -748,8 +666,8 @@ impl Render for SlabToastView {
             );
         }
 
-        if ring_running {
-            self.ring.after(RING_TICK, cx);
+        if counting {
+            window.request_animation_frame();
         }
         if count > 0 {
             self.age.after(AGE_TICK, cx);

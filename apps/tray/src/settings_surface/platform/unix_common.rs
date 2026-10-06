@@ -23,6 +23,7 @@ enum Command {
     Toast {
         group: String,
         source: String,
+        mark: Option<String>,
         title: String,
         body: String,
         level: String,
@@ -392,6 +393,7 @@ fn spawn_command_loop(
                 Command::Toast {
                     group,
                     source,
+                    mark,
                     title,
                     body,
                     level,
@@ -403,6 +405,7 @@ fn spawn_command_loop(
                         toast_host,
                         group,
                         source,
+                        mark,
                         title,
                         body,
                         level,
@@ -468,6 +471,7 @@ fn show_toast_in_host(
     toast_host: ToastHost,
     group: String,
     source: String,
+    mark: Option<String>,
     title: String,
     body: String,
     level: String,
@@ -496,6 +500,9 @@ fn show_toast_in_host(
         .group(group)
         .source(source)
         .tone(toast_tone(&level));
+        if let Some(mark) = mark.as_deref().and_then(qol_theme::Mark::from_name) {
+            toast = toast.mark(mark);
+        }
         if let Some(path) = artifact {
             toast = toast.artifact(path);
         } else if let Some((_, payload)) = action {
@@ -920,6 +927,7 @@ pub(in crate::settings_surface) fn show_toast(
             serde_json::json!({
                 "group": source.group,
                 "source": source.name,
+                "mark": source.mark,
                 "title": title,
                 "body": body,
                 "level": level,
@@ -988,6 +996,7 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
                 (Some(title), Some(body), Some(level)) => ReadResult::Command(Command::Toast {
                     group: text("group").or(text("source")).unwrap_or_default(),
                     source: text("source").unwrap_or_default(),
+                    mark: text("mark"),
                     title: title.to_string(),
                     body: body.to_string(),
                     level: level.to_string(),
@@ -1092,6 +1101,7 @@ mod tests {
             ("accent", qol_config::contract::FieldKind::Select),
             ("profile", qol_config::contract::FieldKind::Select),
             ("residency", qol_config::contract::FieldKind::Boolean),
+            ("message_seconds", qol_config::contract::FieldKind::Number),
         ] {
             let field = spec.field(name).unwrap_or_else(|| panic!("missing {name}"));
             assert_eq!(field.kind, kind, "wrong kind for {name}");
@@ -1159,20 +1169,29 @@ mod tests {
             action: "toast".into(),
             input,
         }) {
-            ReadResult::Command(Command::Toast { group, source, .. }) => (group, source),
+            ReadResult::Command(Command::Toast {
+                group,
+                source,
+                mark,
+                ..
+            }) => (group, source, mark),
             _ => panic!("toast request did not parse as a command"),
         };
         assert_eq!(
             toast(serde_json::json!({
-                "group": "qol-shot", "source": "Shot", "title": "t", "body": "b", "level": "info",
+                "group": "qol-shot", "source": "Shot", "mark": "shot", "title": "t", "body": "b", "level": "info",
             })),
-            ("qol-shot".to_string(), "Shot".to_string())
+            (
+                "qol-shot".to_string(),
+                "Shot".to_string(),
+                Some("shot".to_string())
+            )
         );
         assert_eq!(
             toast(serde_json::json!({
                 "source": "Shot", "title": "t", "body": "b", "level": "info",
             })),
-            ("Shot".to_string(), "Shot".to_string())
+            ("Shot".to_string(), "Shot".to_string(), None)
         );
     }
 
@@ -1195,6 +1214,7 @@ mod tests {
             ReadResult::Command(Command::Toast {
                 group,
                 source,
+                mark,
                 title,
                 body,
                 level,
@@ -1204,6 +1224,7 @@ mod tests {
             }) => {
                 assert_eq!(group, "");
                 assert_eq!(source, "");
+                assert_eq!(mark, None);
                 assert_eq!(title, "title");
                 assert_eq!(body, "body");
                 assert_eq!(level, "warn");

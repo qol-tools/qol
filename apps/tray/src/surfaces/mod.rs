@@ -12,14 +12,16 @@ pub fn show_plugin_notification(
     layout: Option<NotificationLayout>,
 ) {
     let system_notifications = crate::features::notifications::use_system_notifications();
+    let (name, mark) = plugin_id.map_or_else(
+        || (qol_conventions::TRAY_DISPLAY_NAME.to_string(), None),
+        crate::plugins::name_and_icon,
+    );
     let toast_shown = !system_notifications
         && crate::settings_surface::show_toast(
             crate::settings_surface::ToastSource {
                 group: plugin_id.unwrap_or(qol_conventions::TRAY_DISPLAY_NAME),
-                name: &plugin_id.map_or_else(
-                    || qol_conventions::TRAY_DISPLAY_NAME.to_string(),
-                    crate::plugins::display_name,
-                ),
+                name: &name,
+                mark: mark.as_deref(),
             },
             title,
             body,

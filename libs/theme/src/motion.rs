@@ -4,6 +4,7 @@ use std::time::Duration;
 pub enum Curve {
     Settle,
     Travel,
+    Leave,
 }
 
 impl Curve {
@@ -11,6 +12,7 @@ impl Curve {
         let delta = delta.clamp(0.0, 1.0);
         match self {
             Self::Settle => 1.0 - (1.0 - delta).powi(5),
+            Self::Leave => delta.powi(5),
             Self::Travel if delta < 0.5 => 2.0 * delta * delta,
             Self::Travel => {
                 let rest = -2.0 * delta + 2.0;
@@ -31,8 +33,15 @@ impl Motion {
     pub const SETTLE: Self = Self::new(180, Curve::Settle);
     pub const TRAVEL: Self = Self::new(260, Curve::Travel);
     pub const FADE: Self = Self::new(1000, Curve::Settle);
+    pub const LEAVE: Self = Self::new(120, Curve::Leave);
 
-    pub const ALL: [Self; 4] = [Self::QUICK, Self::SETTLE, Self::TRAVEL, Self::FADE];
+    pub const ALL: [Self; 5] = [
+        Self::QUICK,
+        Self::SETTLE,
+        Self::TRAVEL,
+        Self::FADE,
+        Self::LEAVE,
+    ];
 
     const fn new(millis: u64, curve: Curve) -> Self {
         Self {
@@ -49,7 +58,8 @@ impl Motion {
 
 pub const STAY_BRIEF: Duration = Duration::from_secs(4);
 pub const STAY_LONG: Duration = Duration::from_secs(8);
-pub const STAY_UNTIL_CLOSED: Option<Duration> = None;
+pub const STAY_MESSAGE: Duration = Duration::from_secs(3);
+pub const STAY_ERROR: Duration = Duration::from_secs(10);
 pub const WAIT_BEFORE_BUSY: Duration = Duration::from_millis(300);
 pub const MOTION_LOOP: Duration = Duration::from_millis(1200);
 pub const SETTLE_INPUT: Duration = Duration::from_millis(140);

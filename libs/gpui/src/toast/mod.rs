@@ -15,14 +15,16 @@ use crate::popup_window::HiddenWindowsBarrier;
 
 mod banner;
 mod card;
+mod follow;
 mod pile;
+mod rows;
+mod shape;
 mod slab;
 
 use banner::BannerPresenter;
 use slab::SlabPresenter;
 
 const POINTER_POLL: Duration = Duration::from_millis(60);
-const RING_TICK: Duration = Duration::from_millis(50);
 const AGE_TICK: Duration = Duration::from_secs(30);
 const WINDOW_ROOM: f32 = 4096.0;
 
@@ -47,7 +49,7 @@ impl ToastLayout {
     pub fn status() -> Self {
         Self {
             placement: MonitorPlacement::top_center(TOP_CENTER_MARGIN),
-            size: size(px(pile::CARD_WIDTH), px(pile::CARD_HEIGHT)),
+            size: size(px(pile::CARD_WIDTH), px(qol_theme::toast::MESSAGE_HEIGHT)),
             style: ToastStyle::Status,
         }
     }
@@ -118,7 +120,7 @@ impl ToastTone {
         match self {
             Self::Neutral | Self::Info | Self::Success => Some(qol_theme::STAY_BRIEF),
             Self::Warning => Some(qol_theme::STAY_LONG),
-            Self::Danger => qol_theme::STAY_UNTIL_CLOSED,
+            Self::Danger => Some(qol_theme::STAY_ERROR),
         }
     }
 
@@ -145,6 +147,7 @@ pub struct Toast {
     timeout_explicit: bool,
     group: SharedString,
     source: SharedString,
+    mark: Option<qol_theme::Mark>,
     key: Option<SharedString>,
     preview: Option<Rc<dyn crate::artifact::ArtifactPreview>>,
     preview_action: Option<Activation>,
@@ -168,6 +171,7 @@ impl Toast {
             timeout_explicit: false,
             group: "".into(),
             source: "".into(),
+            mark: None,
             key: None,
             preview: None,
             preview_action: None,
@@ -226,6 +230,11 @@ impl Toast {
         self
     }
 
+    pub fn mark(mut self, mark: qol_theme::Mark) -> Self {
+        self.mark = Some(mark);
+        self
+    }
+
     pub fn on_preview(
         mut self,
         activation: impl Fn(&mut App) -> anyhow::Result<()> + 'static,
@@ -253,7 +262,10 @@ impl Toast {
             created: now,
             deadline: None,
         };
-        card::lone(&row, None, now)
+        match routed_presentation(self) {
+            Presentation::Banner => card::message(&row, 1.0, 1.0, 1.0, crate::kit::kit()),
+            Presentation::Slab => card::lone(&row, None, now),
+        }
     }
 
     pub fn positioned(&self, bounds: Bounds<Pixels>) -> Div {
@@ -266,6 +278,25 @@ impl Toast {
             .child(self.element())
     }
 
+    fn for_the_top(self) -> Self {
+        if self.timeout_explicit {
+            self
+        } else {
+            self.timeout(message_timeout())
+        }
+    }
+
+    fn is_message(&self) -> bool {
+        self.tone != ToastTone::Danger && self.preview.is_none()
+    }
+
+    fn in_the_pile(mut self) -> Self {
+        if self.layout.style() == ToastStyle::Status {
+            self.layout = ToastLayout::compact();
+        }
+        self
+    }
+
     fn effective_timeout(&self) -> Option<Duration> {
         if self.timeout_explicit {
             self.timeout
@@ -273,6 +304,17 @@ impl Toast {
             self.tone.default_timeout()
         }
     }
+}
+
+fn message_timeout() -> Duration {
+    qol_config::config_dir()
+        .and_then(|dir| {
+            std::fs::read_to_string(dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE)).ok()
+        })
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|settings| settings.get("message_seconds")?.as_u64())
+        .filter(|seconds| *seconds > 0)
+        .map_or(qol_theme::STAY_MESSAGE, Duration::from_secs)
 }
 
 #[derive(Default)]
@@ -311,8 +353,8 @@ enum Presentation {
 
 fn routed_presentation(toast: &Toast) -> Presentation {
     match toast.layout.style() {
-        ToastStyle::Status => Presentation::Banner,
-        ToastStyle::Compact => Presentation::Slab,
+        ToastStyle::Status if toast.is_message() => Presentation::Banner,
+        _ => Presentation::Slab,
     }
 }
 
@@ -341,7 +383,7 @@ impl ToastHost {
         }
         match routed_presentation(&toast) {
             Presentation::Banner => self.banner.show(toast, cx),
-            Presentation::Slab => self.slab.show(toast, cx),
+            Presentation::Slab => self.slab.show(toast.in_the_pile(), cx),
         }
     }
 
@@ -372,7 +414,10 @@ mod tests {
 
     use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
 
-    use super::{routed_presentation, Presentation, Toast, ToastLayout, ToastStyle, ToastTone};
+    use super::{
+        message_timeout, routed_presentation, Presentation, Toast, ToastLayout, ToastStyle,
+        ToastTone,
+    };
 
     #[test]
     fn a_caller_overrides_the_preset_placement_and_size() {
@@ -505,7 +550,7 @@ mod tests {
             (ToastTone::Info, Some(Duration::from_secs(4))),
             (ToastTone::Success, Some(Duration::from_secs(4))),
             (ToastTone::Warning, Some(Duration::from_secs(8))),
-            (ToastTone::Danger, None),
+            (ToastTone::Danger, Some(Duration::from_secs(10))),
         ];
         for (tone, expected) in cases {
             assert_eq!(tone.default_timeout(), expected, "tone: {tone:?}");
@@ -519,13 +564,13 @@ mod tests {
         let warning = Toast::new("t", "m", ToastLayout::status()).tone(ToastTone::Warning);
         assert_eq!(warning.effective_timeout(), Some(Duration::from_secs(8)));
         let danger = Toast::new("t", "m", ToastLayout::status()).tone(ToastTone::Danger);
-        assert_eq!(danger.effective_timeout(), None);
+        assert_eq!(danger.effective_timeout(), Some(Duration::from_secs(10)));
     }
 
     #[test]
     fn explicit_timeout_beats_the_tone_default() {
         let toast = Toast::new("t", "m", ToastLayout::status()).tone(ToastTone::Danger);
-        assert_eq!(toast.effective_timeout(), None);
+        assert_eq!(toast.effective_timeout(), Some(Duration::from_secs(10)));
         let timed = toast.timeout(Duration::from_secs(2));
         assert_eq!(timed.effective_timeout(), Some(Duration::from_secs(2)));
         let long_warning = Toast::new("t", "m", ToastLayout::status())
@@ -558,6 +603,33 @@ mod tests {
             routed_presentation(&Toast::new("t", "m", ToastLayout::compact())),
             Presentation::Slab
         ));
+    }
+
+    #[test]
+    fn the_top_keeps_a_chosen_time_and_gives_the_rest_the_message_time() {
+        let plain = Toast::new("t", "m", ToastLayout::status()).tone(ToastTone::Warning);
+        assert_eq!(
+            plain.for_the_top().effective_timeout(),
+            Some(message_timeout())
+        );
+        let chosen = Toast::new("t", "m", ToastLayout::status()).timeout(Duration::from_secs(9));
+        assert_eq!(
+            chosen.for_the_top().effective_timeout(),
+            Some(Duration::from_secs(9))
+        );
+        let kept = Toast::new("t", "m", ToastLayout::status()).persistent();
+        assert_eq!(kept.for_the_top().effective_timeout(), None);
+    }
+
+    #[test]
+    fn errors_and_pictures_go_to_the_pile_never_the_top() {
+        let error = Toast::new("t", "m", ToastLayout::status()).tone(ToastTone::Danger);
+        assert!(matches!(routed_presentation(&error), Presentation::Slab));
+        assert_eq!(error.in_the_pile().layout, ToastLayout::compact());
+        let picture = Toast::new("t", "m", ToastLayout::status()).artifact("/nowhere/shot.png");
+        assert!(matches!(routed_presentation(&picture), Presentation::Slab));
+        let saving = Toast::new("t", "m", ToastLayout::status()).persistent();
+        assert!(matches!(routed_presentation(&saving), Presentation::Banner));
     }
 
     #[test]

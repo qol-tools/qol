@@ -110,3 +110,13 @@ label = "Do not disturb"
 section = "notifications"
 query = "os_do_not_disturb"
 value_from = "value"
+
+[field.message_seconds]
+type = "number"
+label = "Message time"
+description = "Seconds a message at the top of the screen stays. Hovering it starts the time again."
+section = "notifications"
+default = 3
+min = 1
+max = 15
+step = 1
