@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use qol_watch::WatchRoot;
+
 use super::super::details::{AppAbout, AppFace};
 use super::super::AppEntry;
 use super::AppRoot;
@@ -18,6 +20,14 @@ pub fn app_roots() -> Vec<AppRoot> {
 
 pub fn scan_root(_root: &AppRoot) -> Vec<AppEntry> {
     Vec::new()
+}
+
+pub fn app_watch_root(root: &AppRoot) -> WatchRoot {
+    WatchRoot::shallow(root.path.clone())
+}
+
+pub fn app_change(_root: &AppRoot, _path: &Path) -> Option<PathBuf> {
+    None
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {

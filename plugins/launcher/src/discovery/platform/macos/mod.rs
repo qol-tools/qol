@@ -4,6 +4,8 @@ mod spotlight;
 
 use std::path::{Path, PathBuf};
 
+use qol_watch::WatchRoot;
+
 use super::super::details::{AppAbout, AppFace, Package};
 use super::super::AppEntry;
 use super::AppRoot;
@@ -18,6 +20,14 @@ pub fn app_roots() -> Vec<AppRoot> {
 
 pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
     qol_apps::scan_macos_launcher_root(root)
+}
+
+pub fn app_watch_root(root: &AppRoot) -> WatchRoot {
+    WatchRoot::deep(root.path.clone())
+}
+
+pub fn app_change(root: &AppRoot, path: &Path) -> Option<PathBuf> {
+    qol_apps::macos_launcher_change(root, path)
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {

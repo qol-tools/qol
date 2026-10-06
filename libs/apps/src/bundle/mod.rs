@@ -53,6 +53,22 @@ pub fn scan_macos_launcher_root(root: &AppRoot) -> Vec<AppEntry> {
     entries
 }
 
+pub fn macos_launcher_change(root: &AppRoot, path: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(&root.path).ok()?;
+    let mut affected = root.path.clone();
+    for (depth, component) in relative.components().enumerate() {
+        affected.push(component);
+        let name = component.as_os_str().to_str()?;
+        if has_launcher_extension(name) {
+            return Some(affected);
+        }
+        if name.starts_with('.') || depth >= root.max_depth {
+            return None;
+        }
+    }
+    (affected != root.path).then_some(affected)
+}
+
 pub fn read_macos_bundle_facts(path: &Path) -> BundleFacts {
     platform::bundle_facts(path)
 }
@@ -172,7 +188,14 @@ fn is_launcher_path(path: &Path) -> bool {
     if !path.exists() {
         return false;
     }
-    path.extension()
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(has_launcher_extension)
+}
+
+fn has_launcher_extension(name: &str) -> bool {
+    Path::new(name)
+        .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("app") || extension.eq_ignore_ascii_case("prefPane")
@@ -254,6 +277,88 @@ mod tests {
         assert_eq!(apps.iter().filter(|app| app.name == "Dupe").count(), 2);
         assert_eq!(apps.iter().filter(|app| app.path == duplicate).count(), 1);
         assert!(apps.iter().any(|app| app.path == other));
+    }
+
+    #[test]
+    fn launcher_change_maps_each_path_to_the_entry_a_rescan_must_refresh() {
+        let root = AppRoot {
+            path: PathBuf::from("/Applications"),
+            max_depth: 2,
+        };
+        let cases = [
+            (
+                "/Applications/Firefox Developer Edition.app",
+                Some("/Applications/Firefox Developer Edition.app"),
+            ),
+            (
+                "/Applications/Firefox.app/Contents/Info.plist",
+                Some("/Applications/Firefox.app"),
+            ),
+            (
+                "/Applications/Firefox.app/Contents/MacOS/firefox",
+                Some("/Applications/Firefox.app"),
+            ),
+            (
+                "/Applications/Utilities/Disk Utility.app",
+                Some("/Applications/Utilities/Disk Utility.app"),
+            ),
+            (
+                "/Applications/Adobe/Tools/Bridge.APP/Contents",
+                Some("/Applications/Adobe/Tools/Bridge.APP"),
+            ),
+            (
+                "/Applications/Network.prefPane",
+                Some("/Applications/Network.prefPane"),
+            ),
+            ("/Applications/Utilities", Some("/Applications/Utilities")),
+            (
+                "/Applications/Adobe/Tools",
+                Some("/Applications/Adobe/Tools"),
+            ),
+            ("/Applications/Adobe/Tools/readme.txt", None),
+            ("/Applications/Adobe/Tools/Deep/Hidden.app", None),
+            ("/Applications/.DS_Store", None),
+            ("/Applications/Utilities/.localized", None),
+            ("/Applications", None),
+            ("/Users/someone/Downloads/Firefox.app", None),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                macos_launcher_change(&root, Path::new(path)),
+                expected.map(PathBuf::from),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn launcher_change_agrees_with_the_scan_about_which_bundles_count() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = AppRoot {
+            path: temp.path().to_path_buf(),
+            max_depth: 2,
+        };
+        let shallow = temp.path().join("Top.app");
+        let nested = temp.path().join("Group/Inner/Nested.app");
+        let too_deep = temp.path().join("Group/Inner/Deeper/Lost.app");
+        for bundle in [&shallow, &nested, &too_deep] {
+            write_bundle(bundle, INFO_PLIST);
+        }
+
+        let scanned: Vec<PathBuf> = scan_macos_launcher_root(&root)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+
+        for bundle in [&shallow, &nested, &too_deep] {
+            let changed = macos_launcher_change(&root, &bundle.join("Contents/Info.plist"));
+            assert_eq!(
+                changed.as_ref() == Some(bundle),
+                scanned.contains(bundle),
+                "{}",
+                bundle.display()
+            );
+        }
     }
 
     #[test]
