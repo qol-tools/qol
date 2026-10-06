@@ -8,7 +8,6 @@ use super::{RowId, SlabSnapshotRow, ToastTone};
 use crate::kit::Kit;
 use crate::text::{cased, TextStyled};
 
-const PREVIEW_GROUP: &str = "toast-preview";
 const OPEN_GROUP: &str = "toast-open";
 
 fn hover_veil(kit: Kit) -> Rgba {
@@ -181,8 +180,9 @@ pub(super) fn content(
         .child(dismiss(row, &parts, kit, host.clone()));
     if let Some(host) = host.filter(|_| parts.interactive) {
         let id = row.id;
-        card = card.on_mouse_down(MouseButton::Middle, move |_, _, cx| {
-            host.act(id, CardAct::Close, cx)
+        card = card.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+            host.act(id, CardAct::Close, cx);
+            window.refresh();
         });
     }
     card
@@ -215,15 +215,10 @@ fn lead(
     };
     let id = row.id;
     slot.id(("toast-preview", id.0))
-        .group(PREVIEW_GROUP)
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .group_hover(PREVIEW_GROUP, move |style| style.bg(hover_veil(kit))),
-        )
+        .child(kit.pointable(
+            div().absolute().top_0().left_0().size_full(),
+            hover_veil(kit),
+        ))
         .cursor_pointer()
         .on_click(move |_, _, cx| host.act(id, CardAct::Preview, cx))
         .into_any_element()
@@ -302,14 +297,14 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
         return column.child(detail(ground.soft));
     }
     column.child(
-        div().w_full().relative().child(detail(ground.soft)).child(
-            detail(kit.palette.accent)
-                .absolute()
-                .top_0()
-                .left_0()
-                .opacity(0.0)
-                .group_hover(OPEN_GROUP, |style| style.opacity(1.0)),
-        ),
+        div()
+            .w_full()
+            .relative()
+            .child(detail(ground.soft))
+            .child(kit.revealed_by(
+                detail(kit.palette.accent).absolute().top_0().left_0(),
+                OPEN_GROUP,
+            )),
     )
 }
 
@@ -350,8 +345,7 @@ fn dismiss(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Host
         return control.into_any_element();
     };
     let id = row.id;
-    control
-        .hover(move |style| style.bg(hover_veil(kit)))
+    kit.pointable(control, hover_veil(kit))
         .cursor_pointer()
         .on_click(move |_, _, cx| host.act(id, CardAct::Close, cx))
         .into_any_element()

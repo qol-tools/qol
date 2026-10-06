@@ -313,7 +313,7 @@ fn message_timeout() -> Duration {
         })
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
         .and_then(|settings| settings.get("message_seconds")?.as_u64())
-        .filter(|seconds| *seconds > 0)
+        .filter(|seconds| (1..=qol_theme::STAY_MESSAGE_MOST.as_secs()).contains(seconds))
         .map_or(qol_theme::STAY_MESSAGE, Duration::from_secs)
 }
 
@@ -382,8 +382,14 @@ impl ToastHost {
             anyhow::bail!("toast push refused: no title");
         }
         match routed_presentation(&toast) {
-            Presentation::Banner => self.banner.show(toast, cx),
-            Presentation::Slab => self.slab.show(toast.in_the_pile(), cx),
+            Presentation::Banner => {
+                self.slab.withdraw(&toast, cx);
+                self.banner.show(toast, cx)
+            }
+            Presentation::Slab => {
+                self.banner.withdraw(&toast, cx);
+                self.slab.show(toast.in_the_pile(), cx)
+            }
         }
     }
 

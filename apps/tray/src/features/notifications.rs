@@ -92,6 +92,7 @@ pub fn message_seconds() -> u64 {
     settings()
         .ok()
         .and_then(|settings| settings.message_seconds)
+        .filter(|seconds| (1..=qol_theme::STAY_MESSAGE_MOST.as_secs()).contains(seconds))
         .unwrap_or(qol_theme::STAY_MESSAGE.as_secs())
 }
 
@@ -106,25 +107,21 @@ pub fn apply_native_handler(previous: NativeHandler) {
     sync_notification_inhibit();
 }
 
-#[cfg(target_os = "linux")]
 static NOTIFICATION_INHIBIT: std::sync::Mutex<
     Option<qol_plugin_daemon::notification::platform::NotificationInhibit>,
 > = std::sync::Mutex::new(None);
 
 pub fn sync_notification_inhibit() {
-    #[cfg(target_os = "linux")]
-    {
-        let mut held = NOTIFICATION_INHIBIT
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if native_handler() == NativeHandler::Qol {
-            qol_plugin_daemon::notification::platform::set_os_banners(false);
-            if held.is_none() {
-                *held = qol_plugin_daemon::notification::platform::acquire_inhibit();
-            }
-        } else {
-            *held = None;
+    let mut held = NOTIFICATION_INHIBIT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if native_handler() == NativeHandler::Qol {
+        qol_plugin_daemon::notification::platform::set_os_banners(false);
+        if held.is_none() {
+            *held = qol_plugin_daemon::notification::platform::acquire_inhibit();
         }
+    } else {
+        *held = None;
     }
 }
 

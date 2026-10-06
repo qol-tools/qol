@@ -59,7 +59,7 @@ impl SlabPresenter {
             let mut state = self.state.borrow_mut();
             let placement = toast.layout.placement();
             let group = toast.group.clone();
-            state.rows.put(toast, same_key);
+            state.rows.put(toast, rows::same_key);
 
             let positions: Vec<usize> = state
                 .rows
@@ -108,6 +108,13 @@ impl SlabPresenter {
         self.close(cx);
     }
 
+    pub(super) fn withdraw(&self, toast: &Toast, cx: &mut App) {
+        let ids = self.state.borrow().rows.keyed_like(toast);
+        if !ids.is_empty() {
+            self.drop_rows(&ids, cx);
+        }
+    }
+
     fn clear_all(&self, cx: &mut App) {
         let ids: Vec<RowId> = {
             let state = self.state.borrow();
@@ -146,7 +153,7 @@ impl SlabPresenter {
     }
 
     fn mark_row_failed(&self, id: RowId, error: anyhow::Error, cx: &mut App) {
-        {
+        let timer = {
             let mut state = self.state.borrow_mut();
             let generation = state.rows.next_generation();
             if let Some(row) = state.rows.iter_mut().find(|row| row.id == id) {
@@ -157,10 +164,12 @@ impl SlabPresenter {
                 toast.message = previous_title;
                 toast.title = error.to_string().into();
                 toast.timeout = None;
-                toast.timeout_explicit = true;
+                toast.timeout_explicit = false;
                 row.deadline = None;
             }
-        }
+            state.rows.time_front(Instant::now())
+        };
+        rows::arm(self, timer, cx);
         self.notify_view(cx);
     }
 
@@ -322,8 +331,4 @@ impl CardHost for SlabPresenter {
             CardAct::Close => self.remove(id, cx),
         }
     }
-}
-
-fn same_key(held: &Toast, new: &Toast) -> bool {
-    new.key.is_some() && held.group == new.group && held.key == new.key
 }

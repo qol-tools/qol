@@ -96,6 +96,14 @@ impl Rows {
             .any(|row| row.id == id && row.generation == generation)
     }
 
+    pub(super) fn keyed_like(&self, toast: &Toast) -> Vec<RowId> {
+        self.list
+            .iter()
+            .filter(|row| same_key(&row.toast, toast))
+            .map(|row| row.id)
+            .collect()
+    }
+
     pub(super) fn raise(&mut self, id: RowId) {
         if let Some(index) = self.list.iter().position(|row| row.id == id) {
             let row = self.list.remove(index);
@@ -141,6 +149,10 @@ impl DerefMut for Rows {
     fn deref_mut(&mut self) -> &mut [Row] {
         &mut self.list
     }
+}
+
+pub(super) fn same_key(held: &Toast, new: &Toast) -> bool {
+    new.key.is_some() && held.group == new.group && held.key == new.key
 }
 
 pub(super) trait Timed: Clone + 'static {

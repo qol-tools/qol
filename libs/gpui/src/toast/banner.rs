@@ -51,6 +51,7 @@ impl BannerPresenter {
 
     pub(super) fn show(&self, toast: Toast, cx: &mut App) -> anyhow::Result<()> {
         let toast = toast.for_the_top();
+        self.forget_lost_window(cx);
         let layout = toast.layout;
         if self
             .state
@@ -85,6 +86,26 @@ impl BannerPresenter {
     pub(super) fn dismiss(&self, cx: &mut App) {
         self.state.borrow_mut().rows.clear();
         self.changed(cx);
+    }
+
+    pub(super) fn withdraw(&self, toast: &Toast, cx: &mut App) {
+        let ids = self.state.borrow().rows.keyed_like(toast);
+        if !ids.is_empty() {
+            self.state.borrow_mut().rows.remove(&ids);
+            self.changed(cx);
+        }
+    }
+
+    fn forget_lost_window(&self, cx: &App) {
+        let mut state = self.state.borrow_mut();
+        let lost = state.surface.as_ref().is_some_and(|surface| {
+            let id = surface.handle.window_id();
+            cx.windows().iter().all(|window| window.window_id() != id)
+        });
+        if lost {
+            state.surface = None;
+            state.layout = None;
+        }
     }
 
     fn open(&self, layout: ToastLayout, cx: &mut App) -> anyhow::Result<()> {
@@ -168,9 +189,9 @@ impl BannerPresenter {
                 .rows
                 .iter()
                 .find(|row| row.id == id)
-                .map(|row| (row.generation, pick(&row.toast)))
+                .map(|row| (row.toast.clone(), pick(&row.toast)))
         };
-        let Some((generation, action)) = found else {
+        let Some((clicked, action)) = found else {
             return;
         };
         if let Some(action) = action {
@@ -178,7 +199,13 @@ impl BannerPresenter {
                 qol_runtime::probe!("TOAST_ACTIVATION", "presentation=banner error={error:#}");
             }
         }
-        if self.state.borrow().rows.owns(id, generation) {
+        let unchanged = self
+            .state
+            .borrow()
+            .rows
+            .iter()
+            .any(|row| row.id == id && Rc::ptr_eq(&row.toast, &clicked));
+        if unchanged {
             self.remove(id, cx);
         }
     }
@@ -395,8 +422,9 @@ impl BannerToastView {
         layer = layer
             .occlude()
             .on_mouse_move(cx.listener(|view, _: &MouseMoveEvent, _, cx| view.enter(cx)))
-            .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
-                closer.act(id, CardAct::Close, cx)
+            .on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+                closer.act(id, CardAct::Close, cx);
+                window.refresh();
             });
         if row.toast.activation.is_some() {
             let opener = self.card.clone();

@@ -59,6 +59,7 @@ impl Motion {
 pub const STAY_BRIEF: Duration = Duration::from_secs(4);
 pub const STAY_LONG: Duration = Duration::from_secs(8);
 pub const STAY_MESSAGE: Duration = Duration::from_secs(3);
+pub const STAY_MESSAGE_MOST: Duration = Duration::from_secs(15);
 pub const STAY_ERROR: Duration = Duration::from_secs(10);
 pub const WAIT_BEFORE_BUSY: Duration = Duration::from_millis(300);
 pub const MOTION_LOOP: Duration = Duration::from_millis(1200);

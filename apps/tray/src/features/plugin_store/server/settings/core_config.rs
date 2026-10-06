@@ -12,7 +12,7 @@ use super::http_json::{self, blocking};
 
 type HttpResult<T> = Result<T, Box<Response>>;
 
-const MESSAGE_SECONDS_MAX: f64 = 15.0;
+const MESSAGE_SECONDS_MAX: f64 = qol_theme::STAY_MESSAGE_MOST.as_secs() as f64;
 
 #[derive(Serialize)]
 struct CoreConfigResponse {
