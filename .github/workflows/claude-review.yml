@@ -134,6 +134,7 @@ jobs:
             enabledPlugins: ([inputs | select(length > 0) | {(.): true}] | add),
             sandbox: {filesystem: {allowWrite: [$work]}}
           }' <<< "$PLUGINS")"
+          printf '%s' "$settings" > "$work/settings.json"
           {
             echo "/qol-code-review:qol-code-review Review pull request #$PR_NUMBER of $GITHUB_REPOSITORY."
             echo
@@ -209,3 +210,69 @@ jobs:
             echo "::error::qol-code-review produced no review"
             exit 1
           fi
+
+      - name: Fix review findings
+        id: fix
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 40
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
+          CLAUDE_CODE_SYNC_PLUGIN_INSTALL: "1"
+          DISABLE_AUTOUPDATER: "1"
+          SEED: ${{ steps.seed.outputs.dir }}
+          FIX_SUBJECT: "chore(review): address review findings"
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/claude-review"
+          out="$work/out/review"
+          # One fix round per push: a head that is already the fix commit only gets reviewed.
+          if [ "$(git log -1 --format=%s HEAD^2)" = "$FIX_SUBJECT" ]; then
+            echo "Head is the review fix commit, skipping."
+            exit 0
+          fi
+          verdict="$(jq -r '.status // empty' "$out/report.json" 2>/dev/null || true)"
+          if [ "$verdict" != "conditional" ] && [ "$verdict" != "block" ]; then
+            echo "Verdict is '${verdict:-missing}', nothing to fix."
+            exit 0
+          fi
+          { cat "$out/review.md"; echo; cat .github/claude-review/fix-prompt.md; } > "$work/fix-prompt.md"
+          claude -p "$(cat "$work/fix-prompt.md")" \
+            --model "$CLAUDE_MODEL" \
+            --effort high \
+            --settings "$work/settings.json" \
+            --permission-mode dontAsk \
+            --allowedTools \
+              "Read(/$GITHUB_WORKSPACE/**)" "Glob(/$GITHUB_WORKSPACE/**)" "Grep(/$GITHUB_WORKSPACE/**)" \
+              "Read(/$SEED/**)" "Edit(/$GITHUB_WORKSPACE/**)" "Write(/$GITHUB_WORKSPACE/**)" \
+            --disallowedTools Bash Agent NotebookEdit WebFetch WebSearch "Edit(/$GITHUB_WORKSPACE/.git/**)" \
+            > "$work/fix-reply.md"
+          cat "$work/fix-reply.md"
+          git diff > "$work/fix.patch"
+          if [ -s "$work/fix.patch" ]; then
+            echo "patch=$work/fix.patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push review fixes
+        if: steps.fix.outputs.patch != ''
+        env:
+          DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          FIX_SUBJECT: "chore(review): address review findings"
+          PATCH: ${{ steps.fix.outputs.patch }}
+        run: |
+          set -euo pipefail
+          # The review ran on the merge ref; the fix lands on the pull request head.
+          git reset -q --hard
+          git switch -q --detach HEAD^2
+          git apply --index "$PATCH"
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "$FIX_SUBJECT"
+          key="$RUNNER_TEMP/deploy-key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          # The deploy key, unlike the workflow token, starts the tests and merge gate on the pushed fix.
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git push "git@github.com:$GITHUB_REPOSITORY.git" "HEAD:refs/heads/$HEAD_REF"
+          rm -f "$key"
