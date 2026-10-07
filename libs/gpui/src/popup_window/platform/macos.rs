@@ -259,11 +259,8 @@ fn input_event_for(title: &str, event: &NSEvent) -> Option<crate::popup_window::
     if kind == NSEventType::KeyDown {
         return (event.keyCode() == K_VK_ESCAPE).then_some(InputEvent::Escape);
     }
-    let inside = resolve_window(title).is_some_and(|window| {
-        window.isVisible() && pointer_inside(window.frame(), NSEvent::mouseLocation())
-    });
     Some(InputEvent::Pointer(PointerOnWindow {
-        inside,
+        inside: pointer_over_window_by_title(title),
         pressed: kind != NSEventType::MouseMoved,
     }))
 }
@@ -302,12 +299,16 @@ pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
     None
 }
 
-pub fn pointer_on_window_by_title(_title: &str) -> Option<crate::popup_window::PointerOnWindow> {
-    None
+pub fn pointer_on_window_by_title(title: &str) -> Option<crate::popup_window::PointerOnWindow> {
+    let window = resolve_window(title)?;
+    Some(crate::popup_window::PointerOnWindow {
+        inside: window.isVisible() && pointer_inside(window.frame(), NSEvent::mouseLocation()),
+        pressed: NSEvent::pressedMouseButtons() != 0,
+    })
 }
 
-pub fn pointer_over_window_by_title(_title: &str) -> bool {
-    false
+pub fn pointer_over_window_by_title(title: &str) -> bool {
+    pointer_on_window_by_title(title).is_some_and(|pointer| pointer.inside)
 }
 
 pub fn set_input_region_by_title(

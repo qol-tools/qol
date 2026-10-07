@@ -87,6 +87,7 @@ impl InputShape {
             Some(watch) => {
                 self.listening = true;
                 listen(watch, held, on, cx);
+                confirm(held, named, on, cx);
             }
             None => poll(held, named, on, cx),
         }
@@ -116,6 +117,27 @@ fn listen<V: 'static>(mut watch: InputWatch, held: Held<V>, on: Sensed<V>, cx: &
             let shape = held(view);
             shape.listening = false;
             shape.sensing = false;
+        });
+    })
+    .detach();
+}
+
+fn confirm<V: 'static>(held: Held<V>, named: Named<V>, on: Sensed<V>, cx: &mut Context<V>) {
+    cx.spawn(async move |this, cx| {
+        cx.background_executor().timer(POINTER_POLL).await;
+        let _ = this.update(cx, |view, cx| {
+            if !held(view).sensing {
+                return;
+            }
+            let pointer = crate::popup_window::pointer_on_window_by_title(&named(view));
+            on(
+                view,
+                Some(InputEvent::Pointer(pointer.unwrap_or_default())),
+                cx,
+            );
+            if held(view).sensing {
+                confirm(held, named, on, cx);
+            }
         });
     })
     .detach();
