@@ -93,15 +93,6 @@ jobs:
           path: ~/.claude-seed
           key: ${{ steps.seed.outputs.key }}
 
-      - name: Install sandbox dependencies
-        if: github.event_name == 'pull_request'
-        # The subprocess env scrub runs Bash in the sandbox, which needs bwrap and socat;
-        # Ubuntu 24.04 blocks the user namespaces bwrap uses by default.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap socat
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
       - name: Run qol-code-review
         if: github.event_name == 'pull_request'
         # Below the job timeout, so a hung review fails instead of cancelling the post step.
@@ -112,7 +103,6 @@ jobs:
           CLAUDE_CODE_SYNC_PLUGIN_INSTALL: "1"
           CLAUDE_CODE_SUBAGENT_MODEL: ${{ env.CLAUDE_MODEL }}
           CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1"
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
           DISABLE_AUTOUPDATER: "1"
           SEED: ${{ steps.seed.outputs.dir }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
