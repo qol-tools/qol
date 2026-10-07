@@ -1,0 +1,77 @@
+name: build cache
+
+# Only main may save the build cache that pull requests and the merge queue
+# restore, and a push to main that reuses the queue verdict compiles nothing.
+# Without this workflow a dependency, toolchain or profile change, or an
+# evicted entry, leaves every later run compiling each third-party crate
+# (17 minutes for the macOS queue build). It runs the compilations lint + test
+# and the release build restore, once per cache key, and stays out of the tests
+# workflow so Versioning never waits for it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    name: warm build cache (${{ matrix.os }})
+    if: github.ref == 'refs/heads/main'
+    # Must equal the tests workflow's RUSTFLAGS: they are part of the cache key.
+    env:
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            plan: ubuntu
+          - os: macos-latest
+            plan: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust-setup
+        id: rust_setup
+        with:
+          cache-key: ci-${{ matrix.os }}
+          components: rustfmt, clippy
+
+      - name: Workspace arguments
+        id: workspace
+        if: steps.rust_setup.outputs.build-cache-hit != 'true'
+        env:
+          BASE_SHA: ""
+        run: python3 .github/scripts/affected_crates.py
+
+      - name: Install cargo-nextest
+        if: steps.rust_setup.outputs.build-cache-hit != 'true'
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73
+        with:
+          tool: cargo-nextest@0.9.143
+
+      - name: Compile what lint + test and the release build restore
+        if: steps.rust_setup.outputs.build-cache-hit != 'true'
+        env:
+          CLIPPY_ARGS: ${{ steps.workspace.outputs[format('{0}_clippy', matrix.plan)] }}
+          BUILD_ARGS: ${{ steps.workspace.outputs[format('{0}_build', matrix.plan)] }}
+          TEST_ARGS: ${{ steps.workspace.outputs[format('{0}_test', matrix.plan)] }}
+        run: |
+          cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
+          cargo check --release --locked $BUILD_ARGS
+          cargo build --release --locked $BUILD_ARGS
+          cargo nextest run --locked $TEST_ARGS --no-run

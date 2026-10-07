@@ -163,13 +163,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: matrix.skip != 'true'
 
-      - name: Free disk space
-        if: runner.os == 'Linux' && matrix.skip != 'true'
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          sudo docker image prune --all --force || true
-          df -h /
-
       - uses: ./.github/actions/rust-setup
         id: rust_setup
         if: matrix.skip != 'true'
@@ -375,13 +368,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: matrix.skip != 'true'
-
-      - name: Free disk space
-        if: runner.os == 'Linux' && matrix.skip != 'true'
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          sudo docker image prune --all --force || true
-          df -h /
 
       - uses: ./.github/actions/rust-setup
         if: matrix.skip != 'true'

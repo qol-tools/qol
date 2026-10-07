@@ -149,7 +149,7 @@ def main() -> int:
         description="Prune GitHub Actions caches by age, revision count, and total bytes."
     )
     parser.add_argument("--repo", help="OWNER/NAME; defaults to $GH_REPO")
-    parser.add_argument("--keep", type=int, default=2)
+    parser.add_argument("--keep", type=int, default=1)
     parser.add_argument("--max-age-days", type=int, default=14)
     parser.add_argument("--max-bytes", type=int, default=MAX_CACHE_BYTES)
     parser.add_argument("--dry-run", action="store_true")

@@ -33,6 +33,21 @@ outputs:
 runs:
   using: composite
   steps:
+    # Runners now start with far more free disk than a workspace build needs,
+    # and deleting the preinstalled SDKs took one to two minutes per job, so
+    # it only runs on a runner that starts short of room.
+    - name: Make room for the build
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        available=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+        echo "${available}G free"
+        if ((available < 50)); then
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force || true
+          df -h /
+        fi
+
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       with:
