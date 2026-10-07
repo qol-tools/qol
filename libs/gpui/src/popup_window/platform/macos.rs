@@ -859,8 +859,12 @@ fn show_window_by_title_with_focus(
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(input_passthrough);
-    if !input_passthrough && apply_input_region(title) {
-        ensure_region_poll();
+    if !input_passthrough {
+        apply_input_region(title);
+        // A re-shown window is not visible yet, so the poll must start regardless.
+        if input_region(title).is_some() {
+            ensure_region_poll();
+        }
     }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
