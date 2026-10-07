@@ -62,6 +62,7 @@ impl BundlePlatform for Platform {
             executable: string("CFBundleExecutable"),
             category: string("LSApplicationCategoryType"),
             copyright: string("NSHumanReadableCopyright"),
+            launcher_icon: string(crate::bundle::LAUNCHER_ICON_KEY),
         }
     }
 
@@ -106,6 +107,7 @@ mod tests {
 <key>CFBundleExecutable</key><string>foo</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
 <key>NSHumanReadableCopyright</key><string> </string>
+<key>QoLLauncherIcon</key><string>/data/launcher-icons/link.svg</string>
 </dict></plist>"#,
         )
         .unwrap();
@@ -119,6 +121,7 @@ mod tests {
                 executable: Some("foo".to_string()),
                 category: Some("public.app-category.developer-tools".to_string()),
                 copyright: None,
+                launcher_icon: Some("/data/launcher-icons/link.svg".to_string()),
             }
         );
         assert_eq!(
