@@ -99,6 +99,7 @@ fn remember_input_region(title: &str, x: i16, y: i16, width: u16, height: u16) {
         .unwrap_or_else(PoisonError::into_inner)
         .get_or_insert_with(HashMap::new)
         .insert(title.to_owned(), region);
+    REGION_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
 fn input_region(title: &str) -> Option<NSRect> {
@@ -140,6 +141,7 @@ fn pointer_in_region(frame: NSRect, region: NSRect, pointer: NSPoint) -> bool {
 const REGION_POLL: std::time::Duration = std::time::Duration::from_millis(16);
 
 static REGION_POLLING: AtomicBool = AtomicBool::new(false);
+static REGION_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn apply_input_region(title: &str) -> bool {
     let Some(region) = input_region(title) else {
@@ -150,7 +152,7 @@ fn apply_input_region(title: &str) -> bool {
         return false;
     };
     if !window.isVisible() || window.alphaValue() <= 0.0 {
-        return true;
+        return false;
     }
     let inside = pointer_in_region(window.frame(), region, NSEvent::mouseLocation());
     if window.ignoresMouseEvents() == inside {
@@ -174,12 +176,19 @@ fn ensure_region_poll() {
     }
     std::thread::spawn(|| loop {
         std::thread::sleep(REGION_POLL);
+        let generation = REGION_GENERATION.load(Ordering::SeqCst);
         let (sender, receiver) = std::sync::mpsc::channel();
         crate::platform::run_on_main(Box::new(move || {
             let _ = sender.send(apply_all_input_regions());
         }));
         if !receiver.recv().unwrap_or(false) {
             REGION_POLLING.store(false, Ordering::SeqCst);
+            // A region stored after this tick began saw the flag still set and spawned no poll.
+            if generation != REGION_GENERATION.load(Ordering::SeqCst)
+                && !REGION_POLLING.swap(true, Ordering::SeqCst)
+            {
+                continue;
+            }
             qol_runtime::probe!("INPUT_REGION", "step=poll-stopped");
             return;
         }
