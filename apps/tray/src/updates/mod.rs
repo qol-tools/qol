@@ -333,21 +333,8 @@ fn github_status_in(text: &str) -> Option<u16> {
     rest.split_whitespace().next()?.parse().ok()
 }
 
-pub(crate) struct HostUpdateLease(());
-
-pub(crate) fn claim_host_update() -> Result<HostUpdateLease, String> {
-    jobs::start(jobs::HOST_ID)?;
-    Ok(HostUpdateLease(()))
-}
-
-impl Drop for HostUpdateLease {
-    fn drop(&mut self) {
-        jobs::release(jobs::HOST_ID);
-    }
-}
-
 fn record_update_progress(percent: u8) {
-    jobs::set_progress(jobs::HOST_ID, percent);
+    jobs::QUEUE.set_progress(jobs::HOST_ID, percent);
 }
 
 fn lock_latest_version() -> Option<MutexGuard<'static, Option<String>>> {
@@ -409,23 +396,26 @@ fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)
     Some((tag, version))
 }
 
-pub async fn download_and_install(events: std::sync::Arc<crate::daemon::EventBus>) -> Result<()> {
-    let lease = claim_host_update().map_err(|message| anyhow::anyhow!(message))?;
-    run_host_update(lease, events).await
-}
-
-pub(crate) async fn run_host_update(
-    lease: HostUpdateLease,
+pub(crate) async fn install_host_update(
     events: std::sync::Arc<crate::daemon::EventBus>,
-) -> Result<()> {
+    confirm_after_restart: bool,
+) -> Result<(), String> {
+    let marker = confirm_after_restart
+        .then(write_pending_update_marker)
+        .flatten();
     record_update_progress(0);
-    let result = platform::download_and_install(events).await;
-    if let Err(error) = &result {
-        log::error!("Self-update failed: {error:#}");
-        jobs::fail(jobs::HOST_ID, plain_update_failure(error));
+    let Err(error) = platform::download_and_install(events.clone()).await else {
+        return Ok(());
+    };
+    log::error!("Self-update failed: {error:#}");
+    if let Some(marker) = marker {
+        let _ = std::fs::remove_file(marker);
     }
-    drop(lease);
-    result
+    let message = plain_update_failure(&error);
+    events.send(crate::daemon::DaemonEvent::UpdateFailed {
+        message: message.clone(),
+    });
+    Err(message)
 }
 
 fn update_marker_path() -> Option<PathBuf> {
@@ -783,16 +773,6 @@ mod tests {
         }
         drop(CheckInFlight);
         assert!(lock_update_state().is_some_and(|state| !state.checking));
-    }
-
-    #[test]
-    fn host_update_claim_is_single_flight() {
-        let lease = claim_host_update().expect("first claim should succeed");
-        assert!(claim_host_update().is_err());
-        drop(lease);
-        let release = claim_host_update();
-        assert!(release.is_ok());
-        drop(release);
     }
 
     #[test]

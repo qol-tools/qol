@@ -1,4 +1,5 @@
 use super::types::AppState;
+use crate::updates::jobs::Operation;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -68,32 +69,11 @@ pub(super) async fn check_update() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "available": available, "latest": latest }))
 }
 
-pub(super) fn start_self_update(
-    state: &AppState,
-    confirm_after_restart: bool,
-) -> Result<(), String> {
-    let lease = crate::updates::claim_host_update()?;
-    let marker = if confirm_after_restart {
-        crate::updates::write_pending_update_marker()
-    } else {
-        None
+pub(super) async fn self_update() -> impl IntoResponse {
+    let operation = Operation::Host {
+        confirm_after_restart: false,
     };
-    let events = state.daemon.events.clone();
-    tokio::spawn(async move {
-        if let Err(error) = crate::updates::run_host_update(lease, events.clone()).await {
-            if let Some(marker) = marker {
-                let _ = std::fs::remove_file(marker);
-            }
-            events.send(crate::daemon::DaemonEvent::UpdateFailed {
-                message: crate::updates::plain_update_failure(&error),
-            });
-        }
-    });
-    Ok(())
-}
-
-pub(super) async fn self_update(State(state): State<AppState>) -> impl IntoResponse {
-    match start_self_update(&state, false) {
+    match crate::updates::jobs::push(crate::updates::jobs::HOST_ID, operation) {
         Ok(()) => StatusCode::ACCEPTED,
         Err(message) => {
             log::warn!("Self-update refused: {}", message);

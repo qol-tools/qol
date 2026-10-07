@@ -4,7 +4,6 @@ use axum::{
 };
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
@@ -13,11 +12,9 @@ use super::http_json;
 use super::update_handlers::{action_error, action_ok, CoreActionRequest};
 use crate::features::plugin_store::source::{builtin_sources, default_source_repos, SourceCatalog};
 use crate::features::plugin_store::user_sources;
-use crate::updates::jobs::{self, JobState, UpdateJob};
+use crate::updates::jobs::{self, JobState, Operation, UpdateJob};
 
 pub(super) const PLUGINS_QUERY: &str = "plugins";
-
-static INSTALL_WORKER_RUNNING: AtomicBool = AtomicBool::new(false);
 
 type HttpResult<T> = Result<T, Box<Response>>;
 
@@ -106,17 +103,14 @@ fn install_action(state: &AppState, id: Option<&str>) -> Response {
         Ok(_) => return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}")),
         Err(response) => return *response,
     }
-    let refusal = install_refusal(
-        installed.contains(&id),
-        jobs::get(&id).map(|job| job.state),
-        updates_queued(&installed, &jobs::snapshot()),
-    );
+    let refusal = install_refusal(installed.contains(&id), jobs::get(&id).map(|job| job.state));
     if let Some(message) = refusal {
         return action_error(StatusCode::CONFLICT, message);
     }
-    jobs::queue(&id);
-    spawn_install_worker(state.clone());
-    action_ok("Install queued")
+    match jobs::push(&id, Operation::Install) {
+        Ok(()) => action_ok("Install queued"),
+        Err(message) => action_error(StatusCode::CONFLICT, message),
+    }
 }
 
 fn cancel_install_action(id: Option<&str>) -> Response {
@@ -124,7 +118,9 @@ fn cancel_install_action(id: Option<&str>) -> Response {
         Ok(id) => id,
         Err(response) => return *response,
     };
-    if !jobs::remove_queued(&id) {
+    if jobs::QUEUE.cancel_queued(|key, operation| key == id && *operation == Operation::Install)
+        == 0
+    {
         return action_error(StatusCode::CONFLICT, "The plugin is not waiting to install");
     }
     action_ok("Install cancelled")
@@ -140,20 +136,10 @@ fn uninstall_action(state: &AppState, id: Option<&str>) -> Response {
         Ok(_) => return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}")),
         Err(response) => return *response,
     }
-    if let Err(message) = jobs::start_removing(&id) {
-        return action_error(StatusCode::CONFLICT, message);
+    match jobs::push(&id, Operation::Remove) {
+        Ok(()) => action_ok("Removing"),
+        Err(message) => action_error(StatusCode::CONFLICT, message),
     }
-    let worker_state = state.clone();
-    tokio::spawn(async move {
-        let result = plugin_services::uninstall_plugin(&worker_state, &id).await;
-        if result.success {
-            jobs::finish(&id);
-        } else {
-            log::warn!("Uninstall for {} failed: {}", id, result.message);
-            jobs::fail(&id, result.message);
-        }
-    });
-    action_ok("Removing")
 }
 
 fn add_source_action(state: &AppState, repo: Option<&str>) -> Response {
@@ -188,67 +174,14 @@ fn revalidate_catalog(state: &AppState) {
     }
 }
 
-fn spawn_install_worker(state: AppState) {
-    if INSTALL_WORKER_RUNNING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    tokio::spawn(async move {
-        loop {
-            drain_install_queue(&state).await;
-            INSTALL_WORKER_RUNNING.store(false, Ordering::SeqCst);
-            if next_install(&state).is_none() || INSTALL_WORKER_RUNNING.swap(true, Ordering::SeqCst)
-            {
-                break;
-            }
-        }
-    });
-}
-
-async fn drain_install_queue(state: &AppState) {
-    while let Some(id) = next_install(state) {
-        if !jobs::take_queued(&id) {
-            continue;
-        }
-        match plugin_services::install_plugin(state, &id).await {
-            Ok(_) => jobs::finish(&id),
-            Err((_, message)) => {
-                log::warn!("Install for {} failed: {}", id, message);
-                let error = anyhow::anyhow!(message);
-                jobs::fail(&id, crate::updates::plain_update_failure(&error));
-            }
-        }
-    }
-}
-
-fn next_install(state: &AppState) -> Option<String> {
-    let id = jobs::next_queued()?;
-    let installed = installed_ids(state).ok()?;
-    (!installed.contains(&id)).then_some(id)
-}
-
-fn install_refusal(
-    installed: bool,
-    job: Option<JobState>,
-    updates_queued: bool,
-) -> Option<&'static str> {
+fn install_refusal(installed: bool, job: Option<JobState>) -> Option<&'static str> {
     match job {
         Some(JobState::Queued) => return Some("The plugin is already waiting to install"),
         Some(JobState::Updating) => return Some("The plugin is already installing"),
         Some(JobState::Removing) => return Some("The plugin is being removed"),
         Some(JobState::Failed) | None => {}
     }
-    if installed {
-        return Some("The plugin is already installed");
-    }
-    if updates_queued {
-        return Some(crate::updates::UPDATE_ALREADY_RUNNING);
-    }
-    None
-}
-
-fn updates_queued(installed: &HashSet<String>, jobs: &HashMap<String, UpdateJob>) -> bool {
-    jobs.iter()
-        .any(|(id, job)| job.state == JobState::Queued && installed.contains(id))
+    installed.then_some("The plugin is already installed")
 }
 
 fn plugin_id(id: Option<&str>) -> HttpResult<String> {
@@ -547,65 +480,38 @@ mod tests {
 
     #[test]
     fn install_refusal_table() {
-        let running = Some(crate::updates::UPDATE_ALREADY_RUNNING);
-        let cases: &[(bool, Option<JobState>, bool, Option<&str>)] = &[
-            (false, None, false, None),
-            (false, Some(JobState::Failed), false, None),
+        let cases: &[(bool, Option<JobState>, Option<&str>)] = &[
+            (false, None, None),
+            (false, Some(JobState::Failed), None),
             (
                 false,
                 Some(JobState::Queued),
-                false,
                 Some("The plugin is already waiting to install"),
             ),
             (
                 false,
                 Some(JobState::Updating),
-                false,
                 Some("The plugin is already installing"),
             ),
             (
                 true,
                 Some(JobState::Removing),
-                false,
                 Some("The plugin is being removed"),
             ),
-            (true, None, false, Some("The plugin is already installed")),
+            (true, None, Some("The plugin is already installed")),
             (
                 true,
                 Some(JobState::Failed),
-                false,
                 Some("The plugin is already installed"),
             ),
-            (false, None, true, running),
         ];
-        for (installed, job_state, queued, expected) in cases {
+        for (installed, job_state, expected) in cases {
             assert_eq!(
-                install_refusal(*installed, *job_state, *queued),
+                install_refusal(*installed, *job_state),
                 *expected,
-                "installed={installed} job={job_state:?} updates_queued={queued}"
+                "installed={installed} job={job_state:?}"
             );
         }
-    }
-
-    #[test]
-    fn only_a_queued_installed_plugin_counts_as_a_pending_update() {
-        let installed: HashSet<String> = ["qol-launcher".to_string()].into();
-        let jobs_with = |id: &str, state: JobState| -> HashMap<String, UpdateJob> {
-            [(id.to_string(), job(state, 0, None).unwrap())].into()
-        };
-        assert!(updates_queued(
-            &installed,
-            &jobs_with("qol-launcher", JobState::Queued)
-        ));
-        assert!(!updates_queued(
-            &installed,
-            &jobs_with("qol-launcher", JobState::Updating)
-        ));
-        assert!(!updates_queued(
-            &installed,
-            &jobs_with("qol-voice", JobState::Queued)
-        ));
-        assert!(!updates_queued(&installed, &HashMap::new()));
     }
 
     #[test]

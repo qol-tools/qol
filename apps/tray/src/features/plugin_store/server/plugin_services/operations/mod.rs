@@ -1,50 +1,29 @@
-use axum::http::StatusCode;
-
 use super::super::super::source::{resolve_source_for_plugin, PluginSource};
-use super::super::types::{AppState, PluginInfo, UninstallResult};
+use super::super::types::AppState;
+use crate::updates::jobs::Operation;
 
 mod install;
 mod uninstall;
 mod update;
 
-pub(super) async fn install_plugin(
+pub(in super::super) async fn run_operation(
     state: &AppState,
     id: &str,
-) -> Result<PluginInfo, (StatusCode, String)> {
-    install::install_plugin(state, id).await
-}
-
-pub(super) async fn update_plugin(state: &AppState, id: &str) -> UninstallResult {
-    update::update_plugin(state, id).await
-}
-
-pub(super) async fn run_plugin_update(state: &AppState, id: &str) -> UninstallResult {
-    update::run_plugin_update(state, id).await
-}
-
-pub(super) async fn uninstall_plugin(state: &AppState, id: &str) -> UninstallResult {
-    uninstall::uninstall_plugin(state, id).await
-}
-
-pub(super) fn source_for(id: &str) -> Result<PluginSource, (StatusCode, String)> {
-    resolve_source_for_plugin(id).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            format!("No plugin source provides {}", id),
-        )
-    })
-}
-
-pub(super) fn success_uninstall_result(message: &str) -> UninstallResult {
-    UninstallResult {
-        success: true,
-        message: message.to_string(),
+    operation: Operation,
+) -> Result<(), String> {
+    match operation {
+        Operation::Install => install::install_plugin(state, id).await,
+        Operation::Update => update::update_plugin(state, id).await,
+        Operation::Remove => uninstall::uninstall_plugin(state, id).await,
+        Operation::Host {
+            confirm_after_restart,
+        } => {
+            crate::updates::install_host_update(state.daemon.events.clone(), confirm_after_restart)
+                .await
+        }
     }
 }
 
-pub(super) fn failed_uninstall_result(message: String) -> UninstallResult {
-    UninstallResult {
-        success: false,
-        message,
-    }
+fn source_for(id: &str) -> Result<PluginSource, String> {
+    resolve_source_for_plugin(id).ok_or_else(|| format!("No plugin source provides {}", id))
 }

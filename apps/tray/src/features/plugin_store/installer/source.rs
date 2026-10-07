@@ -12,7 +12,7 @@ pub(super) async fn resolve_latest_plugin_version(
     plugin_id: &str,
 ) -> Result<String> {
     let url = source.releases_api_url();
-    let client = reqwest::Client::new();
+    let client = super::super::index::blob_client();
     let token = get_stored_token();
     let request = build_github_request(&client, &url, token.as_deref());
     let response = send_checked(request).await?;
