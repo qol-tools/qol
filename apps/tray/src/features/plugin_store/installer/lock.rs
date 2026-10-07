@@ -23,6 +23,9 @@ pub(super) fn stale_lockfile(path: &Path, max_age: Duration) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
         return lockfile_too_old(path, max_age);
     };
+    if !owner_line_complete(&content) {
+        return lockfile_too_old(path, max_age);
+    }
     let mut fields = content.split_whitespace();
     let Some(raw_pid) = fields.next() else {
         return lockfile_too_old(path, max_age);
@@ -38,6 +41,10 @@ pub(super) fn stale_lockfile(path: &Path, max_age: Duration) -> bool {
         return !alive;
     }
     lockfile_too_old(path, max_age)
+}
+
+fn owner_line_complete(content: &str) -> bool {
+    content.ends_with('\n')
 }
 
 fn lockfile_too_old(path: &Path, max_age: Duration) -> bool {
