@@ -144,9 +144,10 @@ jobs:
   publish:
     name: Publish the review
     needs: review
+    # !cancelled() replaces the implicit success() a job if gets, so a failed review or fix still posts its comment.
     if: >-
-      github.event_name == 'pull_request' &&
-      needs.review.result != 'cancelled' && needs.review.result != 'skipped'
+      !cancelled() && github.event_name == 'pull_request' &&
+      needs.review.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
