@@ -9,7 +9,7 @@ use gpui::prelude::*;
 use gpui::*;
 use qol_gpui::deck;
 use qol_gpui::pictures::PictureContext;
-use qol_gpui::scroll_list::{wheel_rows, ScrollList};
+use qol_gpui::scroll_list::{wheel_steps, ScrollList};
 use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
     settings_label_group, settings_message, settings_page, settings_tile_rows,
@@ -1039,12 +1039,8 @@ impl NativeToolsView {
             .id("native-tools-list")
             .on_scroll_wheel(
                 cx.listener(|this: &mut Self, event: &ScrollWheelEvent, _, cx| {
-                    let rows = wheel_rows(&event.delta, ROW_HEIGHT);
-                    for _ in 0..rows.max(0) as usize {
-                        this.move_list(1);
-                    }
-                    for _ in 0..(-rows).max(0) as usize {
-                        this.move_list(-1);
+                    for step in wheel_steps(&event.delta, ROW_HEIGHT) {
+                        this.move_list(step);
                     }
                     cx.notify();
                 }),

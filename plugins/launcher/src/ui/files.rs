@@ -175,6 +175,7 @@ pub fn file_card(
             ))
             .when_some(index, |well, index| {
                 well.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
                     this.state.scroll_list.selected = index;
                     this.open_selected_folder(cx);
                 }))

@@ -473,6 +473,22 @@ impl Kit {
             .child(label.into())
     }
 
+    pub fn hint_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        key: Key,
+        label: impl Into<SharedString>,
+    ) -> gpui::Stateful<Div> {
+        self.pointable(
+            self.hint(key, label)
+                .id(id)
+                .px(px(qol_theme::SPACE_SNUG))
+                .cursor(gpui::CursorStyle::PointingHand)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+            rgb(self.grounds.pane.lift),
+        )
+    }
+
     pub fn letter_tile(&self, name: &str) -> Div {
         let glyph = name
             .chars()

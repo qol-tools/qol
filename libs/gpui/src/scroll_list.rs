@@ -180,6 +180,7 @@ pub struct ScrollList {
     pub scroll_offset: usize,
     pub max_visible: usize,
     scroll_accum: f32,
+    followed: Option<(usize, usize, usize)>,
 }
 
 impl ScrollList {
@@ -189,6 +190,7 @@ impl ScrollList {
             scroll_offset: 0,
             max_visible: max_visible.max(1),
             scroll_accum: 0.0,
+            followed: None,
         }
     }
 
@@ -221,15 +223,24 @@ impl ScrollList {
         self.selected = 0;
         self.scroll_offset = 0;
         self.scroll_accum = 0.0;
+        self.followed = None;
     }
 
     pub fn sync(&mut self, count: usize) {
+        let key = (self.selected, count, self.max_visible);
+        if self.followed == Some(key) {
+            self.scroll_offset = self
+                .scroll_offset
+                .min(count.saturating_sub(self.max_visible));
+            return;
+        }
         clamp_into_view(
             &mut self.selected,
             &mut self.scroll_offset,
             count,
             self.max_visible,
         );
+        self.followed = Some((self.selected, count, self.max_visible));
     }
 
     pub fn visible_range(&self, count: usize) -> std::ops::Range<usize> {
@@ -245,6 +256,11 @@ pub fn wheel_rows(delta: &gpui::ScrollDelta, row_height: f32) -> isize {
         gpui::ScrollDelta::Pixels(pixels) => pixels.y.to_f64() as f32 / row_height,
     };
     -lines.round() as isize
+}
+
+pub fn wheel_steps(delta: &gpui::ScrollDelta, row_height: f32) -> impl Iterator<Item = isize> {
+    let rows = wheel_rows(delta, row_height);
+    std::iter::repeat_n(rows.signum(), rows.unsigned_abs())
 }
 
 #[cfg(test)]
@@ -620,6 +636,24 @@ mod tests {
         assert_eq!(
             list.scroll_offset, 7,
             "cannot scroll past the last visible row"
+        );
+    }
+
+    #[test]
+    fn a_wheel_scroll_survives_the_next_sync() {
+        let mut list = ScrollList::new(5);
+        list.sync(20);
+        list.wheel_by(4, 20);
+        list.sync(20);
+        assert_eq!(
+            list.scroll_offset, 4,
+            "render sync keeps the wheeled window"
+        );
+        list.move_down(20);
+        list.sync(20);
+        assert!(
+            list.visible_range(20).contains(&list.selected),
+            "a keyboard move brings the selection back into view"
         );
     }
 

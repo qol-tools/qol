@@ -11,7 +11,7 @@ use gpui::{
 use qol_gpui::deck;
 use qol_gpui::key::Key;
 use qol_gpui::kit::kit;
-use qol_gpui::scroll_list::{wheel_rows, ScrollList};
+use qol_gpui::scroll_list::{wheel_steps, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
     settings_label, settings_label_group, settings_page, settings_value_group, RowGround,
@@ -464,9 +464,8 @@ impl PluginsView {
             .id("plugins-list")
             .on_scroll_wheel(
                 cx.listener(|view: &mut Self, event: &ScrollWheelEvent, _, cx| {
-                    let steps = wheel_rows(&event.delta, qol_theme::HEIGHT_SETTING_ROW);
-                    for _ in 0..steps.unsigned_abs() {
-                        view.move_selection(steps.signum());
+                    for step in wheel_steps(&event.delta, qol_theme::HEIGHT_SETTING_ROW) {
+                        view.move_selection(step);
                     }
                     cx.notify();
                 }),
