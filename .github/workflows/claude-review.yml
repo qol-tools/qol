@@ -1,0 +1,255 @@
+name: claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CLAUDE_CODE_VERSION: 2.1.292
+  MARKETPLACES: |-
+    https://github.com/qol-tools/qol-skills.git
+    https://github.com/KMRH47/kmrh47-skills.git
+  REVIEW_PLUGIN: qol-code-review@qol-skills
+
+jobs:
+  review:
+    name: Review with qol-code-review
+    if: >-
+      github.event_name == 'push' ||
+      (!github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       !endsWith(github.actor, '[bot]'))
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve marketplace heads
+        id: seed
+        env:
+          GH_TOKEN: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          heads=""
+          while read -r url; do
+            head="$(git ls-remote "$url" HEAD | cut -f1)"
+            test -n "$head"
+            heads="$heads $head"
+          done <<< "$MARKETPLACES"
+          hash="$(printf '%s %s' "$heads" "$CLAUDE_CODE_VERSION" | sha256sum | cut -c1-8)"
+          echo "key=claude-seed-$hash" >> "$GITHUB_OUTPUT"
+          echo "dir=$HOME/.claude-seed" >> "$GITHUB_OUTPUT"
+
+      - name: Restore plugin seed
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.claude-seed
+          key: ${{ steps.seed.outputs.key }}
+          lookup-only: ${{ github.event_name == 'push' }}
+
+      - name: Install Claude Code
+        if: github.event_name == 'pull_request' || steps.cache.outputs.cache-hit != 'true'
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Build plugin seed
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+          CLAUDE_CODE_PLUGIN_CACHE_DIR: ${{ steps.seed.outputs.dir }}
+          SEED: ${{ steps.seed.outputs.dir }}
+        run: |
+          set -euo pipefail
+          export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/seed-config"
+          while read -r url; do claude plugin marketplace add "$url"; done <<< "$MARKETPLACES"
+          claude plugin install "$REVIEW_PLUGIN"
+          node "$SEED"/cache/*/*/*/skills/*/scripts/ci-pr.cjs plugins | grep -vxF "$REVIEW_PLUGIN" |
+            while read -r plugin; do claude plugin install "$plugin"; done
+
+      - name: Save plugin seed
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.claude-seed
+          key: ${{ steps.seed.outputs.key }}
+
+
+      - name: Locate the review node
+        if: github.event_name == 'pull_request'
+        id: node
+        env:
+          SEED: ${{ steps.seed.outputs.dir }}
+        run: |
+          set -euo pipefail
+          node="$(ls "$SEED"/cache/*/*/*/skills/*/scripts/ci-pr.cjs)"
+          test "$(echo "$node" | wc -l)" = 1
+          echo "path=$node" >> "$GITHUB_OUTPUT"
+          echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
+
+      - name: Review
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 50
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT" --title "$PR_TITLE" --body "$PR_BODY"
+
+      - name: Fix
+        id: fix
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 40
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
+        run: node "$NODE" fix --base HEAD^1 --head HEAD --out "$OUT"
+
+      - name: Upload review
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.node.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: claude-review
+          path: |
+            ${{ steps.node.outputs.out }}/reply.md
+            ${{ steps.node.outputs.out }}/review/
+            ${{ steps.node.outputs.out }}/fix/
+          if-no-files-found: ignore
+          retention-days: 7
+
+    outputs:
+      seed-key: ${{ steps.seed.outputs.key }}
+      fix: ${{ steps.fix.outcome }}
+
+  # A fresh runner, so nothing the review and fix sessions wrote reaches the steps holding the deploy key and the PR token.
+  publish:
+    name: Publish the review
+    needs: review
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.review.result != 'cancelled' && needs.review.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Restore plugin seed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.claude-seed
+          key: ${{ needs.review.outputs.seed-key }}
+          fail-on-cache-miss: true
+
+      - name: Download review
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: claude-review
+          path: ${{ runner.temp }}/claude-review
+
+      - name: Locate the review node
+        id: node
+        run: |
+          set -euo pipefail
+          node="$(ls "$HOME"/.claude-seed/cache/*/*/*/skills/*/scripts/ci-pr.cjs)"
+          test "$(echo "$node" | wc -l)" = 1
+          echo "path=$node" >> "$GITHUB_OUTPUT"
+          echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
+          if [ -s "$RUNNER_TEMP/claude-review/fix/fix.patch" ]; then echo "patch=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Push fix
+        id: push
+        if: steps.node.outputs.patch == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
+          SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: |
+          set -euo pipefail
+          for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
+            if [ -n "$secret" ] && grep -qF -- "$secret" "$OUT/fix/fix.patch"; then
+              echo "::error::the fix patch contains a secret and was not pushed"
+              exit 1
+            fi
+          done
+          node "$NODE" check-patch --patch "$OUT/fix/fix.patch" --base HEAD^1 --head HEAD
+          git -c advice.detachedHead=false checkout -q HEAD^2
+          git apply --index "$OUT/fix/fix.patch"
+          git -c core.hooksPath=/dev/null -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -F "$OUT/fix/message.txt"
+          key="$RUNNER_TEMP/deploy-key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          # The deploy key, unlike the workflow token, starts the tests and merge gate on the pushed fix.
+          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git push "git@github.com:$GITHUB_REPOSITORY.git" "HEAD:refs/heads/$HEAD_REF"
+          rm -f "$key"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Post review comment
+        if: ${{ !cancelled() && steps.node.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          FIX_OUTCOME: ${{ needs.review.outputs.fix == 'failure' && 'failure' || steps.push.outcome }}
+          FIX_SHA: ${{ steps.push.outputs.sha }}
+          SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          status=0
+          node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" \
+            --fix-sha "$FIX_SHA" --fix-outcome "$FIX_OUTCOME" > /dev/null || status=$?
+          body="$OUT/comment.md"
+          for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
+            if [ -n "$secret" ] && grep -qF -- "$secret" "$body"; then
+              echo "::error::the review contains a secret and was not posted"
+              exit 1
+            fi
+          done
+          marker="$(node "$NODE" marker)"
+          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n1)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$body" > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
+          fi
+          exit "$status"
