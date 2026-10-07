@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 env:
   CLAUDE_CODE_VERSION: 2.1.292
   CLAUDE_MODEL: claude-opus-5-5
@@ -36,6 +32,10 @@ jobs:
       (!github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
        !endsWith(github.actor, '[bot]'))
+    # Job-level, so a run whose job is skipped (draft, bot) never cancels a running review.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -94,11 +94,13 @@ jobs:
           path: ~/.claude-seed
           key: ${{ steps.seed.outputs.key }}
 
-      - name: Install bubblewrap
+      - name: Install sandbox dependencies
         if: github.event_name == 'pull_request'
-        # The subprocess env scrub isolates Bash through bwrap, which Ubuntu 24.04 blocks by default.
+        # The subprocess env scrub runs Bash in the sandbox, which needs bwrap and socat;
+        # Ubuntu 24.04 blocks the user namespaces bwrap uses by default.
         run: |
-          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Run qol-code-review
@@ -122,21 +124,25 @@ jobs:
           export CODE_REVIEW_OUT_DIR="$work/out"
           skill="$(echo "$SEED"/cache/qol-skills/qol-code-review/*/skills/qol-code-review)"
           test -f "$skill/SKILL.md"
-          detector="node $skill/scripts/shallow-wrappers.cjs"
-          writer="node $skill/scripts/save-review.cjs"
           diff="$work/pr.diff"
+          detector="node $skill/scripts/shallow-wrappers.cjs --root . --diff $diff --json $work/shallow-wrappers.json"
+          writer="node $skill/scripts/save-review.cjs --verdict"
           git diff HEAD^1 HEAD > "$diff"
-          settings="$(jq -Rn '{enabledPlugins: ([inputs | select(length > 0) | {(.): true}] | add)}' <<< "$PLUGINS")"
+          settings="$(jq -Rn --arg work "$work" '{
+            enabledPlugins: ([inputs | select(length > 0) | {(.): true}] | add),
+            sandbox: {filesystem: {allowWrite: [$work]}}
+          }' <<< "$PLUGINS")"
           {
             echo "/qol-code-review:qol-code-review Review pull request #$PR_NUMBER of $GITHUB_REPOSITORY."
             echo
             echo "- Checkout: $PWD, the merge of the pull request into its base. Git history is not available."
             echo "- PR diff: $diff"
-            echo "- Shallow-wrapper detector: $detector --root . --diff $diff --json $work/shallow-wrappers.json"
-            echo "- Review writer: $writer --verdict <verdict> --slug pr --run-id review"
+            echo "- Shallow-wrapper detector: $detector"
+            echo "- Review writer, with the review on stdin: $writer <verdict> --slug pr --run-id review"
             echo "- Title: $PR_TITLE"
             echo "- Description:"
-            printf '%s\n' "$PR_BODY" | sed 's/^/  > /'
+            # Capped so the prompt stays under the kernel's per-argument limit.
+            printf '%s\n' "${PR_BODY:0:20000}" | sed 's/^/  > /'
             echo
             cat .github/claude-review/prompt.md
           } > "$work/prompt.md"
@@ -148,31 +154,37 @@ jobs:
             --settings "$settings" \
             --agents .github/claude-review/agents.json \
             --permission-mode dontAsk \
-            --allowedTools Glob Grep \
+            --allowedTools \
               "Read(/$GITHUB_WORKSPACE/**)" "Read(/$work/**)" "Read(/$SEED/**)" \
+              "Glob(/$GITHUB_WORKSPACE/**)" "Glob(/$work/**)" "Glob(/$SEED/**)" \
+              "Grep(/$GITHUB_WORKSPACE/**)" "Grep(/$work/**)" "Grep(/$SEED/**)" \
               "Bash($detector:*)" "Bash($writer:*)" "Agent(adversarial-reviewer)" \
             --disallowedTools Edit Write NotebookEdit WebFetch WebSearch "Read(//proc/**)" "Read(//sys/**)" \
             --output-format json > "$work/result.json"
 
       - name: Post review comment
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/claude-review"
           review="$work/out/review/review.md"
+          failed=""
           if [ ! -s "$review" ]; then
             echo "::warning::qol-code-review wrote no review.md, posting the final reply instead"
             review="$work/reply.md"
-            jq -r '.result // empty' "$work/result.json" > "$review"
+            mkdir -p "$work"
+            jq -r '.result // empty' "$work/result.json" > "$review" 2>/dev/null || true
           fi
           if [ ! -s "$review" ]; then
-            echo "::error::qol-code-review produced no review"
-            exit 1
+            failed=1
+            printf 'The review of %s failed before it produced a result. See [the run](%s).\n' "$HEAD_SHA" "$RUN_URL" > "$review"
           fi
           for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
             if [ -n "$secret" ] && grep -qF -- "$secret" "$review"; then
@@ -182,11 +194,15 @@ jobs:
           done
           marker='<!-- qol-code-review -->'
           body="$work/comment.md"
-          { echo "$marker"; cat "$review"; } > "$body"
+          { echo "$marker"; echo "Reviewed head: $HEAD_SHA"; echo; cat "$review"; } > "$body"
           id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n1)"
           if [ -n "$id" ]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$body" > /dev/null
           else
             gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error::qol-code-review produced no review"
+            exit 1
           fi
