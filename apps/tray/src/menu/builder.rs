@@ -77,21 +77,13 @@ fn create_update_route(menu: &Menu, events: Arc<EventBus>) -> EventRoute {
 }
 
 fn spawn_update_task(events: Arc<EventBus>) {
-    std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                log::error!("Failed to create runtime for update: {}", e);
-                return;
-            }
-        };
-        if let Err(e) = rt.block_on(updates::download_and_install(events.clone())) {
-            log::error!("Update failed: {}", e);
-            events.send(crate::daemon::DaemonEvent::UpdateFailed {
-                message: e.to_string(),
-            });
-        }
-    });
+    let operation = updates::jobs::Operation::Host {
+        confirm_after_restart: false,
+    };
+    if let Err(message) = updates::jobs::push(updates::jobs::HOST_ID, operation) {
+        log::error!("Update failed: {}", message);
+        events.send(crate::daemon::DaemonEvent::UpdateFailed { message });
+    }
 }
 
 fn create_quit_route(menu: &Menu) -> EventRoute {

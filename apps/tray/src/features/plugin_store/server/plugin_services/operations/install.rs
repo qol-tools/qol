@@ -1,51 +1,23 @@
-use axum::http::StatusCode;
-
 use crate::features::plugin_store::installer::PluginInstaller;
 
-use super::super::super::helpers::{read_plugin_version, reload_plugin_and_notify};
-use super::super::super::types::{AppState, PluginInfo};
+use super::super::super::helpers::reload_plugin_and_notify;
+use super::super::super::types::AppState;
 use super::source_for;
 
-pub(super) async fn install_plugin(
-    state: &AppState,
-    id: &str,
-) -> Result<PluginInfo, (StatusCode, String)> {
+pub(super) async fn install_plugin(state: &AppState, id: &str) -> Result<(), String> {
     log::info!("Install requested for plugin: {}", id);
-    ensure_plugins_dir(state)?;
+    std::fs::create_dir_all(&state.plugins_dir).map_err(|error| {
+        log::error!("Failed to get plugins directory: {}", error);
+        "Failed to access plugins directory".to_string()
+    })?;
     let source = source_for(id)?;
     let installer = PluginInstaller::new(state.plugins_dir.clone());
     installer.install(&source, id).await.map_err(|error| {
         log::error!("Failed to install plugin {}: {}", id, error);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Installation failed: {:#}", error),
-        )
+        crate::updates::plain_update_failure(&error)
     })?;
     reload_plugin_and_notify(state, id);
     tokio::task::spawn_blocking(crate::settings_surface::plugins_changed);
     log::info!("Plugin {} installed successfully", id);
-    Ok(installed_plugin_info(state, id))
-}
-
-fn ensure_plugins_dir(state: &AppState) -> Result<(), (StatusCode, String)> {
-    std::fs::create_dir_all(&state.plugins_dir).map_err(|error| {
-        log::error!("Failed to get plugins directory: {}", error);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to access plugins directory".to_string(),
-        )
-    })
-}
-
-fn installed_plugin_info(state: &AppState, id: &str) -> PluginInfo {
-    let version =
-        read_plugin_version(&state.plugins_dir.join(id)).unwrap_or_else(|_| "unknown".into());
-    PluginInfo {
-        id: id.to_string(),
-        name: id.to_string(),
-        description: "Installed successfully".to_string(),
-        installed_version: Some(version.clone()),
-        version,
-        installed: true,
-    }
+    Ok(())
 }

@@ -11,12 +11,15 @@ use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
 use super::super::types::{AppState, MAX_CONFIG_SIZE};
 use super::http_json;
-use crate::updates::jobs::{self, JobState, UpdateJob};
+use crate::updates::jobs::{self, JobState, Operation, UpdateJob};
 use crate::version::is_newer_version;
 
 pub(super) const UPDATES_QUERY: &str = "updates";
 pub(super) const ATTENTION_QUERY: &str = "attention";
 pub(super) const HOST_PLUGIN_ID: &str = jobs::HOST_ID;
+const HOST_UPDATE: Operation = Operation::Host {
+    confirm_after_restart: true,
+};
 const ATTENTION_AFTER_SECS: u64 = 24 * 60 * 60;
 
 type HttpResult<T> = Result<T, Box<Response>>;
@@ -186,21 +189,23 @@ fn start_update_action(state: &AppState, id: Option<&str>) -> Response {
         Err((status, message)) => return action_error(status, message),
     };
     match target {
-        UpdateTarget::Host => start_host_update(state),
+        UpdateTarget::Host => start_host_update(),
         UpdateTarget::Plugin(id) => start_plugin_update(state, id),
     }
 }
 
-fn start_host_update(state: &AppState) -> Response {
+fn start_host_update() -> Response {
     let available = crate::updates::host_update_available();
     if let Some(message) = host_update_refusal(
         crate::updates::checks_enabled(),
-        jobs::get(jobs::HOST_ID).is_some_and(|job| job.state == JobState::Updating),
+        jobs::get(jobs::HOST_ID).is_some_and(|job| job.state != JobState::Failed),
         available,
     ) {
         return action_error(StatusCode::CONFLICT, message);
     }
-    match super::super::meta_handlers::start_self_update(state, true) {
+    let waits = jobs::QUEUE.busy();
+    match jobs::push(jobs::HOST_ID, HOST_UPDATE) {
+        Ok(()) if waits => action_ok("Restarts when the other updates finish"),
         Ok(()) => action_ok("Update started"),
         Err(message) => action_error(StatusCode::CONFLICT, message),
     }
@@ -220,17 +225,10 @@ fn start_plugin_update(state: &AppState, id: String) -> Response {
     {
         return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}"));
     }
-    if let Err(message) = jobs::start(&id) {
-        return action_error(StatusCode::CONFLICT, message);
+    match jobs::push(&id, Operation::Update) {
+        Ok(()) => action_ok("Update started"),
+        Err(message) => action_error(StatusCode::CONFLICT, message),
     }
-    let worker_state = state.clone();
-    tokio::spawn(async move {
-        let result = plugin_services::run_plugin_update(&worker_state, &id).await;
-        if !result.success {
-            log::warn!("Update for {} failed: {}", id, result.message);
-        }
-    });
-    action_ok("Update started")
 }
 
 fn start_update_all_action(state: &AppState) -> Response {
@@ -242,48 +240,26 @@ fn start_update_all_action(state: &AppState) -> Response {
     };
     let host_available = crate::updates::host_update_available();
     let plan = update_all_plan(&plugins, host_available);
-    let running = jobs::any_active();
-    if let Some(message) = update_all_refusal(running, &plan) {
+    if let Some(message) = update_all_refusal(jobs::QUEUE.busy(), &plan) {
         return action_error(StatusCode::CONFLICT, message);
     }
-    if plan.contains(&UpdateTarget::Host) {
-        return match super::super::meta_handlers::start_self_update(state, true) {
-            Ok(()) => action_ok("Update started"),
-            Err(message) => action_error(StatusCode::CONFLICT, message),
-        };
-    }
     for target in &plan {
-        if let UpdateTarget::Plugin(id) = target {
-            jobs::queue(id);
+        let pushed = match target {
+            UpdateTarget::Host => jobs::push(jobs::HOST_ID, HOST_UPDATE),
+            UpdateTarget::Plugin(id) => jobs::push(id, Operation::Update),
+        };
+        if let Err(message) = pushed {
+            return action_error(StatusCode::CONFLICT, message);
         }
     }
-    let worker_state = state.clone();
-    tokio::spawn(async move {
-        run_update_all(worker_state, plan).await;
-    });
     action_ok("Update started")
 }
 
 fn stop_updates_action() -> Response {
-    if jobs::stop_queued() == 0 {
+    if jobs::QUEUE.cancel_queued() == 0 {
         return action_error(StatusCode::CONFLICT, "Nothing to stop");
     }
     action_ok("Stopping after the current update")
-}
-
-async fn run_update_all(state: AppState, plan: Vec<UpdateTarget>) {
-    for target in plan {
-        let UpdateTarget::Plugin(id) = target else {
-            continue;
-        };
-        if !jobs::take_queued(&id) {
-            continue;
-        }
-        let result = plugin_services::run_plugin_update(&state, &id).await;
-        if !result.success {
-            log::warn!("Update all could not update {}: {}", id, result.message);
-        }
-    }
 }
 
 fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {

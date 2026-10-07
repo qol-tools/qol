@@ -51,6 +51,7 @@ qol-plugin-daemon = { path = "libs/plugin-daemon" }
 qol-profile-sync = { path = "libs/profile-sync" }
 qol-workspace = { path = "libs/workspace" }
 qol-windowing = { path = "libs/windowing" }
+qol-work-queue = { path = "libs/work-queue" }
 qol-zigbee = { path = "libs/zigbee" }
 workspace-hack = { path = "libs/workspace-hack" }
 

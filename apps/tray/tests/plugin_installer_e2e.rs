@@ -112,8 +112,8 @@ fn lockfile_with_live_pid_blocks_acquisition() {
     let root = plugins_root();
     let lock_path = lockfile_path(root.path(), PLUGIN_ID);
 
-    let self_pid = std::process::id();
-    fs::write(&lock_path, format!("{self_pid} {PLUGIN_ID}\n")).expect("plant lockfile");
+    let live_pid = std::os::unix::process::parent_id();
+    fs::write(&lock_path, format!("{live_pid} {PLUGIN_ID}\n")).expect("plant lockfile");
 
     let result = acquire_operation_lock(root.path(), PLUGIN_ID);
 
@@ -124,9 +124,29 @@ fn lockfile_with_live_pid_blocks_acquisition() {
     );
     let owner = fs::read_to_string(&lock_path).expect("lockfile must survive blocked acquire");
     assert!(
-        owner.starts_with(&format!("{self_pid} ")),
+        owner.starts_with(&format!("{live_pid} ")),
         "blocked acquire must not rewrite live-owner lockfile, got: {owner:?}"
     );
+}
+
+#[test]
+fn lockfile_left_by_this_pid_before_a_restart_is_reacquired() {
+    let root = plugins_root();
+    let lock_path = lockfile_path(root.path(), PLUGIN_ID);
+    let self_pid = std::process::id();
+
+    for planted in [
+        format!("{self_pid} {PLUGIN_ID}\n"),
+        format!("{self_pid} {PLUGIN_ID} earlier\n"),
+    ] {
+        fs::write(&lock_path, &planted).expect("plant lockfile");
+        let held = acquire_operation_lock(root.path(), PLUGIN_ID)
+            .unwrap_or_else(|error| panic!("{planted:?} must count as stale: {error}"));
+        let err = acquire_operation_lock(root.path(), PLUGIN_ID)
+            .expect_err("the lock this image holds must still block");
+        assert!(err.to_string().contains("already in progress"), "{err}");
+        drop(held);
+    }
 }
 
 #[test]

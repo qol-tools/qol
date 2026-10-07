@@ -7373,6 +7373,7 @@ dependencies = [
  "qol-runtime",
  "qol-theme",
  "qol-watch",
+ "qol-work-queue",
  "qol-workspace",
  "reqwest",
  "resvg",
@@ -7477,6 +7478,14 @@ dependencies = [
  "tempfile",
  "workspace-hack",
  "x11rb",
+]
+
+[[package]]
+name = "qol-work-queue"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "workspace-hack",
 ]
 
 [[package]]

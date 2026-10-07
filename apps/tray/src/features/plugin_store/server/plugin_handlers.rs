@@ -2,7 +2,7 @@ use super::helpers::{validate_plugin_id, validate_plugin_id_bad_request};
 use super::plugin_services;
 use super::types::{
     AppState, ExecuteActionResult, InstalledPluginsResponse, PluginPermissionsResponse,
-    PluginsQuery, PluginsResponse, UninstallResult,
+    PluginsQuery, PluginsResponse,
 };
 use crate::plugins::action_executor::ActionExecutionError;
 use crate::plugins::capabilities::{PermissionState, PermissionStatus};
@@ -37,9 +37,6 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/push-status", get(get_push_status))
         .route("/readiness", get(get_readiness))
-        .route("/install/{id}", post(install_plugin))
-        .route("/update/{id}", post(update_plugin))
-        .route("/uninstall/{id}", post(uninstall_plugin))
 }
 
 fn trace_action_resolve(
@@ -165,37 +162,6 @@ pub(super) async fn get_registry(
     })
     .await
     .map_err(join_error_response)?
-}
-
-pub(super) async fn install_plugin(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> Result<Json<super::types::PluginInfo>, (StatusCode, String)> {
-    validate_plugin_id_bad_request(&id)?;
-
-    plugin_services::install_plugin(&state, &id).await.map(Json)
-}
-
-pub(super) async fn update_plugin(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> Json<UninstallResult> {
-    if validate_plugin_id(&id).is_err() {
-        return invalid_plugin_id_uninstall_result();
-    }
-
-    Json(plugin_services::update_plugin(&state, &id).await)
-}
-
-pub(super) async fn uninstall_plugin(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> Json<UninstallResult> {
-    if validate_plugin_id(&id).is_err() {
-        return invalid_plugin_id_uninstall_result();
-    }
-
-    Json(plugin_services::uninstall_plugin(&state, &id).await)
 }
 
 pub(super) async fn execute_plugin_action(
@@ -366,13 +332,6 @@ pub(super) async fn sse_handler(State(state): State<AppState>) -> impl IntoRespo
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-fn invalid_plugin_id_uninstall_result() -> Json<UninstallResult> {
-    Json(UninstallResult {
-        success: false,
-        message: "Invalid plugin ID".to_string(),
-    })
 }
 
 fn invalid_plugin_id_action_result() -> (StatusCode, Json<ExecuteActionResult>) {

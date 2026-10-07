@@ -72,6 +72,7 @@ pub(crate) async fn start_ui_server(
         #[cfg(feature = "dev")]
         core_log_controls,
     )?;
+    start_job_worker(&app_state);
     if !crate::dev_generation::is_shadow() {
         start_sync_loop(&app_state);
         if crate::updates::checks_enabled() {
@@ -378,6 +379,18 @@ fn start_sync_loop(app_state: &AppState) {
                 helpers::reload_manager_and_notify_without_profile_sync(&state);
             }
         }
+    });
+}
+
+fn start_job_worker(app_state: &AppState) {
+    let state = app_state.clone();
+    tokio::spawn(async move {
+        crate::updates::jobs::QUEUE
+            .run(|id, operation| {
+                let state = state.clone();
+                async move { plugin_services::run_operation(&state, &id, operation).await }
+            })
+            .await
     });
 }
 

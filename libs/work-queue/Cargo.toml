@@ -1,0 +1,16 @@
+[package]
+name = "qol-work-queue"
+version = "0.1.0"
+edition = "2021"
+description = "One keyed work queue with a single worker for qol-tools"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+tokio = { version = "1.35", features = ["sync"] }
+workspace-hack.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.35", features = ["sync", "rt", "macros", "time"] }
+
+[lints]
+workspace = true

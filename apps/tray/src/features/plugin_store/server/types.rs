@@ -176,12 +176,6 @@ pub(super) struct PluginsQuery {
 }
 
 #[derive(Serialize)]
-pub(super) struct UninstallResult {
-    pub(super) success: bool,
-    pub(super) message: String,
-}
-
-#[derive(Serialize)]
 pub(super) struct ExecuteActionResult {
     pub(super) success: bool,
     pub(super) message: String,
