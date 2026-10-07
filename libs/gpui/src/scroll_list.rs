@@ -180,7 +180,6 @@ pub struct ScrollList {
     pub scroll_offset: usize,
     pub max_visible: usize,
     scroll_accum: f32,
-    followed: Option<(usize, usize, usize)>,
 }
 
 impl ScrollList {
@@ -190,7 +189,6 @@ impl ScrollList {
             scroll_offset: 0,
             max_visible: max_visible.max(1),
             scroll_accum: 0.0,
-            followed: None,
         }
     }
 
@@ -212,6 +210,22 @@ impl ScrollList {
         let max_offset = total.saturating_sub(self.max_visible);
         let target = self.scroll_offset as isize + rows;
         self.scroll_offset = target.clamp(0, max_offset as isize) as usize;
+        if total == 0 {
+            self.selected = 0;
+            return;
+        }
+        let lead = usize::from(self.max_visible >= 3);
+        let low = if self.scroll_offset == 0 {
+            0
+        } else {
+            self.scroll_offset + lead
+        };
+        let high = if self.scroll_offset == max_offset {
+            total - 1
+        } else {
+            self.scroll_offset + self.max_visible - 1 - lead
+        };
+        self.selected = self.selected.clamp(low, high);
     }
 
     pub fn scroll_by(&mut self, increments: f32, count: usize) {
@@ -223,24 +237,15 @@ impl ScrollList {
         self.selected = 0;
         self.scroll_offset = 0;
         self.scroll_accum = 0.0;
-        self.followed = None;
     }
 
     pub fn sync(&mut self, count: usize) {
-        let key = (self.selected, count, self.max_visible);
-        if self.followed == Some(key) {
-            self.scroll_offset = self
-                .scroll_offset
-                .min(count.saturating_sub(self.max_visible));
-            return;
-        }
         clamp_into_view(
             &mut self.selected,
             &mut self.scroll_offset,
             count,
             self.max_visible,
         );
-        self.followed = Some((self.selected, count, self.max_visible));
     }
 
     pub fn visible_range(&self, count: usize) -> std::ops::Range<usize> {
@@ -640,21 +645,77 @@ mod tests {
     }
 
     #[test]
-    fn a_wheel_scroll_survives_the_next_sync() {
-        let mut list = ScrollList::new(5);
-        list.sync(20);
-        list.wheel_by(4, 20);
-        list.sync(20);
-        assert_eq!(
-            list.scroll_offset, 4,
-            "render sync keeps the wheeled window"
-        );
-        list.move_down(20);
-        list.sync(20);
-        assert!(
-            list.visible_range(20).contains(&list.selected),
-            "a keyboard move brings the selection back into view"
-        );
+    fn a_wheel_keeps_the_selection_visible_and_survives_the_next_sync() {
+        for count in 0usize..=24 {
+            for max_visible in 1usize..=10 {
+                for selected in 0..count.max(1) {
+                    for rows in -6isize..=6 {
+                        let mut list = ScrollList::new(max_visible);
+                        list.selected = selected;
+                        list.sync(count);
+                        list.wheel_by(rows, count);
+                        let wheeled = (list.selected, list.scroll_offset);
+                        list.sync(count);
+                        let label =
+                            format!("count={count} vis={max_visible} sel={selected} rows={rows}");
+                        assert_eq!(
+                            (list.selected, list.scroll_offset),
+                            wheeled,
+                            "sync moved the wheeled window: {label}"
+                        );
+                        if count > 0 {
+                            assert!(
+                                list.visible_range(count).contains(&list.selected),
+                                "selection off screen: {label}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_wheel_drags_the_selection_only_as_far_as_the_window_moves() {
+        let cases = [
+            ("down from the top", 0usize, 0usize, 3isize, 4usize, 3usize),
+            ("down keeps a row above", 3, 0, 3, 4, 3),
+            ("down with the selection already inside", 3, 0, 1, 3, 1),
+            ("up keeps a row below", 10, 6, -3, 6, 3),
+            ("down to the end reaches the last row", 19, 15, 9, 19, 15),
+            ("up to the top reaches the first row", 0, 0, -4, 0, 0),
+        ];
+        for (label, selected, offset, rows, expected_selected, expected_offset) in cases {
+            let mut list = ScrollList::new(5);
+            list.selected = selected;
+            list.scroll_offset = offset;
+            list.wheel_by(rows, 20);
+            assert_eq!(
+                (list.selected, list.scroll_offset),
+                (expected_selected, expected_offset),
+                "case: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn wheel_steps_yields_one_signed_step_per_row() {
+        let lines = |y: f32| gpui::ScrollDelta::Lines(gpui::point(0.0, y));
+        let pixels = |y: f32| gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(y)));
+        let cases = [
+            ("no motion", lines(0.0), vec![]),
+            ("one line toward the user", lines(-1.0), vec![1]),
+            ("three lines away", lines(3.0), vec![-1, -1, -1]),
+            ("pixels under half a row", pixels(-20.0), vec![]),
+            ("pixels for two rows", pixels(-88.0), vec![1, 1]),
+        ];
+        for (label, delta, expected) in cases {
+            assert_eq!(
+                wheel_steps(&delta, 44.0).collect::<Vec<_>>(),
+                expected,
+                "case: {label}"
+            );
+        }
     }
 
     #[test]

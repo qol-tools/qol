@@ -556,7 +556,8 @@ impl LauncherView {
                       _window,
                       cx: &mut Context<Self>| {
                     let rows = qol_gpui::scroll_list::wheel_rows(&event.delta, wheel_row);
-                    this.state.scroll_list.wheel_by(rows, result_count);
+                    let count = this.store.result_count();
+                    this.state.scroll_list.wheel_by(rows, count);
                     cx.notify();
                 },
             ))

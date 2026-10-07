@@ -60,8 +60,12 @@ fn hint_buttons(
         .enumerate()
         .map(|(index, (key, label, command))| {
             let command = *command;
-            kit.hint_button(("qol-removeapp-hint", index), *key, label.to_string())
-                .on_click(cx.listener(move |this, _, _, cx| this.run(command, cx)))
+            kit.hint_button(
+                ("qol-removeapp-hint", index),
+                *key,
+                label.to_string(),
+                cx.listener(move |this, _, _, cx| this.run(command, cx)),
+            )
         })
         .collect()
 }
@@ -523,8 +527,8 @@ impl RemoveAppView {
             )
             .into_any_element(),
         };
-        Some(
-            kit.notice(
+        let bar = kit
+            .notice(
                 NoticeTone::Invalid,
                 format!("Remove {}", app.name),
                 Some(subtitle),
@@ -534,8 +538,10 @@ impl RemoveAppView {
             .child(kit.chip(Chip::Key(REMOVE_KEY), kit.grounds.invalid))
             .id("qol-removeapp-remove")
             .cursor(gpui::CursorStyle::PointingHand)
-            .on_click(cx.listener(|this, _, _, cx| this.run(Command::Select, cx)))
-            .into_any_element(),
+            .on_click(cx.listener(|this, _, _, cx| this.run(Command::Select, cx)));
+        Some(
+            kit.pointable(bar, rgb(kit.grounds.invalid.lift))
+                .into_any_element(),
         )
     }
 
@@ -1018,8 +1024,8 @@ fn banner_busy(color: u32) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        done_action, primary_action, Command, PrimaryAction, FAILBAR_H, MAX_VISIBLE, ROW_H,
-        SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
+        confirm_command, done_action, primary_action, Command, PrimaryAction, FAILBAR_H,
+        MAX_VISIBLE, ROW_H, SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
     };
     use crate::core::{Guards, ManagedPackage, PackageManager, PackageScope, PackageStatus};
 
@@ -1078,6 +1084,25 @@ mod tests {
 
         for (guards, expected) in &cases {
             assert_eq!(primary_action(guards.as_ref()), *expected);
+        }
+    }
+
+    #[test]
+    fn confirm_screen_maps_each_key_to_its_command() {
+        let cases = [
+            ("escape", Some(Command::Back)),
+            ("q", Some(Command::QuitApp)),
+            ("t", Some(Command::TrashAnyway)),
+            ("enter", Some(Command::Primary)),
+            ("d", Some(Command::ToggleDisposal)),
+            ("tab", Some(Command::ToggleDisposal)),
+            ("D", None),
+            ("u", None),
+            ("space", None),
+            ("backspace", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(confirm_command(key), expected, "key: {key}");
         }
     }
 

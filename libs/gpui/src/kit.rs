@@ -478,14 +478,20 @@ impl Kit {
         id: impl Into<gpui::ElementId>,
         key: Key,
         label: impl Into<SharedString>,
+        on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<Div> {
         self.pointable(
             self.hint(key, label)
                 .id(id)
                 .px(px(qol_theme::SPACE_SNUG))
                 .cursor(gpui::CursorStyle::PointingHand)
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
-            rgb(self.grounds.pane.lift),
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |event, window, cx| {
+                    if event.click_count() <= 1 {
+                        on_click(event, window, cx);
+                    }
+                }),
+            rgba(self.washes.fill_hover.packed()),
         )
     }
 
