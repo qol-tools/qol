@@ -293,6 +293,15 @@ fn spawn_command_poll(
                     }
                     LoopFlow::Continue
                 }
+                Command::Focus(session) => {
+                    #[cfg(debug_assertions)]
+                    qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=focus id={session}");
+                    cx.background_spawn(async move {
+                        focus_session(&registry, host.as_ref(), &session)
+                    })
+                    .await;
+                    LoopFlow::Continue
+                }
                 Command::Snapshot => {
                     #[cfg(debug_assertions)]
                     qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=snapshot");
@@ -452,6 +461,24 @@ fn jump_to_next_attention_without_panel(
     trace::focus_start("next-attention", target.session_id());
     let result = host.focus(&target);
     trace::focus_result("next-attention", target.session_id(), &result);
+}
+
+fn focus_session(
+    registry: &Arc<Mutex<Registry>>,
+    host: &(dyn TerminalHost + Send + Sync),
+    session: &SessionId,
+) {
+    let target = registry
+        .lock()
+        .ok()
+        .and_then(|registry| registry.get(session).and_then(|row| row.binding()));
+    let Some(target) = target else {
+        log::info!("[cli-sessions] focus skipped: session {session} is gone");
+        return;
+    };
+    trace::focus_start("notification", target.session_id());
+    let result = host.focus(&target);
+    trace::focus_result("notification", target.session_id(), &result);
 }
 
 fn next_attention_target(

@@ -1,7 +1,8 @@
 pub mod native_notifications;
 
-use qol_runtime::protocol::{NotificationLayout, NotificationLevel};
+use qol_runtime::protocol::{DaemonRequest, NotificationLayout, NotificationLevel};
 
+#[allow(clippy::too_many_arguments)]
 pub fn show_plugin_notification(
     plugin_id: Option<&str>,
     title: &str,
@@ -10,6 +11,7 @@ pub fn show_plugin_notification(
     action: Option<(&str, &str)>,
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
+    activate: Option<&DaemonRequest>,
 ) {
     let toast_shown = !crate::features::notifications::use_system_notifications() && {
         let (name, mark) = plugin_id.map_or_else(
@@ -28,6 +30,7 @@ pub fn show_plugin_notification(
             action,
             artifact,
             layout,
+            plugin_id.zip(activate),
         )
         .unwrap_or(false)
     };

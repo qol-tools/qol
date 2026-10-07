@@ -486,6 +486,7 @@ fn send_notification(observation: &Observation, intent: &PolicyIntent) {
             None,
             None,
             None,
+            None,
         );
         trace::notify("sent", Some(loaded), Some(on_disk), Some(intent.as_str()));
     }

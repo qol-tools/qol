@@ -1,8 +1,8 @@
 pub(crate) mod peers;
 
 use crate::protocol::{
-    ArmedLifelinesResponse, NotificationLayout, NotificationLevel, PluginConfigResponse, PushAck,
-    RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
+    ArmedLifelinesResponse, DaemonRequest, NotificationLayout, NotificationLevel,
+    PluginConfigResponse, PushAck, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 use crate::PlatformState;
 use serde::Serialize;
@@ -141,6 +141,33 @@ impl PlatformStateClient {
         artifact: Option<&str>,
         layout: Option<NotificationLayout>,
     ) -> bool {
+        self.push_notification(title, body, level, action, artifact, layout, None)
+    }
+
+    /// Pushes a notification whose click sends `activate` back to this
+    /// plugin as a regular plugin action.
+    pub fn send_activatable_notification(
+        &self,
+        title: &str,
+        body: &str,
+        level: NotificationLevel,
+        layout: Option<NotificationLayout>,
+        activate: DaemonRequest,
+    ) -> bool {
+        self.push_notification(title, body, level, None, None, layout, Some(activate))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_notification(
+        &self,
+        title: &str,
+        body: &str,
+        level: NotificationLevel,
+        action: Option<(&str, &str)>,
+        artifact: Option<&str>,
+        layout: Option<NotificationLayout>,
+        activate: Option<DaemonRequest>,
+    ) -> bool {
         let plugin_id = self.plugin_id_from_env();
         let request = RuntimeRequest::PushNotification {
             plugin_id,
@@ -151,6 +178,7 @@ impl PlatformStateClient {
             action_payload: action.map(|(_, payload)| payload.to_string()),
             artifact: artifact.map(str::to_string),
             layout,
+            activate,
         };
         matches!(self.request_json(&request), Some(PushAck::Handled))
     }

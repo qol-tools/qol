@@ -23,6 +23,11 @@ args = ["next"]
 label = "Snapshot All Sessions"
 args = ["snapshot"]
 
+[action.focus]
+label = "Focus Session"
+args = ["focus"]
+hotkey = false
+
 [action.settings]
 label = "Settings"
 kind = "settings"

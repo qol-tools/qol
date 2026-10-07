@@ -1,4 +1,4 @@
-mod data;
+pub(super) mod data;
 mod linked_devices;
 mod model;
 mod plugins;

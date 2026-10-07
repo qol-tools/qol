@@ -2,7 +2,7 @@ mod platform;
 
 use std::time::Duration;
 
-use qol_runtime::protocol::NotificationLayout;
+use qol_runtime::protocol::{DaemonRequest, NotificationLayout};
 
 const HOST_ARGUMENT: &str = "__qol-settings-surface-host";
 
@@ -99,6 +99,7 @@ pub struct ToastSource<'a> {
     pub mark: Option<&'a str>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn show_toast(
     source: ToastSource<'_>,
     title: &str,
@@ -107,8 +108,11 @@ pub fn show_toast(
     action: Option<(&str, &str)>,
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
+    activate: Option<(&str, &DaemonRequest)>,
 ) -> anyhow::Result<bool> {
-    platform::show_toast(source, title, body, level, action, artifact, layout)
+    platform::show_toast(
+        source, title, body, level, action, artifact, layout, activate,
+    )
 }
 
 pub fn prewarm() {

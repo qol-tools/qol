@@ -258,6 +258,7 @@ pub fn transition_line(
 }
 
 fn attention_notice(
+    session: &SessionId,
     prev: Status,
     new: Status,
     tool: &Tool,
@@ -267,7 +268,7 @@ fn attention_notice(
 ) -> Option<Notice> {
     notify::announces_attention(prev, new).then(|| {
         let name = label.map(str::to_string).unwrap_or_else(|| project_of(cwd));
-        Notice::new(tool, name, summary)
+        Notice::new(session.clone(), tool, name, summary)
     })
 }
 
@@ -573,6 +574,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
     }
     let summary = summary_for(status, &input.tool);
     let notice = attention_notice(
+        pane_id,
         prev_status,
         status,
         &input.tool,

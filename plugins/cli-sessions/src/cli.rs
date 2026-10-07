@@ -1,7 +1,11 @@
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
+use anyhow::Context;
 use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp, PlainTextOutput};
+use qol_runtime::protocol::DaemonResponse;
+use qol_terminal_sessions::{BackendId, SessionId};
 
 use crate::daemon::actions::CONFIG;
 use crate::storage::paths::PLUGIN_ID;
@@ -75,6 +79,20 @@ where
                 }),
         )
         .command(
+            Command::new("focus")
+                .about("Focus the terminal of one tracked session.")
+                .usage(format!("{PLUGIN_ID} focus <backend>:<session>"))
+                .detail("A click on a CLI Sessions notification runs this for its session.")
+                .output("No stdout on success.")
+                .exit_behavior(
+                    "Exits non-zero if the session id is invalid or the daemon does not answer.",
+                )
+                .run_plain_text(|context| {
+                    focus(parse_session(context.args())?)?;
+                    Ok(PlainTextOutput::empty())
+                }),
+        )
+        .command(
             Command::new("snapshot")
                 .about("Ask the resident daemon to snapshot all observed sessions.")
                 .usage(format!("{PLUGIN_ID} snapshot"))
@@ -114,6 +132,32 @@ fn reject_args(args: &[String]) -> anyhow::Result<()> {
         return Ok(());
     }
     anyhow::bail!("unexpected arguments: {}", args.join(" "))
+}
+
+fn parse_session(args: &[String]) -> anyhow::Result<SessionId> {
+    let [session] = args else {
+        anyhow::bail!("expected one session id like kitty:42");
+    };
+    let (backend, native) = session
+        .split_once(':')
+        .context("a session id is <backend>:<session>, like kitty:42")?;
+    Ok(SessionId::new(BackendId::new(backend)?, native)?)
+}
+
+fn focus(session: SessionId) -> anyhow::Result<()> {
+    let request = crate::ui::notify::focus_request(&session);
+    let response = qol_plugin_daemon::daemon::send_request(
+        &CONFIG,
+        &request.action,
+        request.input,
+        Duration::from_secs(2),
+    )
+    .context("the CLI Sessions daemon is not running")?;
+    match response {
+        DaemonResponse::Handled { .. } => Ok(()),
+        DaemonResponse::Error { message } => anyhow::bail!("{message}"),
+        other => anyhow::bail!("the daemon did not focus {session}: {other:?}"),
+    }
 }
 
 fn send_action(action: &str) -> bool {
@@ -215,6 +259,17 @@ mod tests {
             ["next", "snapshot"]
         );
         assert!(calls.run.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn focus_rejects_malformed_session_ids() {
+        let cases: [&[&str]; 4] = [&[], &["kitty"], &["kitty:"], &["kitty:1", "kitty:2"]];
+        for args in cases {
+            let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+            assert!(super::parse_session(&args).is_err(), "{args:?}");
+        }
+        let parsed = super::parse_session(&["kitty:42".to_string()]).unwrap();
+        assert_eq!(parsed.to_string(), "kitty:42");
     }
 
     #[test]
