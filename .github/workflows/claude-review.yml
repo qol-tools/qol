@@ -94,6 +94,13 @@ jobs:
           path: ~/.claude-seed
           key: ${{ steps.seed.outputs.key }}
 
+      - name: Install bubblewrap
+        if: github.event_name == 'pull_request'
+        # The subprocess env scrub isolates Bash through bwrap, which Ubuntu 24.04 blocks by default.
+        run: |
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Run qol-code-review
         if: github.event_name == 'pull_request'
         env:
