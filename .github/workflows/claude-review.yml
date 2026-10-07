@@ -31,7 +31,6 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -88,6 +87,7 @@ jobs:
           path: ~/.claude-seed
           key: ${{ steps.seed.outputs.key }}
 
+
       - name: Locate the review node
         if: github.event_name == 'pull_request'
         id: node
@@ -122,22 +122,73 @@ jobs:
           CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
           NODE: ${{ steps.node.outputs.path }}
           OUT: ${{ steps.node.outputs.out }}
+        run: node "$NODE" fix --base HEAD^1 --head HEAD --out "$OUT"
+
+      - name: Upload review
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.node.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: claude-review
+          path: |
+            ${{ steps.node.outputs.out }}/reply.md
+            ${{ steps.node.outputs.out }}/review/
+            ${{ steps.node.outputs.out }}/fix/
+          if-no-files-found: ignore
+          retention-days: 7
+
+    outputs:
+      seed-key: ${{ steps.seed.outputs.key }}
+      fix: ${{ steps.fix.outcome }}
+
+  # A fresh runner, so nothing the review and fix sessions wrote reaches the steps holding the deploy key and the PR token.
+  publish:
+    name: Publish the review
+    needs: review
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.review.result != 'cancelled' && needs.review.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Restore plugin seed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.claude-seed
+          key: ${{ needs.review.outputs.seed-key }}
+          fail-on-cache-miss: true
+
+      - name: Download review
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: claude-review
+          path: ${{ runner.temp }}/claude-review
+
+      - name: Locate the review node
+        id: node
         run: |
           set -euo pipefail
-          node "$NODE" fix --base HEAD^1 --head HEAD --out "$OUT"
-          if [ -s "$OUT/fix/fix.patch" ]; then
-            echo "patch=$OUT/fix/fix.patch" >> "$GITHUB_OUTPUT"
-            echo "message=$OUT/fix/message.txt" >> "$GITHUB_OUTPUT"
-          fi
+          node="$(ls "$HOME"/.claude-seed/cache/*/*/*/skills/*/scripts/ci-pr.cjs)"
+          test "$(echo "$node" | wc -l)" = 1
+          echo "path=$node" >> "$GITHUB_OUTPUT"
+          echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
+          if [ -s "$RUNNER_TEMP/claude-review/fix/fix.patch" ]; then echo "patch=true" >> "$GITHUB_OUTPUT"; fi
 
       - name: Push fix
         id: push
-        if: steps.fix.outputs.patch != ''
+        if: steps.node.outputs.patch == 'true'
         env:
           DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PATCH: ${{ steps.fix.outputs.patch }}
-          MESSAGE: ${{ steps.fix.outputs.message }}
+          OUT: ${{ steps.node.outputs.out }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
           GIT_CONFIG_GLOBAL: /dev/null
@@ -145,17 +196,16 @@ jobs:
         run: |
           set -euo pipefail
           for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
-            if [ -n "$secret" ] && grep -qF -- "$secret" "$PATCH"; then
+            if [ -n "$secret" ] && grep -qF -- "$secret" "$OUT/fix/fix.patch"; then
               echo "::error::the fix patch contains a secret and was not pushed"
               exit 1
             fi
           done
-          git reset -q --hard
-          git switch -q --detach HEAD^2
-          git apply --index "$PATCH"
+          git -c advice.detachedHead=false checkout -q HEAD^2
+          git apply --index "$OUT/fix/fix.patch"
           git -c core.hooksPath=/dev/null -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -F "$MESSAGE"
+            commit -q -F "$OUT/fix/message.txt"
           key="$RUNNER_TEMP/deploy-key"
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           chmod 600 "$key"
@@ -166,7 +216,7 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Post review comment
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.node.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.node.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           NODE: ${{ steps.node.outputs.path }}
@@ -175,12 +225,13 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          FIX_OUTCOME: ${{ steps.fix.outcome == 'failure' && 'failure' || steps.push.outcome }}
+          FIX_OUTCOME: ${{ needs.review.outputs.fix == 'failure' && 'failure' || steps.push.outcome }}
           FIX_SHA: ${{ steps.push.outputs.sha }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
         run: |
           set -euo pipefail
+          mkdir -p "$OUT"
           status=0
           node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" \
             --fix-sha "$FIX_SHA" --fix-outcome "$FIX_OUTCOME" > /dev/null || status=$?
