@@ -11,7 +11,7 @@ permissions:
 
 env:
   CLAUDE_CODE_VERSION: 2.1.292
-  CLAUDE_MODEL: claude-opus-5-5
+  CLAUDE_MODEL: claude-sonnet-5-5
   MARKETPLACES: |-
     https://github.com/qol-tools/qol-skills.git
     https://github.com/KMRH47/kmrh47-skills.git
@@ -149,7 +149,7 @@ jobs:
           } > "$work/prompt.md"
           claude -p "$(cat "$work/prompt.md")" \
             --model "$CLAUDE_MODEL" \
-            --effort high \
+            --effort medium \
             --settings "$work/settings.json" \
             --agents .github/claude-review/agents.json \
             --dangerously-skip-permissions \
@@ -238,7 +238,7 @@ jobs:
           { cat "$out/review.md"; echo; cat .github/claude-review/fix-prompt.md; } > "$work/fix-prompt.md"
           claude -p "$(cat "$work/fix-prompt.md")" \
             --model "$CLAUDE_MODEL" \
-            --effort high \
+            --effort medium \
             --settings "$work/settings.json" \
             --dangerously-skip-permissions \
             --disallowedTools Bash Agent NotebookEdit WebFetch WebSearch "Edit(/$GITHUB_WORKSPACE/.git/**)" \
