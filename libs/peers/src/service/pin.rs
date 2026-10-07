@@ -12,7 +12,10 @@ const P256_SPKI_PREFIX: [u8; 26] = [
 ];
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub struct PeerPin([u8; 91]);
+pub struct PeerPin {
+    der: [u8; 91],
+    id: PeerId,
+}
 
 impl PeerPin {
     pub fn from_spki_der(der: &[u8]) -> Result<Self, PeerError> {
@@ -20,15 +23,19 @@ impl PeerPin {
             return Err(PeerError::InvalidPin);
         }
         p256::PublicKey::from_sec1_bytes(&der[26..]).map_err(|_| PeerError::InvalidPin)?;
-        Ok(Self(der.try_into().map_err(|_| PeerError::InvalidPin)?))
+        let der: [u8; 91] = der.try_into().map_err(|_| PeerError::InvalidPin)?;
+        Ok(Self {
+            id: PeerId::from_spki_digest(Sha256::digest(der).into()),
+            der,
+        })
     }
 
     pub fn spki_der(&self) -> &[u8] {
-        &self.0
+        &self.der
     }
 
     pub fn peer_id(&self) -> PeerId {
-        PeerId::from_spki_digest(Sha256::digest(self.0).into())
+        self.id
     }
 }
 

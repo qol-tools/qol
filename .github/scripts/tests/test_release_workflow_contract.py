@@ -65,6 +65,33 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("actions: write", build)
         self.assertNotIn("github.token", build)
 
+    def test_main_warms_the_build_cache_outside_the_tests_workflow(self):
+        warm = (ROOT / ".github/workflows/build-cache.yml").read_text()
+        tests = (ROOT / ".github/workflows/ci.yml").read_text()
+        rustflags = (
+            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && "
+            "'-C link-arg=-fuse-ld=lld' || '' }}"
+        )
+        self.assertIn(rustflags, tests)
+        for contract in [
+            "branches: [main]",
+            "cancel-in-progress: false",
+            "persist-credentials: false",
+            "cache-key: ci-${{ matrix.os }}",
+            rustflags,
+            "steps.rust_setup.outputs.build-cache-hit != 'true'",
+            "cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings",
+            "cargo check --release --locked $BUILD_ARGS",
+            "cargo build --release --locked $BUILD_ARGS",
+            "cargo nextest run --locked $TEST_ARGS --no-run",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, warm)
+        self.assertNotIn("actions: write", warm)
+        self.assertNotIn("github.token", warm)
+        versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        self.assertIn("workflows: [tests]", versioning)
+
     def test_one_gate_job_carries_the_merge_verdict(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]

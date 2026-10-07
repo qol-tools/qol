@@ -36,7 +36,7 @@ enum OfferState {
         grants: Vec<OperationKey>,
     },
     Ready {
-        invitation: Invitation,
+        invitation: Box<Invitation>,
         code: LinkCode,
         deadline: Instant,
     },
@@ -71,7 +71,7 @@ impl Offers {
         match result {
             Ok(offer) => {
                 *state = OfferState::Ready {
-                    invitation: offer.invitation,
+                    invitation: Box::new(offer.invitation),
                     code: offer.code,
                     deadline: Instant::now() + CONFIRM_WINDOW,
                 };
