@@ -7,7 +7,8 @@ use qol_theme::{
     DARK_SYSTEM, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
     HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
     LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER,
-    STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED, TEXT_SCALE, THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
+    STAY_BRIEF, STAY_ERROR, STAY_LONG, STAY_MESSAGE, STAY_MESSAGE_MOST, TEXT_SCALE,
+    THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
 };
 use std::{
     fs,
@@ -2080,17 +2081,20 @@ fn motion_curves_start_at_rest_and_arrive_exactly() {
     }
     assert_eq!(Curve::Travel.at(0.5), 0.5);
     assert!(Curve::Settle.at(0.5) > 0.96);
+    assert!(Curve::Leave.at(0.5) < 0.04);
 }
 
 #[test]
 fn stays_and_waits_hold_their_approved_values() {
     assert_eq!(
         Motion::ALL.map(|motion| motion.duration.as_millis()),
-        [140, 180, 260, 1000]
+        [140, 180, 260, 1000, 120]
     );
     assert_eq!(STAY_BRIEF, Duration::from_secs(4));
     assert_eq!(STAY_LONG, Duration::from_secs(8));
-    assert_eq!(STAY_UNTIL_CLOSED, None);
+    assert_eq!(STAY_MESSAGE, Duration::from_secs(3));
+    assert_eq!(STAY_MESSAGE_MOST, Duration::from_secs(15));
+    assert_eq!(STAY_ERROR, Duration::from_secs(10));
     assert_eq!(WAIT_BEFORE_BUSY, Duration::from_millis(300));
     assert_eq!(SETTLE_INPUT, Duration::from_millis(140));
 }

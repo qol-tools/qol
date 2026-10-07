@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
 
-const NOTIFICATIONS_SETTINGS_FILE: &str = "notifications.json";
-
 #[derive(Clone, Debug, Serialize)]
 struct NotificationSettings {
     #[serde(default)]
     use_system_notifications: bool,
     handler: NativeHandler,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_seconds: Option<u64>,
 }
 
 impl Default for NotificationSettings {
@@ -16,6 +16,7 @@ impl Default for NotificationSettings {
         Self {
             use_system_notifications: false,
             handler: NativeHandler::Qol,
+            message_seconds: None,
         }
     }
 }
@@ -31,6 +32,8 @@ impl<'de> Deserialize<'de> for NotificationSettings {
             use_system_notifications: bool,
             #[serde(default)]
             handler: Option<NativeHandler>,
+            #[serde(default)]
+            message_seconds: Option<u64>,
         }
         let raw = Raw::deserialize(deserializer)?;
         let handler = raw.handler.unwrap_or(if raw.use_system_notifications {
@@ -41,6 +44,7 @@ impl<'de> Deserialize<'de> for NotificationSettings {
         Ok(Self {
             use_system_notifications: raw.use_system_notifications,
             handler,
+            message_seconds: raw.message_seconds,
         })
     }
 }
@@ -84,6 +88,18 @@ pub fn set_native_handler(handler: NativeHandler) -> Result<()> {
     })
 }
 
+pub fn message_seconds() -> u64 {
+    settings()
+        .ok()
+        .and_then(|settings| settings.message_seconds)
+        .filter(|seconds| (1..=qol_theme::STAY_MESSAGE_MOST.as_secs()).contains(seconds))
+        .unwrap_or(qol_theme::STAY_MESSAGE.as_secs())
+}
+
+pub fn set_message_seconds(seconds: u64) -> Result<()> {
+    update_settings(|settings| settings.message_seconds = Some(seconds))
+}
+
 pub fn apply_native_handler(previous: NativeHandler) {
     if previous == NativeHandler::Qol && native_handler() != NativeHandler::Qol {
         qol_plugin_daemon::notification::platform::set_os_banners(true);
@@ -91,25 +107,21 @@ pub fn apply_native_handler(previous: NativeHandler) {
     sync_notification_inhibit();
 }
 
-#[cfg(target_os = "linux")]
 static NOTIFICATION_INHIBIT: std::sync::Mutex<
     Option<qol_plugin_daemon::notification::platform::NotificationInhibit>,
 > = std::sync::Mutex::new(None);
 
 pub fn sync_notification_inhibit() {
-    #[cfg(target_os = "linux")]
-    {
-        let mut held = NOTIFICATION_INHIBIT
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if native_handler() == NativeHandler::Qol {
-            qol_plugin_daemon::notification::platform::set_os_banners(false);
-            if held.is_none() {
-                *held = qol_plugin_daemon::notification::platform::acquire_inhibit();
-            }
-        } else {
-            *held = None;
+    let mut held = NOTIFICATION_INHIBIT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if native_handler() == NativeHandler::Qol {
+        qol_plugin_daemon::notification::platform::set_os_banners(false);
+        if held.is_none() {
+            *held = qol_plugin_daemon::notification::platform::acquire_inhibit();
         }
+    } else {
+        *held = None;
     }
 }
 
@@ -119,7 +131,8 @@ fn settings() -> Result<NotificationSettings> {
 }
 
 fn settings_path() -> Result<std::path::PathBuf> {
-    crate::paths::shared_config_dir().map(|dir| dir.join(NOTIFICATIONS_SETTINGS_FILE))
+    crate::paths::shared_config_dir()
+        .map(|dir| dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE))
 }
 
 #[cfg(test)]
@@ -176,6 +189,18 @@ mod tests {
         write_legacy_file(false);
         assert_eq!(native_handler(), NativeHandler::Qol);
         assert!(!use_system_notifications());
+    }
+
+    #[test]
+    fn message_time_defaults_to_the_theme_and_survives_a_handler_change() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        assert_eq!(message_seconds(), qol_theme::STAY_MESSAGE.as_secs());
+        set_message_seconds(5).unwrap();
+        set_native_handler(NativeHandler::Os).unwrap();
+        assert_eq!(message_seconds(), 5);
+        assert_eq!(native_handler(), NativeHandler::Os);
     }
 
     #[test]

@@ -11,15 +11,16 @@ pub fn show_plugin_notification(
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
 ) {
-    let system_notifications = crate::features::notifications::use_system_notifications();
-    let toast_shown = !system_notifications
-        && crate::settings_surface::show_toast(
+    let toast_shown = !crate::features::notifications::use_system_notifications() && {
+        let (name, mark) = plugin_id.map_or_else(
+            || (qol_conventions::TRAY_DISPLAY_NAME.to_string(), None),
+            crate::plugins::name_and_icon,
+        );
+        crate::settings_surface::show_toast(
             crate::settings_surface::ToastSource {
                 group: plugin_id.unwrap_or(qol_conventions::TRAY_DISPLAY_NAME),
-                name: &plugin_id.map_or_else(
-                    || qol_conventions::TRAY_DISPLAY_NAME.to_string(),
-                    crate::plugins::display_name,
-                ),
+                name: &name,
+                mark: mark.as_deref(),
             },
             title,
             body,
@@ -28,7 +29,8 @@ pub fn show_plugin_notification(
             artifact,
             layout,
         )
-        .unwrap_or(false);
+        .unwrap_or(false)
+    };
     if !toast_shown {
         native_notifications::show_plugin_notification(title, body, level, action);
     }

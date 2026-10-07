@@ -216,6 +216,16 @@ impl Kit {
         element.hover(move |style| style.bg(lift))
     }
 
+    pub fn revealed_by<E: Styled + InteractiveElement>(
+        &self,
+        element: E,
+        group: &'static str,
+    ) -> E {
+        element
+            .opacity(0.0)
+            .group_hover(group, |style| style.opacity(1.0))
+    }
+
     pub fn highlight_ground(&self, selected: bool) -> Ground {
         if selected {
             self.grounds.band

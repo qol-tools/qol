@@ -7,9 +7,9 @@ pub(super) const CARD_HEIGHT: f32 = qol_theme::toast::HEIGHT;
 pub(super) const STRIP_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
 const GROW: f32 = qol_theme::toast::GROW;
 pub(super) const WIDTH: f32 = CARD_WIDTH * GROW;
-const EDGE_STEP: f32 = qol_theme::SPACE_SNUG;
-const EDGE_INSET: f32 = qol_theme::SPACE_CELL;
-const MAX_EDGES: usize = 3;
+pub(super) const EDGE_STEP: f32 = qol_theme::SPACE_SNUG;
+pub(super) const EDGE_INSET: f32 = qol_theme::SPACE_CELL;
+pub(super) const MAX_EDGES: usize = 3;
 const EDGE_BAND: f32 = qol_theme::toast::FAN;
 pub(super) const WORDS_ROW: f32 = qol_theme::toast::SHOW_ALL_ROW;
 pub(super) const WORDS_RISE: f32 = qol_theme::SPACE_TIGHT;
@@ -299,6 +299,7 @@ pub(super) struct Tween {
     from: f32,
     to: f32,
     start: Instant,
+    motion: Motion,
 }
 
 impl Tween {
@@ -307,11 +308,21 @@ impl Tween {
             from: value,
             to: value,
             start: Instant::now(),
+            motion: Motion::SETTLE,
+        }
+    }
+
+    pub(super) fn gliding(self) -> Self {
+        Self {
+            motion: GLIDE,
+            ..self
         }
     }
 
     pub(super) fn value(&self, now: Instant) -> f32 {
-        let progress = Motion::SETTLE.progress(now.saturating_duration_since(self.start));
+        let progress = self
+            .motion
+            .progress(now.saturating_duration_since(self.start));
         lerp(self.from, self.to, progress)
     }
 
@@ -320,7 +331,7 @@ impl Tween {
     }
 
     pub(super) fn moving(&self, now: Instant) -> bool {
-        self.from != self.to && now.saturating_duration_since(self.start) < Motion::SETTLE.duration
+        self.from != self.to && now.saturating_duration_since(self.start) < self.motion.duration
     }
 
     pub(super) fn toward(&mut self, to: f32, now: Instant) {

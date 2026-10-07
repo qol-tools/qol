@@ -63,6 +63,7 @@ impl CaptureStatus {
             .tone(self.tone)
             .group("qol-shot")
             .source("Shot")
+            .mark(qol_gpui::theme::Mark::Shot)
             .key(self.context);
         let toast = match self.saved_file {
             Some(path) => toast.artifact(path),

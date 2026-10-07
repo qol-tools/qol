@@ -8,10 +8,32 @@ use super::{RowId, SlabSnapshotRow, ToastTone};
 use crate::kit::Kit;
 use crate::text::{cased, TextStyled};
 
-#[derive(Clone, Copy)]
-pub(super) struct Ring {
-    pub remaining: f32,
-    pub ink: u32,
+const OPEN_GROUP: &str = "toast-open";
+
+fn hover_veil(kit: Kit) -> Rgba {
+    rgba(qol_theme::translucent(
+        kit.grounds.pane.ink,
+        qol_theme::Alpha::Halo,
+    ))
+}
+
+pub(super) fn ruled(card: impl IntoElement, left: f32, content: f32, scale: f32, kit: Kit) -> Div {
+    div().size_full().relative().child(card).child(
+        div()
+            .absolute()
+            .opacity(content)
+            .top_0()
+            .left_0()
+            .w(relative(left.clamp(0.0, 1.0)))
+            .h(px(qol_theme::toast::RULE * scale))
+            .bg(rgb(kit.palette.accent)),
+    )
+}
+
+pub(super) fn counting(row: &SlabSnapshotRow, paused: bool, now: Instant) -> Option<f32> {
+    let timeout = row.toast.effective_timeout()?;
+    let deadline = row.deadline.filter(|_| !paused)?;
+    Some(deadline.saturating_duration_since(now).as_secs_f32() / timeout.as_secs_f32())
 }
 
 #[derive(Clone, Copy)]
@@ -58,31 +80,86 @@ pub(super) fn age_label(age: Duration) -> String {
 
 pub(super) fn lone(row: &SlabSnapshotRow, host: Option<Host>, now: Instant) -> Div {
     let kit = crate::kit::kit();
-    let ring = row.toast.effective_timeout().map(|timeout| Ring {
-        remaining: row.deadline.map_or(1.0, |deadline| {
-            deadline.saturating_duration_since(now).as_secs_f32() / timeout.as_secs_f32()
-        }),
-        ink: row.toast.tone.color(kit),
-    });
-    kit.window().bg(rgb(row_ground(row, kit))).child(content(
-        row,
-        CardParts {
-            scale: 1.0,
-            content: 1.0,
-            interactive: host.is_some(),
-            ring,
-            age: age_label(now.saturating_duration_since(row.created)),
-        },
+    ruled(
+        kit.window().bg(rgb(row_ground(row, kit))).child(content(
+            row,
+            CardParts {
+                scale: 1.0,
+                content: 1.0,
+                interactive: host.is_some(),
+                age: age_label(now.saturating_duration_since(row.created)),
+            },
+            kit,
+            host,
+        )),
+        counting(row, false, now).unwrap_or(1.0),
+        1.0,
+        1.0,
         kit,
-        host,
-    ))
+    )
+}
+
+pub(super) fn message(row: &SlabSnapshotRow, scale: f32, content: f32, left: f32, kit: Kit) -> Div {
+    let ground = kit.grounds.pane;
+    let line = |style: TextStyle, ink: u32, lines: usize, text: SharedString| {
+        div()
+            .w_full()
+            .text_scaled(style, scale)
+            .text_color(rgb(ink))
+            .clamps(lines)
+            .child(text)
+    };
+    let mut words = div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(qol_theme::SPACE_STACK * scale))
+        .px(px(qol_theme::toast::MESSAGE_TEXT_INSET * scale))
+        .text_center()
+        .child(line(
+            TextStyle::ListName,
+            ground.ink,
+            1,
+            row.toast.title.clone(),
+        ));
+    if !row.toast.message.is_empty() {
+        words = words.child(line(
+            TextStyle::Detail,
+            ground.soft,
+            2,
+            row.toast.message.clone(),
+        ));
+    }
+    let below_rule = qol_theme::toast::RULE - qol_theme::LINE;
+    let mut body = div()
+        .size_full()
+        .relative()
+        .pt(px(below_rule * scale))
+        .opacity(content)
+        .child(words);
+    if let Some(mark) = row.toast.mark {
+        let inset = qol_theme::toast::MESSAGE_MARK_INSET;
+        body = body.child(
+            div()
+                .absolute()
+                .left(px(inset * scale))
+                .top(px((inset + below_rule) * scale))
+                .child(crate::icon::mark(
+                    mark,
+                    qol_theme::toast::MESSAGE_MARK * scale,
+                    ground.faint,
+                )),
+        );
+    }
+    ruled(kit.window().child(body), left, content, scale, kit)
 }
 
 pub(super) struct CardParts {
     pub scale: f32,
     pub content: f32,
     pub interactive: bool,
-    pub ring: Option<Ring>,
     pub age: String,
 }
 
@@ -103,8 +180,9 @@ pub(super) fn content(
         .child(dismiss(row, &parts, kit, host.clone()));
     if let Some(host) = host.filter(|_| parts.interactive) {
         let id = row.id;
-        card = card.on_mouse_down(MouseButton::Middle, move |_, _, cx| {
-            host.act(id, CardAct::Close, cx)
+        card = card.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+            host.act(id, CardAct::Close, cx);
+            window.refresh();
         });
     }
     card
@@ -128,6 +206,7 @@ fn lead(
         .h_full()
         .w(px(qol_theme::toast::PREVIEW * scale))
         .mr(px(qol_theme::SPACE_CELL * scale))
+        .relative()
         .flex()
         .overflow_hidden()
         .child(preview.render(row.toast.tone.color(kit)));
@@ -135,11 +214,12 @@ fn lead(
         return slot.into_any_element();
     };
     let id = row.id;
-    crate::kit::kit()
-        .pointable(
-            slot.id(("toast-preview", id.0)).cursor_pointer(),
-            row_lift(row, kit),
-        )
+    slot.id(("toast-preview", id.0))
+        .child(kit.pointable(
+            div().absolute().top_0().left_0().size_full(),
+            hover_veil(kit),
+        ))
+        .cursor_pointer()
         .on_click(move |_, _, cx| host.act(id, CardAct::Preview, cx))
         .into_any_element()
 }
@@ -150,11 +230,10 @@ fn text_zone(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Ho
         return column.into_any_element();
     };
     let id = row.id;
-    crate::kit::kit()
-        .pointable(
-            column.id(("toast-open", id.0)).cursor_pointer(),
-            row_lift(row, kit),
-        )
+    column
+        .id(("toast-open", id.0))
+        .group(OPEN_GROUP)
+        .cursor_pointer()
         .on_click(move |_, _, cx| host.act(id, CardAct::Open, cx))
         .into_any_element()
 }
@@ -180,7 +259,7 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
                 .pr(px(qol_theme::SPACE_INSET * scale))
                 .child(SharedString::from(cased(TextStyle::Label, &parts.age))),
         );
-    let mut column = div()
+    let column = div()
         .flex_grow()
         .min_w_0()
         .overflow_hidden()
@@ -200,29 +279,42 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
     if row.toast.message.is_empty() {
         return column;
     }
-    if row.toast.message_is_path {
-        let (head, tail) = crate::kit::path_label(&row.toast.message);
-        column = column.child(path_line(head, tail, scale, kit));
-    } else {
-        column = column.child(
+    let opens = parts.interactive && row.toast.activation.is_some();
+    let detail = |ink: u32| {
+        if row.toast.message_is_path {
+            let (head, tail) = crate::kit::path_label(&row.toast.message);
+            path_line(head, tail, scale, ink)
+        } else {
             div()
                 .w_full()
                 .text_scaled(TextStyle::Detail, scale)
                 .clamps(2)
-                .text_color(rgb(ground.soft))
-                .child(row.toast.message.clone()),
-        );
+                .text_color(rgb(ink))
+                .child(row.toast.message.clone())
+        }
+    };
+    if !opens {
+        return column.child(detail(ground.soft));
     }
-    column
+    column.child(
+        div()
+            .w_full()
+            .relative()
+            .child(detail(ground.soft))
+            .child(kit.revealed_by(
+                detail(kit.palette.accent).absolute().top_0().left_0(),
+                OPEN_GROUP,
+            )),
+    )
 }
 
-fn path_line(head: String, tail: String, scale: f32, kit: Kit) -> Div {
+fn path_line(head: String, tail: String, scale: f32, ink: u32) -> Div {
     let piece = |text: String| {
         div()
             .min_w_0()
             .flex_grow()
             .text_scaled(TextStyle::Code, scale)
-            .text_color(rgb(kit.grounds.pane.soft))
+            .text_color(rgb(ink))
             .child(SharedString::from(text))
     };
     let mut line = div().w_full().flex().flex_row().overflow_hidden();
@@ -235,7 +327,7 @@ fn path_line(head: String, tail: String, scale: f32, kit: Kit) -> Div {
 fn dismiss(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Host>) -> AnyElement {
     let scale = parts.scale;
     let side = qol_theme::toast::CLOSE * scale;
-    let mut control = div()
+    let control = div()
         .id(("toast-dismiss", row.id.0))
         .flex_none()
         .w(px(side))
@@ -249,60 +341,14 @@ fn dismiss(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Host
             qol_theme::TEXT_MICRO * scale,
             kit.grounds.pane.soft,
         ));
-    if let Some(ring) = parts.ring {
-        control = control.child(ring_view(ring, scale, kit));
-    }
     let Some(host) = host.filter(|_| parts.interactive) else {
         return control.into_any_element();
     };
     let id = row.id;
-    crate::kit::kit()
-        .pointable(control.cursor_pointer(), row_lift(row, kit))
+    kit.pointable(control, hover_veil(kit))
+        .cursor_pointer()
         .on_click(move |_, _, cx| host.act(id, CardAct::Close, cx))
         .into_any_element()
-}
-
-fn ring_view(ring: Ring, scale: f32, kit: Kit) -> Div {
-    let diameter = qol_theme::toast::RING * scale;
-    let stroke = qol_theme::LINE * scale;
-    let well = kit.grounds.pane.well.packed();
-    div().absolute().size(px(diameter)).child(
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let centre = bounds.center();
-                let radius = px((diameter - stroke) / 2.0);
-                let at = |turn: f32| {
-                    let angle = turn * std::f32::consts::TAU;
-                    point(
-                        centre.x + radius * angle.sin(),
-                        centre.y - radius * angle.cos(),
-                    )
-                };
-                let arc = |from: f32, to: f32| {
-                    let mut path = PathBuilder::stroke(px(stroke));
-                    path.move_to(at(from));
-                    let mut turn = from;
-                    while turn < to {
-                        let next = (turn + 0.5).min(to);
-                        path.arc_to(point(radius, radius), px(0.0), false, true, at(next));
-                        turn = next;
-                    }
-                    path.build().ok()
-                };
-                if let Some(path) = arc(0.0, 1.0) {
-                    window.paint_path(path, rgba(well));
-                }
-                let remaining = ring.remaining.clamp(0.0, 1.0);
-                if remaining > 0.0 {
-                    if let Some(path) = arc(0.0, remaining) {
-                        window.paint_path(path, rgb(ring.ink));
-                    }
-                }
-            },
-        )
-        .size_full(),
-    )
 }
 
 pub(super) fn strip(

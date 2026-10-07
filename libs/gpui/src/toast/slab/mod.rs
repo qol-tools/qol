@@ -1,12 +1,14 @@
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui::*;
 
 use super::card::{CardAct, CardHost};
+use super::follow::{self, Follow, Follower};
+use super::rows::{self, Rows, Timed};
 use super::{pile, Activation, RowId, SlabSnapshotRow, Toast, ToastTone, WINDOW_ROOM};
-use crate::monitor::{ActiveMonitor, MonitorTracker};
+use crate::monitor::MonitorTracker;
 use crate::placement::MonitorPlacement;
 use crate::popup_window::{present_topmost, restore_composite};
 use crate::surface::{OpenedSurface, Surface, SurfaceKind};
@@ -16,33 +18,13 @@ mod view;
 use view::SlabToastView;
 
 const MAX_ROWS_PER_GROUP: usize = 3;
-const HOVER_HOLD_RECHECK: Duration = Duration::from_millis(400);
-
-struct ToastRow {
-    id: RowId,
-    toast: Rc<Toast>,
-    generation: u64,
-    created: Instant,
-    deadline: Option<Instant>,
-}
 
 struct HostState {
     surface: Option<OpenedSurface<SlabToastView>>,
-    rows: Vec<ToastRow>,
-    next_id: u64,
-    next_generation: u64,
+    rows: Rows,
     expanded: bool,
     hovering: bool,
-    moving: bool,
-    monitor: Option<Bounds<Pixels>>,
-    watching: bool,
-}
-
-impl HostState {
-    fn next_generation(&mut self) -> u64 {
-        self.next_generation = self.next_generation.wrapping_add(1);
-        self.next_generation
-    }
+    follow: Follow,
 }
 
 #[derive(Clone)]
@@ -63,62 +45,21 @@ impl SlabPresenter {
             tracker,
             state: Rc::new(RefCell::new(HostState {
                 surface: None,
-                rows: Vec::new(),
-                next_id: 0,
-                next_generation: 0,
+                rows: Rows::default(),
                 expanded: false,
                 hovering: false,
-                moving: false,
-                monitor: None,
-                watching: false,
+                follow: Follow::default(),
             })),
             title: title.into(),
         }
     }
 
     pub(super) fn show(&self, toast: Toast, cx: &mut App) -> anyhow::Result<()> {
-        let timeout = toast.effective_timeout();
-        let (outcome, row_id, generation) = {
+        let (outcome, timer) = {
             let mut state = self.state.borrow_mut();
             let placement = toast.layout.placement();
             let group = toast.group.clone();
-            let key = toast.key.clone();
-
-            let target = key.as_ref().and_then(|key| {
-                state
-                    .rows
-                    .iter()
-                    .position(|row| row.toast.group == group && row.toast.key.as_ref() == Some(key))
-            });
-
-            let row_id;
-            let generation;
-            let created = Instant::now();
-            let deadline = timeout.map(|timeout| created + timeout);
-            let toast = Rc::new(toast);
-            match target {
-                Some(index) => {
-                    generation = state.next_generation();
-                    let row = &mut state.rows[index];
-                    row.generation = generation;
-                    row.toast = toast;
-                    row.created = created;
-                    row.deadline = deadline;
-                    row_id = row.id;
-                }
-                None => {
-                    row_id = RowId(state.next_id);
-                    state.next_id += 1;
-                    generation = state.next_generation();
-                    state.rows.push(ToastRow {
-                        id: row_id,
-                        generation,
-                        toast,
-                        created,
-                        deadline,
-                    });
-                }
-            }
+            state.rows.put(toast, rows::same_key);
 
             let positions: Vec<usize> = state
                 .rows
@@ -132,15 +73,15 @@ impl SlabPresenter {
                     .iter()
                     .map(|&index| state.rows[index].id)
                     .collect();
-                state.rows.retain(|row| !stale_ids.contains(&row.id));
+                state.rows.remove(&stale_ids);
             }
 
-            let outcome = if state.surface.is_none() && !state.moving {
+            let outcome = if state.surface.is_none() && !state.follow.moving() {
                 PushOutcome::Open { placement }
             } else {
                 PushOutcome::Notify
             };
-            (outcome, row_id, generation)
+            (outcome, state.rows.time_front(Instant::now()))
         };
 
         match outcome {
@@ -155,9 +96,7 @@ impl SlabPresenter {
             PushOutcome::Notify => self.notify_view(cx),
         }
 
-        if let Some(timeout) = timeout {
-            arm_timer(self.clone(), row_id, generation, timeout, cx);
-        }
+        rows::arm(self, timer, cx);
         Ok(())
     }
 
@@ -167,6 +106,13 @@ impl SlabPresenter {
             state.rows.clear();
         }
         self.close(cx);
+    }
+
+    pub(super) fn withdraw(&self, toast: &Toast, cx: &mut App) {
+        let ids = self.state.borrow().rows.keyed_like(toast);
+        if !ids.is_empty() {
+            self.drop_rows(&ids, cx);
+        }
     }
 
     fn clear_all(&self, cx: &mut App) {
@@ -202,31 +148,14 @@ impl SlabPresenter {
     }
 
     fn restart_timers(&self, cx: &mut App) {
-        let now = Instant::now();
-        let armed: Vec<(RowId, u64, Duration)> = {
-            let mut state = self.state.borrow_mut();
-            let mut armed = Vec::new();
-            for index in 0..state.rows.len() {
-                let Some(timeout) = state.rows[index].toast.effective_timeout() else {
-                    continue;
-                };
-                let generation = state.next_generation();
-                let row = &mut state.rows[index];
-                row.generation = generation;
-                row.deadline = Some(now + timeout);
-                armed.push((row.id, generation, timeout));
-            }
-            armed
-        };
-        for (id, generation, timeout) in armed {
-            arm_timer(self.clone(), id, generation, timeout, cx);
-        }
+        let timer = self.state.borrow_mut().rows.restart_front(Instant::now());
+        rows::arm(self, timer, cx);
     }
 
     fn mark_row_failed(&self, id: RowId, error: anyhow::Error, cx: &mut App) {
-        {
+        let timer = {
             let mut state = self.state.borrow_mut();
-            let generation = state.next_generation();
+            let generation = state.rows.next_generation();
             if let Some(row) = state.rows.iter_mut().find(|row| row.id == id) {
                 row.generation = generation;
                 let toast = Rc::make_mut(&mut row.toast);
@@ -235,10 +164,12 @@ impl SlabPresenter {
                 toast.message = previous_title;
                 toast.title = error.to_string().into();
                 toast.timeout = None;
-                toast.timeout_explicit = true;
+                toast.timeout_explicit = false;
                 row.deadline = None;
             }
-        }
+            state.rows.time_front(Instant::now())
+        };
+        rows::arm(self, timer, cx);
         self.notify_view(cx);
     }
 
@@ -260,58 +191,25 @@ impl SlabPresenter {
         }
     }
 
-    fn on_timer(&self, id: RowId, generation: u64, cx: &mut App) {
-        let (owned, held) = {
-            let state = self.state.borrow();
-            let owned = state
-                .rows
-                .iter()
-                .any(|row| row.id == id && row.generation == generation);
-            (owned, state.hovering || state.expanded)
-        };
-        if !owned {
-            return;
-        }
-        if held {
-            arm_timer(self.clone(), id, generation, HOVER_HOLD_RECHECK, cx);
-        } else {
-            self.remove(id, cx);
-        }
-    }
-
     fn remove(&self, id: RowId, cx: &mut App) {
         self.drop_rows(&[id], cx);
     }
 
     fn drop_rows(&self, ids: &[RowId], cx: &mut App) {
-        let remains_empty = {
+        let (remains_empty, timer) = {
             let mut state = self.state.borrow_mut();
-            state.rows.retain(|row| !ids.contains(&row.id));
+            state.rows.remove(ids);
             if state.rows.len() < 2 {
                 state.expanded = false;
             }
-            state.rows.is_empty()
+            (state.rows.is_empty(), state.rows.time_front(Instant::now()))
         };
+        rows::arm(self, timer, cx);
         if remains_empty && self.state.borrow().surface.is_none() {
             self.close(cx);
         } else {
             self.notify_view(cx);
         }
-    }
-
-    fn watch_monitor(&self, cx: &mut App) {
-        if std::mem::replace(&mut self.state.borrow_mut().watching, true) {
-            return;
-        }
-        let presenter = self.clone();
-        crate::event_router::spawn_runtime_event_router(
-            cx,
-            vec![crate::protocol::RuntimeEventKind::ActiveMonitorChanged],
-            move |cx, event| {
-                let monitor = ActiveMonitor::from_event(event).map(|monitor| monitor.bounds());
-                presenter.follow(monitor, cx);
-            },
-        );
     }
 
     fn open_surface(
@@ -321,11 +219,7 @@ impl SlabPresenter {
         arriving: bool,
         cx: &mut App,
     ) -> Result<()> {
-        self.state.borrow_mut().moving = false;
-        let monitor = self
-            .tracker
-            .snapshot_monitor()
-            .or_else(|| self.tracker.snapshot_cursor().map(|(monitor, _)| monitor));
+        let monitor = self.state.borrow_mut().follow.land(&self.tracker);
         let host = self.clone();
         let surface = Surface::new(SurfaceKind::Toast)
             .title(&*self.title)
@@ -334,55 +228,13 @@ impl SlabPresenter {
             .open_on(monitor.as_ref(), cx, move |dismisser, _window, _cx| {
                 SlabToastView::new(host, dismisser, scroll, arriving)
             })?;
-        let replaced = {
-            let mut state = self.state.borrow_mut();
-            state.monitor = monitor.map(|monitor| monitor.bounds());
-            state.surface.replace(surface)
-        };
+        let replaced = self.state.borrow_mut().surface.replace(surface);
         if let Some(replaced) = replaced {
             replaced.dismisser.dismiss(cx);
         }
         present_topmost(&self.title);
-        self.watch_monitor(cx);
+        follow::watch(self, cx);
         Ok(())
-    }
-
-    fn follow(&self, monitor: Option<Bounds<Pixels>>, cx: &mut App) {
-        let (placement, handle) = {
-            let state = self.state.borrow();
-            let Some(surface) = state.surface.as_ref() else {
-                return;
-            };
-            if monitor.is_none() || state.monitor == monitor {
-                return;
-            }
-            (surface.placement(), surface.handle)
-        };
-        let scroll = handle
-            .update(cx, |root, _, cx| {
-                root.inner.update(cx, |view, _| view.moving_away())
-            })
-            .unwrap_or(0.0);
-        let surface = {
-            let mut state = self.state.borrow_mut();
-            state.moving = true;
-            state.hovering = false;
-            state.surface.take()
-        };
-        if let Some(surface) = surface {
-            surface.dismisser.dismiss(cx);
-        }
-        restore_composite(&self.title);
-        let presenter = self.clone();
-        cx.defer(move |cx| {
-            if presenter.state.borrow().rows.is_empty() {
-                presenter.state.borrow_mut().moving = false;
-                return;
-            }
-            if let Err(error) = presenter.open_surface(placement, scroll, true, cx) {
-                log::warn!("[toast] the stack could not move to the active monitor: {error:#}");
-            }
-        });
     }
 
     fn close_if_empty(&self, cx: &mut App) {
@@ -413,17 +265,61 @@ impl SlabPresenter {
 
     fn slab_snapshot(&self) -> (Vec<SlabSnapshotRow>, bool) {
         let state = self.state.borrow();
-        let rows = state
-            .rows
-            .iter()
-            .map(|row| SlabSnapshotRow {
-                id: row.id,
-                toast: row.toast.clone(),
-                created: row.created,
-                deadline: row.deadline,
+        (state.rows.snapshot(), state.expanded)
+    }
+}
+
+impl Timed for SlabPresenter {
+    fn rows(&self) -> RefMut<'_, Rows> {
+        RefMut::map(self.state.borrow_mut(), |state| &mut state.rows)
+    }
+
+    fn held(&self) -> bool {
+        let state = self.state.borrow();
+        state.hovering || state.expanded
+    }
+
+    fn expire(&self, id: RowId, cx: &mut App) {
+        self.remove(id, cx);
+    }
+}
+
+impl Follower for SlabPresenter {
+    type Carry = (MonitorPlacement, f32);
+
+    fn follow(&self) -> RefMut<'_, Follow> {
+        RefMut::map(self.state.borrow_mut(), |state| &mut state.follow)
+    }
+
+    fn depart(&self, cx: &mut App) -> Option<Self::Carry> {
+        let (placement, handle) = {
+            let state = self.state.borrow();
+            let surface = state.surface.as_ref()?;
+            (surface.placement(), surface.handle)
+        };
+        let scroll = handle
+            .update(cx, |root, _, cx| {
+                root.inner.update(cx, |view, _| view.moving_away())
             })
-            .collect();
-        (rows, state.expanded)
+            .unwrap_or(0.0);
+        let surface = {
+            let mut state = self.state.borrow_mut();
+            state.hovering = false;
+            state.surface.take()
+        };
+        if let Some(surface) = surface {
+            surface.dismisser.dismiss(cx);
+        }
+        restore_composite(&self.title);
+        Some((placement, scroll))
+    }
+
+    fn empty(&self) -> bool {
+        self.state.borrow().rows.is_empty()
+    }
+
+    fn arrive(&self, (placement, scroll): Self::Carry, cx: &mut App) -> anyhow::Result<()> {
+        self.open_surface(placement, scroll, true, cx)
     }
 }
 
@@ -435,18 +331,4 @@ impl CardHost for SlabPresenter {
             CardAct::Close => self.remove(id, cx),
         }
     }
-}
-
-fn arm_timer(
-    presenter: SlabPresenter,
-    id: RowId,
-    generation: u64,
-    timeout: Duration,
-    cx: &mut App,
-) {
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        cx.background_executor().timer(timeout).await;
-        let _ = cx.update(|cx| presenter.on_timer(id, generation, cx));
-    })
-    .detach();
 }

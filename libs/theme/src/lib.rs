@@ -12,8 +12,8 @@ pub use depth::{
 };
 pub use marks::Mark;
 pub use motion::{
-    Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_LONG, STAY_UNTIL_CLOSED,
-    WAIT_BEFORE_BUSY,
+    Curve, Motion, MOTION_LOOP, SETTLE_INPUT, STAY_BRIEF, STAY_ERROR, STAY_LONG, STAY_MESSAGE,
+    STAY_MESSAGE_MOST, WAIT_BEFORE_BUSY,
 };
 pub use quiet::{set_window_quiet, window_is_quiet};
 pub use text::{Face, TextSpec, TextStyle};

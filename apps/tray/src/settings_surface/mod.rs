@@ -96,6 +96,7 @@ pub fn plugins_changed() -> bool {
 pub struct ToastSource<'a> {
     pub group: &'a str,
     pub name: &'a str,
+    pub mark: Option<&'a str>,
 }
 
 pub fn show_toast(

@@ -19,6 +19,7 @@ pub const SETTINGS_SURFACE_DISPLAY_NAME: &str = "QoL Settings";
 pub const TRAY_DISPLAY_NAME: &str = "QoL Tray";
 pub const TRAY_ICON_NAME: &str = "qol-tray";
 pub const HTTP_AUTH_TOKEN_FILE: &str = ".http-token";
+pub const NOTIFICATIONS_SETTINGS_FILE: &str = "notifications.json";
 pub const CODESIGN_IDENTITY_FILE: &str = "codesign-identity";
 pub const CODESIGN_IDENTITY_ENV: &str = "QOL_CODESIGN_IDENTITY";
 pub const HOST_WORKSPACE_BUILD_FILE: &str = "host-workspace-build";

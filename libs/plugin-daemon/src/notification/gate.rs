@@ -11,7 +11,8 @@ pub enum NativeHandler {
 }
 
 pub fn stored_handler() -> NativeHandler {
-    let Some(path) = config_dir().map(|dir| dir.join("notifications.json")) else {
+    let Some(path) = config_dir().map(|dir| dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE))
+    else {
         return NativeHandler::Qol;
     };
     let Ok(contents) = std::fs::read_to_string(path) else {
