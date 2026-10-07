@@ -45,11 +45,23 @@ pub struct Blob {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedIndex {
+    pub signature: String,
+    pub index: String,
+}
+
 pub fn public_key_line(minisign_pub_file: &str) -> &str {
     minisign_pub_file.lines().last().unwrap_or_default().trim()
 }
 
-pub fn verify(body: &[u8], signature: &str, public_key: &str) -> Result<IndexDocument> {
+pub fn verify_signed(signed: &[u8], public_key: &str) -> Result<IndexDocument> {
+    let signed: SignedIndex =
+        serde_json::from_slice(signed).context("the signed plugin index is unreadable")?;
+    verify(signed.index.as_bytes(), &signed.signature, public_key)
+}
+
+fn verify(body: &[u8], signature: &str, public_key: &str) -> Result<IndexDocument> {
     let key = minisign_verify::PublicKey::from_base64(public_key)
         .context("the plugin index public key is invalid")?;
     let signature = minisign_verify::Signature::decode(signature)
@@ -136,6 +148,38 @@ mod tests {
         let body = serde_json::to_vec(&document).unwrap();
         let error = verify(&body, &signer.sign(&body), &signer.public_key()).unwrap_err();
         assert!(error.to_string().contains("schema 2"), "{error:#}");
+    }
+
+    #[test]
+    fn verify_signed_reads_the_index_and_signature_from_one_file() {
+        let signer = TestSigner::generate();
+        let body = serde_json::to_vec(&index(3)).unwrap();
+        let key = signer.public_key();
+        let from_jq = format!(
+            "{{\n  \"signature\": {},\n  \"index\": {}\n}}\n",
+            serde_json::to_string(&signer.sign(&body)).unwrap(),
+            serde_json::to_string(std::str::from_utf8(&body).unwrap()).unwrap(),
+        );
+        let mut swapped: SignedIndex = serde_json::from_slice(&signer.sign_index(&body)).unwrap();
+        swapped.index = serde_json::to_string(&index(4)).unwrap();
+
+        assert_eq!(
+            verify_signed(&signer.sign_index(&body), &key).unwrap(),
+            index(3)
+        );
+        assert_eq!(verify_signed(from_jq.as_bytes(), &key).unwrap(), index(3));
+        let refused: &[(&str, Vec<u8>, &str)] = &[
+            (
+                "index swapped under the signature",
+                serde_json::to_vec(&swapped).unwrap(),
+                "does not match",
+            ),
+            ("bare index", body.clone(), "unreadable"),
+        ];
+        for (case, bytes, cause) in refused {
+            let error = verify_signed(bytes, &key).unwrap_err();
+            assert!(format!("{error:#}").contains(cause), "{case}: {error:#}");
+        }
     }
 
     #[test]

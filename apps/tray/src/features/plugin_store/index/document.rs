@@ -1,6 +1,6 @@
 use anyhow::Result;
 pub(super) use qol_plugin_index::{
-    verify, Blob, IndexDocument, IndexedPlugin, IndexedVersion, RegistryLocation,
+    verify_signed, Blob, IndexDocument, IndexedPlugin, IndexedVersion, RegistryLocation,
 };
 
 #[derive(Debug, Clone)]
@@ -89,7 +89,7 @@ mod tests {
     fn release_picks_latest_or_the_requested_version() {
         let signer = Signer::generate();
         let body = two_version_index(1);
-        let document = verify(&body, &signer.sign(&body), &signer.public_key()).unwrap();
+        let document = verify_signed(&signer.sign_index(&body), &signer.public_key()).unwrap();
         let cases: &[(Option<&str>, &str, &str)] = &[
             (None, "1.2.0", "sha256:t2"),
             (Some("1.1.0"), "1.1.0", "sha256:t1"),

@@ -22,7 +22,6 @@ const TOKEN: &str = "anonymous-pull";
 #[derive(Default)]
 struct Published {
     index: Vec<u8>,
-    signature: String,
     blobs: HashMap<String, Vec<u8>>,
     tokens_issued: usize,
     indexes_served: usize,
@@ -47,8 +46,7 @@ impl Server {
             published: Arc::default(),
         };
         let app = Router::new()
-            .route("/plugins/index.json", get(serve_index))
-            .route("/plugins/index.json.minisig", get(serve_signature))
+            .route("/plugins/index.signed.json", get(serve_index))
             .route("/token", get(serve_token))
             .route("/v2/qol-tools/plugins/blobs/{digest}", get(serve_blob))
             .with_state(server.clone());
@@ -58,7 +56,7 @@ impl Server {
 
     fn location(&self, signer: &Signer) -> IndexLocation {
         IndexLocation {
-            url: format!("{}/plugins/index.json", self.base),
+            url: format!("{}/plugins/index.signed.json", self.base),
             public_key: signer.public_key(),
         }
     }
@@ -92,8 +90,7 @@ impl Server {
         let latest = releases.last().unwrap().0;
         let plugins = json!({ PLUGIN_ID: { "latest": latest, "versions": versions } });
         let body = serde_json::to_vec(&document(serial, &self.base, plugins)).unwrap();
-        published.signature = signer.sign(&body);
-        published.index = body;
+        published.index = signer.sign_index(&body);
     }
 
     fn replace_blob(&self, original: &[u8], served: &[u8]) {
@@ -113,10 +110,6 @@ async fn serve_index(State(server): State<Server>) -> Vec<u8> {
     let mut published = server.published.lock().unwrap();
     published.indexes_served += 1;
     published.index.clone()
-}
-
-async fn serve_signature(State(server): State<Server>) -> String {
-    server.published.lock().unwrap().signature.clone()
 }
 
 async fn serve_token(State(server): State<Server>) -> Json<Value> {
@@ -205,8 +198,9 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
     assert_eq!(server.published.lock().unwrap().indexes_served, 3);
 
     server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
-    let replayed = installer.update(&source, PLUGIN_ID).await.unwrap_err();
-    assert!(format!("{replayed:#}").contains("older"), "{replayed:#}");
+    installer.update(&source, PLUGIN_ID).await.unwrap();
+    assert_eq!(installed_version(&plugins_dir), "1.1.0");
+    assert_eq!(installed_binary(&plugins_dir), b"binary two");
 }
 
 #[tokio::test]
@@ -251,7 +245,7 @@ async fn an_index_or_blob_that_cannot_be_reached_names_what_failed() {
     let signer = Signer::generate();
     server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
     let missing_index = IndexLocation {
-        url: format!("{}/missing/index.json", server.base),
+        url: format!("{}/missing/index.signed.json", server.base),
         public_key: signer.public_key(),
     };
 
