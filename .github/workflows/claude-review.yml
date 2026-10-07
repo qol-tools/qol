@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,6 +101,22 @@ jobs:
           echo "path=$node" >> "$GITHUB_OUTPUT"
           echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
 
+      - name: Find the last review
+        if: github.event_name == 'pull_request'
+        id: last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | {body}' | node "$NODE" previous --out "$OUT")"
+          if [ -n "$sha" ] && git fetch -q --no-tags --depth=1 origin "$sha"; then
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Review
         if: github.event_name == 'pull_request'
         timeout-minutes: 50
@@ -111,7 +128,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT" --title "$PR_TITLE" --body "$PR_BODY"
+          SINCE: ${{ steps.last.outputs.sha }}
+        run: >-
+          node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT"
+          --title "$PR_TITLE" --body "$PR_BODY" --since "$SINCE" --previous "$OUT/previous.md"
 
       - name: Fix
         id: fix
