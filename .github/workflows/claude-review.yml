@@ -188,6 +188,7 @@ jobs:
         env:
           DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          NODE: ${{ steps.node.outputs.path }}
           OUT: ${{ steps.node.outputs.out }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
@@ -201,6 +202,7 @@ jobs:
               exit 1
             fi
           done
+          node "$NODE" check-patch --patch "$OUT/fix/fix.patch" --base HEAD^1 --head HEAD
           git -c advice.detachedHead=false checkout -q HEAD^2
           git apply --index "$OUT/fix/fix.patch"
           git -c core.hooksPath=/dev/null -c user.name="github-actions[bot]" \
