@@ -40,4 +40,12 @@ impl TestSigner {
             STANDARD.encode(global.as_ref()),
         )
     }
+
+    pub fn sign_index(&self, body: &[u8]) -> Vec<u8> {
+        let signed = crate::SignedIndex {
+            signature: self.sign(body),
+            index: String::from_utf8(body.to_vec()).unwrap_or_default(),
+        };
+        serde_json::to_vec(&signed).unwrap_or_default()
+    }
 }

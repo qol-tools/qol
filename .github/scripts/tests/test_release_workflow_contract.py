@@ -329,6 +329,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("< /dev/null", signing)
         verify = named_step(sign, "Verify with the key the tray ships", "      ")
         self.assertIn('minisign -V -p "${PUBLIC_KEY}" -m site/plugins/index.json', verify)
+        bundle = named_step(sign, "Bundle the signature with the index", "      ")
+        self.assertIn("> site/plugins/index.signed.json", bundle)
+        self.assertIn("jq -j .index site/plugins/index.signed.json | cmp - site/plugins/index.json", bundle)
+        self.assertIn(
+            "jq -j .signature site/plugins/index.signed.json | cmp - site/plugins/index.json.minisig",
+            bundle,
+        )
+        self.assertRegex(index, r"INDEX_URL: [^\n]+/plugins/index\.signed\.json\n")
 
         secret_steps = [step for step in workflow.split("\n      - ") if "secrets." in step]
         self.assertEqual(len(secret_steps), 1)
@@ -338,6 +346,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "actions/download-artifact",
             "- name: Sign index",
             "- name: Verify with the key the tray ships",
+            "- name: Bundle the signature with the index",
             "actions/upload-pages-artifact",
         ]
         positions = [sign.index(marker) for marker in order]
