@@ -11,27 +11,19 @@ permissions:
 
 env:
   CLAUDE_CODE_VERSION: 2.1.292
-  CLAUDE_MODEL: claude-sonnet-5-5
   MARKETPLACES: |-
     https://github.com/qol-tools/qol-skills.git
     https://github.com/KMRH47/kmrh47-skills.git
-  PLUGINS: |-
-    qol-code-review@qol-skills
-    qol-project@qol-skills
-    qol-langs@qol-skills
-    engineering-discipline@kmrh47-skills
-    writing@kmrh47-skills
+  REVIEW_PLUGIN: qol-code-review@qol-skills
 
 jobs:
   review:
     name: Review with qol-code-review
-    # Push to main only refreshes the plugin seed cache, which every pull request can restore.
     if: >-
       github.event_name == 'push' ||
       (!github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
        !endsWith(github.actor, '[bot]'))
-    # Job-level, so a run whose job is skipped (draft, bot) never cancels a running review.
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
@@ -59,7 +51,7 @@ jobs:
             test -n "$head"
             heads="$heads $head"
           done <<< "$MARKETPLACES"
-          hash="$(printf '%s %s %s' "$heads" "$CLAUDE_CODE_VERSION" "$PLUGINS" | sha256sum | cut -c1-8)"
+          hash="$(printf '%s %s' "$heads" "$CLAUDE_CODE_VERSION" | sha256sum | cut -c1-8)"
           echo "key=claude-seed-$hash" >> "$GITHUB_OUTPUT"
           echo "dir=$HOME/.claude-seed" >> "$GITHUB_OUTPUT"
 
@@ -80,11 +72,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.KMRH47_SKILLS_TOKEN }}
           CLAUDE_CODE_PLUGIN_CACHE_DIR: ${{ steps.seed.outputs.dir }}
+          SEED: ${{ steps.seed.outputs.dir }}
         run: |
           set -euo pipefail
           export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/seed-config"
           while read -r url; do claude plugin marketplace add "$url"; done <<< "$MARKETPLACES"
-          while read -r plugin; do claude plugin install "$plugin"; done <<< "$PLUGINS"
+          claude plugin install "$REVIEW_PLUGIN"
+          node "$SEED"/cache/*/*/*/skills/*/scripts/ci-pr.cjs plugins | grep -vxF "$REVIEW_PLUGIN" |
+            while read -r plugin; do claude plugin install "$plugin"; done
 
       - name: Save plugin seed
         if: steps.cache.outputs.cache-hit != 'true'
@@ -93,127 +88,58 @@ jobs:
           path: ~/.claude-seed
           key: ${{ steps.seed.outputs.key }}
 
-      - name: Run qol-code-review
+      - name: Locate the review node
         if: github.event_name == 'pull_request'
-        # Below the job timeout, so a hung review fails instead of cancelling the post step.
+        id: node
+        env:
+          SEED: ${{ steps.seed.outputs.dir }}
+        run: |
+          set -euo pipefail
+          node="$(ls "$SEED"/cache/*/*/*/skills/*/scripts/ci-pr.cjs)"
+          test "$(echo "$node" | wc -l)" = 1
+          echo "path=$node" >> "$GITHUB_OUTPUT"
+          echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
+
+      - name: Review
+        if: github.event_name == 'pull_request'
         timeout-minutes: 50
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
-          CLAUDE_CODE_SYNC_PLUGIN_INSTALL: "1"
-          CLAUDE_CODE_SUBAGENT_MODEL: ${{ env.CLAUDE_MODEL }}
-          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1"
-          DISABLE_AUTOUPDATER: "1"
-          SEED: ${{ steps.seed.outputs.dir }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          set -euo pipefail
-          work="$RUNNER_TEMP/claude-review"
-          # Inputs the model reads live in the checkout; .git/info/exclude keeps them out of the fix commit.
-          ctx=".claude-review"
-          mkdir -p "$work" "$ctx"
-          echo "/$ctx/" >> .git/info/exclude
-          skill="$(echo "$SEED"/cache/qol-skills/qol-code-review/*/skills/qol-code-review)"
-          test -f "$skill/SKILL.md"
-          cp -r "$skill/references" "$ctx/references"
-          git diff HEAD^1 HEAD > "$ctx/pr.diff"
-          node "$skill/scripts/shallow-wrappers.cjs" --root . --diff "$ctx/pr.diff" \
-            --json "$ctx/shallow-wrappers.json" > "$ctx/shallow-wrappers.txt"
-          jq -Rn '{enabledPlugins: ([inputs | select(length > 0) | {(.): true}] | add)}' \
-            <<< "$PLUGINS" > "$work/settings.json"
-          {
-            echo "/qol-code-review:qol-code-review Review pull request #$PR_NUMBER of $GITHUB_REPOSITORY."
-            echo
-            echo "- Checkout: $PWD, the merge of the pull request into its base. Git history is not available."
-            echo "- PR diff: $ctx/pr.diff"
-            echo "- Shallow-wrapper detector output, already run on that diff: $ctx/shallow-wrappers.txt and $ctx/shallow-wrappers.json"
-            echo "- Review checklists: $ctx/references/review-checklists.md"
-            echo "- Title: $PR_TITLE"
-            echo "- Description:"
-            # Capped so the prompt stays under the kernel's per-argument limit.
-            printf '%s\n' "${PR_BODY:0:20000}" | sed 's/^/  > /'
-            echo
-            cat .github/claude-review/prompt.md
-          } > "$work/prompt.md"
-          claude -p "$(cat "$work/prompt.md")" \
-            --model "$CLAUDE_MODEL" \
-            --effort medium \
-            --settings "$work/settings.json" \
-            --agents .github/claude-review/agents.json \
-            --dangerously-skip-permissions \
-            --disallowedTools Bash Edit Write NotebookEdit WebFetch WebSearch \
-            --output-format json > "$work/result.json"
-          jq -c '.permission_denials // []' "$work/result.json"
-          # The workflow persists the review, so the model needs no shell.
-          jq -r 'select(.subtype == "success" and .is_error != true) | .result // empty' "$work/result.json" > "$work/reply.md"
-          if [ -s "$work/reply.md" ]; then
-            verdict="$(grep -oE '"verdict": *"[a-z]+"' "$work/reply.md" | tail -n1 | grep -oE '[a-z]+"$' | tr -d '"' || true)"
-            node "$skill/scripts/save-review.cjs" --verdict "${verdict:-unknown}" --slug pr --run-id review \
-              --out-dir "$work/out" --in "$work/reply.md"
-          fi
+        run: node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT" --title "$PR_TITLE" --body "$PR_BODY"
 
-      - name: Fix review findings
+      - name: Fix
         id: fix
         if: github.event_name == 'pull_request'
         timeout-minutes: 40
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
-          CLAUDE_CODE_SYNC_PLUGIN_INSTALL: "1"
-          DISABLE_AUTOUPDATER: "1"
-          SEED: ${{ steps.seed.outputs.dir }}
-          FIX_SUBJECT: "chore(review): address review findings"
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
         run: |
           set -euo pipefail
-          work="$RUNNER_TEMP/claude-review"
-          out="$work/out/review"
-          # One fix round per push: a head that is already the fix commit only gets reviewed.
-          if [ "$(git log -1 --format=%s HEAD^2)" = "$FIX_SUBJECT" ]; then
-            echo "Head is the review fix commit, skipping."
-            exit 0
-          fi
-          verdict="$(jq -r '.status // empty' "$out/report.json" 2>/dev/null || true)"
-          if [ "$verdict" != "conditional" ] && [ "$verdict" != "block" ]; then
-            echo "Verdict is '${verdict:-missing}', nothing to fix."
-            exit 0
-          fi
-          { cat "$out/review.md"; echo; cat .github/claude-review/fix-prompt.md; } > "$work/fix-prompt.md"
-          claude -p "$(cat "$work/fix-prompt.md")" \
-            --model "$CLAUDE_MODEL" \
-            --effort medium \
-            --settings "$work/settings.json" \
-            --allowedTools Read Grep Glob Edit Write \
-            --disallowedTools Bash Agent NotebookEdit WebFetch WebSearch \
-              "Edit(/$GITHUB_WORKSPACE/.git/**)" "Write(/$GITHUB_WORKSPACE/.git/**)" "Read(//proc/**)" \
-            > "$work/fix-reply.md"
-          cat "$work/fix-reply.md"
-          # Staged so files the fix creates are part of the patch.
-          git add -A
-          # The fix may only touch files the pull request already changes, and never workflows.
-          git diff --cached --no-renames --name-only > "$work/fix-files.txt"
-          git diff --no-renames --name-only HEAD^1 HEAD > "$work/pr-files.txt"
-          if grep -q '^\.github/' "$work/fix-files.txt" || grep -vxFf "$work/pr-files.txt" "$work/fix-files.txt" | grep -q .; then
-            echo "::error::the fix touches files outside the pull request diff or under .github, not pushed"
-            exit 1
-          fi
-          git diff --cached --binary > "$work/fix.patch"
-          if [ -s "$work/fix.patch" ]; then
-            echo "patch=$work/fix.patch" >> "$GITHUB_OUTPUT"
+          node "$NODE" fix --base HEAD^1 --head HEAD --out "$OUT"
+          if [ -s "$OUT/fix/fix.patch" ]; then
+            echo "patch=$OUT/fix/fix.patch" >> "$GITHUB_OUTPUT"
+            echo "message=$OUT/fix/message.txt" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Push review fixes
+      - name: Push fix
         id: push
         if: steps.fix.outputs.patch != ''
         env:
           DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          FIX_SUBJECT: "chore(review): address review findings"
           PATCH: ${{ steps.fix.outputs.patch }}
+          MESSAGE: ${{ steps.fix.outputs.message }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
-          # The fix step ran a model in this checkout, so no repo or user git config is trusted here.
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
@@ -224,13 +150,12 @@ jobs:
               exit 1
             fi
           done
-          # The review ran on the merge ref; the fix lands on the pull request head.
           git reset -q --hard
           git switch -q --detach HEAD^2
           git apply --index "$PATCH"
           git -c core.hooksPath=/dev/null -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "$FIX_SUBJECT"
+            commit -q -F "$MESSAGE"
           key="$RUNNER_TEMP/deploy-key"
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           chmod 600 "$key"
@@ -241,86 +166,32 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Post review comment
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.node.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          FIX_OUTCOME: ${{ steps.fix.outcome }}
-          PUSH_OUTCOME: ${{ steps.push.outcome }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          FIX_OUTCOME: ${{ steps.fix.outcome == 'failure' && 'failure' || steps.push.outcome }}
           FIX_SHA: ${{ steps.push.outputs.sha }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
         run: |
           set -euo pipefail
-          work="$RUNNER_TEMP/claude-review"
-          review="$work/out/review/review.md"
-          failed=""
-          if [ ! -s "$review" ]; then
-            echo "::warning::qol-code-review wrote no review.md, posting the final reply instead"
-            review="$work/reply.md"
-            mkdir -p "$work"
-            jq -r 'select(.subtype == "success" and .is_error != true) | .result // empty' \
-              "$work/result.json" > "$review" 2>/dev/null || true
-          fi
-          if [ ! -s "$review" ]; then
-            failed=1
-            printf 'The review of %s failed before it produced a result. See [the run](%s).\n' "$HEAD_SHA" "$RUN_URL" > "$review"
-          fi
-          # The review ends with a machine-readable json fence: render it as tables, keep the prose folded.
-          json="$work/review.json"
-          awk '/^```json *$/ {buf = ""; inside = 1; next} inside && /^```/ {inside = 0; last = buf; next} inside {buf = buf $0 "\n"} END {printf "%s", last}' "$review" > "$json"
-          awk '/^```json *$/ {skip = 1; next} skip && /^```/ {skip = 0; next} !skip' "$review" > "$work/prose.md"
-          repo="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
-          section() {
-            local rows
-            rows="$(jq -r --arg key "$2" --arg blob "$repo/blob/$HEAD_SHA" '
-              .[$key] // [] | .[] |
-              (if .line then ":\(.line)" else "" end) as $at |
-              (if .line then "#L\(.line)" else "" end) as $anchor |
-              "| \(.severity) | \(.id) | [`\(.file | split("/") | last)\($at)`](\($blob)/\(.file)\($anchor)) | \(.required_action | gsub("\n"; " ") | gsub("\\|"; "\\|")) |"' "$json")"
-            if [ -n "$rows" ]; then
-              printf '\n### %s\n\n| Severity | Finding | Where | Action |\n|---|---|---|---|\n%s\n' "$1" "$rows"
-            fi
-          }
-          marker='<!-- qol-code-review -->'
-          body="$work/comment.md"
-          {
-            echo "$marker"
-            if jq -e '.verdict' "$json" > /dev/null 2>&1; then
-              verdict="$(jq -r '.verdict' "$json")"
-              case "$verdict" in pass) icon="✅" ;; conditional) icon="⚠️" ;; block) icon="⛔" ;; *) icon="❔" ;; esac
-              counts="$(jq -r '.counts // {} | to_entries | map(select(.value > 0) | "\(.value) \(.key)") | join(" · ")' "$json")"
-              printf '## %s Code review: %s\n\nHead `%s` · %s · [run](%s)\n' "$icon" "$verdict" "${HEAD_SHA:0:7}" "${counts:-no findings}" "$RUN_URL"
-              section "Must fix" must_fix
-              section "Deferred" deferred_followups
-              fixes=""
-              if [ -n "$FIX_SHA" ]; then
-                fixes="Pushed [\`${FIX_SHA:0:7}\`]($repo/commit/$FIX_SHA)."
-              elif [ "$FIX_OUTCOME" = failure ] || [ "$PUSH_OUTCOME" = failure ]; then
-                fixes="Fixing failed, nothing was pushed. See [the run]($RUN_URL)."
-              elif [ -s "$work/fix-reply.md" ]; then
-                fixes="No changes were needed."
-              fi
-              if [ -n "$fixes" ]; then
-                printf '\n### Fixes\n\n%s\n' "$fixes"
-                if [ -s "$work/fix-reply.md" ]; then
-                  printf '\n<details><summary>Fix notes</summary>\n\n%s\n\n</details>\n' "$(cat "$work/fix-reply.md")"
-                fi
-              fi
-              printf '\n<details><summary>Full review</summary>\n\n%s\n\n</details>\n' "$(cat "$work/prose.md")"
-            else
-              printf 'Reviewed head: %s\n\n' "$HEAD_SHA"
-              cat "$review"
-            fi
-          } > "$body"
+          status=0
+          node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" \
+            --fix-sha "$FIX_SHA" --fix-outcome "$FIX_OUTCOME" > /dev/null || status=$?
+          body="$OUT/comment.md"
           for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
             if [ -n "$secret" ] && grep -qF -- "$secret" "$body"; then
               echo "::error::the review contains a secret and was not posted"
               exit 1
             fi
           done
+          marker="$(node "$NODE" marker)"
           id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n1)"
           if [ -n "$id" ]; then
@@ -328,7 +199,4 @@ jobs:
           else
             gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
           fi
-          if [ -n "$failed" ]; then
-            echo "::error::qol-code-review produced no review"
-            exit 1
-          fi
+          exit "$status"
