@@ -230,13 +230,21 @@ jobs:
             --model "$CLAUDE_MODEL" \
             --effort medium \
             --settings "$work/settings.json" \
-            --dangerously-skip-permissions \
-            --disallowedTools Bash Agent NotebookEdit WebFetch WebSearch "Edit(/$GITHUB_WORKSPACE/.git/**)" \
+            --allowedTools Read Grep Glob Edit Write \
+            --disallowedTools Bash Agent NotebookEdit WebFetch WebSearch \
+              "Edit(/$GITHUB_WORKSPACE/.git/**)" "Write(/$GITHUB_WORKSPACE/.git/**)" "Read(//proc/**)" \
             > "$work/fix-reply.md"
           cat "$work/fix-reply.md"
           # Staged so files the fix creates are part of the patch.
           git add -A
-          git diff --cached > "$work/fix.patch"
+          # The fix may only touch files the pull request already changes, and never workflows.
+          git diff --cached --no-renames --name-only > "$work/fix-files.txt"
+          git diff --no-renames --name-only HEAD^1 HEAD > "$work/pr-files.txt"
+          if grep -q '^\.github/' "$work/fix-files.txt" || grep -vxFf "$work/pr-files.txt" "$work/fix-files.txt" | grep -q .; then
+            echo "::error::the fix touches files outside the pull request diff or under .github, not pushed"
+            exit 1
+          fi
+          git diff --cached --binary > "$work/fix.patch"
           if [ -s "$work/fix.patch" ]; then
             echo "patch=$work/fix.patch" >> "$GITHUB_OUTPUT"
           fi
@@ -248,13 +256,24 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           FIX_SUBJECT: "chore(review): address review findings"
           PATCH: ${{ steps.fix.outputs.patch }}
+          SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+          # The fix step ran a model in this checkout, so no repo or user git config is trusted here.
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
         run: |
           set -euo pipefail
+          for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
+            if [ -n "$secret" ] && grep -qF -- "$secret" "$PATCH"; then
+              echo "::error::the fix patch contains a secret and was not pushed"
+              exit 1
+            fi
+          done
           # The review ran on the merge ref; the fix lands on the pull request head.
           git reset -q --hard
           git switch -q --detach HEAD^2
           git apply --index "$PATCH"
-          git -c user.name="github-actions[bot]" \
+          git -c core.hooksPath=/dev/null -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "$FIX_SUBJECT"
           key="$RUNNER_TEMP/deploy-key"
