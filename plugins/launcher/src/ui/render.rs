@@ -390,15 +390,15 @@ impl Render for LauncherView {
                                               event: &ScrollWheelEvent,
                                               _window,
                                               cx: &mut Context<Self>| {
-                                            let rows = qol_gpui::scroll_list::wheel_rows(
+                                            for step in qol_gpui::scroll_list::wheel_steps(
                                                 &event.delta,
                                                 qol_gpui::trail::motion::ROW_H,
-                                            );
-                                            for _ in 0..rows.max(0) as usize {
-                                                this.state.scroll_list.move_down(result_count);
-                                            }
-                                            for _ in 0..(-rows).max(0) as usize {
-                                                this.state.scroll_list.move_up();
+                                            ) {
+                                                if step > 0 {
+                                                    this.state.scroll_list.move_down(result_count);
+                                                } else {
+                                                    this.state.scroll_list.move_up();
+                                                }
                                             }
                                             cx.notify();
                                         },
@@ -556,7 +556,8 @@ impl LauncherView {
                       _window,
                       cx: &mut Context<Self>| {
                     let rows = qol_gpui::scroll_list::wheel_rows(&event.delta, wheel_row);
-                    this.state.scroll_list.wheel_by(rows, result_count);
+                    let count = this.store.result_count();
+                    this.state.scroll_list.wheel_by(rows, count);
                     cx.notify();
                 },
             ))
@@ -876,7 +877,7 @@ impl LauncherView {
         home: Option<&std::path::Path>,
         cx: &mut Context<Self>,
     ) -> (AnyElement, f32) {
-        match &shown.shot {
+        let (card, height) = match &shown.shot {
             Shot::File(path) => {
                 let size = sizing::file_card(look.strength);
                 let card = files::file_card(
@@ -919,7 +920,21 @@ impl LauncherView {
                 });
                 (card.into_any_element(), size.height)
             }
-        }
+        };
+        let Some(index) = look.index else {
+            return (card, height);
+        };
+        let card = div()
+            .id(("launcher-card", index))
+            .size_full()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
+                this.state.scroll_list.selected = index;
+                this.state.list_focused = true;
+                this.launch_selected(cx);
+            }))
+            .child(card);
+        (card.into_any_element(), height)
     }
 
     fn panel(

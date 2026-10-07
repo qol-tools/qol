@@ -3,7 +3,7 @@ pub mod run;
 use gpui::prelude::*;
 use gpui::{
     div, font, px, rgb, rgba, AnyElement, App, AsyncApp, Context, ElementId, FocusHandle,
-    Focusable, KeyDownEvent, WeakEntity, Window,
+    Focusable, KeyDownEvent, ScrollWheelEvent, WeakEntity, Window,
 };
 use qol_gpui::kit::{Chip, NoticeTone};
 use qol_gpui::text::{cased, TextStyled};
@@ -13,7 +13,7 @@ use qol_gpui::Key;
 use crate::core::{
     self, Disposal, Guards, InstalledApp, PackageIndex, PackageStatus, RemovalOutcome, RemovalPlan,
 };
-use qol_gpui::scroll_list::ScrollList;
+use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
@@ -34,16 +34,40 @@ const MAX_VISIBLE: usize = ((WINDOW_HEIGHT
     / ROW_H) as usize;
 const REMOVE_KEY: Key = Key::BACKSPACE.platform();
 
-fn continue_or_quit_hint() -> gpui::Div {
-    let kit = qol_gpui::kit::kit();
+fn continue_or_quit_hint(cx: &mut Context<RemoveAppView>) -> gpui::Div {
     div()
         .flex()
         .items_center()
         .gap(px(qol_gpui::theme::SPACE_GUTTER))
         .text_color(rgb(qol_gpui::kit::kit().grounds.pane.faint))
         .text(TextStyle::Hint)
-        .child(kit.hint(Key::ENTER, "continue"))
-        .child(kit.hint(Key::ESC, "quit"))
+        .children(hint_buttons(
+            &[
+                (Key::ENTER, "continue", Command::Continue),
+                (Key::ESC, "quit", Command::Quit),
+            ],
+            cx,
+        ))
+}
+
+fn hint_buttons(
+    hints: &[(Key, &str, Command)],
+    cx: &mut Context<RemoveAppView>,
+) -> Vec<gpui::Stateful<gpui::Div>> {
+    let kit = qol_gpui::kit::kit();
+    hints
+        .iter()
+        .enumerate()
+        .map(|(index, (key, label, command))| {
+            let command = *command;
+            kit.hint_button(
+                ("qol-removeapp-hint", index),
+                *key,
+                label.to_string(),
+                cx.listener(move |this, _, _, cx| this.run(command, cx)),
+            )
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -61,7 +85,13 @@ enum PrimaryAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DoneAction {
+enum Command {
+    Select,
+    Back,
+    QuitApp,
+    TrashAnyway,
+    Primary,
+    ToggleDisposal,
     Continue,
     Quit,
 }
@@ -309,7 +339,7 @@ impl RemoveAppView {
         let secondary = ev.keystroke.modifiers.secondary();
         match self.mode {
             Mode::Picking => match key {
-                "escape" => cx.quit(),
+                "escape" => self.run(Command::Quit, cx),
                 "down" => {
                     self.list.move_down(self.matches.len());
                     cx.notify();
@@ -318,14 +348,8 @@ impl RemoveAppView {
                     self.list.move_up();
                     cx.notify();
                 }
-                "enter" => {
-                    self.enter_confirm();
-                    cx.notify();
-                }
-                "backspace" if ev.keystroke.modifiers.platform => {
-                    self.enter_confirm();
-                    cx.notify();
-                }
+                "enter" => self.run(Command::Select, cx),
+                "backspace" if ev.keystroke.modifiers.platform => self.run(Command::Select, cx),
                 "backspace" => {
                     self.query.backspace(span);
                     self.refilter();
@@ -371,58 +395,55 @@ impl RemoveAppView {
                 }
                 _ => {}
             },
-            Mode::Confirming => match key {
-                "escape" => {
-                    self.mode = Mode::Picking;
-                    self.plan = None;
-                    self.guards = None;
-                    self.error = None;
-                    cx.notify();
+            Mode::Confirming => {
+                if let Some(command) = confirm_command(key) {
+                    self.run(command, cx);
                 }
-                "q" => {
-                    self.try_quit();
-                    cx.notify();
+            }
+            Mode::Done => {
+                if let Some(command) = done_action(key) {
+                    self.run(command, cx);
                 }
-                "t" => {
-                    self.execute(Disposal::Trash, true);
-                    cx.notify();
-                }
-                "enter" => {
-                    match primary_action(self.guards.as_ref()) {
-                        PrimaryAction::Package => self.try_package(),
-                        PrimaryAction::Remove => self.execute(self.disposal, false),
-                        PrimaryAction::Blocked => {}
-                    }
-                    cx.notify();
-                }
-                "d" | "tab" => {
-                    if primary_action(self.guards.as_ref()) == PrimaryAction::Remove {
-                        self.toggle_disposal();
-                    }
-                    cx.notify();
-                }
-                _ => {}
-            },
-            Mode::Done => match done_action(key) {
-                Some(DoneAction::Continue) => {
-                    self.continue_picking(cx);
-                    cx.notify();
-                }
-                Some(DoneAction::Quit) => cx.quit(),
-                None => {}
-            },
+            }
         }
     }
 
-    fn render_body(&self, window: &mut Window) -> AnyElement {
+    fn run(&mut self, command: Command, cx: &mut Context<Self>) {
+        match command {
+            Command::Select => self.enter_confirm(),
+            Command::Back => {
+                self.mode = Mode::Picking;
+                self.plan = None;
+                self.guards = None;
+                self.error = None;
+            }
+            Command::QuitApp => self.try_quit(),
+            Command::TrashAnyway => self.execute(Disposal::Trash, true),
+            Command::Primary => match primary_action(self.guards.as_ref()) {
+                PrimaryAction::Package => self.try_package(),
+                PrimaryAction::Remove => self.execute(self.disposal, false),
+                PrimaryAction::Blocked => {}
+            },
+            Command::ToggleDisposal => {
+                if primary_action(self.guards.as_ref()) == PrimaryAction::Remove {
+                    self.toggle_disposal();
+                }
+            }
+            Command::Continue => self.continue_picking(cx),
+            Command::Quit => cx.quit(),
+        }
+        cx.notify();
+    }
+
+    fn render_body(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         match self.mode {
-            Mode::Picking => self.render_picking(window),
-            Mode::Confirming => self.render_confirming(),
-            Mode::Done => self.render_done(),
+            Mode::Picking => self.render_picking(window, cx),
+            Mode::Confirming => self.render_confirming(cx),
+            Mode::Done => self.render_done(cx),
         }
     }
 
-    fn render_picking(&self, window: &mut Window) -> AnyElement {
+    fn render_picking(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let kit = qol_gpui::kit::kit();
         let range = self.list.visible_range(self.matches.len());
         let selected = self.list.selected;
@@ -431,12 +452,19 @@ impl RemoveAppView {
             .enumerate()
             .map(|(offset, app)| {
                 let index = range.start + offset;
-                app_row(
-                    app,
-                    self.app_size(app),
-                    index == selected,
-                    core::is_protected(app),
-                )
+                div()
+                    .id(("qol-removeapp-row", index))
+                    .cursor(gpui::CursorStyle::PointingHand)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.list.selected = index;
+                        this.run(Command::Select, cx);
+                    }))
+                    .child(app_row(
+                        app,
+                        self.app_size(app),
+                        index == selected,
+                        core::is_protected(app),
+                    ))
             })
             .collect();
         let counter = format!("{} / {}", self.matches.len(), self.apps.len());
@@ -447,6 +475,12 @@ impl RemoveAppView {
             .child(self.search_box(window))
             .child(
                 div()
+                    .id("qol-removeapp-list")
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                        let rows = wheel_rows(&event.delta, ROW_H);
+                        this.list.wheel_by(rows, this.matches.len());
+                        cx.notify();
+                    }))
                     .relative()
                     .flex_1()
                     .min_h_0()
@@ -464,15 +498,19 @@ impl RemoveAppView {
                         kit.grounds.pane,
                     )),
             )
-            .children(self.remove_bar())
+            .children(self.remove_bar(cx))
             .child(footer(
-                &[(Key::ENTER, "select"), (REMOVE_KEY, "remove")],
+                &[
+                    (Key::ENTER, "select", Command::Select),
+                    (REMOVE_KEY, "remove", Command::Select),
+                ],
                 Some(counter),
+                cx,
             ))
             .into_any_element()
     }
 
-    fn remove_bar(&self) -> Option<AnyElement> {
+    fn remove_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let kit = qol_gpui::kit::kit();
         let app = self.matches.get(self.list.selected)?;
         if core::is_protected(app) {
@@ -489,8 +527,8 @@ impl RemoveAppView {
             )
             .into_any_element(),
         };
-        Some(
-            kit.notice(
+        let bar = kit
+            .notice(
                 NoticeTone::Invalid,
                 format!("Remove {}", app.name),
                 Some(subtitle),
@@ -498,7 +536,12 @@ impl RemoveAppView {
             .h(px(FAILBAR_H))
             .w_full()
             .child(kit.chip(Chip::Key(REMOVE_KEY), kit.grounds.invalid))
-            .into_any_element(),
+            .id("qol-removeapp-remove")
+            .cursor(gpui::CursorStyle::PointingHand)
+            .on_click(cx.listener(|this, _, _, cx| this.run(Command::Select, cx)));
+        Some(
+            kit.pointable(bar, rgb(kit.grounds.invalid.lift))
+                .into_any_element(),
         )
     }
 
@@ -575,7 +618,7 @@ impl RemoveAppView {
             )
     }
 
-    fn render_confirming(&self) -> AnyElement {
+    fn render_confirming(&self, cx: &mut Context<Self>) -> AnyElement {
         let kit = qol_gpui::kit::kit();
         let Some(plan) = &self.plan else {
             return div().into_any_element();
@@ -623,10 +666,10 @@ impl RemoveAppView {
             (None, Disposal::Trash) => ("Move to Trash".to_string(), kit.palette.success),
             (None, Disposal::Delete) => ("PERMANENTLY DELETE".to_string(), kit.palette.danger),
         };
-        let mut hints: Vec<(Key, &str)> = Vec::new();
+        let mut hints: Vec<(Key, &str, Command)> = Vec::new();
         if let Some(g) = &self.guards {
             if g.running {
-                hints.push((Key::letter('q'), "quit app"));
+                hints.push((Key::letter('q'), "quit app", Command::QuitApp));
             }
             if !g.running {
                 if let PackageStatus::Managed(package) = &g.package {
@@ -635,16 +678,16 @@ impl RemoveAppView {
                         crate::core::PackageManager::Apt => "uninstall with APT",
                         crate::core::PackageManager::Flatpak => "uninstall with Flatpak",
                     };
-                    hints.push((Key::ENTER, label));
+                    hints.push((Key::ENTER, label, Command::Primary));
                 }
             }
         }
         if primary_action(self.guards.as_ref()) == PrimaryAction::Remove {
-            hints.push((Key::ENTER, "confirm"));
-            hints.push((Key::letter('d'), "trash/delete"));
+            hints.push((Key::ENTER, "confirm", Command::Primary));
+            hints.push((Key::letter('d'), "trash/delete", Command::ToggleDisposal));
         }
-        hints.push((Key::letter('t'), "trash anyway"));
-        hints.push((Key::ESC, "back"));
+        hints.push((Key::letter('t'), "trash anyway", Command::TrashAnyway));
+        hints.push((Key::ESC, "back", Command::Back));
         div()
             .flex()
             .flex_col()
@@ -699,7 +742,7 @@ impl RemoveAppView {
                             )),
                     ),
             )
-            .child(footer(&hints, None))
+            .child(footer(&hints, None, cx))
             .into_any_element()
     }
 
@@ -751,7 +794,7 @@ impl RemoveAppView {
         Some(banner_container(lines))
     }
 
-    fn render_done(&self) -> AnyElement {
+    fn render_done(&self, cx: &mut Context<Self>) -> AnyElement {
         let kit = qol_gpui::kit::kit();
         let notice = if let Some(error) = &self.error {
             kit.notice(
@@ -789,7 +832,12 @@ impl RemoveAppView {
             .gap(px(qol_gpui::theme::SPACE_CELL))
             .panel_drag_area()
             .child(notice.w_full())
-            .child(div().flex().justify_center().child(continue_or_quit_hint()))
+            .child(
+                div()
+                    .flex()
+                    .justify_center()
+                    .child(continue_or_quit_hint(cx)),
+            )
             .into_any_element()
     }
 }
@@ -812,7 +860,7 @@ impl Render for RemoveAppView {
             .flex_col()
             .text_color(rgb(kit.grounds.pane.ink))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_key(ev, cx)))
-            .child(self.render_body(window))
+            .child(self.render_body(window, cx))
     }
 }
 
@@ -836,10 +884,21 @@ fn primary_action(guards: Option<&Guards>) -> PrimaryAction {
     PrimaryAction::Remove
 }
 
-fn done_action(key: &str) -> Option<DoneAction> {
+fn confirm_command(key: &str) -> Option<Command> {
     match key {
-        "enter" => Some(DoneAction::Continue),
-        "escape" => Some(DoneAction::Quit),
+        "escape" => Some(Command::Back),
+        "q" => Some(Command::QuitApp),
+        "t" => Some(Command::TrashAnyway),
+        "enter" => Some(Command::Primary),
+        "d" | "tab" => Some(Command::ToggleDisposal),
+        _ => None,
+    }
+}
+
+fn done_action(key: &str) -> Option<Command> {
+    match key {
+        "enter" => Some(Command::Continue),
+        "escape" => Some(Command::Quit),
         _ => None,
     }
 }
@@ -908,13 +967,15 @@ fn section_header(title: &str) -> impl IntoElement {
         .panel_drag_area()
 }
 
-fn footer(hints: &[(Key, &str)], counter: Option<String>) -> impl IntoElement {
+fn footer(
+    hints: &[(Key, &str, Command)],
+    counter: Option<String>,
+    cx: &mut Context<RemoveAppView>,
+) -> impl IntoElement {
     let kit = qol_gpui::kit::kit();
-    let mut bar = kit.hint_bar();
-    for (key, label) in hints {
-        bar = bar.child(kit.hint(*key, label.to_string()));
-    }
-    bar.child(div().flex_1())
+    kit.hint_bar()
+        .children(hint_buttons(hints, cx))
+        .child(div().flex_1())
         .when_some(counter, |bar, counter| {
             bar.child(
                 div()
@@ -963,8 +1024,8 @@ fn banner_busy(color: u32) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        done_action, primary_action, DoneAction, PrimaryAction, FAILBAR_H, MAX_VISIBLE, ROW_H,
-        SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
+        confirm_command, done_action, primary_action, Command, PrimaryAction, FAILBAR_H,
+        MAX_VISIBLE, ROW_H, SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
     };
     use crate::core::{Guards, ManagedPackage, PackageManager, PackageScope, PackageStatus};
 
@@ -1027,10 +1088,29 @@ mod tests {
     }
 
     #[test]
+    fn confirm_screen_maps_each_key_to_its_command() {
+        let cases = [
+            ("escape", Some(Command::Back)),
+            ("q", Some(Command::QuitApp)),
+            ("t", Some(Command::TrashAnyway)),
+            ("enter", Some(Command::Primary)),
+            ("d", Some(Command::ToggleDisposal)),
+            ("tab", Some(Command::ToggleDisposal)),
+            ("D", None),
+            ("u", None),
+            ("space", None),
+            ("backspace", None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(confirm_command(key), expected, "key: {key}");
+        }
+    }
+
+    #[test]
     fn completed_screen_only_handles_enter_and_escape() {
         let cases = [
-            ("enter", Some(DoneAction::Continue)),
-            ("escape", Some(DoneAction::Quit)),
+            ("enter", Some(Command::Continue)),
+            ("escape", Some(Command::Quit)),
             ("u", None),
             ("space", None),
             ("q", None),
