@@ -793,10 +793,14 @@ pub fn show_window_by_title(title: &str) -> bool {
 }
 
 pub fn show_window_passive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false, WindowPresentation::Notice, true)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, true)
 }
 
 pub fn show_window_interactive_by_title(title: &str) -> bool {
+    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, false)
+}
+
+pub fn show_toast_window_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, false, WindowPresentation::Notice, false)
 }
 
