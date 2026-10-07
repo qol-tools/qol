@@ -154,52 +154,6 @@ jobs:
               --out-dir "$work/out" --in "$work/reply.md"
           fi
 
-      - name: Post review comment
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
-        run: |
-          set -euo pipefail
-          work="$RUNNER_TEMP/claude-review"
-          review="$work/out/review/review.md"
-          failed=""
-          if [ ! -s "$review" ]; then
-            echo "::warning::qol-code-review wrote no review.md, posting the final reply instead"
-            review="$work/reply.md"
-            mkdir -p "$work"
-            jq -r 'select(.subtype == "success" and .is_error != true) | .result // empty' \
-              "$work/result.json" > "$review" 2>/dev/null || true
-          fi
-          if [ ! -s "$review" ]; then
-            failed=1
-            printf 'The review of %s failed before it produced a result. See [the run](%s).\n' "$HEAD_SHA" "$RUN_URL" > "$review"
-          fi
-          for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
-            if [ -n "$secret" ] && grep -qF -- "$secret" "$review"; then
-              echo "::error::the review contains a secret and was not posted"
-              exit 1
-            fi
-          done
-          marker='<!-- qol-code-review -->'
-          body="$work/comment.md"
-          { echo "$marker"; echo "Reviewed head: $HEAD_SHA"; echo; cat "$review"; } > "$body"
-          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n1)"
-          if [ -n "$id" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$body" > /dev/null
-          else
-            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
-          fi
-          if [ -n "$failed" ]; then
-            echo "::error::qol-code-review produced no review"
-            exit 1
-          fi
-
       - name: Fix review findings
         id: fix
         if: github.event_name == 'pull_request'
@@ -250,6 +204,7 @@ jobs:
           fi
 
       - name: Push review fixes
+        id: push
         if: steps.fix.outputs.patch != ''
         env:
           DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
@@ -283,3 +238,97 @@ jobs:
           GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
             git push "git@github.com:$GITHUB_REPOSITORY.git" "HEAD:refs/heads/$HEAD_REF"
           rm -f "$key"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Post review comment
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FIX_OUTCOME: ${{ steps.fix.outcome }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+          FIX_SHA: ${{ steps.push.outputs.sha }}
+          SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/claude-review"
+          review="$work/out/review/review.md"
+          failed=""
+          if [ ! -s "$review" ]; then
+            echo "::warning::qol-code-review wrote no review.md, posting the final reply instead"
+            review="$work/reply.md"
+            mkdir -p "$work"
+            jq -r 'select(.subtype == "success" and .is_error != true) | .result // empty' \
+              "$work/result.json" > "$review" 2>/dev/null || true
+          fi
+          if [ ! -s "$review" ]; then
+            failed=1
+            printf 'The review of %s failed before it produced a result. See [the run](%s).\n' "$HEAD_SHA" "$RUN_URL" > "$review"
+          fi
+          # The review ends with a machine-readable json fence: render it as tables, keep the prose folded.
+          json="$work/review.json"
+          awk '/^```json *$/ {buf = ""; inside = 1; next} inside && /^```/ {inside = 0; last = buf; next} inside {buf = buf $0 "\n"} END {printf "%s", last}' "$review" > "$json"
+          awk '/^```json *$/ {skip = 1; next} skip && /^```/ {skip = 0; next} !skip' "$review" > "$work/prose.md"
+          repo="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          section() {
+            local rows
+            rows="$(jq -r --arg key "$2" --arg blob "$repo/blob/$HEAD_SHA" '
+              .[$key] // [] | .[] |
+              (if .line then ":\(.line)" else "" end) as $at |
+              (if .line then "#L\(.line)" else "" end) as $anchor |
+              "| \(.severity) | \(.id) | [`\(.file | split("/") | last)\($at)`](\($blob)/\(.file)\($anchor)) | \(.required_action | gsub("\n"; " ") | gsub("\\|"; "\\|")) |"' "$json")"
+            if [ -n "$rows" ]; then
+              printf '\n### %s\n\n| Severity | Finding | Where | Action |\n|---|---|---|---|\n%s\n' "$1" "$rows"
+            fi
+          }
+          marker='<!-- qol-code-review -->'
+          body="$work/comment.md"
+          {
+            echo "$marker"
+            if jq -e '.verdict' "$json" > /dev/null 2>&1; then
+              verdict="$(jq -r '.verdict' "$json")"
+              case "$verdict" in pass) icon="✅" ;; conditional) icon="⚠️" ;; block) icon="⛔" ;; *) icon="❔" ;; esac
+              counts="$(jq -r '.counts // {} | to_entries | map(select(.value > 0) | "\(.value) \(.key)") | join(" · ")' "$json")"
+              printf '## %s Code review: %s\n\nHead `%s` · %s · [run](%s)\n' "$icon" "$verdict" "${HEAD_SHA:0:7}" "${counts:-no findings}" "$RUN_URL"
+              section "Must fix" must_fix
+              section "Deferred" deferred_followups
+              fixes=""
+              if [ -n "$FIX_SHA" ]; then
+                fixes="Pushed [\`${FIX_SHA:0:7}\`]($repo/commit/$FIX_SHA)."
+              elif [ "$FIX_OUTCOME" = failure ] || [ "$PUSH_OUTCOME" = failure ]; then
+                fixes="Fixing failed, nothing was pushed. See [the run]($RUN_URL)."
+              elif [ -s "$work/fix-reply.md" ]; then
+                fixes="No changes were needed."
+              fi
+              if [ -n "$fixes" ]; then
+                printf '\n### Fixes\n\n%s\n' "$fixes"
+                if [ -s "$work/fix-reply.md" ]; then
+                  printf '\n<details><summary>Fix notes</summary>\n\n%s\n\n</details>\n' "$(cat "$work/fix-reply.md")"
+                fi
+              fi
+              printf '\n<details><summary>Full review</summary>\n\n%s\n\n</details>\n' "$(cat "$work/prose.md")"
+            else
+              printf 'Reviewed head: %s\n\n' "$HEAD_SHA"
+              cat "$review"
+            fi
+          } > "$body"
+          for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
+            if [ -n "$secret" ] && grep -qF -- "$secret" "$body"; then
+              echo "::error::the review contains a secret and was not posted"
+              exit 1
+            fi
+          done
+          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n1)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$body" > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error::qol-code-review produced no review"
+            exit 1
+          fi
