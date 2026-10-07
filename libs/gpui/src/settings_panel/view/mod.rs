@@ -3680,7 +3680,27 @@ impl SettingsPanelView {
             .w(px(super::PANEL_RAIL_WIDTH))
             .p(px(qol_theme::SPACE_INSET))
             .children(rail_dots);
-        let scrim = rail_scrim_layer(self.kit);
+        let scrim = rail_scrim_layer(self.kit)
+            .id("settings-rail-back")
+            .when(entering, |scrim| {
+                scrim
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                    .on_click(|event: &ClickEvent, window, cx| {
+                        if event.standard_click() {
+                            window.defer(cx, |window, cx| {
+                                window.dispatch_keystroke(
+                                    Keystroke {
+                                        modifiers: Modifiers::default(),
+                                        key: "escape".into(),
+                                        key_char: None,
+                                    },
+                                    cx,
+                                );
+                            });
+                        }
+                    })
+            });
         let custom_breadcrumbs = if self.current_source_is_custom() {
             self.custom_view()
                 .map(|custom| custom.breadcrumb_labels(cx).len())
