@@ -87,6 +87,124 @@ fn forget_window_number(title: &str) {
     }
 }
 
+static INPUT_REGIONS: Mutex<Option<HashMap<String, NSRect>>> = Mutex::new(None);
+
+fn remember_input_region(title: &str, x: i16, y: i16, width: u16, height: u16) {
+    let region = NSRect::new(
+        NSPoint::new(f64::from(x), f64::from(y)),
+        NSSize::new(f64::from(width), f64::from(height)),
+    );
+    INPUT_REGIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_with(HashMap::new)
+        .insert(title.to_owned(), region);
+}
+
+fn input_region(title: &str) -> Option<NSRect> {
+    INPUT_REGIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(|regions| regions.get(title).copied())
+}
+
+fn region_titles() -> Vec<String> {
+    INPUT_REGIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(|regions| regions.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn forget_input_region(title: &str) {
+    if let Some(regions) = INPUT_REGIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_mut()
+    {
+        regions.remove(title);
+    }
+}
+
+fn pointer_in_region(frame: NSRect, region: NSRect, pointer: NSPoint) -> bool {
+    let x = pointer.x - frame.origin.x;
+    let y = frame.origin.y + frame.size.height - pointer.y;
+    x >= region.origin.x
+        && y >= region.origin.y
+        && x < region.origin.x + region.size.width
+        && y < region.origin.y + region.size.height
+}
+
+const REGION_POLL: std::time::Duration = std::time::Duration::from_millis(16);
+
+static REGION_POLLING: AtomicBool = AtomicBool::new(false);
+
+fn apply_input_region(title: &str) -> bool {
+    let Some(region) = input_region(title) else {
+        return false;
+    };
+    let Some(window) = resolve_window(title) else {
+        forget_input_region(title);
+        return false;
+    };
+    if !window.isVisible() || window.alphaValue() <= 0.0 {
+        return true;
+    }
+    let inside = pointer_in_region(window.frame(), region, NSEvent::mouseLocation());
+    if window.ignoresMouseEvents() == inside {
+        window.setIgnoresMouseEvents(!inside);
+    }
+    true
+}
+
+fn apply_all_input_regions() -> bool {
+    let titles = region_titles();
+    titles
+        .iter()
+        .filter(|title| apply_input_region(title))
+        .count()
+        > 0
+}
+
+fn ensure_region_poll() {
+    if REGION_POLLING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(REGION_POLL);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        crate::platform::run_on_main(Box::new(move || {
+            let _ = sender.send(apply_all_input_regions());
+        }));
+        if !receiver.recv().unwrap_or(false) {
+            REGION_POLLING.store(false, Ordering::SeqCst);
+            qol_runtime::probe!("INPUT_REGION", "step=poll-stopped");
+            return;
+        }
+    });
+    qol_runtime::probe!("INPUT_REGION", "step=poll-started");
+}
+
+fn set_input_region_on_main(title: &str, x: i16, y: i16, width: u16, height: u16) -> bool {
+    remember_input_region(title, x, y, width, height);
+    let title = title.to_owned();
+    crate::platform::run_on_main(Box::new(move || {
+        apply_input_region(&title);
+    }));
+    ensure_region_poll();
+    true
+}
+
+fn pointer_inside_input(title: &str, window: &NSWindow) -> bool {
+    let pointer = NSEvent::mouseLocation();
+    match input_region(title) {
+        Some(region) => pointer_in_region(window.frame(), region, pointer),
+        None => pointer_inside(window.frame(), pointer),
+    }
+}
+
 fn pointer_inside(frame: NSRect, pointer: NSPoint) -> bool {
     let (x, y) = (pointer.x - frame.origin.x, pointer.y - frame.origin.y);
     x >= 0.0 && y >= 0.0 && x < frame.size.width && y < frame.size.height
@@ -210,8 +328,8 @@ impl WindowGeometrySession {
         None
     }
 
-    pub fn set_input_region(&self, _x: i16, _y: i16, _width: u16, _height: u16) -> bool {
-        false
+    pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
+        set_input_region_on_main(&self.title, x, y, width, height)
     }
 
     pub fn anchor_content(&self, _right: bool, _bottom: bool) {}
@@ -302,7 +420,7 @@ pub fn window_position_by_title(_title: &str) -> Option<(i32, i32)> {
 pub fn pointer_on_window_by_title(title: &str) -> Option<crate::popup_window::PointerOnWindow> {
     let window = resolve_window(title)?;
     Some(crate::popup_window::PointerOnWindow {
-        inside: window.isVisible() && pointer_inside(window.frame(), NSEvent::mouseLocation()),
+        inside: window.isVisible() && pointer_inside_input(title, &window),
         pressed: NSEvent::pressedMouseButtons() != 0,
     })
 }
@@ -675,11 +793,11 @@ pub fn show_window_by_title(title: &str) -> bool {
 }
 
 pub fn show_window_passive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, true)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Notice, true)
 }
 
 pub fn show_window_interactive_by_title(title: &str) -> bool {
-    show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, false)
+    show_window_by_title_with_focus(title, false, WindowPresentation::Notice, false)
 }
 
 pub fn show_normal_window_by_title(title: &str) -> bool {
@@ -693,6 +811,7 @@ pub fn window_presentation_is_normal_by_title(_title: &str) -> bool {
 #[derive(Clone, Copy, Debug)]
 enum WindowPresentation {
     Overlay,
+    Notice,
     Normal,
 }
 
@@ -720,12 +839,16 @@ fn show_window_by_title_with_focus(
     };
     let level = match presentation {
         WindowPresentation::Overlay => NSPopUpMenuWindowLevel,
+        WindowPresentation::Notice => NSPopUpMenuWindowLevel - 1,
         WindowPresentation::Normal => NSNormalWindowLevel,
     };
     window.setLevel(level);
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(input_passthrough);
+    if !input_passthrough && apply_input_region(title) {
+        ensure_region_poll();
+    }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
         #[allow(deprecated)]
