@@ -98,7 +98,7 @@ fn write_app_bundle(
     let icon_path = resources_dir.join(format!("{ICON_FILE}.icns"));
 
     let expected_script = build_script(target, entry);
-    let expected_plist = build_info_plist(entry);
+    let expected_plist = build_info_plist(entry, launcher_icon(&entry.icon, marks).as_deref());
     let expected_icon = icon_png(&entry.icon, marks).map(|png| icns(&png));
 
     if file_matches(&run_path, &expected_script)
@@ -130,6 +130,13 @@ fn icon_png(icon: &LauncherIcon, marks: &MarkFiles) -> Option<Vec<u8>> {
         },
     };
     mark_png(&marks.svg(mark))
+}
+
+fn launcher_icon(icon: &LauncherIcon, marks: &MarkFiles) -> Option<PathBuf> {
+    match icon {
+        LauncherIcon::Mark(mark) => Some(marks.path(*mark)),
+        LauncherIcon::TargetApp(_) => None,
+    }
 }
 
 fn target_app_png(app: &AppRef) -> Option<Vec<u8>> {
@@ -181,8 +188,15 @@ fn is_executable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn build_info_plist(entry: &LauncherEntry) -> String {
+fn build_info_plist(entry: &LauncherEntry, launcher_icon: Option<&Path>) -> String {
     let name = xml_escape(&entry.display_name);
+    let launcher_icon = launcher_icon.map_or(String::new(), |path| {
+        format!(
+            "<key>{}</key><string>{}</string>\n",
+            qol_apps::LAUNCHER_ICON_KEY,
+            xml_escape(&path.display().to_string())
+        )
+    });
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -197,9 +211,10 @@ fn build_info_plist(entry: &LauncherEntry) -> String {
          <key>CFBundleVersion</key><string>1</string>\n\
          <key>CFBundleShortVersionString</key><string>1</string>\n\
          <key>LSUIElement</key><true/>\n\
+         {}\
          </dict>\n\
          </plist>\n",
-        ICON_FILE, name, name, entry.bundle_id
+        ICON_FILE, name, name, entry.bundle_id, launcher_icon
     )
 }
 
@@ -514,8 +529,41 @@ mod tests {
 
     #[test]
     fn info_plist_names_the_bundle_icon() {
-        assert!(build_info_plist(&entry("shortcut-a", "A"))
+        assert!(build_info_plist(&entry("shortcut-a", "A"), None)
             .contains("<key>CFBundleIconFile</key><string>icon</string>"));
+    }
+
+    #[test]
+    fn mark_entries_point_the_launcher_at_their_mark_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let marks = MarkFiles::in_dir(tmp.path().join("marks"), 0);
+        let app = tmp.path().join("Open Browser.app");
+
+        write_app_bundle(
+            &app,
+            &shortcut_entry(ShortcutAction::OpenUrl {
+                url: "https://example.com".to_string(),
+                browser_override: None,
+            }),
+            &tmp.path().join("qol-tray"),
+            &marks,
+        )
+        .unwrap();
+
+        assert_eq!(
+            qol_apps::read_macos_bundle_facts(&app).launcher_icon,
+            Some(marks.path(Mark::Qol).display().to_string())
+        );
+    }
+
+    #[test]
+    fn target_app_entries_keep_the_app_icon() {
+        let marks = MarkFiles::in_dir(PathBuf::from("/marks"), 0);
+        let icon = LauncherIcon::TargetApp(AppRef::Name {
+            name: "Safari".to_string(),
+        });
+
+        assert_eq!(launcher_icon(&icon, &marks), None);
     }
 
     #[test]

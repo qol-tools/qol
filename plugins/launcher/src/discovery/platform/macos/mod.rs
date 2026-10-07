@@ -42,9 +42,14 @@ pub fn file_watch_roots() -> Vec<PathBuf> {
 }
 
 pub fn app_face(entry: &AppEntry) -> AppFace {
-    let category = qol_apps::read_macos_bundle_facts(&entry.path).category;
+    let facts = qol_apps::read_macos_bundle_facts(&entry.path);
+    let category = facts.category;
     AppFace {
-        icon: icon::icon_path(&entry.path),
+        icon: facts
+            .launcher_icon
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .or_else(|| icon::icon_path(&entry.path)),
         description: cask::owner_of(&entry.path)
             .and_then(|cask| cask.summary)
             .or_else(|| category.as_deref().and_then(kind)),

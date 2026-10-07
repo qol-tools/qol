@@ -6,6 +6,8 @@ use serde::Serialize;
 
 use crate::{AppEntry, AppRoot};
 
+pub const LAUNCHER_ICON_KEY: &str = "QoLLauncherIcon";
+
 const EXCLUDED_LAUNCHERS: &[&str] = &["Spotlight", "Launchpad"];
 
 mod platform;
@@ -25,6 +27,7 @@ pub struct BundleFacts {
     pub executable: Option<String>,
     pub category: Option<String>,
     pub copyright: Option<String>,
+    pub launcher_icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
