@@ -105,6 +105,8 @@ jobs:
 
       - name: Run qol-code-review
         if: github.event_name == 'pull_request'
+        # Below the job timeout, so a hung review fails instead of cancelling the post step.
+        timeout-minutes: 50
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
@@ -180,7 +182,8 @@ jobs:
             echo "::warning::qol-code-review wrote no review.md, posting the final reply instead"
             review="$work/reply.md"
             mkdir -p "$work"
-            jq -r '.result // empty' "$work/result.json" > "$review" 2>/dev/null || true
+            jq -r 'select(.subtype == "success" and .is_error != true) | .result // empty' \
+              "$work/result.json" > "$review" 2>/dev/null || true
           fi
           if [ ! -s "$review" ]; then
             failed=1
