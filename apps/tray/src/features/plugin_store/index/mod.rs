@@ -8,6 +8,7 @@ mod stage;
 
 pub(crate) use catalog::list_plugins;
 pub(crate) use document::IndexedRelease;
+pub(crate) use fetch::blob_client;
 pub(crate) use registry::download_asset;
 pub(crate) use stage::{load_config_contract, stage_release};
 

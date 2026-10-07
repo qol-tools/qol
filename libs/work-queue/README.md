@@ -11,7 +11,8 @@ One keyed work queue with a single worker for qol-tools.
 - Every task has a key. A key that is already waiting or running is refused, so the same work is never queued twice.
 - One worker runs the tasks one at a time, oldest first.
 - A task pushed with `Run::Alone` waits until nothing else is waiting, and while it runs every new push is refused. Use it for work that ends the process, such as an update that restarts the app.
-- A waiting task can be cancelled. A failed task keeps its reason until the same key is pushed again.
+- Waiting tasks that match a filter can be cancelled; a running task is never cancelled.
+- Each task runs on its own tokio task, so a task that panics fails with a reason and the worker moves on. A failed task keeps its reason until the same key is pushed again.
 - `snapshot` and `get` show every task with its state, progress and failure reason.
 
 ## Quick start

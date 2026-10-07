@@ -32,7 +32,7 @@ pub(super) fn http_client() -> reqwest::Client {
     build_client(reqwest::Client::builder().timeout(REQUEST_TIMEOUT))
 }
 
-pub(super) fn blob_client() -> reqwest::Client {
+pub(crate) fn blob_client() -> reqwest::Client {
     build_client(
         reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)

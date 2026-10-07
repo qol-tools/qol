@@ -118,7 +118,9 @@ fn cancel_install_action(id: Option<&str>) -> Response {
         Ok(id) => id,
         Err(response) => return *response,
     };
-    if !jobs::QUEUE.cancel(&id) {
+    if jobs::QUEUE.cancel_queued(|key, operation| key == id && *operation == Operation::Install)
+        == 0
+    {
         return action_error(StatusCode::CONFLICT, "The plugin is not waiting to install");
     }
     action_ok("Install cancelled")

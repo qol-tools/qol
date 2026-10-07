@@ -31,7 +31,7 @@ pub(crate) async fn fetch_latest_release(repo: &str) -> Result<GitHubRelease> {
 
 async fn fetch_release_url(url: &str) -> Result<GitHubRelease> {
     let request = super::github::build_github_request(
-        &reqwest::Client::new(),
+        &super::index::blob_client(),
         url,
         crate::credentials::github_bearer_token().as_deref(),
     );
@@ -71,7 +71,7 @@ pub(crate) fn require_immutable_release(release: &GitHubRelease) -> Result<()> {
 
 pub(crate) async fn download_verified(asset: &GitHubAsset, destination: &Path) -> Result<()> {
     let request = super::github::build_github_request(
-        &reqwest::Client::new(),
+        &super::index::blob_client(),
         &asset.browser_download_url,
         crate::credentials::github_bearer_token().as_deref(),
     );

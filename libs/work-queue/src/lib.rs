@@ -44,13 +44,13 @@ struct Slot<T> {
     run: Run,
 }
 
-impl<T: Clone> Default for WorkQueue<T> {
+impl<T: Clone + Send + 'static> Default for WorkQueue<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Clone> WorkQueue<T> {
+impl<T: Clone + Send + 'static> WorkQueue<T> {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(Inner {
@@ -82,24 +82,12 @@ impl<T: Clone> WorkQueue<T> {
         Ok(())
     }
 
-    pub fn cancel(&self, key: &str) -> bool {
-        let mut inner = self.lock();
-        let queued = inner
-            .slots
-            .get(key)
-            .is_some_and(|slot| slot.entry.state == State::Queued);
-        if queued {
-            inner.slots.remove(key);
-        }
-        queued
-    }
-
-    pub fn cancel_queued(&self) -> usize {
+    pub fn cancel_queued(&self, matches: impl Fn(&str, &T) -> bool) -> usize {
         let mut inner = self.lock();
         let before = inner.slots.len();
-        inner
-            .slots
-            .retain(|_, slot| slot.entry.state != State::Queued);
+        inner.slots.retain(|key, slot| {
+            slot.entry.state != State::Queued || !matches(key, &slot.entry.task)
+        });
         before - inner.slots.len()
     }
 
@@ -128,14 +116,16 @@ impl<T: Clone> WorkQueue<T> {
     pub async fn run<F, Fut>(&self, mut work: F)
     where
         F: FnMut(String, T) -> Fut,
-        Fut: Future<Output = Result<(), String>>,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
     {
         loop {
             let Some((key, task)) = self.start_next() else {
                 self.wake.notified().await;
                 continue;
             };
-            let outcome = work(key.clone(), task).await;
+            let outcome = tokio::spawn(work(key.clone(), task))
+                .await
+                .unwrap_or_else(|error| Err(format!("the task stopped: {error}")));
             self.settle(&key, outcome);
         }
     }
@@ -285,12 +275,19 @@ mod tests {
         for key in ["a", "b", "c", "d"] {
             queue.push(key, "update", Run::InOrder).unwrap();
         }
+        queue.push("e", "remove", Run::InOrder).unwrap();
         assert_eq!(queue.start_next(), Some(("a".to_string(), "update")));
-        assert!(queue.cancel("b"));
-        assert!(!queue.cancel("a"));
-        assert!(!queue.cancel("missing"));
-        assert_eq!(queue.cancel_queued(), 2);
-        assert_eq!(states(&queue), [("a".to_string(), State::Running)]);
+        assert_eq!(queue.cancel_queued(|key, _| key == "b"), 1);
+        assert_eq!(queue.cancel_queued(|key, _| key == "a"), 0);
+        assert_eq!(queue.cancel_queued(|key, _| key == "missing"), 0);
+        assert_eq!(queue.cancel_queued(|_, task| *task == "update"), 2);
+        assert_eq!(
+            states(&queue),
+            [
+                ("a".to_string(), State::Running),
+                ("e".to_string(), State::Queued)
+            ]
+        );
     }
 
     #[test]
@@ -315,10 +312,10 @@ mod tests {
                     let sender = sender.clone();
                     async move {
                         sender.send(key).unwrap();
-                        if task == "fail" {
-                            Err("no".to_string())
-                        } else {
-                            Ok(())
+                        match task {
+                            "fail" => Err("no".to_string()),
+                            "panic" => panic!("the task broke"),
+                            _ => Ok(()),
                         }
                     }
                 })
@@ -327,8 +324,9 @@ mod tests {
         tokio::task::yield_now().await;
 
         queue.push("a", "fail", Run::InOrder).unwrap();
+        queue.push("p", "panic", Run::InOrder).unwrap();
         queue.push("b", "update", Run::InOrder).unwrap();
-        for expected in ["a", "b"] {
+        for expected in ["a", "p", "b"] {
             let key = tokio::time::timeout(Duration::from_secs(5), ran.recv())
                 .await
                 .unwrap();
@@ -341,6 +339,13 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(states(&queue), [("a".to_string(), State::Failed)]);
+        assert_eq!(
+            states(&queue),
+            [
+                ("a".to_string(), State::Failed),
+                ("p".to_string(), State::Failed)
+            ]
+        );
+        assert!(queue.get("p").unwrap().reason.unwrap().contains("panic"));
     }
 }

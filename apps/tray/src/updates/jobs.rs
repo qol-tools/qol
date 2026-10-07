@@ -57,10 +57,10 @@ pub(crate) fn get(id: &str) -> Option<UpdateJob> {
 
 fn update_job(entry: Entry<Operation>) -> UpdateJob {
     let state = match (entry.state, entry.task) {
-        (State::Queued, _) => JobState::Queued,
-        (State::Running, Operation::Remove) => JobState::Removing,
-        (State::Running, _) => JobState::Updating,
         (State::Failed, _) => JobState::Failed,
+        (_, Operation::Remove) => JobState::Removing,
+        (State::Queued, _) => JobState::Queued,
+        (State::Running, _) => JobState::Updating,
     };
     UpdateJob {
         state,
@@ -85,12 +85,14 @@ mod tests {
     }
 
     #[test]
-    fn a_running_removal_reads_as_removing_and_everything_else_by_its_state() {
+    fn a_removal_reads_as_removing_and_everything_else_by_its_state() {
         let host = Operation::Host {
             confirm_after_restart: true,
         };
         let cases = [
-            (State::Queued, Operation::Remove, JobState::Queued),
+            (State::Queued, Operation::Remove, JobState::Removing),
+            (State::Queued, Operation::Install, JobState::Queued),
+            (State::Queued, host, JobState::Queued),
             (State::Running, Operation::Remove, JobState::Removing),
             (State::Running, Operation::Install, JobState::Updating),
             (State::Running, Operation::Update, JobState::Updating),

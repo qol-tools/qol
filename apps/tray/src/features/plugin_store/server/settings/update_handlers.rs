@@ -256,7 +256,10 @@ fn start_update_all_action(state: &AppState) -> Response {
 }
 
 fn stop_updates_action() -> Response {
-    if jobs::QUEUE.cancel_queued() == 0 {
+    let stopped = jobs::QUEUE.cancel_queued(|_, operation| {
+        matches!(operation, Operation::Update | Operation::Host { .. })
+    });
+    if stopped == 0 {
         return action_error(StatusCode::CONFLICT, "Nothing to stop");
     }
     action_ok("Stopping after the current update")

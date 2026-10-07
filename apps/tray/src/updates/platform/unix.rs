@@ -17,7 +17,7 @@ pub(crate) fn dev_update_url() -> Option<String> {
 
 pub(crate) async fn download_asset(url: &str, dest: &Path, events: &EventBus) -> Result<()> {
     let request = crate::features::plugin_store::github::build_github_request(
-        &reqwest::Client::new(),
+        &crate::features::plugin_store::blob_client(),
         url,
         None,
     );
