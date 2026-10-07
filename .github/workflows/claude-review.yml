@@ -1,0 +1,185 @@
+name: claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLAUDE_CODE_VERSION: 2.1.292
+  CLAUDE_MODEL: claude-opus-5-5
+  MARKETPLACES: |-
+    https://github.com/qol-tools/qol-skills.git
+    https://github.com/KMRH47/kmrh47-skills.git
+  PLUGINS: |-
+    qol-code-review@qol-skills
+    qol-project@qol-skills
+    qol-workflow@qol-skills
+    qol-langs@qol-skills
+    engineering-discipline@kmrh47-skills
+    writing@kmrh47-skills
+
+jobs:
+  review:
+    name: Review with qol-code-review
+    # Push to main only refreshes the plugin seed cache, which every pull request can restore.
+    if: >-
+      github.event_name == 'push' ||
+      (!github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       !endsWith(github.actor, '[bot]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve marketplace heads
+        id: seed
+        env:
+          GH_TOKEN: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          heads=""
+          while read -r url; do
+            head="$(git ls-remote "$url" HEAD | cut -f1)"
+            test -n "$head"
+            heads="$heads $head"
+          done <<< "$MARKETPLACES"
+          hash="$(printf '%s %s %s' "$heads" "$CLAUDE_CODE_VERSION" "$PLUGINS" | sha256sum | cut -c1-8)"
+          echo "key=claude-seed-$hash" >> "$GITHUB_OUTPUT"
+          echo "dir=$HOME/.claude-seed" >> "$GITHUB_OUTPUT"
+
+      - name: Restore plugin seed
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.claude-seed
+          key: ${{ steps.seed.outputs.key }}
+          lookup-only: ${{ github.event_name == 'push' }}
+
+      - name: Install Claude Code
+        if: github.event_name == 'pull_request' || steps.cache.outputs.cache-hit != 'true'
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Build plugin seed
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+          CLAUDE_CODE_PLUGIN_CACHE_DIR: ${{ steps.seed.outputs.dir }}
+        run: |
+          set -euo pipefail
+          export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/seed-config"
+          while read -r url; do claude plugin marketplace add "$url"; done <<< "$MARKETPLACES"
+          while read -r plugin; do claude plugin install "$plugin"; done <<< "$PLUGINS"
+
+      - name: Save plugin seed
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.claude-seed
+          key: ${{ steps.seed.outputs.key }}
+
+      - name: Run qol-code-review
+        if: github.event_name == 'pull_request'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
+          CLAUDE_CODE_SYNC_PLUGIN_INSTALL: "1"
+          CLAUDE_CODE_SUBAGENT_MODEL: ${{ env.CLAUDE_MODEL }}
+          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1"
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          DISABLE_AUTOUPDATER: "1"
+          SEED: ${{ steps.seed.outputs.dir }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/claude-review"
+          mkdir -p "$work"
+          export CODE_REVIEW_OUT_DIR="$work/out"
+          skill="$(echo "$SEED"/cache/qol-skills/qol-code-review/*/skills/qol-code-review)"
+          test -f "$skill/SKILL.md"
+          detector="node $skill/scripts/shallow-wrappers.cjs"
+          writer="node $skill/scripts/save-review.cjs"
+          diff="$work/pr.diff"
+          git diff HEAD^1 HEAD > "$diff"
+          settings="$(jq -Rn '{enabledPlugins: ([inputs | select(length > 0) | {(.): true}] | add)}' <<< "$PLUGINS")"
+          {
+            echo "/qol-code-review:qol-code-review Review pull request #$PR_NUMBER of $GITHUB_REPOSITORY."
+            echo
+            echo "- Checkout: $PWD, the merge of the pull request into its base. Git history is not available."
+            echo "- PR diff: $diff"
+            echo "- Shallow-wrapper detector: $detector --root . --diff $diff --json $work/shallow-wrappers.json"
+            echo "- Review writer: $writer --verdict <verdict> --slug pr --run-id review"
+            echo "- Title: $PR_TITLE"
+            echo "- Description:"
+            printf '%s\n' "$PR_BODY" | sed 's/^/  > /'
+            echo
+            cat .github/claude-review/prompt.md
+          } > "$work/prompt.md"
+          # Untrusted PR text reaches the model, so tools stay read-only and scoped:
+          # reads cover the checkout, the review dir and the plugin seed; Bash runs only the two skill scripts.
+          claude -p "$(cat "$work/prompt.md")" \
+            --model "$CLAUDE_MODEL" \
+            --effort high \
+            --settings "$settings" \
+            --agents .github/claude-review/agents.json \
+            --permission-mode dontAsk \
+            --allowedTools Glob Grep \
+              "Read(/$GITHUB_WORKSPACE/**)" "Read(/$work/**)" "Read(/$SEED/**)" \
+              "Bash($detector:*)" "Bash($writer:*)" "Agent(adversarial-reviewer)" \
+            --disallowedTools Edit Write NotebookEdit WebFetch WebSearch "Read(//proc/**)" "Read(//sys/**)" \
+            --output-format json > "$work/result.json"
+
+      - name: Post review comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/claude-review"
+          review="$work/out/review/review.md"
+          if [ ! -s "$review" ]; then
+            echo "::warning::qol-code-review wrote no review.md, posting the final reply instead"
+            review="$work/reply.md"
+            jq -r '.result // empty' "$work/result.json" > "$review"
+          fi
+          if [ ! -s "$review" ]; then
+            echo "::error::qol-code-review produced no review"
+            exit 1
+          fi
+          for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
+            if [ -n "$secret" ] && grep -qF -- "$secret" "$review"; then
+              echo "::error::the review contains a secret and was not posted"
+              exit 1
+            fi
+          done
+          marker='<!-- qol-code-review -->'
+          body="$work/comment.md"
+          { echo "$marker"; cat "$review"; } > "$body"
+          id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | tail -n1)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$body" > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
+          fi
