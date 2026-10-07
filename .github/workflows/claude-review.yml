@@ -18,7 +18,6 @@ env:
   PLUGINS: |-
     qol-code-review@qol-skills
     qol-project@qol-skills
-    qol-workflow@qol-skills
     qol-langs@qol-skills
     engineering-discipline@kmrh47-skills
     writing@kmrh47-skills
@@ -122,26 +121,25 @@ jobs:
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/claude-review"
-          mkdir -p "$work"
-          export CODE_REVIEW_OUT_DIR="$work/out"
+          # Inputs the model reads live in the checkout; .git/info/exclude keeps them out of the fix commit.
+          ctx=".claude-review"
+          mkdir -p "$work" "$ctx"
+          echo "/$ctx/" >> .git/info/exclude
           skill="$(echo "$SEED"/cache/qol-skills/qol-code-review/*/skills/qol-code-review)"
           test -f "$skill/SKILL.md"
-          diff="$work/pr.diff"
-          detector="node $skill/scripts/shallow-wrappers.cjs --root . --diff $diff --json $work/shallow-wrappers.json"
-          writer="node $skill/scripts/save-review.cjs --verdict"
-          git diff HEAD^1 HEAD > "$diff"
-          settings="$(jq -Rn --arg work "$work" '{
-            enabledPlugins: ([inputs | select(length > 0) | {(.): true}] | add),
-            sandbox: {filesystem: {allowWrite: [$work]}}
-          }' <<< "$PLUGINS")"
-          printf '%s' "$settings" > "$work/settings.json"
+          cp -r "$skill/references" "$ctx/references"
+          git diff HEAD^1 HEAD > "$ctx/pr.diff"
+          node "$skill/scripts/shallow-wrappers.cjs" --root . --diff "$ctx/pr.diff" \
+            --json "$ctx/shallow-wrappers.json" > "$ctx/shallow-wrappers.txt"
+          jq -Rn '{enabledPlugins: ([inputs | select(length > 0) | {(.): true}] | add)}' \
+            <<< "$PLUGINS" > "$work/settings.json"
           {
             echo "/qol-code-review:qol-code-review Review pull request #$PR_NUMBER of $GITHUB_REPOSITORY."
             echo
             echo "- Checkout: $PWD, the merge of the pull request into its base. Git history is not available."
-            echo "- PR diff: $diff"
-            echo "- Shallow-wrapper detector: $detector"
-            echo "- Review writer, with the review on stdin: $writer <verdict> --slug pr --run-id review"
+            echo "- PR diff: $ctx/pr.diff"
+            echo "- Shallow-wrapper detector output, already run on that diff: $ctx/shallow-wrappers.txt and $ctx/shallow-wrappers.json"
+            echo "- Review checklists: $ctx/references/review-checklists.md"
             echo "- Title: $PR_TITLE"
             echo "- Description:"
             # Capped so the prompt stays under the kernel's per-argument limit.
@@ -152,11 +150,19 @@ jobs:
           claude -p "$(cat "$work/prompt.md")" \
             --model "$CLAUDE_MODEL" \
             --effort high \
-            --settings "$settings" \
+            --settings "$work/settings.json" \
             --agents .github/claude-review/agents.json \
             --dangerously-skip-permissions \
-            --disallowedTools Edit Write NotebookEdit WebFetch WebSearch "Read(//proc/**)" "Read(//sys/**)" \
+            --disallowedTools Bash Edit Write NotebookEdit WebFetch WebSearch \
             --output-format json > "$work/result.json"
+          jq -c '.permission_denials // []' "$work/result.json"
+          # The workflow persists the review, so the model needs no shell.
+          jq -r 'select(.subtype == "success" and .is_error != true) | .result // empty' "$work/result.json" > "$work/reply.md"
+          if [ -s "$work/reply.md" ]; then
+            verdict="$(grep -oE '"verdict": *"[a-z]+"' "$work/reply.md" | tail -n1 | grep -oE '[a-z]+"$' | tr -d '"' || true)"
+            node "$skill/scripts/save-review.cjs" --verdict "${verdict:-unknown}" --slug pr --run-id review \
+              --out-dir "$work/out" --in "$work/reply.md"
+          fi
 
       - name: Post review comment
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -238,7 +244,9 @@ jobs:
             --disallowedTools Bash Agent NotebookEdit WebFetch WebSearch "Edit(/$GITHUB_WORKSPACE/.git/**)" \
             > "$work/fix-reply.md"
           cat "$work/fix-reply.md"
-          git diff > "$work/fix.patch"
+          # Staged so files the fix creates are part of the patch.
+          git add -A
+          git diff --cached > "$work/fix.patch"
           if [ -s "$work/fix.patch" ]; then
             echo "patch=$work/fix.patch" >> "$GITHUB_OUTPUT"
           fi
