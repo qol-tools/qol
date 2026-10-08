@@ -91,8 +91,8 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
     phases.mark("stage");
     apply_marker_update(&plan.marker_update)?;
     status.set("stop", Measure::Unknown, "running tray");
-    let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
     let restore = crate::installed_tray::RestoreOnExit::arm();
+    let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
     phases.mark("stop");
     let shutdown_detail = match shutdown_method {
         ShutdownMethod::Graceful => "previous tray stopped gracefully",
@@ -163,8 +163,8 @@ fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
     let binary = root
         .join("bin")
         .join(crate::workspace::exe_name("qol-tray"));
-    let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
     let restore = crate::installed_tray::RestoreOnExit::arm();
+    let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
     let shutdown_detail = match shutdown_method {
         ShutdownMethod::Graceful => "previous tray stopped gracefully",
         ShutdownMethod::Forced => "previous tray required fallback cleanup",
