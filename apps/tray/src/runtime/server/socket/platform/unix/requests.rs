@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use qol_plugin_api::manifest::is_valid_plugin_id;
 use qol_runtime::protocol::{
-    ArmedLifelinesResponse, NotificationLayout, NotificationLevel, PluginConfigResponse, PushAck,
-    RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
+    ArmedLifelinesResponse, DaemonRequest, NotificationLayout, NotificationLevel,
+    PluginConfigResponse, PushAck, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 
 use super::io::{write_flushed_json_line, write_state};
@@ -79,11 +79,20 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
             action_payload,
             artifact,
             layout,
+            activate,
         } => {
             let action = resolve_action(action_label.as_deref(), action_payload.as_deref());
             let artifact = resolve_artifact(artifact.as_deref());
             handle_push_notification(
-                writer, &plugin_id, &title, &body, level, action, artifact, layout,
+                writer,
+                &plugin_id,
+                &title,
+                &body,
+                level,
+                action,
+                artifact,
+                layout,
+                activate.as_ref(),
             )
         }
         RuntimeRequest::PushStatus { plugin_id, status } => {
@@ -104,6 +113,7 @@ fn handle_push_notification(
     action: Option<(&str, &str)>,
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
+    activate: Option<&DaemonRequest>,
 ) {
     let accepted = push_plugin_known(plugin_id);
     if accepted && title.trim().is_empty() {
@@ -137,6 +147,7 @@ fn handle_push_notification(
         action,
         artifact,
         layout,
+        activate,
     );
 }
 

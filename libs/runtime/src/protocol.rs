@@ -102,6 +102,11 @@ pub enum RuntimeRequest {
         artifact: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         layout: Option<NotificationLayout>,
+        /// Action the host sends back to the pushing plugin when the
+        /// notification is clicked, through the same route as any other
+        /// plugin action. The plugin decides what "take me there" means.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activate: Option<DaemonRequest>,
     },
     PushStatus {
         plugin_id: String,
@@ -301,6 +306,7 @@ mod tests {
             action_payload: None,
             artifact: None,
             layout: None,
+            activate: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"cmd\":\"push_notification\""));
@@ -315,6 +321,7 @@ mod tests {
             action_payload,
             artifact,
             layout,
+            activate,
         } = serde_json::from_str(&wire).expect("deserialize")
         else {
             panic!("variant mismatch");
@@ -327,6 +334,37 @@ mod tests {
         assert_eq!(action_payload, None);
         assert_eq!(artifact, None);
         assert_eq!(layout, None);
+        assert!(activate.is_none());
+        assert!(!wire.contains("activate"));
+    }
+
+    #[test]
+    fn push_notification_with_activate_round_trips() {
+        let request = RuntimeRequest::PushNotification {
+            plugin_id: "qol-cli-sessions".to_string(),
+            title: "lane".to_string(),
+            body: "needs you".to_string(),
+            level: NotificationLevel::Info,
+            action_label: None,
+            action_payload: None,
+            artifact: None,
+            layout: None,
+            activate: Some(DaemonRequest {
+                action: "focus".to_string(),
+                input: serde_json::json!({ "session": "kitty:42" }),
+            }),
+        };
+        let wire = serde_json::to_string(&request).expect("serialize");
+        assert!(wire.contains(r#""activate":{"action":"focus","input":{"session":"kitty:42"}}"#));
+
+        let RuntimeRequest::PushNotification { activate, .. } =
+            serde_json::from_str(&wire).expect("deserialize")
+        else {
+            panic!("variant mismatch");
+        };
+        let activate = activate.expect("activate survives the round trip");
+        assert_eq!(activate.action, "focus");
+        assert_eq!(activate.input["session"], "kitty:42");
     }
 
     #[test]
@@ -340,6 +378,7 @@ mod tests {
             action_payload: Some("/home/u/Videos/qol-shot.mp4".to_string()),
             artifact: None,
             layout: None,
+            activate: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"action_label\":\"Open Folder\""));
@@ -374,6 +413,7 @@ mod tests {
             action_payload: None,
             artifact: Some("/home/u/Pictures/shot.png".to_string()),
             layout: None,
+            activate: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"artifact\":\"/home/u/Pictures/shot.png\""));
@@ -396,6 +436,7 @@ mod tests {
             action_payload,
             artifact,
             layout,
+            activate,
             ..
         } = serde_json::from_str(wire).expect("deserialize")
         else {
@@ -407,6 +448,7 @@ mod tests {
         assert_eq!(action_payload, None);
         assert_eq!(artifact, None);
         assert_eq!(layout, None);
+        assert!(activate.is_none());
     }
 
     #[test]
@@ -425,6 +467,7 @@ mod tests {
                 height: Some(84.0),
                 style: Some("compact".to_string()),
             }),
+            activate: None,
         };
         let wire = serde_json::to_string(&request).expect("serialize");
         assert!(wire.contains("\"layout\":{\"anchor\":\"bottom-right\""));

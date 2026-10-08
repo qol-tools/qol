@@ -1,6 +1,10 @@
 use std::sync::mpsc::Sender;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
+use qol_runtime::protocol::DaemonRequest;
+use qol_terminal_sessions::SessionId;
+
+use crate::ui::notify::FOCUS_ACTION;
 
 pub const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -11,12 +15,23 @@ pub const CONFIG: DaemonConfig = DaemonConfig {
 pub enum Command {
     Open,
     NextAttention,
+    Focus(SessionId),
     Snapshot,
     Kill,
     Theme {
         native: Option<String>,
         accent: Option<String>,
     },
+}
+
+fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
+    if request.action != FOCUS_ACTION {
+        return parse_command(&request.action);
+    }
+    match serde_json::from_value(request.input["session"].clone()) {
+        Ok(session) => ReadResult::Command(Command::Focus(session)),
+        Err(error) => ReadResult::Error(format!("focus requires a session: {error}")),
+    }
 }
 
 fn parse_command(cmd: &str) -> ReadResult<Command> {
@@ -38,13 +53,50 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
 }
 
 pub fn start_listener(tx: Sender<Command>) -> bool {
-    core_daemon::start_listener(&CONFIG, tx, parse_command)
+    core_daemon::start_request_listener(&CONFIG, tx, parse_request)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_command, Command};
+    use super::{parse_command, parse_request, Command};
     use qol_plugin_daemon::daemon::ReadResult;
+    use qol_runtime::protocol::DaemonRequest;
+    use qol_terminal_sessions::SessionId;
+
+    #[test]
+    fn focus_carries_the_session_from_the_notice_input() {
+        let session = SessionId::new(qol_terminal_sessions::kitty::backend_id().clone(), "42")
+            .expect("valid session id");
+        let request = DaemonRequest {
+            action: "focus".to_string(),
+            input: serde_json::json!({ "session": session }),
+        };
+        match parse_request(&request) {
+            ReadResult::Command(Command::Focus(parsed)) => assert_eq!(parsed, session),
+            _ => panic!("expected Focus command"),
+        }
+    }
+
+    #[test]
+    fn focus_without_a_session_is_an_error() {
+        let request = DaemonRequest {
+            action: "focus".to_string(),
+            input: serde_json::Value::Null,
+        };
+        assert!(matches!(parse_request(&request), ReadResult::Error(_)));
+    }
+
+    #[test]
+    fn plain_actions_still_parse_through_the_request_listener() {
+        let request = DaemonRequest {
+            action: "next".to_string(),
+            input: serde_json::Value::Null,
+        };
+        assert!(matches!(
+            parse_request(&request),
+            ReadResult::Command(Command::NextAttention)
+        ));
+    }
 
     fn theme(cmd: &str) -> (Option<String>, Option<String>) {
         match parse_command(cmd) {

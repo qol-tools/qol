@@ -20,20 +20,59 @@ use crate::settings_surface::{CoreTool, HostBoot};
 #[derive(Debug)]
 enum Command {
     Open(String),
-    Toast {
-        group: String,
-        source: String,
-        mark: Option<String>,
-        title: String,
-        body: String,
-        level: String,
-        action: Option<(String, String)>,
-        artifact: Option<String>,
-        layout: Option<Box<NotificationLayout>>,
-    },
+    Toast(Box<ToastCommand>),
     ThemeChanged,
     PluginsChanged,
     Kill,
+}
+
+#[derive(Debug)]
+struct ToastCommand {
+    group: String,
+    source: String,
+    mark: Option<String>,
+    title: String,
+    body: String,
+    level: String,
+    action: Option<(String, String)>,
+    artifact: Option<String>,
+    layout: Option<NotificationLayout>,
+    activate: Option<ToastActivation>,
+}
+
+/// The plugin action a click on the toast runs, through the tray's plugin
+/// action route like any other plugin action.
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct ToastActivation {
+    plugin: String,
+    action: String,
+    #[serde(default)]
+    input: serde_json::Value,
+}
+
+impl ToastActivation {
+    fn run(&self, cx: &mut App) {
+        let route = qol_conventions::api_routes::plugin_action(&self.plugin, &self.action);
+        let body = self.input.to_string();
+        cx.background_spawn(async move {
+            if let Err(error) = super::native_tools::data::request_text(
+                qol_runtime::local_http::Method::Post,
+                &route,
+                Some(&body),
+                super::native_tools::data::REQUEST_TIMEOUT,
+            ) {
+                log::warn!("[toast] activation {route} failed: {error:#}");
+            }
+        })
+        .detach();
+    }
+}
+
+fn validated_activation(value: &serde_json::Value) -> Option<ToastActivation> {
+    let activation = serde_json::from_value::<ToastActivation>(value.clone()).ok()?;
+    (qol_plugin_api::manifest::is_valid_plugin_id(&activation.plugin)
+        && crate::plugins::manifest::is_valid_action_id(&activation.action))
+    .then_some(activation)
 }
 
 fn config() -> DaemonConfig {
@@ -390,19 +429,8 @@ fn spawn_command_loop(
                     activate(host, tracker, plugin_id, &cx).await;
                     LoopFlow::Continue
                 }
-                Command::Toast {
-                    group,
-                    source,
-                    mark,
-                    title,
-                    body,
-                    level,
-                    action,
-                    artifact,
-                    layout,
-                } => {
-                    show_toast_in_host(
-                        toast_host,
+                Command::Toast(toast) => {
+                    let ToastCommand {
                         group,
                         source,
                         mark,
@@ -411,8 +439,12 @@ fn spawn_command_loop(
                         level,
                         action,
                         artifact,
-                        layout.map(|layout| *layout),
-                        &cx,
+                        layout,
+                        activate,
+                    } = *toast;
+                    show_toast_in_host(
+                        toast_host, group, source, mark, title, body, level, action, artifact,
+                        layout, activate, &cx,
                     );
                     LoopFlow::Continue
                 }
@@ -478,6 +510,7 @@ fn show_toast_in_host(
     action: Option<(String, String)>,
     artifact: Option<String>,
     layout: Option<NotificationLayout>,
+    activate: Option<ToastActivation>,
     cx: &gpui::AsyncApp,
 ) {
     let result = cx.update(move |cx| {
@@ -507,6 +540,11 @@ fn show_toast_in_host(
             toast = toast.artifact(path);
         } else if let Some((_, payload)) = action {
             toast = toast.on_activate(move |_cx| crate::paths::open_url(&payload));
+        } else if let Some(activate) = activate {
+            toast = toast.on_activate(move |cx| {
+                activate.run(cx);
+                Ok(())
+            });
         }
         if let Err(error) = toast_host.show(toast, cx) {
             log::warn!("[toast] render failed: {error:#}");
@@ -908,6 +946,7 @@ fn forward_open(plugin_id: &str) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::settings_surface) fn show_toast(
     source: crate::settings_surface::ToastSource<'_>,
     title: &str,
@@ -916,10 +955,14 @@ pub(in crate::settings_surface) fn show_toast(
     action: Option<(&str, &str)>,
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
+    activate: Option<(&str, &DaemonRequest)>,
 ) -> anyhow::Result<bool> {
     let config = config();
     let action =
         action.map(|(label, payload)| serde_json::json!({ "label": label, "payload": payload }));
+    let activate = activate.map(|(plugin, request)| {
+        serde_json::json!({ "plugin": plugin, "action": request.action, "input": request.input })
+    });
     Ok(matches!(
         core_daemon::send_request(
             &config,
@@ -934,6 +977,7 @@ pub(in crate::settings_surface) fn show_toast(
                 "action": action,
                 "artifact": artifact,
                 "layout": layout,
+                "activate": activate,
             }),
             Duration::from_millis(500),
         ),
@@ -990,20 +1034,23 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
             let layout = request
                 .input
                 .get("layout")
-                .and_then(|value| serde_json::from_value::<NotificationLayout>(value.clone()).ok())
-                .map(Box::new);
+                .and_then(|value| serde_json::from_value::<NotificationLayout>(value.clone()).ok());
+            let activate = request.input.get("activate").and_then(validated_activation);
             match (title, body, level) {
-                (Some(title), Some(body), Some(level)) => ReadResult::Command(Command::Toast {
-                    group: text("group").or(text("source")).unwrap_or_default(),
-                    source: text("source").unwrap_or_default(),
-                    mark: text("mark"),
-                    title: title.to_string(),
-                    body: body.to_string(),
-                    level: level.to_string(),
-                    action,
-                    artifact,
-                    layout,
-                }),
+                (Some(title), Some(body), Some(level)) => {
+                    ReadResult::Command(Command::Toast(Box::new(ToastCommand {
+                        group: text("group").or(text("source")).unwrap_or_default(),
+                        source: text("source").unwrap_or_default(),
+                        mark: text("mark"),
+                        title: title.to_string(),
+                        body: body.to_string(),
+                        level: level.to_string(),
+                        action,
+                        artifact,
+                        layout,
+                        activate,
+                    })))
+                }
                 _ => ReadResult::Error("toast requires title, body and level".into()),
             }
         }
@@ -1035,6 +1082,7 @@ fn activation_name(activation: SettingsActivation) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::ToastCommand;
     use qol_plugin_daemon::daemon::ReadResult;
     use qol_runtime::protocol::DaemonRequest;
 
@@ -1163,19 +1211,26 @@ mod tests {
         ));
     }
 
+    fn parsed_toast(result: ReadResult<Command>) -> ToastCommand {
+        match result {
+            ReadResult::Command(Command::Toast(toast)) => *toast,
+            _ => panic!("toast request did not parse as a command"),
+        }
+    }
+
     #[test]
     fn toast_protocol_groups_by_plugin_id_and_names_the_plugin() {
-        let toast = |input: serde_json::Value| match parse_request(&DaemonRequest {
-            action: "toast".into(),
-            input,
-        }) {
-            ReadResult::Command(Command::Toast {
+        let toast = |input: serde_json::Value| {
+            let ToastCommand {
                 group,
                 source,
                 mark,
                 ..
-            }) => (group, source, mark),
-            _ => panic!("toast request did not parse as a command"),
+            } = parsed_toast(parse_request(&DaemonRequest {
+                action: "toast".into(),
+                input,
+            }));
+            (group, source, mark)
         };
         assert_eq!(
             toast(serde_json::json!({
@@ -1210,8 +1265,8 @@ mod tests {
                 "action": { "label": "open", "payload": payload },
             }),
         };
-        match parse_request(&request) {
-            ReadResult::Command(Command::Toast {
+        {
+            let ToastCommand {
                 group,
                 source,
                 mark,
@@ -1221,18 +1276,18 @@ mod tests {
                 action,
                 artifact,
                 layout,
-            }) => {
-                assert_eq!(group, "");
-                assert_eq!(source, "");
-                assert_eq!(mark, None);
-                assert_eq!(title, "title");
-                assert_eq!(body, "body");
-                assert_eq!(level, "warn");
-                assert_eq!(action, Some(("open".to_string(), payload)));
-                assert_eq!(artifact, None);
-                assert_eq!(layout, None);
-            }
-            _ => panic!("toast request did not parse as a command"),
+                activate,
+            } = parsed_toast(parse_request(&request));
+            assert_eq!(activate, None);
+            assert_eq!(group, "");
+            assert_eq!(source, "");
+            assert_eq!(mark, None);
+            assert_eq!(title, "title");
+            assert_eq!(body, "body");
+            assert_eq!(level, "warn");
+            assert_eq!(action, Some(("open".to_string(), payload)));
+            assert_eq!(artifact, None);
+            assert_eq!(layout, None);
         }
 
         let incomplete = DaemonRequest {
@@ -1250,9 +1305,44 @@ mod tests {
                 "action": { "label": "open", "payload": "/does/not/exist" },
             }),
         };
-        match parse_request(&missing_payload) {
-            ReadResult::Command(Command::Toast { action, .. }) => assert_eq!(action, None),
-            _ => panic!("toast request did not parse as a command"),
+        let action = parsed_toast(parse_request(&missing_payload)).action;
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn toast_protocol_carries_a_plugin_activation_and_drops_invalid_ones() {
+        let toast = |activate: serde_json::Value| {
+            let ToastCommand { activate, .. } = parsed_toast(parse_request(&DaemonRequest {
+                action: "toast".into(),
+                input: serde_json::json!({
+                    "title": "title",
+                    "body": "body",
+                    "level": "info",
+                    "activate": activate,
+                }),
+            }));
+            activate
+        };
+        assert_eq!(
+            toast(serde_json::json!({
+                "plugin": "qol-cli-sessions",
+                "action": "focus",
+                "input": { "session": "kitty:42" },
+            })),
+            Some(super::ToastActivation {
+                plugin: "qol-cli-sessions".into(),
+                action: "focus".into(),
+                input: serde_json::json!({ "session": "kitty:42" }),
+            })
+        );
+        let cases = [
+            serde_json::json!({ "plugin": "../core", "action": "focus" }),
+            serde_json::json!({ "plugin": "qol-cli-sessions", "action": "a/b" }),
+            serde_json::json!({ "action": "focus" }),
+            serde_json::Value::Null,
+        ];
+        for case in cases {
+            assert_eq!(toast(case.clone()), None, "{case}");
         }
     }
 
@@ -1272,16 +1362,12 @@ mod tests {
                 },
             }),
         };
-        match parse_request(&request) {
-            ReadResult::Command(Command::Toast { layout, .. }) => {
-                let layout = layout.expect("layout override parsed");
-                assert_eq!(layout.anchor.as_deref(), Some("bottom-right"));
-                assert_eq!(layout.width, Some(400.0));
-                assert_eq!(layout.height, Some(84.0));
-                assert_eq!(layout.style.as_deref(), Some("compact"));
-            }
-            _ => panic!("toast request did not parse as a command"),
-        }
+        let layout = parsed_toast(parse_request(&request)).layout;
+        let layout = layout.expect("layout override parsed");
+        assert_eq!(layout.anchor.as_deref(), Some("bottom-right"));
+        assert_eq!(layout.width, Some(400.0));
+        assert_eq!(layout.height, Some(84.0));
+        assert_eq!(layout.style.as_deref(), Some("compact"));
 
         let malformed = DaemonRequest {
             action: "toast".into(),
@@ -1292,10 +1378,8 @@ mod tests {
                 "layout": "bottom-right",
             }),
         };
-        match parse_request(&malformed) {
-            ReadResult::Command(Command::Toast { layout, .. }) => assert_eq!(layout, None),
-            _ => panic!("toast request did not parse as a command"),
-        }
+        let layout = parsed_toast(parse_request(&malformed)).layout;
+        assert_eq!(layout, None);
     }
 
     #[test]
@@ -1314,20 +1398,15 @@ mod tests {
             }),
         };
 
-        match parse_request(&request_for(&existing)) {
-            ReadResult::Command(Command::Toast { artifact, .. }) => {
-                assert_eq!(artifact, Some(existing));
-            }
-            _ => panic!("toast request did not parse as a command"),
+        {
+            let ToastCommand { artifact, .. } =
+                parsed_toast(parse_request(&request_for(&existing)));
+            assert_eq!(artifact, Some(existing));
         }
 
         let missing = tmp.path().join("gone.png").to_string_lossy().into_owned();
-        match parse_request(&request_for(&missing)) {
-            ReadResult::Command(Command::Toast { artifact, .. }) => {
-                assert_eq!(artifact, None);
-            }
-            _ => panic!("toast request did not parse as a command"),
-        }
+        let artifact = parsed_toast(parse_request(&request_for(&missing))).artifact;
+        assert_eq!(artifact, None);
     }
 
     #[test]

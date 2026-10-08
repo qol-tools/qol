@@ -1,3 +1,4 @@
+#[allow(clippy::too_many_arguments)]
 pub(in crate::settings_surface) fn show_toast(
     _source: super::super::ToastSource<'_>,
     _title: &str,
@@ -6,6 +7,7 @@ pub(in crate::settings_surface) fn show_toast(
     _action: Option<(&str, &str)>,
     _artifact: Option<&str>,
     _layout: Option<qol_runtime::protocol::NotificationLayout>,
+    _activate: Option<(&str, &qol_runtime::protocol::DaemonRequest)>,
 ) -> anyhow::Result<bool> {
     Ok(false)
 }
