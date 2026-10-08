@@ -24,6 +24,7 @@ qol-plugin-daemon.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true
 qol-terminal-sessions.workspace = true
+qol-agent-launch.workspace = true
 qol-config.workspace = true
 qol-fs.workspace = true
 workspace-hack.workspace = true

@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod diagnostics;
 mod doctor;
 pub mod host;
+pub mod park;
 pub mod session;
 pub mod signal;
 pub mod storage;

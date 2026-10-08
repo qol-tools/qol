@@ -1,9 +1,24 @@
-use anyhow::{bail, Result};
-use qol_terminal_sessions::cli::CliToolId;
+use std::fmt::{Display, Formatter};
 
-pub(super) const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+use super::CliToolId;
 
-pub(super) fn launch_flags(
+/// A model or effort the tool cannot take, worded for the caller who asked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchFlagError(String);
+
+impl Display for LaunchFlagError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for LaunchFlagError {}
+
+type Result<T> = std::result::Result<T, LaunchFlagError>;
+
+pub const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+pub fn launch_flags(
     tool: &CliToolId,
     model: Option<&str>,
     effort: Option<&str>,
@@ -13,7 +28,7 @@ pub(super) fn launch_flags(
     Ok(flags)
 }
 
-pub(super) fn tier_flags(
+pub fn tier_flags(
     tool: &CliToolId,
     model: Option<&str>,
     effort: Option<&str>,
@@ -35,7 +50,7 @@ fn permission_flags(tool: &CliToolId) -> Vec<String> {
     }
 }
 
-pub(super) const RESUMABLE_PERMISSION_MODES: [&str; 5] = [
+pub const RESUMABLE_PERMISSION_MODES: [&str; 5] = [
     "default",
     "acceptEdits",
     "plan",
@@ -43,7 +58,7 @@ pub(super) const RESUMABLE_PERMISSION_MODES: [&str; 5] = [
     "bypassPermissions",
 ];
 
-pub(super) fn resume_permission_flags(tool: &CliToolId, mode: Option<&str>) -> Vec<String> {
+pub fn resume_permission_flags(tool: &CliToolId, mode: Option<&str>) -> Vec<String> {
     match (tool.as_str(), mode) {
         ("claude", Some("bypassPermissions")) => permission_flags(tool),
         ("claude", Some(mode)) if RESUMABLE_PERMISSION_MODES.contains(&mode) => {
@@ -56,14 +71,16 @@ pub(super) fn resume_permission_flags(tool: &CliToolId, mode: Option<&str>) -> V
 fn model_flags(tool: &CliToolId, model: &str) -> Result<Vec<String>> {
     let flag = match tool.as_str() {
         "pi" | "codex" | "claude" | "kimi" => "--model",
-        other => bail!(
-            "tool `{other}` has no model override flag; launch it directly with the model instead"
-        ),
+        other => {
+            return Err(LaunchFlagError(format!(
+            "tool `{other}` has no model override flag; launch it directly with the model instead",
+        )))
+        }
     };
     Ok(vec![flag.to_owned(), model.to_owned()])
 }
 
-pub(super) fn takes_effort(tool: &str) -> bool {
+pub fn takes_effort(tool: &str) -> bool {
     effort_flag(tool).is_some()
 }
 
@@ -77,16 +94,16 @@ fn effort_flag(tool: &str) -> Option<&'static str> {
 
 fn effort_flags(tool: &CliToolId, effort: &str) -> Result<Vec<String>> {
     if !EFFORT_LEVELS.contains(&effort) {
-        bail!(
+        return Err(LaunchFlagError(format!(
             "invalid effort `{effort}`; expected one of {}",
             EFFORT_LEVELS.join(", ")
-        );
+        )));
     }
     let Some(flag) = effort_flag(tool.as_str()) else {
-        bail!(
+        return Err(LaunchFlagError(format!(
             "tool `{}` has no effort flag; drop the effort or pick a tool that takes one",
             tool.as_str()
-        );
+        )));
     };
     Ok(vec![flag.to_owned(), effort.to_owned()])
 }

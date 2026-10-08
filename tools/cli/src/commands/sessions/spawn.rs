@@ -6,6 +6,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use qol_agent_launch::cap::{apply_slice_properties, wrap_launch};
+pub(super) use qol_agent_launch::cap::{config_spawn_cap, resolve_spawn_cap, SpawnCapConfig};
+use qol_agent_launch::sessions_config_path;
+pub(super) use qol_agent_launch::surface::{config_surface, surface_token, SURFACE_TAB};
+use qol_agent_launch::surface::{parse_surface, SURFACE_OS_WINDOW};
 use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
@@ -19,20 +24,23 @@ use super::agent_policy::{
     AgentRequirement, AgentRole, AgentStatus, AssignmentRequest, DispatchPolicy, RecordedIdentity,
 };
 
-pub(super) const SURFACE_TAB: &str = "tab";
-pub(super) const SURFACE_OS_WINDOW: &str = "os-window";
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const READY_TIMEOUT_MS: u64 = 30_000;
 const READY_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const SPAWN_TASK_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const SCOPE_SLICE: &str = "qol-agents.slice";
-const SCOPE_WEIGHT_MIN: u32 = 1;
-const SCOPE_WEIGHT_MAX: u32 = 10_000;
-const SPAWN_CAP_DEFAULT_CPU_WEIGHT: u32 = 40;
-const SPAWN_CAP_DEFAULT_IO_WEIGHT: u32 = 40;
-const SCOPE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 static KEY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const LANE_EXEC_PREFIX: &[&str] = &["sessions", "lane-exec"];
+
+#[cfg(not(test))]
+fn caller_config_dir() -> Option<PathBuf> {
+    std::env::var_os(qol_agent_launch::account::CONFIG_DIR_ENV).map(PathBuf::from)
+}
+
+#[cfg(test)]
+fn caller_config_dir() -> Option<PathBuf> {
+    None
+}
 
 #[derive(Debug, Serialize)]
 pub(super) struct SpawnOutcome {
@@ -110,21 +118,6 @@ enum SpawnDecision {
     Ambiguous(usize),
 }
 
-pub(super) fn surface_token(surface: SpawnSurface) -> &'static str {
-    match surface {
-        SpawnSurface::Tab => SURFACE_TAB,
-        SpawnSurface::OsWindow => SURFACE_OS_WINDOW,
-    }
-}
-
-fn parse_surface(token: &str) -> Option<SpawnSurface> {
-    match token {
-        SURFACE_TAB => Some(SpawnSurface::Tab),
-        SURFACE_OS_WINDOW => Some(SpawnSurface::OsWindow),
-        _ => None,
-    }
-}
-
 fn resolve_surface(flag: Option<&str>, config: Option<SpawnSurface>) -> Result<SpawnSurface> {
     match flag {
         Some(token) => parse_surface(token).ok_or_else(|| {
@@ -136,14 +129,9 @@ fn resolve_surface(flag: Option<&str>, config: Option<SpawnSurface>) -> Result<S
 
 #[derive(serde::Deserialize)]
 struct SpawnConfigFile {
-    spawn_surface: Option<String>,
     spawn_model: Option<String>,
     allowed_models: Option<Vec<String>>,
     tool_models: Option<std::collections::BTreeMap<String, Vec<String>>>,
-    spawn_cap: Option<bool>,
-    spawn_cpu_weight: Option<u32>,
-    spawn_io_weight: Option<u32>,
-    spawn_cpu_quota: Option<String>,
     #[serde(default)]
     agent_profiles: std::collections::BTreeMap<String, AgentProfileSpec>,
     #[serde(default)]
@@ -151,253 +139,11 @@ struct SpawnConfigFile {
     #[serde(default)]
     enforce_agent_profiles: Option<bool>,
     #[serde(default)]
-    claude_accounts: std::collections::BTreeMap<String, super::lane_account::ClaudeAccountSpec>,
-    #[serde(default)]
     aliases: std::collections::BTreeMap<String, String>,
     fork_model: Option<String>,
     fork_effort: Option<String>,
     fork_surface: Option<String>,
     spawn_effort: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct SpawnCapConfig {
-    pub(super) enabled: bool,
-    pub(super) cpu_weight: u32,
-    pub(super) io_weight: u32,
-    pub(super) cpu_quota: Option<String>,
-}
-
-impl Default for SpawnCapConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            cpu_weight: SPAWN_CAP_DEFAULT_CPU_WEIGHT,
-            io_weight: SPAWN_CAP_DEFAULT_IO_WEIGHT,
-            cpu_quota: None,
-        }
-    }
-}
-
-pub(super) fn config_spawn_cap() -> Result<SpawnCapConfig> {
-    let Some(config_dir) = qol_config::config_dir() else {
-        return Ok(SpawnCapConfig::default());
-    };
-    config_spawn_cap_at(&config_dir.join("sessions.toml"))
-}
-
-fn config_spawn_cap_at(path: &Path) -> Result<SpawnCapConfig> {
-    let mut cap = SpawnCapConfig::default();
-    let encoded = match fs::read_to_string(path) {
-        Ok(encoded) => encoded,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(cap),
-        Err(error) => return Err(error).context("failed to read spawn cap config"),
-    };
-    let config: SpawnConfigFile =
-        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
-    if let Some(enabled) = config.spawn_cap {
-        cap.enabled = enabled;
-    }
-    if let Some(weight) = config.spawn_cpu_weight {
-        validate_scope_weight(weight, "spawn_cpu_weight", path)?;
-        cap.cpu_weight = weight;
-    }
-    if let Some(weight) = config.spawn_io_weight {
-        validate_scope_weight(weight, "spawn_io_weight", path)?;
-        cap.io_weight = weight;
-    }
-    if let Some(quota) = config.spawn_cpu_quota {
-        if quota.trim().is_empty() {
-            bail!(
-                "spawn_cpu_quota must be a non-empty value such as `600%` in {}",
-                path.display()
-            );
-        }
-        cap.cpu_quota = Some(quota);
-    }
-    Ok(cap)
-}
-
-fn validate_scope_weight(weight: u32, key: &str, path: &Path) -> Result<()> {
-    if (SCOPE_WEIGHT_MIN..=SCOPE_WEIGHT_MAX).contains(&weight) {
-        return Ok(());
-    }
-    bail!(
-        "{key} must be between {SCOPE_WEIGHT_MIN} and {SCOPE_WEIGHT_MAX} in {}",
-        path.display()
-    )
-}
-
-pub(super) fn wrap_launch(
-    launch: &CliLaunchProgram,
-    cap: Option<&SpawnCapConfig>,
-) -> CliLaunchProgram {
-    let Some(cap) = cap else {
-        return launch.clone();
-    };
-    if !cap.enabled {
-        return launch.clone();
-    }
-    let mut args = scope_property_args(cap, true);
-    args.push("--".to_owned());
-    args.push(launch.program.clone());
-    args.extend(launch.args.iter().cloned());
-    CliLaunchProgram {
-        program: "systemd-run".to_owned(),
-        args,
-        env: launch.env.clone(),
-    }
-}
-
-fn scope_property_args(cap: &SpawnCapConfig, with_quota: bool) -> Vec<String> {
-    let mut args = vec![
-        "--user".to_owned(),
-        "--scope".to_owned(),
-        "--quiet".to_owned(),
-        format!("--slice={SCOPE_SLICE}"),
-        "-p".to_owned(),
-        format!("CPUWeight={}", cap.cpu_weight),
-        "-p".to_owned(),
-        format!("IOWeight={}", cap.io_weight),
-    ];
-    if with_quota {
-        if let Some(quota) = &cap.cpu_quota {
-            args.push("-p".to_owned());
-            args.push(format!("CPUQuota={quota}"));
-        }
-    }
-    args
-}
-
-pub(super) fn resolve_spawn_cap(config: SpawnCapConfig) -> Option<SpawnCapConfig> {
-    if !config.enabled {
-        qol_runtime::probe!("CLI_SESSION_SPAWN", "event=cap_disabled reason=config");
-        return None;
-    }
-    if probe_scope(&scope_property_args(&config, true)) {
-        return Some(config);
-    }
-    if config.cpu_quota.is_some() && probe_scope(&scope_property_args(&config, false)) {
-        let mut weight_only = config.clone();
-        weight_only.cpu_quota = None;
-        qol_runtime::probe!(
-            "CLI_SESSION_SPAWN",
-            "event=cap_quota_dropped reason=systemd_rejected_cpu_quota"
-        );
-        return Some(weight_only);
-    }
-    qol_runtime::probe!(
-        "CLI_SESSION_SPAWN",
-        "event=cap_disabled reason=systemd_scope_unavailable"
-    );
-    None
-}
-
-fn probe_scope(args: &[String]) -> bool {
-    let mut command = process::Command::new("systemd-run");
-    command
-        .args(args)
-        .arg("--")
-        .arg("true")
-        .stdout(process::Stdio::null())
-        .stderr(process::Stdio::null());
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-    let deadline = Instant::now() + SCOPE_PROBE_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-            Ok(None) => std::thread::sleep(READY_POLL_INTERVAL),
-            Err(_) => return false,
-        }
-    }
-}
-
-fn apply_slice_properties(cap: Option<&SpawnCapConfig>) {
-    let Some(cap) = cap else {
-        return;
-    };
-    for slice in ["qol.slice", "qol-agents.slice"] {
-        let mut command = process::Command::new("systemctl");
-        let quota = cap.cpu_quota.as_deref().unwrap_or("");
-        command
-            .arg("--user")
-            .arg("set-property")
-            .arg(slice)
-            .arg(format!("CPUWeight={}", cap.cpu_weight))
-            .arg(format!("IOWeight={}", cap.io_weight))
-            .arg(format!("CPUQuota={quota}"));
-        let _ = command
-            .stdout(process::Stdio::null())
-            .stderr(process::Stdio::null())
-            .status();
-    }
-}
-
-pub(super) fn config_surface() -> Result<Option<SpawnSurface>> {
-    let Some(config_dir) = qol_config::config_dir() else {
-        return Ok(None);
-    };
-    config_surface_at(&config_dir.join("sessions.toml"))
-}
-
-fn config_surface_at(path: &Path) -> Result<Option<SpawnSurface>> {
-    let encoded = match fs::read_to_string(path) {
-        Ok(encoded) => encoded,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("failed to read spawn surface config"),
-    };
-    let config: SpawnConfigFile =
-        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
-    let Some(token) = config.spawn_surface else {
-        return Ok(None);
-    };
-    let surface = parse_surface(&token).ok_or_else(|| {
-        anyhow!(
-            "invalid spawn_surface `{token}` in {}; expected `{SURFACE_TAB}` or `{SURFACE_OS_WINDOW}`",
-            path.display()
-        )
-    })?;
-    Ok(Some(surface))
-}
-
-pub(super) fn sessions_config_path() -> Option<std::path::PathBuf> {
-    sessions_config_candidates()
-        .into_iter()
-        .find(|path| path.exists())
-}
-
-fn sessions_config_candidates() -> Vec<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(config_dir) = qol_config::config_dir() {
-        candidates.push(config_dir.join("sessions.toml"));
-    }
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(
-            home.join(".config")
-                .join(qol_config::NAMESPACE)
-                .join("sessions.toml"),
-        );
-    }
-    candidates
-}
-
-pub(super) fn config_claude_accounts(
-) -> Result<std::collections::BTreeMap<String, super::lane_account::ClaudeAccountSpec>> {
-    let Some(path) = sessions_config_path() else {
-        return Ok(std::collections::BTreeMap::new());
-    };
-    let encoded = fs::read_to_string(&path).context("failed to read the sessions config")?;
-    let config: SpawnConfigFile =
-        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(config.claude_accounts)
 }
 
 pub(super) fn config_launch_defaults() -> Result<super::launch::LaunchDefaults> {
@@ -1591,7 +1337,12 @@ pub(super) fn spawn_or_reuse(
                     model,
                     effort,
                 )?);
-                super::lane_account::apply(&mut launch, &prepared.tool_id)?;
+                qol_agent_launch::account::apply(
+                    &mut launch,
+                    &prepared.tool_id,
+                    caller_config_dir().as_deref(),
+                    &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
+                )?;
                 let resumed = key.is_some()
                     && task.is_some()
                     && pending.has_key_history(prepared.key.as_str())?;
@@ -2136,7 +1887,12 @@ pub(super) fn spawn_detached(
         None => super::launch_flags::launch_flags(&prepared.tool_id, model, effort)?,
     };
     launch.args.extend(flags);
-    super::lane_account::apply(&mut launch, &prepared.tool_id)?;
+    qol_agent_launch::account::apply(
+        &mut launch,
+        &prepared.tool_id,
+        caller_config_dir().as_deref(),
+        &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
+    )?;
     if !dry_run && !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
     }
@@ -3714,138 +3470,6 @@ mod tests {
     }
 
     #[test]
-    fn wrap_launch_runs_inside_a_systemd_scope_when_capping_is_resolved() {
-        let launch = CliLaunchProgram {
-            program: "pi".to_owned(),
-            args: vec!["--model".to_owned(), "flash-x".to_owned()],
-            env: Vec::new(),
-        };
-
-        let unwrapped = wrap_launch(&launch, None);
-        assert_eq!(unwrapped.program, "pi");
-        assert_eq!(
-            unwrapped.args,
-            vec!["--model".to_owned(), "flash-x".to_owned()]
-        );
-
-        let wrapped = wrap_launch(&launch, Some(&SpawnCapConfig::default()));
-        assert_eq!(wrapped.program, "systemd-run");
-        assert_eq!(
-            wrapped.args,
-            vec![
-                "--user".to_owned(),
-                "--scope".to_owned(),
-                "--quiet".to_owned(),
-                "--slice=qol-agents.slice".to_owned(),
-                "-p".to_owned(),
-                "CPUWeight=40".to_owned(),
-                "-p".to_owned(),
-                "IOWeight=40".to_owned(),
-                "--".to_owned(),
-                "pi".to_owned(),
-                "--model".to_owned(),
-                "flash-x".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn wrap_launch_adds_the_quota_property_only_when_configured() {
-        let launch = CliLaunchProgram {
-            program: "codex".to_owned(),
-            args: Vec::new(),
-            env: Vec::new(),
-        };
-        let cap = SpawnCapConfig {
-            enabled: true,
-            cpu_weight: 25,
-            io_weight: 20,
-            cpu_quota: Some("600%".to_owned()),
-        };
-        let wrapped = wrap_launch(&launch, Some(&cap));
-        assert_eq!(wrapped.program, "systemd-run");
-        assert_eq!(
-            wrapped.args,
-            vec![
-                "--user".to_owned(),
-                "--scope".to_owned(),
-                "--quiet".to_owned(),
-                "--slice=qol-agents.slice".to_owned(),
-                "-p".to_owned(),
-                "CPUWeight=25".to_owned(),
-                "-p".to_owned(),
-                "IOWeight=20".to_owned(),
-                "-p".to_owned(),
-                "CPUQuota=600%".to_owned(),
-                "--".to_owned(),
-                "codex".to_owned(),
-            ]
-        );
-
-        let disabled = SpawnCapConfig {
-            cpu_quota: Some("600%".to_owned()),
-            ..cap
-        };
-        let wrapped = wrap_launch(
-            &launch,
-            Some(&SpawnCapConfig {
-                enabled: false,
-                ..disabled
-            }),
-        );
-        assert_eq!(wrapped.program, "codex");
-        assert!(wrapped.args.is_empty());
-    }
-
-    #[test]
-    fn spawn_cap_config_parses_keys_and_defaults_to_weight_based_capping() {
-        let root = tempfile::TempDir::new().unwrap();
-        let path = root.path().join("sessions.toml");
-        assert_eq!(
-            config_spawn_cap_at(&path).unwrap(),
-            SpawnCapConfig::default()
-        );
-
-        fs::write(
-            &path,
-            "spawn_cpu_weight = 25\nspawn_io_weight = 20\nspawn_cpu_quota = \"600%\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            config_spawn_cap_at(&path).unwrap(),
-            SpawnCapConfig {
-                enabled: true,
-                cpu_weight: 25,
-                io_weight: 20,
-                cpu_quota: Some("600%".to_owned()),
-            }
-        );
-
-        fs::write(&path, "spawn_cap = false\nspawn_cpu_quota = \"300%\"\n").unwrap();
-        assert_eq!(
-            config_spawn_cap_at(&path).unwrap(),
-            SpawnCapConfig {
-                enabled: false,
-                cpu_quota: Some("300%".to_owned()),
-                ..SpawnCapConfig::default()
-            }
-        );
-
-        fs::write(&path, "spawn_cpu_weight = 0\n").unwrap();
-        let error = config_spawn_cap_at(&path).unwrap_err().to_string();
-        assert!(error.contains("spawn_cpu_weight"), "{error}");
-        assert!(error.contains("10000"), "{error}");
-
-        fs::write(&path, "spawn_io_weight = 10001\n").unwrap();
-        let error = config_spawn_cap_at(&path).unwrap_err().to_string();
-        assert!(error.contains("spawn_io_weight"), "{error}");
-
-        fs::write(&path, "spawn_cpu_quota = \"  \"\n").unwrap();
-        let error = config_spawn_cap_at(&path).unwrap_err().to_string();
-        assert!(error.contains("spawn_cpu_quota"), "{error}");
-    }
-
-    #[test]
     fn capped_launch_carries_the_scope_wrapper_into_the_spawn_request() {
         let root = tempfile::TempDir::new().unwrap();
         let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
@@ -4571,33 +4195,6 @@ mod tests {
             );
         }
         assert!(resolve_surface(Some("floating"), None).is_err());
-    }
-
-    #[test]
-    fn config_surface_parses_tokens_and_rejects_unknown_values() {
-        let root = tempfile::TempDir::new().unwrap();
-        let path = root.path().join("sessions.toml");
-        assert_eq!(config_surface_at(&path).unwrap(), None);
-
-        fs::write(&path, "spawn_surface = \"tab\"\n").unwrap();
-        assert_eq!(config_surface_at(&path).unwrap(), Some(SpawnSurface::Tab));
-
-        fs::write(&path, "spawn_surface = \"os-window\"\n").unwrap();
-        assert_eq!(
-            config_surface_at(&path).unwrap(),
-            Some(SpawnSurface::OsWindow)
-        );
-
-        fs::write(&path, "spawn_surface = \"floating\"\n").unwrap();
-        let error = config_surface_at(&path).unwrap_err().to_string();
-        assert!(
-            error.contains("invalid spawn_surface `floating`"),
-            "{error}"
-        );
-        assert!(error.contains("tab"), "{error}");
-
-        fs::write(&path, "spawn_surface =\n").unwrap();
-        assert!(config_surface_at(&path).is_err());
     }
 
     #[test]

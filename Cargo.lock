@@ -6283,6 +6283,7 @@ dependencies = [
  "git2",
  "libc",
  "qol-agent-homes",
+ "qol-agent-launch",
  "qol-apps",
  "qol-artifact",
  "qol-build-identity",
@@ -6323,6 +6324,22 @@ version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
  "qol-config",
+ "serde",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-agent-launch"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "qol-config",
+ "qol-runtime",
+ "qol-secrets",
+ "qol-terminal-sessions",
  "serde",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
@@ -6490,6 +6507,7 @@ dependencies = [
  "gpui",
  "log",
  "proptest",
+ "qol-agent-launch",
  "qol-apps",
  "qol-color",
  "qol-config",

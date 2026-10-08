@@ -19,13 +19,10 @@ mod close;
 mod contract;
 mod export;
 mod fork;
-mod lane_account;
-mod lane_exec;
 mod last_send;
 mod launch;
-mod launch_flags;
+use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
-mod park;
 mod spawn;
 mod watch;
 mod watch_owner;
@@ -37,7 +34,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 24] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 21] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -57,18 +54,6 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 24] = [
     SessionSubcommand {
         name: "forks",
         run: |rest, _format| fork::run_list(rest),
-    },
-    SessionSubcommand {
-        name: "park",
-        run: |rest, _format| park::run(rest),
-    },
-    SessionSubcommand {
-        name: "parked",
-        run: |rest, _format| park::run_list(rest),
-    },
-    SessionSubcommand {
-        name: "unpark",
-        run: |rest, _format| park::run_unpark(rest),
     },
     SessionSubcommand {
         name: "submit",
@@ -132,7 +117,7 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 24] = [
     },
     SessionSubcommand {
         name: "lane-exec",
-        run: |rest, _format| lane_exec::run(rest),
+        run: |rest, _format| qol_agent_launch::lane_exec::run(rest),
     },
 ];
 

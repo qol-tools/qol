@@ -3,6 +3,7 @@ mod builtins;
 mod chat;
 mod evidence;
 mod interpreter;
+pub mod launch_flags;
 mod model;
 mod screen;
 mod subscription;

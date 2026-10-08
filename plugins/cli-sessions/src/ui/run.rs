@@ -307,7 +307,8 @@ fn spawn_command_poll(
                 }
                 Command::Reopen(park) => {
                     qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=reopen park={park}");
-                    cx.background_spawn(async move { reopen_park(&park) }).await;
+                    cx.background_spawn(async move { reopen_park(&park) })
+                        .detach();
                     LoopFlow::Continue
                 }
                 Command::Snapshot => {
@@ -489,22 +490,10 @@ fn focus_session(
     trace::focus_result("notification", target.session_id(), &result);
 }
 
-/// Hands a finished park back to the qol binary that parked it, which resumes the conversation.
 fn reopen_park(park: &str) {
-    let record = qol_terminal_sessions::park::parked_dir().and_then(|dir| {
-        qol_terminal_sessions::park::records(&dir)
-            .ok()?
-            .into_iter()
-            .find(|record| record.id == park)
-    });
-    let Some(exe) = record.and_then(|record| record.runner_exe) else {
-        log::warn!("[cli-sessions] reopen skipped: park {park} has no recorded qol binary");
-        return;
-    };
-    let mut command = std::process::Command::new(&exe);
-    command.args(["sessions", "unpark", park]);
-    if let Err(error) = qol_process::spawn_detached(&mut command) {
-        log::warn!("[cli-sessions] reopen of park {park} via {exe} failed: {error}");
+    match crate::park::unpark(park) {
+        Ok(outcome) => log::info!("[cli-sessions] {outcome}"),
+        Err(error) => log::warn!("[cli-sessions] reopen of park {park} failed: {error:#}"),
     }
 }
 

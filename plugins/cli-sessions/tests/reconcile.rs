@@ -1527,6 +1527,7 @@ fn park_record(window_id: u64, runner_pid: u32) -> ParkRecord {
         effort: None,
         title: Some("watch pr".to_owned()),
         permission_mode: None,
+        claude_config_dir: None,
         session,
         command: vec!["sleep".to_owned(), "60".to_owned()],
         created_at: 50,
@@ -1538,7 +1539,6 @@ fn park_record(window_id: u64, runner_pid: u32) -> ParkRecord {
         resumed_session: None,
         detail: None,
         report: None,
-        runner_exe: None,
         notified: false,
     }
 }
@@ -1717,6 +1717,7 @@ fn live_parks_drop_dead_runners_and_unparseable_sessions() {
         effort: None,
         title: None,
         permission_mode: None,
+        claude_config_dir: None,
         session: session.to_owned(),
         command: vec![],
         created_at: 0,
@@ -1728,7 +1729,6 @@ fn live_parks_drop_dead_runners_and_unparseable_sessions() {
         resumed_session: None,
         detail: None,
         report: None,
-        runner_exe: None,
         notified: false,
     };
     let token = SessionBinding::new(kitty_session_id(5), 1).unwrap().token();
