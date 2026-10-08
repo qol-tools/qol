@@ -2110,8 +2110,11 @@ pub(super) fn spawn_detached(
     prompt: &str,
     dry_run: bool,
     assignment: Option<&AgentAssignment>,
+    resume: Option<&[String]>,
 ) -> Result<DetachedLaunch> {
-    require_model_for_launch(model)?;
+    if resume.is_none() {
+        require_model_for_launch(model)?;
+    }
     let prepared = prepare_spawn(interpreter, tool, Some(key), surface, title, config)?;
     let _guard = locks.acquire(&prepared.key)?;
     let started = Instant::now();
@@ -2125,6 +2128,9 @@ pub(super) fn spawn_detached(
         );
     }
     let mut launch = wrap_launch(&prepared.launch, cap);
+    launch
+        .args
+        .extend(resume.unwrap_or_default().iter().cloned());
     launch.args.extend(super::launch_flags::launch_flags(
         &prepared.tool_id,
         model,
