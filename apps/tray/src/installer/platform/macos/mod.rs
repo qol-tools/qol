@@ -14,16 +14,11 @@ pub(super) struct Platform;
 
 impl InstallerOps for Platform {
     fn binary_filename(&self) -> String {
-        "qol-tray".to_string()
+        qol_apps::tray_install::binary_filename().to_string()
     }
 
     fn install_dir(&self) -> Result<PathBuf> {
-        let home = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home
-            .join("Applications")
-            .join(format!("{APP_NAME}.app"))
-            .join("Contents")
-            .join("MacOS"))
+        Ok(qol_apps::tray_install::install_dir()?)
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {

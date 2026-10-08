@@ -165,6 +165,18 @@ impl Sign {
         self.render_bottom_at(frame, body, x, width, accent, navigation);
     }
 
+    pub(super) fn render_bottom_left(self, frame: &mut Frame, body: Rect, accent: Color) {
+        let width = self.sign_width();
+        self.render_bottom_at(
+            frame,
+            body,
+            body.x,
+            width,
+            accent,
+            NavigationOverflow::default(),
+        );
+    }
+
     pub(super) fn render_bottom_right(self, frame: &mut Frame, body: Rect, accent: Color) {
         let width = self.sign_width();
         let x = body.x + body.width.saturating_sub(width);

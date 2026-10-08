@@ -13,6 +13,7 @@ use crate::dev_server::{
     fetch_active_worktree, fetch_plugin_health_rows, fetch_workspace_plugins, health_ok, web_ok,
     ActiveWorktreeResponse, EndpointStatus, PluginHealthRow, WorkspacePlugin,
 };
+use crate::installed_tray::InstalledTray;
 use crate::poller::Poller;
 
 use super::activity::Activity;
@@ -395,6 +396,7 @@ pub(super) struct Dash {
     pub(super) running_branch: Option<String>,
     pub(super) running_worktree: PathBuf,
     pub(super) base_label: String,
+    pub(super) installed_tray: Option<InstalledTray>,
     pub(super) boot_rx: Option<Receiver<String>>,
     pub(super) keys_hidden: bool,
     pub(super) filters: ViewFilters,
@@ -474,6 +476,7 @@ impl Dash {
             running_branch: startup_branch,
             running_worktree,
             base_label: "base".to_string(),
+            installed_tray: None,
             boot_rx: None,
             keys_hidden: false,
             filters: ViewFilters::default(),

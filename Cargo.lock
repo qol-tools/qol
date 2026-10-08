@@ -6379,6 +6379,7 @@ dependencies = [
 name = "qol-apps"
 version = "1.0.0"
 dependencies = [
+ "dirs 6.0.0",
  "open",
  "plist",
  "qol-conventions",
