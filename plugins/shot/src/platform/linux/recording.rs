@@ -19,6 +19,7 @@ const CINNAMON_HELPER_ENV: &str = "QOL_SHOT_CINNAMON_CAPTURE_REQUEST";
 const CINNAMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const CINNAMON_POLL_INTERVAL: Duration = Duration::from_millis(40);
 static CINNAMON_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+const CINNAMON_VP8_THREADS: u32 = 4;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct CinnamonCaptureRequest {
@@ -477,7 +478,7 @@ fn cinnamon_desktop_session() -> bool {
 fn cinnamon_pipeline(config: &Config) -> String {
     let muxer = "webmmux";
     let video = format!(
-        "vp8enc deadline=1 cpu-used=8 min-quantizer={quality} max-quantizer={quality} threads=%T ! queue",
+        "vp8enc deadline=1 cpu-used=8 min-quantizer={quality} max-quantizer={quality} threads={CINNAMON_VP8_THREADS} ! queue",
         quality = config.video.crf.clamp(0, 63)
     );
     let audio = "opusenc bitrate=192000";
@@ -849,6 +850,7 @@ mod tests {
             let pipeline = cinnamon_pipeline(&config);
             assert!(pipeline.contains("webmmux"), "{pipeline}");
             assert!(pipeline.contains("vp8enc"), "{pipeline}");
+            assert!(pipeline.contains("threads=4 "), "{pipeline}");
             if let Some(audio) = audio {
                 assert!(pipeline.contains(audio), "{pipeline}");
             } else {
