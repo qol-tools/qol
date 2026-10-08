@@ -742,15 +742,19 @@ fn show_first_run_welcome() {
 }
 
 fn confirm_host_update() {
-    let Some(from_version) = qol_tray::updates::consume_update_confirmation() else {
+    let Some(resumed) = qol_tray::updates::resume_after_restart() else {
         return;
     };
-    log::info!("qol-tray updated from v{}", from_version);
+    log::info!(
+        "qol-tray updated from v{}, resumed {} plugin updates",
+        resumed.from_version,
+        resumed.queued_plugins
+    );
     let _ = qol_tray::settings_surface::wait_until_ready(Duration::from_secs(30));
     qol_tray::surfaces::show_plugin_notification(
         None,
         "qol-tray updated",
-        &format!("Now running v{}", qol_tray::updates::current_version()),
+        &updated_notification_body(&resumed, qol_tray::updates::current_version()),
         qol_runtime::protocol::NotificationLevel::Info,
         None,
         None,
@@ -759,6 +763,19 @@ fn confirm_host_update() {
     );
     if let Err(error) = qol_tray::settings_surface::open_updates() {
         log::warn!("Failed to reopen the Updates page after the update: {error:#}");
+    }
+    qol_tray::updates::finish_restart_resume();
+}
+
+fn updated_notification_body(resumed: &qol_tray::updates::ResumedUpdate, current: &str) -> String {
+    match (resumed.queued_plugins, resumed.dropped_plugins) {
+        (_, dropped) if dropped > 0 => format!(
+            "Now running v{current}. Plugin updates did not continue after a failed start; \
+             run Update all again."
+        ),
+        (0, _) => format!("Now running v{current}"),
+        (1, _) => format!("Now running v{current}. Updating 1 plugin."),
+        (queued, _) => format!("Now running v{current}. Updating {queued} plugins."),
     }
 }
 
@@ -783,12 +800,35 @@ async fn check_for_updates() -> bool {
 mod tests {
     use super::{
         finished_update_available, reconcile_after_launch_pull, run_launch_profile_tasks,
-        start_local_daemons_before_launch_pull,
+        start_local_daemons_before_launch_pull, updated_notification_body,
     };
     use qol_tray::plugins::PluginManager;
     use std::sync::Arc;
     use tokio::sync::oneshot;
     use tokio::time::{timeout, Duration};
+
+    #[test]
+    fn updated_notification_says_what_continues_after_the_restart() {
+        let cases = [
+            (0, 0, "Now running v3.67.0"),
+            (1, 0, "Now running v3.67.0. Updating 1 plugin."),
+            (4, 0, "Now running v3.67.0. Updating 4 plugins."),
+            (
+                0,
+                2,
+                "Now running v3.67.0. Plugin updates did not continue after a failed start; \
+                 run Update all again.",
+            ),
+        ];
+        for (queued_plugins, dropped_plugins, expected) in cases {
+            let resumed = qol_tray::updates::ResumedUpdate {
+                from_version: "3.66.1".to_string(),
+                queued_plugins,
+                dropped_plugins,
+            };
+            assert_eq!(updated_notification_body(&resumed, "3.67.0"), expected);
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn pending_update_check_does_not_hold_startup() {

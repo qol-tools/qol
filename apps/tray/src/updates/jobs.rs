@@ -9,12 +9,15 @@ pub(crate) const HOST_ID: &str = "qol-tray";
 
 pub(crate) static QUEUE: LazyLock<WorkQueue<Operation>> = LazyLock::new(WorkQueue::new);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Operation {
     Install,
     Update,
     Remove,
-    Host { confirm_after_restart: bool },
+    Host {
+        confirm_after_restart: bool,
+        update_plugins: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,20 +91,22 @@ mod tests {
     fn a_removal_reads_as_removing_and_everything_else_by_its_state() {
         let host = Operation::Host {
             confirm_after_restart: true,
+            update_plugins: vec!["qol-launcher".to_string()],
         };
         let cases = [
             (State::Queued, Operation::Remove, JobState::Removing),
             (State::Queued, Operation::Install, JobState::Queued),
-            (State::Queued, host, JobState::Queued),
+            (State::Queued, host.clone(), JobState::Queued),
             (State::Running, Operation::Remove, JobState::Removing),
             (State::Running, Operation::Install, JobState::Updating),
             (State::Running, Operation::Update, JobState::Updating),
-            (State::Running, host, JobState::Updating),
+            (State::Running, host.clone(), JobState::Updating),
             (State::Failed, Operation::Remove, JobState::Failed),
         ];
         for (state, task, expected) in cases {
+            let label = format!("{state:?} {task:?}");
             let job = update_job(entry(state, task));
-            assert_eq!(job.state, expected, "{state:?} {task:?}");
+            assert_eq!(job.state, expected, "{label}");
             assert_eq!((job.progress, job.order), (Some(7), 3));
         }
     }

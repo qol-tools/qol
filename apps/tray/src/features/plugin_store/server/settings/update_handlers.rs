@@ -19,10 +19,12 @@ pub(super) const ATTENTION_QUERY: &str = "attention";
 pub(super) const HOST_PLUGIN_ID: &str = jobs::HOST_ID;
 const HOST_UPDATE: Operation = Operation::Host {
     confirm_after_restart: true,
+    update_plugins: Vec::new(),
 };
 const ATTENTION_AFTER_SECS: u64 = 24 * 60 * 60;
 
 type HttpResult<T> = Result<T, Box<Response>>;
+type PlannedJob = (String, Operation);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -243,12 +245,8 @@ fn start_update_all_action(state: &AppState) -> Response {
     if let Some(message) = update_all_refusal(jobs::QUEUE.busy(), &plan) {
         return action_error(StatusCode::CONFLICT, message);
     }
-    for target in &plan {
-        let pushed = match target {
-            UpdateTarget::Host => jobs::push(jobs::HOST_ID, HOST_UPDATE),
-            UpdateTarget::Plugin(id) => jobs::push(id, Operation::Update),
-        };
-        if let Err(message) = pushed {
+    for (id, operation) in plan {
+        if let Err(message) = jobs::push(&id, operation) {
             return action_error(StatusCode::CONFLICT, message);
         }
     }
@@ -479,7 +477,7 @@ fn host_update_refusal(
     None
 }
 
-fn update_all_refusal(running: bool, plan: &[UpdateTarget]) -> Option<&'static str> {
+fn update_all_refusal(running: bool, plan: &[PlannedJob]) -> Option<&'static str> {
     if running {
         Some(crate::updates::UPDATE_ALREADY_RUNNING)
     } else if plan.is_empty() {
@@ -489,10 +487,7 @@ fn update_all_refusal(running: bool, plan: &[UpdateTarget]) -> Option<&'static s
     }
 }
 
-fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<UpdateTarget> {
-    if host_available {
-        return vec![UpdateTarget::Host];
-    }
+fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<PlannedJob> {
     let mut candidates: Vec<&PluginView> = plugins
         .iter()
         .filter(|plugin| {
@@ -509,10 +504,15 @@ fn update_all_plan(plugins: &[PluginView], host_available: bool) -> Vec<UpdateTa
             .cmp(&right.name.to_lowercase())
             .then_with(|| left.id.cmp(&right.id))
     });
-    candidates
-        .into_iter()
-        .map(|plugin| UpdateTarget::Plugin(plugin.id.clone()))
-        .collect()
+    let plugin_ids = candidates.into_iter().map(|plugin| plugin.id.clone());
+    if host_available {
+        let host = Operation::Host {
+            confirm_after_restart: true,
+            update_plugins: plugin_ids.collect(),
+        };
+        return vec![(jobs::HOST_ID.to_string(), host)];
+    }
+    plugin_ids.map(|id| (id, Operation::Update)).collect()
 }
 
 pub(super) fn action_ok(message: &str) -> Response {
@@ -899,9 +899,9 @@ mod tests {
 
     #[test]
     fn update_all_refusal_table() {
-        let plan = [UpdateTarget::Plugin("plugin-a".to_string())];
-        let empty: [UpdateTarget; 0] = [];
-        let cases: &[(bool, &[UpdateTarget], Option<&str>)] = &[
+        let plan = [("plugin-a".to_string(), Operation::Update)];
+        let empty: [PlannedJob; 0] = [];
+        let cases: &[(bool, &[PlannedJob], Option<&str>)] = &[
             (true, plan.as_slice(), Some("An update is already running")),
             (false, &empty, Some("Nothing to update")),
             (false, plan.as_slice(), None),
@@ -912,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn update_all_plan_orders_plugins_by_name_and_updates_the_host_alone_first() {
+    fn update_all_plan_orders_plugins_by_name_and_carries_them_across_the_host_restart() {
         let mut failed = plugin("qol-alt-tab", "Alt Tab", "1.0.0", None);
         failed.job = job(JobState::Failed, Some("No connection to GitHub"));
         let launcher = plugin("qol-launcher", "Launcher", "1.0.0", Some("1.1.0"));
@@ -922,16 +922,26 @@ mod tests {
         linked.dev_linked = true;
         let plugins = vec![zed, gamma, linked, failed, launcher];
 
-        assert_eq!(update_all_plan(&plugins, true), vec![UpdateTarget::Host]);
+        let ordered = ["qol-alt-tab", "qol-launcher", "plugin-zed"].map(str::to_string);
+        assert_eq!(
+            update_all_plan(&plugins, true),
+            vec![(
+                "qol-tray".to_string(),
+                Operation::Host {
+                    confirm_after_restart: true,
+                    update_plugins: ordered.to_vec(),
+                }
+            )]
+        );
         assert_eq!(
             update_all_plan(&plugins, false),
-            vec![
-                UpdateTarget::Plugin("qol-alt-tab".to_string()),
-                UpdateTarget::Plugin("qol-launcher".to_string()),
-                UpdateTarget::Plugin("plugin-zed".to_string()),
-            ]
+            ordered.map(|id| (id, Operation::Update)).to_vec()
         );
         assert_eq!(update_all_plan(&[], false), Vec::new());
+        assert_eq!(
+            update_all_plan(&[], true),
+            vec![("qol-tray".to_string(), HOST_UPDATE)]
+        );
     }
 
     #[test]

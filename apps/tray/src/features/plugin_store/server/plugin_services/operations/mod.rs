@@ -17,9 +17,14 @@ pub(in super::super) async fn run_operation(
         Operation::Remove => uninstall::uninstall_plugin(state, id).await,
         Operation::Host {
             confirm_after_restart,
+            update_plugins,
         } => {
-            crate::updates::install_host_update(state.daemon.events.clone(), confirm_after_restart)
-                .await
+            crate::updates::install_host_update(
+                state.daemon.events.clone(),
+                confirm_after_restart,
+                update_plugins,
+            )
+            .await
         }
     }
 }

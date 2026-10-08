@@ -21,7 +21,6 @@ pub(crate) const UPDATE_FAILED: &str = "The update could not be installed";
 pub(super) const GITHUB_REPO: &str = "qol-tools/qol";
 pub(super) const HOST_TAG_PREFIX: &str = "qol-tray";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const UPDATE_FROM_MARKER: &str = ".update-from-version";
 const NO_CONNECTION: &str = "No connection to GitHub";
 
 struct UpdateState {
@@ -399,9 +398,10 @@ fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)
 pub(crate) async fn install_host_update(
     events: std::sync::Arc<crate::daemon::EventBus>,
     confirm_after_restart: bool,
+    update_plugins: Vec<String>,
 ) -> Result<(), String> {
-    let marker = confirm_after_restart
-        .then(write_pending_update_marker)
+    let record = confirm_after_restart
+        .then(|| write_restart_record(update_plugins))
         .flatten();
     record_update_progress(0);
     store_latest_version(newest_version_before_install().await);
@@ -409,8 +409,8 @@ pub(crate) async fn install_host_update(
         return Ok(());
     };
     log::error!("Self-update failed: {error:#}");
-    if let Some(marker) = marker {
-        let _ = std::fs::remove_file(marker);
+    if let Some(record) = record {
+        let _ = std::fs::remove_file(record);
     }
     let message = plain_update_failure(&error);
     events.send(crate::daemon::DaemonEvent::UpdateFailed {
@@ -435,39 +435,64 @@ fn version_to_install(refreshed: Result<Option<String>>, cached: Option<String>)
     }
 }
 
-fn update_marker_path() -> Option<PathBuf> {
-    crate::paths::shared_config_dir()
-        .ok()
-        .map(|dir| dir.join(UPDATE_FROM_MARKER))
-}
-
-pub(crate) fn write_pending_update_marker() -> Option<PathBuf> {
-    let marker = update_marker_path()?;
-    if let Some(parent) = marker.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    match std::fs::write(&marker, CURRENT_VERSION) {
-        Ok(()) => Some(marker),
+fn write_restart_record(update_plugins: Vec<String>) -> Option<PathBuf> {
+    let record = crate::restart_record::RestartRecord {
+        from_version: CURRENT_VERSION.to_string(),
+        attempts: 0,
+        update_plugins,
+    };
+    let written = crate::paths::shared_config_dir()
+        .map_err(std::io::Error::other)
+        .and_then(|dir| crate::restart_record::write(&dir, &record));
+    match written {
+        Ok(path) => Some(path),
         Err(error) => {
-            log::warn!("Failed to write the update confirmation marker: {}", error);
+            log::warn!("Failed to write the restart record: {}", error);
             None
         }
     }
 }
 
-pub fn consume_update_confirmation() -> Option<String> {
-    let marker = update_marker_path()?;
-    if !marker.exists() {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumedUpdate {
+    pub from_version: String,
+    pub queued_plugins: usize,
+    pub dropped_plugins: usize,
+}
+
+pub fn resume_after_restart() -> Option<ResumedUpdate> {
+    let dir = crate::paths::shared_config_dir().ok()?;
+    let record = crate::restart_record::begin(&dir)?;
+    let resume = crate::restart_record::resume_plan(&record, CURRENT_VERSION);
+    let Some(from_version) = resume.updated_from else {
+        crate::restart_record::finish(&dir);
         return None;
+    };
+    let _ = UPDATED_FROM.set(from_version.clone());
+    let mut queued_plugins = 0;
+    for id in &resume.update_plugins {
+        match jobs::push(id, jobs::Operation::Update) {
+            Ok(()) => queued_plugins += 1,
+            Err(message) => log::warn!("Failed to resume the update of {id}: {message}"),
+        }
     }
-    let from = std::fs::read_to_string(&marker).ok();
-    let _ = std::fs::remove_file(&marker);
-    let from = from?.trim().to_string();
-    if from.is_empty() || from == CURRENT_VERSION {
-        return None;
+    if !resume.dropped_plugins.is_empty() {
+        log::warn!(
+            "Not resuming plugin updates after repeated restarts: {}",
+            resume.dropped_plugins.join(", ")
+        );
     }
-    let _ = UPDATED_FROM.set(from.clone());
-    Some(from)
+    Some(ResumedUpdate {
+        from_version,
+        queued_plugins,
+        dropped_plugins: resume.dropped_plugins.len(),
+    })
+}
+
+pub fn finish_restart_resume() {
+    if let Ok(dir) = crate::paths::shared_config_dir() {
+        crate::restart_record::finish(&dir);
+    }
 }
 
 pub(super) fn verify_host_update(
