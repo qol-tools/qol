@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Mutex, Once, PoisonError};
 
 use block2::{DynBlock, RcBlock};
@@ -270,6 +270,7 @@ fn cf_int_value(dict: CFDictionaryRef, key: &CFStringRef) -> Option<i32> {
 }
 
 fn force_app_frontmost() {
+    cancel_focus_return();
     set_app_frontmost(std::process::id() as i32);
 }
 
@@ -296,12 +297,35 @@ fn set_app_frontmost(pid: i32) {
     }
 }
 
-fn return_focus_after_hiding_key(mtm: MainThreadMarker, held_key: bool) {
+const FOCUS_RETURN_SETTLE: std::time::Duration = std::time::Duration::from_millis(120);
+
+static FOCUS_RETURN_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn schedule_focus_return() {
+    let generation = FOCUS_RETURN_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(FOCUS_RETURN_SETTLE);
+        crate::platform::run_on_main(Box::new(move || {
+            if FOCUS_RETURN_GENERATION.load(Ordering::SeqCst) == generation {
+                return_focus_if_unheld();
+            }
+        }));
+    });
+}
+
+fn cancel_focus_return() {
+    FOCUS_RETURN_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+fn return_focus_if_unheld() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
     let app = NSApplication::sharedApplication(mtm);
     let shown_key = app
         .keyWindow()
         .is_some_and(|key| key.isVisible() && key.alphaValue() > 0.0);
-    if !held_key || !app.isActive() || shown_key {
+    if !app.isActive() || shown_key {
         return;
     }
     let target = frontmost_foreign_pid();
@@ -661,7 +685,9 @@ pub fn hide_invisible(title: &str) -> bool {
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
     window.orderOut(None);
-    return_focus_after_hiding_key(mtm, held_key);
+    if held_key {
+        schedule_focus_return();
+    }
     qol_runtime::probe!(
         "HIDE_WIN",
         "title={title} path=ordered_out reason={}",
