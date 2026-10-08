@@ -39,6 +39,17 @@ pub(crate) fn capture_before_restart() {
     }
 }
 
+pub(crate) fn discard_reopen_list() {
+    let Ok(dir) = crate::paths::shared_config_dir() else {
+        return;
+    };
+    if let Err(error) = std::fs::remove_file(list_path(&dir)) {
+        if error.kind() != io::ErrorKind::NotFound {
+            log::warn!("[window-state] failed to discard the reopen list: {error}");
+        }
+    }
+}
+
 pub fn reopen_after_restart(plugin_manager: Arc<Mutex<PluginManager>>) {
     if crate::dev_generation::is_shadow() {
         return;

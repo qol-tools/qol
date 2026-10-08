@@ -193,7 +193,11 @@ type PendingWrites = HashMap<String, (WindowStateStore, WindowState)>;
 
 static PENDING: LazyLock<Mutex<PendingWrites>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Held across take-and-write so an older pending state can never land after a newer one.
+static WRITE_ORDER: Mutex<()> = Mutex::new(());
+
 fn flush_key(key: &str) {
+    let _order = WRITE_ORDER.lock().unwrap_or_else(PoisonError::into_inner);
     let pending = PENDING
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -204,6 +208,7 @@ fn flush_key(key: &str) {
 }
 
 pub(crate) fn flush_all() {
+    let _order = WRITE_ORDER.lock().unwrap_or_else(PoisonError::into_inner);
     let pending: Vec<_> = PENDING
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
