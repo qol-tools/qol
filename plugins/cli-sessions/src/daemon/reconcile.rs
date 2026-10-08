@@ -612,7 +612,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         );
     }
     let summary = summary_for(status, &input.tool);
-    let notice = (!input.closing)
+    let notice = (!(input.closing && status == Status::YourTurn))
         .then(|| {
             attention_notice(
                 pane_id,

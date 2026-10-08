@@ -107,11 +107,15 @@ pub fn unnotified(dir: &Path) -> Vec<ParkRecord> {
 }
 
 pub fn mark_notified(dir: &Path, record: &ParkRecord) -> std::io::Result<()> {
+    let path = dir.join(format!("{}.json", record.id));
+    let stored = serde_json::from_str::<ParkRecord>(&fs::read_to_string(&path)?)?;
+    if stored.state != ParkState::Finished {
+        return Ok(());
+    }
     let notified = ParkRecord {
         notified: true,
-        ..record.clone()
+        ..stored
     };
-    let path = dir.join(format!("{}.json", record.id));
     let staging = dir.join(format!("{}.json.notified", record.id));
     fs::write(&staging, serde_json::to_string(&notified)?)?;
     fs::rename(staging, path)

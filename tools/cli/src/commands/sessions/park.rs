@@ -480,16 +480,13 @@ fn woken_turn(turns: &[ChatTurn]) -> WokenTurn {
     if after.iter().any(|turn| turn.role == ChatRole::User) {
         return WokenTurn::Engaged;
     }
-    let report = after
+    match after
         .iter()
         .map(|turn| turn.text.trim())
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    if report.is_empty() {
-        WokenTurn::Working
-    } else {
-        WokenTurn::Finished(report)
+        .rfind(|text| !text.is_empty())
+    {
+        Some(report) => WokenTurn::Finished(report.to_owned()),
+        None => WokenTurn::Working,
     }
 }
 
@@ -816,6 +813,14 @@ mod tests {
                     turn(ChatRole::Assistant, "PR merged.\n\nRestart the tray."),
                 ],
                 WokenTurn::Finished("PR merged.\n\nRestart the tray.".to_owned()),
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &wake),
+                    turn(ChatRole::Assistant, "Checking the PR..."),
+                    turn(ChatRole::Assistant, "PR merged."),
+                ],
+                WokenTurn::Finished("PR merged.".to_owned()),
             ),
             (
                 vec![
