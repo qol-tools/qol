@@ -232,9 +232,10 @@ fn hold_debug_build_locks(debug: &Path) -> Result<Vec<fs::File>, String> {
 }
 
 fn is_building_in_root(root: &Path) -> bool {
-    PROFILE_DIRS
-        .iter()
-        .any(|profile| hold_debug_build_locks(&root.join(profile)).is_err())
+    root.is_dir()
+        && PROFILE_DIRS
+            .iter()
+            .any(|profile| hold_debug_build_locks(&root.join(profile)).is_err())
 }
 
 fn prune_with_ceilings(
