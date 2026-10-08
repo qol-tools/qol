@@ -337,15 +337,15 @@ jobs:
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
 
-  # Pull requests only check the release profile. Every queue entry, and a push
-  # the queue did not already test, builds it here in parallel with lint + test,
-  # so the build no longer waits behind clippy and the tests.
+  # Pull requests only check the release profile. Every queue entry builds it
+  # here in parallel with lint + test, so the build no longer waits behind
+  # clippy and the tests. A push to main never runs it: the build cache
+  # workflow already compiles the release build there, and a second job saving
+  # the same cache key would drop one job's artifacts.
   release-build:
     name: release build (${{ matrix.os }})
     needs: plan
-    if: >-
-      ${{ github.event_name != 'pull_request' && (github.event_name == 'merge_group' ||
-      needs.plan.outputs.reused != 'true') }}
+    if: ${{ github.event_name == 'merge_group' }}
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
     timeout-minutes: 45

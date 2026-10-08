@@ -53,8 +53,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         build = workflow.split("  release-build:\n", 1)[1].split("  gate:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
-            "github.event_name != 'pull_request' && (github.event_name == 'merge_group' ||",
-            "needs.plan.outputs.reused != 'true') }}",
+            "if: ${{ github.event_name == 'merge_group' }}",
             "RUSTFLAGS: -D warnings",
             "cache-key: ci-${{ matrix.os }}",
             "cargo build --release --locked $BUILD_ARGS",
@@ -173,7 +172,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("merge_group:", workflow)
         self.assertIn("cargo check --release --locked $BUILD_ARGS", workflow)
         self.assertIn("cargo build --release --locked $BUILD_ARGS", workflow)
-        self.assertIn("github.event_name != 'pull_request'", workflow)
+        self.assertIn("if: ${{ github.event_name == 'merge_group' }}", workflow)
         self.assertIn("RUSTFLAGS: -D warnings", workflow)
         self.assertNotIn("debug-assertions", workflow)
         self.assertIn("timeout-minutes:", workflow)
