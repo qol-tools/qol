@@ -242,11 +242,13 @@ fn handle_session_end(
             bail!("qol-tray dev process exited with {status}")
         }
         dev_console::SessionEnd::SelfRestart { tray_pid } => {
-            restore.disarm();
             let root = repo_root()?;
             let binary = fresh_cli_binary(&root);
             match crate::self_exec::replace_with(&binary, tray_pid) {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    restore.disarm();
+                    Ok(())
+                }
                 Err(error) => {
                     ratatui::restore();
                     Err(error)
