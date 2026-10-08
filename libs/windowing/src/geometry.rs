@@ -11,7 +11,7 @@ pub struct MonitorBounds {
 }
 
 /// A window frame in screen coordinates.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowRect {
     pub x: f64,
     pub y: f64,

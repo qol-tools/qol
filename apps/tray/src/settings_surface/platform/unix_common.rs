@@ -398,7 +398,8 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
             let activation_host = host.clone();
             let activation_tracker = tracker.clone();
             cx.spawn(async move |cx| {
-                activate(activation_host, activation_tracker, plugin_id, cx).await;
+                activate(activation_host.clone(), activation_tracker, plugin_id, cx).await;
+                remember_active_page(&activation_host, cx);
             })
             .detach();
         }
@@ -426,7 +427,8 @@ fn spawn_command_loop(
                         "SURFACE_ACTIVATION",
                         "plugin={plugin_id} phase=command outcome=received"
                     );
-                    activate(host, tracker, plugin_id, &cx).await;
+                    activate(host.clone(), tracker, plugin_id, &cx).await;
+                    remember_active_page(&host, &cx);
                     LoopFlow::Continue
                 }
                 Command::Toast(toast) => {
@@ -457,6 +459,7 @@ fn spawn_command_loop(
                     LoopFlow::Continue
                 }
                 Command::Kill => {
+                    remember_active_page(&host, &cx);
                     qol_runtime::probe!(
                         "SURFACE_ACTIVATION",
                         "plugin=none phase=host outcome=stop_requested"
@@ -466,6 +469,11 @@ fn spawn_command_loop(
             }
         }
     });
+}
+
+fn remember_active_page(host: &Rc<RefCell<SettingsWindowHost>>, cx: &gpui::AsyncApp) {
+    let host = host.clone();
+    let _ = cx.update(move |cx| host.borrow_mut().remember_active_page(cx));
 }
 
 fn notice_timeout(tone: CustomPanelNoticeTone) -> Option<Duration> {

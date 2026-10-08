@@ -9,6 +9,7 @@ mod ops;
 mod window_id;
 
 pub mod display;
+pub mod window_state;
 
 #[cfg(target_os = "macos")]
 pub mod macos;

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{px, size, App, AppContext, Application, AsyncApp};
-use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind};
+use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind, WindowMemory};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
@@ -180,6 +180,7 @@ fn open_panel(
             corner,
             CORNER_MARGIN,
         ))
+        .remember(WindowMemory::reopened_by_action(APP_ID, APP_ID, "open"))
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
             SessionsView::new(registry, host, corner, dismisser, cx)
         });

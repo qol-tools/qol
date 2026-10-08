@@ -288,6 +288,7 @@ fn app_init_inner(
         std::thread::spawn(show_first_run_welcome);
     }
     std::thread::spawn(confirm_host_update);
+    qol_tray::window_reopen::reopen_after_restart(init.plugin_manager.clone());
     Ok((tray, init.plugin_manager))
 }
 

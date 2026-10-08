@@ -71,6 +71,7 @@ impl Drop for PendingRestart {
 pub(in crate::features::plugin_store::server) async fn cleanup_before_restart(
     plugin_manager: Arc<Mutex<PluginManager>>,
 ) -> Result<(), String> {
+    crate::window_reopen::capture_before_restart();
     crate::runtime::RuntimeServer::shutdown_peers_and_wait().await?;
     tokio::task::spawn_blocking(move || {
         shutdown_plugin_manager(&plugin_manager);

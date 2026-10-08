@@ -28,7 +28,9 @@ use std::time::Duration;
 use gpui::*;
 
 use crate::monitor::MonitorTracker;
-use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
+use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind, WindowMemory};
+
+const SETTINGS_WINDOW_KEY: &str = "settings";
 use rows::{
     apply_runtime_query, rows_from_resolved, runtime_query_names, sections_from_resolved, Row,
     RowControl, RowQueryState, RowSection,
@@ -423,6 +425,15 @@ impl SettingsWindowHost {
     }
 
     /// The plugin id of the rail row the open panel has selected.
+    pub fn remember_active_page(&mut self, cx: &mut App) {
+        let Some(page) = self.active_source_id(cx) else {
+            return;
+        };
+        if let Some(active) = self.active.as_ref() {
+            active.surface.dismisser.remember_reopen_page(page);
+        }
+    }
+
     pub fn active_source_id(&mut self, cx: &mut App) -> Option<String> {
         if !self.active_is_open(cx) {
             return None;
@@ -952,6 +963,7 @@ fn open_prepared(
         .app_id(qol_conventions::SETTINGS_SURFACE_APP_ID)
         .size(prepared.size)
         .retain_on_dismiss()
+        .remember(WindowMemory::reopened_by_settings(SETTINGS_WINDOW_KEY))
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
             SettingsPanelView::new(
                 prepared.panel,

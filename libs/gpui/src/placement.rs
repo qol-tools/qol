@@ -55,6 +55,10 @@ impl MonitorPlacement {
         }
     }
 
+    pub(crate) fn memory_label(self) -> String {
+        format!("{:?}:{}", self.anchor, self.margin)
+    }
+
     pub fn resized(self, current: Bounds<Pixels>, content: Size<Pixels>) -> Bounds<Pixels> {
         let x = match self.anchor {
             Anchor::Corner(Corner::TopLeft | Corner::BottomLeft) => current.origin.x,
