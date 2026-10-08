@@ -590,6 +590,62 @@ fn chat_transcript_keeps_human_turns_and_drops_tool_and_harness_noise() {
     assert_eq!(strategy.chat_transcript(&session()), Some(expected));
 }
 
+#[test]
+fn current_model_is_the_last_main_thread_assistant_model() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    let cases = [
+        (
+            concat!(
+                r#"{"type":"assistant","message":{"model":"claude-opus-5-5","content":[]}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"model":"claude-haiku-5-5","content":[]}}"#,
+                "\n",
+                r#"{"type":"user","message":{"content":"next"}}"#,
+                "\n",
+            ),
+            Some("claude-haiku-5-5"),
+        ),
+        (
+            concat!(
+                r#"{"type":"assistant","message":{"model":"claude-sonnet-5-5","content":[]}}"#,
+                "\n",
+                r#"{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-5-5","content":[]}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"model":"<synthetic>","content":[]}}"#,
+                "\n",
+                "{\"type\":\"assistant\"",
+                "\n",
+            ),
+            Some("claude-sonnet-5-5"),
+        ),
+        (
+            concat!(r#"{"type":"user","message":{"content":"hi"}}"#, "\n"),
+            None,
+        ),
+    ];
+    for (contents, expected) in cases {
+        std::fs::write(&transcript, contents).unwrap();
+        assert_eq!(
+            super::metadata::current_model(&transcript).as_deref(),
+            expected,
+            "{contents}"
+        );
+    }
+
+    std::fs::write(&transcript, cases[0].0).unwrap();
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript,
+        },
+    }));
+    assert_eq!(
+        strategy.current_model(&session()).as_deref(),
+        Some("claude-haiku-5-5")
+    );
+}
+
 fn session() -> SessionFacts {
     SessionFacts {
         id: SessionId::new(BackendId::new("kitty").unwrap(), "7").unwrap(),

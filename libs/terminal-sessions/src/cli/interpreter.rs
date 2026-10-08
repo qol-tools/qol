@@ -106,6 +106,10 @@ impl CliSessionInterpreter {
         self.strategy_for(session).chat_transcript(session)
     }
 
+    pub fn current_model(&self, session: &SessionFacts) -> Option<String> {
+        self.strategy_for(session).current_model(session)
+    }
+
     pub fn marked_report(&self, paths: &[std::path::PathBuf], marker: &str) -> Option<String> {
         self.strategies
             .iter()

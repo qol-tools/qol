@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::{
-    DeliveryMode, ScreenReader, SessionBinding, SessionInventory, TerminalError,
+    DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionInventory, TerminalError,
     TerminalSessionService, TextInput,
 };
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,7 @@ struct WatchedRound {
     transcript_pinned: bool,
     transcript_owned_seen: bool,
     agent_assignment: Option<super::agent_policy::AgentAssignment>,
+    nudged_report: Option<String>,
 }
 
 impl WatchedRound {
@@ -115,7 +116,15 @@ impl WatchedRound {
             transcript_pinned: false,
             transcript_owned_seen: false,
             agent_assignment: round.agent_assignment,
+            nudged_report: None,
         })
+    }
+
+    fn report_or_nudged(&self, report: String) -> String {
+        match &self.nudged_report {
+            Some(nudged) if report.trim().is_empty() => nudged.clone(),
+            _ => report,
+        }
     }
 
     fn observe_screen(&mut self, screen: &str) -> bool {
@@ -598,6 +607,7 @@ fn poll_round(
                     None
                 };
                 if let Some((report, outcome)) = rescue {
+                    let report = round.report_or_nudged(report);
                     let markerless = outcome != GroupOutcome::Completed;
                     let tail = screen_tail(&report);
                     let full_screen: &str = &report;
@@ -897,7 +907,8 @@ fn poll_round(
                 return Ok(RoundPoll::of(false, false));
             }
             Some(_) => {
-                let report = cap_report(strip_trailing_marker(report, &round.marker));
+                let report = round
+                    .report_or_nudged(cap_report(strip_trailing_marker(report, &round.marker)));
                 let wake_msg = if round.silent_wake || round.group.is_some() {
                     String::new()
                 } else {
@@ -965,13 +976,13 @@ fn poll_round(
             }
             Some(_) => {
                 if round.marker_seen {
-                    let report = capture_report(
+                    let report = round.report_or_nudged(capture_report(
                         &round.transcript_paths,
                         interpreter,
                         round.started_at,
                         &round.marker,
                         &screen,
-                    );
+                    ));
                     let wake_msg = if round.silent_wake || round.group.is_some() {
                         String::new()
                     } else {
@@ -1049,13 +1060,27 @@ fn poll_round(
             .map(str::to_owned)
     });
     if finished_turn || screen_quiet || fault.is_some() {
-        let report = capture_report(
+        let report = round.report_or_nudged(capture_report(
             &round.transcript_paths,
             interpreter,
             round.started_at,
             &round.marker,
             &screen,
-        );
+        ));
+        if finished_turn
+            && fault.is_none()
+            && round.nudged_report.is_none()
+            && nudge_missing_marker(terminals, interpreter, round, facts.as_ref(), &screen)
+        {
+            round.nudged_report = Some(report);
+            round.ready_polls = 0;
+            round.last_change = Instant::now();
+            return Ok(RoundPoll {
+                keep: true,
+                changed: true,
+                released: false,
+            });
+        }
         let idle_msg = if round.silent_wake || round.group.is_some() {
             String::new()
         } else {
@@ -1095,6 +1120,33 @@ fn poll_round(
         changed,
         released: false,
     })
+}
+
+fn nudge_missing_marker(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    round: &WatchedRound,
+    facts: Option<&SessionFacts>,
+    screen: &str,
+) -> bool {
+    if composer_busy(screen) {
+        return false;
+    }
+    let Ok(marker) = super::bridge::CompletionMarker::from_token(&round.marker) else {
+        return false;
+    };
+    let joined = facts.is_some_and(|facts| super::bridge::session_is_pi(interpreter, facts));
+    let prompt = super::bridge::missing_marker_prompt(&marker, joined);
+    let sent = terminals
+        .send_text(&round.binding, &prompt, DeliveryMode::Submit)
+        .is_ok();
+    qol_runtime::probe!(
+        "CLI_SESSION_WATCH",
+        "event=marker_nudge session={} sent={}",
+        round.session,
+        sent
+    );
+    sent
 }
 
 fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> Result<()> {
@@ -5663,6 +5715,20 @@ mod tests {
         }
 
         fn wakes(&self) -> Vec<String> {
+            self.sent_texts()
+                .into_iter()
+                .filter(|text| !text.starts_with("[qol session bridge]"))
+                .collect()
+        }
+
+        fn nudges(&self) -> Vec<String> {
+            self.sent_texts()
+                .into_iter()
+                .filter(|text| text.starts_with("[qol session bridge]"))
+                .collect()
+        }
+
+        fn sent_texts(&self) -> Vec<String> {
             self.backend
                 .sent
                 .lock()
@@ -5893,6 +5959,25 @@ mod tests {
         lane.poll_times(&sim, 2);
         lane.transcript(Transcript::Finished);
         lane.poll_times(&sim, 3);
+        assert!(
+            lane.events().is_empty(),
+            "the first markerless finish nudges instead of completing: {:?}",
+            lane.events()
+        );
+        let nudges = lane.nudges();
+        assert_eq!(nudges.len(), 1, "nudges: {nudges:?}");
+        assert!(
+            nudges[0].contains("ended without the completion fragments"),
+            "{:?}",
+            nudges[0]
+        );
+        assert!(
+            !nudges[0].contains("QOL_BRIDGE_DONE_round"),
+            "{:?}",
+            nudges[0]
+        );
+        lane.poll_times(&sim, 3);
+        assert_eq!(lane.nudges().len(), 1, "a round is nudged at most once");
 
         let events = lane.events();
         assert_eq!(events.len(), 1, "events: {events:?}");
@@ -5918,6 +6003,68 @@ mod tests {
     }
 
     #[test]
+    fn sim_a_nudged_lane_that_answers_with_only_the_marker_keeps_its_first_report() {
+        let sim = SessionSim::new();
+        let mut lane = sim.lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            false,
+            None,
+            None,
+            Transcript::Working,
+            vec!["the full report".to_owned(); 5],
+        );
+        lane.set_report(Some("the full report".to_owned()), false);
+
+        lane.poll_times(&sim, 2);
+        lane.transcript(Transcript::Finished);
+        lane.poll_times(&sim, 3);
+        assert_eq!(lane.nudges().len(), 1, "nudges: {:?}", lane.nudges());
+        assert!(lane.events().is_empty(), "events: {:?}", lane.events());
+        assert_eq!(lane.round.nudged_report.as_deref(), Some("the full report"));
+
+        lane.set_report(Some("QOL_BRIDGE_DONE_round".to_owned()), true);
+        lane.backend
+            .screens
+            .lock()
+            .unwrap()
+            .push_back("the full report\nQOL_BRIDGE_DONE_round".to_owned());
+
+        lane.run(&sim);
+
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        let round = lane.open_round(&sim).unwrap();
+        assert_eq!(round.screen.as_deref(), Some("the full report"));
+    }
+
+    #[test]
+    fn sim_a_lane_with_a_draft_in_its_composer_is_never_nudged() {
+        let sim = SessionSim::new();
+        let mut lane = sim.silent_lane(
+            "7",
+            100,
+            "QOL_BRIDGE_DONE_round",
+            true,
+            None,
+            None,
+            Transcript::Working,
+            vec!["> a half typed draft".to_owned(); 8],
+        );
+
+        lane.poll_times(&sim, 2);
+        lane.transcript(Transcript::Finished);
+        lane.poll_times(&sim, 3);
+
+        assert!(lane.nudges().is_empty(), "nudges: {:?}", lane.nudges());
+        let events = lane.events();
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed_markerless");
+    }
+
+    #[test]
     fn sim_a_foreign_transcript_is_never_captured_as_this_lanes_report() {
         let sim = SessionSim::new();
         let mut lane = sim.lane(
@@ -5935,7 +6082,7 @@ mod tests {
 
         lane.poll_times(&sim, 2);
         lane.transcript(Transcript::Finished);
-        lane.poll_times(&sim, 3);
+        lane.poll_times(&sim, 6);
 
         let wakes = lane.wakes();
         assert_eq!(wakes.len(), 1, "wakes: {wakes:?}");

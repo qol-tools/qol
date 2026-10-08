@@ -987,7 +987,7 @@ impl CompletionMarker {
         }
     }
 
-    fn from_token(token: &str) -> Result<Self> {
+    pub(super) fn from_token(token: &str) -> Result<Self> {
         let nonce = token
             .strip_prefix("QOL_BRIDGE_DONE_")
             .filter(|nonce| !nonce.is_empty())
@@ -1826,7 +1826,7 @@ fn recovery_command(session: &str) -> String {
     format!("qol sessions close {session}")
 }
 
-fn session_is_pi(interpreter: &CliSessionInterpreter, facts: &SessionFacts) -> bool {
+pub(super) fn session_is_pi(interpreter: &CliSessionInterpreter, facts: &SessionFacts) -> bool {
     interpreter.describe(facts).tool.id.as_str() == qol_terminal_sessions::cli::PI_TOOL_ID
 }
 
@@ -1980,6 +1980,20 @@ fn kickstart_prompt(marker: &CompletionMarker, joined: bool) -> String {
     } else {
         format!(
             "[qol session bridge]\nThe bounded task previously submitted to this session is still open and its completion signal was never emitted; the session may have been interrupted. If the task is already complete, reply now ending with the completion fragments joined with no spaces or punctuation. Otherwise continue the task to completion and end your final response with them.\n\nCompletion fragments: `{}` and `{}`.",
+            marker.left, marker.right
+        )
+    }
+}
+
+pub(super) fn missing_marker_prompt(marker: &CompletionMarker, joined: bool) -> String {
+    if joined {
+        format!(
+            "[qol session bridge]\nYour last response ended without the completion token, so the bounded task is still open. If the task is complete, reply with only this completion token alone on a line of its own and do not repeat the report. If it is not complete, continue it, or say what blocks you and stop without the token.\n\nCompletion token:\n{token}",
+            token = marker.token
+        )
+    } else {
+        format!(
+            "[qol session bridge]\nYour last response ended without the completion fragments, so the bounded task is still open. If the task is complete, reply with only the completion fragments joined with no spaces or punctuation and do not repeat the report. If it is not complete, continue it, or say what blocks you and stop without them.\n\nCompletion fragments: `{}` and `{}`.",
             marker.left, marker.right
         )
     }
@@ -3087,6 +3101,7 @@ mod tests {
         assert!(!kickstart.contains("fragments"), "{kickstart}");
         assert_eq!(kickstart.matches(&marker.token).count(), 1);
         for prompt in [
+            missing_marker_prompt(&marker, true),
             bridge_prompt("implement the bounded change", &marker, Role::Lane, true),
             bridge_prompt("collaborator request", &marker, Role::Architect, true),
         ] {
@@ -3102,6 +3117,7 @@ mod tests {
         for prompt in [
             bridge_prompt("implement the bounded change", &marker, Role::Lane, false),
             bridge_prompt("collaborator request", &marker, Role::Architect, false),
+            missing_marker_prompt(&marker, false),
         ] {
             assert!(prompt.contains("QOL_BRIDGE_DONE_"));
             assert!(prompt.contains("abc123"));
