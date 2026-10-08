@@ -118,7 +118,7 @@ struct ParkArgs {
 }
 
 fn help() -> &'static str {
-    "qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]\n\nPark the calling harness session on a long wait. A detached qol process runs the command, closes this terminal once the current turn ends, and when the command exits resumes the same conversation (same tool, same session id, same cwd) in a new tab with the exit code and the tail of its output. If the terminal is still open when the command exits, the result is submitted into it instead.\n\n--model and --effort are passed to the resumed harness; left out, the harness picks its own default.\n--session defaults to the calling terminal.\nqol sessions parked lists parked sessions; qol sessions unpark <id> stops the wait and resumes the conversation now."
+    "qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]\n\nPark the calling harness session on a long wait. A detached qol process runs the command, closes this terminal once the current turn ends, and when the command exits resumes the same conversation (same tool, same session id, same cwd) in a new tab with the exit code and the tail of its output. If the terminal is still open when the command exits, the result is submitted into it instead.\n\n--model and --effort are passed to the resumed harness; left out, the harness picks its own default.\n--title names the parked session and its resumed tab; left out, it is the calling session's name.\n--session defaults to the calling terminal.\nqol sessions parked lists parked sessions; qol sessions unpark <id> stops the wait and resumes the conversation now."
 }
 
 fn parse_args(args: &[OsString]) -> Result<ParkArgs> {
@@ -206,6 +206,7 @@ fn park(
         .map_err(|error| anyhow!("invalid session token `{token}`: {error}"))?;
     let facts = super::bridge::resolve_target(terminals, &binding)?;
     let descriptor = interpreter.describe(&facts);
+    let title = park_title(parsed.title.as_deref(), descriptor.display_name.as_deref());
     let tool = descriptor.tool.id;
     let external_id = descriptor
         .external_id
@@ -225,7 +226,7 @@ fn park(
         external_id: external_id.clone(),
         model: parsed.model.clone(),
         effort: parsed.effort.clone(),
-        title: parsed.title.clone(),
+        title,
         permission_mode: interpreter.permission_mode(&facts),
         session: binding.token(),
         command: parsed.command.clone(),
@@ -271,6 +272,10 @@ enum CallerState {
     Gone,
     Ready,
     Busy,
+}
+
+fn park_title(explicit: Option<&str>, display_name: Option<&str>) -> Option<String> {
+    explicit.or(display_name).map(str::to_owned)
 }
 
 fn caller_state(
@@ -655,6 +660,16 @@ mod tests {
             resumed_session: None,
             detail: None,
         }
+    }
+
+    #[test]
+    fn park_title_prefers_the_explicit_title_then_the_session_name() {
+        assert_eq!(
+            park_title(Some("watch pr"), Some("M4 aim")).as_deref(),
+            Some("watch pr")
+        );
+        assert_eq!(park_title(None, Some("M4 aim")).as_deref(), Some("M4 aim"));
+        assert_eq!(park_title(None, None), None);
     }
 
     #[test]
