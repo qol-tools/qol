@@ -329,6 +329,7 @@ pub(super) fn fork(
         &prompt,
         dry_run,
         admission.assignment.as_ref(),
+        None,
     )?;
     record.surface = launched.surface.to_owned();
     record.cwd = launched.cwd.clone();

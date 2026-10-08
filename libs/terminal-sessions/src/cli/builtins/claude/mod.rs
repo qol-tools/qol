@@ -114,6 +114,10 @@ impl CliSessionStrategy for ClaudeStrategy {
         Some(vec!["--resume".to_owned(), external_id.to_owned()])
     }
 
+    fn permission_mode(&self, session: &SessionFacts) -> Option<String> {
+        metadata::permission_mode(&self.metadata.subscription_path(session)?)
+    }
+
     fn subscribe(
         &self,
         session: &SessionFacts,

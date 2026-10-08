@@ -2110,8 +2110,11 @@ pub(super) fn spawn_detached(
     prompt: &str,
     dry_run: bool,
     assignment: Option<&AgentAssignment>,
+    resume: Option<&[String]>,
 ) -> Result<DetachedLaunch> {
-    require_model_for_launch(model)?;
+    if resume.is_none() {
+        require_model_for_launch(model)?;
+    }
     let prepared = prepare_spawn(interpreter, tool, Some(key), surface, title, config)?;
     let _guard = locks.acquire(&prepared.key)?;
     let started = Instant::now();
@@ -2125,11 +2128,14 @@ pub(super) fn spawn_detached(
         );
     }
     let mut launch = wrap_launch(&prepared.launch, cap);
-    launch.args.extend(super::launch_flags::launch_flags(
-        &prepared.tool_id,
-        model,
-        effort,
-    )?);
+    let flags = match resume {
+        Some(resume) => {
+            launch.args.extend(resume.iter().cloned());
+            super::launch_flags::tier_flags(&prepared.tool_id, model, effort)?
+        }
+        None => super::launch_flags::launch_flags(&prepared.tool_id, model, effort)?,
+    };
+    launch.args.extend(flags);
     super::lane_account::apply(&mut launch, &prepared.tool_id)?;
     if !dry_run {
         launch.args.push(prompt.to_owned());

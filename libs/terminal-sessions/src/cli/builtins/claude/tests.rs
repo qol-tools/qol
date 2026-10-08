@@ -156,6 +156,34 @@ fn missing_transcript_has_no_activity_hint() {
 }
 
 #[test]
+fn permission_mode_is_the_latest_recorded_one_and_absent_without_one() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript.clone(),
+        },
+    }));
+    let cases = [
+        (
+            concat!(
+                "{\"type\":\"permission-mode\",\"permissionMode\":\"bypassPermissions\"}\n",
+                "{\"type\":\"user\",\"permissionMode\":\"plan\"}\n",
+                "{\"type\":\"assistant\"}\n",
+                "not json \"permissionMode\"\n"
+            ),
+            Some("plan"),
+        ),
+        ("{\"type\":\"user\"}\n", None),
+    ];
+    for (content, expected) in cases {
+        std::fs::write(&transcript, content).unwrap();
+        assert_eq!(strategy.permission_mode(&session()).as_deref(), expected);
+    }
+}
+
+#[test]
 fn transcript_tail_type_drives_the_runtime() {
     let root = TempDir::new().unwrap();
     let transcript = root.path().join("session.jsonl");
