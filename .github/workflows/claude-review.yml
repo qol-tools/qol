@@ -68,7 +68,7 @@ jobs:
           lookup-only: ${{ github.event_name == 'push' }}
 
       - name: Install Claude Code
-        if: github.event_name == 'pull_request' || steps.cache.outputs.cache-hit != 'true'
+        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
       - name: Build plugin seed
@@ -121,6 +121,12 @@ jobs:
           ref: ${{ steps.queue.outputs.merge-ref }}
           fetch-depth: 2
           persist-credentials: false
+
+      # refs/pull/N/merge moves with the pull request, so the publish job checks out this exact merge.
+      - name: Pin the merge commit
+        if: steps.queue.outputs.pr != ''
+        id: merge
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Find the last review
         if: github.event_name == 'pull_request'
@@ -195,7 +201,7 @@ jobs:
       pr: ${{ steps.queue.outputs.pr }}
       head-ref: ${{ steps.queue.outputs.head-ref }}
       head-sha: ${{ steps.queue.outputs.head-sha }}
-      merge-ref: ${{ steps.queue.outputs.merge-ref }}
+      merge-sha: ${{ steps.merge.outputs.sha }}
 
   # A fresh runner, so nothing the review and fix sessions wrote reaches the steps holding the deploy key and the PR token.
   publish:
@@ -213,7 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.review.outputs.merge-ref }}
+          ref: ${{ needs.review.outputs.merge-sha }}
           fetch-depth: 2
           persist-credentials: false
 

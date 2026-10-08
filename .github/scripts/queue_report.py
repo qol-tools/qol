@@ -64,7 +64,6 @@ def report(repo: str, head_ref: str, run_id: str, run_url: str) -> str:
         return f"no pull request in {head_ref}"
     jobs = failed_jobs(gh_json([f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"])["jobs"])
     failed = [(job, errors(gh_json([f"repos/{repo}/check-runs/{job['id']}/annotations"]))) for job in jobs]
-    gh_json(["--method", "POST", f"repos/{repo}/issues/{number}/comments", "-f", f"body={comment(failed, run_url)}"])
     head = gh_json([f"repos/{repo}/pulls/{number}"])["head"]["sha"]
     description = f"Sent back: {', '.join(job['name'] for job in jobs) or 'failed'}"[:140]
     gh_json(
@@ -82,7 +81,8 @@ def report(repo: str, head_ref: str, run_id: str, run_url: str) -> str:
             f"target_url={run_url}",
         ]
     )
-    return f"commented on #{number} and failed {head[:7]}"
+    gh_json(["--method", "POST", f"repos/{repo}/issues/{number}/comments", "-f", f"body={comment(failed, run_url)}"])
+    return f"failed {head[:7]} and commented on #{number}"
 
 
 def main() -> int:

@@ -67,7 +67,7 @@ class CommentTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
-    def test_comments_and_fails_the_pull_request_head(self):
+    def test_fails_the_pull_request_head_then_comments(self):
         calls = []
 
         def gh(args):
@@ -82,12 +82,12 @@ class ReportTests(unittest.TestCase):
 
         with mock.patch.object(qr, "gh_json", gh):
             result = qr.report("o/r", f"refs/heads/gh-readonly-queue/main/pr-40-{SHA}", "9", RUN_URL)
-        self.assertEqual(result, f"commented on #40 and failed {SHA[:7]}")
+        self.assertEqual(result, f"failed {SHA[:7]} and commented on #40")
         self.assertEqual(calls[1], ["repos/o/r/check-runs/7/annotations"])
-        self.assertEqual(calls[2][:3], ["--method", "POST", "repos/o/r/issues/40/comments"])
-        self.assertIn("`a.rs:3` boom", calls[2][4])
+        self.assertEqual(calls[4][:3], ["--method", "POST", "repos/o/r/issues/40/comments"])
+        self.assertIn("`a.rs:3` boom", calls[4][4])
         self.assertEqual(
-            calls[4],
+            calls[3],
             [
                 "--method", "POST", f"repos/o/r/statuses/{SHA}",
                 "-f", "state=failure", "-f", "context=merge queue",
