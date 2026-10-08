@@ -107,6 +107,20 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         report = workflow.split("  queue-report:\n", 1)[1]
         self.assertIn("needs: [plan, check, release-build, process-windows]", report)
 
+    def test_only_a_pass_verdict_satisfies_the_review_check(self):
+        workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
+        self.assertIn("  merge_group:\n", workflow.split("jobs:\n", 1)[0])
+        verdict = workflow.split("  verdict:\n", 1)[1]
+        for contract in [
+            "name: claude review",
+            "needs: [review, publish]",
+            "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
+            '[ "$EVENT" = merge_group ] || [ "$BOT" = true ] || [ "$VERDICT" = pass ]',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, verdict)
+        self.assertIn("verdict: ${{ steps.verdict.outputs.verdict }}", workflow)
+
     def test_no_workflow_wraps_the_compiler(self):
         sources = [ROOT / ".github/actions/rust-setup/action.yml"]
         sources.extend((ROOT / ".github/workflows").glob("*.yml"))
