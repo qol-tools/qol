@@ -120,7 +120,12 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "description": "Registered CLI tool to spawn (codex, claude, pi, kimi)",
+                        "description": "Registered CLI tool to spawn (codex, claude, pi, kimi). Optional: it resolves from a pick, the selected agent profile's declared tool, or the harness tool_models declares for the chosen model",
+                    },
+                    "pick": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "The user's +tokens, verbatim and in any order, each naming one launch slot: a surface (tab, os-window), an effort level, a harness or model from tool_models, or an alias from [aliases] in sessions.toml (for example cc = \"claude\"). An explicit tool, model, effort or surface argument wins over a pick; an unknown or doubled pick is refused. An effort nothing picks takes spawn_effort from sessions.toml when the harness takes one; a picked harness without a model takes spawn_model when tool_models declares it for that harness, else its first declared model",
                     },
                     "cwd": {
                         "type": "string",
@@ -218,7 +223,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         },
                     },
                 },
-                "required": ["tool", "cwd"],
+                "required": ["cwd"],
             }),
         },
         ToolSpec {
@@ -242,7 +247,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, the tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models still governs spending.",
+                        "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then fork_model, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, the tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models still governs spending.",
                     },
                     "effort": effort_property(),
                     "brief": {
@@ -253,9 +258,14 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "Tab title for the fork; defaults to the key",
                     },
+                    "pick": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "The user's +tokens, verbatim and in any order, each naming one launch slot: a surface (tab, os-window), an effort level, a harness or model from tool_models, or an alias from [aliases] in sessions.toml (for example cc = \"claude\"). An explicit tool, model, effort or surface argument wins over a pick; an unknown or doubled pick is refused. Slots nothing picks take fork_model, fork_effort and fork_surface from sessions.toml; a picked harness without a model takes the default model when tool_models declares it for that harness, else its first declared model",
+                    },
                     "surface": {
                         "type": "string",
-                        "description": "tab or os-window; defaults to the spawn_surface config, then tab",
+                        "description": "tab or os-window; defaults to fork_surface, then spawn_surface in sessions.toml, then tab",
                         "enum": ["tab", "os-window"],
                     },
                     "copy_chat": {
@@ -574,7 +584,7 @@ mod tests {
             .iter()
             .find(|spec| spec.name == "session_spawn")
             .unwrap();
-        assert_eq!(spec.input_schema["required"], json!(["tool", "cwd"]));
+        assert_eq!(spec.input_schema["required"], json!(["cwd"]));
         assert_eq!(
             spec.input_schema["properties"]["task"]["type"], "string",
             "a single lane still embeds its task in the launch"

@@ -24,6 +24,7 @@ mod lane_exec;
 mod last_send;
 mod launch_flags;
 mod mcp;
+mod pick;
 mod spawn;
 mod watch;
 mod watch_owner;

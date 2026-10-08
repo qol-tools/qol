@@ -746,7 +746,7 @@ mod tests {
             .expect("spawn in contract");
         let source = render_tool_block(spec).expect("render");
         assert!(source.contains(
-            "tool: Type.String({ description: \"Registered CLI tool to spawn (codex, claude, pi, kimi)\" }),"
+            "tool: Type.Optional(Type.String({ description: \"Registered CLI tool to spawn (codex, claude, pi, kimi)."
         ));
         assert!(source.contains(
             "cwd: Type.String({ description: \"Working directory for the spawned session\" }),"

@@ -368,26 +368,41 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     };
     let terminals = super::service()?;
     let interpreter = CliSessionInterpreter::system();
+    let parent = parsed.parent.clone().or_else(|| {
+        Some(super::bridge::driver_token(&terminals)).filter(|token| !token.is_empty())
+    });
     let chat = if parsed.no_chat {
         None
     } else {
-        resolve_chat_source(&terminals, &interpreter, parsed.parent.as_deref())
+        resolve_chat_source(&terminals, &interpreter, parent.as_deref())
     };
+    let launch = super::pick::resolve(
+        super::pick::LaunchKind::Fork,
+        super::pick::LaunchChoice {
+            tool: parsed.tool.clone(),
+            model: parsed.model.clone(),
+            effort: parsed.effort.clone(),
+            surface: parsed.surface.clone(),
+        },
+        &parsed.picks,
+        &super::spawn::config_launch_defaults()?,
+        &dispatch,
+    )?;
     let outcome = fork(
         &terminals,
         &interpreter,
         &SpawnLedger::system()?,
         &SpawnLocks::system()?,
         &ForkStore::system()?,
-        parsed.tool.as_deref(),
+        Some(&launch.tool),
         &parsed.cwd,
         &parsed.key,
-        parsed.surface.as_deref(),
-        parsed.model.as_deref(),
-        parsed.effort.as_deref(),
+        launch.surface.as_deref(),
+        launch.model.as_deref(),
+        launch.effort.as_deref(),
         parsed.title.as_deref(),
         &brief,
-        parsed.parent.as_deref(),
+        parent.as_deref(),
         chat.as_ref(),
         resolve_spawn_cap(config_spawn_cap()?).as_ref(),
         &dispatch,
@@ -437,6 +452,7 @@ pub(super) struct ForkArgs {
     pub(super) agent_profile: Option<String>,
     pub(super) task_role: Option<super::agent_policy::AgentRole>,
     pub(super) requires: Option<Vec<super::agent_policy::AgentRequirement>>,
+    pub(super) picks: Vec<String>,
 }
 
 impl ForkArgs {
@@ -450,7 +466,7 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [+PICK...]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\nEach +PICK names one launch slot: a surface (tab, os-window), an effort level, a harness or model from tool_models, or an alias from [aliases] in sessions.toml. An explicit flag wins over a pick, and fork_model, fork_effort and fork_surface fill the slots nothing picked.\n--key defaults to a generated fork-<id>; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
@@ -495,6 +511,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
                 let value = flag_value(args, &mut index, "--requires")?;
                 parsed.requires = Some(super::agent_policy::parse_requires(&value)?);
             }
+            pick if pick.starts_with('+') => parsed.picks.push(pick.to_owned()),
             other => bail!("unknown fork flag `{other}`\n\n{}", help()),
         }
         index += 1;
@@ -503,10 +520,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
         bail!("fork requires --cwd\n\n{}", help());
     }
     if parsed.key.is_empty() {
-        bail!(
-            "fork requires --key so the detached tree is findable later\n\n{}",
-            help()
-        );
+        parsed.key = format!("fork-{}", &super::spawn::generate_key()[..8]);
     }
     Ok(parsed)
 }
@@ -531,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn fork_args_leave_the_tool_unset_and_require_key_and_cwd() {
+    fn fork_args_leave_the_tool_unset_and_require_cwd() {
         let parsed = parse_args(&args(&[
             "--cwd",
             "/work",
@@ -566,13 +580,18 @@ mod tests {
             "a selected profile supplies the model, so the parse must not require one"
         );
 
-        for (missing, expected) in [
-            (args(&["--key", "k", "--model", "opus"]), "--cwd"),
-            (args(&["--cwd", "/work", "--model", "opus"]), "--key"),
-        ] {
-            let error = parse_args(&missing).unwrap_err().to_string();
-            assert!(error.contains(expected), "{error}");
-        }
+        let error = parse_args(&args(&["--key", "k", "--model", "opus"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--cwd"), "{error}");
+    }
+
+    #[test]
+    fn fork_args_collect_picks_and_generate_a_key() {
+        let parsed =
+            parse_args(&args(&["--cwd", "/work", "--brief", "b", "+win", "+high"])).unwrap();
+        assert_eq!(parsed.picks, vec!["+win".to_owned(), "+high".to_owned()]);
+        assert!(parsed.key.starts_with("fork-"), "{}", parsed.key);
     }
 
     #[test]

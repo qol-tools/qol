@@ -35,6 +35,18 @@ fn model_flags(tool: &CliToolId, model: &str) -> Result<Vec<String>> {
     Ok(vec![flag.to_owned(), model.to_owned()])
 }
 
+pub(super) fn takes_effort(tool: &str) -> bool {
+    effort_flag(tool).is_some()
+}
+
+fn effort_flag(tool: &str) -> Option<&'static str> {
+    match tool {
+        "claude" => Some("--effort"),
+        "pi" => Some("--thinking"),
+        _ => None,
+    }
+}
+
 fn effort_flags(tool: &CliToolId, effort: &str) -> Result<Vec<String>> {
     if !EFFORT_LEVELS.contains(&effort) {
         bail!(
@@ -42,12 +54,11 @@ fn effort_flags(tool: &CliToolId, effort: &str) -> Result<Vec<String>> {
             EFFORT_LEVELS.join(", ")
         );
     }
-    let flag = match tool.as_str() {
-        "claude" => "--effort",
-        "pi" => "--thinking",
-        other => bail!(
-            "tool `{other}` has no effort flag; drop the effort or pick a tool that takes one"
-        ),
+    let Some(flag) = effort_flag(tool.as_str()) else {
+        bail!(
+            "tool `{}` has no effort flag; drop the effort or pick a tool that takes one",
+            tool.as_str()
+        );
     };
     Ok(vec![flag.to_owned(), effort.to_owned()])
 }

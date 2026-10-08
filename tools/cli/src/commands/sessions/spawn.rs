@@ -152,6 +152,12 @@ struct SpawnConfigFile {
     enforce_agent_profiles: Option<bool>,
     #[serde(default)]
     claude_accounts: std::collections::BTreeMap<String, super::lane_account::ClaudeAccountSpec>,
+    #[serde(default)]
+    aliases: std::collections::BTreeMap<String, String>,
+    fork_model: Option<String>,
+    fork_effort: Option<String>,
+    fork_surface: Option<String>,
+    spawn_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -394,6 +400,22 @@ pub(super) fn config_claude_accounts(
     Ok(config.claude_accounts)
 }
 
+pub(super) fn config_launch_defaults() -> Result<super::pick::LaunchDefaults> {
+    let Some(path) = sessions_config_path() else {
+        return Ok(super::pick::LaunchDefaults::default());
+    };
+    let encoded = fs::read_to_string(&path).context("failed to read the sessions config")?;
+    let config: SpawnConfigFile =
+        toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(super::pick::LaunchDefaults {
+        aliases: config.aliases,
+        fork_model: config.fork_model,
+        fork_effort: config.fork_effort,
+        fork_surface: config.fork_surface,
+        spawn_effort: config.spawn_effort,
+    })
+}
+
 pub(super) fn config_dispatch_policy() -> Result<DispatchPolicy> {
     let Some(path) = sessions_config_path() else {
         return Ok(DispatchPolicy::default());
@@ -438,6 +460,14 @@ impl DispatchPolicySource {
             DispatchPolicySource::System => config_dispatch_policy(),
             #[cfg(test)]
             DispatchPolicySource::Fixed(policy) => Ok((**policy).clone()),
+        }
+    }
+
+    pub(super) fn launch_defaults(&self) -> Result<super::pick::LaunchDefaults> {
+        match self {
+            DispatchPolicySource::System => config_launch_defaults(),
+            #[cfg(test)]
+            DispatchPolicySource::Fixed(_) => Ok(super::pick::LaunchDefaults::default()),
         }
     }
 }
@@ -881,8 +911,25 @@ pub(super) fn recorded_assignment(
 }
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
-    let parsed = parse_args(args)?;
+    let mut parsed = parse_args(args)?;
     let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
+    let explicit = super::pick::LaunchChoice {
+        tool: parsed.tool.take(),
+        model: parsed.model.take(),
+        effort: parsed.effort.take(),
+        surface: parsed.surface.take(),
+    };
+    let launch = super::pick::resolve(
+        super::pick::LaunchKind::Spawn,
+        explicit,
+        &parsed.picks,
+        &config_launch_defaults()?,
+        &dispatch,
+    )?;
+    let tool = launch.tool;
+    parsed.model = launch.model;
+    parsed.effort = launch.effort;
+    parsed.surface = launch.surface;
     let cap = resolve_spawn_cap(config_spawn_cap()?);
     if let Some(cap) = &cap {
         qol_runtime::probe!(
@@ -897,10 +944,10 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     let surface = config_surface()?;
     let locks = SpawnLocks::system()?;
     let encoded = if parsed.lanes.is_empty() {
-        let outcome = run_with(&terminals, parsed, &dispatch, surface, &locks, cap)?;
+        let outcome = run_with(&terminals, &tool, parsed, &dispatch, surface, &locks, cap)?;
         serde_json::to_string(&outcome).context("failed to serialize spawn outcome")?
     } else {
-        let outcome = run_lanes_with(&terminals, parsed, &dispatch, surface, &locks, cap)?;
+        let outcome = run_lanes_with(&terminals, &tool, parsed, &dispatch, surface, &locks, cap)?;
         serde_json::to_string(&outcome).context("failed to serialize lane set outcome")?
     };
     println!("{encoded}");
@@ -909,6 +956,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 
 fn run_lanes_with(
     terminals: &TerminalSessionService,
+    tool: &str,
     parsed: SpawnArgs,
     dispatch: &AgentDispatch,
     config: Option<SpawnSurface>,
@@ -918,7 +966,7 @@ fn run_lanes_with(
     let outcome = spawn_lanes(
         terminals,
         &CliSessionInterpreter::system(),
-        &parsed.tool,
+        tool,
         &parsed.cwd,
         &parsed.lanes,
         parsed.surface.as_deref(),
@@ -945,6 +993,7 @@ fn run_lanes_with(
 
 fn run_with(
     terminals: &TerminalSessionService,
+    tool: &str,
     parsed: SpawnArgs,
     dispatch: &AgentDispatch,
     config: Option<SpawnSurface>,
@@ -955,7 +1004,7 @@ fn run_with(
     let outcome = spawn_or_reuse(
         terminals,
         &CliSessionInterpreter::system(),
-        &parsed.tool,
+        tool,
         &parsed.cwd,
         parsed.key.as_deref(),
         parsed.surface.as_deref(),
@@ -1077,7 +1126,8 @@ fn wait_until_live(
 
 #[derive(Debug)]
 struct SpawnArgs {
-    tool: String,
+    tool: Option<String>,
+    picks: Vec<String>,
     cwd: String,
     key: Option<String>,
     surface: Option<String>,
@@ -1106,7 +1156,7 @@ impl SpawnArgs {
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] --model MODEL [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--model is required when launching a new session; the reuse path needs no model. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
+    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON] [+PICK...]\n--tool resolves from a pick, the selected agent profile, or the harness tool_models declares for the model; --model falls back to spawn_model. Each +PICK names one launch slot: a surface (tab, os-window), an effort level, a harness or model from tool_models, or an alias from [aliases] in sessions.toml; an explicit flag wins over a pick, and spawn_effort fills an effort nothing picked. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -1123,6 +1173,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut task_role = None;
     let mut requires = None;
     let mut lanes = Vec::new();
+    let mut picks = Vec::new();
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -1207,10 +1258,13 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 })?;
                 index += 2;
             }
+            pick if pick.starts_with('+') => {
+                picks.push(pick.to_owned());
+                index += 1;
+            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
-    let tool = tool.ok_or_else(|| anyhow!("usage: {usage}"))?;
     let cwd = cwd.ok_or_else(|| anyhow!("usage: {usage}"))?;
     if !lanes.is_empty() && (key.is_some() || task.is_some() || title.is_some()) {
         bail!("--lanes carries every lane's key, task and title, so --key, --task and --title cannot be combined with it\nusage: {usage}");
@@ -1220,6 +1274,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     }
     Ok(SpawnArgs {
         tool,
+        picks,
         cwd,
         key,
         surface,
@@ -2722,7 +2777,7 @@ mod tests {
             "image_input,visual_review".into(),
         ])
         .unwrap();
-        assert_eq!(parsed.tool, "codex");
+        assert_eq!(parsed.tool.as_deref(), Some("codex"));
         assert_eq!(parsed.cwd, "/work/project");
         assert_eq!(parsed.key.as_deref(), Some("lane-1"));
         assert_eq!(parsed.surface.as_deref(), Some("os-window"));
@@ -2790,7 +2845,7 @@ mod tests {
 
         let parsed =
             parse_args(&["--tool".into(), "pi".into(), "--cwd".into(), "/tmp".into()]).unwrap();
-        assert_eq!(parsed.tool, "pi");
+        assert_eq!(parsed.tool.as_deref(), Some("pi"));
         assert_eq!(parsed.cwd, "/tmp");
         assert_eq!(parsed.key, None);
         assert_eq!(parsed.surface, None);
@@ -4404,6 +4459,7 @@ mod tests {
         .unwrap();
         let error = run_with(
             &terminals,
+            "codex",
             parsed,
             &AgentDispatch::unconfigured(),
             None,
@@ -4428,6 +4484,7 @@ mod tests {
         .unwrap();
         let outcome = run_with(
             &terminals,
+            "codex",
             parsed,
             &AgentDispatch::unconfigured(),
             None,
@@ -4450,6 +4507,7 @@ mod tests {
         .unwrap();
         let outcome = run_with(
             &terminals,
+            "codex",
             parsed,
             &AgentDispatch::unconfigured(),
             None,
@@ -4465,7 +4523,6 @@ mod tests {
     #[test]
     fn spawn_args_reject_missing_required_flags_and_unknown_flags() {
         for args in [
-            vec!["--cwd".into(), "/tmp".into()],
             vec!["--tool".into(), "pi".into()],
             vec!["--tool".into(), "pi".into(), "--cwd".into()],
             vec![

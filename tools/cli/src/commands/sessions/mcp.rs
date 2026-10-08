@@ -15,6 +15,8 @@ use qol_terminal_sessions::{
 };
 use serde_json::{json, Value};
 
+use super::pick::{Launch, LaunchChoice, LaunchKind};
+
 const SERVER_NAME: &str = "qol-sessions-mcp";
 
 #[cfg(test)]
@@ -245,7 +247,6 @@ impl McpSessionServer {
         if arguments.get("lanes").is_some() {
             return self.tool_spawn_lanes(&arguments, cancel);
         }
-        let tool = string_argument(&arguments, "tool")?;
         let cwd = string_argument(&arguments, "cwd")?;
         let key = string_argument(&arguments, "key")?;
         if arguments.get("background").is_some() {
@@ -254,25 +255,7 @@ impl McpSessionServer {
         if arguments.get("autoclose").is_some() {
             return Err("`autoclose` was removed; lanes always close on completion".to_owned());
         }
-        let surface = arguments
-            .get("surface")
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| "session_spawn `surface` must be a string".to_owned())
-            })
-            .transpose()?;
-        let model_flag = arguments
-            .get("model")
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| "session_spawn `model` must be a string".to_owned())
-            })
-            .transpose()?;
-        let effort = optional_string(&arguments, "effort", "session_spawn")?;
+        let launch_args = launch_arguments(&arguments, "session_spawn")?;
         let title = arguments
             .get("title")
             .map(|value| {
@@ -314,15 +297,16 @@ impl McpSessionServer {
             self.policy.load().map_err(|error| error.to_string())?,
             request,
         );
+        let launch = self.resolve_launch(LaunchKind::Spawn, launch_args, &dispatch)?;
         let outcome = super::spawn::spawn_or_reuse(
             self.terminals.as_ref(),
             &self.interpreter,
-            tool,
+            &launch.tool,
             cwd,
             Some(key),
-            surface.as_deref(),
-            model_flag.as_deref(),
-            effort.as_deref(),
+            launch.surface.as_deref(),
+            launch.model.as_deref(),
+            launch.effort.as_deref(),
             title.as_deref(),
             self.spawn_surface,
             self.spawn_cap.as_ref(),
@@ -351,7 +335,6 @@ impl McpSessionServer {
         arguments: &Value,
         cancel: Option<Arc<AtomicBool>>,
     ) -> Result<String, String> {
-        let tool = string_argument(arguments, "tool")?;
         let cwd = string_argument(arguments, "cwd")?;
         for rejected in ["key", "task", "title"] {
             if arguments.get(rejected).is_some() {
@@ -367,9 +350,7 @@ impl McpSessionServer {
             serde_json::from_value(lanes.clone()).map_err(|error| {
                 format!("`lanes` must be an array of {{key, task, title?}} objects: {error}")
             })?;
-        let surface = optional_string(arguments, "surface", "session_spawn")?;
-        let model_flag = optional_string(arguments, "model", "session_spawn")?;
-        let effort = optional_string(arguments, "effort", "session_spawn")?;
+        let launch_args = launch_arguments(arguments, "session_spawn")?;
         let group = optional_string(arguments, "group", "session_spawn")?;
         let resume = arguments
             .get("resume")
@@ -384,15 +365,16 @@ impl McpSessionServer {
             self.policy.load().map_err(|error| error.to_string())?,
             request,
         );
+        let launch = self.resolve_launch(LaunchKind::Spawn, launch_args, &dispatch)?;
         let outcome = super::spawn::spawn_lanes(
             self.terminals.as_ref(),
             &self.interpreter,
-            tool,
+            &launch.tool,
             cwd,
             &lanes,
-            surface.as_deref(),
-            model_flag.as_deref(),
-            effort.as_deref(),
+            launch.surface.as_deref(),
+            launch.model.as_deref(),
+            launch.effort.as_deref(),
             self.spawn_surface,
             self.spawn_cap.as_ref(),
             &self.locks,
@@ -416,12 +398,9 @@ impl McpSessionServer {
     fn tool_fork(&self, arguments: Value) -> Result<String, String> {
         let cwd = string_argument(&arguments, "cwd")?;
         let key = string_argument(&arguments, "key")?;
-        let model = optional_string(&arguments, "model", "session_fork")?;
         let brief = string_argument(&arguments, "brief")?;
-        let tool = optional_string(&arguments, "tool", "session_fork")?;
-        let effort = optional_string(&arguments, "effort", "session_fork")?;
+        let launch_args = launch_arguments(&arguments, "session_fork")?;
         let title = optional_string(&arguments, "title", "session_fork")?;
-        let surface = optional_string(&arguments, "surface", "session_fork")?;
         let copy_chat = arguments
             .get("copy_chat")
             .map(|value| {
@@ -453,18 +432,19 @@ impl McpSessionServer {
             self.policy.load().map_err(|error| error.to_string())?,
             request,
         );
+        let launch = self.resolve_launch(LaunchKind::Fork, launch_args, &dispatch)?;
         let outcome = super::fork::fork(
             self.terminals.as_ref(),
             &self.interpreter,
             &self.ledger,
             &self.locks,
             &self.forks,
-            tool.as_deref(),
+            Some(&launch.tool),
             cwd,
             key,
-            surface.as_deref(),
-            model.as_deref(),
-            effort.as_deref(),
+            launch.surface.as_deref(),
+            launch.model.as_deref(),
+            launch.effort.as_deref(),
             title.as_deref(),
             brief,
             parent.as_deref(),
@@ -474,6 +454,20 @@ impl McpSessionServer {
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn resolve_launch(
+        &self,
+        kind: LaunchKind,
+        (explicit, picks): (LaunchChoice, Vec<String>),
+        dispatch: &super::agent_policy::AgentDispatch,
+    ) -> Result<Launch, String> {
+        let defaults = self
+            .policy
+            .launch_defaults()
+            .map_err(|error| error.to_string())?;
+        super::pick::resolve(kind, explicit, &picks, &defaults, dispatch)
+            .map_err(|error| error.to_string())
     }
 
     fn tool_submit(&self, arguments: Value) -> Result<String, String> {
@@ -968,6 +962,21 @@ fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, Stri
         .get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing `{name}` string argument"))
+}
+
+fn launch_arguments(arguments: &Value, tool: &str) -> Result<(LaunchChoice, Vec<String>), String> {
+    let explicit = LaunchChoice {
+        tool: optional_string(arguments, "tool", tool)?,
+        model: optional_string(arguments, "model", tool)?,
+        effort: optional_string(arguments, "effort", tool)?,
+        surface: optional_string(arguments, "surface", tool)?,
+    };
+    let picks = match arguments.get("pick") {
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|_| format!("{tool} `pick` must be an array of strings"))?,
+        None => Vec::new(),
+    };
+    Ok((explicit, picks))
 }
 
 fn optional_string(arguments: &Value, name: &str, tool: &str) -> Result<Option<String>, String> {
@@ -3277,6 +3286,33 @@ mod tests {
     }
 
     #[test]
+    fn session_spawn_picks_reach_the_launch() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let mut arguments = spawn_arguments("pi", "mcp-lane-pick", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["pick"] = json!(["+high"]);
+        arguments["task"] = json!("implement the fix");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false);
+        let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            request.args[..4],
+            vec![
+                "--model".to_owned(),
+                "flash-x".to_owned(),
+                "--thinking".to_owned(),
+                "high".to_owned()
+            ]
+        );
+    }
+
+    #[test]
     fn session_spawn_model_rejects_non_string_values() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
@@ -3636,7 +3672,7 @@ mod tests {
     }
 
     #[test]
-    fn session_spawn_requires_tool_cwd_and_key() {
+    fn session_spawn_requires_cwd_and_key() {
         let backend = Arc::new(
             FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
         );
@@ -3646,7 +3682,6 @@ mod tests {
             tempfile::TempDir::new().unwrap().path().to_path_buf(),
         );
         for (name, arguments) in [
-            ("tool", json!({ "cwd": "/work", "key": "k" })),
             ("cwd", json!({ "tool": "codex", "key": "k" })),
             ("key", json!({ "tool": "codex", "cwd": "/work" })),
         ] {
