@@ -242,9 +242,11 @@ fn handle_session_end(
             bail!("qol-tray dev process exited with {status}")
         }
         dev_console::SessionEnd::SelfRestart { tray_pid } => {
-            let root = repo_root()?;
-            let binary = fresh_cli_binary(&root);
-            match crate::self_exec::replace_with(&binary, tray_pid) {
+            let replaced = repo_root().and_then(|root| {
+                let binary = fresh_cli_binary(&root);
+                crate::self_exec::replace_with(&binary, tray_pid)
+            });
+            match replaced {
                 Ok(()) => {
                     restore.disarm();
                     Ok(())
