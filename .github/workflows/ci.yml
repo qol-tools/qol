@@ -403,7 +403,7 @@ jobs:
           esac
 
   # GitHub only marks a queue removal on the pull request timeline, so a failed
-  # queue run says which jobs failed on the pull request itself.
+  # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
     name: Report merge queue failure
     needs: [plan, check, release-build, process-windows]
@@ -413,7 +413,9 @@ jobs:
     permissions:
       contents: read
       actions: read
+      checks: read
       pull-requests: write
+      statuses: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

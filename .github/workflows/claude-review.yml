@@ -5,6 +5,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
 
 permissions:
   contents: read
@@ -21,23 +24,23 @@ jobs:
     name: Review with qol-code-review
     if: >-
       github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'merge_group' &&
+       github.event.workflow_run.conclusion == 'failure') ||
       (!github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
        !endsWith(github.actor, '[bot]'))
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_branch || github.ref }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: read
+      actions: read
+      checks: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-
       - name: Resolve marketplace heads
         id: seed
         env:
@@ -90,7 +93,7 @@ jobs:
 
 
       - name: Locate the review node
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'push'
         id: node
         env:
           SEED: ${{ steps.seed.outputs.dir }}
@@ -100,6 +103,23 @@ jobs:
           test "$(echo "$node" | wc -l)" = 1
           echo "path=$node" >> "$GITHUB_OUTPUT"
           echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
+
+      - name: Read the merge queue failure
+        if: github.event_name == 'workflow_run'
+        id: queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node "$NODE" queue-context --run-id "$RUN_ID" --repo "$GITHUB_REPOSITORY" --out "$OUT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name != 'workflow_run' || steps.queue.outputs.pr != ''
+        with:
+          ref: ${{ steps.queue.outputs.merge-ref }}
+          fetch-depth: 2
+          persist-credentials: false
 
       - name: Find the last review
         if: github.event_name == 'pull_request'
@@ -144,8 +164,19 @@ jobs:
           OUT: ${{ steps.node.outputs.out }}
         run: node "$NODE" fix --base HEAD^1 --head HEAD --out "$OUT"
 
+      - name: Fix the merge queue failure
+        id: queue-fix
+        if: steps.queue.outputs.pr != ''
+        timeout-minutes: 50
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
+          NODE: ${{ steps.node.outputs.path }}
+          OUT: ${{ steps.node.outputs.out }}
+        run: node "$NODE" queue-fix --base HEAD^1 --head HEAD --out "$OUT"
+
       - name: Upload review
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.node.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name != 'push' && steps.node.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: claude-review
@@ -153,12 +184,17 @@ jobs:
             ${{ steps.node.outputs.out }}/reply.md
             ${{ steps.node.outputs.out }}/review/
             ${{ steps.node.outputs.out }}/fix/
+            ${{ steps.node.outputs.out }}/queue/
           if-no-files-found: ignore
           retention-days: 7
 
     outputs:
       seed-key: ${{ steps.seed.outputs.key }}
-      fix: ${{ steps.fix.outcome }}
+      fix: ${{ steps.queue-fix.outcome == 'skipped' && steps.fix.outcome || steps.queue-fix.outcome }}
+      pr: ${{ steps.queue.outputs.pr }}
+      head-ref: ${{ steps.queue.outputs.head-ref }}
+      head-sha: ${{ steps.queue.outputs.head-sha }}
+      merge-ref: ${{ steps.queue.outputs.merge-ref }}
 
   # A fresh runner, so nothing the review and fix sessions wrote reaches the steps holding the deploy key and the PR token.
   publish:
@@ -166,8 +202,8 @@ jobs:
     needs: review
     # !cancelled() replaces the implicit success() a job if gets, so a failed review or fix still posts its comment.
     if: >-
-      !cancelled() && github.event_name == 'pull_request' &&
-      needs.review.result != 'skipped'
+      !cancelled() && needs.review.result != 'skipped' &&
+      (github.event_name == 'pull_request' || needs.review.outputs.pr != '')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -176,6 +212,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.review.outputs.merge-ref }}
           fetch-depth: 2
           persist-credentials: false
 
@@ -208,7 +245,7 @@ jobs:
         if: steps.node.outputs.patch == 'true'
         env:
           DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || needs.review.outputs.head-ref }}
           NODE: ${{ steps.node.outputs.path }}
           OUT: ${{ steps.node.outputs.out }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -244,8 +281,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NODE: ${{ steps.node.outputs.path }}
           OUT: ${{ steps.node.outputs.out }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || needs.review.outputs.pr }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || needs.review.outputs.head-sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           FIX_OUTCOME: ${{ needs.review.outputs.fix == 'failure' && 'failure' || steps.push.outcome }}
@@ -265,7 +302,7 @@ jobs:
               exit 1
             fi
           done
-          marker="$(node "$NODE" marker)"
+          marker="$(node "$NODE" marker --out "$OUT")"
           earlier="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .node_id")"
           gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
