@@ -320,11 +320,10 @@ jobs:
           done
           marker="$(node "$NODE" marker --out "$OUT")"
           earlier="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .node_id")"
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id")"
           gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$body" > /dev/null
-          for node in $earlier; do
-            gh api graphql -f id="$node" \
-              -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null || true
+          for id in $earlier; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id" > /dev/null || true
           done
           exit "$status"
 
