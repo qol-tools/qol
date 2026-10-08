@@ -7221,7 +7221,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.81.1"
+version = "1.81.2"
 dependencies = [
  "anyhow",
  "block2",
