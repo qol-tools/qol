@@ -1,6 +1,6 @@
 use std::os::fd::{AsRawFd, RawFd};
 
-use super::PRIOR_TERMIOS_ENV;
+const PRIOR_TERMIOS_ENV: &str = "QOL_DEV_PRIOR_TERMIOS";
 
 const COOKED_LFLAG: libc::tcflag_t = libc::ICANON | libc::ECHO | libc::ISIG;
 const COOKED_IFLAG: libc::tcflag_t = libc::IXON | libc::ICRNL;

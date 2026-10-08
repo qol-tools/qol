@@ -16,6 +16,7 @@ use ratatui::DefaultTerminal;
 
 use crate::dev_server::{probe_endpoints, toggle_dev_link, LinkToggle};
 use crate::host_facade;
+use crate::installed_tray::InstalledTray;
 use crate::poller::Poller;
 
 use super::console_state::{load_console_state, save_console_state};
@@ -84,6 +85,7 @@ pub(crate) fn run_session(
     let mut probes = Probes::spawn(running_worktree.clone());
     let mut dash = Dash::new_for_startup(plugins, worktree_branch, running_worktree);
     dash.base_label = resolve_base_label();
+    dash.installed_tray = Some(InstalledTray::probe());
     dash.apply_state(load_console_state());
     dash.start_log_file();
     dash.boot_rx = boot;

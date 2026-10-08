@@ -9,13 +9,11 @@ pub(super) struct Platform;
 
 impl InstallerOps for Platform {
     fn binary_filename(&self) -> String {
-        "qol-tray.exe".to_string()
+        qol_apps::tray_install::binary_filename().to_string()
     }
 
     fn install_dir(&self) -> Result<PathBuf> {
-        let local_data =
-            dirs::data_local_dir().context("Could not determine local data directory")?;
-        Ok(local_data.join("Programs").join("qol-tray").join("bin"))
+        Ok(qol_apps::tray_install::install_dir()?)
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {

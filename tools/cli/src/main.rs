@@ -6,6 +6,7 @@ mod dev_console;
 mod dev_server;
 mod dev_shutdown;
 mod host_facade;
+mod installed_tray;
 mod platform;
 mod poller;
 mod process_guardian;

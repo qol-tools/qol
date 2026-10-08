@@ -7,6 +7,7 @@ use ratatui::Frame;
 use qol_conventions::dev_health::ReadinessPhase;
 
 use crate::dev_server::{PluginDaemonStatus, WorkspacePlugin};
+use crate::installed_tray::InstalledTray;
 
 use super::activity::draw_activity;
 use super::dash::{Dash, Health, LinksState, RebuildState, Row, View};
@@ -52,6 +53,7 @@ pub(super) fn draw(frame: &mut Frame, dash: &mut Dash) {
     }
     .render(frame, body, accent);
     draw_branch_sign(frame, dash, body, navigation);
+    draw_installed_tray_sign(frame, dash, body);
     draw_activity(frame, dash, body, accent);
     draw_keys_hud(frame, dash, inner);
 }
@@ -238,6 +240,26 @@ pub(super) fn draw_branch_sign(
         content: branch_sign_line(dash),
     }
     .render_bottom(frame, body, sign_accent(dash), navigation);
+}
+
+pub(super) fn installed_tray_sign_line(tray: &InstalledTray) -> Line<'static> {
+    match tray {
+        InstalledTray::Missing => Line::from("qol-tray not installed".fg(ORANGE).bold()),
+        InstalledTray::Installed { version, .. } => Line::from(vec![
+            "installed qol-tray ".fg(Color::DarkGray),
+            InstalledTray::version_label(version.as_deref()).fg(Color::Gray),
+        ]),
+    }
+}
+
+fn draw_installed_tray_sign(frame: &mut Frame, dash: &Dash, body: Rect) {
+    let Some(tray) = &dash.installed_tray else {
+        return;
+    };
+    Sign {
+        content: installed_tray_sign_line(tray),
+    }
+    .render_bottom_left(frame, body, sign_accent(dash));
 }
 
 pub(super) fn quit_prompt_rows() -> Vec<Line<'static>> {
@@ -1314,6 +1336,32 @@ mod tests {
             let text = span_text(&branch_sign_line(&dash).spans);
             assert_eq!(text, expected, "target: {target:?} running: {running:?}");
         }
+    }
+
+    #[test]
+    fn installed_tray_sign_sits_in_the_bottom_left_corner() {
+        let mut dash = Dash::new(Vec::new());
+        dash.installed_tray = Some(InstalledTray::Installed {
+            binary: PathBuf::from("/home/x/.local/bin/qol-tray"),
+            version: Some("3.86.5".to_string()),
+        });
+        let rows = render_rows(&mut dash);
+        let border = &rows[rows.len() - 2];
+        assert!(
+            border.starts_with("┤ installed qol-tray v3.86.5 ├"),
+            "installed version must sit in the bottom-left corner: {border}"
+        );
+        assert!(
+            border.contains("┤ base ├"),
+            "the worktree sign must stay centered beside it: {border}"
+        );
+    }
+
+    #[test]
+    fn missing_installed_tray_is_an_orange_warning() {
+        let line = installed_tray_sign_line(&InstalledTray::Missing);
+        assert_eq!(span_text(&line.spans), "qol-tray not installed");
+        assert!(line.spans.iter().all(|span| span.style.fg == Some(ORANGE)));
     }
 
     #[test]

@@ -65,6 +65,9 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
     let plan = resolve_directive(&root, directive, current_active_worktree_marker())?;
     let mut phases = PhaseTimer::start(verbose);
     let build_root = cli_build_root(&plan, &root);
+    if plan.target.branch.is_some() {
+        adopt_worktree_cli(&cli_workspace_root(&build_root, &root), verbose)?;
+    }
     crate::setup::run_setup_with_install(&build_root, verbose, plan.target.branch.is_none())?;
     phases.mark("setup");
     if verbose {
@@ -89,6 +92,7 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
     apply_marker_update(&plan.marker_update)?;
     status.set("stop", Measure::Unknown, "running tray");
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
+    let restore = crate::installed_tray::RestoreOnExit::arm();
     phases.mark("stop");
     let shutdown_detail = match shutdown_method {
         ShutdownMethod::Graceful => "previous tray stopped gracefully",
@@ -145,7 +149,7 @@ fn run_inner(args: &[OsString], verbose: bool, skip_plugins: bool) -> Result<()>
         run_root,
         None,
     )?;
-    handle_session_end(end)
+    handle_session_end(end, restore)
 }
 
 fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
@@ -160,6 +164,7 @@ fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
         .join("bin")
         .join(crate::workspace::exe_name("qol-tray"));
     let shutdown_method = crate::dev_shutdown::stop_existing_tray()?;
+    let restore = crate::installed_tray::RestoreOnExit::arm();
     let shutdown_detail = match shutdown_method {
         ShutdownMethod::Graceful => "previous tray stopped gracefully",
         ShutdownMethod::Forced => "previous tray required fallback cleanup",
@@ -195,13 +200,14 @@ fn run_artifact(args: &[OsString], verbose: bool, root: PathBuf) -> Result<()> {
     }
     let plugin_names = bundle.plugins.into_iter().map(|plugin| plugin.id).collect();
     let end = dev_console::run_session(&mut child, verbose, plugin_names, lines, None, root, None)?;
-    handle_session_end(end)
+    handle_session_end(end, restore)
 }
 
 fn run_attached(tray_pid: u32, verbose: bool, branch: Option<String>) -> Result<()> {
     let root = repo_root()?;
     let (target, note) = marker_tray_target(&root, branch);
     let worktree = dev_run_root(&target.root);
+    let restore = crate::installed_tray::RestoreOnExit::arm();
     let mut child = dev_console::TrayHandle::Attached(tray_pid);
     wait_for_health_or_exit(&mut child, None)
         .context("dev server did not become healthy on reattach")?;
@@ -222,10 +228,13 @@ fn run_attached(tray_pid: u32, verbose: bool, branch: Option<String>) -> Result<
         worktree,
         None,
     )?;
-    handle_session_end(end)
+    handle_session_end(end, restore)
 }
 
-fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
+fn handle_session_end(
+    end: dev_console::SessionEnd,
+    restore: crate::installed_tray::RestoreOnExit,
+) -> Result<()> {
     match end {
         dev_console::SessionEnd::UserQuit => Ok(()),
         dev_console::SessionEnd::ChildExited(status) if status.success() => Ok(()),
@@ -233,6 +242,7 @@ fn handle_session_end(end: dev_console::SessionEnd) -> Result<()> {
             bail!("qol-tray dev process exited with {status}")
         }
         dev_console::SessionEnd::SelfRestart { tray_pid } => {
+            restore.disarm();
             let root = repo_root()?;
             let binary = fresh_cli_binary(&root);
             match crate::self_exec::replace_with(&binary, tray_pid) {
@@ -656,6 +666,26 @@ fn build_qol_tray_dev(
         qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
     )
     .map_err(anyhow::Error::from)
+}
+
+fn adopt_worktree_cli(cli_root: &Path, verbose: bool) -> Result<()> {
+    let fresh = cli_root
+        .join("target")
+        .join("debug")
+        .join(host_facade::exe_name("qol"));
+    if crate::self_exec::is_worktree_cli() || running_binary_is(&fresh) {
+        return Ok(());
+    }
+    build_qol_cli_debug(cli_root, verbose)?;
+    dev_step_label("cli", StepKind::Info, &fresh.display().to_string(), verbose);
+    crate::self_exec::hand_off_to_worktree_cli(&fresh)
+}
+
+fn running_binary_is(binary: &Path) -> bool {
+    let Ok(current) = std::env::current_exe().and_then(|path| path.canonicalize()) else {
+        return false;
+    };
+    binary.canonicalize().is_ok_and(|binary| binary == current)
 }
 
 fn build_qol_cli_debug(root: &Path, verbose: bool) -> Result<()> {
@@ -1552,7 +1582,7 @@ mod tests {
         let (plugin, binary) = write_freshness_workspace(repo.path());
         std::fs::write(
             plugin.dir.join("src/main.rs"),
-            "compile_error!(\"broken plugin\");\nfn main() {}\n",
+            "fn main() { let broken: u32 = \"broken plugin\"; }\n",
         )
         .unwrap();
 
@@ -1870,6 +1900,17 @@ mod tests {
         let resolved = fresh_cli_root(root, Some("feat-x".to_string()));
 
         assert_eq!(resolved, worktree);
+    }
+
+    #[test]
+    fn running_binary_is_true_only_for_the_running_executable() {
+        let current = std::env::current_exe().unwrap();
+        assert!(running_binary_is(&current));
+        let tmp = tempfile::TempDir::new().unwrap();
+        let other = tmp.path().join("qol");
+        std::fs::write(&other, "").unwrap();
+        assert!(!running_binary_is(&other));
+        assert!(!running_binary_is(&tmp.path().join("missing")));
     }
 
     #[test]

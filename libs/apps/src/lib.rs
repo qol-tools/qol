@@ -1,6 +1,7 @@
 pub mod bundle;
 pub mod desktop;
 pub mod desktop_integration;
+pub mod tray_install;
 
 pub use bundle::{
     is_macos_app_bundle, macos_cache_dir, macos_installed_apps, macos_inventory_from_paths,

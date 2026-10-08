@@ -11,11 +11,11 @@ pub(super) struct Platform;
 
 impl InstallerOps for Platform {
     fn binary_filename(&self) -> String {
-        "qol-tray".to_string()
+        qol_apps::tray_install::binary_filename().to_string()
     }
 
     fn install_dir(&self) -> Result<PathBuf> {
-        unavailable()
+        Ok(qol_apps::tray_install::install_dir()?)
     }
 
     fn start_now(&self, _binary_path: &Path) -> Result<()> {

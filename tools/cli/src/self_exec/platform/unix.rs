@@ -9,10 +9,10 @@ use super::SelfExecPlatform;
 pub(super) struct Platform;
 
 impl SelfExecPlatform for Platform {
-    fn replace_process(&self, binary: &Path, args: &[OsString], tray_pid: u32) -> Result<()> {
+    fn replace_process(&self, binary: &Path, args: &[OsString], env: (&str, &str)) -> Result<()> {
         let error = std::process::Command::new(binary)
             .args(args)
-            .env(crate::self_exec::RESUME_TRAY_PID_ENV, tray_pid.to_string())
+            .env(env.0, env.1)
             .exec();
         Err(error.into())
     }
