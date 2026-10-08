@@ -14,10 +14,14 @@ use gpui::*;
 use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN};
 
+mod memory;
 mod platform;
 mod reveal;
 
+use self::memory::Remembered;
 use self::platform::{Platform, SurfacePlatform};
+
+pub use self::memory::WindowMemory;
 
 pub use self::reveal::{
     await_reveal_readiness, schedule_fresh_frame, schedule_fresh_frame_in, FreshFrame,
@@ -131,6 +135,7 @@ pub struct Surface {
     timeout: Option<Duration>,
     size: Size<Pixels>,
     retain_on_dismiss: bool,
+    memory: Option<WindowMemory>,
 }
 
 pub struct OpenedSurface<V> {
@@ -155,6 +160,7 @@ struct DismissState {
     constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
+    remembered: Option<Rc<Remembered>>,
 }
 
 #[derive(Clone)]
@@ -170,6 +176,7 @@ impl SurfaceDismisser {
         constrains_size: bool,
         visible: Rc<Cell<bool>>,
         reveal_pending: Rc<Cell<bool>>,
+        remembered: Option<Rc<Remembered>>,
     ) -> Self {
         Self {
             state: Rc::new(DismissState {
@@ -182,7 +189,14 @@ impl SurfaceDismisser {
                 constrains_size,
                 visible,
                 reveal_pending,
+                remembered,
             }),
+        }
+    }
+
+    pub fn remember_reopen_page(&self, page: String) {
+        if let Some(remembered) = &self.state.remembered {
+            remembered.record_page(page);
         }
     }
 
@@ -226,6 +240,9 @@ impl SurfaceDismisser {
 
     pub fn dismiss(&self, cx: &mut App) {
         cancel_focus_reassert();
+        if let Some(remembered) = &self.state.remembered {
+            remembered.record_closed();
+        }
         self.state
             .generation
             .set(self.state.generation.get().wrapping_add(1));
@@ -258,7 +275,13 @@ impl Surface {
             timeout: None,
             size: size(px(320.0), px(72.0)),
             retain_on_dismiss: false,
+            memory: None,
         }
+    }
+
+    pub fn remember(mut self, memory: WindowMemory) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
@@ -357,11 +380,23 @@ impl Surface {
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<OpenedSurface<V>> {
-        let bounds = monitor
-            .map(|m| self.resolved_bounds(m))
+        let constrains_size = self.constrains_size();
+        let remembered = self
+            .memory
+            .clone()
+            .and_then(|memory| Remembered::new(memory, self.placement, cx));
+        let restored = remembered
+            .as_ref()
+            .and_then(|remembered| remembered.restore(self.size, constrains_size, cx));
+        let restored_monitor = restored
+            .as_ref()
+            .map(|restored| ActiveMonitor::from_gpui_bounds(restored.monitor));
+        let monitor = restored_monitor.as_ref().or(monitor);
+        let bounds = restored
+            .map(|restored| restored.bounds)
+            .or_else(|| monitor.map(|m| self.resolved_bounds(m)))
             .unwrap_or_else(|| Bounds::centered(None, self.size, cx));
         let title = reserve_surface_title(&self.title);
-        let constrains_size = self.constrains_size();
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
         let passive_reveal_gate =
@@ -392,11 +427,14 @@ impl Surface {
             constrains_size,
             visible.clone(),
             reveal_pending.clone(),
+            remembered.clone(),
         );
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
         let follows_focus = self.takes_focus();
         let root_visible = visible.clone();
+        let bounds_visible = visible.clone();
+        let bounds_memory = remembered.clone();
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
         }
@@ -408,7 +446,14 @@ impl Surface {
             }
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
-                let bounds_subscription = cx.observe_window_bounds(window, |_, _, cx| cx.notify());
+                let bounds_subscription = cx.observe_window_bounds(window, move |_, window, cx| {
+                    if let Some(remembered) =
+                        bounds_memory.as_ref().filter(|_| bounds_visible.get())
+                    {
+                        remembered.record_bounds(window.bounds(), window.scale_factor(), cx);
+                    }
+                    cx.notify();
+                });
                 let activation_subscription = cx.observe_window_activation(
                     window,
                     move |root: &mut SurfaceRoot<V>, window, _| {
@@ -433,6 +478,12 @@ impl Surface {
                 return Err(error);
             }
         };
+        if let Some(remembered) = &remembered {
+            let scale = handle
+                .update(cx, |_, window, _| window.scale_factor())
+                .unwrap_or(1.0);
+            remembered.record_open(bounds, scale, cx);
+        }
         let dismiss_state = dismisser.state.clone();
         let dismiss_visible = visible.clone();
         let dismiss_reveal_pending = reveal_pending.clone();
@@ -999,12 +1050,19 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                     .set(self.dismisser.state.generation.get().wrapping_add(1));
                 self.reveal_pending.set(false);
             }
-            let bounds = match (self.kind, tracker.snapshot_monitor()) {
-                (_, Some(monitor)) => self
+            let restored = self
+                .dismisser
+                .state
+                .remembered
+                .as_ref()
+                .and_then(|remembered| remembered.restore(self.size(), self.constrains_size, cx));
+            let bounds = match (restored, self.kind, tracker.snapshot_monitor()) {
+                (Some(restored), _, _) => restored.bounds,
+                (None, _, Some(monitor)) => self
                     .placement
                     .bounds(placement_area(self.kind, monitor.bounds()), self.size()),
-                (SurfaceKind::Toast, None) => return false,
-                (SurfaceKind::Panel | SurfaceKind::OverlayPanel, None) => {
+                (None, SurfaceKind::Toast, None) => return false,
+                (None, SurfaceKind::Panel | SurfaceKind::OverlayPanel, None) => {
                     Bounds::centered(None, self.size(), cx)
                 }
             };
@@ -1034,6 +1092,13 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 return false;
             };
             self.reveal_pending.set(true);
+            if let Some(remembered) = &self.dismisser.state.remembered {
+                let scale = self
+                    .handle
+                    .update(cx, |_, window, _| window.scale_factor())
+                    .unwrap_or(1.0);
+                remembered.record_open(bounds, scale, cx);
+            }
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=opened hidden=true frame_scheduled=true reused=true x={} y={}",
@@ -1466,6 +1531,7 @@ mod tests {
             true,
             visible,
             pending,
+            None,
         );
         let generation = dismisser.state.generation.get();
         assert!(!reveal_cancelled(&dismisser.state, generation));

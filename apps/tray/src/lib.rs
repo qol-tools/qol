@@ -27,6 +27,7 @@ pub mod sync;
 mod testing;
 pub mod tray;
 pub mod updates;
+pub mod window_reopen;
 
 pub use commands::net;
 pub use daemon::reconcile;

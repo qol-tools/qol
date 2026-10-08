@@ -6674,13 +6674,17 @@ dependencies = [
  "qol-hotkeys",
  "qol-runtime",
  "qol-theme",
+ "qol-window-state",
+ "qol-windowing",
  "qrcode",
  "raw-window-handle",
  "resvg",
  "serde",
  "serde_json",
+ "signal-hook",
  "smallvec",
  "taffy",
+ "tempfile",
  "ttf-parser 0.25.1",
  "tungstenite 0.26.2",
  "workspace-hack",
@@ -7376,6 +7380,7 @@ dependencies = [
  "qol-runtime",
  "qol-theme",
  "qol-watch",
+ "qol-window-state",
  "qol-work-queue",
  "qol-workspace",
  "reqwest",
@@ -7466,6 +7471,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-window-state"
+version = "1.0.0"
+dependencies = [
+ "qol-config",
+ "qol-fs",
+ "qol-windowing",
+ "serde",
+ "serde_json",
+ "tempfile",
  "workspace-hack",
 ]
 
