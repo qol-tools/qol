@@ -15,7 +15,7 @@ use qol_terminal_sessions::{
 };
 use serde_json::{json, Value};
 
-use super::pick::{Launch, LaunchChoice, LaunchKind};
+use super::launch::{Launch, LaunchChoice, LaunchKind};
 
 const SERVER_NAME: &str = "qol-sessions-mcp";
 
@@ -459,14 +459,14 @@ impl McpSessionServer {
     fn resolve_launch(
         &self,
         kind: LaunchKind,
-        (explicit, picks): (LaunchChoice, Vec<String>),
+        explicit: LaunchChoice,
         dispatch: &super::agent_policy::AgentDispatch,
     ) -> Result<Launch, String> {
         let defaults = self
             .policy
             .launch_defaults()
             .map_err(|error| error.to_string())?;
-        super::pick::resolve(kind, explicit, &picks, &defaults, dispatch)
+        super::launch::resolve(kind, explicit, &defaults, dispatch)
             .map_err(|error| error.to_string())
     }
 
@@ -964,19 +964,13 @@ fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, Stri
         .ok_or_else(|| format!("missing `{name}` string argument"))
 }
 
-fn launch_arguments(arguments: &Value, tool: &str) -> Result<(LaunchChoice, Vec<String>), String> {
-    let explicit = LaunchChoice {
+fn launch_arguments(arguments: &Value, tool: &str) -> Result<LaunchChoice, String> {
+    Ok(LaunchChoice {
         tool: optional_string(arguments, "tool", tool)?,
         model: optional_string(arguments, "model", tool)?,
         effort: optional_string(arguments, "effort", tool)?,
         surface: optional_string(arguments, "surface", tool)?,
-    };
-    let picks = match arguments.get("pick") {
-        Some(value) => serde_json::from_value(value.clone())
-            .map_err(|_| format!("{tool} `pick` must be an array of strings"))?,
-        None => Vec::new(),
-    };
-    Ok((explicit, picks))
+    })
 }
 
 fn optional_string(arguments: &Value, name: &str, tool: &str) -> Result<Option<String>, String> {
@@ -3282,33 +3276,6 @@ mod tests {
         assert!(
             request.args[2].contains("[qol session bridge]"),
             "the launch must embed the first round after the model flags"
-        );
-    }
-
-    #[test]
-    fn session_spawn_picks_reach_the_launch() {
-        let root = tempfile::TempDir::new().unwrap();
-        let cwd = spawn_cwd(&root);
-        let backend = Arc::new(
-            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
-        );
-        backend.enable_spawner();
-        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
-        let mut arguments = spawn_arguments("pi", "mcp-lane-pick", None, &cwd);
-        arguments["model"] = json!("flash-x");
-        arguments["pick"] = json!(["-high"]);
-        arguments["task"] = json!("implement the fix");
-        let response = tool_call(&server, "session_spawn", arguments);
-        assert_eq!(response["result"]["isError"], false);
-        let request = backend.spawn_launch.lock().unwrap().clone().unwrap();
-        assert_eq!(
-            request.args[..4],
-            vec![
-                "--model".to_owned(),
-                "flash-x".to_owned(),
-                "--thinking".to_owned(),
-                "high".to_owned()
-            ]
         );
     }
 

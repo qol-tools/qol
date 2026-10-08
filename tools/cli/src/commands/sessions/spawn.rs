@@ -400,14 +400,14 @@ pub(super) fn config_claude_accounts(
     Ok(config.claude_accounts)
 }
 
-pub(super) fn config_launch_defaults() -> Result<super::pick::LaunchDefaults> {
+pub(super) fn config_launch_defaults() -> Result<super::launch::LaunchDefaults> {
     let Some(path) = sessions_config_path() else {
-        return Ok(super::pick::LaunchDefaults::default());
+        return Ok(super::launch::LaunchDefaults::default());
     };
     let encoded = fs::read_to_string(&path).context("failed to read the sessions config")?;
     let config: SpawnConfigFile =
         toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(super::pick::LaunchDefaults {
+    Ok(super::launch::LaunchDefaults {
         aliases: config.aliases,
         fork_model: config.fork_model,
         fork_effort: config.fork_effort,
@@ -463,11 +463,11 @@ impl DispatchPolicySource {
         }
     }
 
-    pub(super) fn launch_defaults(&self) -> Result<super::pick::LaunchDefaults> {
+    pub(super) fn launch_defaults(&self) -> Result<super::launch::LaunchDefaults> {
         match self {
             DispatchPolicySource::System => config_launch_defaults(),
             #[cfg(test)]
-            DispatchPolicySource::Fixed(_) => Ok(super::pick::LaunchDefaults::default()),
+            DispatchPolicySource::Fixed(_) => Ok(super::launch::LaunchDefaults::default()),
         }
     }
 }
@@ -913,16 +913,15 @@ pub(super) fn recorded_assignment(
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let mut parsed = parse_args(args)?;
     let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
-    let explicit = super::pick::LaunchChoice {
+    let explicit = super::launch::LaunchChoice {
         tool: parsed.tool.take(),
         model: parsed.model.take(),
         effort: parsed.effort.take(),
         surface: parsed.surface.take(),
     };
-    let launch = super::pick::resolve(
-        super::pick::LaunchKind::Spawn,
+    let launch = super::launch::resolve(
+        super::launch::LaunchKind::Spawn,
         explicit,
-        &parsed.picks,
         &config_launch_defaults()?,
         &dispatch,
     )?;
@@ -1127,7 +1126,6 @@ fn wait_until_live(
 #[derive(Debug)]
 struct SpawnArgs {
     tool: Option<String>,
-    picks: Vec<String>,
     cwd: String,
     key: Option<String>,
     surface: Option<String>,
@@ -1156,7 +1154,7 @@ impl SpawnArgs {
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON] [-PICK...]\n--tool resolves from a pick, the selected agent profile, or the harness tool_models declares for the model; --model falls back to spawn_model. Each -PICK names one launch slot: a surface (tab, os-window), an effort level, a harness or model from tool_models, or an alias from [aliases] in sessions.toml; an explicit flag wins over a pick, and spawn_effort fills an effort nothing picked. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
+    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--tool resolves from a pick, the selected agent profile, or the harness tool_models declares for the model; --model falls back to spawn_model. --tool, --model, --effort and --surface values pass through [aliases] in sessions.toml, and spawn_effort fills an effort left out. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -1173,7 +1171,6 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut task_role = None;
     let mut requires = None;
     let mut lanes = Vec::new();
-    let mut picks = Vec::new();
     let mut index = 0;
     while index < args.len() {
         let argument = args[index]
@@ -1258,10 +1255,6 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
                 })?;
                 index += 2;
             }
-            pick if super::pick::is_pick(pick) => {
-                picks.push(pick.to_owned());
-                index += 1;
-            }
             other => bail!("unknown spawn flag `{other}`\nusage: {usage}"),
         }
     }
@@ -1274,7 +1267,6 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     }
     Ok(SpawnArgs {
         tool,
-        picks,
         cwd,
         key,
         surface,

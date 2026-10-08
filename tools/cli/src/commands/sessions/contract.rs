@@ -120,12 +120,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "description": "Registered CLI tool to spawn (codex, claude, pi, kimi). Optional: it resolves from a pick, the selected agent profile's declared tool, or the harness tool_models declares for the chosen model",
-                    },
-                    "pick": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "The user's -picks, verbatim and in any order, each naming one launch slot: a surface (tab, os-window), an effort level, a harness or model from tool_models, or an alias from [aliases] in sessions.toml (for example cc = \"claude\"). An explicit tool, model, effort or surface argument wins over a pick; an unknown or doubled pick is refused. An effort nothing picks takes spawn_effort from sessions.toml when the harness takes one; a picked harness without a model takes spawn_model when tool_models declares it for that harness, else its first declared model",
+                        "description": "Registered CLI tool to spawn (codex, claude, pi, kimi). Optional: it resolves from the selected agent profile's declared tool, or the harness tool_models declares for the chosen model",
                     },
                     "cwd": {
                         "type": "string",
@@ -257,11 +252,6 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     "title": {
                         "type": "string",
                         "description": "Tab title for the fork; defaults to the key",
-                    },
-                    "pick": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "The user's -picks, verbatim and in any order, each naming one launch slot: a surface (tab, os-window), an effort level, a harness or model from tool_models, or an alias from [aliases] in sessions.toml (for example cc = \"claude\"). An explicit tool, model, effort or surface argument wins over a pick; an unknown or doubled pick is refused. Slots nothing picks take fork_model, fork_effort and fork_surface from sessions.toml; a picked harness without a model takes the default model when tool_models declares it for that harness, else its first declared model",
                     },
                     "surface": {
                         "type": "string",
