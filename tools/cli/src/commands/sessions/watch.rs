@@ -120,6 +120,12 @@ impl WatchedRound {
         })
     }
 
+    fn restore(round: PendingRound, pending: &PendingBridgeStore) -> Result<Self> {
+        let mut restored = Self::new(round)?;
+        restored.nudged_report = pending.nudged_report(&restored.binding, &restored.marker);
+        Ok(restored)
+    }
+
     fn report_or_nudged(&self, report: String) -> String {
         match &self.nudged_report {
             Some(nudged) if report.trim().is_empty() => nudged.clone(),
@@ -1072,6 +1078,7 @@ fn poll_round(
             && round.nudged_report.is_none()
             && nudge_missing_marker(terminals, interpreter, round, facts.as_ref(), &screen)
         {
+            pending.record_nudge(&round.binding, &round.marker, &report)?;
             round.nudged_report = Some(report);
             round.ready_polls = 0;
             round.last_change = Instant::now();
@@ -1180,6 +1187,7 @@ fn reconcile(pending: &PendingBridgeStore, watched: &mut Vec<WatchedRound>) -> R
                         round.started_at = current.started_at;
                         round.transcript_paths = current.transcript_paths;
                         round.transcript_pinned = false;
+                        round.nudged_report = None;
                     }
                     remaining.push(round);
                 }
@@ -1238,7 +1246,7 @@ fn readmit(
             "event=readmitted session={}",
             round.session
         );
-        watched.push(WatchedRound::new(round)?);
+        watched.push(WatchedRound::restore(round, pending)?);
     }
     Ok(watched)
 }
@@ -1768,7 +1776,7 @@ fn watch_loop(
     }
     let mut watched = load_rounds(pending, &tokens)?
         .into_iter()
-        .map(WatchedRound::new)
+        .map(|round| WatchedRound::restore(round, pending))
         .collect::<Result<Vec<_>>>()?;
     let mut poll_interval = config.poll_base;
     let mut released = std::collections::HashSet::new();
@@ -6023,6 +6031,18 @@ mod tests {
         assert_eq!(lane.nudges().len(), 1, "nudges: {:?}", lane.nudges());
         assert!(lane.events().is_empty(), "events: {:?}", lane.events());
         assert_eq!(lane.round.nudged_report.as_deref(), Some("the full report"));
+        lane.round = WatchedRound::restore(
+            sim.pending.pending_round(&lane.binding).unwrap().unwrap(),
+            &sim.pending,
+        )
+        .unwrap();
+        lane.poll_times(&sim, 3);
+        assert_eq!(
+            lane.nudges().len(),
+            1,
+            "a restarted watcher must not nudge the same round again"
+        );
+        assert!(lane.events().is_empty(), "events: {:?}", lane.events());
 
         lane.set_report(Some("QOL_BRIDGE_DONE_round".to_owned()), true);
         lane.backend

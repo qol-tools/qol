@@ -203,6 +203,12 @@ impl From<StoredCheckpoint> for BridgeCheckpoint {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct StoredNudge {
+    completion_marker: String,
+    report: String,
+}
+
 impl From<StoredCheckpoint> for PendingRound {
     fn from(stored: StoredCheckpoint) -> Self {
         PendingRound {
@@ -768,7 +774,7 @@ impl PendingBridgeStore {
                 Some("tmp") if older_than(&path, STALE_TMP_AFTER) => {
                     let _ = fs::remove_file(&path);
                 }
-                Some("json") if name.starts_with("role-") => {}
+                Some("json") if name.starts_with("role-") || name.starts_with("nudge-") => {}
                 Some("json") => {
                     let Ok(encoded) = fs::read_to_string(&path) else {
                         continue;
@@ -787,6 +793,7 @@ impl PendingBridgeStore {
                                 let _ = fs::remove_file(self.role_lock_for(&binding));
                                 let _ = fs::remove_file(self.lock_for(&binding));
                                 let _ = fs::remove_file(self.owner_for(&binding));
+                                let _ = fs::remove_file(self.nudge_for(&binding));
                             }
                         }
                     }
@@ -913,6 +920,32 @@ impl PendingBridgeStore {
         file.lock()
             .context("failed to lock pending bridge checkpoint")?;
         Ok(PendingBridgeLock { file })
+    }
+
+    pub(super) fn record_nudge(
+        &self,
+        binding: &SessionBinding,
+        marker: &str,
+        report: &str,
+    ) -> Result<()> {
+        let _lock = self.lock(binding)?;
+        let encoded = serde_json::to_string(&StoredNudge {
+            completion_marker: marker.to_owned(),
+            report: report.to_owned(),
+        })?;
+        qol_fs::atomic_write(&self.nudge_for(binding), encoded.as_bytes())
+            .context("failed to record the marker nudge")
+    }
+
+    pub(super) fn nudged_report(&self, binding: &SessionBinding, marker: &str) -> Option<String> {
+        let encoded = fs::read_to_string(self.nudge_for(binding)).ok()?;
+        let nudge = serde_json::from_str::<StoredNudge>(&encoded).ok()?;
+        (nudge.completion_marker == marker).then_some(nudge.report)
+    }
+
+    fn nudge_for(&self, binding: &SessionBinding) -> PathBuf {
+        let digest = Sha256::digest(binding.token().as_bytes());
+        self.dir.join(format!("nudge-{digest:x}.json"))
     }
 
     fn file_for(&self, binding: &SessionBinding) -> PathBuf {
