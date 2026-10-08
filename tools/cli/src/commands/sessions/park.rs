@@ -1,6 +1,6 @@
 use std::ffi::OsString;
-use std::fs::{self, File};
-use std::io::ErrorKind;
+use std::fs::{self, File, OpenOptions};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
@@ -98,6 +98,32 @@ impl ParkStore {
         let encoded = serde_json::to_string(record)?;
         qol_fs::atomic_write(&self.record_path(&record.id), encoded.as_bytes())
             .context("failed to publish the park record")
+    }
+
+    fn claim_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.claim"))
+    }
+
+    /// Takes the single right to resume a park; false when another process already holds it.
+    fn claim(&self, id: &str) -> Result<bool> {
+        fs::create_dir_all(&self.dir).context("failed to create the parked directory")?;
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(self.claim_path(id))
+        {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error).context("failed to claim the park"),
+        }
+    }
+
+    fn release(&self, id: &str) {
+        let _ = fs::remove_file(self.claim_path(id));
+    }
+
+    fn is_claimed(&self, id: &str) -> bool {
+        self.claim_path(id).exists()
     }
 
     pub(super) fn load(&self, id: &str) -> Result<ParkRecord> {
@@ -307,6 +333,7 @@ fn caller_state(
             CallerState::Ready
         }
         Ok(_) => CallerState::Busy,
+        Err(error) if error.to_string() == "session discovery failed" => CallerState::Busy,
         Err(_) => CallerState::Gone,
     }
 }
@@ -333,6 +360,9 @@ impl CloseGate {
 
 fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
     let mut record = store.load(id)?;
+    if store.is_claimed(id) {
+        return Ok(());
+    }
     record.runner_pid = Some(std::process::id());
     store.record(&record)?;
     let terminals = TerminalSessionService::system();
@@ -346,21 +376,29 @@ fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
         Ok(mut child) => {
             let mut gate = CloseGate::default();
             loop {
-                if let Some(status) = child
-                    .try_wait()
-                    .context("failed to poll the parked command")?
-                {
-                    break Ok(status);
+                if store.is_claimed(id) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Ok(());
+                }
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break Err(anyhow!(error).context("failed to poll the parked command"));
+                    }
                 }
                 if !record.caller_closed {
                     let state = caller_state(&terminals, &interpreter, &caller);
                     if state == CallerState::Gone {
                         record.caller_closed = true;
-                        store.record(&record)?;
+                        let _ = store.record(&record);
                     } else if gate.observe(&state) {
                         let _ = terminals.close(&caller);
                         record.caller_closed = true;
-                        store.record(&record)?;
+                        let _ = store.record(&record);
                         qol_runtime::probe!("CLI_SESSION_PARK", "event=caller_closed id={}", id);
                     }
                 }
@@ -406,6 +444,7 @@ fn wake(
     caller: &SessionBinding,
     prompt: &str,
 ) -> Result<()> {
+    record.runner_pid = None;
     if !record.caller_closed
         && caller_state(terminals, interpreter, caller) != CallerState::Gone
         && terminals
@@ -417,6 +456,9 @@ fn wake(
         qol_runtime::probe!("CLI_SESSION_PARK", "event=delivered id={}", record.id);
         return Ok(());
     }
+    if !store.claim(&record.id)? {
+        return Ok(());
+    }
     match resume(terminals, interpreter, record, prompt) {
         Ok(session) => {
             record.state = ParkState::Resumed;
@@ -425,6 +467,7 @@ fn wake(
         Err(error) => {
             record.state = ParkState::Failed;
             record.detail = Some(format!("{error:#}"));
+            store.release(&record.id);
         }
     }
     store.record(record)?;
@@ -472,8 +515,25 @@ fn resume(
 }
 
 fn read_tail(path: &Path) -> String {
-    let bytes = fs::read(path).unwrap_or_default();
-    tail_lines(&String::from_utf8_lossy(&bytes), TAIL_LINES, TAIL_MAX_BYTES)
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or_default();
+    let start = len.saturating_sub(TAIL_MAX_BYTES as u64);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut bytes).is_err() {
+        return String::new();
+    }
+    let skip = if start > 0 {
+        bytes.iter().take_while(|byte| **byte & 0xC0 == 0x80).count()
+    } else {
+        0
+    };
+    tail_lines(
+        &String::from_utf8_lossy(&bytes[skip..]),
+        TAIL_LINES,
+        TAIL_MAX_BYTES,
+    )
 }
 
 fn tail_lines(text: &str, lines: usize, max_bytes: usize) -> String {
@@ -533,7 +593,8 @@ pub(super) fn run_unpark(args: &[OsString]) -> Result<()> {
     };
     let store = ParkStore::system();
     let mut record = store.load(id)?;
-    if record.state != ParkState::Waiting {
+    let retry = record.state == ParkState::Failed && record.resumed_session.is_none();
+    if record.state != ParkState::Waiting && !retry {
         bail!("`{id}` is no longer waiting ({:?})", record.state);
     }
     let terminals = super::service()?;
@@ -548,6 +609,9 @@ pub(super) fn run_unpark(args: &[OsString]) -> Result<()> {
             record.session
         );
     }
+    if !store.claim(id)? {
+        bail!("`{id}` is already being resumed");
+    }
     if let Some(pid) = record
         .runner_pid
         .filter(|pid| qol_process::is_group_alive(*pid))
@@ -555,7 +619,14 @@ pub(super) fn run_unpark(args: &[OsString]) -> Result<()> {
         qol_process::terminate_group(pid, STOP_GRACE);
     }
     let prompt = unpark_prompt(&record, &store.log_path(id));
-    let session = resume(&terminals, &interpreter, &record, &prompt)?;
+    let session = match resume(&terminals, &interpreter, &record, &prompt) {
+        Ok(session) => session,
+        Err(error) => {
+            store.release(id);
+            return Err(error);
+        }
+    };
+    record.runner_pid = None;
     record.state = ParkState::Resumed;
     record.caller_closed = true;
     record.resumed_session = Some(session.clone());
