@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::hotkeys::{HotkeyBinding, HotkeyConfig};
 use crate::shortcuts::model::{Shortcut, ShortcutsConfig};
 
-pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+pub(in super::super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(65);
 
 #[derive(Clone, Debug, Deserialize)]
@@ -150,7 +150,7 @@ pub(super) fn request_json<T: DeserializeOwned>(
     serde_json::from_str(&body).with_context(|| format!("{route} returned invalid JSON"))
 }
 
-pub(super) fn request_text(
+pub(in super::super) fn request_text(
     method: Method,
     route: &str,
     body: Option<&str>,
