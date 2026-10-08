@@ -28,7 +28,7 @@ const SERVICES_SESSION: u32 = 0;
 const RUNNER_LOG_PATH: &str = r"C:\ProgramData\qol\guest-runner.log";
 const RUNNER_LOG_MAX_BYTES: u64 = 1024 * 1024;
 
-pub(super) struct Platform;
+pub(crate) struct Platform;
 
 impl GuestRunnerPlatform for Platform {
     fn default_options(&self) -> RunOptions {

@@ -14,7 +14,7 @@ use super::GuestRunnerPlatform;
 use crate::cli::RunOptions;
 use qol_dev_guest::server::{read_identity, read_run_id, serve_forever};
 
-pub(super) struct Platform;
+pub(crate) struct Platform;
 
 impl GuestRunnerPlatform for Platform {
     fn default_options(&self) -> RunOptions {

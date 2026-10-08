@@ -12,13 +12,13 @@ mod macos;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-use fallback::Platform;
+pub(crate) use fallback::Platform;
 #[cfg(target_os = "linux")]
-use linux::Platform;
+pub(crate) use linux::Platform;
 #[cfg(target_os = "macos")]
-use macos::Platform;
+pub(crate) use macos::Platform;
 #[cfg(target_os = "windows")]
-use windows::Platform;
+pub(crate) use windows::Platform;
 
 trait GuestRunnerPlatform {
     fn default_options(&self) -> RunOptions;

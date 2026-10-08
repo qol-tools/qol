@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use qol_headless::DoctorCheckResult;
 use std::path::PathBuf;
 
-pub(super) struct Platform;
+pub(crate) struct Platform;
 
 impl GuestRunnerPlatform for Platform {
     fn default_options(&self) -> RunOptions {
