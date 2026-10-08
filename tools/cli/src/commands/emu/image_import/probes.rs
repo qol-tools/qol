@@ -13,7 +13,7 @@ use super::{ImageImportPlan, ImportCancellation};
 
 const GUEST_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const GUEST_HELLO_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const GUEST_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const GUEST_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug)]
 pub(super) struct Verification {
@@ -72,13 +72,14 @@ pub(super) fn verify_guest(
     )?;
     let specs = match plan.guest_adapter {
         GuestAdapter::MintCinnamon => mint_probe_specs(&plan.environment)?,
+        GuestAdapter::WindowsDesktop => windows_probe_specs(&plan.environment)?,
         GuestAdapter::DebianNocloud | GuestAdapter::UbuntuNocloud => {
             bail!(
                 "guest adapter `{}` has no verified image-import probe set",
                 plan.guest_adapter.as_str()
             )
         }
-        GuestAdapter::MacosDesktop | GuestAdapter::WindowsDesktop => bail!(
+        GuestAdapter::MacosDesktop => bail!(
             "guest adapter `{}` has no verified image-import probe set",
             plan.guest_adapter.as_str()
         ),
@@ -138,6 +139,30 @@ fn mint_probe_specs(definition: &EnvironmentDefinition) -> Result<Vec<ProbeSpec>
             expected: format!("Cinnamon {cinnamon}"),
         },
     ])
+}
+
+const WINDOWS_POWERSHELL: &str = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+const WINDOWS_CURRENT_VERSION_KEY: &str = r"HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+
+fn windows_probe_specs(definition: &EnvironmentDefinition) -> Result<Vec<ProbeSpec>> {
+    let build = required_capability(definition, "windows_build")?;
+    let edition = required_capability(definition, "windows_edition")?;
+    Ok(vec![
+        windows_registry_probe("windows-build", "CurrentBuild", build),
+        windows_registry_probe("windows-edition", "EditionID", edition),
+    ])
+}
+
+fn windows_registry_probe(id: &'static str, value: &str, expected: String) -> ProbeSpec {
+    let script = format!("(Get-ItemProperty '{WINDOWS_CURRENT_VERSION_KEY}').{value}");
+    ProbeSpec {
+        id,
+        command: command(
+            WINDOWS_POWERSHELL,
+            &["-NoProfile", "-NonInteractive", "-Command", &script],
+        ),
+        expected,
+    }
 }
 
 fn run_probe(

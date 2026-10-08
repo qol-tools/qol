@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "environment_id": "windows/desktop",
+  "revision": "win11-25h2-26200-pro-qol-1",
+  "desktop": "windows",
+  "display_protocol": "win32",
+  "user": "qol"
+}

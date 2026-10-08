@@ -7,11 +7,17 @@ use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+pub mod server;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const VIRTIO_PORT_NAME: &str = "org.qol-tools.guest-control";
 pub const DEFAULT_DEVICE_PATH: &str = "/dev/virtio-ports/org.qol-tools.guest-control";
 pub const DEFAULT_IDENTITY_PATH: &str = "/etc/qol-dev-image.json";
 pub const DEFAULT_RUN_ID_PATH: &str = "/sys/firmware/qemu_fw_cfg/by_name/opt/qol/run-id/raw";
+pub const WINDOWS_DEVICE_PATH: &str = r"\\.\Global\org.qol-tools.guest-control";
+pub const WINDOWS_IDENTITY_PATH: &str = r"C:\ProgramData\qol\qol-dev-image.json";
+pub const WIN32_DISPLAY_PROTOCOL: &str = "win32";
+pub const SMBIOS_RUN_ID_PREFIX: &str = "qol-run-id=";
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -112,7 +118,8 @@ impl GuestHello {
                 self.session.session_type.as_deref().unwrap_or("unknown")
             );
         }
-        if self.session.display.is_none() || !self.session.dbus_session {
+        let needs_dbus = self.image.display_protocol != WIN32_DISPLAY_PROTOCOL;
+        if self.session.display.is_none() || (needs_dbus && !self.session.dbus_session) {
             bail!("guest runner is not attached to a graphical desktop session");
         }
         Ok(())
@@ -154,7 +161,7 @@ pub struct CommandSpec {
 
 impl CommandSpec {
     pub fn validate(&self) -> Result<()> {
-        if !self.program.starts_with('/') {
+        if !is_absolute_guest_path(&self.program) {
             bail!("guest command program must be an absolute path");
         }
         if self.program.contains('\0')
@@ -170,6 +177,49 @@ impl CommandSpec {
         }
         Ok(())
     }
+}
+
+pub fn smbios_run_id(table: &[u8]) -> Option<String> {
+    const OEM_STRINGS: u8 = 11;
+    const END_OF_TABLE: u8 = 127;
+    let mut offset = 0;
+    while offset + 4 <= table.len() {
+        let kind = table[offset];
+        let formatted_len = usize::from(table[offset + 1]);
+        if formatted_len < 4 || offset + formatted_len > table.len() {
+            return None;
+        }
+        let strings_start = offset + formatted_len;
+        let strings_len = table[strings_start..]
+            .windows(2)
+            .position(|pair| pair == [0, 0])?;
+        let strings = &table[strings_start..strings_start + strings_len];
+        if kind == OEM_STRINGS {
+            let found = strings
+                .split(|byte| *byte == 0)
+                .filter_map(|value| std::str::from_utf8(value).ok())
+                .find_map(|value| value.strip_prefix(SMBIOS_RUN_ID_PREFIX));
+            if let Some(run_id) = found {
+                return Some(run_id.to_string());
+            }
+        }
+        if kind == END_OF_TABLE {
+            return None;
+        }
+        offset = strings_start + strings_len + 2;
+    }
+    None
+}
+
+fn is_absolute_guest_path(program: &str) -> bool {
+    if program.starts_with('/') {
+        return true;
+    }
+    let bytes = program.as_bytes();
+    bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 fn valid_environment_name(name: &str) -> bool {
@@ -585,6 +635,85 @@ mod tests {
             .validate_identity("linux/mint-cinnamon", "fixture-1", "mint-lane-2")
             .unwrap_err();
         assert!(error.to_string().contains("run identity mismatch"));
+    }
+
+    #[test]
+    fn windows_hello_needs_a_session_but_no_dbus() {
+        let mut windows = hello();
+        windows.image.environment_id = "windows/desktop".to_string();
+        windows.image.desktop = "windows".to_string();
+        windows.image.display_protocol = WIN32_DISPLAY_PROTOCOL.to_string();
+        windows.session.desktop = Some("windows".to_string());
+        windows.session.session_type = Some(WIN32_DISPLAY_PROTOCOL.to_string());
+        windows.session.display = Some("Console".to_string());
+        windows.session.runtime_dir = None;
+        windows.session.dbus_session = false;
+        windows.validate_for("windows/desktop").unwrap();
+        windows.session.display = None;
+        assert_eq!(
+            windows
+                .validate_for("windows/desktop")
+                .unwrap_err()
+                .to_string(),
+            "guest runner is not attached to a graphical desktop session"
+        );
+        let mut linux = hello();
+        linux.session.dbus_session = false;
+        assert!(linux.validate_for("linux/mint-cinnamon").is_err());
+    }
+
+    fn smbios_structure(kind: u8, formatted: &[u8], strings: &[&str]) -> Vec<u8> {
+        let mut bytes = vec![kind, u8::try_from(4 + formatted.len()).unwrap(), 0, 0];
+        bytes.extend_from_slice(formatted);
+        for value in strings {
+            bytes.extend_from_slice(value.as_bytes());
+            bytes.push(0);
+        }
+        if strings.is_empty() {
+            bytes.push(0);
+        }
+        bytes.push(0);
+        bytes
+    }
+
+    #[test]
+    fn smbios_run_id_reads_the_oem_string() {
+        let mut table = smbios_structure(1, &[1, 2, 3], &["QEMU", "Standard PC"]);
+        table.extend(smbios_structure(
+            11,
+            &[2],
+            &["other", "qol-run-id=win-lane-1"],
+        ));
+        table.extend(smbios_structure(127, &[], &[]));
+        assert_eq!(smbios_run_id(&table).as_deref(), Some("win-lane-1"));
+
+        let mut missing = smbios_structure(11, &[1], &["other"]);
+        missing.extend(smbios_structure(127, &[], &[]));
+        assert_eq!(smbios_run_id(&missing), None);
+        assert_eq!(smbios_run_id(&[11, 9, 0]), None);
+        assert_eq!(smbios_run_id(&[11, 2, 0, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn command_specs_accept_windows_drive_paths() {
+        for program in [r"C:\Windows\System32\cmd.exe", "c:/qol/qol.exe"] {
+            let spec = CommandSpec {
+                program: program.to_string(),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+            };
+            spec.validate().unwrap();
+        }
+        for program in ["C:", "C:cmd.exe", r"\\server\share\x.exe", "1:/x"] {
+            let spec = CommandSpec {
+                program: program.to_string(),
+                args: Vec::new(),
+                cwd: None,
+                env: BTreeMap::new(),
+            };
+            assert!(spec.validate().is_err(), "{program}");
+        }
     }
 
     #[test]

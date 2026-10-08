@@ -6612,6 +6612,7 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "tempfile",
  "workspace-hack",
 ]
 
@@ -6695,6 +6696,7 @@ dependencies = [
  "qol-headless",
  "serde_json",
  "tempfile",
+ "windows-sys 0.61.2",
  "workspace-hack",
 ]
 

@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod cli;

@@ -1790,14 +1790,11 @@ fn emu_up_args(request: EmuUpRequest<'_>) -> Result<Vec<OsString>> {
         dev_bundle,
         usb_host,
     } = request;
-    let guest_adapter = dev_bundle.map(|_| emu::GuestAdapter::MintCinnamon);
-    let guest_image_revision = dev_bundle.and_then(|_| {
-        environment
-            .definition
-            .capabilities
-            .get("image_revision")
-            .map(String::as_str)
-    });
+    let capabilities = &environment.definition.capabilities;
+    let guest_adapter = capabilities
+        .get("flow_adapter")
+        .and_then(|adapter| emu::GuestAdapter::parse(adapter));
+    let guest_image_revision = capabilities.get("image_revision").map(String::as_str);
     emu::child_launch_args(emu::ChildLaunch {
         operation: emu::ChildOperation::Up,
         target: image_path,
@@ -3694,6 +3691,44 @@ mod tests {
         .unwrap();
         assert!(windowed.contains(&OsString::from("--windowed")));
         assert!(!windowed.contains(&OsString::from("--headless")));
+    }
+
+    #[test]
+    fn plain_up_records_the_declared_guest_adapter_and_revision() {
+        let temp = tempdir().unwrap();
+        let mut environment = resolved_environment(temp.path());
+        let capabilities = &mut environment.definition.capabilities;
+        capabilities.insert("flow_adapter".to_string(), "windows-desktop".to_string());
+        capabilities.insert("image_revision".to_string(), "win11-qol-1".to_string());
+        let case_root = temp.path().join("cases");
+        let parent_lease = dev_resources::ParentLeaseClaim::parse("windows-batch-1").unwrap();
+        let args = emu_up_args(EmuUpRequest {
+            image_path: Path::new("/images/windows.qcow2"),
+            environment: &environment,
+            parent_lease: &parent_lease,
+            run_id: "windows-run-1",
+            memory_mb: 4096,
+            cpus: 2,
+            windowed: false,
+            case_root: &case_root,
+            dev_bundle: None,
+            usb_host: None,
+        })
+        .unwrap();
+        let joined = args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined.contains("--guest-adapter windows-desktop"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("--guest-image-revision win11-qol-1"),
+            "{joined}"
+        );
+        assert!(!joined.contains("--offline"), "{joined}");
     }
 
     #[test]
