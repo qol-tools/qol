@@ -37,9 +37,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, step)
-        build = named_step(check, "Release profile build", "      ")
-        self.assertIn("github.event_name != 'pull_request'", build)
-        self.assertIn("cargo build --release --locked $BUILD_ARGS", build)
+        self.assertNotIn("cargo build --release", check)
 
     def test_build_jobs_never_hold_a_cache_deletion_token(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -48,14 +46,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("github.token", check)
         self.assertNotIn("cache_prune.py", check)
 
-    def test_queue_entry_that_reuses_a_verdict_builds_under_its_own_name(self):
+    def test_release_build_runs_beside_lint_and_test(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
         self.assertIn("if: ${{ needs.plan.outputs.reused != 'true' }}", check)
         build = workflow.split("  release-build:\n", 1)[1].split("  gate:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
-            "github.event_name == 'merge_group' && needs.plan.outputs.reused == 'true'",
+            "if: ${{ github.event_name == 'merge_group' }}",
             "RUSTFLAGS: -D warnings",
             "cache-key: ci-${{ matrix.os }}",
             "cargo build --release --locked $BUILD_ARGS",
@@ -190,7 +188,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("merge_group:", workflow)
         self.assertIn("cargo check --release --locked $BUILD_ARGS", workflow)
         self.assertIn("cargo build --release --locked $BUILD_ARGS", workflow)
-        self.assertIn("github.event_name != 'pull_request'", workflow)
+        self.assertIn("if: ${{ github.event_name == 'merge_group' }}", workflow)
         self.assertIn("RUSTFLAGS: -D warnings", workflow)
         self.assertNotIn("debug-assertions", workflow)
         self.assertIn("timeout-minutes:", workflow)

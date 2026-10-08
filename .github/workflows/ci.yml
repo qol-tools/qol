@@ -134,8 +134,8 @@ jobs:
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
-    # A run that reuses a verdict has nothing left to lint or test. A queue
-    # entry still builds release binaries, in the release build job below.
+    # A run that reuses a verdict has nothing left to lint or test. Release
+    # binaries build in the release build job below, beside this one.
     if: ${{ needs.plan.outputs.reused != 'true' }}
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
@@ -230,13 +230,6 @@ jobs:
           BUILD_ARGS: ${{ matrix.build_args }}
           RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
         run: cargo check --release --locked $BUILD_ARGS
-
-      - name: Release profile build
-        if: matrix.skip != 'true' && github.event_name != 'pull_request'
-        env:
-          BUILD_ARGS: ${{ matrix.build_args }}
-          RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
-        run: cargo build --release --locked $BUILD_ARGS
 
       - name: Test
         if: runner.os == 'Linux' && matrix.skip != 'true'
@@ -344,13 +337,15 @@ jobs:
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
 
-  # Pull requests only check the release profile, so a queue entry that reuses
-  # the pull request verdict builds it here, under the name of what it does.
-  # A run that reuses nothing builds it inside lint + test.
+  # Pull requests only check the release profile. Every queue entry builds it
+  # here in parallel with lint + test, so the build no longer waits behind
+  # clippy and the tests. A push to main never runs it: the build cache
+  # workflow already compiles the release build there, and a second job saving
+  # the same cache key would drop one job's artifacts.
   release-build:
     name: release build (${{ matrix.os }})
     needs: plan
-    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.reused == 'true' }}
+    if: ${{ github.event_name == 'merge_group' }}
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
     timeout-minutes: 45
