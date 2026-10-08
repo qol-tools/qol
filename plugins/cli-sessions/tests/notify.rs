@@ -74,6 +74,7 @@ fn a_finished_park_notice_falls_back_to_the_project_and_caps_the_report() {
         effort: None,
         title: None,
         permission_mode: None,
+        claude_config_dir: None,
         session: String::new(),
         command: vec![],
         created_at: 0,

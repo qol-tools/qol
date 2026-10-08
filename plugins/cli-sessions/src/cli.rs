@@ -18,8 +18,19 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
         if command == crate::park::PARK {
             return park(rest).emit();
         }
+        if command == crate::park::LANE_EXEC {
+            return lane_exec(rest).emit();
+        }
     }
     app().run(args)
+}
+
+fn lane_exec(args: &[String]) -> CommandResult {
+    let args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+    match qol_agent_launch::lane_exec::run(&args) {
+        Ok(()) => CommandResult::success(""),
+        Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} lane-exec: {error:#}")),
+    }
 }
 
 fn park(args: &[String]) -> CommandResult {

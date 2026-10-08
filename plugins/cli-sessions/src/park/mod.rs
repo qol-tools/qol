@@ -21,6 +21,7 @@ use runner::{caller_state, target, CallerState, Target};
 use store::ParkStore;
 
 pub const PARK: &str = "park";
+pub const LANE_EXEC: &str = "lane-exec";
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Serialize)]
@@ -118,6 +119,7 @@ fn park(
         effort: parsed.effort.clone(),
         title,
         permission_mode: interpreter.permission_mode(&facts),
+        claude_config_dir: std::env::var(qol_agent_launch::account::CONFIG_DIR_ENV).ok(),
         session: token,
         command: parsed.command.clone(),
         created_at,
@@ -264,6 +266,7 @@ pub(crate) mod tests {
             effort: None,
             title: None,
             permission_mode: None,
+            claude_config_dir: None,
             session: "v1:kitty:k1_f1.2:3".to_owned(),
             command: vec!["node".to_owned(), "watch.cjs".to_owned(), "79".to_owned()],
             created_at: 1,

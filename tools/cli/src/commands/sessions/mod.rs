@@ -19,8 +19,6 @@ mod close;
 mod contract;
 mod export;
 mod fork;
-mod lane_account;
-mod lane_exec;
 mod last_send;
 mod launch;
 use qol_terminal_sessions::cli::launch_flags;
@@ -119,7 +117,7 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 21] = [
     },
     SessionSubcommand {
         name: "lane-exec",
-        run: |rest, _format| lane_exec::run(rest),
+        run: |rest, _format| qol_agent_launch::lane_exec::run(rest),
     },
 ];
 

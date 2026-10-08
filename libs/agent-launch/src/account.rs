@@ -4,47 +4,59 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use qol_terminal_sessions::cli::{CliLaunchProgram, CliToolId};
 
-const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
+pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 const DEFAULT_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ClaudeAccountSpec {
+pub struct ClaudeAccountSpec {
     secret: String,
     token_env: Option<String>,
 }
 
-/// Starts a claude lane under the Claude account its caller runs under: the
-/// caller's config dir travels with the launch, and when `claude_accounts`
-/// names a secret for that dir, the lane reads its token through
-/// `qol sessions lane-exec` so the token never passes through the terminal.
-pub(super) fn apply(launch: &mut CliLaunchProgram, tool: &CliToolId) -> Result<()> {
+pub struct LaneExecCommand {
+    pub program: PathBuf,
+    pub prefix: &'static [&'static str],
+}
+
+impl LaneExecCommand {
+    pub fn current(prefix: &'static [&'static str]) -> Result<Self> {
+        let program =
+            std::env::current_exe().context("failed to locate this binary for lane-exec")?;
+        Ok(Self { program, prefix })
+    }
+}
+
+pub fn config_claude_accounts() -> Result<BTreeMap<String, ClaudeAccountSpec>> {
+    let Some(path) = crate::sessions_config_path() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(crate::config::read(&path, "the sessions config")?
+        .map(|config| config.claude_accounts)
+        .unwrap_or_default())
+}
+
+pub fn apply(
+    launch: &mut CliLaunchProgram,
+    tool: &CliToolId,
+    config_dir: Option<&Path>,
+    lane_exec: &LaneExecCommand,
+) -> Result<()> {
     if tool.as_str() != "claude" {
         return Ok(());
     }
-    let Some(config_dir) = caller_config_dir() else {
+    let Some(config_dir) = config_dir else {
         return Ok(());
     };
-    let accounts = super::spawn::config_claude_accounts()?;
-    let qol = std::env::current_exe().context("failed to locate the qol binary for lane-exec")?;
+    let accounts = config_claude_accounts()?;
     apply_with(
         launch,
-        &config_dir,
+        config_dir,
         &accounts,
         dirs::home_dir().as_deref(),
-        &qol,
+        lane_exec,
         |secret| qol_secrets::read(secret).map(drop),
     )
-}
-
-#[cfg(not(test))]
-fn caller_config_dir() -> Option<PathBuf> {
-    std::env::var_os(CONFIG_DIR_ENV).map(PathBuf::from)
-}
-
-#[cfg(test)]
-fn caller_config_dir() -> Option<PathBuf> {
-    None
 }
 
 fn apply_with(
@@ -52,7 +64,7 @@ fn apply_with(
     config_dir: &Path,
     accounts: &BTreeMap<String, ClaudeAccountSpec>,
     home: Option<&Path>,
-    qol: &Path,
+    lane_exec: &LaneExecCommand,
     check_secret: impl Fn(&str) -> Result<()>,
 ) -> Result<()> {
     let config_dir_text = config_dir
@@ -78,18 +90,21 @@ fn apply_with(
             account.secret
         )
     })?;
-    let mut args = vec![
-        "sessions".to_owned(),
-        "lane-exec".to_owned(),
+    let mut args: Vec<String> = lane_exec
+        .prefix
+        .iter()
+        .map(|part| (*part).to_owned())
+        .collect();
+    args.extend([
         "--secret".to_owned(),
         account.secret.clone(),
         "--env".to_owned(),
         token_env.to_owned(),
         "--".to_owned(),
         launch.program.clone(),
-    ];
+    ]);
     args.append(&mut launch.args);
-    launch.program = qol.to_string_lossy().into_owned();
+    launch.program = lane_exec.program.to_string_lossy().into_owned();
     launch.args = args;
     Ok(())
 }
@@ -109,6 +124,13 @@ mod tests {
         ClaudeAccountSpec {
             secret: secret.to_owned(),
             token_env: token_env.map(str::to_owned),
+        }
+    }
+
+    fn qol() -> LaneExecCommand {
+        LaneExecCommand {
+            program: PathBuf::from("/bin/qol"),
+            prefix: &["sessions", "lane-exec"],
         }
     }
 
@@ -133,7 +155,7 @@ mod tests {
             Path::new("/Users/me/.claude-personal/"),
             &accounts(),
             Some(Path::new("/Users/me")),
-            Path::new("/bin/qol"),
+            &qol(),
             |_| Ok(()),
         )
         .unwrap();
@@ -171,7 +193,7 @@ mod tests {
             Path::new("/Users/me/.claude-work"),
             &accounts(),
             Some(Path::new("/Users/me")),
-            Path::new("/bin/qol"),
+            &qol(),
             |_| panic!("no secret is read for an unmapped account"),
         )
         .unwrap();
@@ -189,7 +211,7 @@ mod tests {
             Path::new("/Users/me/.claude-personal"),
             &accounts(),
             Some(Path::new("/Users/me")),
-            Path::new("/bin/qol"),
+            &qol(),
             |_| bail!("no such item"),
         )
         .unwrap_err();
@@ -212,7 +234,7 @@ mod tests {
             Path::new("/srv/claude"),
             &accounts,
             None,
-            Path::new("/bin/qol"),
+            &qol(),
             |_| Ok(()),
         )
         .unwrap();

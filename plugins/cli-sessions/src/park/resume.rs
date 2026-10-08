@@ -3,9 +3,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_terminal_sessions::cli::{
-    launch_flags, CliLaunchProgram, CliSessionInterpreter, CliToolId,
-};
+use std::path::Path;
+
+use qol_agent_launch::account::LaneExecCommand;
+use qol_terminal_sessions::cli::{launch_flags, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::park::ParkRecord;
 use qol_terminal_sessions::{
     SessionId, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
@@ -13,7 +14,6 @@ use qol_terminal_sessions::{
 
 const READY_POLL: Duration = Duration::from_millis(250);
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
-const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 pub fn resume(
     terminals: &TerminalSessionService,
@@ -30,12 +30,19 @@ pub fn resume(
     if !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
     }
-    carry_claude_config_dir(&mut launch, &tool);
+    let cap = qol_agent_launch::cap::resolve_spawn_cap(qol_agent_launch::cap::config_spawn_cap()?);
+    let mut launch = qol_agent_launch::cap::wrap_launch(&launch, cap.as_ref());
+    qol_agent_launch::account::apply(
+        &mut launch,
+        &tool,
+        record.claude_config_dir.as_deref().map(Path::new),
+        &LaneExecCommand::current(&[crate::park::LANE_EXEC])?,
+    )?;
     let identity = SpawnIdentity {
         key: SpawnKey::new(record.id.clone())
             .map_err(|error| anyhow!("park id `{}` is not a spawn key: {error}", record.id))?,
         tool: tool.clone(),
-        surface: SpawnSurface::Tab,
+        surface: qol_agent_launch::surface::config_surface()?.unwrap_or(SpawnSurface::Tab),
     };
     let cwd = PathBuf::from(&record.cwd);
     if !cwd.is_dir() {
@@ -85,15 +92,6 @@ fn resume_args(
         record.effort.as_deref(),
     )?);
     Ok(args)
-}
-
-fn carry_claude_config_dir(launch: &mut CliLaunchProgram, tool: &CliToolId) {
-    if tool.as_str() != "claude" {
-        return;
-    }
-    if let Ok(dir) = std::env::var(CLAUDE_CONFIG_DIR_ENV) {
-        launch.env.push((CLAUDE_CONFIG_DIR_ENV.to_owned(), dir));
-    }
 }
 
 fn ready_token(
