@@ -4,7 +4,7 @@ uid = "e8208e3e-58b3-4f8c-ad4b-ddbecafa3375"
 name = "Shot"
 icon = "shot"
 description = "Capture screenshots and record screen regions"
-version = "1.79.3"
+version = "1.80.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 

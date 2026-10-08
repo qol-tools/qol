@@ -4,7 +4,7 @@ uid = "c30275fa-eb76-42af-bdce-2e7596976fba"
 name = "Bluetooth"
 icon = "bluetooth"
 description = "Reliably reconnect the Bluetooth devices you choose"
-version = "0.52.2"
+version = "0.53.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
