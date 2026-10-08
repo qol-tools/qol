@@ -8,8 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter, CliToolId};
+use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::{DeliveryMode, SessionBinding, TerminalSessionService, TextInput};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::spawn::{
     config_spawn_cap, config_surface, resolve_spawn_cap, spawn_detached, SpawnLedger, SpawnLocks,
@@ -20,47 +21,6 @@ const READY_POLLS_BEFORE_CLOSE: u32 = 2;
 const TAIL_LINES: usize = 80;
 const TAIL_MAX_BYTES: usize = 12 * 1024;
 const STOP_GRACE: Duration = Duration::from_secs(3);
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ParkState {
-    Waiting,
-    Delivered,
-    Resumed,
-    Failed,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct ParkRecord {
-    pub(super) id: String,
-    pub(super) tool: String,
-    pub(super) cwd: String,
-    pub(super) external_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) effort: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) permission_mode: Option<String>,
-    pub(super) session: String,
-    pub(super) command: Vec<String>,
-    pub(super) created_at: u64,
-    pub(super) state: ParkState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) runner_pid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) runner_identity: Option<String>,
-    #[serde(default)]
-    pub(super) caller_closed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) exit_code: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) resumed_session: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) detail: Option<String>,
-}
 
 #[derive(Debug, Serialize)]
 struct ParkOutcome {
@@ -82,7 +42,10 @@ pub(super) struct ParkStore {
 
 impl ParkStore {
     pub(super) fn system() -> Self {
-        Self::with_dir(super::bridge::trace_dir().join("parked"))
+        Self::with_dir(
+            qol_terminal_sessions::park::parked_dir()
+                .unwrap_or_else(|| super::bridge::trace_dir().join("parked")),
+        )
     }
 
     pub(super) fn with_dir(dir: PathBuf) -> Self {
@@ -138,27 +101,8 @@ impl ParkStore {
     }
 
     pub(super) fn list(&self) -> Result<Vec<ParkRecord>> {
-        let entries = match fs::read_dir(&self.dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error).context("failed to read the parked directory"),
-        };
-        let mut records = entries
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "json")
-            })
-            .filter_map(|path| fs::read_to_string(path).ok())
-            .filter_map(|encoded| serde_json::from_str::<ParkRecord>(&encoded).ok())
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| {
-            right
-                .created_at
-                .cmp(&left.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(records)
+        qol_terminal_sessions::park::records(&self.dir)
+            .context("failed to read the parked directory")
     }
 }
 

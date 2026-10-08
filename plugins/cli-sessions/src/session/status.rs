@@ -9,6 +9,7 @@ pub enum Status {
     #[default]
     Unknown,
     Acknowledged,
+    Parked,
 }
 
 pub struct StateDefinition {
@@ -38,13 +39,14 @@ impl StateDefinition {
 }
 
 impl Status {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::NeedsYou,
         Self::YourTurn,
         Self::AwaitingReview,
         Self::Coordinating,
         Self::Working,
         Self::Service,
+        Self::Parked,
         Self::Unknown,
         Self::Acknowledged,
     ];
@@ -73,11 +75,14 @@ impl Status {
             Self::Service => {
                 StateDefinition::new("live", 5, false, false, |k| (k.palette.info, info_halo(k)))
             }
-            Self::Acknowledged => StateDefinition::new("acknowledged", 7, false, true, |k| {
+            Self::Parked => StateDefinition::new("parked", 6, false, false, |k| {
+                (k.palette.info, info_halo(k))
+            }),
+            Self::Acknowledged => StateDefinition::new("acknowledged", 8, false, true, |k| {
                 (k.grounds.pane.faint, 0)
             }),
             Self::Unknown => {
-                StateDefinition::new("idle", 6, false, true, |k| (k.grounds.pane.faint, 0))
+                StateDefinition::new("idle", 7, false, true, |k| (k.grounds.pane.faint, 0))
             }
         }
     }
@@ -105,6 +110,13 @@ pub fn bridge_status(status: Status, bridged: bool, driving: bool) -> Status {
         )
     {
         return Status::AwaitingReview;
+    }
+    status
+}
+
+pub fn park_status(status: Status, parked: bool) -> Status {
+    if parked && status != Status::NeedsYou {
+        return Status::Parked;
     }
     status
 }

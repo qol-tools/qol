@@ -4,6 +4,7 @@ mod error;
 pub mod kitty;
 pub mod marker;
 mod model;
+pub mod park;
 mod service;
 mod spawn;
 

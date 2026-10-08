@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use qol_terminal_sessions::cli::generic_tool;
 use qol_terminal_sessions::cli::{
     CliRuntimeState, CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription,
     CliToolId, CliViewportState,
 };
+use qol_terminal_sessions::park::ParkRecord;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use super::screen_analysis::ScreenAnalysis;
@@ -27,6 +29,16 @@ pub struct ReconcileCaches {
     branch: git::BranchCache,
     persisted: Option<(std::path::PathBuf, Vec<SessionState>)>,
     screens: HashMap<SessionId, ScreenCache>,
+    parked_dir: Option<std::path::PathBuf>,
+}
+
+impl ReconcileCaches {
+    pub fn with_parked_dir(parked_dir: Option<std::path::PathBuf>) -> Self {
+        Self {
+            parked_dir,
+            ..Self::default()
+        }
+    }
 }
 
 struct ScreenCache {
@@ -95,13 +107,14 @@ pub fn tick_with_caches(
     let tick_start = std::time::Instant::now();
     let panes = host.discover();
     let bridges = live_bridge_sessions();
+    let parked = live_parked_sessions(caches.parked_dir.as_deref());
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "CLI_SESSIONS_RECON",
         "phase=tick mono_now={mono_now} panes={}",
         panes.len()
     );
-    prune_missing(registry, caches, &panes);
+    prune_missing(registry, caches, &panes, &parked);
 
     for pane in &panes {
         let cli_session = cli_interpreter.describe(pane);
@@ -156,6 +169,9 @@ pub fn tick_with_caches(
         let is_bridged = binding_token
             .as_ref()
             .is_some_and(|token| bridges.driven.contains(token));
+        let is_parked = binding_token
+            .as_ref()
+            .is_some_and(|token| parked.iter().any(|park| &park.record.session == token));
         let driving: Vec<SessionId> = binding_token
             .as_ref()
             .and_then(|token| bridges.driving.get(token))
@@ -204,6 +220,7 @@ pub fn tick_with_caches(
                     wall_now,
                     bridged: is_bridged,
                     driving,
+                    parked: is_parked,
                 },
             );
             if let Some(notice) = notice {
@@ -221,6 +238,7 @@ pub fn tick_with_caches(
         }
     }
 
+    show_detached_parks(registry, cli_interpreter, caches, &panes, &parked, wall_now);
     persist_if_changed(registry, caches);
     #[cfg(debug_assertions)]
     {
@@ -408,9 +426,15 @@ fn cached_screen(
     None
 }
 
-fn prune_missing(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches, panes: &[Pane]) {
-    let live: HashSet<SessionId> = panes.iter().map(|pane| pane.id.clone()).collect();
+fn prune_missing(
+    registry: &Arc<Mutex<Registry>>,
+    caches: &mut ReconcileCaches,
+    panes: &[Pane],
+    parked: &[LivePark],
+) {
+    let mut live: HashSet<SessionId> = panes.iter().map(|pane| pane.id.clone()).collect();
     caches.screens.retain(|id, _| live.contains(id));
+    live.extend(parked.iter().map(|park| park.id.clone()));
     let Ok(mut reg) = registry.lock() else { return };
     reg.prune(pid_alive);
     let stale: Vec<SessionId> = reg
@@ -501,7 +525,9 @@ fn snapshot(registry: &Arc<Mutex<Registry>>, id: &SessionId) -> (Attention, Opti
         Some(s) => (
             Attention {
                 status: s.runtime_status.unwrap_or(match s.status {
-                    Status::Coordinating | Status::AwaitingReview => Status::Unknown,
+                    Status::Coordinating | Status::AwaitingReview | Status::Parked => {
+                        Status::Unknown
+                    }
                     Status::Working
                     | Status::Service
                     | Status::YourTurn
@@ -530,6 +556,7 @@ pub struct ApplyInput<'a> {
     pub wall_now: u64,
     pub bridged: bool,
     pub driving: Vec<SessionId>,
+    pub parked: bool,
 }
 
 fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
@@ -556,20 +583,24 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
             input.label
         );
     }
-    let status = crate::session::status::bridge_status(
-        input.reduction.attention.status,
-        input.bridged,
-        !input.driving.is_empty(),
+    let status = crate::session::status::park_status(
+        crate::session::status::bridge_status(
+            input.reduction.attention.status,
+            input.bridged,
+            !input.driving.is_empty(),
+        ),
+        input.parked,
     );
     if status != input.reduction.attention.status {
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=bridge id={} runtime={:?} display={:?} delegated={} agents={}",
+            "phase=bridge id={} runtime={:?} display={:?} delegated={} agents={} parked={}",
             pane_id,
             input.reduction.attention.status,
             status,
             input.bridged,
-            input.driving.len()
+            input.driving.len(),
+            input.parked
         );
     }
     let summary = summary_for(status, &input.tool);
@@ -652,6 +683,96 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
     (notice, status)
 }
 
+pub struct LivePark {
+    pub id: SessionId,
+    pub runner_pid: i32,
+    pub record: ParkRecord,
+}
+
+pub fn live_parks(
+    records: Vec<ParkRecord>,
+    runner_alive: impl Fn(u32, Option<&str>) -> bool,
+) -> Vec<LivePark> {
+    records
+        .into_iter()
+        .filter_map(|record| {
+            let pid = record.runner_pid?;
+            if !runner_alive(pid, record.runner_identity.as_deref()) {
+                return None;
+            }
+            let binding = record.session.parse::<SessionBinding>().ok()?;
+            Some(LivePark {
+                id: binding.session_id().clone(),
+                runner_pid: i32::try_from(pid).ok()?,
+                record,
+            })
+        })
+        .collect()
+}
+
+fn live_parked_sessions(dir: Option<&std::path::Path>) -> Vec<LivePark> {
+    let records = dir
+        .map(qol_terminal_sessions::park::waiting)
+        .unwrap_or_default();
+    live_parks(records, |pid, identity| match identity {
+        Some(identity) => qol_process::process_identity_matches(pid, identity),
+        None => qol_process::is_pid_alive(pid),
+    })
+}
+
+fn show_detached_parks(
+    registry: &Arc<Mutex<Registry>>,
+    cli_interpreter: &CliSessionInterpreter,
+    caches: &mut ReconcileCaches,
+    panes: &[Pane],
+    parked: &[LivePark],
+    wall_now: u64,
+) {
+    for park in parked {
+        if panes.iter().any(|pane| pane.id == park.id) {
+            continue;
+        }
+        let record = &park.record;
+        let tool = CliToolId::new(record.tool.as_str())
+            .ok()
+            .and_then(|id| cli_interpreter.tool_for(&id))
+            .unwrap_or_else(generic_tool);
+        let branch = caches.branch.branch(&record.cwd, wall_now);
+        let Ok(mut reg) = registry.lock() else { return };
+        if reg
+            .get(&park.id)
+            .is_some_and(|state| state.root_pid == park.runner_pid)
+        {
+            continue;
+        }
+        qol_runtime::probe!(
+            "CLI_SESSIONS_RECON",
+            "phase=park id={} park={} runner_pid={}",
+            park.id,
+            record.id,
+            park.runner_pid
+        );
+        reg.upsert(SessionState {
+            id: park.id.clone(),
+            root_pid: park.runner_pid,
+            project: project_of(&record.cwd),
+            name: meaningful_name(record.title.as_deref()).map(str::to_owned),
+            cwd: record.cwd.clone(),
+            branch,
+            tool,
+            status: Status::Parked,
+            summary: Status::Parked.definition().label.into(),
+            last_activity: record.created_at,
+            screen_hash: None,
+            working_since: None,
+            settled_since: None,
+            bridged: false,
+            driving: Vec::new(),
+            runtime_status: None,
+        });
+    }
+}
+
 fn live_bridge_sessions() -> qol_terminal_sessions::bridge::LiveBridges {
     qol_terminal_sessions::bridge::checkpoint_dir()
         .map(|dir| qol_terminal_sessions::bridge::live_sessions(&dir))
@@ -714,6 +835,7 @@ mod bridge_tests {
                     .then(|| crate::host::kitty_session_id(2))
                     .into_iter()
                     .collect(),
+                parked: false,
             },
         )
     }

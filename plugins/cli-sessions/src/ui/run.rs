@@ -73,7 +73,9 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let corner = cfg.corner();
     let service_commands: Arc<[String]> = Arc::from(cfg.service_commands);
     let cli_interpreter = Arc::new(CliSessionInterpreter::system());
-    let reconcile_caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::default()));
+    let reconcile_caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::with_parked_dir(
+        qol_terminal_sessions::park::parked_dir(),
+    )));
     let service_snapshot = SharedSnapshotCache::default();
 
     let probe =
