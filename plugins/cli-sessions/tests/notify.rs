@@ -85,7 +85,6 @@ fn a_finished_park_notice_falls_back_to_the_project_and_caps_the_report() {
         resumed_session: None,
         detail: None,
         report: Some("\u{00E9}".repeat(500)),
-        runner_exe: None,
         notified: false,
     };
     let notice = Notice::finished_park(&record);

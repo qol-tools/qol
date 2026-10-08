@@ -13,7 +13,27 @@ use crate::storage::paths::PLUGIN_ID;
 const OPEN: &str = "open";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
+    let args: Vec<String> = args.into_iter().collect();
+    if let Some((command, rest)) = args.split_first() {
+        if command == crate::park::PARK {
+            return park(rest).emit();
+        }
+    }
     app().run(args)
+}
+
+fn park(args: &[String]) -> CommandResult {
+    match crate::park::run(args) {
+        Ok(crate::park::Invocation::Help) => CommandResult::success(crate::park::HELP),
+        Ok(crate::park::Invocation::Ran) => CommandResult::success(""),
+        Ok(crate::park::Invocation::Parked(outcome)) => {
+            match serde_json::to_string_pretty(&outcome) {
+                Ok(json) => CommandResult::success(json),
+                Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} park: {error}")),
+            }
+        }
+        Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} park: {error:#}")),
+    }
 }
 
 fn app() -> HeadlessApp {
@@ -112,6 +132,49 @@ where
                     };
                     ask_daemon(crate::ui::notify::reopen_request(park))?;
                     Ok(PlainTextOutput::empty())
+                }),
+        )
+        .command(
+            Command::new(crate::park::PARK)
+                .about("Close this harness and resume it when a long command exits.")
+                .usage(format!(
+                    "{PLUGIN_ID} park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]"
+                ))
+                .detail("Parks the calling harness session on a long wait such as a pull request watcher.")
+                .detail("A detached CLI Sessions process runs the command, closes the calling terminal once its turn ends, resumes the conversation in a new tab when the command exits, and closes that tab once its turn ends.")
+                .detail("Everything after `--` is the command, passed through verbatim.")
+                .output("Park JSON on stdout; diagnostics on stderr.")
+                .exit_behavior("Exits non-zero when the calling session cannot be resolved or resumed, or the runner cannot start.")
+                .run_result(|context| Ok(park(context.args()))),
+        )
+        .command(
+            Command::new("parked")
+                .about("List parked sessions and what became of them.")
+                .usage(format!("{PLUGIN_ID} parked"))
+                .detail("One row per park: id, state, tool, cwd, the command it waits on, and the session it resumed in.")
+                .output("Park rows on stdout; diagnostics on stderr.")
+                .exit_behavior("Exits non-zero when the parked directory cannot be read.")
+                .run_plain_text(|context| {
+                    reject_args(context.args())?;
+                    let rows = crate::park::list()?;
+                    if rows.is_empty() {
+                        return Ok(PlainTextOutput::text("no parked sessions recorded"));
+                    }
+                    Ok(PlainTextOutput::text(rows.join("\n")))
+                }),
+        )
+        .command(
+            Command::new("unpark")
+                .about("Stop a parked wait and resume the conversation now, or reopen a finished one.")
+                .usage(format!("{PLUGIN_ID} unpark <park-id>"))
+                .detail("Refuses a park that is no longer waiting or whose terminal is still open.")
+                .output("A confirmation line on stdout; diagnostics on stderr.")
+                .exit_behavior("Exits non-zero when the id is unknown, no longer waiting, still open, or the resume fails.")
+                .run_plain_text(|context| {
+                    let [park] = context.args() else {
+                        anyhow::bail!("expected one park id like park-1791472381-2374635");
+                    };
+                    Ok(PlainTextOutput::text(crate::park::unpark(park)?))
                 }),
         )
         .command(

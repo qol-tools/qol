@@ -260,30 +260,6 @@ fn app() -> HeadlessApp {
                 "Exits non-zero when the fork directory cannot be read.",
             ))
             .subcommand(command(
-                "park",
-                "Close this harness and resume it when a long command exits.",
-                "qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]",
-                "Parks the calling harness session on a long wait such as a pull request watcher. A detached qol process runs the command with its output in a log under the sessions data dir, closes the calling terminal once its current turn ends, and when the command exits resumes the same conversation (same tool, session id and cwd) in a new tab with the exit code and the tail of the output. If the calling terminal is still open when the command exits, the result is submitted into it instead. --model and --effort go to the resumed harness; left out, the harness picks its own default. The session must expose a resumable session id.",
-                "Park JSON on stdout; diagnostics on stderr.",
-                "Exits non-zero when the calling session cannot be resolved or resumed, or the runner cannot start.",
-            ))
-            .subcommand(command(
-                "parked",
-                "List parked sessions and what became of them.",
-                "qol sessions parked",
-                "Prints one row per parked session: id, state (waiting, delivered, resumed, failed), tool, cwd, the command it waits on, and the session it resumed in.",
-                "Park rows on stdout; diagnostics on stderr.",
-                "Exits non-zero when the parked directory cannot be read.",
-            ))
-            .subcommand(command(
-                "unpark",
-                "Stop a parked wait and resume the conversation now.",
-                "qol sessions unpark <id>",
-                "Stops the waiting command of a parked session whose terminal is already closed and resumes the conversation in a new tab, telling it the wait was cut short. Refuses a session that is no longer waiting or whose terminal is still open.",
-                "A confirmation line on stdout; diagnostics on stderr.",
-                "Exits non-zero when the id is unknown, no longer waiting, still open, or the resume fails.",
-            ))
-            .subcommand(command(
                 "submit",
                 "Deliver one bounded task and return with the round open.",
                 "qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]",

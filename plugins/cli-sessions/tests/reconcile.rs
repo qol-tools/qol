@@ -1538,7 +1538,6 @@ fn park_record(window_id: u64, runner_pid: u32) -> ParkRecord {
         resumed_session: None,
         detail: None,
         report: None,
-        runner_exe: None,
         notified: false,
     }
 }
@@ -1728,7 +1727,6 @@ fn live_parks_drop_dead_runners_and_unparseable_sessions() {
         resumed_session: None,
         detail: None,
         report: None,
-        runner_exe: None,
         notified: false,
     };
     let token = SessionBinding::new(kitty_session_id(5), 1).unwrap().token();

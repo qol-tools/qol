@@ -46,8 +46,6 @@ pub struct ParkRecord {
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_exe: Option<String>,
     #[serde(default)]
     pub notified: bool,
 }
@@ -146,7 +144,6 @@ mod tests {
             resumed_session: None,
             detail: None,
             report: None,
-            runner_exe: None,
             notified: false,
         }
     }
