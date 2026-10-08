@@ -7,7 +7,9 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter, CliToolId};
+use qol_terminal_sessions::cli::{
+    ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter, CliToolId,
+};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::{DeliveryMode, SessionBinding, TerminalSessionService, TextInput};
 use serde::Serialize;
@@ -21,6 +23,9 @@ const READY_POLLS_BEFORE_CLOSE: u32 = 2;
 const TAIL_LINES: usize = 80;
 const TAIL_MAX_BYTES: usize = 12 * 1024;
 const STOP_GRACE: Duration = Duration::from_secs(3);
+const WOKEN_UNREAD_LIMIT: u32 = 30;
+const WAKE_HEADER: &str = "[qol parked session woke]";
+const CLOSE_NOTE: &str = " This tab closes when your turn ends, and your final message is shown to the user in a notification they can click to reopen the conversation, so end with what they need to know.";
 
 #[derive(Debug, Serialize)]
 struct ParkOutcome {
@@ -104,6 +109,12 @@ impl ParkStore {
         qol_terminal_sessions::park::records(&self.dir)
             .context("failed to read the parked directory")
     }
+
+    fn parks_again(&self, session: &str) -> bool {
+        qol_terminal_sessions::park::waiting(&self.dir)
+            .iter()
+            .any(|record| record.session == session)
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -118,7 +129,7 @@ struct ParkArgs {
 }
 
 fn help() -> &'static str {
-    "qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]\n\nPark the calling harness session on a long wait. A detached qol process runs the command, closes this terminal once the current turn ends, and when the command exits resumes the same conversation (same tool, same session id, same cwd) in a new tab with the exit code and the tail of its output. If the terminal is still open when the command exits, the result is submitted into it instead.\n\n--model and --effort are passed to the resumed harness; left out, the harness picks its own default.\n--title names the parked session and its resumed tab; left out, it is the calling session's name.\n--session defaults to the calling terminal.\nqol sessions parked lists parked sessions; qol sessions unpark <id> stops the wait and resumes the conversation now."
+    "qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]\n\nPark the calling harness session on a long wait. A detached qol process runs the command, closes this terminal once the current turn ends, and when the command exits resumes the same conversation (same tool, same session id, same cwd) in a new tab with the exit code and the tail of its output. If the terminal is still open when the command exits, the result is submitted into it instead.\n\nThe resumed tab closes once its turn ends, unless it parks again or the user writes in it, and its final message is shown in a qol-cli-sessions notification; clicking it reopens the conversation.\n\n--model and --effort are passed to the resumed harness; left out, the harness picks its own default.\n--title names the parked session and its resumed tab; left out, it is the calling session's name.\n--session defaults to the calling terminal.\nqol sessions parked lists parked sessions; qol sessions unpark <id> stops the wait and resumes the conversation now, or reopens a finished one."
 }
 
 fn parse_args(args: &[OsString]) -> Result<ParkArgs> {
@@ -217,6 +228,8 @@ fn park(
     if interpreter.resume_args_for(&tool, &external_id).is_none() {
         bail!("`{tool}` has no resume command, so its sessions cannot be parked");
     }
+    let executable = std::env::current_exe()
+        .context("cannot resolve the current executable for the park runner")?;
     let created_at = now_seconds();
     let id = format!("park-{created_at}-{}", std::process::id());
     let record = ParkRecord {
@@ -238,10 +251,11 @@ fn park(
         exit_code: None,
         resumed_session: None,
         detail: None,
+        report: None,
+        runner_exe: Some(executable.display().to_string()),
+        notified: false,
     };
     store.record(&record)?;
-    let executable = std::env::current_exe()
-        .context("cannot resolve the current executable for the park runner")?;
     let mut runner = Command::new(executable);
     runner
         .args(["sessions", "park", "--run", &id])
@@ -415,10 +429,16 @@ fn wake(
     if !store.claim(&record.id)? {
         return Ok(());
     }
-    match resume(terminals, interpreter, record, prompt) {
+    match resume(
+        terminals,
+        interpreter,
+        record,
+        &format!("{prompt}{CLOSE_NOTE}"),
+    ) {
         Ok(session) => {
             record.state = ParkState::Resumed;
             record.resumed_session = Some(session);
+            record.runner_pid = Some(std::process::id());
         }
         Err(error) => {
             record.state = ParkState::Failed;
@@ -433,6 +453,101 @@ fn wake(
         record.id,
         record.state,
         record.resumed_session.as_deref().unwrap_or("-")
+    );
+    if record.state == ParkState::Resumed {
+        watch_woken(terminals, interpreter, store, record)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WokenTurn {
+    Working,
+    Engaged,
+    Finished(String),
+}
+
+/// Reads the woken conversation from the wake prompt on: the agent's reply is the report, and
+/// any user message after the wake means the user took the session over.
+fn woken_turn(turns: &[ChatTurn]) -> WokenTurn {
+    let Some(wake) = turns
+        .iter()
+        .rposition(|turn| turn.role == ChatRole::User && turn.text.contains(WAKE_HEADER))
+    else {
+        return WokenTurn::Working;
+    };
+    let after = &turns[wake + 1..];
+    if after.iter().any(|turn| turn.role == ChatRole::User) {
+        return WokenTurn::Engaged;
+    }
+    let report = after
+        .iter()
+        .map(|turn| turn.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if report.is_empty() {
+        WokenTurn::Working
+    } else {
+        WokenTurn::Finished(report)
+    }
+}
+
+/// Closes the woken tab once its turn ends, unless it parked again or the user took it over.
+fn watch_woken(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    store: &ParkStore,
+    record: &mut ParkRecord,
+) -> Result<()> {
+    let Some(token) = record.resumed_session.clone() else {
+        return Ok(());
+    };
+    let woken = token
+        .parse::<SessionBinding>()
+        .map_err(|error| anyhow!("invalid woken session token: {error}"))?;
+    let mut gate = CloseGate::default();
+    let mut unread = 0;
+    let outcome = loop {
+        thread::sleep(POLL);
+        let state = caller_state(terminals, interpreter, &woken);
+        if state == CallerState::Gone {
+            break "gone";
+        }
+        if store.parks_again(&token) {
+            break "parked_again";
+        }
+        if !gate.observe(&state) {
+            continue;
+        }
+        let turns = super::bridge::resolve_target(terminals, &woken)
+            .ok()
+            .and_then(|facts| interpreter.chat_transcript(&facts))
+            .unwrap_or_default();
+        match woken_turn(&turns) {
+            WokenTurn::Working => {
+                unread += 1;
+                if unread >= WOKEN_UNREAD_LIMIT {
+                    break "unread";
+                }
+            }
+            WokenTurn::Engaged => break "engaged",
+            WokenTurn::Finished(report) => {
+                let _ = terminals.close(&woken);
+                record.state = ParkState::Finished;
+                record.report = Some(report);
+                break "closed";
+            }
+        }
+    };
+    record.runner_pid = None;
+    store.record(record)?;
+    qol_runtime::probe!(
+        "CLI_SESSION_PARK",
+        "event=woken_{} id={} session={}",
+        outcome,
+        record.id,
+        token
     );
     Ok(())
 }
@@ -535,7 +650,7 @@ fn wake_prompt(
         )
     };
     format!(
-        "[qol parked session woke]\nYou parked this conversation on `{command}` and qol waited for it in the background. It {outcome}.\n\n{output}\n\nContinue from where you left off."
+        "{WAKE_HEADER}\nYou parked this conversation on `{command}` and qol waited for it in the background. It {outcome}.\n\n{output}\n\nContinue from where you left off."
     )
 }
 
@@ -556,6 +671,9 @@ pub(super) fn run_unpark(args: &[OsString]) -> Result<()> {
     };
     let store = ParkStore::system();
     let mut record = store.load(id)?;
+    if record.state == ParkState::Finished {
+        return reopen(&store, record);
+    }
     let retry = record.state == ParkState::Failed && record.resumed_session.is_none();
     if record.state != ParkState::Waiting && !retry {
         bail!("`{id}` is no longer waiting ({:?})", record.state);
@@ -595,6 +713,18 @@ pub(super) fn run_unpark(args: &[OsString]) -> Result<()> {
     record.detail = Some("resumed early by unpark".to_owned());
     store.record(&record)?;
     println!("resumed {id} in {session}");
+    Ok(())
+}
+
+/// Reopens a finished park's conversation without a new prompt; the user picks it up from there.
+fn reopen(store: &ParkStore, mut record: ParkRecord) -> Result<()> {
+    let terminals = super::service()?;
+    let session = resume(&terminals, &CliSessionInterpreter::system(), &record, "")?;
+    record.state = ParkState::Resumed;
+    record.resumed_session = Some(session.clone());
+    record.detail = Some("reopened from its notification".to_owned());
+    store.record(&record)?;
+    println!("reopened {} in {session}", record.id);
     Ok(())
 }
 
@@ -659,6 +789,46 @@ mod tests {
             exit_code: None,
             resumed_session: None,
             detail: None,
+            report: None,
+            runner_exe: None,
+            notified: false,
+        }
+    }
+
+    fn turn(role: ChatRole, text: &str) -> ChatTurn {
+        ChatTurn {
+            role,
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn woken_turn_reports_the_reply_after_the_latest_wake() {
+        let wake = format!("{WAKE_HEADER}\nYou parked this conversation.");
+        let cases = [
+            (vec![turn(ChatRole::User, "earlier")], WokenTurn::Working),
+            (vec![turn(ChatRole::User, &wake)], WokenTurn::Working),
+            (
+                vec![
+                    turn(ChatRole::User, &wake),
+                    turn(ChatRole::Assistant, "first reply"),
+                    turn(ChatRole::User, &wake),
+                    turn(ChatRole::Assistant, "PR merged.\n\nRestart the tray."),
+                ],
+                WokenTurn::Finished("PR merged.\n\nRestart the tray.".to_owned()),
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &wake),
+                    turn(ChatRole::Assistant, "PR merged."),
+                    turn(ChatRole::User, "prune it now"),
+                    turn(ChatRole::Assistant, "Pruned."),
+                ],
+                WokenTurn::Engaged,
+            ),
+        ];
+        for (turns, expected) in cases {
+            assert_eq!(woken_turn(&turns), expected, "{turns:?}");
         }
     }
 

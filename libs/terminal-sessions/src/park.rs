@@ -10,6 +10,7 @@ pub enum ParkState {
     Waiting,
     Delivered,
     Resumed,
+    Finished,
     Failed,
 }
 
@@ -43,6 +44,12 @@ pub struct ParkRecord {
     pub resumed_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_exe: Option<String>,
+    #[serde(default)]
+    pub notified: bool,
 }
 
 pub fn parked_dir() -> Option<PathBuf> {
@@ -81,6 +88,35 @@ pub fn waiting(dir: &Path) -> Vec<ParkRecord> {
         .collect()
 }
 
+/// Resumed parks whose runner still watches the woken session, to close it when its turn ends.
+pub fn watching(dir: &Path) -> Vec<ParkRecord> {
+    records(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| record.state == ParkState::Resumed && record.runner_pid.is_some())
+        .collect()
+}
+
+/// Finished parks whose final report has not been shown to the user yet.
+pub fn unnotified(dir: &Path) -> Vec<ParkRecord> {
+    records(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| record.state == ParkState::Finished && !record.notified)
+        .collect()
+}
+
+pub fn mark_notified(dir: &Path, record: &ParkRecord) -> std::io::Result<()> {
+    let notified = ParkRecord {
+        notified: true,
+        ..record.clone()
+    };
+    let path = dir.join(format!("{}.json", record.id));
+    let staging = dir.join(format!("{}.json.notified", record.id));
+    fs::write(&staging, serde_json::to_string(&notified)?)?;
+    fs::rename(staging, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +141,9 @@ mod tests {
             exit_code: None,
             resumed_session: None,
             detail: None,
+            report: None,
+            runner_exe: None,
+            notified: false,
         }
     }
 
@@ -154,5 +193,41 @@ mod tests {
             .map(|record| record.id)
             .collect();
         assert_eq!(ids, ["w"]);
+    }
+
+    #[test]
+    fn watching_keeps_resumed_parks_whose_runner_still_watches() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), &record("watched", 1, ParkState::Resumed));
+        write(
+            root.path(),
+            &ParkRecord {
+                runner_pid: None,
+                ..record("released", 1, ParkState::Resumed)
+            },
+        );
+        write(root.path(), &record("waiting", 1, ParkState::Waiting));
+        let ids: Vec<String> = watching(root.path())
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        assert_eq!(ids, ["watched"]);
+    }
+
+    #[test]
+    fn a_finished_park_is_unnotified_until_marked() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), &record("done", 1, ParkState::Finished));
+        write(root.path(), &record("resumed", 1, ParkState::Resumed));
+        let pending = unnotified(root.path());
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "done");
+        mark_notified(root.path(), &pending[0]).unwrap();
+        assert!(unnotified(root.path()).is_empty());
+        let stored = records(root.path()).unwrap();
+        assert!(stored
+            .iter()
+            .any(|record| record.id == "done" && record.notified));
+        assert!(!root.path().join("done.json.notified").exists());
     }
 }

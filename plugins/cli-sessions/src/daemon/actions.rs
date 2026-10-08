@@ -4,7 +4,7 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::DaemonRequest;
 use qol_terminal_sessions::SessionId;
 
-use crate::ui::notify::FOCUS_ACTION;
+use crate::ui::notify::{FOCUS_ACTION, REOPEN_ACTION};
 
 pub const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -16,6 +16,7 @@ pub enum Command {
     Open,
     NextAttention,
     Focus(SessionId),
+    Reopen(String),
     Snapshot,
     Kill,
     Theme {
@@ -25,6 +26,12 @@ pub enum Command {
 }
 
 fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
+    if request.action == REOPEN_ACTION {
+        return match request.input["park"].as_str() {
+            Some(park) => ReadResult::Command(Command::Reopen(park.to_owned())),
+            None => ReadResult::Error("reopen requires a park id".to_owned()),
+        };
+    }
     if request.action != FOCUS_ACTION {
         return parse_command(&request.action);
     }
@@ -84,6 +91,23 @@ mod tests {
             input: serde_json::Value::Null,
         };
         assert!(matches!(parse_request(&request), ReadResult::Error(_)));
+    }
+
+    #[test]
+    fn reopen_carries_the_park_id_and_requires_it() {
+        let request = DaemonRequest {
+            action: "reopen".to_string(),
+            input: serde_json::json!({ "park": "park-1-2" }),
+        };
+        match parse_request(&request) {
+            ReadResult::Command(Command::Reopen(park)) => assert_eq!(park, "park-1-2"),
+            _ => panic!("expected Reopen command"),
+        }
+        let missing = DaemonRequest {
+            action: "reopen".to_string(),
+            input: serde_json::Value::Null,
+        };
+        assert!(matches!(parse_request(&missing), ReadResult::Error(_)));
     }
 
     #[test]

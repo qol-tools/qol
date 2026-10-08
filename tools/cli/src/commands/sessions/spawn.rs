@@ -2137,7 +2137,7 @@ pub(super) fn spawn_detached(
     };
     launch.args.extend(flags);
     super::lane_account::apply(&mut launch, &prepared.tool_id)?;
-    if !dry_run {
+    if !dry_run && !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
     }
     let request = SpawnRequest {

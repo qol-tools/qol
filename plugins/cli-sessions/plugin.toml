@@ -28,6 +28,11 @@ label = "Focus Session"
 args = ["focus"]
 hotkey = false
 
+[action.reopen]
+label = "Reopen Parked Session"
+args = ["reopen"]
+hotkey = false
+
 [action.settings]
 label = "Settings"
 kind = "settings"

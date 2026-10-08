@@ -108,6 +108,7 @@ pub fn tick_with_caches(
     let panes = host.discover();
     let bridges = live_bridge_sessions();
     let parked = live_parked_sessions(caches.parked_dir.as_deref());
+    let closing = closing_sessions(caches.parked_dir.as_deref());
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "CLI_SESSIONS_RECON",
@@ -172,6 +173,9 @@ pub fn tick_with_caches(
         let is_parked = binding_token
             .as_ref()
             .is_some_and(|token| parked.iter().any(|park| &park.record.session == token));
+        let is_closing = binding_token
+            .as_ref()
+            .is_some_and(|token| closing.contains(token));
         let driving: Vec<SessionId> = binding_token
             .as_ref()
             .and_then(|token| bridges.driving.get(token))
@@ -221,6 +225,7 @@ pub fn tick_with_caches(
                     bridged: is_bridged,
                     driving,
                     parked: is_parked,
+                    closing: is_closing,
                 },
             );
             if let Some(notice) = notice {
@@ -239,6 +244,7 @@ pub fn tick_with_caches(
     }
 
     show_detached_parks(registry, cli_interpreter, caches, &panes, &parked, wall_now);
+    notices.extend(finished_park_notices(caches.parked_dir.as_deref()));
     persist_if_changed(registry, caches);
     #[cfg(debug_assertions)]
     {
@@ -557,6 +563,8 @@ pub struct ApplyInput<'a> {
     pub bridged: bool,
     pub driving: Vec<SessionId>,
     pub parked: bool,
+    /// A woken park session its runner closes when the turn ends; its report replaces the toast.
+    pub closing: bool,
 }
 
 fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
@@ -604,15 +612,19 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         );
     }
     let summary = summary_for(status, &input.tool);
-    let notice = attention_notice(
-        pane_id,
-        prev_status,
-        status,
-        &input.tool,
-        name.as_deref(),
-        &input.pane.cwd,
-        &summary,
-    );
+    let notice = (!input.closing)
+        .then(|| {
+            attention_notice(
+                pane_id,
+                prev_status,
+                status,
+                &input.tool,
+                name.as_deref(),
+                &input.pane.cwd,
+                &summary,
+            )
+        })
+        .flatten();
 
     if status != prev_status {
         let reason = input
@@ -714,10 +726,50 @@ fn live_parked_sessions(dir: Option<&std::path::Path>) -> Vec<LivePark> {
     let records = dir
         .map(qol_terminal_sessions::park::waiting)
         .unwrap_or_default();
-    live_parks(records, |pid, identity| match identity {
+    live_parks(records, park_runner_alive)
+}
+
+fn park_runner_alive(pid: u32, identity: Option<&str>) -> bool {
+    match identity {
         Some(identity) => qol_process::process_identity_matches(pid, identity),
         None => qol_process::is_pid_alive(pid),
-    })
+    }
+}
+
+fn closing_sessions(dir: Option<&std::path::Path>) -> Vec<String> {
+    dir.map(qol_terminal_sessions::park::watching)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| {
+            record
+                .runner_pid
+                .is_some_and(|pid| park_runner_alive(pid, record.runner_identity.as_deref()))
+        })
+        .filter_map(|record| record.resumed_session)
+        .collect()
+}
+
+/// One toast per finished park, marked first so a failed write never repeats it.
+fn finished_park_notices(dir: Option<&std::path::Path>) -> Vec<Notice> {
+    let Some(dir) = dir else {
+        return Vec::new();
+    };
+    qol_terminal_sessions::park::unnotified(dir)
+        .into_iter()
+        .filter(
+            |record| match qol_terminal_sessions::park::mark_notified(dir, record) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!(
+                        "[cli-sessions] finished park {} not announced: {error}",
+                        record.id
+                    );
+                    false
+                }
+            },
+        )
+        .map(|record| Notice::finished_park(&record))
+        .collect()
 }
 
 fn show_detached_parks(
@@ -836,6 +888,7 @@ mod bridge_tests {
                     .into_iter()
                     .collect(),
                 parked: false,
+                closing: false,
             },
         )
     }
