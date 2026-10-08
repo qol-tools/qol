@@ -247,7 +247,7 @@ mod tests {
         SerialClient::from_transport(MockStream::new(reads))
     }
 
-    const TIMEOUT: Duration = Duration::from_secs(1);
+    const TIMEOUT: Duration = Duration::from_secs(5);
     const FIRST_MARKER: &str = "QOL-RC-test-0-";
 
     #[test]

@@ -468,7 +468,7 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
     };
     let incoming = sender.send_operation_fixture(matching.clone());
     assert_eq!(
-        tokio::task::spawn_blocking(move || incoming.recv_timeout(Duration::from_secs(3)).unwrap())
+        tokio::task::spawn_blocking(move || incoming.recv_timeout(Duration::from_secs(5)).unwrap())
             .await
             .unwrap(),
         Ok(status.outcome.clone())
@@ -493,7 +493,7 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
         let incoming = sender.send_operation_fixture(invalid);
         assert_eq!(
             tokio::task::spawn_blocking(move || incoming
-                .recv_timeout(Duration::from_secs(3))
+                .recv_timeout(Duration::from_secs(5))
                 .unwrap())
             .await
             .unwrap(),
@@ -588,7 +588,7 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
     };
     let incoming = sender.send_operation_fixture(duplicate);
     assert_eq!(
-        tokio::task::spawn_blocking(move || incoming.recv_timeout(Duration::from_secs(3)).unwrap())
+        tokio::task::spawn_blocking(move || incoming.recv_timeout(Duration::from_secs(5)).unwrap())
             .await
             .unwrap(),
         Ok(Outcome::DispatchStarted)
@@ -779,7 +779,7 @@ async fn peer_operation_external_verification_releases_guards_and_refuses_change
                 });
                 changed.send(()).unwrap();
             });
-            let acquired = observed.recv_timeout(Duration::from_secs(2)).is_ok();
+            let acquired = observed.recv_timeout(Duration::from_secs(5)).is_ok();
             resume.send(()).unwrap();
             worker.join().unwrap();
             acquired

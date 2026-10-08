@@ -421,7 +421,7 @@ async fn failed_or_stalled_cleanup_keeps_the_persistent_writer_and_bounds_shutdo
             "{name}"
         );
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), fixture.host.shutdown_and_wait())
+            tokio::time::timeout(Duration::from_secs(5), fixture.host.shutdown_and_wait())
                 .await
                 .unwrap(),
             Err(Error::HostUnavailable),

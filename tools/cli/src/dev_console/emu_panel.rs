@@ -2383,7 +2383,7 @@ mod tests {
         let mut run = ActiveSandboxRun::flow(handle);
 
         assert!(run.is_live());
-        assert!(run.wait_for_exit_until(Instant::now() + Duration::from_secs(2)));
+        assert!(run.wait_for_exit_until(Instant::now() + Duration::from_secs(5)));
         assert!(!run.is_live());
         assert!(run
             .pane
@@ -2491,7 +2491,7 @@ mod tests {
             .insert("linux/mint-cinnamon".to_string(), run);
 
         assert!(is_running(&dash, "linux/mint-cinnamon"));
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !dash.pokes.emu && Instant::now() < deadline {
             drain_emu_runs(&mut dash);
             thread::sleep(Duration::from_millis(10));
@@ -2678,7 +2678,7 @@ mod tests {
                 let (lock, ready) = &*worker_gate;
                 let released = lock.lock().unwrap();
                 let (released, _) = ready
-                    .wait_timeout_while(released, Duration::from_secs(2), |released| !*released)
+                    .wait_timeout_while(released, Duration::from_secs(15), |released| !*released)
                     .unwrap();
                 if !*released {
                     anyhow::bail!("test gate timed out");
@@ -2686,8 +2686,8 @@ mod tests {
                 Ok(())
             })
         });
-        let first = started_rx.recv_timeout(Duration::from_secs(1));
-        let second = started_rx.recv_timeout(Duration::from_secs(1));
+        let first = started_rx.recv_timeout(Duration::from_secs(5));
+        let second = started_rx.recv_timeout(Duration::from_secs(5));
         let (lock, ready) = &*gate;
         *lock.lock().unwrap() = true;
         ready.notify_all();

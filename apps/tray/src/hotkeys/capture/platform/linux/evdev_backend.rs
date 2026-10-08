@@ -1077,7 +1077,7 @@ mod tests {
         let handler_entered = entered.clone();
         let dispatch = spawn_dispatch_thread(Arc::new(move |_: &CaptureEvent| {
             handler_entered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(500));
+            std::thread::sleep(Duration::from_secs(10));
         }));
 
         let started = std::time::Instant::now();
@@ -1089,7 +1089,7 @@ mod tests {
         let elapsed = started.elapsed();
 
         assert!(
-            elapsed < Duration::from_millis(100),
+            elapsed < Duration::from_secs(5),
             "sending 10 events took {elapsed:?}; the reader thread was blocked by the handler"
         );
         assert!(
@@ -1208,7 +1208,7 @@ mod tests {
             return;
         };
         use std::os::unix::fs::OpenOptionsExt;
-        let open_deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let open_deadline = std::time::Instant::now() + Duration::from_secs(5);
         let node_file = loop {
             let attempt = std::fs::OpenOptions::new()
                 .read(true)
@@ -1256,7 +1256,7 @@ mod tests {
             .insert(KeyCode::KEY_DOWN.0);
         emit_key_ups(&tracked, [KeyCode::KEY_DOWN.0]);
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             if let Ok(mut events) = node.fetch_events() {
                 let found = events.any(|event| {

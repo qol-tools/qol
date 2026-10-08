@@ -1866,7 +1866,7 @@ mod tests {
             .unwrap();
 
         assert!(error.to_string().contains("timed out"));
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

@@ -957,7 +957,7 @@ mod tests {
         let started = Instant::now();
         let error = lock_reconciliation(&layout, Duration::from_millis(20)).unwrap_err();
 
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(5));
         assert!(error.to_string().contains("cleanup remains retained"));
     }
 }

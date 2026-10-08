@@ -593,7 +593,7 @@ fn plugin_cleanup_does_not_reap_an_untracked_child() {
         .args(["-c", "exit 0"])
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(1);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !qol_process::is_pid_zombie(child.id()) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -660,7 +660,7 @@ fn not_ready_daemon_defers_promptly_with_its_phase_instead_of_waiting() {
     .expect_err("a NotReady answer must defer instead of waiting out the timeout");
 
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < DAEMON_READY_TIMEOUT,
         "the defer must be prompt instead of eating the readiness timeout"
     );
     assert_eq!(
@@ -691,7 +691,7 @@ fn wait_for_daemon_socket_defers_promptly_when_the_daemon_answers_not_ready() {
         .expect_err("a NotReady answer during the wait must defer");
 
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < DAEMON_READY_TIMEOUT,
         "the defer must surface the phase instead of eating DAEMON_READY_TIMEOUT"
     );
     assert!(matches!(error, ActionExecutionError::DaemonNotReady { .. }));

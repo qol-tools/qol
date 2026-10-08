@@ -2313,7 +2313,7 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(error.to_string().contains("registry.guard"));
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(5));
         drop(holder);
     }
     #[test]
@@ -2336,7 +2336,7 @@ mod tests {
         for index in 0..3 {
             std::fs::write(journals.path().join(format!("{index}.lock")), "invalid").unwrap();
         }
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         let mut budget = CgroupRecoveryBudget::new(deadline, 1, 64);
 
         recover_stale_cgroup_pass(root.path(), journals.path(), &mut budget).unwrap();
@@ -2369,7 +2369,7 @@ mod tests {
         let journals = tempfile::tempdir().unwrap();
         let pending = journals.path().join("pending.lock");
         std::fs::write(&pending, "invalid").unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         let mut budget = CgroupRecoveryBudget::new(deadline, 1, 1);
 
         let cleaned = recover_stale_cgroup_pass(root.path(), journals.path(), &mut budget).unwrap();

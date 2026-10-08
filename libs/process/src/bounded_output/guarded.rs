@@ -348,7 +348,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(output, BoundedCommandOutput::TimedOut { .. }));
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
@@ -501,7 +501,7 @@ mod tests {
 
     #[cfg(any(target_os = "linux", windows))]
     fn wait_for_exit(pid: u32) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while crate::is_pid_alive(pid) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }

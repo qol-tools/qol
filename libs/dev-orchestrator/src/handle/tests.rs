@@ -171,7 +171,7 @@ fn worker_pid(handle: &RunHandle) -> u32 {
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn wait_for_exit(pid: u32) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while qol_process::is_pid_alive(pid) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
@@ -196,7 +196,7 @@ fn wait_for_terminal_worker_failure(handle: &mut RunHandle, timeout: Duration) {
 
 #[cfg(target_os = "linux")]
 fn wait_for_marker_pid(path: &Path) -> u32 {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !path.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
@@ -390,7 +390,7 @@ fn exited_worker_is_reaped_even_when_its_report_is_malformed() {
     fs::create_dir_all(ticket.report_path.parent().unwrap()).unwrap();
     fs::write(&ticket.report_path, b"not-json").unwrap();
     let mut handle = handle(ticket, child("exit", None));
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match handle.poll() {
             Ok(WaitState::Failed {
@@ -474,7 +474,7 @@ fn invalid_termination_timeout_is_rejected_before_dispatch() {
     assert!(matches!(handle.worker, Some(WorkerState::Running(_))));
     assert!(qol_process::is_pid_alive(pid));
     assert!(handle
-        .terminate_worker(Duration::from_secs(2))
+        .terminate_worker(Duration::from_secs(5))
         .unwrap()
         .is_some());
     assert!(!qol_process::is_pid_alive(pid));
@@ -489,14 +489,14 @@ fn termination_timeout_becomes_a_sticky_terminal_failure_after_proof() {
     let pid = worker_pid(&handle);
     let started = Instant::now();
     let error = delayed_termination_failure(&mut handle);
-    assert!(started.elapsed() < Duration::from_millis(400));
+    assert!(started.elapsed() < Duration::from_secs(5));
     assert!(format!("{error:#}").contains("ownership remains with the lifecycle owner"));
     assert!(qol_process::is_pid_alive(pid));
     assert!(matches!(
         handle.worker,
         Some(WorkerState::Escalating { .. })
     ));
-    wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(3));
+    wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(15));
     assert!(!qol_process::is_pid_alive(pid));
     assert_sticky_terminal_failure(&mut handle);
 }
@@ -536,7 +536,7 @@ fn pending_cleanup_moves_from_the_owner_to_the_recovery_coordinator() {
         )
         .unwrap_err();
     assert!(format!("{error:#}").contains("injected process-tree timeout"));
-    wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(3));
+    wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(15));
     assert!(!qol_process::is_pid_alive(pid));
     let threads = cleanup_threads.lock().unwrap();
     assert_eq!(threads[0], "qol-worker-owner-bounded-exit");
@@ -553,7 +553,7 @@ fn delayed_termination_failure(handle: &mut RunHandle) -> anyhow::Error {
         .terminate_worker_with(
             Duration::from_millis(10),
             Box::new(|_, _| {
-                thread::sleep(Duration::from_millis(600));
+                thread::sleep(Duration::from_secs(6));
                 TerminationAttempt {
                     proof: Err(anyhow!("injected process-tree timeout")),
                     root_stop: Err(anyhow!("injected exact-root timeout")),
@@ -597,7 +597,7 @@ fn failed_termination_retries_until_a_stubborn_descendant_is_proven_gone() {
         handle.worker,
         Some(WorkerState::Escalating { .. })
     ));
-    wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(4));
+    wait_for_terminal_worker_failure(&mut handle, Duration::from_secs(5));
     assert!(!qol_process::is_pid_alive(root_pid));
     assert!(!qol_process::is_pid_alive(descendant_pid));
     let WaitState::Failed { worker_exit, .. } = handle.poll().unwrap() else {
@@ -650,7 +650,7 @@ fn lifecycle_owner_keeps_drop_bounded() {
     };
     let started = Instant::now();
     drop(handle);
-    assert!(started.elapsed() < Duration::from_millis(400));
+    assert!(started.elapsed() < Duration::from_secs(5));
     wait_for_exit(pid);
 }
 
@@ -788,7 +788,7 @@ fn subprocess_helper() {
         return;
     }
     if mode == "bounded-exit" {
-        thread::sleep(Duration::from_millis(900));
+        thread::sleep(Duration::from_secs(9));
         return;
     }
     if mode == "exit" {

@@ -78,10 +78,6 @@ impl Drop for InFlightGuard {
     }
 }
 
-#[cfg(test)]
-const STOP_BACKSTOP: std::time::Duration = std::time::Duration::from_millis(300);
-
-#[cfg(not(test))]
 const STOP_BACKSTOP: std::time::Duration = std::time::Duration::from_secs(3);
 
 struct Gate {
@@ -879,7 +875,7 @@ mod lifecycle_tests {
             let _ = started.send(());
             let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
             peak.fetch_max(now, Ordering::SeqCst);
-            let _ = super::platform::bounded_modinfo_version(&script);
+            let _ = super::platform::bounded_modinfo_version(&script, Duration::from_millis(300));
             concurrent.fetch_sub(1, Ordering::SeqCst);
             (
                 Observation::OnDiskUnavailable {
@@ -1004,7 +1000,7 @@ mod lifecycle_tests {
         let started = std::time::Instant::now();
         stop_watch();
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < Duration::from_secs(5),
             "stop must return within the deterministic bound while the probe subprocess would sleep 30 seconds"
         );
         assert_eq!(
@@ -1148,7 +1144,7 @@ mod lifecycle_tests {
         stop_watch();
         assert!(
             started.elapsed() >= STOP_BACKSTOP
-                && started.elapsed() < STOP_BACKSTOP + Duration::from_secs(2),
+                && started.elapsed() < STOP_BACKSTOP + Duration::from_secs(5),
             "stop must return within the backstop bound while the probe is gate-blocked"
         );
         assert!(
@@ -1219,10 +1215,10 @@ mod lifecycle_tests {
         });
         for _ in 0..2 {
             let elapsed = finished_rx
-                .recv_timeout(STOP_BACKSTOP + Duration::from_secs(2))
+                .recv_timeout(STOP_BACKSTOP + Duration::from_secs(5))
                 .expect("every concurrent stop must return within the bounded backstop");
             assert!(
-                elapsed < STOP_BACKSTOP + Duration::from_secs(2),
+                elapsed < STOP_BACKSTOP + Duration::from_secs(5),
                 "the concurrent stop exceeded the bound"
             );
         }

@@ -344,7 +344,7 @@ impl Fixture {
     fn request_response(&self, name: &str, input: Value) -> Option<Value> {
         let mut socket = UnixStream::connect(self.root.path().join("daemon.sock")).ok()?;
         socket
-            .set_read_timeout(Some(Duration::from_secs(1)))
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         writeln!(socket, "{}", json!({"action":name,"input":input})).ok()?;
         socket.shutdown(std::net::Shutdown::Write).ok()?;

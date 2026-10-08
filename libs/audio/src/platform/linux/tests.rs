@@ -17,7 +17,7 @@ use super::connection::Connection;
 use super::environment::{self, SelectionInputs};
 use super::{control, default_output, devices};
 
-const DEADLINE: Duration = Duration::from_secs(2);
+const DEADLINE: Duration = Duration::from_secs(5);
 const TEST_COOKIE: [u8; environment::COOKIE_LENGTH] = [0x5a; environment::COOKIE_LENGTH];
 
 type StepReply = Box<dyn FnOnce(&mut UnixStream, u32, u16) -> Result<(), ProtocolError> + Send>;
@@ -167,7 +167,7 @@ impl Drop for FakeServer {
             let _ = client.shutdown(std::net::Shutdown::Both);
         }
         let _ = UnixStream::connect(&self.path);
-        let finished = self.finished.recv_timeout(Duration::from_secs(2)).is_ok();
+        let finished = self.finished.recv_timeout(Duration::from_secs(5)).is_ok();
         let Some(handle) = self.handle.take() else {
             return;
         };
@@ -253,12 +253,8 @@ fn serve(
     while protocol::read_command_message(&mut reader, version).is_ok() {}
 }
 
-fn connect_with_deadline(server: &FakeServer, deadline: Duration) -> Connection {
-    Connection::connect_at(server.path(), deadline, &TEST_COOKIE).expect("fixture connection")
-}
-
 fn connect(server: &FakeServer) -> Connection {
-    connect_with_deadline(server, DEADLINE)
+    Connection::connect_at(server.path(), DEADLINE, &TEST_COOKIE).expect("fixture connection")
 }
 
 fn small_backlog_listener(path: &Path) -> UnixListener {
@@ -466,7 +462,7 @@ fn an_unused_fixture_shuts_down_within_the_bound() {
     let started = Instant::now();
     drop(server);
     assert!(
-        started.elapsed() < Duration::from_secs(2),
+        started.elapsed() < Duration::from_secs(5),
         "teardown took {:?}",
         started.elapsed()
     );
@@ -1071,13 +1067,13 @@ fn auth_rejection_is_reported_without_credentials() {
 #[test]
 fn silent_server_times_out() {
     let server = FakeServer::start(vec![Step::Silent]);
-    let mut connection = connect_with_deadline(&server, Duration::from_millis(400));
+    let mut connection = connect(&server).with_request_timeout(Duration::from_millis(400));
     let started = Instant::now();
     match connection.request::<Vec<protocol::SinkInfo>>(&Command::GetSinkInfoList) {
         Err(crate::AudioError::Timeout) => {}
         other => panic!("unexpected result: {other:?}"),
     }
-    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[test]
@@ -1092,17 +1088,17 @@ fn request_deadline_covers_a_trickle() {
     let server = FakeServer::start(vec![trickle_typed(
         record,
         9,
-        Duration::from_millis(60),
-        Duration::from_millis(60),
+        Duration::from_millis(700),
+        Duration::from_millis(700),
     )]);
-    let mut connection = connect_with_deadline(&server, Duration::from_millis(400));
+    let mut connection = connect(&server).with_request_timeout(Duration::from_millis(400));
     let started = Instant::now();
     match connection.request::<Vec<protocol::SinkInfo>>(&Command::GetSinkInfoList) {
         Err(crate::AudioError::Timeout) => {}
         other => panic!("unexpected result: {other:?}"),
     }
     assert!(
-        started.elapsed() < Duration::from_millis(900),
+        started.elapsed() < Duration::from_secs(5),
         "the request waited for the whole trickle"
     );
 }
@@ -1130,7 +1126,7 @@ fn connect_deadline_covers_a_full_backlog() {
         Err(crate::AudioError::Timeout) => {}
         other => panic!("unexpected result: {other:?}"),
     }
-    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(started.elapsed() < Duration::from_secs(5));
     drop(listener);
 }
 

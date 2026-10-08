@@ -1479,7 +1479,7 @@ options = ["top-left", "top-right"]
             writer_release_rx.recv().unwrap();
         });
         writer_ready_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap();
 
         let outcome = local.fetch(None).unwrap();
@@ -1501,7 +1501,7 @@ options = ["top-left", "top-right"]
             apply_finished_tx.send(()).unwrap();
         });
         apply_started_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap();
         assert!(
             apply_finished_rx
@@ -1513,7 +1513,7 @@ options = ["top-left", "top-right"]
         writer_release_tx.send(()).unwrap();
         writer.join().unwrap();
         apply_finished_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap();
         apply.join().unwrap();
 

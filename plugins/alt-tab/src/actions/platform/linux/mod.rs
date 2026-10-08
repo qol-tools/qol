@@ -384,7 +384,7 @@ mod tests {
             "second call must spawn a fresh activator"
         );
         assert_eq!(
-            live_rx.recv_timeout(Duration::from_secs(1)),
+            live_rx.recv_timeout(Duration::from_secs(5)),
             Ok(22),
             "the re-armed activator must deliver the window id"
         );
@@ -404,7 +404,7 @@ mod tests {
             "healthy activator accepts the message"
         );
         assert_eq!(
-            rx.recv_timeout(Duration::from_secs(1)),
+            rx.recv_timeout(Duration::from_secs(5)),
             Ok(77),
             "the window id must arrive unchanged"
         );

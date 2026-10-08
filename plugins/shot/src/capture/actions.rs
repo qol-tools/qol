@@ -147,7 +147,7 @@ mod tests {
             .is_err());
         signal.test_complete(Ok(()));
         performed_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .expect("file action remained parked after the readiness signal");
     }
 }

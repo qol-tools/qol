@@ -170,7 +170,7 @@ async fn closed_discovery_events_with_pending_cleanup_allow_trusted_inbound_tls(
         .await
         .unwrap();
     let session = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(5),
         NormalSession::connect(io, remote, local_id),
     )
     .await

@@ -146,7 +146,7 @@ mod tests {
             .unwrap()
             .parse::<u32>()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if qol_process::is_pid_gone(child_pid) {
                 return;

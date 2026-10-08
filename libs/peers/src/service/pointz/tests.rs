@@ -122,8 +122,8 @@ impl Harness {
         self.phone.send_to(packet, self.commands()).await.unwrap();
     }
 
-    async fn next_delivery(&mut self) -> Option<serde_json::Value> {
-        tokio::time::timeout(Duration::from_millis(500), self.delivered.recv())
+    async fn next_delivery(&mut self, wait: Duration) -> Option<serde_json::Value> {
+        tokio::time::timeout(wait, self.delivered.recv())
             .await
             .ok()
             .flatten()
@@ -279,7 +279,7 @@ async fn a_phone_pairs_through_the_adapter_and_its_commands_arrive() {
         .send_command(&command(&key, PHONE, [1; 16], now_ms()))
         .await;
     assert_eq!(
-        harness.next_delivery().await,
+        harness.next_delivery(Duration::from_secs(5)).await,
         Some(serde_json::json!({"type": "MouseClick", "button": 1}))
     );
 }
@@ -318,13 +318,22 @@ async fn replays_stale_commands_and_removed_phones_are_refused() {
     let packet = command(&PHONE_KEY, PHONE, [1; 16], now_ms());
 
     harness.send_command(&packet).await;
-    assert!(harness.next_delivery().await.is_some());
+    assert!(harness
+        .next_delivery(Duration::from_secs(5))
+        .await
+        .is_some());
     harness.send_command(&packet).await;
-    assert_eq!(harness.next_delivery().await, None);
+    assert_eq!(
+        harness.next_delivery(Duration::from_millis(500)).await,
+        None
+    );
     harness
         .send_command(&command(&PHONE_KEY, PHONE, [2; 16], now_ms() - 31_000))
         .await;
-    assert_eq!(harness.next_delivery().await, None);
+    assert_eq!(
+        harness.next_delivery(Duration::from_millis(500)).await,
+        None
+    );
 
     let revision = authority.projection().unwrap().revision;
     authority
@@ -333,5 +342,8 @@ async fn replays_stale_commands_and_removed_phones_are_refused() {
     harness
         .send_command(&command(&PHONE_KEY, PHONE, [3; 16], now_ms()))
         .await;
-    assert_eq!(harness.next_delivery().await, None);
+    assert_eq!(
+        harness.next_delivery(Duration::from_millis(500)).await,
+        None
+    );
 }

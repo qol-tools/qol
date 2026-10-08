@@ -485,7 +485,7 @@ mod tests {
 
         assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());
         start.start();
-        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
     #[test]

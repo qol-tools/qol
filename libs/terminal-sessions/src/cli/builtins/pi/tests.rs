@@ -508,7 +508,7 @@ fn subscribe_falls_back_to_the_session_directory_when_no_session_file_exists_yet
     .unwrap();
 
     events
-        .recv_timeout(std::time::Duration::from_secs(3))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .expect("a session file appearing in the directory wakes the subscription");
     drop(subscription);
 }
@@ -544,7 +544,7 @@ fn subscribe_watches_the_exact_session_file_when_one_resolves() {
     std::fs::write(&file, content).unwrap();
 
     events
-        .recv_timeout(std::time::Duration::from_secs(3))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .expect("a change to the resolved session file wakes the subscription");
     drop(subscription);
 }

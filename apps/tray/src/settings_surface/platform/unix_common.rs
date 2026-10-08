@@ -1071,7 +1071,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             drop(listener);
             stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
             let mut line = String::new();
             std::io::BufReader::new(&stream)

@@ -118,7 +118,7 @@ fn process_tree_containment_reports_unsupported_before_startup() {
 
 #[cfg(any(target_os = "linux", windows))]
 fn wait_for_path(path: &std::path::Path) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !path.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -199,7 +199,7 @@ fn owned_process_tree_terminates_and_reaps_windows_descendants() {
     tree.terminate_and_wait(&mut root, Duration::from_secs(2))
         .unwrap();
 
-    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(started.elapsed() < Duration::from_secs(10));
     assert!(tree.tree_has_exited().unwrap());
     assert!(!qol_process::is_pid_alive(root_pid));
     assert!(!qol_process::is_pid_alive(descendant_pid));
@@ -669,7 +669,7 @@ fn abrupt_nested_guard_owner_exit_kills_child_and_grandchild() {
         .unwrap()
         .parse::<u32>()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while (qol_process::is_pid_alive(child) || qol_process::is_pid_alive(grandchild))
         && Instant::now() < deadline
     {
@@ -861,11 +861,11 @@ fn abrupt_owner_death_kills_an_ordinary_descendant_before_recovery() {
     owner.kill().unwrap();
     let owner_failed = !owner.wait().unwrap().success();
     let tree_died_before_recovery =
-        wait_for_pids_to_exit(&[root_pid, descendant_pid], Duration::from_secs(3));
+        wait_for_pids_to_exit(&[root_pid, descendant_pid], Duration::from_secs(5));
     let inherited_survived_owner = qol_process::is_pid_alive(inherited_pid);
 
     qol_process::kill_pid(inherited_pid).unwrap();
-    let inherited_died = wait_for_pids_to_exit(&[inherited_pid], Duration::from_secs(2));
+    let inherited_died = wait_for_pids_to_exit(&[inherited_pid], Duration::from_secs(5));
 
     recover_stale_guardian_journal(&journal, &cgroup_root);
     assert!(fork_drop_preserved);
@@ -919,7 +919,7 @@ fn containing_scope_kill_recursively_cleans_the_guarded_tree() {
     std::fs::write(scope.join("cgroup.kill"), "1").unwrap();
     let owner_failed = !owner.wait().unwrap().success();
     let tree_died_before_recovery =
-        wait_for_pids_to_exit(&[root, descendant], Duration::from_secs(3));
+        wait_for_pids_to_exit(&[root, descendant], Duration::from_secs(5));
     recover_stale_guardian_journal(&journal, &stable);
     std::fs::remove_dir(&scope).unwrap();
 

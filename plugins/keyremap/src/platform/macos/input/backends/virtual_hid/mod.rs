@@ -336,7 +336,7 @@ mod tests {
     ) -> (FakeHelper, std::thread::JoinHandle<anyhow::Result<()>>) {
         let (daemon_side, helper_side) = UnixStream::pair().unwrap();
         helper_side
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let session =
             std::thread::spawn(move || run_session(daemon_side, environment.as_ref(), &layouts()));

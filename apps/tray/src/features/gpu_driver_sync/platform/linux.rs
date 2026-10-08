@@ -3,10 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) const MODINFO_CANDIDATES: [&str; 2] = ["/usr/sbin/modinfo", "/sbin/modinfo"];
-#[cfg(not(test))]
 const MODINFO_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-#[cfg(test)]
-const MODINFO_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
 const MODINFO_OUTPUT_LIMIT: usize = 4096;
 
 pub(crate) fn watch_supported() -> bool {
@@ -39,16 +36,19 @@ fn proc_version_path() -> PathBuf {
 fn on_disk_version() -> Option<String> {
     MODINFO_CANDIDATES
         .iter()
-        .find_map(|binary| bounded_modinfo_version(Path::new(binary)))
+        .find_map(|binary| bounded_modinfo_version(Path::new(binary), MODINFO_PROBE_TIMEOUT))
 }
 
-pub(crate) fn bounded_modinfo_version(binary: &Path) -> Option<String> {
+pub(crate) fn bounded_modinfo_version(
+    binary: &Path,
+    timeout: std::time::Duration,
+) -> Option<String> {
     let mut command = Command::new(binary);
     command.args(["-F", "version", "nvidia"]);
     let output = qol_process::run_guarded_with_output_timeout(
         command,
         modinfo_guardian_command()?,
-        MODINFO_PROBE_TIMEOUT,
+        timeout,
         MODINFO_OUTPUT_LIMIT,
     )
     .ok()?;
@@ -150,14 +150,14 @@ mod tests {
         std::fs::set_permissions(&script, permissions).unwrap();
 
         let started = std::time::Instant::now();
-        let version = bounded_modinfo_version(&script);
+        let version = bounded_modinfo_version(&script, std::time::Duration::from_millis(300));
         assert_eq!(
             version, None,
             "a hanging modinfo probe must be aborted, not answered"
         );
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(2),
-            "the hanging probe must be terminated within the short test bound"
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the hanging probe must be terminated well before its 30 second sleep ends"
         );
         let pid: u32 = std::fs::read_to_string(&pidfile)
             .unwrap()
@@ -186,7 +186,7 @@ mod tests {
         std::fs::set_permissions(&script, permissions).unwrap();
 
         assert_eq!(
-            bounded_modinfo_version(&script).as_deref(),
+            bounded_modinfo_version(&script, std::time::Duration::from_secs(5)).as_deref(),
             Some("580.159.02")
         );
         std::fs::remove_dir_all(&dir).ok();

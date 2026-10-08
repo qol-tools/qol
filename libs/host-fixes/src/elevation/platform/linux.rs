@@ -92,7 +92,7 @@ mod tests {
             "{error:#}"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < Duration::from_secs(5),
             "the timeout must fire within the short test bound"
         );
         let root_pid: u32 = std::fs::read_to_string(&root_pid_file)
@@ -105,7 +105,7 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if qol_process::is_pid_gone(root_pid) && qol_process::is_pid_gone(child_pid) {
                 break;

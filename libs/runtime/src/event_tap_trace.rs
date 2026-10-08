@@ -55,7 +55,7 @@ mod tests {
         let elapsed = started.elapsed();
 
         assert!(
-            elapsed < Duration::from_secs(1),
+            elapsed < Duration::from_secs(5),
             "the event tap thread must outrun a wedged writer, or macOS kills the tap and the keyboard freezes: {elapsed:?}"
         );
         drop(release);

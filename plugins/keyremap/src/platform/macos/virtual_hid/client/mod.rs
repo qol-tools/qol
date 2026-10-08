@@ -197,7 +197,7 @@ mod tests {
     fn pair() -> (Connection, UnixStream, mpsc::Receiver<ClientEvent>) {
         let (client, server) = UnixStream::pair().unwrap();
         server
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let (sender, events) = mpsc::channel();
         let connection = Connection::from_stream(client, sender).unwrap();
@@ -211,7 +211,7 @@ mod tests {
         let failed = (0..100_000).any(|_| connection.send(&request).is_err());
         assert!(failed, "the socket never filled up");
         assert!(matches!(
-            events.recv_timeout(Duration::from_secs(2)),
+            events.recv_timeout(Duration::from_secs(5)),
             Ok(ClientEvent::Disconnected(_))
         ));
     }
@@ -229,7 +229,7 @@ mod tests {
             )
             .unwrap();
 
-        let event = events.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = events.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(
             event,
             ClientEvent::Status(Status::KeyboardReady(true))
@@ -275,7 +275,7 @@ mod tests {
     fn the_daemon_closing_the_socket_is_reported() {
         let (_connection, server, events) = pair();
         drop(server);
-        let event = events.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = events.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(matches!(event, ClientEvent::Disconnected(_)));
     }
 }

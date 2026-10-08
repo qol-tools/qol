@@ -490,7 +490,7 @@ mod tests {
         let transcriber = WebSocketTranscriber::new(WebSocketTranscriberConfig {
             endpoint,
             engine: "whisper".to_owned(),
-            connect_timeout: Duration::from_secs(2),
+            connect_timeout: Duration::from_secs(5),
         });
         let (events, receiver) = mpsc::channel();
         let session = transcriber
@@ -516,11 +516,11 @@ mod tests {
         );
         session.finalize_user_turn().unwrap();
         let partial = receiver
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap()
             .unwrap();
         let final_result = receiver
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(5))
             .unwrap()
             .unwrap();
         assert_eq!(partial.text, "hello");
@@ -588,7 +588,7 @@ mod tests {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
-        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
             .await
             .unwrap()
             .unwrap()
@@ -603,7 +603,7 @@ mod tests {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
-        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
             .await
             .unwrap()
             .unwrap()

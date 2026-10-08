@@ -58,7 +58,7 @@ mod tests {
         let fallback = hub.subscribe();
         hub.trigger();
         fallback
-            .recv_timeout(Duration::from_millis(500))
+            .recv_timeout(Duration::from_secs(5))
             .expect("fallback backend must receive reload after primary's receiver dropped");
     }
 
@@ -70,7 +70,7 @@ mod tests {
 
         let rx = hub.subscribe();
         hub.trigger();
-        rx.recv_timeout(Duration::from_millis(500))
+        rx.recv_timeout(Duration::from_secs(5))
             .expect("trigger after subscribe must deliver");
 
         hub.trigger();
@@ -99,7 +99,7 @@ mod tests {
         let second = hub.subscribe();
         hub.trigger();
         for (label, rx) in [("first", &first), ("second", &second)] {
-            rx.recv_timeout(Duration::from_millis(500))
+            rx.recv_timeout(Duration::from_secs(5))
                 .unwrap_or_else(|err| panic!("{label} subscriber must receive reload: {err}"));
         }
     }

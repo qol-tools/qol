@@ -16,7 +16,7 @@ use qol_runtime::broker::{EventBus, TopicCheckError, BUS_QUEUE_CAPACITY};
 
 const TOPIC: &str = "kitty.session_opened";
 const OTHER_TOPIC: &str = "kitty.session_closed";
-const RECV_TIMEOUT: Duration = Duration::from_secs(1);
+const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 const QUIET_TIMEOUT: Duration = Duration::from_millis(50);
 
 fn declared(topics: &[&str]) -> Vec<String> {

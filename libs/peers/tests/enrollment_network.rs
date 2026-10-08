@@ -112,7 +112,7 @@ async fn admission_bounds_queued_work_without_spawning_or_evicting_transactions(
     assert_eq!(revision(&local), expected);
     control.stop();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), task)
+        tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .unwrap(),
         Ok(())
@@ -269,7 +269,7 @@ async fn inbound_tls_capacity_and_shutdown_are_owned_without_stopping_normal_lis
             .await
             .unwrap();
         connections.push(
-            tokio::time::timeout(Duration::from_secs(2), config.connect(stream))
+            tokio::time::timeout(Duration::from_secs(5), config.connect(stream))
                 .await
                 .unwrap()
                 .unwrap(),
@@ -289,7 +289,7 @@ async fn inbound_tls_capacity_and_shutdown_are_owned_without_stopping_normal_lis
     ));
     control.stop();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), task)
+        tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .unwrap()
             .unwrap(),

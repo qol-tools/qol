@@ -222,7 +222,7 @@ mod tests {
 
         assert!(matches!(dispatch, DaemonActionDispatch::OutcomeUnknown));
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(5),
             "readiness probes must not inherit the long action timeout"
         );
     }

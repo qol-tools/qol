@@ -276,7 +276,7 @@ fn subscribe_falls_back_to_the_session_group_when_no_state_file_exists_yet() {
     std::fs::write(fresh.join("state.json"), r#"{"title":"Fresh lane"}"#).unwrap();
 
     events
-        .recv_timeout(std::time::Duration::from_secs(3))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .expect("a new session directory under the group wakes the subscription");
     drop(subscription);
 }

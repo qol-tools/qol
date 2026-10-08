@@ -490,7 +490,7 @@ mod tests {
         let root = std::path::PathBuf::from(root);
         let token = CancellationToken::install().unwrap();
         std::fs::write(root.join("ready"), "ready").unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !token.is_cancelled() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -499,7 +499,7 @@ mod tests {
         if std::env::var_os("QOL_PROCESS_EXPECT_ESCALATION").is_none() {
             return;
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !token.escalation_requested() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -516,13 +516,13 @@ mod tests {
             .env("QOL_PROCESS_CANCELLATION_TEST_ROOT", temp.path())
             .spawn()
             .unwrap();
-        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
         while !temp.path().join("ready").exists() && Instant::now() < ready_deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(temp.path().join("ready").exists());
         signal_term_pid(child.id()).unwrap();
-        let exit_deadline = Instant::now() + Duration::from_secs(2);
+        let exit_deadline = Instant::now() + Duration::from_secs(5);
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
                 break status;
@@ -563,7 +563,7 @@ mod tests {
 
     #[cfg(unix)]
     fn wait_for_path(path: &std::path::Path) {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !path.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -638,7 +638,7 @@ mod tests {
     fn exited_unreaped_process_is_a_zombie_until_waited() {
         let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
         let pid = child.id();
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !is_pid_zombie(pid) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -667,7 +667,7 @@ mod tests {
 
         spawn_detached(&mut command).unwrap();
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !marker.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }

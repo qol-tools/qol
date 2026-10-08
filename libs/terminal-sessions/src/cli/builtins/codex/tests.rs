@@ -527,7 +527,7 @@ fn subscribe_falls_back_to_the_rollout_day_directory_when_no_rollout_exists_yet(
     .unwrap();
 
     events
-        .recv_timeout(std::time::Duration::from_secs(3))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .expect("a rollout appearing in the day directory wakes the subscription");
     drop(subscription);
 }

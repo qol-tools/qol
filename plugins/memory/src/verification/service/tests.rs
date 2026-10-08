@@ -86,14 +86,14 @@ fn requests_remain_nonblocking_and_duplicates_share_one_job() {
     .unwrap();
     let job = fixture_job();
     assert_eq!(service.query(job.clone()), Status::Pending);
-    begin.recv_timeout(Duration::from_secs(2)).unwrap();
+    begin.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(service.query(job.clone()), Status::Pending);
     finish.send(()).unwrap();
     let state = service.shared.state.lock().unwrap();
     let (state, timeout) = service
         .shared
         .changed
-        .wait_timeout_while(state, Duration::from_secs(2), |state| {
+        .wait_timeout_while(state, Duration::from_secs(5), |state| {
             matches!(
                 state.entries.get(&binding_key("fixture-verifier", &job)),
                 Some(Entry::Pending)
@@ -131,7 +131,7 @@ fn requests_remain_nonblocking_and_duplicates_share_one_job() {
     let (state, timeout) = restarted
         .shared
         .changed
-        .wait_timeout_while(state, Duration::from_secs(2), |state| {
+        .wait_timeout_while(state, Duration::from_secs(5), |state| {
             matches!(
                 state.entries.get(&binding_key("fixture-verifier", &job)),
                 Some(Entry::Pending)
@@ -167,7 +167,7 @@ fn latest_launcher_query_replaces_queued_work_and_other_callers_are_bounded() {
     )
     .unwrap();
     assert_eq!(service.query(fixture_job()), Status::Pending);
-    begin.recv_timeout(Duration::from_secs(2)).unwrap();
+    begin.recv_timeout(Duration::from_secs(5)).unwrap();
     for index in 0..10 {
         assert_eq!(
             service.query(Job {

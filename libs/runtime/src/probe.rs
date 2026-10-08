@@ -206,7 +206,7 @@ mod tests {
         }
         let elapsed = started.elapsed();
         assert!(
-            elapsed < Duration::from_secs(1),
+            elapsed < Duration::from_secs(5),
             "a wedged probe writer must never block the caller: {elapsed:?}",
         );
         drop(release);

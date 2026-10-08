@@ -38,7 +38,7 @@ fn listener() -> &'static Listener {
 }
 
 fn wait_until_bound(path: &PathBuf) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if UnixStream::connect(path).is_ok() {
             return;

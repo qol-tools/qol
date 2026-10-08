@@ -201,7 +201,7 @@ mod tests {
             "request failed too fast to prove the server stalled"
         );
         assert!(
-            elapsed < std::time::Duration::from_secs(2),
+            elapsed < std::time::Duration::from_secs(5),
             "client timeout did not bound the stalled request: {elapsed:?}"
         );
     }

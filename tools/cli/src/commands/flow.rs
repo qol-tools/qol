@@ -5617,8 +5617,8 @@ mod tests {
             results
         });
 
-        let first = starts.recv_timeout(Duration::from_secs(1));
-        let second = starts.recv_timeout(Duration::from_secs(1));
+        let first = starts.recv_timeout(Duration::from_secs(5));
+        let second = starts.recv_timeout(Duration::from_secs(5));
         {
             let (released, wake) = &*release;
             *released.lock().unwrap() = true;

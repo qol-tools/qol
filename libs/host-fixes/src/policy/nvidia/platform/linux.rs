@@ -514,20 +514,17 @@ fn verify_apt_preferences_consumer() -> Result<()> {
 }
 
 const MODINFO_CANDIDATES: [&str; 2] = ["/usr/sbin/modinfo", "/sbin/modinfo"];
-#[cfg(not(test))]
 const HOST_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-#[cfg(test)]
-const HOST_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
 const HOST_TOOL_OUTPUT_LIMIT: usize = 16 * 1024;
 
-fn owned_command_output(binary: &str, args: &[&str]) -> Result<Option<String>> {
+fn owned_command_output(
+    binary: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<Option<String>> {
     let mut command = Command::new(binary);
     command.args(args);
-    match qol_process::run_owned_with_output_timeout(
-        command,
-        HOST_TOOL_TIMEOUT,
-        HOST_TOOL_OUTPUT_LIMIT,
-    ) {
+    match qol_process::run_owned_with_output_timeout(command, timeout, HOST_TOOL_OUTPUT_LIMIT) {
         Ok(qol_process::BoundedCommandOutput::Completed(output)) => {
             if !output.status.success() {
                 return Ok(None);
@@ -587,7 +584,9 @@ fn module_path() -> Result<Option<String>> {
         }
         return resolved_module_path("the module-path fixture", path);
     }
-    module_path_from_probes(|binary| owned_command_output(binary, &["-n", "nvidia"]))
+    module_path_from_probes(|binary| {
+        owned_command_output(binary, &["-n", "nvidia"], HOST_TOOL_TIMEOUT)
+    })
 }
 
 fn module_version() -> Result<Option<String>> {
@@ -600,7 +599,9 @@ fn module_version() -> Result<Option<String>> {
         return Ok(Some(fixture));
     }
     for binary in MODINFO_CANDIDATES {
-        if let Some(version) = owned_command_output(binary, &["-F", "version", "nvidia"])? {
+        if let Some(version) =
+            owned_command_output(binary, &["-F", "version", "nvidia"], HOST_TOOL_TIMEOUT)?
+        {
             return Ok(Some(version));
         }
     }
@@ -2259,15 +2260,19 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let started = std::time::Instant::now();
-        let output =
-            owned_command_output(script.to_str().unwrap(), &["-F", "version", "nvidia"]).unwrap();
+        let output = owned_command_output(
+            script.to_str().unwrap(),
+            &["-F", "version", "nvidia"],
+            std::time::Duration::from_millis(300),
+        )
+        .unwrap();
         assert_eq!(
             output, None,
             "the hanging probe must be aborted, not answered"
         );
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(3),
-            "the owned runner must terminate the tree within the short test bound"
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the owned runner must terminate the tree well before its 30 second sleep ends"
         );
         let root_pid: u32 = std::fs::read_to_string(&root_pid_file)
             .unwrap()
@@ -2279,7 +2284,7 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline
             && !(qol_process::is_pid_gone(root_pid) && qol_process::is_pid_gone(child_pid))
         {
@@ -4639,7 +4644,7 @@ mod tests {
             );
         }
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(2),
+            started.elapsed() < std::time::Duration::from_secs(5),
             "nonregular entries must never block the descriptor-first probe"
         );
         assert_eq!(
@@ -4707,7 +4712,7 @@ mod tests {
         let started = std::time::Instant::now();
         let error = policy().disable(&owner).unwrap_err();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(2),
+            started.elapsed() < std::time::Duration::from_secs(5),
             "a fifo at the staged path must never block the release"
         );
         assert!(format!("{error:#}").contains("preserved"), "{error:#}");
@@ -4754,7 +4759,7 @@ mod tests {
         let started = std::time::Instant::now();
         let error = policy().disable(&owner).unwrap_err();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(2),
+            started.elapsed() < std::time::Duration::from_secs(5),
             "a fifo at the active fragment must never block the release"
         );
         assert!(

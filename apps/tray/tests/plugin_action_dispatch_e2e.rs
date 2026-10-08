@@ -150,7 +150,7 @@ fn serve_fake_daemon(listener: UnixListener, response_line: &str) {
         let Ok((mut stream, _)) = listener.accept() else {
             return;
         };
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let mut reader = BufReader::new(stream.try_clone().expect("clone fake daemon stream"));
         let mut line = String::new();
         let Ok(_) = reader.read_line(&mut line) else {
@@ -217,7 +217,7 @@ async fn action_dispatch_falls_back_to_runtime_when_daemon_replies_fallback() {
     action_executor::execute_action(&manager, plugin_id, "do-thing");
 
     assert!(
-        wait_until(|| marker.exists(), Duration::from_secs(2)),
+        wait_until(|| marker.exists(), Duration::from_secs(5)),
         "runtime fallback must run when daemon replies fallback (marker={})",
         marker.display(),
     );

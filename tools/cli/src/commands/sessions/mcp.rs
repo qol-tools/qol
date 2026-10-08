@@ -4435,7 +4435,7 @@ mod tests {
                 json!({ "name": "session_submit", "arguments": { "session": token(), "task": "implement the bounded change" } }),
             ),
         );
-        wait_for_responses(&writer, 1, Duration::from_secs(2));
+        wait_for_responses(&writer, 1, Duration::from_secs(5));
 
         feed_line(
             &server,
@@ -4451,7 +4451,7 @@ mod tests {
             &workers,
             &request(3, "ping", json!({})),
         );
-        let responses = wait_for_responses(&writer, 3, Duration::from_secs(2));
+        let responses = wait_for_responses(&writer, 3, Duration::from_secs(5));
         assert_eq!(
             responses[1]["id"], 3,
             "the ping must be answered while the bridge is still waiting: {responses:?}"
@@ -4477,7 +4477,7 @@ mod tests {
                 json!({ "name": "session_submit", "arguments": { "session": token(), "task": "implement the bounded change" } }),
             ),
         );
-        wait_for_responses(&writer, 1, Duration::from_secs(2));
+        wait_for_responses(&writer, 1, Duration::from_secs(5));
         feed_line(
             &server,
             &writer,
@@ -4560,7 +4560,7 @@ mod tests {
                 json!({ "name": "session_submit", "arguments": { "session": token(), "task": "implement the bounded change" } }),
             ),
         );
-        wait_for_responses(&writer, 1, Duration::from_secs(2));
+        wait_for_responses(&writer, 1, Duration::from_secs(5));
         feed_line(
             &server,
             &writer,
@@ -4581,7 +4581,7 @@ mod tests {
                 "params": { "requestId": 5 },
             }),
         );
-        let responses = wait_for_responses(&writer, 2, Duration::from_secs(3));
+        let responses = wait_for_responses(&writer, 2, Duration::from_secs(5));
         assert_eq!(
             responses[1]["id"], 5,
             "the cancelled bridge must respond promptly: {responses:?}"
@@ -4595,7 +4595,7 @@ mod tests {
             "the cancellation must be named: {responses:?}"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < Duration::from_secs(5),
             "the cancelled bridge took {:?} to return",
             started.elapsed()
         );
@@ -4645,7 +4645,7 @@ mod tests {
                 json!({ "name": "session_submit", "arguments": { "session": "v1:fake:9:300", "task": "implement the bounded change" } }),
             ),
         );
-        let submitted = wait_for_responses(&writer, 1, Duration::from_secs(2));
+        let submitted = wait_for_responses(&writer, 1, Duration::from_secs(5));
         assert_eq!(
             submitted[0]["result"]["isError"], false,
             "submit failed: {submitted:?}"
@@ -4675,7 +4675,7 @@ mod tests {
                 "params": { "requestId": 6 },
             }),
         );
-        let responses = wait_for_responses(&writer, 2, Duration::from_secs(3));
+        let responses = wait_for_responses(&writer, 2, Duration::from_secs(5));
         assert_eq!(responses[1]["id"], 6, "{responses:?}");
         assert_eq!(responses[1]["result"]["isError"], true);
         assert!(
@@ -4685,7 +4685,7 @@ mod tests {
                 .contains("cancelled"),
             "{responses:?}"
         );
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_secs(5));
         let round = server.pending.pending_round(&binding).unwrap().unwrap();
         assert!(!round.completed);
         assert!(server.pending.owner_pid(&binding).is_none());

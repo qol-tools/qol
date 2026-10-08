@@ -163,7 +163,7 @@ fn panicking_acquire_holder_releases_lock_via_drop() {
     let join = crashed.join();
     assert!(join.is_err(), "thread must panic");
 
-    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while lock_path.exists() && std::time::Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }

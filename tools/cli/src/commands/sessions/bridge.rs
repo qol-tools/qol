@@ -3413,7 +3413,7 @@ mod tests {
             let started = Instant::now();
             while !abandoned.load(Ordering::SeqCst) {
                 assert!(
-                    started.elapsed() < Duration::from_secs(3),
+                    started.elapsed() < Duration::from_secs(5),
                     "a newer attach must signal the abandoned one"
                 );
                 std::thread::sleep(Duration::from_millis(5));

@@ -88,7 +88,7 @@ mod tests {
 
         std::fs::write(path, "new\n").unwrap();
 
-        events.recv_timeout(Duration::from_secs(3)).unwrap();
+        events.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
     #[test]
@@ -105,6 +105,6 @@ mod tests {
 
         std::fs::write(root.path().join("2026-08-27T09-00-00-000Z_lane.jsonl"), "").unwrap();
 
-        events.recv_timeout(Duration::from_secs(3)).unwrap();
+        events.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 }

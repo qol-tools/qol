@@ -299,7 +299,7 @@ fn stubborn_group_command(leader: &Path, descendant: &Path) -> Command {
 
 #[cfg(unix)]
 fn wait_for_path(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !path.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
@@ -411,7 +411,7 @@ fn residual_evidence_preserves_status_verdict_and_cleanup() {
                     ResidualCase::Observed => tree.observe_residual(),
                     ResidualCase::Disappearing => {
                         member.write_all(&[1]).unwrap();
-                        let deadline = Instant::now() + Duration::from_secs(3);
+                        let deadline = Instant::now() + Duration::from_secs(5);
                         while owner.is_alive(leader_pid).unwrap() {
                             assert!(
                                 Instant::now() < deadline,

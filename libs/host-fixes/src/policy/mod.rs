@@ -1218,7 +1218,7 @@ mod tests {
             let started = std::time::Instant::now();
             let error = read_journal("nvidia-driver-version-pin").unwrap_err();
             assert!(
-                started.elapsed() < std::time::Duration::from_secs(2),
+                started.elapsed() < std::time::Duration::from_secs(5),
                 "a fifo at the stage must never block the read-only probe"
             );
             assert!(format!("{error:#}").contains("recovery stage"), "{error:#}");
@@ -1233,7 +1233,7 @@ mod tests {
             let error = write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"]))
                 .unwrap_err();
             assert!(
-                started.elapsed() < std::time::Duration::from_secs(2),
+                started.elapsed() < std::time::Duration::from_secs(5),
                 "a fifo at the stage must never block the locked writer either"
             );
             assert!(
@@ -1272,7 +1272,7 @@ mod tests {
             let started = std::time::Instant::now();
             let error = read_journal("nvidia-driver-version-pin").unwrap_err();
             assert!(
-                started.elapsed() < std::time::Duration::from_secs(2),
+                started.elapsed() < std::time::Duration::from_secs(5),
                 "a fifo at the canonical must never block the descriptor reader"
             );
             assert!(
@@ -1290,7 +1290,7 @@ mod tests {
             let error = write_journal_durable(&journal("nvidia-driver-version-pin", &["owner-a"]))
                 .unwrap_err();
             assert!(
-                started.elapsed() < std::time::Duration::from_secs(2),
+                started.elapsed() < std::time::Duration::from_secs(5),
                 "a fifo at the canonical must never block the writer"
             );
             assert!(

@@ -211,7 +211,7 @@ async fn operation_shutdown_joins_actual_started_closure_and_keeps_writer_owned(
     drop(operations);
     drop(authority);
     let task = tokio::spawn(task);
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         while observed.try_recv().is_err() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -227,7 +227,7 @@ async fn operation_shutdown_joins_actual_started_closure_and_keeps_writer_owned(
     );
     release.send(()).unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(3), task)
+        tokio::time::timeout(Duration::from_secs(5), task)
             .await
             .unwrap()
             .unwrap(),

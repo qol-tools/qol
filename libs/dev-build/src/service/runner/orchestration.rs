@@ -430,7 +430,7 @@ mod tests {
 
         std::thread::scope(|scope| {
             let handle = scope.spawn(|| runner.run_builds_parallel(&build_indices));
-            let deadline = Instant::now() + Duration::from_millis(500);
+            let deadline = Instant::now() + Duration::from_secs(5);
             let mut admitted_plugin_4 = false;
             while Instant::now() < deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());

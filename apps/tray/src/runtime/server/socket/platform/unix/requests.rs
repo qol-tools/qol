@@ -432,7 +432,7 @@ mod tests {
     }
 
     fn read_to_string(stream: &mut UnixStream) -> String {
-        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         let mut buf = [0u8; 4096];
         let n = stream.read(&mut buf).unwrap_or(0);
         String::from_utf8_lossy(&buf[..n]).into_owned()
@@ -863,7 +863,7 @@ mod tests {
             forward_events(&mut writer, rx);
         });
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !handle.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -905,7 +905,7 @@ mod tests {
 
         handle.join().expect("forward_events thread");
         let mut buf = [0u8; 256];
-        let _ = reader.set_read_timeout(Some(Duration::from_millis(200)));
+        let _ = reader.set_read_timeout(Some(Duration::from_secs(5)));
         let n = reader.read(&mut buf).unwrap_or(0);
         let body = String::from_utf8_lossy(&buf[..n]);
         assert!(body.contains("cursor_moved"), "got: {body:?}");

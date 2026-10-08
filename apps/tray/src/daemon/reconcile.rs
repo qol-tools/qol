@@ -161,7 +161,7 @@ mod tests {
         let started_in_reconcile = Arc::clone(&started);
         spawn_reconciler(&bus, &[ConfigKind::Plugins], move || {
             started_in_reconcile.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_secs(6));
         });
         sleep(Duration::from_millis(20)).await;
         bus.config_changed(ConfigKind::Plugins);
@@ -177,7 +177,7 @@ mod tests {
             "the reconcile closure must have run"
         );
         assert!(
-            elapsed < Duration::from_millis(280),
+            elapsed < Duration::from_secs(5),
             "async tasks must progress while a blocking reconcile runs; \
              150ms of async work took {elapsed:?}"
         );

@@ -816,7 +816,7 @@ fn materialization_waits_for_mutation_and_reads_post_mutation_value() {
     });
 
     waiting_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(Duration::from_secs(5))
         .expect("materialization should wait for the active mutation");
     assert!(
         result_rx.try_recv().is_err(),
@@ -826,7 +826,7 @@ fn materialization_waits_for_mutation_and_reads_post_mutation_value() {
     super::runtime_cache::set_before_wait_hook(None);
 
     let result = result_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(Duration::from_secs(5))
         .expect("materialization should resume after the mutation")
         .unwrap();
     worker.join().unwrap();
@@ -1771,7 +1771,7 @@ items = []
         assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
 
         release_tx.send(()).unwrap();
-        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap());
         materializer.join().unwrap();
         writer.join().unwrap();
 

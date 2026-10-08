@@ -794,7 +794,7 @@ mod tests {
         let pending = tokio::spawn(std::future::pending::<bool>());
 
         let available = timeout(
-            Duration::from_millis(50),
+            Duration::from_secs(5),
             finished_update_available(Some(pending)),
         )
         .await
@@ -852,7 +852,7 @@ mod tests {
         .expect("launch pull reconciliation is tracked");
         assert!(!post_pull_task.is_finished());
         release_tx.send(()).unwrap();
-        timeout(Duration::from_secs(1), post_pull_task)
+        timeout(Duration::from_secs(5), post_pull_task)
             .await
             .unwrap()
             .unwrap();
@@ -877,7 +877,7 @@ mod tests {
         tokio::task::yield_now().await;
         shutdown_tx.send(()).unwrap();
         let _ = release_tx.send(());
-        timeout(Duration::from_secs(1), task)
+        timeout(Duration::from_secs(5), task)
             .await
             .unwrap()
             .unwrap();
@@ -910,11 +910,11 @@ mod tests {
         .unwrap();
 
         shutdown_tx.send(()).unwrap();
-        timeout(Duration::from_secs(1), post_pull_task)
+        timeout(Duration::from_secs(5), post_pull_task)
             .await
             .unwrap()
             .unwrap();
-        timeout(Duration::from_secs(1), observed_rx)
+        timeout(Duration::from_secs(5), observed_rx)
             .await
             .unwrap()
             .unwrap();

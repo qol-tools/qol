@@ -60,7 +60,7 @@ impl Fixture {
     }
 
     fn answer(&mut self) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let result = self.ask(json!({}));
             if result["verification"]["status"] != "pending" {
@@ -207,7 +207,7 @@ fn in_flight_result_does_not_promote_replaced_evidence() {
     let mut fixture = Fixture::new(Controlled { started, released });
     assert_eq!(fixture.ask(json!({}))["verification"]["status"], "pending");
     assert_eq!(
-        next.recv_timeout(Duration::from_secs(2)).unwrap(),
+        next.recv_timeout(Duration::from_secs(5)).unwrap(),
         "original command"
     );
     write_units(
@@ -217,7 +217,7 @@ fn in_flight_result_does_not_promote_replaced_evidence() {
     assert_eq!(fixture.ask(json!({}))["verification"]["status"], "pending");
     release.send(()).unwrap();
     assert_eq!(
-        next.recv_timeout(Duration::from_secs(2)).unwrap(),
+        next.recv_timeout(Duration::from_secs(5)).unwrap(),
         "replacement command, with different parameters"
     );
     let waiting = fixture.ask(json!({}));

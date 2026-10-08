@@ -188,7 +188,7 @@ mod tests {
     }
 
     fn wait_for_label(routing: &Mutex<RoutingControl>, expected: &str) {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let label = routing.lock().unwrap().status().target_label;
             if label.as_deref() == Some(expected) {

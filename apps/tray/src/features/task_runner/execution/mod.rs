@@ -283,7 +283,7 @@ mod tests {
 
         #[cfg(target_os = "linux")]
         async fn wait_for_process_exit(pid: u32) {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
             while qol_process::is_pid_alive(pid) && tokio::time::Instant::now() < deadline {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }

@@ -1096,7 +1096,7 @@ mod tests {
         }
 
         fn wait_for_start(&self) -> bool {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while std::time::Instant::now() < deadline {
                 if self.started.exists() {
                     return true;

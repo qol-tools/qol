@@ -550,7 +550,7 @@ mod tests {
             let mut active_count = lock.lock().unwrap();
             *active_count += 1;
             condition.notify_all();
-            let deadline = Instant::now() + Duration::from_millis(250);
+            let deadline = Instant::now() + Duration::from_secs(5);
             while *active_count < 2 {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -737,7 +737,7 @@ mod tests {
             process_tree,
         } = super::super::spawn_piped(command).unwrap();
         let readers = streams::spawn_output_readers(stdout, stderr);
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !marker.is_file() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }

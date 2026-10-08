@@ -47,6 +47,12 @@ impl Connection {
         Ok(connection)
     }
 
+    #[cfg(test)]
+    pub(super) fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
     pub(super) fn version(&self) -> u16 {
         self.version
     }

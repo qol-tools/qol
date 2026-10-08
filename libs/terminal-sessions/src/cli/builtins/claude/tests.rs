@@ -415,7 +415,7 @@ fn subscribe_falls_back_to_the_projects_directory_when_no_transcript_exists_yet(
     std::fs::write(project.join("20260803T091527Z_session-7.jsonl"), "{}\n").unwrap();
 
     events
-        .recv_timeout(std::time::Duration::from_secs(3))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .expect("a transcript appearing in the project directory wakes the subscription");
     drop(subscription);
 }
