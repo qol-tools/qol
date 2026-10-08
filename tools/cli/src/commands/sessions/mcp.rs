@@ -3296,7 +3296,7 @@ mod tests {
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
         let mut arguments = spawn_arguments("pi", "mcp-lane-pick", None, &cwd);
         arguments["model"] = json!("flash-x");
-        arguments["pick"] = json!(["+high"]);
+        arguments["pick"] = json!(["-high"]);
         arguments["task"] = json!("implement the fix");
         let response = tool_call(&server, "session_spawn", arguments);
         assert_eq!(response["result"]["isError"], false);

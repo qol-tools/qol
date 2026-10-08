@@ -6,6 +6,13 @@ use super::agent_policy::{AgentDispatch, DispatchPolicy};
 use super::launch_flags::{takes_effort, EFFORT_LEVELS};
 use super::spawn::{SURFACE_OS_WINDOW, SURFACE_TAB};
 
+pub(super) fn is_pick(argument: &str) -> bool {
+    argument.len() > 1
+        && argument.starts_with('-')
+        && !argument.starts_with("--")
+        && argument != "-h"
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaunchKind {
     Fork,
@@ -115,7 +122,7 @@ fn classify(
 ) -> Result<LaunchChoice> {
     let mut choice = LaunchChoice::default();
     for raw in picks {
-        let token = raw.strip_prefix('+').unwrap_or(raw);
+        let token = raw.trim_start_matches('-');
         let value = aliases.get(token).map(String::as_str).unwrap_or(token);
         let (slot, name) = if value == SURFACE_TAB || value == SURFACE_OS_WINDOW {
             (&mut choice.surface, "surface")
@@ -215,22 +222,22 @@ mod tests {
             ),
             (
                 LaunchKind::Fork,
-                &["+win"],
+                &["-win"],
                 choice("claude", Some("opus"), Some("high"), Some("os-window")),
             ),
             (
                 LaunchKind::Fork,
-                &["+low", "+sonnet"],
+                &["-low", "-sonnet"],
                 choice("claude", Some("sonnet"), Some("low"), Some("tab")),
             ),
             (
                 LaunchKind::Fork,
-                &["+pi"],
+                &["-pi"],
                 choice("pi", Some("flash"), Some("high"), Some("tab")),
             ),
             (
                 LaunchKind::Fork,
-                &["+pi", "+max"],
+                &["-pi", "-max"],
                 choice("pi", Some("flash"), Some("max"), Some("tab")),
             ),
             (
@@ -240,7 +247,7 @@ mod tests {
             ),
             (
                 LaunchKind::Spawn,
-                &["+cc"],
+                &["-cc"],
                 choice("claude", Some("opus"), Some("medium"), None),
             ),
             (
@@ -271,7 +278,7 @@ mod tests {
         let resolved = resolve(
             LaunchKind::Fork,
             explicit,
-            &picks(&["+low"]),
+            &picks(&["-low"]),
             &defaults(),
             &dispatch(),
         )
@@ -289,7 +296,7 @@ mod tests {
         let resolved = resolve(
             LaunchKind::Fork,
             LaunchChoice::default(),
-            &picks(&["+codex"]),
+            &picks(&["-codex"]),
             &defaults(),
             &dispatch,
         )
@@ -300,11 +307,11 @@ mod tests {
     #[test]
     fn unknown_and_doubled_picks_are_refused_by_name() {
         let cases: &[(&[&str], &str)] = &[
-            (&["+nope"], "unknown pick `+nope`"),
-            (&["+cc", "+pi"], "picks a second harness"),
-            (&["+low", "+high"], "picks a second effort"),
-            (&["+win", "+tab"], "picks a second surface"),
-            (&["+opus", "+sonnet"], "picks a second model"),
+            (&["-nope"], "unknown pick `-nope`"),
+            (&["-cc", "-pi"], "picks a second harness"),
+            (&["-low", "-high"], "picks a second effort"),
+            (&["-win", "-tab"], "picks a second surface"),
+            (&["-opus", "-sonnet"], "picks a second model"),
         ];
         for (tokens, expected) in cases {
             let error = resolve(
