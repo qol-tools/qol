@@ -200,6 +200,7 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         FixAction::PruneCargoTargetDir { targets } => {
             let failures: Vec<String> = targets
                 .iter()
+                .filter(|target| target.exists())
                 .filter_map(|target| {
                     qol_dev_build::target_cache::prune_cargo_target_dir(target).err()
                 })
