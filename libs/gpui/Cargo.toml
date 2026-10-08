@@ -23,6 +23,7 @@ qol-conventions.workspace = true
 qol-hotkeys.workspace = true
 qol-runtime.workspace = true
 qol-theme.workspace = true
+qol-window-state.workspace = true
 qol-windowing.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true

@@ -13,7 +13,7 @@ fn state(key: &str, open: bool) -> WindowState {
     WindowState {
         version: SCHEMA_VERSION,
         key: key.into(),
-        monitor: window_state::MonitorRef {
+        monitor: qol_window_state::MonitorRef {
             id: "id".into(),
             connector: "DP-1".into(),
             bounds: bounds(0.0, 0.0, 1920.0, 1080.0),

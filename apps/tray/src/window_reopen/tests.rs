@@ -1,6 +1,6 @@
 use super::*;
-use qol_windowing::window_state::{MonitorRef, WindowState, SCHEMA_VERSION};
-use qol_windowing::{MonitorBounds, WindowRect};
+use qol_window_state::{MonitorBounds, WindowRect};
+use qol_window_state::{MonitorRef, WindowState, SCHEMA_VERSION};
 
 fn state(key: &str, open: bool, owner_pid: u32, reopen: Option<Reopen>) -> WindowState {
     WindowState {

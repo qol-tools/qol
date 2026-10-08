@@ -2,7 +2,7 @@ mod store;
 
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::{MonitorBounds, WindowRect};
+pub use qol_windowing::{MonitorBounds, WindowRect};
 
 pub use store::WindowStateStore;
 

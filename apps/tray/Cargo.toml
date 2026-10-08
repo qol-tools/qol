@@ -50,7 +50,7 @@ qol-headless.workspace = true
 qol-platform.workspace = true
 qol-log.workspace = true
 qol-process.workspace = true
-qol-windowing.workspace = true
+qol-window-state.workspace = true
 qol-workspace.workspace = true
 qol-work-queue.workspace = true
 # Core async runtime

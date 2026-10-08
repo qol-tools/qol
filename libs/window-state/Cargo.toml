@@ -1,0 +1,20 @@
+[package]
+name = "qol-window-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Remembered on-screen state for persistent qol windows"
+
+[dependencies]
+qol-config.workspace = true
+qol-fs.workspace = true
+qol-windowing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+workspace-hack.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

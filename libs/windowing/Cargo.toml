@@ -6,10 +6,7 @@ license.workspace = true
 description = "Shared window identity, geometry, and window operation contract for qol-tools"
 
 [dependencies]
-qol-config.workspace = true
-qol-fs.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 sha2.workspace = true
 workspace-hack.workspace = true
 
@@ -23,6 +20,7 @@ objc2-app-kit = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile = "3"
 
 [lints]

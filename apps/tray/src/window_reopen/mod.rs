@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use qol_windowing::window_state::{Reopen, WindowStateStore};
+use qol_window_state::{Reopen, WindowStateStore};
 use serde::{Deserialize, Serialize};
 
 use crate::plugins::action_executor::{self, ActionExecutionError};

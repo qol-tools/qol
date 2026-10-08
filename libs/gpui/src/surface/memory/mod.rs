@@ -6,9 +6,7 @@ use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
 use gpui::{point, px, size, App, AppContext, AsyncApp, Bounds, Pixels, Size};
-use qol_windowing::window_state::{
-    self, Monitor, Reopen, WindowState, WindowStateStore, SCHEMA_VERSION,
-};
+use qol_window_state::{Monitor, Reopen, WindowState, WindowStateStore, SCHEMA_VERSION};
 use qol_windowing::{DisplayEnumerator, MonitorBounds, WindowRect};
 
 use crate::monitor::MonitorTracker;
@@ -67,7 +65,7 @@ impl Remembered {
         placement: MonitorPlacement,
         cx: &mut App,
     ) -> Option<Rc<Self>> {
-        if !window_state::is_valid_key(&memory.key) {
+        if !qol_window_state::is_valid_key(&memory.key) {
             log::warn!(
                 "[window-state] ignoring invalid window key {:?}",
                 memory.key
@@ -102,7 +100,7 @@ impl Remembered {
             saved.bounds_on_monitor.height = content.height.to_f64();
         }
         let monitors = current_monitors(cx);
-        let window = window_state::resolve(&saved, &monitors)?;
+        let window = qol_window_state::resolve(&saved, &monitors)?;
         let monitor = monitors
             .iter()
             .find(|monitor| contains(monitor.bounds, window))
@@ -162,7 +160,7 @@ impl Remembered {
 
     fn capture(&self, bounds: Bounds<Pixels>, scale: f32, open: bool, cx: &App) -> bool {
         let Some((monitor, bounds_on_monitor)) =
-            window_state::locate(rect_of_bounds(bounds), &current_monitors(cx))
+            qol_window_state::locate(rect_of_bounds(bounds), &current_monitors(cx))
         else {
             return false;
         };

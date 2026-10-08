@@ -6673,6 +6673,7 @@ dependencies = [
  "qol-hotkeys",
  "qol-runtime",
  "qol-theme",
+ "qol-window-state",
  "qol-windowing",
  "qrcode",
  "raw-window-handle",
@@ -7377,7 +7378,7 @@ dependencies = [
  "qol-runtime",
  "qol-theme",
  "qol-watch",
- "qol-windowing",
+ "qol-window-state",
  "qol-work-queue",
  "qol-workspace",
  "reqwest",
@@ -7472,13 +7473,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-window-state"
+version = "1.0.0"
+dependencies = [
+ "qol-config",
+ "qol-fs",
+ "qol-windowing",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-windowing"
 version = "1.0.0"
 dependencies = [
  "objc2",
  "objc2-app-kit",
- "qol-config",
- "qol-fs",
  "serde",
  "serde_json",
  "sha2",
