@@ -404,7 +404,7 @@ fn validate_sha256(value: &str, context: &str) -> Result<()> {
 }
 
 fn verify_managed_registration(
-    environment_id: &str,
+    definition: &EnvironmentDefinition,
     expected_revision: &str,
     registration: &VerifiedImageRegistration,
     image_root: Option<&Path>,
@@ -468,7 +468,24 @@ fn verify_managed_registration(
     if !report_metadata.permissions().readonly() {
         bail!("verification report must be read-only");
     }
-    verify_verification_report(environment_id, registration, &canonical_report)
+    verify_verification_report(definition, registration, &canonical_report)
+}
+
+fn required_import_probes(definition: &EnvironmentDefinition) -> Result<&'static [&'static str]> {
+    match definition
+        .capabilities
+        .get("flow_adapter")
+        .map(String::as_str)
+    {
+        Some("mint-cinnamon") => Ok(&[
+            "linux-mint-release",
+            "linux-mint-edition",
+            "cinnamon-version",
+        ]),
+        Some("windows-desktop") => Ok(&["windows-build", "windows-edition"]),
+        Some(adapter) => bail!("flow adapter `{adapter}` has no verified image-import probe set"),
+        None => bail!("environment `{}` declares no flow_adapter", definition.id),
+    }
 }
 
 fn verify_regular_nonsymlink(path: &Path, context: &str) -> Result<()> {
@@ -484,7 +501,7 @@ fn verify_regular_nonsymlink(path: &Path, context: &str) -> Result<()> {
 }
 
 fn verify_verification_report(
-    environment_id: &str,
+    definition: &EnvironmentDefinition,
     registration: &VerifiedImageRegistration,
     report_path: &Path,
 ) -> Result<()> {
@@ -505,7 +522,7 @@ fn verify_verification_report(
     }
     let report = checked.document();
     require_json_string(report, &["status"], "pass")?;
-    require_json_string(report, &["environment", "id"], environment_id)?;
+    require_json_string(report, &["environment", "id"], &definition.id)?;
     require_json_string(report, &["launch", "display"], "none")?;
     require_json_string(report, &["launch", "network"], "none")?;
     require_json_string(
@@ -548,11 +565,7 @@ fn verify_verification_report(
         .filter(|probe| probe.get("verdict").and_then(Value::as_str) == Some("pass"))
         .filter_map(|probe| probe.get("id").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    for required in [
-        "linux-mint-release",
-        "linux-mint-edition",
-        "cinnamon-version",
-    ] {
+    for required in required_import_probes(definition)? {
         if !passing.contains(required) {
             bail!("verification report lacks passing probe `{required}`");
         }
@@ -845,7 +858,7 @@ where
             }
         };
         if let Err(error) = verify_managed_registration(
-            &definition.id,
+            &definition,
             expected_revision,
             verification,
             config.image_root.as_deref(),
@@ -945,7 +958,9 @@ shared_folder = "virtio-9p"
             .replace("linux/mint-base.qcow2", base)
             .replace(
                 "\"virtual-input\" = \"qmp\"",
-                &format!("\"virtual-input\" = \"qmp\"\nimage_revision = \"{revision}\""),
+                &format!(
+                    "\"virtual-input\" = \"qmp\"\nflow_adapter = \"mint-cinnamon\"\nimage_revision = \"{revision}\""
+                ),
             );
         parse_definition(&content, Path::new("environment.toml")).unwrap()
     }
@@ -1415,6 +1430,30 @@ run_root = "/var/tmp/qol-runs"
         let resolved = resolve_definitions(vec![definition], &config, |_| Ok(())).unwrap();
         assert_eq!(resolved[0].state, ResolutionState::Missing);
         assert!(resolved[0].messages[0].contains("cinnamon-version"));
+    }
+
+    #[test]
+    fn managed_verification_requires_the_adapter_probe_set() {
+        let root = tempdir().unwrap();
+        let image_root = root.path().join("images");
+        fs::create_dir_all(&image_root).unwrap();
+        let registration = verified_fixture(&image_root, "windows/desktop", "win11-qol-1");
+        let config = LocalConfig {
+            image_root: Some(image_root),
+            images: BTreeMap::from([(
+                "windows/desktop".to_string(),
+                LocalImage::Verified(registration),
+            )]),
+            ..LocalConfig::default()
+        };
+        let mut definition =
+            revision_definition("windows/desktop", "windows/desktop.qcow2", "win11-qol-1");
+        definition
+            .capabilities
+            .insert("flow_adapter".to_string(), "windows-desktop".to_string());
+        let resolved = resolve_definitions(vec![definition], &config, |_| Ok(())).unwrap();
+        assert_eq!(resolved[0].state, ResolutionState::Missing);
+        assert!(resolved[0].messages[0].contains("windows-build"));
     }
 
     #[test]

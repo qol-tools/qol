@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use qol_dev_guest::{DEFAULT_DEVICE_PATH, DEFAULT_IDENTITY_PATH, DEFAULT_RUN_ID_PATH};
 use qol_headless::{Command, DoctorCheck, HeadlessApp, PlainTextOutput};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -10,16 +9,12 @@ const BINARY_NAME: &str = "qol-guest-runner";
 pub(crate) struct RunOptions {
     pub(crate) device_path: PathBuf,
     pub(crate) identity_path: PathBuf,
-    pub(crate) run_id_path: PathBuf,
+    pub(crate) run_id_path: Option<PathBuf>,
 }
 
 impl Default for RunOptions {
     fn default() -> Self {
-        Self {
-            device_path: PathBuf::from(DEFAULT_DEVICE_PATH),
-            identity_path: PathBuf::from(DEFAULT_IDENTITY_PATH),
-            run_id_path: PathBuf::from(DEFAULT_RUN_ID_PATH),
-        }
+        crate::platform::default_options()
     }
 }
 
@@ -57,7 +52,7 @@ impl RunOptions {
             options.identity_path = path;
         }
         if let Some(path) = run_id_path {
-            options.run_id_path = path;
+            options.run_id_path = Some(path);
         }
         Ok(options)
     }
@@ -124,7 +119,7 @@ mod tests {
             RunOptions {
                 device_path: PathBuf::from("/tmp/device"),
                 identity_path: PathBuf::from("/tmp/identity"),
-                run_id_path: PathBuf::from(DEFAULT_RUN_ID_PATH),
+                run_id_path: RunOptions::default().run_id_path,
             }
         );
         assert!(RunOptions::parse(&[

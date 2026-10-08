@@ -1,0 +1,31 @@
+id = "windows/desktop"
+name = "Windows 11 Desktop"
+family = "windows"
+backend = "qemu"
+
+[image]
+kind = "qcow2"
+base = "windows-desktop.qcow2"
+recommended_size_gb = 40
+arch = "x86_64"
+firmware = "uefi"
+
+[boot]
+memory_mb = 4096
+cpus = 2
+display = "headless"
+
+[mounts]
+workspace = false
+
+[capabilities]
+acceleration = "hardware"
+kernel = "full"
+reboot = "true"
+desktop = "windows"
+display_protocol = "win32"
+virtual_input = "qmp"
+flow_adapter = "windows-desktop"
+image_revision = "win11-25h2-26200-pro-qol-1"
+windows_build = "26200"
+windows_edition = "Professional"

@@ -2228,6 +2228,11 @@ fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
         format!("qol-emu-{run_id}"),
         "-fw_cfg".to_string(),
         format!("name=opt/qol/run-id,string={run_id}"),
+        "-smbios".to_string(),
+        format!(
+            "type=11,value={}{run_id}",
+            qol_dev_guest::SMBIOS_RUN_ID_PREFIX
+        ),
         "-machine".to_string(),
         environment.arch.machine_type().to_string(),
         "-accel".to_string(),
@@ -2235,6 +2240,9 @@ fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
     ];
     args.extend(launch.qemu_args(display));
     match environment.arch {
+        GuestArch::X86_64 if matches!(acceleration, "kvm" | "hvf") => {
+            args.extend(["-cpu".to_string(), "host".to_string()]);
+        }
         GuestArch::X86_64 => {}
         GuestArch::Aarch64 => {
             let cpu = if acceleration == "tcg" { "max" } else { "host" };
@@ -3151,6 +3159,8 @@ mod tests {
         let expected = [
             "-accel kvm",
             "-fw_cfg name=opt/qol/run-id,string=foo-run",
+            "-smbios type=11,value=qol-run-id=foo-run",
+            "-cpu host",
             "-display gtk,zoom-to-fit=on",
             "-qmp tcp:127.0.0.1:4444,server,nowait",
             "-serial tcp:127.0.0.1:5555,server,nowait",
@@ -3174,7 +3184,6 @@ mod tests {
             joined.contains("-name qol-emu-foo-run"),
             "name in: {joined}"
         );
-        assert!(!joined.contains("-cpu"), "unexpected -cpu in: {joined}");
         assert!(
             !joined.contains("virtio-gpu-pci"),
             "x86 guests should keep the default video path: {joined}"

@@ -21,9 +21,14 @@ use macos::Platform;
 use windows::Platform;
 
 trait GuestRunnerPlatform {
+    fn default_options(&self) -> RunOptions;
     fn run(&self, options: RunOptions) -> Result<()>;
     fn platform_check(&self) -> DoctorCheckResult;
     fn runtime_paths_check(&self) -> DoctorCheckResult;
+}
+
+pub(crate) fn default_options() -> RunOptions {
+    Platform.default_options()
 }
 
 pub(crate) fn run(options: RunOptions) -> Result<()> {
