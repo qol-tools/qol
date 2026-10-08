@@ -4,7 +4,8 @@ use super::cargo_target::workspace_root;
 use super::doctor_sizes::{self, StoredSize};
 use super::ttl_cell::TtlCell;
 use qol_dev_build::target_cache::{
-    dir_size, format_bytes, prunable_target_bytes, INCREMENTAL_CACHE_CEILING, SWEPT_CACHE_CEILING,
+    cargo_cache_dirs, dir_size, format_bytes, prunable_target_bytes, INCREMENTAL_CACHE_CEILING,
+    SWEPT_CACHE_CEILING,
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,7 +15,7 @@ const WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
 pub(super) struct CargoTargetTotalCheck {
-    sizes: TtlCell<(TargetSize, u64)>,
+    sizes: TtlCell<(TargetSize, u64, Vec<PathBuf>)>,
 }
 
 impl CargoTargetTotalCheck {
@@ -36,10 +37,12 @@ impl DoctorCheck for CargoTargetTotalCheck {
         let Some(root) = workspace_root() else {
             return CheckReport::ok("workspace root not found; skipping cargo target directory");
         };
-        let (size, prunable) = self.sizes.get_or_compute(CACHE_TTL, || {
-            compute_total(&root, dir_size, prunable_target_bytes)
+        let (size, prunable, targets) = self.sizes.get_or_compute(CACHE_TTL, || {
+            let targets = cargo_cache_dirs(&root);
+            let (size, prunable) = compute_total(&root, &targets, dir_size, prunable_target_bytes);
+            (size, prunable, targets)
         });
-        report_for(size, prunable, root.join("target"))
+        report_for(size, prunable, targets)
     }
 }
 
@@ -72,10 +75,10 @@ impl From<&TargetSize> for StoredSize {
 
 fn compute_total(
     root: &Path,
-    walk_total: impl FnOnce(&Path) -> Result<Option<u64>, String>,
-    walk_prunable: impl FnOnce(&Path) -> u64,
+    targets: &[PathBuf],
+    mut walk_total: impl FnMut(&Path) -> Result<Option<u64>, String>,
+    mut walk_prunable: impl FnMut(&Path) -> u64,
 ) -> (TargetSize, u64) {
-    let target = root.join("target");
     let now = doctor_sizes::now_ms();
     let path = doctor_sizes::path_for(root);
     if let Some(stored) = doctor_sizes::load(&path) {
@@ -85,12 +88,18 @@ fn compute_total(
             }
         }
     }
-    let size = match walk_total(&target) {
-        Ok(Some(bytes)) => TargetSize::Bytes(bytes),
-        Ok(None) => TargetSize::Missing,
-        Err(reason) => TargetSize::Unreadable(reason),
-    };
-    let prunable = walk_prunable(&target);
+    let mut size = TargetSize::Missing;
+    for target in targets {
+        size = match (size, walk_total(target)) {
+            (TargetSize::Unreadable(reason), _) | (_, Err(reason)) => {
+                TargetSize::Unreadable(reason)
+            }
+            (size, Ok(None)) => size,
+            (TargetSize::Bytes(total), Ok(Some(bytes))) => TargetSize::Bytes(total + bytes),
+            (TargetSize::Missing, Ok(Some(bytes))) => TargetSize::Bytes(bytes),
+        };
+    }
+    let prunable = targets.iter().map(|target| walk_prunable(target)).sum();
     let mut sizes = doctor_sizes::load(&path).unwrap_or_default();
     sizes.scanned_at_ms = now;
     sizes.total = Some((&size).into());
@@ -99,7 +108,7 @@ fn compute_total(
     (size, prunable)
 }
 
-fn report_for(size: TargetSize, prunable: u64, path: PathBuf) -> CheckReport {
+fn report_for(size: TargetSize, prunable: u64, targets: Vec<PathBuf>) -> CheckReport {
     match size {
         TargetSize::Missing => CheckReport::ok("cargo target directory has not been created yet"),
         TargetSize::Bytes(bytes) if prunable <= WARN_BYTES => CheckReport::ok(format!(
@@ -116,7 +125,7 @@ fn report_for(size: TargetSize, prunable: u64, path: PathBuf) -> CheckReport {
                 format_bytes(INCREMENTAL_CACHE_CEILING)
             ),
             ID,
-            vec![FixAction::PruneCargoTargetDir { target: path }],
+            vec![FixAction::PruneCargoTargetDir { targets }],
         ),
         TargetSize::Unreadable(reason) => CheckReport::ok(format!(
             "cargo target directory unreadable, skipping: {reason}"
@@ -130,7 +139,7 @@ mod tests {
 
     #[test]
     fn missing_target_is_ok_without_fix() {
-        let report = report_for(TargetSize::Missing, 0, PathBuf::from("/repo/target"));
+        let report = report_for(TargetSize::Missing, 0, vec![PathBuf::from("/repo/target")]);
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
     }
@@ -140,7 +149,7 @@ mod tests {
         let report = report_for(
             TargetSize::Bytes(20 * WARN_BYTES),
             WARN_BYTES,
-            PathBuf::from("/repo/target"),
+            vec![PathBuf::from("/repo/target")],
         );
         assert!(report.issues.is_empty());
         assert!(report.fixes.is_empty());
@@ -149,16 +158,19 @@ mod tests {
 
     #[test]
     fn stale_weight_above_limit_warns_with_prune_fix() {
-        let path = PathBuf::from("/repo/target");
+        let targets = vec![
+            PathBuf::from("/repo/target"),
+            PathBuf::from("/git/.cargo-build"),
+        ];
         let report = report_for(
             TargetSize::Bytes(20 * WARN_BYTES),
             WARN_BYTES + 1,
-            path.clone(),
+            targets.clone(),
         );
         assert_eq!(report.issues.len(), 1);
         assert_eq!(
             report.fixes,
-            vec![FixAction::PruneCargoTargetDir { target: path }],
+            vec![FixAction::PruneCargoTargetDir { targets }],
             "the prune must never be cargo clean: live dev caches stay protected"
         );
         assert!(report
@@ -190,7 +202,8 @@ mod tests {
             2
         };
 
-        let (size, prunable) = compute_total(root, total_walk, prunable_walk);
+        let (size, prunable) =
+            compute_total(root, &[root.join("target")], total_walk, prunable_walk);
 
         assert_eq!(size, TargetSize::Bytes(4321));
         assert_eq!(prunable, 99);
@@ -220,9 +233,8 @@ mod tests {
         );
         let mut total_walks = 0;
         let mut prunable_walks = 0;
-        let total_walk = |path: &Path| {
+        let total_walk = |_: &Path| {
             total_walks += 1;
-            assert!(path.ends_with("target"));
             Ok(Some(7))
         };
         let prunable_walk = |_: &Path| {
@@ -230,15 +242,24 @@ mod tests {
             8
         };
 
-        let (size, prunable) = compute_total(root, total_walk, prunable_walk);
+        let (size, prunable) = compute_total(
+            root,
+            &[root.join("target"), root.join(".cargo-build")],
+            total_walk,
+            prunable_walk,
+        );
 
-        assert_eq!(size, TargetSize::Bytes(7));
-        assert_eq!(prunable, 8);
-        assert_eq!(total_walks, 1, "a stale cached file must walk again");
-        assert_eq!(prunable_walks, 1);
+        assert_eq!(
+            size,
+            TargetSize::Bytes(14),
+            "the shared build dir counts with target"
+        );
+        assert_eq!(prunable, 16);
+        assert_eq!(total_walks, 2, "a stale cached file must walk again");
+        assert_eq!(prunable_walks, 2);
         let stored = doctor_sizes::load(&doctor_sizes::path_for(root)).expect("stored");
-        assert_eq!(stored.total, Some(StoredSize::Bytes(7)));
-        assert_eq!(stored.prunable, 8);
+        assert_eq!(stored.total, Some(StoredSize::Bytes(14)));
+        assert_eq!(stored.prunable, 16);
         assert!(stored.fresh(doctor_sizes::now_ms(), CACHE_TTL));
     }
 }

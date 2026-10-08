@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use qol_dev_build::target_cache::{
-    format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir,
+    cargo_cache_dirs, format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir,
     INCREMENTAL_CACHE_CEILING, SWEPT_CACHE_CEILING,
 };
 use ratatui::layout::Rect;
@@ -502,8 +502,10 @@ fn cleanup_disk_usage_in(
         }
     }
     set_progress(progress, "stale caches");
-    let target = running.join("target");
-    if target.exists() {
+    for target in cargo_cache_dirs(running) {
+        if !target.exists() {
+            continue;
+        }
         let prunable = prunable_target_bytes(&target);
         match prune_cargo_target_dir(&target) {
             Ok(()) => freed += prunable,

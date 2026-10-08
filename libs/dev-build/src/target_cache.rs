@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 const PROTECTED_TARGET_ROOTS: [&str; 7] = [
@@ -14,6 +15,7 @@ const PROTECTED_TARGET_ROOTS: [&str; 7] = [
 const REMOVED_DEBUG_DIRS: [&str; 1] = ["examples"];
 const DEBUG_BUILD_LOCK_FILES: [&str; 3] =
     [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"];
+const PROFILE_DIRS: [&str; 2] = ["debug", "release"];
 const SWEPT_DEBUG_DIRS: [&str; 3] = ["deps", "build", ".fingerprint"];
 const INCREMENTAL_DEBUG_DIR: &str = "incremental";
 pub const SWEPT_CACHE_CEILING: u64 = 48 * 1024 * 1024 * 1024;
@@ -163,6 +165,39 @@ pub fn is_protected_target_root(name: &str) -> bool {
     name.starts_with('.') || name == "CACHEDIR.TAG" || PROTECTED_TARGET_ROOTS.contains(&name)
 }
 
+pub fn cargo_cache_dirs(root: &Path) -> Vec<PathBuf> {
+    let target = root.join("target");
+    match cargo_metadata(root).and_then(|metadata| separate_build_dir(&metadata)) {
+        Some(build_dir) => vec![target, build_dir],
+        None => vec![target],
+    }
+}
+
+fn cargo_metadata(root: &Path) -> Option<serde_json::Value> {
+    let output = Command::new("cargo")
+        .args([
+            "metadata",
+            "--no-deps",
+            "--offline",
+            "--format-version",
+            "1",
+        ])
+        .current_dir(root)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn separate_build_dir(metadata: &serde_json::Value) -> Option<PathBuf> {
+    let build_dir = metadata.get("build_directory")?.as_str()?;
+    let target_dir = metadata.get("target_directory")?.as_str()?;
+    (build_dir != target_dir).then(|| PathBuf::from(build_dir))
+}
+
 pub fn prune_cargo_target_dir(target: &Path) -> Result<(), String> {
     prune_with_ceilings(target, SWEPT_CACHE_CEILING, INCREMENTAL_CACHE_CEILING)
 }
@@ -196,6 +231,12 @@ fn hold_debug_build_locks(debug: &Path) -> Result<Vec<fs::File>, String> {
     Ok(held)
 }
 
+fn is_building_in_root(root: &Path) -> bool {
+    PROFILE_DIRS
+        .iter()
+        .any(|profile| hold_debug_build_locks(&root.join(profile)).is_err())
+}
+
 fn prune_with_ceilings(
     target: &Path,
     swept_ceiling: u64,
@@ -211,6 +252,9 @@ fn prune_with_ceilings(
     let mut failures = Vec::new();
     for entry in entries.flatten() {
         if is_protected_target_root(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
+        if is_building_in_root(&entry.path()) {
             continue;
         }
         try_remove_target_path(&entry.path(), &mut failures);
@@ -536,6 +580,55 @@ mod tests {
             "nothing may be removed while the lock is held"
         );
         assert!(debug.join(".cargo-lock").exists());
+    }
+
+    #[test]
+    fn root_sweep_skips_a_root_that_cargo_is_building_in() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let target = root.path();
+        let building = target.join("x86_64-pc-windows-gnu");
+        let release = building.join("release");
+        fs::create_dir_all(&release).expect("release dir");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(release.join(".cargo-build-lock"))
+            .expect("lock file");
+        lock.lock().expect("acquire lock");
+        let idle = target.join("aarch64-apple-darwin/debug");
+        fs::create_dir_all(&idle).expect("idle dir");
+        fs::write(idle.join(".cargo-build-lock"), b"").expect("idle lock");
+
+        prune_with_ceilings(target, u64::MAX, u64::MAX).expect("prune target");
+
+        assert!(
+            building.exists(),
+            "a cross-target root under a held build lock must survive"
+        );
+        assert!(
+            !target.join("aarch64-apple-darwin").exists(),
+            "an idle cross-target root is swept"
+        );
+    }
+
+    #[test]
+    fn build_dir_counts_only_when_cargo_separates_it_from_target() {
+        let cases = [
+            (
+                serde_json::json!({"target_directory": "/r/target", "build_directory": "/g/.cargo-build"}),
+                Some(PathBuf::from("/g/.cargo-build")),
+            ),
+            (
+                serde_json::json!({"target_directory": "/r/target", "build_directory": "/r/target"}),
+                None,
+            ),
+            (serde_json::json!({"target_directory": "/r/target"}), None),
+        ];
+        for (metadata, expected) in cases {
+            assert_eq!(separate_build_dir(&metadata), expected, "{metadata}");
+        }
     }
 
     #[cfg(unix)]

@@ -82,7 +82,7 @@ pub(super) enum FixAction {
     },
     #[cfg(feature = "dev")]
     PruneCargoTargetDir {
-        target: PathBuf,
+        targets: Vec<PathBuf>,
     },
     #[cfg(feature = "dev")]
     HealDevLinkedPlugins {
@@ -197,9 +197,18 @@ pub(super) fn apply_fix(action: &FixAction) -> Result<()> {
         #[cfg(feature = "dev")]
         FixAction::FixClippyLints { workspace } => fix_clippy_lints(workspace),
         #[cfg(feature = "dev")]
-        FixAction::PruneCargoTargetDir { target } => {
-            qol_dev_build::target_cache::prune_cargo_target_dir(target)
-                .map_err(|error| anyhow!(error))
+        FixAction::PruneCargoTargetDir { targets } => {
+            let failures: Vec<String> = targets
+                .iter()
+                .filter_map(|target| {
+                    qol_dev_build::target_cache::prune_cargo_target_dir(target).err()
+                })
+                .collect();
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(anyhow!(failures.join("; ")))
+            }
         }
         #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => heal_dev_linked_plugins(rebuild_ids),

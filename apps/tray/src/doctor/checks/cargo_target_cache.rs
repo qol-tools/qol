@@ -2,7 +2,9 @@ use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck
 use super::cargo_target::workspace_root;
 use super::doctor_sizes::{self, StoredSize};
 use super::ttl_cell::TtlCell;
-use qol_dev_build::target_cache::{dir_size, format_bytes, INCREMENTAL_CACHE_CEILING};
+use qol_dev_build::target_cache::{
+    cargo_cache_dirs, dir_size, format_bytes, INCREMENTAL_CACHE_CEILING,
+};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -94,7 +96,10 @@ fn compute_cache(
 }
 
 fn cargo_incremental_dir(root: &Path) -> PathBuf {
-    root.join("target").join("debug").join("incremental")
+    let build_dir = cargo_cache_dirs(root)
+        .pop()
+        .unwrap_or_else(|| root.join("target"));
+    build_dir.join("debug").join("incremental")
 }
 
 fn report_for(size: CacheSize) -> CheckReport {
