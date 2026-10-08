@@ -10,6 +10,8 @@ use qol_terminal_sessions::{BackendId, SessionId};
 use crate::daemon::actions::CONFIG;
 use crate::storage::paths::PLUGIN_ID;
 
+const OPEN: &str = "open";
+
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app().run(args)
 }
@@ -53,14 +55,14 @@ where
                 .run_result(move |_| Ok(daemon_run(false))),
         )
         .command(
-            Command::new("open")
+            Command::new(OPEN)
                 .about("Show the retained CLI Sessions panel.")
-                .usage(format!("{PLUGIN_ID} open"))
+                .usage(format!("{PLUGIN_ID} {OPEN}"))
                 .detail("Signals the resident daemon, or starts it with the panel visible.")
                 .output("No stdout on success.")
                 .exit_behavior("Exits non-zero only if fallback daemon startup fails.")
                 .run_result(move |_| {
-                    if open_send("open") {
+                    if open_send(OPEN) {
                         return Ok(CommandResult::success(""));
                     }
                     Ok(open_run(true))
