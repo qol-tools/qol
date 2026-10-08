@@ -165,6 +165,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
     crate::window_reopen::capture_before_restart();
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let error = std::process::Command::new(&current_exe).args(&args).exec();
+    crate::window_reopen::discard_reopen_list();
     anyhow::bail!("exec restart failed: {error}")
 }
 

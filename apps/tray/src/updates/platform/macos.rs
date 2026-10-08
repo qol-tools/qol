@@ -243,7 +243,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
 
     log::info!("Update installed, restarting...");
     crate::window_reopen::capture_before_restart();
-    exec_restart_on_main_thread()?;
+    exec_restart_on_main_thread().inspect_err(|_| crate::window_reopen::discard_reopen_list())?;
     Ok(())
 }
 
