@@ -226,11 +226,15 @@ impl Platform for MacQueries {
     fn focused_window(&self) -> Option<FocusedWindow> {
         #[cfg(debug_assertions)]
         focus_probe::log_focus_change(self.own_pid);
-        if let Some((id, monitor)) = focus_probe::frontmost_window(self.own_pid) {
-            return Some(FocusedWindow {
-                id: Some(id),
-                monitor,
-            });
+        match focus_probe::frontmost_window(self.own_pid) {
+            focus_probe::Frontmost::Window(id, monitor) => {
+                return Some(FocusedWindow {
+                    id: Some(id),
+                    monitor,
+                });
+            }
+            focus_probe::Frontmost::Ignored => return None,
+            focus_probe::Frontmost::Unknown => {}
         }
         Some(FocusedWindow {
             id: None,
@@ -365,13 +369,23 @@ mod focus_probe {
         );
     }
 
-    pub(super) fn frontmost_window(own_pid: i32) -> Option<(u32, MonitorBounds)> {
-        let win = frontmost_normal_window()?;
+    pub(super) enum Frontmost {
+        Window(u32, MonitorBounds),
+        Ignored,
+        Unknown,
+    }
+
+    pub(super) fn frontmost_window(own_pid: i32) -> Frontmost {
+        let Some(win) = frontmost_normal_window() else {
+            return Frontmost::Unknown;
+        };
         if win.pid == own_pid || crate::desktop_state::is_ignored_pid(win.pid as u32) {
-            return None;
+            return Frontmost::Ignored;
         }
-        let rect = win.bounds?;
-        Some((
+        let Some(rect) = win.bounds else {
+            return Frontmost::Unknown;
+        };
+        Frontmost::Window(
             win.wid,
             MonitorBounds {
                 x: rect.origin.x as f32,
@@ -379,7 +393,7 @@ mod focus_probe {
                 width: rect.size.width as f32,
                 height: rect.size.height as f32,
             },
-        ))
+        )
     }
 
     fn frontmost_normal_window() -> Option<FrontWindow> {
