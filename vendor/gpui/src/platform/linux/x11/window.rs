@@ -17,7 +17,7 @@ use x11rb::{
     connection::Connection,
     cookie::{Cookie, VoidCookie},
     errors::ConnectionError,
-    properties::WmSizeHints,
+    properties::{WmSizeHints, WmSizeHintsSpecification},
     protocol::{
         sync,
         xinput::{self, ConnectionExt as _},
@@ -380,6 +380,29 @@ pub(crate) fn handle_connection_error(err: ConnectionError) -> anyhow::Error {
     }
 }
 
+// qol-tools: WM_NORMAL_HINTS carries the requested origin and size as
+// user-specified, so the window manager maps the window there instead of
+// placing it and moving it after the first map. Static gravity puts the
+// client area, not the frame, at that origin, so restoring a saved inner
+// bounds does not drift by the title bar height. Upstream candidate for
+// zed-industries/zed; delete once gpui sets these hints itself.
+fn normal_hints(bounds: Bounds<DevicePixels>, min_size: Option<Size<Pixels>>) -> WmSizeHints {
+    let mut size_hints = WmSizeHints::new();
+    size_hints.position = Some((
+        WmSizeHintsSpecification::UserSpecified,
+        bounds.origin.x.0,
+        bounds.origin.y.0,
+    ));
+    size_hints.size = Some((
+        WmSizeHintsSpecification::UserSpecified,
+        bounds.size.width.0,
+        bounds.size.height.0,
+    ));
+    size_hints.min_size = min_size.map(|size| (size.width.0 as i32, size.height.0 as i32));
+    size_hints.win_gravity = Some(xproto::Gravity::STATIC);
+    size_hints
+}
+
 impl X11WindowState {
     pub fn new(
         handle: AnyWindowHandle,
@@ -455,7 +478,7 @@ impl X11WindowState {
                     visual.depth,
                     x_window,
                     visual_set.root,
-                    bounds.origin.x.0 + 2,
+                    bounds.origin.x.0,
                     bounds.origin.y.0,
                     bounds.size.width.0,
                     bounds.size.height.0
@@ -465,7 +488,7 @@ impl X11WindowState {
                 visual.depth,
                 x_window,
                 visual_set.root,
-                (bounds.origin.x.0 + 2) as i16,
+                bounds.origin.x.0 as i16,
                 bounds.origin.y.0 as i16,
                 bounds.size.width.0 as u16,
                 bounds.size.height.0 as u16,
@@ -490,21 +513,6 @@ impl X11WindowState {
                 ),
             )?;
 
-            if let Some(size) = params.window_min_size {
-                let mut size_hints = WmSizeHints::new();
-                let min_size = (size.width.0 as i32, size.height.0 as i32);
-                size_hints.min_size = Some(min_size);
-                check_reply(
-                    || {
-                        format!(
-                            "X11 change of WM_SIZE_HINTS failed. min_size: {:?}",
-                            min_size
-                        )
-                    },
-                    size_hints.set_normal_hints(xcb, x_window),
-                )?;
-            }
-
             let reply = get_reply(|| "X11 GetGeometry failed.", xcb.get_geometry(x_window))?;
             if reply.x == 0 && reply.y == 0 {
                 bounds.origin.x.0 += 2;
@@ -518,6 +526,16 @@ impl X11WindowState {
                     xcb.configure_window(x_window, &xproto::ConfigureWindowAux::new().x(x).y(y)),
                 )?;
             }
+            let size_hints = normal_hints(bounds, params.window_min_size);
+            check_reply(
+                || {
+                    format!(
+                        "X11 change of WM_SIZE_HINTS failed. hints: {:?}",
+                        size_hints
+                    )
+                },
+                size_hints.set_normal_hints(xcb, x_window),
+            )?;
             if let Some(titlebar) = params.titlebar
                 && let Some(title) = titlebar.title
             {
