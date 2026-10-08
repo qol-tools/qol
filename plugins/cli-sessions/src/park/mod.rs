@@ -159,6 +159,9 @@ fn park(
 
 pub fn unpark(id: &str) -> Result<String> {
     let store = ParkStore::system()?;
+    let Some(_lock) = store.lock_unpark(id)? else {
+        bail!("`{id}` is already being resumed or reopened");
+    };
     let mut record = store.load(id)?;
     if record.state == ParkState::Finished {
         return reopen(&store, record);
@@ -205,29 +208,12 @@ pub fn unpark(id: &str) -> Result<String> {
 }
 
 fn reopen(store: &ParkStore, mut record: ParkRecord) -> Result<String> {
-    if !store.claim_reopen(&record.id)? {
-        bail!("`{}` is already being reopened", record.id);
-    }
-    if !store.claim_resume(&record.id)? {
-        store.release_reopen(&record.id);
-        bail!("`{}` is already being resumed", record.id);
-    }
     let terminals = TerminalSessionService::system();
-    let resumed = resume(&terminals, &CliSessionInterpreter::system(), &record, "");
-    let session = match resumed {
-        Ok(session) => session,
-        Err(error) => {
-            store.release(&record.id);
-            store.release_reopen(&record.id);
-            return Err(error);
-        }
-    };
+    let session = resume(&terminals, &CliSessionInterpreter::system(), &record, "")?;
     record.state = ParkState::Resumed;
     record.resumed_session = Some(session.clone());
     record.detail = Some("reopened from its notification".to_owned());
-    let recorded = store.record(&record);
-    store.release_reopen(&record.id);
-    recorded?;
+    store.record(&record)?;
     Ok(format!("reopened {} in {session}", record.id))
 }
 

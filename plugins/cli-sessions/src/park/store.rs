@@ -1,13 +1,9 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use qol_terminal_sessions::park::ParkRecord;
-
-/// A reopen finishes within the resume ready timeout; an older claim is a crashed owner's.
-const REOPEN_CLAIM_TTL: Duration = Duration::from_secs(120);
 
 pub struct ParkStore {
     dir: PathBuf,
@@ -43,25 +39,27 @@ impl ParkStore {
         self.dir.join(format!("{id}.claim"))
     }
 
-    fn reopen_claim_path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.reopen"))
+    fn unpark_lock_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.unpark"))
     }
 
     pub fn claim_resume(&self, id: &str) -> Result<bool> {
         self.claim(&self.claim_path(id))
     }
 
-    pub fn claim_reopen(&self, id: &str) -> Result<bool> {
-        let path = self.reopen_claim_path(id);
-        let stale = fs::metadata(&path)
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|modified| modified.elapsed().ok())
-            .is_some_and(|age| age > REOPEN_CLAIM_TTL);
-        if stale {
-            let _ = fs::remove_file(&path);
+    pub fn lock_unpark(&self, id: &str) -> Result<Option<File>> {
+        fs::create_dir_all(&self.dir).context("failed to create the parked directory")?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.unpark_lock_path(id))
+            .context("failed to open the unpark lock")?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error).context("failed to lock the park"),
         }
-        self.claim(&path)
     }
 
     fn claim(&self, path: &Path) -> Result<bool> {
@@ -75,10 +73,6 @@ impl ParkStore {
 
     pub fn release(&self, id: &str) {
         let _ = fs::remove_file(self.claim_path(id));
-    }
-
-    pub fn release_reopen(&self, id: &str) {
-        let _ = fs::remove_file(self.reopen_claim_path(id));
     }
 
     pub fn is_claimed(&self, id: &str) -> bool {
@@ -142,5 +136,25 @@ mod tests {
         assert!(store.is_claimed("park-1-2"));
         store.release("park-1-2");
         assert!(!store.is_claimed("park-1-2"));
+    }
+
+    #[test]
+    fn the_unpark_lock_is_exclusive_and_freed_when_its_holder_drops() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = ParkStore::with_dir(root.path().join("parked"));
+        let held = store.lock_unpark("park-1-2").unwrap();
+        assert!(held.is_some());
+        assert!(store.lock_unpark("park-1-2").unwrap().is_none());
+        assert!(store.lock_unpark("park-9-9").unwrap().is_some());
+        drop(held);
+        assert!(store.lock_unpark("park-1-2").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_finished_park_keeps_its_resume_claim_without_blocking_the_unpark_lock() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = ParkStore::with_dir(root.path().join("parked"));
+        assert!(store.claim_resume("park-1-2").unwrap());
+        assert!(store.lock_unpark("park-1-2").unwrap().is_some());
     }
 }
