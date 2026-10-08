@@ -39,6 +39,7 @@ const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 extern "C" {
     static kCGWindowOwnerPID: CFStringRef;
     static kCGWindowNumber: CFStringRef;
+    static kCGWindowLayer: CFStringRef;
     fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CFArrayRef;
 }
 
@@ -269,7 +270,10 @@ fn cf_int_value(dict: CFDictionaryRef, key: &CFStringRef) -> Option<i32> {
 }
 
 fn force_app_frontmost() {
-    let pid = std::process::id() as i32;
+    set_app_frontmost(std::process::id() as i32);
+}
+
+fn set_app_frontmost(pid: i32) {
     unsafe {
         let app = AXUIElementCreateApplication(pid);
         if app.is_null() {
@@ -289,6 +293,42 @@ fn force_app_frontmost() {
         };
         CFRelease(app);
         qol_runtime::probe!("AX_FRONT", "pid={pid} result={result}");
+    }
+}
+
+fn return_focus_after_hiding_key(mtm: MainThreadMarker, held_key: bool) {
+    let app = NSApplication::sharedApplication(mtm);
+    let shown_key = app
+        .keyWindow()
+        .is_some_and(|key| key.isVisible() && key.alphaValue() > 0.0);
+    if !held_key || !app.isActive() || shown_key {
+        return;
+    }
+    let target = frontmost_foreign_pid();
+    qol_runtime::probe!("FOCUS_RETURN", "phase=returned target={target:?}");
+    if let Some(pid) = target {
+        set_app_frontmost(pid);
+    }
+}
+
+fn frontmost_foreign_pid() -> Option<i32> {
+    let own = std::process::id() as i32;
+    unsafe {
+        let list = CGWindowListCopyWindowInfo(
+            K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+            0,
+        );
+        if list.is_null() {
+            return None;
+        }
+        let target = (0..CFArrayGetCount(list))
+            .map(|index| CFArrayGetValueAtIndex(list, index))
+            .filter(|dict| !dict.is_null())
+            .filter(|&dict| cf_int_value(dict, &kCGWindowLayer) == Some(0))
+            .filter_map(|dict| cf_int_value(dict, &kCGWindowOwnerPID))
+            .find(|&pid| pid > 0 && pid != own);
+        CFRelease(list);
+        target
     }
 }
 
@@ -609,14 +649,19 @@ pub fn hide_window_by_title(title: &str) -> bool {
 pub fn capture_focus_return() {}
 
 pub fn hide_invisible(title: &str) -> bool {
-    let Some(window) = resolve_window(title) else {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let Some(window) = find_window_by_title(mtm, title) else {
         return false;
     };
     forget_window_number(title);
+    let held_key = window.isKeyWindow();
     window.setLevel(NSPopUpMenuWindowLevel);
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
     window.orderOut(None);
+    return_focus_after_hiding_key(mtm, held_key);
     qol_runtime::probe!(
         "HIDE_WIN",
         "title={title} path=ordered_out reason={}",
