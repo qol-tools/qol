@@ -8,6 +8,7 @@ on:
   workflow_run:
     workflows: [tests]
     types: [completed]
+  merge_group:
 
 permissions:
   contents: read
@@ -160,6 +161,13 @@ jobs:
           node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT"
           --title "$PR_TITLE" --body "$PR_BODY" --since "$SINCE" --previous "$OUT/previous.md"
 
+      - name: Read the verdict
+        id: verdict
+        if: github.event_name == 'pull_request'
+        env:
+          OUT: ${{ steps.node.outputs.out }}
+        run: echo "verdict=$(jq -r .status "$OUT/review/report.json")" >> "$GITHUB_OUTPUT"
+
       - name: Fix
         id: fix
         if: github.event_name == 'pull_request'
@@ -197,6 +205,7 @@ jobs:
 
     outputs:
       seed-key: ${{ steps.seed.outputs.key }}
+      verdict: ${{ steps.verdict.outputs.verdict }}
       fix: ${{ steps.queue-fix.outcome == 'skipped' && steps.fix.outcome || steps.queue-fix.outcome }}
       pr: ${{ steps.queue.outputs.pr }}
       head-ref: ${{ steps.queue.outputs.head-ref }}
@@ -318,3 +327,28 @@ jobs:
               -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }' > /dev/null || true
           done
           exit "$status"
+
+  # The merge queue ruleset requires this check, so auto-merge queues a pull
+  # request only once its head has a pass verdict. Commits after queueing are not
+  # merged, so the merge group run passes. Dependabot runs get no secrets and are
+  # not reviewed, so only dependabot's own branch in this repository, last pushed
+  # by dependabot, passes unreviewed; an actor name alone is not trusted. It
+  # waits for publish so the review comment lands first.
+  verdict:
+    name: claude review
+    needs: [review, publish]
+    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Only a pass verdict may queue
+        env:
+          EVENT: ${{ github.event_name }}
+          BOT: >-
+            ${{ github.actor == 'dependabot[bot]' &&
+                github.event.pull_request.user.login == 'dependabot[bot]' &&
+                github.event.pull_request.head.repo.full_name == github.repository }}
+          VERDICT: ${{ needs.review.outputs.verdict }}
+        run: |
+          echo "event: $EVENT, bot: $BOT, verdict: ${VERDICT:-none}"
+          [ "$EVENT" = merge_group ] || [ "$BOT" = true ] || [ "$VERDICT" = pass ]
