@@ -404,6 +404,7 @@ pub(crate) async fn install_host_update(
         .then(write_pending_update_marker)
         .flatten();
     record_update_progress(0);
+    store_latest_version(newest_version_before_install().await);
     let Err(error) = platform::download_and_install(events.clone()).await else {
         return Ok(());
     };
@@ -416,6 +417,22 @@ pub(crate) async fn install_host_update(
         message: message.clone(),
     });
     Err(message)
+}
+
+async fn newest_version_before_install() -> Option<String> {
+    let cached = latest_version();
+    let refreshed = check_for_updates_force().await.map(|_| latest_version());
+    version_to_install(refreshed, cached)
+}
+
+fn version_to_install(refreshed: Result<Option<String>>, cached: Option<String>) -> Option<String> {
+    match refreshed {
+        Ok(latest) => latest,
+        Err(error) => {
+            log::warn!("Could not re-check the newest qol-tray release, installing the cached {cached:?}: {error:#}");
+            cached
+        }
+    }
 }
 
 fn update_marker_path() -> Option<PathBuf> {
@@ -773,6 +790,48 @@ mod tests {
         }
         drop(CheckInFlight);
         assert!(lock_update_state().is_some_and(|state| !state.checking));
+    }
+
+    #[test]
+    fn install_version_prefers_the_refreshed_check() {
+        let cases = [
+            (
+                "refresh found a newer release",
+                Ok(Some("3.5.0")),
+                Some("3.4.0"),
+                Some("3.5.0"),
+            ),
+            (
+                "refresh agrees with the cache",
+                Ok(Some("3.4.0")),
+                Some("3.4.0"),
+                Some("3.4.0"),
+            ),
+            ("refresh found no update", Ok(None), Some("3.4.0"), None),
+            (
+                "refresh failed, cache kept",
+                Err("offline"),
+                Some("3.4.0"),
+                Some("3.4.0"),
+            ),
+            ("refresh failed, nothing cached", Err("offline"), None, None),
+            (
+                "refresh found a release, nothing cached",
+                Ok(Some("3.5.0")),
+                None,
+                Some("3.5.0"),
+            ),
+        ];
+        for (name, refreshed, cached, expected) in cases {
+            let refreshed = refreshed
+                .map(|latest| latest.map(str::to_string))
+                .map_err(|message| anyhow::anyhow!(message));
+            assert_eq!(
+                version_to_install(refreshed, cached.map(str::to_string)).as_deref(),
+                expected,
+                "case: {name}"
+            );
+        }
     }
 
     #[test]
