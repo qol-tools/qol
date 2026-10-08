@@ -1185,6 +1185,27 @@ mod tests {
     }
 
     #[test]
+    fn a_list_card_opened_from_a_search_hit_shows_every_item() {
+        let (rows, card) = list_card_fixture();
+        let needle = Some("items");
+        assert!(
+            super::super::row_matches(&rows[0], "items"),
+            "the parent row is a search hit"
+        );
+        assert!(super::super::opens_a_card(&rows[0].control));
+        assert!(
+            super::super::filtered_visible_rows(&card.rows, &card.sections, 1, needle, 0)
+                .is_empty(),
+            "the panel needle hides every item it does not name"
+        );
+        assert_eq!(
+            super::super::filtered_visible_rows(&card.rows, &card.sections, 1, None, 0).len(),
+            3,
+            "opening the card ends the search, so every item shows"
+        );
+    }
+
+    #[test]
     fn open_list_card_reads_search_activity_from_live_parent_queries() {
         let (mut rows, card) = list_card_fixture();
         let RowControl::List {
