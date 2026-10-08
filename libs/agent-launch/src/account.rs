@@ -21,8 +21,13 @@ pub struct LaneExecCommand {
 
 impl LaneExecCommand {
     pub fn current(prefix: &'static [&'static str]) -> Result<Self> {
-        let program =
-            std::env::current_exe().context("failed to locate this binary for lane-exec")?;
+        let exe = std::env::current_exe().context("failed to locate this binary for lane-exec")?;
+        // Linux appends " (deleted)" when the binary was replaced while this process runs;
+        // the replacement lives at the stripped path.
+        let program = exe
+            .to_str()
+            .and_then(|path| path.strip_suffix(" (deleted)"))
+            .map_or(exe.clone(), PathBuf::from);
         Ok(Self { program, prefix })
     }
 }

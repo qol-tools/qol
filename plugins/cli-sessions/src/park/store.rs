@@ -1,9 +1,13 @@
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use qol_terminal_sessions::park::ParkRecord;
+
+/// A reopen finishes within the resume ready timeout; an older claim is a crashed owner's.
+const REOPEN_CLAIM_TTL: Duration = Duration::from_secs(120);
 
 pub struct ParkStore {
     dir: PathBuf,
@@ -48,7 +52,16 @@ impl ParkStore {
     }
 
     pub fn claim_reopen(&self, id: &str) -> Result<bool> {
-        self.claim(&self.reopen_claim_path(id))
+        let path = self.reopen_claim_path(id);
+        let stale = fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > REOPEN_CLAIM_TTL);
+        if stale {
+            let _ = fs::remove_file(&path);
+        }
+        self.claim(&path)
     }
 
     fn claim(&self, path: &Path) -> Result<bool> {
