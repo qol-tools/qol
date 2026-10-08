@@ -760,6 +760,10 @@ pub fn show_window_interactive_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, false, WindowPresentation::Overlay, false)
 }
 
+pub fn show_toast_window_by_title(title: &str) -> bool {
+    show_window_interactive_by_title(title)
+}
+
 pub fn show_normal_window_by_title(title: &str) -> bool {
     show_window_by_title_with_focus(title, true, WindowPresentation::Normal, false)
 }

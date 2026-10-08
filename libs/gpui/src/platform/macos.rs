@@ -98,9 +98,12 @@ extern "C" {
 }
 
 struct DispatchSymbols {
-    get_main_queue: unsafe extern "C" fn() -> *const c_void,
+    main_queue: *const c_void,
     async_f: unsafe extern "C" fn(*const c_void, *mut c_void, DispatchFunction),
 }
+
+unsafe impl Send for DispatchSymbols {}
+unsafe impl Sync for DispatchSymbols {}
 
 fn dispatch_symbols() -> Option<&'static DispatchSymbols> {
     static SYMBOLS: OnceLock<Option<DispatchSymbols>> = OnceLock::new();
@@ -110,18 +113,14 @@ fn dispatch_symbols() -> Option<&'static DispatchSymbols> {
             if handle.is_null() {
                 return None;
             }
-            let get_main_queue =
-                unsafe { dlsym(handle, c"_dispatch_get_main_queue".as_ptr()) as *const () };
-            let async_f = unsafe { dlsym(handle, c"_dispatch_async_f".as_ptr()) as *const () };
-            if get_main_queue.is_null() || async_f.is_null() {
+            let main_queue =
+                unsafe { dlsym(handle, c"_dispatch_main_q".as_ptr()) as *const c_void };
+            let async_f = unsafe { dlsym(handle, c"dispatch_async_f".as_ptr()) as *const () };
+            if main_queue.is_null() || async_f.is_null() {
                 return None;
             }
             Some(DispatchSymbols {
-                get_main_queue: unsafe {
-                    std::mem::transmute::<*const (), unsafe extern "C" fn() -> *const c_void>(
-                        get_main_queue,
-                    )
-                },
+                main_queue,
                 async_f: unsafe {
                     std::mem::transmute::<
                         *const (),
@@ -143,12 +142,12 @@ pub fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
         return;
     };
     unsafe {
-        let queue = (symbols.get_main_queue)();
-        if queue.is_null() {
-            return;
-        }
         let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(task);
-        (symbols.async_f)(queue, Box::into_raw(boxed) as *mut c_void, run_task_on_main);
+        (symbols.async_f)(
+            symbols.main_queue,
+            Box::into_raw(boxed) as *mut c_void,
+            run_task_on_main,
+        );
     }
 }
 

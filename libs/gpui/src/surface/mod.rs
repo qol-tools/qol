@@ -468,15 +468,11 @@ impl Surface {
             if !configured {
                 configured = crate::popup_window::configure_popup_window(&title);
             }
-            let shown = crate::popup_window::show_window_interactive_by_title(&title);
+            let shown = crate::popup_window::show_toast_window_by_title(&title);
             visible.set(shown);
-            #[cfg(target_os = "linux")]
-            let configure_key = "docked";
-            #[cfg(not(target_os = "linux"))]
-            let configure_key = "configured";
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={title} phase=toast-ready {configure_key}={configured} shown={shown}"
+                "title={title} phase=toast-ready configured={configured} shown={shown}"
             );
             if !shown {
                 crate::popup_window::restore_composite(&title);
