@@ -37,10 +37,28 @@ pub fn resume(
         tool: tool.clone(),
         surface: SpawnSurface::Tab,
     };
+    let cwd = PathBuf::from(&record.cwd);
+    if !cwd.is_dir() {
+        bail!("the parked directory `{}` no longer exists", record.cwd);
+    }
+    let held = terminals
+        .snapshot()
+        .context("session discovery failed before the resumed session started")?
+        .sessions()
+        .iter()
+        .any(|facts| {
+            facts.spawn_identity.as_ref().map(|tagged| &tagged.key) == Some(&identity.key)
+        });
+    if held {
+        bail!(
+            "`{}` is already held by a live session; continue there",
+            record.id
+        );
+    }
     let request = SpawnRequest {
         identity,
         launch,
-        cwd: PathBuf::from(&record.cwd),
+        cwd,
         title: Some(record.title.clone().unwrap_or_else(|| record.id.clone())),
     };
     let session = terminals

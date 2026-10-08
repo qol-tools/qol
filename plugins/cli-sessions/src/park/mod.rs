@@ -203,12 +203,23 @@ pub fn unpark(id: &str) -> Result<String> {
 }
 
 fn reopen(store: &ParkStore, mut record: ParkRecord) -> Result<String> {
+    if !store.claim_reopen(&record.id)? {
+        bail!("`{}` is already being reopened", record.id);
+    }
     let terminals = TerminalSessionService::system();
-    let session = resume(&terminals, &CliSessionInterpreter::system(), &record, "")?;
+    let resumed = resume(&terminals, &CliSessionInterpreter::system(), &record, "");
+    let session = match resumed {
+        Ok(session) => session,
+        Err(error) => {
+            store.release_reopen(&record.id);
+            return Err(error);
+        }
+    };
     record.state = ParkState::Resumed;
     record.resumed_session = Some(session.clone());
     record.detail = Some("reopened from its notification".to_owned());
     store.record(&record)?;
+    store.release_reopen(&record.id);
     Ok(format!("reopened {} in {session}", record.id))
 }
 

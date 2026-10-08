@@ -306,7 +306,8 @@ fn spawn_command_poll(
                 }
                 Command::Reopen(park) => {
                     qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=reopen park={park}");
-                    cx.background_spawn(async move { reopen_park(&park) }).await;
+                    cx.background_spawn(async move { reopen_park(&park) })
+                        .detach();
                     LoopFlow::Continue
                 }
                 Command::Snapshot => {

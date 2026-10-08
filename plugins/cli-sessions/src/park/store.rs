@@ -1,6 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use qol_terminal_sessions::park::ParkRecord;
@@ -39,13 +39,21 @@ impl ParkStore {
         self.dir.join(format!("{id}.claim"))
     }
 
+    fn reopen_claim_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.reopen"))
+    }
+
     pub fn claim_resume(&self, id: &str) -> Result<bool> {
+        self.claim(&self.claim_path(id))
+    }
+
+    pub fn claim_reopen(&self, id: &str) -> Result<bool> {
+        self.claim(&self.reopen_claim_path(id))
+    }
+
+    fn claim(&self, path: &Path) -> Result<bool> {
         fs::create_dir_all(&self.dir).context("failed to create the parked directory")?;
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(self.claim_path(id))
-        {
+        match OpenOptions::new().write(true).create_new(true).open(path) {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
             Err(error) => Err(error).context("failed to claim the park"),
@@ -54,6 +62,10 @@ impl ParkStore {
 
     pub fn release(&self, id: &str) {
         let _ = fs::remove_file(self.claim_path(id));
+    }
+
+    pub fn release_reopen(&self, id: &str) {
+        let _ = fs::remove_file(self.reopen_claim_path(id));
     }
 
     pub fn is_claimed(&self, id: &str) -> bool {
