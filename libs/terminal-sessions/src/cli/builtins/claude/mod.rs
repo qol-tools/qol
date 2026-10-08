@@ -76,6 +76,11 @@ impl CliSessionStrategy for ClaudeStrategy {
         metadata::chat_transcript(&path)
     }
 
+    fn current_model(&self, session: &SessionFacts) -> Option<String> {
+        let path = self.metadata.subscription_path(session)?;
+        metadata::current_model(&path)
+    }
+
     fn classify_screen(&self, _session: &SessionFacts, screen: &str) -> CliScreenEvidence {
         if crate::cli::screen::claude_working(screen) {
             CliScreenEvidence {

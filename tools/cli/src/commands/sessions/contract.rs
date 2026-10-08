@@ -242,7 +242,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then fork_model, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, the tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models still governs spending.",
+                        "description": "Model for the fork; a selected agent profile's declared model is the default when this is omitted, then the model the calling session is running when tool_models and allowed_models admit it, then fork_model, then spawn_model in sessions.toml. An explicit model that conflicts with the selected profile is refused, the tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models still governs spending.",
                     },
                     "effort": effort_property(),
                     "brief": {

@@ -97,6 +97,30 @@ pub(super) fn resolve(
     })
 }
 
+pub(super) fn inherit_model(
+    explicit: &mut LaunchChoice,
+    inherited: Option<String>,
+    defaults: &LaunchDefaults,
+    dispatch: &AgentDispatch,
+) {
+    if explicit.model.is_some() || dispatch.is_constrained() {
+        return;
+    }
+    let Some(model) = inherited else {
+        return;
+    };
+    let tool = match defaults.alias(explicit.tool.clone()) {
+        Some(tool) => tool,
+        None => match dispatch.resolve_launch_tool(None, Some(&model)) {
+            Ok(tool) => tool,
+            Err(_) => return,
+        },
+    };
+    if dispatch.admit_launch(&tool, Some(&model)).is_ok() {
+        explicit.model = Some(model);
+    }
+}
+
 fn model_for_tool(tool: &str, default: Option<&str>, policy: &DispatchPolicy) -> Option<String> {
     let candidates = [default, policy.default_model.as_deref()];
     let Some(declared) = policy.tool_models.get(tool) else {
@@ -228,5 +252,60 @@ mod tests {
             let resolved = resolve(kind, choice.clone(), &defaults(), &dispatch()).unwrap();
             assert_eq!(resolved, expected, "{kind:?} {choice:?}");
         }
+    }
+
+    #[test]
+    fn a_fork_inherits_the_parent_model_only_when_nothing_names_one_and_the_pair_is_admitted() {
+        let cases = [
+            (ask(None, None, None, None), Some("sonnet"), Some("sonnet")),
+            (ask(None, None, None, None), Some("glm"), Some("glm")),
+            (
+                ask(None, Some("opus"), None, None),
+                Some("sonnet"),
+                Some("opus"),
+            ),
+            (ask(None, None, None, None), Some("haiku"), None),
+            (ask(Some("pi"), None, None, None), Some("sonnet"), None),
+            (
+                ask(Some("cc"), None, None, None),
+                Some("sonnet"),
+                Some("sonnet"),
+            ),
+            (ask(None, None, None, None), None, None),
+        ];
+        for (choice, inherited, expected) in cases {
+            let mut inheriting = choice.clone();
+            inherit_model(
+                &mut inheriting,
+                inherited.map(str::to_owned),
+                &defaults(),
+                &dispatch(),
+            );
+            let expected = expected.or(choice.model.as_deref());
+            assert_eq!(
+                inheriting.model.as_deref(),
+                expected,
+                "{choice:?} {inherited:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_constrained_fork_never_inherits_the_parent_model() {
+        let constrained = AgentDispatch::new(
+            dispatch().policy,
+            AssignmentRequest {
+                agent_profile: Some("planner".to_owned()),
+                ..AssignmentRequest::default()
+            },
+        );
+        let mut choice = ask(None, None, None, None);
+        inherit_model(
+            &mut choice,
+            Some("sonnet".to_owned()),
+            &defaults(),
+            &constrained,
+        );
+        assert_eq!(choice.model, None);
     }
 }

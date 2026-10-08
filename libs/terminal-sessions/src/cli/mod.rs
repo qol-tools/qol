@@ -65,6 +65,10 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn current_model(&self, _session: &SessionFacts) -> Option<String> {
+        None
+    }
+
     fn marked_report(&self, _paths: &[std::path::PathBuf], _marker: &str) -> Option<String> {
         None
     }

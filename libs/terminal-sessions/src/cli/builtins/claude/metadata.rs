@@ -341,6 +341,23 @@ pub(super) fn chat_transcript(path: &Path) -> Option<Vec<ChatTurn>> {
     read_chat(path, append_chat_turn)
 }
 
+pub(super) fn current_model(path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(path).ok()?;
+    contents.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        if value.get("type").and_then(Value::as_str) != Some("assistant")
+            || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        {
+            return None;
+        }
+        value
+            .pointer("/message/model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.is_empty() && !model.starts_with('<'))
+            .map(str::to_owned)
+    })
+}
+
 fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
     if value.get("isSidechain").and_then(Value::as_bool) == Some(true)
         || value.get("isMeta").and_then(Value::as_bool) == Some(true)

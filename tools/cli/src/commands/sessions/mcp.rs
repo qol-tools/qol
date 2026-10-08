@@ -432,6 +432,20 @@ impl McpSessionServer {
             self.policy.load().map_err(|error| error.to_string())?,
             request,
         );
+        let mut launch_args = launch_args;
+        super::launch::inherit_model(
+            &mut launch_args,
+            super::fork::parent_model(
+                self.terminals.as_ref(),
+                &self.interpreter,
+                parent.as_deref(),
+            ),
+            &self
+                .policy
+                .launch_defaults()
+                .map_err(|error| error.to_string())?,
+            &dispatch,
+        );
         let launch = self.resolve_launch(LaunchKind::Fork, launch_args, &dispatch)?;
         let outcome = super::fork::fork(
             self.terminals.as_ref(),
