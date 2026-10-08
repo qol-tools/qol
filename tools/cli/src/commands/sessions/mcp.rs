@@ -450,6 +450,7 @@ impl McpSessionServer {
             parent.as_deref(),
             chat.as_ref(),
             self.spawn_cap.as_ref(),
+            false,
             &dispatch,
         )
         .map_err(|error| error.to_string())?;
@@ -4286,6 +4287,7 @@ mod tests {
             Some(token().as_str()),
             Some(&chat),
             None,
+            false,
             &super::super::agent_policy::AgentDispatch::unconfigured(),
         )
         .unwrap();

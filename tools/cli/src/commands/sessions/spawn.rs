@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
-    SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
+    SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService, TextInput,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -2108,6 +2108,7 @@ pub(super) fn spawn_detached(
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
     prompt: &str,
+    dry_run: bool,
     assignment: Option<&AgentAssignment>,
 ) -> Result<DetachedLaunch> {
     require_model_for_launch(model)?;
@@ -2130,7 +2131,9 @@ pub(super) fn spawn_detached(
         effort,
     )?);
     super::lane_account::apply(&mut launch, &prepared.tool_id)?;
-    launch.args.push(prompt.to_owned());
+    if !dry_run {
+        launch.args.push(prompt.to_owned());
+    }
     let request = SpawnRequest {
         identity: prepared.identity.clone(),
         launch,
@@ -2161,6 +2164,15 @@ pub(super) fn spawn_detached(
         .binding()
         .context("spawned session cannot bind to a stable token")?;
     ledger.bind_session(&prepared.key, &facts.cwd, &binding.token(), assignment)?;
+    if dry_run {
+        terminals
+            .send_text(
+                &binding,
+                prompt,
+                qol_terminal_sessions::DeliveryMode::Insert,
+            )
+            .context("the dry-run prompt could not be typed into the launched session")?;
+    }
     Ok(DetachedLaunch {
         session: binding.token(),
         cwd: facts.cwd.clone(),
@@ -2476,6 +2488,7 @@ mod tests {
         reveal_spawned: bool,
         dying_spawn: bool,
         spawn_reveals: AtomicUsize,
+        typed: Mutex<Vec<(String, DeliveryMode)>>,
     }
 
     impl FakeBackend {
@@ -2492,6 +2505,7 @@ mod tests {
                 reveal_spawned: true,
                 dying_spawn: false,
                 spawn_reveals: AtomicUsize::new(0),
+                typed: Mutex::new(Vec::new()),
             }
         }
 
@@ -2587,9 +2601,10 @@ mod tests {
         fn send_text(
             &self,
             _target: &SessionBinding,
-            _text: &str,
-            _mode: DeliveryMode,
+            text: &str,
+            mode: DeliveryMode,
         ) -> Result<(), TerminalError> {
+            self.typed.lock().unwrap().push((text.to_owned(), mode));
             Ok(())
         }
 
@@ -6519,6 +6534,49 @@ mod tests {
     }
 
     #[test]
+    fn a_dry_run_fork_launches_without_the_prompt_and_types_it_unsubmitted() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let forks = super::super::fork::ForkStore::with_dir(root.path().join("forks"));
+        super::super::fork::fork(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &locks(&root),
+            &forks,
+            Some("pi"),
+            &cwd,
+            "lane-fork-dry",
+            None,
+            Some("flash"),
+            None,
+            None,
+            "chase the stale lockfile",
+            None,
+            None,
+            None,
+            true,
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap();
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert!(
+            !request
+                .launch
+                .args
+                .iter()
+                .any(|arg| arg.contains("[qol session fork]")),
+            "a dry run must not submit the prompt at launch: {:?}",
+            request.launch.args
+        );
+        let typed = backend.typed.lock().unwrap().clone();
+        assert_eq!(typed.len(), 1);
+        assert!(typed[0].0.contains("[qol session fork]"), "{}", typed[0].0);
+        assert_eq!(typed[0].1, DeliveryMode::Insert);
+    }
+
+    #[test]
     fn a_fork_with_a_selected_profile_takes_the_profile_model_and_rejects_a_conflict() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = managed_workdir(&root);
@@ -6544,6 +6602,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             &dispatch,
         )
         .unwrap();
@@ -6569,6 +6628,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             &dispatch,
         )
         .unwrap_err()
