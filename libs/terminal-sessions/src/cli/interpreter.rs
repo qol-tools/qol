@@ -9,7 +9,7 @@ use super::model::normalize_display_name;
 use super::{
     ChatTurn, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
     CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliToolId,
+    CliSessionSubscriptionError, CliTool, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,6 +158,13 @@ impl CliSessionInterpreter {
 
     pub fn ui_rendered(&self, session: &SessionFacts, screen: &str) -> bool {
         self.strategy_for(session).ui_rendered(screen)
+    }
+
+    pub fn tool_for(&self, tool: &CliToolId) -> Option<CliTool> {
+        self.strategies
+            .iter()
+            .find(|strategy| &strategy.tool().id == tool)
+            .map(|strategy| strategy.tool().clone())
     }
 
     pub fn launch_for(&self, tool: &CliToolId) -> Option<CliLaunchProgram> {
@@ -385,6 +392,20 @@ mod tests {
             interpreter.launch_for(&CliToolId::new("future-tool").unwrap()),
             None
         );
+    }
+
+    #[test]
+    fn tool_for_returns_the_strategy_tool_and_none_for_unknown_ids() {
+        let interpreter = CliSessionInterpreter::system();
+        assert_eq!(
+            interpreter
+                .tool_for(&CliToolId::new("claude").unwrap())
+                .map(|tool| tool.label),
+            Some("Claude".to_owned())
+        );
+        assert!(interpreter
+            .tool_for(&CliToolId::new("future-tool").unwrap())
+            .is_none());
     }
 
     #[test]

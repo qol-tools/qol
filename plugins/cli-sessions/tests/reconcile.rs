@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use qol_cli_sessions::attention::{Evidence, GRACE_SECS};
 use qol_cli_sessions::daemon::reconcile::{
-    tick, tick_with_caches, transition_line, ReconcileCaches,
+    live_parks, tick, tick_with_caches, transition_line, ReconcileCaches,
 };
 use qol_cli_sessions::host::{kitty_session_id, Pane, TerminalHost};
 use qol_cli_sessions::registry::{Registry, SessionState};
@@ -14,6 +14,7 @@ use qol_terminal_sessions::cli::{
     CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
     CliSessionInterpreter, CliSessionStrategy, CliSessionSubscription, CliTool, CliViewportState,
 };
+use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::SessionBinding;
 
 struct FakeHost {
@@ -1495,4 +1496,153 @@ fn pi_embedded_working_recovers_and_stays_busy_across_quiet_ticks() {
             "time={now}"
         );
     }
+}
+
+fn write_park(dir: &std::path::Path, window_id: u64, runner_pid: u32) {
+    let session = SessionBinding::new(kitty_session_id(window_id), std::process::id() as i32)
+        .unwrap()
+        .token();
+    let record = ParkRecord {
+        id: format!("park-{window_id}"),
+        tool: "codex".to_owned(),
+        cwd: "/a/parked".to_owned(),
+        external_id: "abc".to_owned(),
+        model: None,
+        effort: None,
+        title: Some("watch pr".to_owned()),
+        permission_mode: None,
+        session,
+        command: vec!["sleep".to_owned(), "60".to_owned()],
+        created_at: 50,
+        state: ParkState::Waiting,
+        runner_pid: Some(runner_pid),
+        runner_identity: None,
+        caller_closed: false,
+        exit_code: None,
+        resumed_session: None,
+        detail: None,
+    };
+    std::fs::write(
+        dir.join(format!("{}.json", record.id)),
+        serde_json::to_string(&record).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_parked_pane_shows_parked_instead_of_your_turn_and_never_notifies() {
+    let parked = tempfile::tempdir().unwrap();
+    write_park(parked.path(), 16, std::process::id());
+    let mut caches = ReconcileCaches::with_parked_dir(Some(parked.path().to_path_buf()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let mut host = FakeHost {
+        panes: vec![pane(16, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: CODEX_WORKING_LINE.into(),
+    };
+    let mut notices = Vec::new();
+    for now in 100..=108 {
+        if now == 101 {
+            host.screen = CODEX_ANSWER_LIST.to_owned();
+        }
+        if now == 108 {
+            host.panes[0].title = "project | Ready | finished".into();
+        }
+        notices.extend(tick_with_caches(
+            &reg,
+            &host,
+            &interpreter(),
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        ));
+    }
+    let rows = reg.lock().unwrap().sorted();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, Status::Parked);
+    assert!(notices.is_empty(), "a parked turn end is not your turn");
+}
+
+#[test]
+fn a_parked_session_without_a_pane_stays_listed_while_its_runner_lives() {
+    let parked = tempfile::tempdir().unwrap();
+    write_park(parked.path(), 17, std::process::id());
+    let mut caches = ReconcileCaches::with_parked_dir(Some(parked.path().to_path_buf()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![],
+        screen: String::new(),
+    };
+    for now in 100..=101 {
+        let notices = tick_with_caches(
+            &reg,
+            &host,
+            &interpreter(),
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        );
+        assert!(notices.is_empty());
+    }
+    let rows = reg.lock().unwrap().sorted();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, kitty_session_id(17));
+    assert_eq!(rows[0].status, Status::Parked);
+    assert_eq!(rows[0].root_pid, std::process::id() as i32);
+    assert_eq!(rows[0].tool, codex_tool());
+    assert_eq!(rows[0].name.as_deref(), Some("watch pr"));
+    assert_eq!(rows[0].cwd, "/a/parked");
+
+    std::fs::remove_file(parked.path().join("park-17.json")).unwrap();
+    tick_with_caches(
+        &reg,
+        &host,
+        &interpreter(),
+        &NoServiceProbe,
+        102,
+        102,
+        &mut caches,
+    );
+    assert!(
+        reg.lock().unwrap().sorted().is_empty(),
+        "a park that stopped waiting leaves the list"
+    );
+}
+
+#[test]
+fn live_parks_drop_dead_runners_and_unparseable_sessions() {
+    let record = |session: &str, runner_pid: Option<u32>| ParkRecord {
+        id: "p".to_owned(),
+        tool: "claude".to_owned(),
+        cwd: "/".to_owned(),
+        external_id: "x".to_owned(),
+        model: None,
+        effort: None,
+        title: None,
+        permission_mode: None,
+        session: session.to_owned(),
+        command: vec![],
+        created_at: 0,
+        state: ParkState::Waiting,
+        runner_pid,
+        runner_identity: None,
+        caller_closed: false,
+        exit_code: None,
+        resumed_session: None,
+        detail: None,
+    };
+    let token = SessionBinding::new(kitty_session_id(5), 1).unwrap().token();
+    let parks = live_parks(
+        vec![
+            record(&token, Some(10)),
+            record(&token, Some(11)),
+            record(&token, None),
+            record("not a token", Some(10)),
+        ],
+        |pid, _| pid == 10,
+    );
+    assert_eq!(parks.len(), 1);
+    assert_eq!(parks[0].id, kitty_session_id(5));
+    assert_eq!(parks[0].runner_pid, 10);
 }

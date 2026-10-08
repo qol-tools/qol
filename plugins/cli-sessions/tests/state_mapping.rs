@@ -30,6 +30,7 @@ fn every_state_has_one_semantic_color_attention_policy_and_order_in_both_themes(
             ),
             (Status::Working, "working", system.success, false, false),
             (Status::Service, "live", system.info, false, false),
+            (Status::Parked, "parked", system.info, false, false),
             (Status::Unknown, "idle", system.text_muted, false, true),
             (
                 Status::Acknowledged,
