@@ -46,6 +46,7 @@ pub(crate) trait PlatformOps {
     fn open_path(&self, path: &Path) -> Result<OpenPathOutcome>;
     fn supports_immutable_payload_build(&self) -> bool;
     fn open_text_file(&self, path: &Path) -> bool;
+    fn lower_thread_priority(&self) {}
 }
 
 pub(super) fn pipe_to_clipboard(program: &str, args: &[&str], text: &str) -> Result<()> {

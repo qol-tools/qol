@@ -59,6 +59,23 @@ impl PlatformOps for Platform {
             .spawn()
             .is_ok()
     }
+
+    fn lower_thread_priority(&self) {
+        const IOPOL_TYPE_DISK: libc::c_int = 0;
+        const IOPOL_SCOPE_THREAD: libc::c_int = 1;
+        const IOPOL_THROTTLE: libc::c_int = 3;
+        unsafe extern "C" {
+            fn setiopolicy_np(
+                scope: libc::c_int,
+                policy: libc::c_int,
+                value: libc::c_int,
+            ) -> libc::c_int;
+        }
+        unsafe {
+            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
+            setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE);
+        }
+    }
 }
 
 fn parse_available_memory_mb(output: &str) -> Option<u64> {

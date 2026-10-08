@@ -346,11 +346,13 @@ fn log_applied(action: &FixAction) {
             );
         }
         #[cfg(feature = "dev")]
-        FixAction::PruneCargoTargetDir { target } => {
-            log::info!(
-                "doctor: pruned stale cargo target caches under {}",
-                target.display()
-            );
+        FixAction::PruneCargoTargetDir { targets } => {
+            for target in targets {
+                log::info!(
+                    "doctor: pruned stale cargo target caches under {}",
+                    target.display()
+                );
+            }
         }
         #[cfg(feature = "dev")]
         FixAction::HealDevLinkedPlugins { rebuild_ids } => {

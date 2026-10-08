@@ -3,8 +3,9 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::platform::{Platform, PlatformOps};
 use qol_dev_build::target_cache::{
-    format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir,
+    cargo_cache_dirs, format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir,
     INCREMENTAL_CACHE_CEILING, SWEPT_CACHE_CEILING,
 };
 use ratatui::layout::Rect;
@@ -192,7 +193,7 @@ pub(super) fn spawn_disk_worker(
     let progress = Arc::new(Mutex::new(String::new()));
     let worker_progress = Arc::clone(&progress);
     std::thread::spawn(move || {
-        lower_worker_priority();
+        Platform.lower_thread_priority();
         let started = Instant::now();
         let outcome = work(&worker_progress);
         let elapsed = started.elapsed();
@@ -206,26 +207,6 @@ pub(super) fn spawn_disk_worker(
         progress,
         started_at_ms: now_unix_ms(),
         phase,
-    }
-}
-
-fn lower_worker_priority() {
-    #[cfg(target_os = "macos")]
-    {
-        const IOPOL_TYPE_DISK: libc::c_int = 0;
-        const IOPOL_SCOPE_THREAD: libc::c_int = 1;
-        const IOPOL_THROTTLE: libc::c_int = 3;
-        unsafe extern "C" {
-            fn setiopolicy_np(
-                scope: libc::c_int,
-                policy: libc::c_int,
-                value: libc::c_int,
-            ) -> libc::c_int;
-        }
-        unsafe {
-            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
-            setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE);
-        }
     }
 }
 
@@ -502,8 +483,10 @@ fn cleanup_disk_usage_in(
         }
     }
     set_progress(progress, "stale caches");
-    let target = running.join("target");
-    if target.exists() {
+    for target in cargo_cache_dirs(running) {
+        if !target.exists() {
+            continue;
+        }
         let prunable = prunable_target_bytes(&target);
         match prune_cargo_target_dir(&target) {
             Ok(()) => freed += prunable,
