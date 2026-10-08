@@ -45,6 +45,7 @@ pub(super) fn launch_argv(
     request: &SpawnRequest,
     path: Option<&str>,
     anchor_window_id: Option<u64>,
+    keep_focus: bool,
 ) -> Result<Vec<String>, TerminalError> {
     let mut argv = vec![
         "@".to_owned(),
@@ -63,7 +64,9 @@ pub(super) fn launch_argv(
         argv.push("--next-to".to_owned());
         argv.push(format!("id:{anchor}"));
     }
-    argv.push("--dont-take-focus".to_owned());
+    if keep_focus {
+        argv.push("--dont-take-focus".to_owned());
+    }
     if let Some(path) = path {
         argv.push("--env".to_owned());
         argv.push(format!("PATH={path}"));
@@ -154,6 +157,7 @@ mod tests {
             &request(SpawnSurface::Tab, Some("Codex")),
             Some("/usr/bin:/bin"),
             Some(42),
+            true,
         )
         .unwrap();
 
@@ -195,7 +199,7 @@ mod tests {
             "/home/u/.claude-x".to_owned(),
         )];
 
-        let argv = launch_argv(&request, Some("/usr/bin"), None).unwrap();
+        let argv = launch_argv(&request, Some("/usr/bin"), None, true).unwrap();
 
         assert_eq!(
             argv[..9],
@@ -214,8 +218,19 @@ mod tests {
     }
 
     #[test]
+    fn launch_argv_leaves_focus_alone_when_kitty_is_not_focused() {
+        for surface in [SpawnSurface::Tab, SpawnSurface::OsWindow] {
+            let focused = launch_argv(&request(surface, None), None, Some(42), true).unwrap();
+            let unfocused = launch_argv(&request(surface, None), None, Some(42), false).unwrap();
+            assert!(focused.iter().any(|arg| arg == "--dont-take-focus"));
+            assert!(!unfocused.iter().any(|arg| arg == "--dont-take-focus"));
+            assert_eq!(focused.len(), unfocused.len() + 1);
+        }
+    }
+
+    #[test]
     fn launch_argv_contract_for_os_window() {
-        let argv = launch_argv(&request(SpawnSurface::OsWindow, None), None, None).unwrap();
+        let argv = launch_argv(&request(SpawnSurface::OsWindow, None), None, None, true).unwrap();
 
         assert_eq!(
             argv,
@@ -253,7 +268,7 @@ mod tests {
             String::new(),
         ];
 
-        let argv = launch_argv(&request, None, None).unwrap();
+        let argv = launch_argv(&request, None, None, true).unwrap();
 
         assert_eq!(
             argv,
@@ -284,14 +299,14 @@ mod tests {
 
     #[test]
     fn launch_argv_requires_an_anchor_only_for_tab() {
-        let error = launch_argv(&request(SpawnSurface::Tab, None), None, None).unwrap_err();
+        let error = launch_argv(&request(SpawnSurface::Tab, None), None, None, true).unwrap_err();
 
         assert!(matches!(error, TerminalError::SpawnFailed { .. }));
         assert!(error
             .to_string()
             .contains("missing Kitty terminal identity"));
         assert!(error.to_string().contains("KITTY_WINDOW_ID"));
-        assert!(launch_argv(&request(SpawnSurface::OsWindow, None), None, None).is_ok());
+        assert!(launch_argv(&request(SpawnSurface::OsWindow, None), None, None, true).is_ok());
     }
 
     #[cfg(unix)]
@@ -303,7 +318,7 @@ mod tests {
         let mut request = request(SpawnSurface::OsWindow, None);
         request.cwd = PathBuf::from(OsString::from_vec(vec![0xff]));
 
-        let error = launch_argv(&request, None, None).unwrap_err();
+        let error = launch_argv(&request, None, None, true).unwrap_err();
 
         assert!(matches!(error, TerminalError::SpawnFailed { .. }));
         assert!(error.to_string().contains("UTF-8"));

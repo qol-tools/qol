@@ -11,6 +11,8 @@ pub struct KittyLs(pub Vec<OsWindow>);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OsWindow {
+    #[serde(default)]
+    pub is_focused: bool,
     pub tabs: Vec<Tab>,
 }
 
@@ -122,6 +124,12 @@ impl KittyLs {
             .flat_map(|tab| tab.windows)
             .map(|window| window.into_session(backend_id, instance))
             .collect()
+    }
+}
+
+impl KittyLs {
+    pub fn has_focus(&self) -> bool {
+        self.0.iter().any(|os_window| os_window.is_focused)
     }
 }
 

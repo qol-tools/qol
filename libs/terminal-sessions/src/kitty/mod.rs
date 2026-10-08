@@ -386,7 +386,8 @@ impl KittyBackend {
         path: Option<&str>,
     ) -> Result<SessionId, TerminalError> {
         let endpoint = self.endpoints.current();
-        let argv = spawn::launch_argv(request, path, anchor_window_id)?;
+        let keep_focus = self.has_focus_at(&endpoint);
+        let argv = spawn::launch_argv(request, path, anchor_window_id, keep_focus)?;
         let stdout = self.run_at(&endpoint, "spawn session", &argv, None)?;
         let window_id =
             spawn::parse_spawned_window_id(&stdout).ok_or_else(|| TerminalError::SpawnFailed {
@@ -405,6 +406,13 @@ impl KittyBackend {
             window_id
         );
         Ok(session_id)
+    }
+
+    fn has_focus_at(&self, endpoint: &Endpoint) -> bool {
+        self.run_at(endpoint, "read focus", &strings(["@", "ls"]), None)
+            .ok()
+            .and_then(|body| parse_ls(&body, backend_id()).ok())
+            .is_none_or(|ls| ls.has_focus())
     }
 
     fn verify_spawned_identity(
@@ -1155,6 +1163,7 @@ mod tests {
     #[test]
     fn spawn_launches_an_anchored_tab_into_the_current_endpoint() {
         let runner = FakeRunner::with_outputs(vec![
+            success(FOCUSED_LS.to_owned()),
             success("77\n".to_owned()),
             success(ls_with_identity(77, "voice-42", "codex", "tab")),
         ]);
@@ -1173,10 +1182,11 @@ mod tests {
         assert_eq!(session.backend().to_string(), "kitty");
         assert_eq!(session.native(), "k1_2.77");
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].0.as_deref(), Some("k1_2"));
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].1, ["@", "ls"]);
+        assert_eq!(calls[1].0.as_deref(), Some("k1_2"));
         assert_eq!(
-            calls[0].1,
+            calls[1].1,
             [
                 "@",
                 "launch",
@@ -1200,12 +1210,13 @@ mod tests {
                 "--full-auto",
             ]
         );
-        assert_eq!(calls[1].1, ["@", "ls"]);
+        assert_eq!(calls[2].1, ["@", "ls"]);
     }
 
     #[test]
     fn spawn_launches_an_os_window_without_an_anchor_or_path() {
         let runner = FakeRunner::with_outputs(vec![
+            success(FOCUSED_LS.to_owned()),
             success("77\n".to_owned()),
             success(ls_with_identity(77, "voice-42", "codex", "os_window")),
         ]);
@@ -1217,10 +1228,10 @@ mod tests {
 
         assert_eq!(session.native(), "77");
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].0, None);
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[1].0, None);
         assert_eq!(
-            calls[0].1,
+            calls[1].1,
             [
                 "@",
                 "launch",
@@ -1255,7 +1266,10 @@ mod tests {
             "77\n88",
             "99999999999999999999999999",
         ] {
-            let runner = FakeRunner::with_outputs(vec![success(stdout.to_owned())]);
+            let runner = FakeRunner::with_outputs(vec![
+                success(FOCUSED_LS.to_owned()),
+                success(stdout.to_owned()),
+            ]);
             let backend = KittyBackend::with_runner(runner.clone());
 
             let error = backend
@@ -1266,13 +1280,14 @@ mod tests {
                 matches!(error, TerminalError::SpawnFailed { .. }),
                 "stdout: {stdout:?}"
             );
-            assert_eq!(runner.calls.lock().unwrap().len(), 1, "stdout: {stdout:?}");
+            assert_eq!(runner.calls.lock().unwrap().len(), 2, "stdout: {stdout:?}");
         }
     }
 
     #[test]
     fn spawn_fails_when_the_spawned_window_is_missing_from_discovery() {
         let runner = FakeRunner::with_outputs(vec![
+            success(FOCUSED_LS.to_owned()),
             success("77\n".to_owned()),
             success(ls_with_identity(78, "voice-42", "codex", "os_window")),
         ]);
@@ -1283,7 +1298,7 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("missing from discovery"));
-        assert_eq!(runner.calls.lock().unwrap().len(), 2);
+        assert_eq!(runner.calls.lock().unwrap().len(), 3);
     }
 
     #[test]
@@ -1293,7 +1308,11 @@ mod tests {
             ls_without_identity(77),
         ];
         for body in bodies {
-            let runner = FakeRunner::with_outputs(vec![success("77\n".to_owned()), success(body)]);
+            let runner = FakeRunner::with_outputs(vec![
+                success(FOCUSED_LS.to_owned()),
+                success("77\n".to_owned()),
+                success(body),
+            ]);
             let backend = KittyBackend::with_runner(runner.clone());
 
             let error = backend
@@ -1302,13 +1321,13 @@ mod tests {
 
             assert!(matches!(error, TerminalError::SpawnFailed { .. }));
             assert!(error.to_string().contains("instead of"));
-            assert_eq!(runner.calls.lock().unwrap().len(), 2);
+            assert_eq!(runner.calls.lock().unwrap().len(), 3);
         }
     }
 
     #[test]
     fn spawn_fails_closed_when_a_tab_has_no_current_window() {
-        let runner = FakeRunner::with_outputs(Vec::new());
+        let runner = FakeRunner::with_outputs(vec![success(FOCUSED_LS.to_owned())]);
         let backend = KittyBackend::with_runner(runner.clone());
 
         let error = backend
@@ -1319,8 +1338,44 @@ mod tests {
             .to_string()
             .contains("missing Kitty terminal identity"));
         assert!(error.to_string().contains("KITTY_WINDOW_ID"));
-        assert!(runner.calls.lock().unwrap().is_empty());
+        assert!(!runner
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.1.get(1).map(String::as_str) == Some("launch")));
     }
+
+    #[test]
+    fn spawn_leaves_focus_alone_when_no_kitty_window_is_focused() {
+        for (focus, expected) in [
+            (FOCUSED_LS, true),
+            (UNFOCUSED_LS, false),
+            ("not json", true),
+        ] {
+            let runner = FakeRunner::with_outputs(vec![
+                success(focus.to_owned()),
+                success("77\n".to_owned()),
+                success(ls_with_identity(77, "voice-42", "codex", "tab")),
+            ]);
+            let backend = KittyBackend::with_runner(runner.clone());
+
+            backend
+                .spawn_at(&spawn_request(SpawnSurface::Tab), Some(42), None)
+                .unwrap();
+
+            let calls = runner.calls.lock().unwrap();
+            assert_eq!(
+                calls[1].1.iter().any(|arg| arg == "--dont-take-focus"),
+                expected,
+                "ls: {focus}"
+            );
+        }
+    }
+
+    const FOCUSED_LS: &str =
+        r#"[{"id":1,"is_focused":false,"tabs":[]},{"id":2,"is_focused":true,"tabs":[]}]"#;
+    const UNFOCUSED_LS: &str = r#"[{"id":1,"is_focused":false,"tabs":[]},{"id":2,"tabs":[]}]"#;
 
     fn ls(id: u64, root_pid: i32) -> String {
         format!(
