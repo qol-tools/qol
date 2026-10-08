@@ -331,7 +331,9 @@ jobs:
   # The merge queue ruleset requires this check, so auto-merge queues a pull
   # request only once its head has a pass verdict. Commits after queueing are not
   # merged, so the merge group run passes. Dependabot runs get no secrets and are
-  # not reviewed. It waits for publish so the review comment lands first.
+  # not reviewed, so only dependabot's own branch in this repository, last pushed
+  # by dependabot, passes unreviewed; an actor name alone is not trusted. It
+  # waits for publish so the review comment lands first.
   verdict:
     name: claude review
     needs: [review, publish]
@@ -342,7 +344,10 @@ jobs:
       - name: Only a pass verdict may queue
         env:
           EVENT: ${{ github.event_name }}
-          BOT: ${{ endsWith(github.actor, '[bot]') }}
+          BOT: >-
+            ${{ github.actor == 'dependabot[bot]' &&
+                github.event.pull_request.user.login == 'dependabot[bot]' &&
+                github.event.pull_request.head.repo.full_name == github.repository }}
           VERDICT: ${{ needs.review.outputs.verdict }}
         run: |
           echo "event: $EVENT, bot: $BOT, verdict: ${VERDICT:-none}"

@@ -116,6 +116,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "needs: [review, publish]",
             "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
             '[ "$EVENT" = merge_group ] || [ "$BOT" = true ] || [ "$VERDICT" = pass ]',
+            "github.event.pull_request.user.login == 'dependabot[bot]'",
+            "github.event.pull_request.head.repo.full_name == github.repository",
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, verdict)
