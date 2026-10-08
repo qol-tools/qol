@@ -616,10 +616,10 @@ impl SettingsPanelView {
                 }
                 true
             }
-            "enter" | "tab" => {
+            "enter" | "return" | "tab" => {
                 self.filter_open = false;
                 self.resync_scroll();
-                true
+                !filter_close_activates(key)
             }
             "backspace" => {
                 let mut next = self.filter.clone();
@@ -4900,6 +4900,12 @@ fn row_matches(row: &Row, needle: &str) -> bool {
             .is_some_and(|text| text.to_lowercase().contains(needle))
 }
 
+/// Enter closes the filter and falls through to activate the highlighted row in the same press;
+/// tab only closes it.
+fn filter_close_activates(key: &str) -> bool {
+    matches!(key, "enter" | "return")
+}
+
 fn bare_filter_seed(key: &str, key_char: Option<&str>) -> Option<String> {
     if matches!(
         key,
@@ -5235,6 +5241,18 @@ mod tests {
             rows,
             source,
         }
+    }
+
+    #[test]
+    fn enter_on_a_filtered_row_closes_the_filter_and_activates_it() {
+        for key in ["enter", "return"] {
+            assert!(super::filter_close_activates(key), "{key}");
+            assert_eq!(intent(key, None, false), Some(Intent::Activate), "{key}");
+        }
+        assert!(
+            !super::filter_close_activates("tab"),
+            "tab only closes the filter"
+        );
     }
 
     #[test]
