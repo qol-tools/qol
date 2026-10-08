@@ -72,6 +72,7 @@ pub(super) async fn check_update() -> Json<serde_json::Value> {
 pub(super) async fn self_update() -> impl IntoResponse {
     let operation = Operation::Host {
         confirm_after_restart: false,
+        update_plugins: Vec::new(),
     };
     match crate::updates::jobs::push(crate::updates::jobs::HOST_ID, operation) {
         Ok(()) => StatusCode::ACCEPTED,

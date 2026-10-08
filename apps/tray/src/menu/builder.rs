@@ -79,6 +79,7 @@ fn create_update_route(menu: &Menu, events: Arc<EventBus>) -> EventRoute {
 fn spawn_update_task(events: Arc<EventBus>) {
     let operation = updates::jobs::Operation::Host {
         confirm_after_restart: false,
+        update_plugins: Vec::new(),
     };
     if let Err(message) = updates::jobs::push(updates::jobs::HOST_ID, operation) {
         log::error!("Update failed: {}", message);
