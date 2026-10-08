@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp, PlainTextOutput};
-use qol_runtime::protocol::DaemonResponse;
+use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 use qol_terminal_sessions::{BackendId, SessionId};
 
 use crate::daemon::actions::CONFIG;
@@ -90,7 +90,27 @@ where
                     "Exits non-zero if the session id is invalid or the daemon does not answer.",
                 )
                 .run_plain_text(|context| {
-                    focus(parse_session(context.args())?)?;
+                    let session = parse_session(context.args())?;
+                    ask_daemon(crate::ui::notify::focus_request(&session))?;
+                    Ok(PlainTextOutput::empty())
+                }),
+        )
+        .command(
+            Command::new("reopen")
+                .about("Reopen the conversation of a finished parked session.")
+                .usage(format!("{PLUGIN_ID} reopen <park-id>"))
+                .detail(
+                    "A click on a finished parked session's notification runs this for its park.",
+                )
+                .output("No stdout on success.")
+                .exit_behavior(
+                    "Exits non-zero without exactly one park id or if the daemon does not answer.",
+                )
+                .run_plain_text(|context| {
+                    let [park] = context.args() else {
+                        anyhow::bail!("expected one park id like park-1791472381-2374635");
+                    };
+                    ask_daemon(crate::ui::notify::reopen_request(park))?;
                     Ok(PlainTextOutput::empty())
                 }),
         )
@@ -146,8 +166,8 @@ fn parse_session(args: &[String]) -> anyhow::Result<SessionId> {
     Ok(SessionId::new(BackendId::new(backend)?, native)?)
 }
 
-fn focus(session: SessionId) -> anyhow::Result<()> {
-    let request = crate::ui::notify::focus_request(&session);
+fn ask_daemon(request: DaemonRequest) -> anyhow::Result<()> {
+    let action = request.action.clone();
     let response = qol_plugin_daemon::daemon::send_request(
         &CONFIG,
         &request.action,
@@ -158,7 +178,7 @@ fn focus(session: SessionId) -> anyhow::Result<()> {
     match response {
         DaemonResponse::Handled { .. } => Ok(()),
         DaemonResponse::Error { message } => anyhow::bail!("{message}"),
-        other => anyhow::bail!("the daemon did not focus {session}: {other:?}"),
+        other => anyhow::bail!("the daemon did not handle {action}: {other:?}"),
     }
 }
 

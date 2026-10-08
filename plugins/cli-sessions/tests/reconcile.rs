@@ -1498,11 +1498,27 @@ fn pi_embedded_working_recovers_and_stays_busy_across_quiet_ticks() {
     }
 }
 
-fn write_park(dir: &std::path::Path, window_id: u64, runner_pid: u32) {
-    let session = SessionBinding::new(kitty_session_id(window_id), std::process::id() as i32)
+fn window_token(window_id: u64) -> String {
+    SessionBinding::new(kitty_session_id(window_id), std::process::id() as i32)
         .unwrap()
-        .token();
-    let record = ParkRecord {
+        .token()
+}
+
+fn write_park(dir: &std::path::Path, window_id: u64, runner_pid: u32) {
+    write_record(dir, &park_record(window_id, runner_pid));
+}
+
+fn write_record(dir: &std::path::Path, record: &ParkRecord) {
+    std::fs::write(
+        dir.join(format!("{}.json", record.id)),
+        serde_json::to_string(record).unwrap(),
+    )
+    .unwrap();
+}
+
+fn park_record(window_id: u64, runner_pid: u32) -> ParkRecord {
+    let session = window_token(window_id);
+    ParkRecord {
         id: format!("park-{window_id}"),
         tool: "codex".to_owned(),
         cwd: "/a/parked".to_owned(),
@@ -1521,12 +1537,92 @@ fn write_park(dir: &std::path::Path, window_id: u64, runner_pid: u32) {
         exit_code: None,
         resumed_session: None,
         detail: None,
+        report: None,
+        runner_exe: None,
+        notified: false,
+    }
+}
+
+#[test]
+fn a_woken_session_its_runner_will_close_never_toasts_your_turn() {
+    let parked = tempfile::tempdir().unwrap();
+    write_record(
+        parked.path(),
+        &ParkRecord {
+            state: ParkState::Resumed,
+            resumed_session: Some(window_token(18)),
+            ..park_record(99, std::process::id())
+        },
+    );
+    let mut caches = ReconcileCaches::with_parked_dir(Some(parked.path().to_path_buf()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let mut host = FakeHost {
+        panes: vec![pane(18, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: CODEX_WORKING_LINE.into(),
     };
-    std::fs::write(
-        dir.join(format!("{}.json", record.id)),
-        serde_json::to_string(&record).unwrap(),
-    )
-    .unwrap();
+    let mut notices = Vec::new();
+    for now in 100..=108 {
+        if now == 101 {
+            host.screen = CODEX_ANSWER_LIST.to_owned();
+        }
+        if now == 108 {
+            host.panes[0].title = "project | Ready | finished".into();
+        }
+        notices.extend(tick_with_caches(
+            &reg,
+            &host,
+            &interpreter(),
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        ));
+    }
+    let rows = reg.lock().unwrap().sorted();
+    assert_eq!(rows[0].status, Status::YourTurn, "the woken turn ended");
+    assert!(
+        notices.is_empty(),
+        "the runner closes the tab and its report is the toast"
+    );
+}
+
+#[test]
+fn a_finished_park_toasts_its_report_once_and_a_click_reopens_it() {
+    let parked = tempfile::tempdir().unwrap();
+    write_record(
+        parked.path(),
+        &ParkRecord {
+            state: ParkState::Finished,
+            runner_pid: None,
+            report: Some("PR #87 merged.\n\nRestart the tray.".to_owned()),
+            ..park_record(19, std::process::id())
+        },
+    );
+    let mut caches = ReconcileCaches::with_parked_dir(Some(parked.path().to_path_buf()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![],
+        screen: String::new(),
+    };
+    let mut notices = Vec::new();
+    for now in 100..=102 {
+        notices.extend(tick_with_caches(
+            &reg,
+            &host,
+            &interpreter(),
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        ));
+    }
+    assert_eq!(notices.len(), 1, "one toast per finished park");
+    assert_eq!(notices[0].title, "watch pr");
+    assert_eq!(notices[0].body, "PR #87 merged.\n\nRestart the tray.");
+    let activate = notices[0].activate();
+    assert_eq!(activate.action, "reopen");
+    assert_eq!(activate.input["park"], "park-19");
+    assert!(reg.lock().unwrap().sorted().is_empty());
 }
 
 #[test]
@@ -1631,6 +1727,9 @@ fn live_parks_drop_dead_runners_and_unparseable_sessions() {
         exit_code: None,
         resumed_session: None,
         detail: None,
+        report: None,
+        runner_exe: None,
+        notified: false,
     };
     let token = SessionBinding::new(kitty_session_id(5), 1).unwrap().token();
     let parks = live_parks(
