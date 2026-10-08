@@ -3,8 +3,8 @@ use gpui::prelude::*;
 use gpui::{AnyElement, ClickEvent, KeyDownEvent};
 
 use super::super::components::{
-    choose_hints, choose_step, settings_tile_rows, tile_arts, tile_layout, ChoiceArt,
-    SettingsGroupHeader, SettingsHint, SettingsTile, TileArt,
+    choose_hints, choose_step, settings_message, settings_tile_rows, tile_arts, tile_layout,
+    ChoiceArt, SettingsGroupHeader, SettingsHint, SettingsTile, TileArt,
 };
 use super::super::rows::{
     row_query_names, Row, RowControl, RowQueryState, RowSection, SelectOption,
@@ -176,6 +176,20 @@ impl SettingsPanelView {
             )
         });
         pending.then_some(lookup_label)
+    }
+
+    fn choose_unavailable(&self) -> Option<String> {
+        let parent = self.stack.len().checked_sub(2)?;
+        let ChooseOrigin::Row(origin_row) = self.stack.last()?.choose.as_ref()?.origin else {
+            return None;
+        };
+        let row = self.stack[parent].rows.get(origin_row)?;
+        row_query_names(row).into_iter().find_map(|name| {
+            match self.query_states.get(&(row.source, name.to_string())) {
+                Some(RowQueryState::Unavailable(failure)) => Some(failure.clone()),
+                _ => None,
+            }
+        })
     }
 
     fn choose_card_tiles(&self) -> Option<(Vec<ChooseTile>, usize)> {
@@ -407,6 +421,14 @@ impl SettingsPanelView {
                 .current(current)
                 .into_any_element(),
         );
+        if tiles.is_empty() {
+            let message = match self.choose_unavailable() {
+                Some(failure) => settings_message(failure, true, self.kit),
+                None => settings_message("Nothing to choose from", false, self.kit),
+            };
+            items.push(message.into_any_element());
+            return items;
+        }
         let mut tile_elements: Vec<AnyElement> = Vec::with_capacity(tiles.len());
         for (index, tile) in tiles.into_iter().enumerate() {
             let waiting = matches!(tile.art, TileArt::Waiting);

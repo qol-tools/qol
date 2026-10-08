@@ -910,6 +910,30 @@ impl SettingsPanelView {
         cx.notify();
     }
 
+    /// A card opened from a search hit would inherit the needle and filter
+    /// its own rows away, so the search ends on the hit's own page first:
+    /// the card's rows show in full and its queries reach the hit's plugin.
+    fn land_on_search_hit(&mut self, row: usize, cx: &mut Context<Self>) {
+        let Some(source) = self.level().rows.get(row).map(|row| row.source) else {
+            return;
+        };
+        let section = self
+            .level()
+            .sections
+            .iter()
+            .position(|section| section.rows.contains(&row));
+        self.filter.clear();
+        self.filter_open = false;
+        self.select_source(source, cx);
+        self.set_source_menu(false);
+        if let Some(section) = section {
+            self.level_mut().selected_section = section;
+            self.level_mut().active_section = Some(section);
+        }
+        self.level_mut().selected = row;
+        self.resync_scroll();
+    }
+
     fn forget_last_visit(&mut self) {
         self.stack.truncate(1);
         self.card_marks.clear();
@@ -1841,6 +1865,15 @@ impl SettingsPanelView {
             return;
         }
         let selected = self.level().selected;
+        if self.filtering()
+            && self
+                .level()
+                .rows
+                .get(selected)
+                .is_some_and(|row| opens_a_card(&row.control))
+        {
+            self.land_on_search_hit(selected, cx);
+        }
         let Some(row) = self.level().rows.get(selected) else {
             return;
         };
@@ -4961,6 +4994,26 @@ fn filtered_visible_rows(
         }
     }
     out
+}
+
+fn opens_a_card(control: &RowControl) -> bool {
+    match control {
+        RowControl::List { items, .. } => !items.is_empty(),
+        RowControl::Select { .. }
+        | RowControl::MultiSelect { .. }
+        | RowControl::ObjectArray(_)
+        | RowControl::DisplayLayout(_)
+        | RowControl::Gamepad { .. }
+        | RowControl::QrCode { .. }
+        | RowControl::TextList(_) => true,
+        RowControl::Toggle(_)
+        | RowControl::Number { .. }
+        | RowControl::Text(_)
+        | RowControl::Color(_)
+        | RowControl::Action { .. }
+        | RowControl::Status { .. }
+        | RowControl::Unsupported { .. } => false,
+    }
 }
 
 fn clamp_selected(visible: &[usize], selected: usize) -> usize {
