@@ -98,12 +98,14 @@ pub(super) fn resolve(
 }
 
 fn model_for_tool(tool: &str, default: Option<&str>, policy: &DispatchPolicy) -> Option<String> {
-    let default = default.or(policy.default_model.as_deref());
+    let candidates = [default, policy.default_model.as_deref()];
     let Some(declared) = policy.tool_models.get(tool) else {
-        return default.map(str::to_owned);
+        return candidates.into_iter().flatten().next().map(str::to_owned);
     };
-    default
-        .filter(|model| declared.iter().any(|entry| entry == model))
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|model| declared.iter().any(|entry| entry == model))
         .or(declared.first().map(String::as_str))
         .map(str::to_owned)
 }
@@ -117,13 +119,18 @@ mod tests {
         AgentDispatch::new(
             DispatchPolicy {
                 default_model: Some("flash".to_owned()),
-                allowed_models: vec!["opus".to_owned(), "sonnet".to_owned(), "flash".to_owned()],
+                allowed_models: vec![
+                    "opus".to_owned(),
+                    "sonnet".to_owned(),
+                    "glm".to_owned(),
+                    "flash".to_owned(),
+                ],
                 tool_models: BTreeMap::from([
                     (
                         "claude".to_owned(),
                         vec!["opus".to_owned(), "sonnet".to_owned()],
                     ),
-                    ("pi".to_owned(), vec!["flash".to_owned()]),
+                    ("pi".to_owned(), vec!["glm".to_owned(), "flash".to_owned()]),
                     ("codex".to_owned(), vec!["astra".to_owned()]),
                 ]),
                 ..DispatchPolicy::default()
