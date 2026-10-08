@@ -337,6 +337,20 @@ fn custom_title(line: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
+pub(super) fn permission_mode(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    text.lines()
+        .rev()
+        .filter(|line| line.contains("\"permissionMode\""))
+        .find_map(|line| {
+            serde_json::from_str::<Value>(line)
+                .ok()?
+                .get("permissionMode")?
+                .as_str()
+                .map(str::to_owned)
+        })
+}
+
 pub(super) fn chat_transcript(path: &Path) -> Option<Vec<ChatTurn>> {
     read_chat(path, append_chat_turn)
 }

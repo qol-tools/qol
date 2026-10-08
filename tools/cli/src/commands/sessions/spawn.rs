@@ -2128,14 +2128,14 @@ pub(super) fn spawn_detached(
         );
     }
     let mut launch = wrap_launch(&prepared.launch, cap);
-    launch
-        .args
-        .extend(resume.unwrap_or_default().iter().cloned());
-    launch.args.extend(super::launch_flags::launch_flags(
-        &prepared.tool_id,
-        model,
-        effort,
-    )?);
+    let flags = match resume {
+        Some(resume) => {
+            launch.args.extend(resume.iter().cloned());
+            super::launch_flags::tier_flags(&prepared.tool_id, model, effort)?
+        }
+        None => super::launch_flags::launch_flags(&prepared.tool_id, model, effort)?,
+    };
+    launch.args.extend(flags);
     super::lane_account::apply(&mut launch, &prepared.tool_id)?;
     if !dry_run {
         launch.args.push(prompt.to_owned());

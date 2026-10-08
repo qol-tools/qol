@@ -130,4 +130,8 @@ pub trait CliSessionStrategy: Send + Sync {
     fn resume_args(&self, _external_id: &str) -> Option<Vec<String>> {
         None
     }
+
+    fn permission_mode(&self, _session: &SessionFacts) -> Option<String> {
+        None
+    }
 }

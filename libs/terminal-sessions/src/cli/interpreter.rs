@@ -177,6 +177,10 @@ impl CliSessionInterpreter {
             .and_then(|strategy| strategy.resume_args(external_id))
     }
 
+    pub fn permission_mode(&self, session: &SessionFacts) -> Option<String> {
+        self.strategy_for(session).permission_mode(session)
+    }
+
     pub fn launchable_tools(&self) -> Vec<CliToolId> {
         self.strategies
             .iter()

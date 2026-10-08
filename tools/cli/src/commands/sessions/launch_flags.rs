@@ -9,6 +9,16 @@ pub(super) fn launch_flags(
     effort: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut flags = permission_flags(tool);
+    flags.extend(tier_flags(tool, model, effort)?);
+    Ok(flags)
+}
+
+pub(super) fn tier_flags(
+    tool: &CliToolId,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut flags = Vec::new();
     if let Some(model) = model {
         flags.extend(model_flags(tool, model)?);
     }
@@ -21,6 +31,24 @@ pub(super) fn launch_flags(
 fn permission_flags(tool: &CliToolId) -> Vec<String> {
     match tool.as_str() {
         "claude" => vec!["--dangerously-skip-permissions".to_owned()],
+        _ => Vec::new(),
+    }
+}
+
+pub(super) const RESUMABLE_PERMISSION_MODES: [&str; 5] = [
+    "default",
+    "acceptEdits",
+    "plan",
+    "auto",
+    "bypassPermissions",
+];
+
+pub(super) fn resume_permission_flags(tool: &CliToolId, mode: Option<&str>) -> Vec<String> {
+    match (tool.as_str(), mode) {
+        ("claude", Some("bypassPermissions")) => permission_flags(tool),
+        ("claude", Some(mode)) if RESUMABLE_PERMISSION_MODES.contains(&mode) => {
+            vec!["--permission-mode".to_owned(), mode.to_owned()]
+        }
         _ => Vec::new(),
     }
 }
@@ -69,6 +97,29 @@ mod tests {
 
     fn tool(id: &str) -> CliToolId {
         CliToolId::new(id).unwrap()
+    }
+
+    #[test]
+    fn resumes_keep_the_recorded_permission_mode_and_never_widen_an_unknown_one() {
+        let cases: [(&str, Option<&str>, &[&str]); 6] = [
+            (
+                "claude",
+                Some("bypassPermissions"),
+                &["--dangerously-skip-permissions"],
+            ),
+            ("claude", Some("plan"), &["--permission-mode", "plan"]),
+            ("claude", Some("default"), &["--permission-mode", "default"]),
+            ("claude", Some("yolo"), &[]),
+            ("claude", None, &[]),
+            ("pi", Some("bypassPermissions"), &[]),
+        ];
+        for (id, mode, expected) in cases {
+            assert_eq!(
+                resume_permission_flags(&tool(id), mode),
+                expected,
+                "{id} {mode:?}"
+            );
+        }
     }
 
     #[test]
