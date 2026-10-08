@@ -255,7 +255,7 @@ fn prune_with_ceilings(
         if is_protected_target_root(&entry.file_name().to_string_lossy()) {
             continue;
         }
-        if entry.path().is_dir() && is_building_in_root(&entry.path()) {
+        if is_building_in_root(&entry.path()) {
             continue;
         }
         try_remove_target_path(&entry.path(), &mut failures);
