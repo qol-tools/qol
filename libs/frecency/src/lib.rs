@@ -73,17 +73,30 @@ pub fn default_store_path(plugin_name: &str) -> PathBuf {
 }
 
 pub fn load(path: &Path) -> FrequencyData {
+    let file = store_token(path);
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FrequencyData::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            qol_runtime::probe!("FRECENCY_LOAD", "file={file} outcome=missing");
+            return FrequencyData::default();
+        }
         Err(e) => {
+            qol_runtime::probe!("FRECENCY_LOAD", "file={file} outcome=read_failed");
             log::warn!("failed to read {}: {}", path.display(), e);
             return FrequencyData::default();
         }
     };
-    match serde_json::from_str(&contents) {
-        Ok(data) => data,
+    match serde_json::from_str::<FrequencyData>(&contents) {
+        Ok(data) => {
+            qol_runtime::probe!(
+                "FRECENCY_LOAD",
+                "file={file} outcome=loaded entries={}",
+                data.entries.len()
+            );
+            data
+        }
         Err(e) => {
+            qol_runtime::probe!("FRECENCY_LOAD", "file={file} outcome=corrupt");
             log::warn!("discarding corrupt {}: {}", path.display(), e);
             FrequencyData::default()
         }
@@ -91,16 +104,30 @@ pub fn load(path: &Path) -> FrequencyData {
 }
 
 pub fn save(path: &Path, data: &FrequencyData) {
+    let file = store_token(path);
     let json = match serde_json::to_string_pretty(data) {
         Ok(json) => json,
         Err(e) => {
+            qol_runtime::probe!("FRECENCY_SAVE", "file={file} outcome=serialize_failed");
             log::warn!("failed to serialize: {}", e);
             return;
         }
     };
-    if let Err(e) = qol_fs::atomic_write(path, json.as_bytes()) {
-        log::warn!("failed to save {}: {}", path.display(), e);
+    match qol_fs::atomic_write(path, json.as_bytes()) {
+        Ok(()) => qol_runtime::probe!(
+            "FRECENCY_SAVE",
+            "file={file} outcome=saved entries={}",
+            data.entries.len()
+        ),
+        Err(e) => {
+            qol_runtime::probe!("FRECENCY_SAVE", "file={file} outcome=failed");
+            log::warn!("failed to save {}: {}", path.display(), e);
+        }
     }
+}
+
+fn store_token(path: &Path) -> String {
+    qol_runtime::probe::token(&path.file_name().unwrap_or_default().to_string_lossy())
 }
 
 #[cfg(test)]
