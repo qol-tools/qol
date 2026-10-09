@@ -3,6 +3,8 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{null, null_mut};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use windows_sys::w;
 use windows_sys::Win32::System::Com::{
@@ -12,6 +14,7 @@ use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 const SHELL_EXECUTE_FIRST_SUCCESS: usize = 33;
+const SHELL_EXECUTE_WAIT: Duration = Duration::from_secs(2);
 const SE_ERR_FNF: usize = 2;
 const SE_ERR_PNF: usize = 3;
 const SE_ERR_ACCESSDENIED: usize = 5;
@@ -21,25 +24,58 @@ pub(crate) fn daemon_action_args(_path: &Path, exec: &[String]) -> Option<(Strin
 }
 
 pub(crate) fn launch_app(_path: &Path, exec: &[String]) -> io::Result<()> {
-    let Some(target) = exec.first() else {
+    let Some((target, args)) = exec.split_first() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "application has no executable",
         ));
     };
     let file = wide(OsStr::new(target));
+    let parameters = (!args.is_empty()).then(|| wide(OsStr::new(&join_args(args))));
     let directory = qol_platform::launch_working_dir().map(|dir| wide(dir.as_os_str()));
+    let (sender, receiver) = mpsc::channel();
     std::thread::Builder::new()
         .name("shell-execute".into())
         .spawn(move || {
-            if let Err(error) = shell_execute(&file, directory.as_deref()) {
+            let result = shell_execute_scrubbed(&file, parameters.as_deref(), directory.as_deref());
+            if let Err(error) = &result {
                 log::warn!("launch failed: {error}");
             }
-        })
-        .map(|_| ())
+            let _ = sender.send(result);
+        })?;
+    // ShellExecute can block on a shell dialog, so a slow call counts as launched.
+    receiver.recv_timeout(SHELL_EXECUTE_WAIT).unwrap_or(Ok(()))
 }
 
-fn shell_execute(file: &[u16], directory: Option<&[u16]>) -> io::Result<()> {
+/// ShellExecute gives the child this process's environment, so the daemon
+/// handoff variables are lifted for the duration of the call and restored.
+fn shell_execute_scrubbed(
+    file: &[u16],
+    parameters: Option<&[u16]>,
+    directory: Option<&[u16]>,
+) -> io::Result<()> {
+    let mut keys = qol_conventions::daemon_handoff_env_keys();
+    keys.push(qol_conventions::ENV_DAEMON_SOCKET.into());
+    keys.push(qol_conventions::ENV_INSTALL_ID.into());
+    let saved: Vec<_> = keys
+        .into_iter()
+        .filter_map(|key| std::env::var_os(&key).map(|value| (key, value)))
+        .collect();
+    for (key, _) in &saved {
+        std::env::remove_var(key);
+    }
+    let result = shell_execute(file, parameters, directory);
+    for (key, value) in saved {
+        std::env::set_var(key, value);
+    }
+    result
+}
+
+fn shell_execute(
+    file: &[u16],
+    parameters: Option<&[u16]>,
+    directory: Option<&[u16]>,
+) -> io::Result<()> {
     let com = unsafe {
         CoInitializeEx(
             null(),
@@ -51,7 +87,7 @@ fn shell_execute(file: &[u16], directory: Option<&[u16]>) -> io::Result<()> {
             null_mut(),
             w!("open"),
             file.as_ptr(),
-            null(),
+            parameters.map_or(null(), <[u16]>::as_ptr),
             directory.map_or(null(), <[u16]>::as_ptr),
             SW_SHOWNORMAL,
         )
@@ -60,6 +96,39 @@ fn shell_execute(file: &[u16], directory: Option<&[u16]>) -> io::Result<()> {
         unsafe { CoUninitialize() };
     }
     shell_execute_result(result)
+}
+
+fn join_args(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| quote_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+        return arg.to_string();
+    }
+    let mut quoted = String::from('"');
+    let mut backslashes = 0;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '"' => {
+                quoted.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                quoted.extend(std::iter::repeat('\\').take(backslashes));
+                quoted.push(ch);
+                backslashes = 0;
+            }
+        }
+    }
+    quoted.extend(std::iter::repeat('\\').take(backslashes * 2));
+    quoted.push('"');
+    quoted
 }
 
 fn shell_execute_result(code: usize) -> io::Result<()> {
