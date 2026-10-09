@@ -5,11 +5,15 @@ use qol_headless::{Command, Execution, HeadlessApp};
 use crate::commands::{agents, peers, sessions};
 
 pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
-    let has_help = args.values.iter().any(|value| {
-        value
-            .to_str()
-            .is_some_and(|value| matches!(value, "help" | "-h" | "--help"))
-    });
+    let has_help = args
+        .values
+        .iter()
+        .take_while(|value| value.to_str() != Some("--"))
+        .any(|value| {
+            value
+                .to_str()
+                .is_some_and(|value| matches!(value, "help" | "-h" | "--help"))
+        });
     let is_agents = args.values.first().and_then(|value| value.to_str()) == Some("agents");
     let is_peers = args.values.first().and_then(|value| value.to_str()) == Some("peers");
     if !is_agents && !is_peers && !args.values.is_empty() && !has_help && !args.json {
