@@ -306,7 +306,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("environment:", build)
         self.assertNotIn("secrets.", build)
         self.assertIn("needs: build", sign)
-        self.assertIn("environment: plugin-index", sign)
+        self.assertIn("if: needs.build.outputs.changed == 'true'", sign)
+        self.assertIn("name: plugin-index\n      deployment: false", sign)
+        compare = named_step(build, "Compare with the deployed index", "      ")
+        self.assertIn("jq -S 'del(.serial)' index.json", compare)
         self.assertIn("secrets.PLUGIN_INDEX_MINISIGN_KEY", sign)
         self.assertIn("-x site/plugins/index.json.minisig", sign)
         for job in (build, sign):
@@ -350,7 +353,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "jq -j .signature site/plugins/index.signed.json | cmp - site/plugins/index.json.minisig",
             bundle,
         )
-        self.assertRegex(index, r"INDEX_URL: [^\n]+/plugins/index\.signed\.json\n")
+        self.assertRegex(build, r"INDEX_URL: [^\n]+/plugins/index\.signed\.json\n")
 
         secret_steps = [step for step in workflow.split("\n      - ") if "secrets." in step]
         self.assertEqual(len(secret_steps), 1)

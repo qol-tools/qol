@@ -27,8 +27,11 @@ jobs:
     permissions:
       contents: read
       packages: read
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
     env:
       RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+      INDEX_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/plugins/index.signed.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,7 +49,6 @@ jobs:
         env:
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
-          INDEX_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/plugins/index.signed.json
         run: |
           set -euo pipefail
           target/debug/qol-plugin-registry index \
@@ -54,6 +56,21 @@ jobs:
             --public-key "${PUBLIC_KEY}" \
             --previous-url "${INDEX_URL}" \
             --output index.json | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      # Every plugin release dispatches this workflow, and one run usually
+      # picks up the tags of the releases after it, so most runs rebuild the
+      # index already deployed. Only a different index is signed and deployed.
+      - name: Compare with the deployed index
+        id: compare
+        run: |
+          set -euo pipefail
+          deployed="$(curl -fsSL "${INDEX_URL}" | jq -r .index | jq -S 'del(.serial)')" || deployed=""
+          if [ "${deployed}" = "$(jq -S 'del(.serial)' index.json)" ]; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "The deployed index already matches, nothing to publish." | tee -a "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -63,13 +80,17 @@ jobs:
           if-no-files-found: error
 
   # The signing key lives only in this job, which compiles nothing and runs
-  # only the pinned minisign binary.
+  # only the pinned minisign binary. The environment only scopes the key, so
+  # it records no deployment.
   sign:
     name: Sign index
     needs: build
+    if: needs.build.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: plugin-index
+    environment:
+      name: plugin-index
+      deployment: false
     permissions:
       contents: read
     steps:
