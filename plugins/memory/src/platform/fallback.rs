@@ -6,3 +6,7 @@ pub(crate) fn current_support() -> PlatformSupport {
         supported: false,
     }
 }
+
+pub(crate) fn run_dir_name(stamp: &str) -> String {
+    stamp.to_owned()
+}

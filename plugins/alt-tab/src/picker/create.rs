@@ -211,28 +211,6 @@ fn on_open_failure() {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-pub(crate) fn pre_create_on_tracker_monitor(
-    config: &AltTabConfig,
-    current: &PickerWindowState,
-    preview_cache: SharedPreviewCache,
-    tracker: &qol_gpui::monitor::MonitorTracker,
-    cx: &mut App,
-) {
-    qol_gpui::popup_window::set_ghost_debug(
-        config.display.ghost_opacity,
-        config.display.ghost_debug_color.as_deref(),
-    );
-    let windows = crate::discovery::WindowDiscovery::visible_windows(
-        &crate::discovery::Platform,
-        config.display.show_minimized,
-        &config.switchable_panels,
-    )
-    .unwrap_or_default();
-    let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
-    pre_create_ghost(config, current, &placement, preview_cache, &windows, cx);
-}
-
 pub(crate) fn pre_create_ghost(
     config: &AltTabConfig,
     current: &PickerWindowState,

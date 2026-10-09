@@ -37,13 +37,7 @@ pub fn pre_create(
     tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut gpui::App,
 ) {
-    crate::picker::create::pre_create_on_tracker_monitor(
-        config,
-        current,
-        preview_cache,
-        tracker,
-        cx,
-    );
+    super::tracker_pre_create::pre_create(config, current, preview_cache, tracker, cx);
 }
 
 pub fn destroy_non_target_windows(
