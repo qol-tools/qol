@@ -1,27 +1,28 @@
+use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::Once;
 
-use qol_windowing::{WindowId, WindowRect};
-use windows_sys::Win32::Foundation::{CloseHandle, BOOL, FILETIME, HWND, LPARAM, RECT, TRUE};
+use crate::{WindowId, WindowRect};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
 use windows_sys::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors,
+    GetMonitorInfoW, MonitorFromWindow, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows_sys::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentThreadId, GetProcessTimes, OpenProcess,
-    QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-};
+use windows_sys::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, SetForegroundWindow, SetWindowPos, ShowWindow, GWL_EXSTYLE,
-    GW_OWNER, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, WS_EX_TOOLWINDOW,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, IsZoomed, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GW_OWNER, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+    WM_CLOSE, WS_EX_TOOLWINDOW,
 };
 
 const SHELL_CLASSES: [&str; 4] = [
@@ -31,7 +32,7 @@ const SHELL_CLASSES: [&str; 4] = [
     "Shell_SecondaryTrayWnd",
 ];
 
-pub(super) fn ensure_dpi_awareness() {
+pub fn ensure_dpi_awareness() {
     static AWARE: Once = Once::new();
     AWARE.call_once(|| unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -39,38 +40,38 @@ pub(super) fn ensure_dpi_awareness() {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Window(HWND);
+pub struct Window(HWND);
 
 impl Window {
-    pub(super) fn foreground() -> Option<Self> {
+    pub fn foreground() -> Option<Self> {
         let hwnd = unsafe { GetForegroundWindow() };
         (!hwnd.is_null())
             .then_some(Self(hwnd))
             .filter(|window| !window.is_shell())
     }
 
-    pub(super) fn from_id(id: &WindowId) -> Option<Self> {
+    pub fn from_id(id: &WindowId) -> Option<Self> {
         id.as_u32().map(|handle| Self(handle as usize as HWND))
     }
 
-    pub(super) fn id(self) -> WindowId {
+    pub fn id(self) -> WindowId {
         WindowId::from_u32(self.0 as usize as u32)
     }
 
-    pub(super) fn exists(self) -> bool {
+    pub fn exists(self) -> bool {
         unsafe { IsWindow(self.0) != 0 }
     }
 
-    pub(super) fn is_minimized(self) -> bool {
+    pub fn is_minimized(self) -> bool {
         unsafe { IsIconic(self.0) != 0 }
     }
 
-    pub(super) fn is_maximized(self) -> bool {
+    pub fn is_maximized(self) -> bool {
         unsafe { IsZoomed(self.0) != 0 }
     }
 
-    pub(super) fn is_switchable(self) -> bool {
-        let shown = unsafe { IsWindowVisible(self.0) != 0 } || self.is_minimized();
+    pub fn is_switchable(self) -> bool {
+        let shown = unsafe { IsWindowVisible(self.0) != 0 };
         let owned = unsafe { !GetWindow(self.0, GW_OWNER).is_null() };
         let style = unsafe { GetWindowLongPtrW(self.0, GWL_EXSTYLE) };
         let tool = style & WS_EX_TOOLWINDOW as isize != 0;
@@ -97,7 +98,7 @@ impl Window {
         SHELL_CLASSES.contains(&class.as_str())
     }
 
-    pub(super) fn frame(self) -> Option<WindowRect> {
+    pub fn frame(self) -> Option<WindowRect> {
         self.visible_rect().map(to_frame)
     }
 
@@ -122,7 +123,7 @@ impl Window {
         (unsafe { GetWindowRect(self.0, &mut rect) } != 0).then_some(rect)
     }
 
-    pub(super) fn set_frame(self, target: WindowRect) -> Result<(), String> {
+    pub fn set_frame(self, target: WindowRect) -> Result<(), String> {
         if self.is_minimized() || self.is_maximized() {
             unsafe { ShowWindow(self.0, SW_RESTORE) };
         }
@@ -149,16 +150,16 @@ impl Window {
         Ok(())
     }
 
-    pub(super) fn maximize(self) {
+    pub fn maximize(self) {
         unsafe { ShowWindow(self.0, SW_MAXIMIZE) };
     }
 
-    pub(super) fn minimize(self) -> bool {
+    pub fn minimize(self) -> bool {
         unsafe { ShowWindow(self.0, SW_MINIMIZE) };
         self.is_minimized()
     }
 
-    pub(super) fn activate(self) -> bool {
+    pub fn activate(self) -> bool {
         if self.is_minimized() {
             unsafe { ShowWindow(self.0, SW_RESTORE) };
         }
@@ -177,19 +178,44 @@ impl Window {
         }
     }
 
-    pub(super) fn work_area(self) -> Option<WindowRect> {
+    pub fn work_area(self) -> Option<WindowRect> {
         let monitor = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
         monitor_work_area(monitor)
     }
 
-    pub(super) fn pid(self) -> Option<u32> {
+    pub fn title(self) -> String {
+        let mut buffer = [0u16; 512];
+        let length = unsafe { GetWindowTextW(self.0, buffer.as_mut_ptr(), buffer.len() as i32) };
+        String::from_utf16_lossy(&buffer[..length.max(0) as usize])
+    }
+
+    pub fn request_close(self) -> bool {
+        unsafe { PostMessageW(self.0, WM_CLOSE, 0, 0) != 0 }
+    }
+
+    pub fn capture_rgba(self) -> Option<WindowPixels> {
+        let outer = self.outer_rect()?;
+        let visible = self.visible_rect()?;
+        let width = usize::try_from(outer.right - outer.left).ok()?;
+        let height = usize::try_from(outer.bottom - outer.top).ok()?;
+        let bgra = print_window(self.0, width, height)?;
+        let crop = WindowRect {
+            x: f64::from(visible.left - outer.left),
+            y: f64::from(visible.top - outer.top),
+            width: f64::from(visible.right - visible.left),
+            height: f64::from(visible.bottom - visible.top),
+        };
+        Some(cropped_rgba(&bgra, width, crop))
+    }
+
+    pub fn pid(self) -> Option<u32> {
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(self.0, &mut pid) };
         (pid != 0).then_some(pid)
     }
 }
 
-pub(super) fn top_level_windows() -> Vec<Window> {
+pub fn top_level_windows() -> Vec<Window> {
     let mut windows: Vec<Window> = Vec::new();
     unsafe {
         EnumWindows(
@@ -206,7 +232,7 @@ unsafe extern "system" fn collect_window(hwnd: HWND, data: LPARAM) -> BOOL {
     TRUE
 }
 
-pub(super) fn work_areas_left_to_right() -> Vec<WindowRect> {
+pub fn work_areas_left_to_right() -> Vec<WindowRect> {
     let mut monitors: Vec<HMONITOR> = Vec::new();
     unsafe {
         EnumDisplayMonitors(
@@ -245,37 +271,70 @@ fn monitor_work_area(monitor: HMONITOR) -> Option<WindowRect> {
     (unsafe { GetMonitorInfoW(monitor, &mut info) } != 0).then(|| to_frame(info.rcWork))
 }
 
-pub(super) fn process_start_ticks(pid: u32) -> Option<u64> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return None;
-    }
-    let mut created = empty_filetime();
-    let (mut exited, mut kernel, mut user) = (empty_filetime(), empty_filetime(), empty_filetime());
-    let read =
-        unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
-    unsafe { CloseHandle(process) };
-    (read != 0)
-        .then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+pub struct WindowPixels {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: Vec<u8>,
 }
 
-pub(super) fn process_image_name(pid: u32) -> Option<String> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
+const PW_RENDERFULLCONTENT: PRINT_WINDOW_FLAGS = 2;
+
+fn print_window(hwnd: HWND, width: usize, height: usize) -> Option<Vec<u8>> {
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: i32::try_from(width).ok()?,
+            biHeight: -i32::try_from(height).ok()?,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [unsafe { std::mem::zeroed() }],
+    };
+    let dc = unsafe { CreateCompatibleDC(null_mut()) };
+    if dc.is_null() {
         return None;
     }
-    let mut buffer = [0u16; 1024];
-    let mut length = buffer.len() as u32;
-    let read = unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            buffer.as_mut_ptr(),
-            &mut length,
-        )
-    };
-    unsafe { CloseHandle(process) };
-    (read != 0).then(|| String::from_utf16_lossy(&buffer[..length as usize]))
+    let mut bits: *mut c_void = null_mut();
+    let bitmap = unsafe { CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0) };
+    if bitmap.is_null() || bits.is_null() {
+        unsafe { DeleteDC(dc) };
+        return None;
+    }
+    let previous = unsafe { SelectObject(dc, bitmap) };
+    let printed = unsafe { PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT) } != 0;
+    let pixels =
+        unsafe { std::slice::from_raw_parts(bits as *const u8, width * height * 4) }.to_vec();
+    unsafe {
+        SelectObject(dc, previous);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+    }
+    printed.then_some(pixels)
+}
+
+fn cropped_rgba(bgra: &[u8], source_width: usize, crop: WindowRect) -> WindowPixels {
+    let (left, top) = (crop.x.max(0.0) as usize, crop.y.max(0.0) as usize);
+    let width = (crop.width.max(0.0) as usize).min(source_width.saturating_sub(left));
+    let source_height = bgra.len() / 4 / source_width.max(1);
+    let height = (crop.height.max(0.0) as usize).min(source_height.saturating_sub(top));
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for row in top..top + height {
+        let start = (row * source_width + left) * 4;
+        for pixel in bgra[start..start + width * 4].chunks_exact(4) {
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+        }
+    }
+    WindowPixels {
+        width,
+        height,
+        rgba,
+    }
 }
 
 fn to_frame(rect: RECT) -> WindowRect {
@@ -296,9 +355,47 @@ fn empty_rect() -> RECT {
     }
 }
 
-fn empty_filetime() -> FILETIME {
-    FILETIME {
-        dwLowDateTime: 0,
-        dwHighDateTime: 0,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cropped_rgba_keeps_the_visible_frame() {
+        let bgra: Vec<u8> = (0..4 * 3)
+            .flat_map(|index| [index as u8, 100, 200, 0])
+            .collect();
+        let cases = [
+            (
+                "inner",
+                rect(1.0, 1.0, 2.0, 1.0),
+                2,
+                1,
+                vec![200, 100, 5, 255, 200, 100, 6, 255],
+            ),
+            (
+                "clamped",
+                rect(3.0, 2.0, 5.0, 5.0),
+                1,
+                1,
+                vec![200, 100, 11, 255],
+            ),
+        ];
+        for (name, crop, width, height, rgba) in cases {
+            let pixels = cropped_rgba(&bgra, 4, crop);
+            assert_eq!(
+                (pixels.width, pixels.height, pixels.rgba),
+                (width, height, rgba),
+                "{name}"
+            );
+        }
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> WindowRect {
+        WindowRect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }

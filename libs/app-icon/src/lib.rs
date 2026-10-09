@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 mod platform;
 
@@ -35,4 +35,8 @@ pub fn parent_pid(pid: i32) -> Option<i32> {
 
 pub fn process_start_time_us(pid: i32) -> Option<u64> {
     platform::process_start_time_us(pid)
+}
+
+pub fn process_executable(pid: i32) -> Option<PathBuf> {
+    platform::process_executable(pid)
 }

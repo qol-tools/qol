@@ -1,5 +1,4 @@
 mod doctor;
-mod win32;
 
 use std::path::PathBuf;
 
@@ -10,7 +9,7 @@ use crate::platform::layout;
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::{self, WindowSystem};
 
-use win32::Window;
+use qol_windowing::platform::windows::{self as win32, Window};
 
 pub(crate) use doctor::{platform_supported_check, required_binaries_check};
 
@@ -151,15 +150,12 @@ impl WindowSystem for Win32WindowSystem {
     }
 
     fn is_launcher_window(&self, window_id: &WindowId) -> bool {
-        Window::from_id(window_id)
-            .and_then(Window::pid)
-            .and_then(win32::process_image_name)
-            .is_some_and(|name| {
-                let lower = name.to_ascii_lowercase();
-                qol_conventions::launcher::MATCH_MARKERS
-                    .iter()
-                    .any(|marker| lower.contains(marker))
-            })
+        Window::from_id(window_id).is_some_and(|window| {
+            let title = window.title().to_ascii_lowercase();
+            qol_conventions::launcher::MATCH_MARKERS
+                .iter()
+                .any(|marker| title.contains(marker))
+        })
     }
 
     fn window_pid(&self, window_id: &WindowId) -> Result<Option<u32>, String> {
@@ -167,6 +163,6 @@ impl WindowSystem for Win32WindowSystem {
     }
 
     fn process_start_ticks(&self, pid: u32) -> Option<u64> {
-        win32::process_start_ticks(pid)
+        qol_app_icon::process_start_time_us(i32::try_from(pid).ok()?)
     }
 }

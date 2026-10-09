@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::RgbaImage;
 
@@ -32,6 +32,10 @@ impl AppIconPlatform for Platform {
     }
 
     fn process_start_time_us(&self, _pid: i32) -> Option<u64> {
+        None
+    }
+
+    fn process_executable(&self, _pid: i32) -> Option<PathBuf> {
         None
     }
 }

@@ -35,6 +35,10 @@ impl AppIconPlatform for Platform {
     fn process_start_time_us(&self, _pid: i32) -> Option<u64> {
         None
     }
+
+    fn process_executable(&self, pid: i32) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
 }
 
 fn icon_for_bundle_id(_bundle_id: &str, _size: usize) -> Option<RgbaImage> {

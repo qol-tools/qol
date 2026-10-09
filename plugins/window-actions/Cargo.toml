@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 log.workspace = true
 qol-log.workspace = true
+qol-app-icon.workspace = true
 qol-apps.workspace = true
 qol-cinnamon.workspace = true
 qol-config.workspace = true
@@ -20,16 +21,6 @@ qol-windowing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 workspace-hack.workspace = true
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Dwm",
-  "Win32_Graphics_Gdi",
-  "Win32_System_Threading",
-  "Win32_UI_HiDpi",
-  "Win32_UI_WindowsAndMessaging",
-] }
 
 [build-dependencies]
 qol-conventions.workspace = true

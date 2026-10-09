@@ -1,6 +1,6 @@
 use crate::RgbaImage;
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::AppIconPlatform;
 
@@ -33,6 +33,10 @@ impl AppIconPlatform for Platform {
 
     fn process_start_time_us(&self, pid: i32) -> Option<u64> {
         process_start_time_us(pid)
+    }
+
+    fn process_executable(&self, _pid: i32) -> Option<PathBuf> {
+        None
     }
 }
 

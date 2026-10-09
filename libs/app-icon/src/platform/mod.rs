@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::RgbaImage;
 
@@ -28,6 +28,7 @@ pub(super) trait AppIconPlatform {
     fn app_display_name(&self, app_id: &str) -> Option<String>;
     fn parent_pid(&self, pid: i32) -> Option<i32>;
     fn process_start_time_us(&self, pid: i32) -> Option<u64>;
+    fn process_executable(&self, pid: i32) -> Option<PathBuf>;
 }
 
 pub(super) fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
@@ -56,4 +57,8 @@ pub(super) fn parent_pid(pid: i32) -> Option<i32> {
 
 pub(super) fn process_start_time_us(pid: i32) -> Option<u64> {
     Platform.process_start_time_us(pid)
+}
+
+pub(super) fn process_executable(pid: i32) -> Option<PathBuf> {
+    Platform.process_executable(pid)
 }
