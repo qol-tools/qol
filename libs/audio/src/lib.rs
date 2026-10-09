@@ -1,5 +1,4 @@
 pub mod attempts;
-#[cfg(target_os = "linux")]
 pub mod control;
 pub mod default_output;
 pub mod devices;
