@@ -7,6 +7,9 @@ pub(super) fn command() -> Command {
         .about("Control the tray-hosted voice session.")
         .subcommand(start_command())
         .subcommand(stop_command())
+        .subcommand(toggle_command())
+        .subcommand(activate_command())
+        .subcommand(target_command())
         .subcommand(status_command())
         .subcommand(events_command())
 }
@@ -38,6 +41,46 @@ fn stop_command() -> Command {
         .run_json(|context| {
             reject_args(context.args())?;
             response_payload("stop_listening", serde_json::Value::Null)
+        })
+}
+
+fn toggle_command() -> Command {
+    Command::new("toggle")
+        .about("Persist and apply the opposite of Voice's global activation.")
+        .usage("qol-voice session toggle")
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            let status = response_payload("toggle_activation", serde_json::Value::Null)?;
+            Ok(PlainTextOutput::text(status_line(&status)))
+        })
+        .run_json(|context| {
+            reject_args(context.args())?;
+            response_payload("toggle_activation", serde_json::Value::Null)
+        })
+}
+
+fn activate_command() -> Command {
+    Command::new("activate")
+        .about("Persist and apply whether Voice is globally active on this device.")
+        .usage("qol-voice session activate on|off")
+        .run_plain_text(|context| {
+            let status = response_payload("set_activation", parse_activation(context.args())?)?;
+            Ok(PlainTextOutput::text(status_line(&status)))
+        })
+        .run_json(|context| response_payload("set_activation", parse_activation(context.args())?))
+}
+
+fn target_command() -> Command {
+    Command::new("target")
+        .about("Persist and activate a live terminal destination.")
+        .usage("qol-voice session target TARGET|none")
+        .detail("TARGET is a value from the terminal_targets query.")
+        .run_plain_text(|context| {
+            let status = response_payload("select_terminal_target", parse_target(context.args())?)?;
+            Ok(PlainTextOutput::text(status_line(&status)))
+        })
+        .run_json(|context| {
+            response_payload("select_terminal_target", parse_target(context.args())?)
         })
 }
 
@@ -81,6 +124,21 @@ fn parse_after(args: &[String]) -> anyhow::Result<serde_json::Value> {
     }
 }
 
+fn parse_activation(args: &[String]) -> anyhow::Result<serde_json::Value> {
+    match args {
+        [value] if value == "on" => Ok(serde_json::json!({ "enabled": true })),
+        [value] if value == "off" => Ok(serde_json::json!({ "enabled": false })),
+        _ => anyhow::bail!("expected on or off"),
+    }
+}
+
+fn parse_target(args: &[String]) -> anyhow::Result<serde_json::Value> {
+    match args {
+        [target] => Ok(serde_json::json!({ "target": target })),
+        _ => anyhow::bail!("expected one terminal target or none"),
+    }
+}
+
 fn status_line(status: &serde_json::Value) -> String {
     let state = status
         .get("state")
@@ -107,7 +165,7 @@ fn status_line(status: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_after;
+    use super::{parse_activation, parse_after, parse_target};
 
     #[test]
     fn event_cursor_is_an_optional_unsigned_integer() {
@@ -120,6 +178,39 @@ mod tests {
             let actual = parse_after(&args)
                 .ok()
                 .and_then(|value| value["after"].as_u64());
+            assert_eq!(actual, expected, "args: {args:?}");
+        }
+    }
+
+    #[test]
+    fn activation_accepts_only_on_or_off() {
+        let cases = [
+            (vec!["on"], Some(true)),
+            (vec!["off"], Some(false)),
+            (vec!["yes"], None),
+            (vec![], None),
+        ];
+        for (args, expected) in cases {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let actual = parse_activation(&args)
+                .ok()
+                .and_then(|value| value["enabled"].as_bool());
+            assert_eq!(actual, expected, "args: {args:?}");
+        }
+    }
+
+    #[test]
+    fn target_requires_exactly_one_value() {
+        let cases = [
+            (vec!["none"], Some("none")),
+            (vec!["kitty:1"], Some("kitty:1")),
+            (vec![], None),
+            (vec!["a", "b"], None),
+        ];
+        for (args, expected) in cases {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let input = parse_target(&args).ok();
+            let actual = input.as_ref().and_then(|value| value["target"].as_str());
             assert_eq!(actual, expected, "args: {args:?}");
         }
     }

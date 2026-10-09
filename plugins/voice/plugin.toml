@@ -29,6 +29,10 @@ args = ["session", "start"]
 label = "Stop Listening"
 args = ["session", "stop"]
 
+[action.toggle_activation]
+label = "Toggle Voice"
+args = ["session", "toggle"]
+
 [action.settings]
 label = "Settings"
 kind = "settings"

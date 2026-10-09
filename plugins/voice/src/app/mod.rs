@@ -67,6 +67,7 @@ fn handle_request(runtime: &mut SessionManager, request: &DaemonRequest) -> Read
         "stt_models" => stt_models(),
         "terminal_targets" => runtime.terminal_targets().and_then(to_value),
         "set_activation" => set_activation(runtime, &request.input),
+        "toggle_activation" => toggle_activation(runtime),
         "select_terminal_target" => select_terminal_target(runtime, &request.input),
         "request_assistant_turn" => request_assistant_turn(runtime, &request.input),
         _ => return ReadResult::Fallback,
@@ -185,7 +186,20 @@ fn set_activation(
         .get("enabled")
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| anyhow::anyhow!("set_activation requires boolean `enabled`"))?;
-    let mut config = crate::config::load();
+    apply_activation(runtime, crate::config::load(), enabled)
+}
+
+fn toggle_activation(runtime: &mut SessionManager) -> Result<serde_json::Value> {
+    let config = crate::config::load();
+    let enabled = !config.activation.enabled;
+    apply_activation(runtime, config, enabled)
+}
+
+fn apply_activation(
+    runtime: &mut SessionManager,
+    mut config: crate::config::Config,
+    enabled: bool,
+) -> Result<serde_json::Value> {
     if enabled && config.recognition.enabled {
         crate::transcribe::resolve_descriptor(&config.recognition.provider)
             .map_err(|error| anyhow::anyhow!("{error}"))?;

@@ -12,6 +12,9 @@ description = "Interrupt user speech and begin an assistant turn"
 [action.set_activation]
 description = "Persist and apply whether Voice is globally active on this device"
 
+[action.toggle_activation]
+description = "Persist and apply the opposite of Voice's current global activation"
+
 [action.select_terminal_target]
 description = "Persist and activate a live terminal destination"
 
