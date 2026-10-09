@@ -112,7 +112,10 @@ fn target(connection: &mut Connection, direction: Direction) -> Result<Target, A
         })?,
         Direction::Input => node.index,
     };
-    let includes_volume = !node.hardware_volume;
+    let includes_volume = match direction {
+        Direction::Output => !node.hardware_volume,
+        Direction::Input => true,
+    };
     Ok(Target {
         device: node.name,
         source_index,
@@ -177,8 +180,8 @@ fn store(peak: &AtomicU32, level: f32) {
 }
 
 fn latest_peak(payload: &[u8]) -> Option<f32> {
-    let sample = payload.chunks_exact(SAMPLE_BYTES).next_back()?;
-    let value = f32::from_le_bytes(sample.try_into().ok()?);
+    let (samples, _) = payload.as_chunks::<SAMPLE_BYTES>();
+    let value = f32::from_le_bytes(*samples.last()?);
     if value.is_nan() {
         return Some(0.0);
     }
