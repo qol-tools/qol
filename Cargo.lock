@@ -6655,6 +6655,7 @@ dependencies = [
  "dirs 6.0.0",
  "log",
  "qol-fs",
+ "qol-runtime",
  "serde",
  "serde_json",
  "tempfile",
@@ -7496,8 +7497,10 @@ dependencies = [
 name = "qol-window-state"
 version = "1.0.0"
 dependencies = [
+ "log",
  "qol-config",
  "qol-fs",
+ "qol-runtime",
  "qol-windowing",
  "serde",
  "serde_json",
