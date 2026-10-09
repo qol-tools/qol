@@ -8,6 +8,9 @@ use windows_sys::Win32::Graphics::Dwm::{
 };
 use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VIRTUAL_KEY, VK_ESCAPE, VK_MENU, VK_SHIFT,
+};
 
 const BASE_DPI: f32 = 96.0;
 
@@ -17,15 +20,20 @@ extern "system" {
 }
 
 pub fn is_modifier_held() -> bool {
-    false
+    key_held(VK_MENU)
 }
 
 pub fn is_shift_held() -> bool {
-    false
+    key_held(VK_SHIFT)
 }
 
 pub fn is_escape_held() -> bool {
-    false
+    key_held(VK_ESCAPE)
+}
+
+fn key_held(key: VIRTUAL_KEY) -> bool {
+    let state = unsafe { GetAsyncKeyState(i32::from(key)) };
+    state as u16 & 0x8000 != 0
 }
 
 pub fn set_accessory_policy() {}

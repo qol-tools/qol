@@ -1,4 +1,3 @@
-use crate::discovery::WindowDiscovery;
 use crate::picker::create::PICKER_WINDOW_TITLE;
 
 pub fn picker_window_title(_target: qol_gpui::window::MonitorKey) -> String {
@@ -56,20 +55,11 @@ pub fn pre_create(
     tracker: &qol_gpui::monitor::MonitorTracker,
     cx: &mut gpui::App,
 ) {
-    qol_gpui::popup_window::set_ghost_debug(
-        config.display.ghost_opacity,
-        config.display.ghost_debug_color.as_deref(),
-    );
-    let windows = crate::discovery::Platform
-        .visible_windows(config.display.show_minimized, &config.switchable_panels)
-        .unwrap_or_default();
-    let placement = qol_gpui::window::PopupPlacement::from_tracker(tracker);
-    crate::picker::create::pre_create_ghost(
+    crate::picker::create::pre_create_on_tracker_monitor(
         config,
         current,
-        &placement,
         preview_cache,
-        &windows,
+        tracker,
         cx,
     );
 }

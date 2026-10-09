@@ -6389,6 +6389,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-graphics",
  "objc2-foundation",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 
@@ -7479,6 +7480,7 @@ version = "2.55.0"
 dependencies = [
  "log",
  "proptest",
+ "qol-app-icon",
  "qol-apps",
  "qol-cinnamon",
  "qol-config",
@@ -7495,7 +7497,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
- "windows-sys 0.59.0",
  "workspace-hack",
 ]
 
@@ -7524,6 +7525,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "windows-sys 0.59.0",
  "workspace-hack",
  "x11rb",
 ]
