@@ -1,4 +1,4 @@
-use crate::session::{session_subdir, SessionSnapshot, SessionStore};
+use qol_host_session::{SessionSnapshot, SessionStore};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 
@@ -33,7 +33,9 @@ impl SessionSnapshot for ThemeSnapshot {
 }
 
 pub fn store() -> SessionStore {
-    SessionStore::new(session_subdir(ThemeSnapshot::SUBDIR))
+    SessionStore::new(crate::session::Platform::session_subdir(
+        ThemeSnapshot::SUBDIR,
+    ))
 }
 
 pub fn id_for(schema: &str, key: &str) -> String {

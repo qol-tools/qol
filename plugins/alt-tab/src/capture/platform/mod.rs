@@ -18,13 +18,18 @@ use windows as imp;
 #[cfg(not(target_os = "macos"))]
 mod fallback;
 
-#[cfg(not(target_os = "macos"))]
-pub(crate) use fallback::{
+#[cfg(target_os = "linux")]
+pub(crate) use linux::{
     live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
     PIXEL_FORMAT_420F,
 };
 #[cfg(target_os = "macos")]
-pub(crate) use macos::shots::{
+pub(crate) use macos::{
+    live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
+    PIXEL_FORMAT_420F,
+};
+#[cfg(target_os = "windows")]
+pub(crate) use windows::{
     live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
     PIXEL_FORMAT_420F,
 };

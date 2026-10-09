@@ -1,9 +1,8 @@
 pub mod platform;
-#[cfg(target_os = "linux")]
-pub(crate) mod session;
 
 use anyhow::Result;
 
+use crate::session::{RestoreMode, RestoreReport};
 use platform::{Platform, ThemePlatform};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +42,6 @@ pub fn toggle() -> Result<ColorScheme> {
     Ok(target)
 }
 
-#[cfg(target_os = "linux")]
-pub fn restore(mode: crate::session::RestoreMode, report: &mut crate::session::RestoreReport) {
-    platform::restore_linux(mode, report);
+pub fn restore(mode: RestoreMode, report: &mut RestoreReport) {
+    Platform.restore(mode, report);
 }

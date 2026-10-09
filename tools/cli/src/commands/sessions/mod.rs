@@ -23,6 +23,7 @@ mod last_send;
 mod launch;
 use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
+mod park;
 mod spawn;
 mod watch;
 mod watch_owner;
@@ -34,7 +35,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 21] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 24] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -54,6 +55,18 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 21] = [
     SessionSubcommand {
         name: "forks",
         run: |rest, _format| fork::run_list(rest),
+    },
+    SessionSubcommand {
+        name: "park",
+        run: |rest, _format| park::forward("park", rest),
+    },
+    SessionSubcommand {
+        name: "parked",
+        run: |rest, _format| park::forward("parked", rest),
+    },
+    SessionSubcommand {
+        name: "unpark",
+        run: |rest, _format| park::forward("unpark", rest),
     },
     SessionSubcommand {
         name: "submit",
@@ -160,6 +173,9 @@ Primary usage:
   qol sessions list [--json]
   qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]
+  qol sessions parked
+  qol sessions unpark <id>
   qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
   qol sessions next [<session>] [--json]

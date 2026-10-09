@@ -7,11 +7,17 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-mod process_tree;
+#[cfg(target_os = "macos")]
+mod macos_command_tree;
+#[cfg(not(target_os = "macos"))]
+mod verified_command_tree;
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub(super) use process_tree::CommandTree;
+#[cfg(target_os = "macos")]
+pub(super) use macos_command_tree::CommandTree;
+#[cfg(not(target_os = "macos"))]
+pub(super) use verified_command_tree::CommandTree;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(super) use fallback::Platform;

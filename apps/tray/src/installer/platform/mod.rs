@@ -11,6 +11,7 @@ trait InstallerOps {
     fn prepare_atomic_replace(&self, installed_binary: &Path) -> Result<()>;
     fn should_bootstrap_current_install(&self, binary_path: &Path) -> Result<bool>;
     fn register_application(&self, binary_path: &Path) -> Result<()>;
+    fn ensure_desktop_registration(&self) -> Result<()>;
     fn warn_system_install_conflict(&self);
     fn remove_legacy_install(&self);
 }
@@ -67,9 +68,8 @@ pub(super) fn register_application(binary_path: &Path) -> Result<()> {
     Platform.register_application(binary_path)
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn ensure_desktop_entries(binary_path: &Path, include_app_entry: bool) -> Result<()> {
-    linux::ensure_linux_desktop_entries(binary_path, include_app_entry)
+pub(super) fn ensure_desktop_registration() -> Result<()> {
+    Platform.ensure_desktop_registration()
 }
 
 pub(super) fn warn_system_install_conflict() {

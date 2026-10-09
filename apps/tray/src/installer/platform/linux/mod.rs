@@ -55,6 +55,14 @@ impl InstallerOps for Platform {
         Ok(())
     }
 
+    fn ensure_desktop_registration(&self) -> Result<()> {
+        let Ok(current_exe) = std::env::current_exe() else {
+            return Ok(());
+        };
+        let installed = crate::installer::has_install_marker(&current_exe) && is_production_mode();
+        ensure_linux_desktop_entries(&current_exe, installed)
+    }
+
     fn warn_system_install_conflict(&self) {
         let system_binary = Path::new("/usr/bin/qol-tray");
         if !system_binary.exists() {
@@ -102,10 +110,13 @@ fn desktop_apps_dir() -> Result<PathBuf> {
     Ok(data_dir.join("applications"))
 }
 
-pub(crate) fn ensure_linux_desktop_entries(
-    binary_path: &Path,
-    include_app_entry: bool,
-) -> Result<()> {
+fn is_production_mode() -> bool {
+    crate::installer::mode::ModeConfig::load()
+        .map(|config| !config.is_dev())
+        .unwrap_or(!cfg!(feature = "dev"))
+}
+
+fn ensure_linux_desktop_entries(binary_path: &Path, include_app_entry: bool) -> Result<()> {
     let apps_dir = desktop_apps_dir()?;
     std::fs::create_dir_all(&apps_dir)?;
     if write_desktop_entries(&apps_dir, binary_path, include_app_entry)? {

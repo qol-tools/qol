@@ -42,7 +42,7 @@ pub(super) fn heal_stuck_keys(
     physical_down: &HashSet<u16>,
     declared_keys: &AttributeSet<KeyCode>,
 ) {
-    if crate::desktop_state::platform::is_wayland() {
+    if crate::desktop_state::platform::linux::is_wayland() {
         log::info!(
             "evdev: skipping stuck-key heal on a Wayland session; the X server (XWayland) core keymap only reflects events delivered to X clients and is empty or stale whenever a Wayland-native window has focus, so its bits are not trustworthy stuck-key candidates"
         );

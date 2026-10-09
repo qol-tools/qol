@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 
 use crate::config::PLUGIN_ID;
+use crate::session::{RestoreMode, RestoreReport};
 use crate::theme::ColorScheme;
 
 use super::ThemePlatform;
@@ -19,4 +20,6 @@ impl ThemePlatform for Platform {
             "{PLUGIN_ID}: theme switching is not implemented on this platform"
         ))
     }
+
+    fn restore(&self, _mode: RestoreMode, _report: &mut RestoreReport) {}
 }

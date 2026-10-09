@@ -7,6 +7,8 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(not(target_os = "macos"))]
+mod virtual_keyboard_absent;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -40,9 +42,6 @@ pub(crate) struct SecureInputHolder {
     pub(crate) pid: i32,
     pub(crate) app: String,
 }
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) const MACOS_ONLY: &str = "the virtual keyboard path only exists on macOS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Probe<T> {

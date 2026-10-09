@@ -13,7 +13,9 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(all(test, not(target_os = "windows")))]
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

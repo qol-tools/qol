@@ -19,7 +19,7 @@ impl CommandTree {
     pub(in crate::features::task_runner) fn spawn(
         mut command: Command,
     ) -> io::Result<(Self, Child)> {
-        match super::super::verified_process_tree() {
+        match super::verified_process_tree() {
             Ok(tree) => {
                 qol_process::isolate_owned_session(&mut command)?;
                 let prepared = tree.prepare_command(command)?;

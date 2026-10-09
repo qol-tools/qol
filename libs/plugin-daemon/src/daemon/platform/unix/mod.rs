@@ -13,10 +13,9 @@ use std::sync::{Arc, Mutex};
 use qol_runtime::local_ipc;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, ReadinessPhase};
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
-use macos::is_listening_socket;
+mod platform;
+
+use platform::is_listening_socket;
 
 const ACK_TIMEOUT_MS: u64 = 80;
 const HOST_DEATH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -563,11 +562,6 @@ fn listener_from_fd_str(raw: &str) -> io::Result<UnixListener> {
     }
     restore_cloexec(fd)?;
     Ok(unsafe { UnixListener::from_raw_fd(fd) })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn is_listening_socket(fd: RawFd) -> bool {
-    socket_opt(fd, libc::SO_ACCEPTCONN).is_some_and(|accepting| accepting != 0)
 }
 
 /// A pre-bound port fd is adoptable when it is a socket of a kind that can

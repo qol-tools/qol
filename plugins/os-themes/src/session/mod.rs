@@ -1,26 +1,10 @@
-use std::path::PathBuf;
+mod platform;
 
-pub use qol_host_session::{RestoreMode, RestoreReport, SessionSnapshot, SessionStore};
+pub use qol_host_session::{RestoreMode, RestoreReport};
 
-pub fn session_subdir(subdir: &str) -> PathBuf {
-    if let Some(base) = qol_config::data_subdir("os-themes-session") {
-        let dir = base.join(subdir);
-        if let Err(error) = qol_fs::create_private_dir(&dir) {
-            log::warn!("cannot secure session dir {}: {error}", dir.display());
-        }
-        return dir;
-    }
-    let fallback = std::env::temp_dir()
-        .join("qol-os-themes-session")
-        .join(subdir);
-    if let Err(error) = qol_fs::create_private_dir(&fallback) {
-        log::warn!(
-            "cannot secure fallback session dir {}: {error}",
-            fallback.display()
-        );
-    }
-    fallback
-}
+pub(crate) use platform::Platform;
+
+use platform::SessionPlatform;
 
 pub fn recover() {
     let mut report = RestoreReport::default();
@@ -37,7 +21,17 @@ pub fn recover() {
     }
 }
 
-pub fn restore_exit() {
+pub fn restore_on_exit() {
+    restore_exit_when(Platform.exit_restores_host());
+}
+
+pub(crate) fn restore_exit_when(restores_host: bool) {
+    if restores_host {
+        restore_exit();
+    }
+}
+
+fn restore_exit() {
     let mut report = RestoreReport::default();
     crate::theme::restore(RestoreMode::Exit, &mut report);
     if report.restored > 0 || report.failed > 0 {

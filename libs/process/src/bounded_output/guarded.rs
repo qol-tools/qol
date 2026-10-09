@@ -232,8 +232,6 @@ fn seal_completed_tree(guard: &crate::ProcessTreeGuard) -> Result<(), GuardedWai
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(any(target_os = "linux", windows))]
-    use crate::CapturedOutput;
     use std::io::Write;
 
     const HELPER_ENV: &str = "QOL_PROCESS_BOUNDED_OUTPUT_HELPER";
@@ -490,7 +488,7 @@ mod tests {
     }
 
     #[cfg(any(target_os = "linux", windows))]
-    fn text(output: &CapturedOutput) -> String {
+    fn text(output: &crate::CapturedOutput) -> String {
         String::from_utf8_lossy(output.as_bytes()).into_owned()
     }
 

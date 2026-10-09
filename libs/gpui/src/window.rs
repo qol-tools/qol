@@ -5,6 +5,7 @@ use std::rc::Rc;
 use gpui::*;
 
 use crate::monitor::{ActiveMonitor, CursorAnchor, CursorAnchorError, MonitorTracker};
+use crate::platform::{native_readback_position, native_scale_for, readback_matches};
 use qol_runtime::{CursorPos, MonitorBounds};
 
 const CURSOR_WINDOW_GAP: f32 = 20.0;
@@ -358,16 +359,6 @@ impl ResolvedCursorPlacement {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn native_scale_for(window: &Window) -> f32 {
-    window.scale_factor()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn native_scale_for(_window: &Window) -> f32 {
-    1.0
-}
-
 fn resolve_cursor_geometry(
     cursor: CursorPos,
     monitor: MonitorBounds,
@@ -462,29 +453,6 @@ pub fn sync_cursor_window_layout(
         if verified { "ok" } else { "failed" }
     );
     verified
-}
-
-#[cfg(target_os = "linux")]
-fn native_readback_position(title: &str) -> Option<(i32, i32)> {
-    crate::popup_window::window_position_by_title(title)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn native_readback_position(_title: &str) -> Option<(i32, i32)> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn readback_matches(readback: Option<(i32, i32)>, native: NativeDesktopBounds) -> bool {
-    match readback {
-        Some((x, y)) => x == native.x.round() as i32 && y == native.y.round() as i32,
-        None => false,
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn readback_matches(_readback: Option<(i32, i32)>, _native: NativeDesktopBounds) -> bool {
-    true
 }
 
 fn cursor_adjacent_bounds(

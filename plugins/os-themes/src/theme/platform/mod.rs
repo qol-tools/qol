@@ -1,10 +1,12 @@
 use anyhow::Result;
 
+use crate::session::{RestoreMode, RestoreReport};
 use crate::theme::ColorScheme;
 
 pub trait ThemePlatform {
     fn current_scheme(&self) -> Result<ColorScheme>;
     fn apply_scheme(&self, target: ColorScheme) -> Result<()>;
+    fn restore(&self, mode: RestoreMode, report: &mut RestoreReport);
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -23,8 +25,6 @@ mod windows;
 pub use fallback::Platform;
 #[cfg(target_os = "linux")]
 pub use linux::Platform;
-#[cfg(target_os = "linux")]
-pub(crate) use linux::{classify_desktop, restore as restore_linux, DesktopEnvironment};
 #[cfg(target_os = "macos")]
 pub use macos::Platform;
 #[cfg(target_os = "windows")]

@@ -134,6 +134,24 @@ pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdent
 
 pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {}
 
+pub(crate) fn native_scale_for(window: &gpui::Window) -> f32 {
+    window.scale_factor()
+}
+
+pub(crate) fn native_readback_position(title: &str) -> Option<(i32, i32)> {
+    crate::popup_window::window_position_by_title(title)
+}
+
+pub(crate) fn readback_matches(
+    readback: Option<(i32, i32)>,
+    native: crate::window::NativeDesktopBounds,
+) -> bool {
+    match readback {
+        Some((x, y)) => x == native.x.round() as i32 && y == native.y.round() as i32,
+        None => false,
+    }
+}
+
 fn owns_window(conn: &RustConnection, mut window: u32, target_pid: u32) -> bool {
     loop {
         if window_pid(conn, window) == Some(target_pid) {

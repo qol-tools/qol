@@ -16,6 +16,7 @@ use crate::{Monitor, Rect};
 mod clipboard;
 mod display;
 mod preview;
+mod preview_window;
 mod recording;
 mod selector_cache;
 mod system;
@@ -24,6 +25,9 @@ mod window;
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, grab_preview_rgba};
+pub(crate) use preview_window::{
+    complete_pin_transition, prepare_preview_window, register_pin_transition,
+};
 pub use recording::{
     capture_screenshot, recording_format, recording_started, recording_stopped, start_capture,
     stop_capture,
