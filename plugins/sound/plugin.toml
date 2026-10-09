@@ -4,7 +4,7 @@ uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
 name = "Audio"
 icon = "sound"
 description = "Choose where sound plays, which microphone every app hears, and how loud each is"
-version = "0.14.0"
+version = "0.15.0"
 author = "KMRH47"
 platforms = ["linux"]
 

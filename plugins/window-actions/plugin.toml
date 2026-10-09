@@ -4,7 +4,7 @@ uid = "9fb4b550-714a-4723-b342-7a62c766cf56"
 name = "Window Actions"
 icon = "window-actions"
 description = "Window snapping, centering, and multi-monitor management"
-version = "2.54.0"
+version = "2.55.0"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
