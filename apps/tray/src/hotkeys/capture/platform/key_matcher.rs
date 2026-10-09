@@ -50,6 +50,7 @@ impl KeyMatcher {
         self.bindings.len()
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn is_swallowing(&self, key: u16) -> bool {
         self.swallowed_keys.contains(&key)
     }
