@@ -1,6 +1,10 @@
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE};
+use windows_sys::Win32::Graphics::Gdi::{
+    CreateRectRgn, DeleteObject, GetMonitorInfoW, MonitorFromPoint, SetWindowRgn, MONITORINFO,
+    MONITOR_DEFAULTTONULL,
+};
 use windows_sys::Win32::System::Threading::{
     AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
 };
@@ -230,6 +234,77 @@ fn cursor_position() -> Option<(i32, i32)> {
     (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
 }
 
+pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bounds<gpui::Pixels>> {
+    let center = monitor.center();
+    let point = POINT {
+        x: f64::from(center.x).round() as i32,
+        y: f64::from(center.y).round() as i32,
+    };
+    let handle = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        rcMonitor: empty_rect(),
+        rcWork: empty_rect(),
+        dwFlags: 0,
+    };
+    if unsafe { GetMonitorInfoW(handle, &mut info) } == 0 {
+        return None;
+    }
+    work_area_in(monitor, info.rcMonitor, info.rcWork)
+}
+
+fn empty_rect() -> RECT {
+    RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    }
+}
+
+fn work_area_in(
+    monitor: gpui::Bounds<gpui::Pixels>,
+    full: RECT,
+    work: RECT,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    let native_width = full.right - full.left;
+    if native_width <= 0 {
+        return None;
+    }
+    let scale = f64::from(monitor.size.width) / f64::from(native_width);
+    let inset = |native: i32| gpui::px((f64::from(native) * scale) as f32);
+    Some(gpui::Bounds::from_corners(
+        gpui::point(
+            monitor.origin.x + inset(work.left - full.left),
+            monitor.origin.y + inset(work.top - full.top),
+        ),
+        gpui::point(
+            monitor.right() - inset(full.right - work.right),
+            monitor.bottom() - inset(full.bottom - work.bottom),
+        ),
+    ))
+}
+
+pub fn set_input_region_by_title(title: &str, x: i16, y: i16, width: u16, height: u16) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    let (left, top) = (i32::from(x), i32::from(y));
+    let region =
+        unsafe { CreateRectRgn(left, top, left + i32::from(width), top + i32::from(height)) };
+    if region.is_null() {
+        return false;
+    }
+    if unsafe { SetWindowRgn(hwnd, region, TRUE) } == 0 {
+        unsafe { DeleteObject(region) };
+        return false;
+    }
+    true
+}
+
 pub fn window_position_by_title(title: &str) -> Option<(i32, i32)> {
     let rect = window_rect(find_window(title)?)?;
     Some((rect.left, rect.top))
@@ -309,4 +384,76 @@ pub fn configure_overlay_window(title: &str) -> bool {
     };
     apply_tool_window_style(hwnd);
     place(hwnd, HWND_TOPMOST, SWP_NOACTIVATE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn work_area_keeps_the_monitor_units() {
+        let cases = [
+            (
+                "bottom taskbar, physical",
+                gpui::bounds(
+                    gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                    gpui::size(gpui::px(1280.0), gpui::px(800.0)),
+                ),
+                rect(0, 0, 1280, 800),
+                rect(0, 0, 1280, 752),
+                (0.0, 0.0, 1280.0, 752.0),
+            ),
+            (
+                "bottom taskbar, logical at 150%",
+                gpui::bounds(
+                    gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                    gpui::size(gpui::px(1280.0), gpui::px(720.0)),
+                ),
+                rect(0, 0, 1920, 1080),
+                rect(0, 0, 1920, 1008),
+                (0.0, 0.0, 1280.0, 672.0),
+            ),
+            (
+                "left taskbar on a second monitor",
+                gpui::bounds(
+                    gpui::point(gpui::px(1920.0), gpui::px(0.0)),
+                    gpui::size(gpui::px(1920.0), gpui::px(1080.0)),
+                ),
+                rect(1920, 0, 3840, 1080),
+                rect(1968, 0, 3840, 1080),
+                (1968.0, 0.0, 1872.0, 1080.0),
+            ),
+        ];
+        for (name, monitor, full, work, (x, y, width, height)) in cases {
+            let area = work_area_in(monitor, full, work).expect(name);
+            assert_eq!(
+                (
+                    f32::from(area.origin.x),
+                    f32::from(area.origin.y),
+                    f32::from(area.size.width),
+                    f32::from(area.size.height),
+                ),
+                (x, y, width, height),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn work_area_refuses_an_empty_monitor() {
+        let monitor = gpui::bounds(
+            gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            gpui::size(gpui::px(0.0), gpui::px(0.0)),
+        );
+        assert!(work_area_in(monitor, rect(0, 0, 0, 0), rect(0, 0, 0, 0)).is_none());
+    }
 }
