@@ -1,4 +1,5 @@
 use super::*;
+use crate::cursor::platform::linux::journal;
 
 pub struct CursorSession {
     display: *mut xlib::Display,
@@ -60,7 +61,7 @@ impl CursorSession {
         if self.active_cursor.is_none() {
             self.capture_live_cursors();
             self.tree = collect_tree(self.display, self.root);
-            crate::cursor::journal::journal_scaled(self.root, &window_ids(&self.tree));
+            journal::journal_scaled(self.root, &window_ids(&self.tree));
         }
         let scaled = self.grow_cursor.as_ref().and_then(|grow_cursor| {
             scale_cursor_for_display(self.display, self.root, grow_cursor, scale)
@@ -160,7 +161,7 @@ impl CursorSession {
         self.applied_cursor = None;
         self.grow_cursor = None;
         self.tree = Vec::new();
-        crate::cursor::journal::clear_journal();
+        journal::clear_journal();
     }
 
     fn flush(&self) {

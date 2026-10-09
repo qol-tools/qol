@@ -12,7 +12,7 @@ impl CommandTree {
     pub(in crate::features::task_runner) fn spawn(
         mut command: Command,
     ) -> io::Result<(Self, Child)> {
-        let tree = super::super::verified_process_tree()?;
+        let tree = super::verified_process_tree()?;
         qol_process::isolate_owned_session(&mut command)?;
         let prepared = tree.prepare_command(command)?;
         let child = prepared.spawn().map_err(|error| {

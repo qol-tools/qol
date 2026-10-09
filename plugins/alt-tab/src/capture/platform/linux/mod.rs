@@ -2,6 +2,11 @@ use crate::discovery::WindowInfo;
 use qol_app_icon::RgbaImage;
 use std::collections::HashMap;
 
+pub(crate) use super::fallback::{
+    live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
+    PIXEL_FORMAT_420F,
+};
+
 mod x11_snapshot;
 
 pub fn capture_previews_cg(

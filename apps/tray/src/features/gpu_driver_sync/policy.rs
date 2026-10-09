@@ -104,8 +104,6 @@ pub(crate) fn notification_text(loaded: &str, on_disk: &str, intent: &PolicyInte
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os = "linux")]
-    use std::sync::OnceLock;
 
     fn view(state: PolicyState, module: Option<&str>) -> PolicyStatusView {
         PolicyStatusView {
@@ -119,7 +117,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn serialized_env_tests() -> std::sync::MutexGuard<'static, ()> {
-        static GUARD: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        static GUARD: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         GUARD
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()

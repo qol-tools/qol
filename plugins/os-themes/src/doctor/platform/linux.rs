@@ -3,7 +3,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::{CurrentThemeMetadata, GsettingsMetadata, PlatformMetadata, SessionMetadata};
-use crate::theme::platform::{classify_desktop, DesktopEnvironment};
 
 pub(super) fn inspect() -> PlatformMetadata {
     let desktop = environment_value("XDG_CURRENT_DESKTOP");
@@ -46,12 +45,8 @@ fn classify_session_desktop(desktop: Option<&str>) -> (Option<&'static str>, boo
         return (None, false);
     };
 
-    match classify_desktop(desktop) {
-        DesktopEnvironment::Gnome => (Some("GNOME"), true),
-        DesktopEnvironment::Cinnamon => (Some("Cinnamon"), true),
-        DesktopEnvironment::Kde => (Some("KDE"), true),
-        DesktopEnvironment::Unknown => (None, false),
-    }
+    let name = crate::theme::platform::Platform::desktop_name(desktop);
+    (name, name.is_some())
 }
 
 fn inspect_gsettings(path: Option<std::ffi::OsString>) -> GsettingsMetadata {

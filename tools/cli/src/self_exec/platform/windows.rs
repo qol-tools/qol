@@ -17,3 +17,9 @@ impl SelfExecPlatform for Platform {
         std::process::exit(0);
     }
 }
+
+pub(crate) fn apply_prior_termios() {}
+
+pub(crate) fn capture_prior_termios() {}
+
+pub(crate) fn restore_resumed_tty() {}

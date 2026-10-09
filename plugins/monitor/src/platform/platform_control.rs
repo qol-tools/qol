@@ -16,13 +16,19 @@ use crate::session::LutProvider;
 pub(crate) struct PlatformControl<D, G, P = qol_windowing::Platform> {
     brightness: PolicyControl<D, G>,
     display: SharedDisplay<P>,
+    mode_writes_supported: fn() -> bool,
 }
 
 impl<D, G, P> PlatformControl<D, G, P> {
-    pub(crate) fn new(brightness: PolicyControl<D, G>, display: SharedDisplay<P>) -> Self {
+    pub(crate) fn new(
+        brightness: PolicyControl<D, G>,
+        display: SharedDisplay<P>,
+        mode_writes_supported: fn() -> bool,
+    ) -> Self {
         Self {
             brightness,
             display,
+            mode_writes_supported,
         }
     }
 }
@@ -43,7 +49,7 @@ where
 
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
         let mut capabilities = self.brightness.probe(handle)?;
-        capabilities.modes = mode_writes_supported();
+        capabilities.modes = (self.mode_writes_supported)();
         Ok(capabilities)
     }
 
@@ -154,16 +160,6 @@ where
     fn gamma_backend(&self) -> Arc<dyn LutProvider> {
         self.brightness.gamma_backend()
     }
-}
-
-#[cfg(target_os = "linux")]
-fn mode_writes_supported() -> bool {
-    super::display_server() == super::DisplayServer::X11
-}
-
-#[cfg(target_os = "macos")]
-fn mode_writes_supported() -> bool {
-    false
 }
 
 #[cfg(test)]
@@ -391,6 +387,7 @@ mod tests {
         PlatformControl::new(
             PolicyControl::new(ddc, FakeGamma),
             SharedDisplay::with_platform(FakePlatform::default()),
+            || true,
         )
     }
 
@@ -411,7 +408,7 @@ mod tests {
         assert_eq!(ddc.writes(), vec![("id-1".to_string(), 42)]);
         let capabilities = control.probe(&handle).unwrap();
         assert!(capabilities.brightness_ddc);
-        assert_eq!(capabilities.modes, mode_writes_supported());
+        assert!(capabilities.modes);
     }
 
     #[test]
@@ -420,6 +417,7 @@ mod tests {
         let control = PlatformControl::new(
             PolicyControl::new(FakeDdc::default(), FakeGamma),
             SharedDisplay::with_platform(platform.clone()),
+            || false,
         );
         let handle = handle();
         let snapshots = control.snapshot().unwrap();

@@ -56,23 +56,9 @@ pub fn bootstrap_current_install() -> Result<()> {
 }
 
 pub fn ensure_installed_desktop_registration() {
-    #[cfg(target_os = "linux")]
-    {
-        let Ok(current_exe) = env::current_exe() else {
-            return;
-        };
-        let installed = has_install_marker(&current_exe) && is_production_mode();
-        if let Err(error) = platform::ensure_desktop_entries(&current_exe, installed) {
-            log::warn!("desktop entry self-heal failed: {error:#}");
-        }
+    if let Err(error) = platform::ensure_desktop_registration() {
+        log::warn!("desktop entry self-heal failed: {error:#}");
     }
-}
-
-#[cfg(target_os = "linux")]
-fn is_production_mode() -> bool {
-    mode::ModeConfig::load()
-        .map(|config| !config.is_dev())
-        .unwrap_or(!cfg!(feature = "dev"))
 }
 
 pub fn check_platform_paths() -> Result<()> {

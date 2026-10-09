@@ -402,8 +402,6 @@ pub fn remove_journal_durable(policy: &str) -> Result<()> {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    #[cfg(target_os = "linux")]
-    use std::ffi::OsString;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -502,7 +500,7 @@ pub(crate) mod test_support {
 
     #[cfg(target_os = "linux")]
     pub(crate) struct JournalDirOverride {
-        previous: Option<OsString>,
+        previous: Option<std::ffi::OsString>,
     }
 
     #[cfg(target_os = "linux")]
@@ -525,7 +523,7 @@ pub(crate) mod test_support {
     pub(crate) fn expected_policy_file_owner_for_tests() -> (u32, u32) {
         #[cfg(target_os = "linux")]
         {
-            crate::policy::platform::expected_policy_file_owner()
+            crate::policy::platform::linux::expected_policy_file_owner()
         }
         #[cfg(not(target_os = "linux"))]
         {

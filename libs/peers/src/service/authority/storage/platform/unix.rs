@@ -1,10 +1,7 @@
 use std::{
     fs::{self, DirBuilder, File, Metadata, OpenOptions, TryLockError},
     io,
-    os::{
-        fd::AsRawFd,
-        unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
-    },
+    os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -54,7 +51,7 @@ impl Store {
         let canonical_root = root.canonicalize().map_err(io_error)?;
         let directory = open_directory(&canonical_root)?;
         same_inode(&metadata, &directory.metadata().map_err(io_error)?)?;
-        let anchored = anchored_root(&directory)?;
+        let anchored = super::anchor::anchored_root(&directory)?;
         same_inode(&metadata, &fs::metadata(&anchored).map_err(io_error)?)?;
         let lock_path = anchored.join("writer.lock");
         let lock = open_regular(&lock_path, create)?;
@@ -111,7 +108,7 @@ impl Store {
         if matches!(fault, Some(super::CommitFault::BeforeReplace)) {
             return Err(AuthorityError::Storage);
         }
-        let path = anchored_root(&self.directory)?.join("state.json");
+        let path = super::anchor::anchored_root(&self.directory)?.join("state.json");
         qol_fs::atomic_write_private(&path, bytes).map_err(io_error)?;
         #[cfg(test)]
         if matches!(fault, Some(super::CommitFault::AfterReplace)) {
@@ -128,7 +125,7 @@ impl Store {
         let held = self.directory.metadata().map_err(io_error)?;
         private_directory(&held)?;
         same_inode(&current, &held)?;
-        let anchored = anchored_root(&self.directory)?;
+        let anchored = super::anchor::anchored_root(&self.directory)?;
         check_file(&anchored.join("writer.lock"), &self.lock)?;
         let path = anchored.join("state.json");
         if let Some(snapshot) = &self.snapshot {
@@ -145,29 +142,6 @@ impl Store {
     pub fn fail_next(&mut self, fault: super::CommitFault) {
         self.fault = Some(fault);
     }
-}
-
-#[cfg(target_os = "linux")]
-fn anchored_root(directory: &File) -> Result<PathBuf, AuthorityError> {
-    Ok(PathBuf::from(format!(
-        "/proc/self/fd/{}",
-        directory.as_raw_fd()
-    )))
-}
-
-#[cfg(target_os = "macos")]
-fn anchored_root(directory: &File) -> Result<PathBuf, AuthorityError> {
-    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
-
-    let mut buffer = [0_u8; libc::PATH_MAX as usize];
-    if unsafe { libc::fcntl(directory.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } == -1 {
-        return Err(io_error(io::Error::last_os_error()));
-    }
-    let length = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .ok_or(AuthorityError::Storage)?;
-    Ok(PathBuf::from(OsStr::from_bytes(&buffer[..length])))
 }
 
 fn open_directory(path: &Path) -> Result<File, AuthorityError> {
@@ -240,7 +214,7 @@ fn same_inode(left: &Metadata, right: &Metadata) -> Result<(), AuthorityError> {
     Ok(())
 }
 
-fn io_error(error: io::Error) -> AuthorityError {
+pub(super) fn io_error(error: io::Error) -> AuthorityError {
     if error.kind() == io::ErrorKind::NotFound {
         return AuthorityError::MissingStore;
     }

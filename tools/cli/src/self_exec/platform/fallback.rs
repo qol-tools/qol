@@ -17,3 +17,9 @@ impl SelfExecPlatform for Platform {
         bail!("replacing the qol process is not supported on this platform")
     }
 }
+
+pub(crate) fn apply_prior_termios() {}
+
+pub(crate) fn capture_prior_termios() {}
+
+pub(crate) fn restore_resumed_tty() {}

@@ -2,7 +2,9 @@ use crate::policy::journal::{
     content_checksum, migrate_legacy_journal, validate_journal_invariants, verify_content_checksum,
     JournalFileIdentity, JournalPayload, JournalRecord, LEGACY_JOURNAL_SCHEMA_VERSION,
 };
-use crate::policy::platform::{expected_policy_file_owner, fail_next, sync_directory_fd_strict};
+use crate::policy::platform::linux::{
+    expected_policy_file_owner, fail_next, sync_directory_fd_strict,
+};
 use crate::policy::{journal_path, journal_stage_path, PolicyError, JOURNAL_FILE_MODE};
 use anyhow::{bail, Context, Result};
 use std::path::Path;

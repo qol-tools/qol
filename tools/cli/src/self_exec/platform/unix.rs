@@ -6,6 +6,8 @@ use anyhow::Result;
 
 use super::SelfExecPlatform;
 
+pub(crate) use super::termios::{apply_prior_termios, capture_prior_termios, restore_resumed_tty};
+
 pub(super) struct Platform;
 
 impl SelfExecPlatform for Platform {

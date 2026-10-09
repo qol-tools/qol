@@ -3,16 +3,12 @@ use anyhow::Result;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::TextStyle;
 use std::cell::{Cell, RefCell};
-#[cfg(target_os = "linux")]
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "linux")]
-use futures::channel::oneshot;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
@@ -20,7 +16,7 @@ use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
 use qol_gpui::kit::{action_row_width, kit, row_circle_state, wrap_index, ActionCircleSize};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
-use qol_gpui::popup_window::{configure_popup_window, hide_invisible, reason_scope};
+use qol_gpui::popup_window::{hide_invisible, reason_scope};
 use qol_gpui::theme::{runtime_theme, ACTION_CIRCLE_GAP, RADIUS_THUMB};
 use qol_gpui::window::{
     centered_window_placement, cursor_window_placement, sync_cursor_window_layout,
@@ -47,31 +43,6 @@ pub(crate) const PREVIEW_APP_ID: &str = "qol-tray-shot";
 
 static PREVIEW_SEQ: AtomicU64 = AtomicU64::new(0);
 static FOCUS_REASSERT_GEN: AtomicU64 = AtomicU64::new(0);
-#[cfg(target_os = "linux")]
-static PIN_TRANSITIONS: std::sync::LazyLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-#[cfg(target_os = "linux")]
-fn register_pin_transition(title: &str) -> oneshot::Receiver<bool> {
-    let (sender, receiver) = oneshot::channel();
-    PIN_TRANSITIONS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .insert(title.to_owned(), sender);
-    receiver
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn complete_pin_transition(title: &str, succeeded: bool) {
-    let sender = PIN_TRANSITIONS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(title);
-    if let Some(sender) = sender {
-        let _ = sender.send(succeeded);
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MonitorTopology {
     monitors: Vec<MonitorKey>,
@@ -320,7 +291,7 @@ pub fn pre_create(windows: &PreviewWindows, tracker: &MonitorTracker, cx: &mut A
             continue;
         };
         windows.borrow_mut().insert(target, handle);
-        if !prepare_preview_window(&title) {
+        if !crate::platform::prepare_preview_window(&title) {
             windows.borrow_mut().remove(target);
             let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
             continue;
@@ -408,27 +379,6 @@ fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
     sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
     hide_invisible(title);
     qol_gpui::popup_window::restore_composite(title);
-}
-
-#[cfg(target_os = "linux")]
-fn prepare_preview_window(title: &str) -> bool {
-    let configured = configure_popup_window(title);
-    if !qol_gpui::popup_window::set_override_redirect_by_title(title) {
-        return false;
-    }
-    if !configured {
-        configure_popup_window(title);
-    }
-    hide_invisible(title);
-    true
-}
-
-#[cfg(not(target_os = "linux"))]
-fn prepare_preview_window(title: &str) -> bool {
-    configure_popup_window(title);
-    qol_gpui::popup_window::set_override_redirect_by_title(title);
-    hide_invisible(title);
-    true
 }
 
 pub(crate) fn fresh_cursor_token(
@@ -659,7 +609,7 @@ fn create_and_show(
     };
     let open_ms = opened_at.elapsed().as_millis();
     windows.borrow_mut().insert(target, handle);
-    if !prepare_preview_window(&title) {
+    if !crate::platform::prepare_preview_window(&title) {
         windows.borrow_mut().remove(target);
         let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
         return false;
@@ -789,7 +739,7 @@ fn open_quit_window(
     let Ok(handle) = opened else {
         return false;
     };
-    if !prepare_preview_window(&title) {
+    if !crate::platform::prepare_preview_window(&title) {
         let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
         return false;
     }
@@ -1195,9 +1145,9 @@ impl PreviewView {
             return;
         }
         self.action_pending = true;
-        #[cfg(target_os = "linux")]
-        let pin_transition =
-            (self.mode == DismissMode::Ghost).then(|| register_pin_transition(&self.title));
+        let pin_transition = (self.mode == DismissMode::Ghost)
+            .then(|| crate::platform::register_pin_transition(&self.title))
+            .flatten();
         let started_at = Instant::now();
         qol_runtime::probe!("SHOT_PIN_ACTION", "seq={}", self.seq);
         self.file_start.start();
@@ -1223,9 +1173,8 @@ impl PreviewView {
         let trace = format!("seq={} mode={pin_mode}", self.seq);
         if !crate::ui::pinned::open_at_cursor(content, dismiss, source_preview, &trace, window, cx)
         {
-            #[cfg(target_os = "linux")]
             if pin_transition.is_some() {
-                complete_pin_transition(&self.title, false);
+                crate::platform::complete_pin_transition(&self.title, false);
             }
             self.action_pending = false;
             return;
@@ -1242,9 +1191,7 @@ impl PreviewView {
             }
             DismissMode::Ghost => {
                 self.set_showing(false);
-                #[cfg(target_os = "linux")]
-                {
-                    let receiver = pin_transition.expect("ghost pin registered its transition");
+                if let Some(receiver) = pin_transition {
                     let seq = self.seq;
                     cx.spawn(async move |this, cx| {
                         let succeeded = receiver.await.unwrap_or(false);
@@ -1275,9 +1222,9 @@ impl PreviewView {
                         });
                     })
                     .detach();
+                } else {
+                    self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
                 }
-                #[cfg(not(target_os = "linux"))]
-                self.finish_completion(crate::capture::completion::PreviewExit::Pinned);
             }
         }
     }
@@ -1603,8 +1550,6 @@ fn window_dims(thumb_w: f32, thumb_h: f32, action_count: usize) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
-    use super::{complete_pin_transition, register_pin_transition};
     use qol_gpui::window::target_monitor_key;
     use qol_runtime::MonitorBounds;
 
@@ -1614,20 +1559,6 @@ mod tests {
         MAX_THUMB_W, PARKED_REVEAL_GUARD,
     };
     use qol_gpui::kit::{action_row_width, ActionCircleSize};
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn pin_transition_completion_reaches_the_preview_once() {
-        let source = "pin-transition-test-preview";
-        let failed = register_pin_transition(source);
-        complete_pin_transition(source, false);
-        assert!(!futures::executor::block_on(failed).unwrap());
-        complete_pin_transition(source, true);
-
-        let succeeded = register_pin_transition(source);
-        complete_pin_transition(source, true);
-        assert!(futures::executor::block_on(succeeded).unwrap());
-    }
 
     #[test]
     fn focus_truth_recovers_when_any_owned_window_holds_focus() {

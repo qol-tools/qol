@@ -19,6 +19,14 @@ impl ActionTransportPlatform for Platform {
         DaemonActionDispatch::NotSent
     }
 
+    fn dispatch_payload(
+        _endpoint: &Path,
+        _payload: &[u8],
+        _timeout: Duration,
+    ) -> DaemonActionDispatch {
+        DaemonActionDispatch::NotSent
+    }
+
     fn can_connect(_endpoint: &Path) -> bool {
         false
     }
