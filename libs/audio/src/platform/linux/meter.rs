@@ -112,10 +112,7 @@ fn target(connection: &mut Connection, direction: Direction) -> Result<Target, A
         })?,
         Direction::Input => node.index,
     };
-    let includes_volume = match direction {
-        Direction::Output => !node.hardware_volume,
-        Direction::Input => true,
-    };
+    let includes_volume = !node.hardware_volume;
     Ok(Target {
         device: node.name,
         source_index,
