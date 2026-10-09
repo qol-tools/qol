@@ -6,7 +6,7 @@ use qol_theme::TextStyle;
 use crate::kit::Kit;
 use crate::theme::Ground;
 
-use super::{ground_bg, ground_border, ground_text, RowGround};
+use super::{ground_bg, ground_text, RowGround};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::settings_panel) enum SliderStyle {
@@ -52,8 +52,7 @@ fn thumb_left(centre: f32) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LevelSegment {
     Lit,
-    Reached,
-    Hollow,
+    Unlit,
 }
 
 fn segments_reached(fraction: f32) -> usize {
@@ -68,10 +67,8 @@ fn segments_lit(level: f32, fraction: f32) -> usize {
 fn level_segment(index: usize, level: f32, fraction: f32) -> LevelSegment {
     if index < segments_lit(level, fraction) {
         LevelSegment::Lit
-    } else if index < segments_reached(fraction) {
-        LevelSegment::Reached
     } else {
-        LevelSegment::Hollow
+        LevelSegment::Unlit
     }
 }
 
@@ -119,13 +116,8 @@ fn level_segments(
                     rgb(ground.mark),
                     hover.map(|hover| rgb(hover.mark)),
                 ),
-                LevelSegment::Reached => ground_bg(
+                LevelSegment::Unlit => ground_bg(
                     segment,
-                    rgba(ground.well.packed()),
-                    hover.map(|hover| rgba(hover.well.packed())),
-                ),
-                LevelSegment::Hollow => ground_border(
-                    segment.border(px(qol_theme::LINE)),
                     rgba(ground.well.packed()),
                     hover.map(|hover| rgba(hover.well.packed())),
                 ),
@@ -289,23 +281,11 @@ mod tests {
     }
 
     #[test]
-    fn every_segment_past_the_thumb_is_hollow() {
+    fn silence_leaves_every_segment_unlit_wherever_the_thumb_sits() {
         for fraction in STEPS {
-            let reached = segments_reached(fraction);
             for index in 0..LEVEL_SEGMENTS {
-                let segment = level_segment(index, 1.0, fraction);
-                assert_eq!(
-                    segment == LevelSegment::Hollow,
-                    index >= reached,
-                    "fraction {fraction} segment {index}"
-                );
+                assert_eq!(level_segment(index, 0.0, fraction), LevelSegment::Unlit);
             }
-            for index in 0..reached {
-                assert_eq!(level_segment(index, 0.0, fraction), LevelSegment::Reached);
-            }
-        }
-        for index in 0..LEVEL_SEGMENTS {
-            assert_eq!(level_segment(index, 1.0, 0.0), LevelSegment::Hollow);
         }
     }
 
