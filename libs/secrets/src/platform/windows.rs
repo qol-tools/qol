@@ -38,7 +38,9 @@ fn decode(blob: &[u8], service: &str) -> Result<String> {
         bail!("the credential `{service}` is neither UTF-8 nor UTF-16");
     }
     let units: Vec<u16> = blob
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     String::from_utf16(&units)

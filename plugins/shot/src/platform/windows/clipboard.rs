@@ -75,7 +75,7 @@ fn dib_from_rgba(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     );
     dib.reserve(image_bytes);
     for row in rgba.chunks_exact(row_bytes).rev() {
-        for pixel in row.chunks_exact(4) {
+        for pixel in row.as_chunks::<4>().0 {
             dib.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }

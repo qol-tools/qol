@@ -314,7 +314,7 @@ pub fn capture_screen_bgra(x: i32, y: i32, width: usize, height: usize) -> Optio
 }
 
 fn make_opaque(bgra: &mut [u8]) {
-    for pixel in bgra.chunks_exact_mut(4) {
+    for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel[3] = u8::MAX;
     }
 }
@@ -372,7 +372,7 @@ fn cropped_rgba(bgra: &[u8], source_width: usize, crop: WindowRect) -> WindowPix
     let mut rgba = Vec::with_capacity(width * height * 4);
     for row in top..top + height {
         let start = (row * source_width + left) * 4;
-        for pixel in bgra[start..start + width * 4].chunks_exact(4) {
+        for pixel in bgra[start..start + width * 4].as_chunks::<4>().0 {
             rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
         }
     }

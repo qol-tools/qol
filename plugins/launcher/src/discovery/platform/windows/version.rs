@@ -77,7 +77,9 @@ fn query<'a>(block: &'a [u8], sub_block: &str, unit_bytes: usize) -> Option<&'a 
 fn translations(block: &[u8]) -> Vec<(u16, u16)> {
     query(block, TRANSLATION, 1)
         .map(|raw| {
-            raw.chunks_exact(4)
+            raw.as_chunks::<4>()
+                .0
+                .iter()
                 .map(|pair| {
                     (
                         u16::from_le_bytes([pair[0], pair[1]]),
@@ -96,7 +98,9 @@ fn query_string(block: &[u8], sub_block: &str) -> Option<String> {
 
 fn utf16_text(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .take_while(|unit| *unit != 0)
         .collect();
