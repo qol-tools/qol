@@ -202,9 +202,7 @@ fn apply_saved_output(config: &SoundConfig) -> bool {
     };
     let before = before.as_ref().map(|identity| identity.as_str());
     let choice_changed = note_saved_output(device);
-    if !choice_changed
-        || !should_follow(config.input.follow_output, before, applied.as_str())
-    {
+    if !choice_changed || !should_follow(config.input.follow_output, before, applied.as_str()) {
         return false;
     }
     match crate::input::follow(&applied) {
