@@ -1,5 +1,5 @@
+use crate::platform::macos::doctor::SecureInputHolder;
 use crate::platform::macos::input::Strategy;
-use crate::platform::SecureInputHolder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Toast {

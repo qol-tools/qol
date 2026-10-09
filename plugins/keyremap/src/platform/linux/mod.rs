@@ -1,11 +1,9 @@
 use anyhow::Result;
-use qol_headless::CommandResult;
+use qol_headless::{CommandResult, DoctorCheckResult};
+use qol_platform::PermissionState;
 
-use super::virtual_keyboard_absent::MACOS_ONLY;
-use super::{
-    ConfigInspection, DriverState, HelperState, LayoutGap, PlatformAdapter, Probe,
-    SecureInputHolder, TrustStatus,
-};
+use super::virtual_keyboard_absent::unavailable;
+use super::{ConfigInspection, PlatformAdapter};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Adapter;
@@ -48,36 +46,34 @@ impl PlatformAdapter for Adapter {
     }
 
     fn inspect_config(&self) -> Result<ConfigInspection> {
-        anyhow::bail!("typed key-remap configuration is only available on macOS")
+        anyhow::bail!("typed key-remap configuration is only available on macOS and Windows")
     }
 
-    fn trust_status(&self) -> TrustStatus {
-        TrustStatus::from_trusted(false)
+    fn input_permission(&self) -> PermissionState {
+        qol_platform::permission_status(qol_platform::Permission::InputCapture)
     }
 
-    fn virtual_hid_driver(&self) -> Probe<DriverState> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn virtual_hid_driver(&self) -> Result<DoctorCheckResult> {
+        Ok(unavailable("virtual_hid_driver"))
     }
 
-    fn virtual_hid_daemon(&self) -> Probe<bool> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn virtual_hid_daemon(&self) -> DoctorCheckResult {
+        unavailable("virtual_hid_daemon")
     }
 
-    fn hid_helper_state(&self) -> Probe<HelperState> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn hid_helper_state(&self) -> DoctorCheckResult {
+        unavailable("hid_helper")
     }
 
-    fn secure_input(&self) -> Probe<Option<SecureInputHolder>> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn secure_input(&self) -> DoctorCheckResult {
+        unavailable("secure_input")
     }
 
-    fn layout_gaps(&self) -> Probe<Vec<LayoutGap>> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn layout_characters(&self) -> DoctorCheckResult {
+        unavailable("layout_characters")
     }
 }
 
 fn unsupported() -> CommandResult {
-    CommandResult::runtime_error(
-        "keyremap: only macOS is supported (requires CGEventTap and Accessibility APIs)",
-    )
+    CommandResult::runtime_error("keyremap: only macOS and Windows are supported")
 }

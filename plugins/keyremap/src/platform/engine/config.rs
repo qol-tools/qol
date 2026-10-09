@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
+pub(crate) const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -93,7 +93,7 @@ pub enum CharRule {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum KeyRule {
     Batch {
@@ -117,7 +117,7 @@ pub enum KeyRule {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MouseRule {
     #[serde(default)]
     pub from_mods: Vec<String>,
@@ -128,7 +128,7 @@ pub struct MouseRule {
     pub global: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScrollRule {
     #[serde(default)]
     pub from_mods: Vec<String>,

@@ -6815,6 +6815,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "proptest",
+ "qol-app-icon",
  "qol-apps",
  "qol-config",
  "qol-conventions",
@@ -6827,6 +6828,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 

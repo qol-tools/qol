@@ -6,7 +6,7 @@ icon = "key-remap"
 description = "Remap keyboard and mouse shortcuts (Ctrl->Cmd, etc.)"
 version = "1.57.0"
 author = "KMRH47"
-platforms = ["macos"]
+platforms = ["macos", "windows"]
 
 [runtime]
 command = "qol-keyremap"

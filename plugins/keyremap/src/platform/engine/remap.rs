@@ -54,6 +54,34 @@ impl Modifiers {
     }
 }
 
+pub(crate) fn modifiers_from_bits(bits: u8) -> Modifiers {
+    Modifiers {
+        ctrl: bits & 0x11 != 0,
+        shift: bits & 0x22 != 0,
+        alt: bits & 0x44 != 0,
+        cmd: bits & 0x88 != 0,
+        ralt: bits & 0x40 != 0,
+    }
+}
+
+pub(crate) fn target_bits(physical: u8, from: Modifiers, to: Modifiers) -> u8 {
+    let mut bits = physical;
+    for (was, wanted, both_sides, left) in [
+        (from.ctrl, to.ctrl, 0x11, 0x01),
+        (from.shift, to.shift, 0x22, 0x02),
+        (from.alt, to.alt, 0x44, 0x04),
+        (from.cmd, to.cmd, 0x88, 0x08),
+    ] {
+        if was && !wanted {
+            bits &= !both_sides;
+        }
+        if !was && wanted {
+            bits |= left;
+        }
+    }
+    bits
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
@@ -372,7 +400,7 @@ fn warn_shadowed_rules(rules: &[ResolvedKeyRule]) {
         let pair = (rule.from_mods, rule.from_key);
         if seen.contains(&pair) {
             log::warn!(
-                "shadowed rule — {} appears multiple times, only first match fires",
+                "shadowed rule: {} appears multiple times, only first match fires",
                 rule_label(&rule.from_mods, rule.from_key),
             );
         } else {
@@ -422,7 +450,7 @@ pub fn diff_key_rules(old: &[ResolvedKeyRule], new: &[ResolvedKeyRule]) -> Vec<S
         match new_match {
             Some(new_rule) if !same_target(&new_rule.to, &old_rule.to) => {
                 warnings.push(format!(
-                    "rule changed — {}: was {}, now {}",
+                    "rule changed: {} was {}, now {}",
                     rule_label(&old_rule.from_mods, old_rule.from_key),
                     target_label(&old_rule.to),
                     target_label(&new_rule.to),
@@ -430,7 +458,7 @@ pub fn diff_key_rules(old: &[ResolvedKeyRule], new: &[ResolvedKeyRule]) -> Vec<S
             }
             None => {
                 warnings.push(format!(
-                    "rule removed — {} (was {})",
+                    "rule removed: {} (was {})",
                     rule_label(&old_rule.from_mods, old_rule.from_key),
                     target_label(&old_rule.to),
                 ));
@@ -941,7 +969,7 @@ mod tests {
             ),
             KeyAction::Passthrough
         );
-        // char_swaps are always global — bypass excluded apps
+        // char_swaps are always global, so they bypass excluded apps
         assert_eq!(
             process_key_event(
                 &config,

@@ -55,7 +55,7 @@ export function AppPicker({ excludedApps, onSelect }) {
             <input
                 type="text"
                 class="text-input"
-                placeholder="Search apps or type bundle ID..."
+                placeholder="Search apps or type a bundle ID or .exe name..."
                 autocomplete="off"
                 value=${query}
                 onFocus=${onFocus}

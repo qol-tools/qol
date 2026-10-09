@@ -4,41 +4,14 @@ use anyhow::Result;
 use qol_headless::{
     Command, CommandContext, CommandResult, DoctorCheck, DoctorCheckResult, HeadlessApp,
 };
-use qol_plugin_api::manifest::{parse_version, PluginManifest, SystemDependency};
+use qol_platform::PermissionState;
 use serde_json::json;
 
-use crate::platform::{
-    ConfigInspection, DriverState, ExtensionState, HelperState, LayoutGap, Platform,
-    PlatformAdapter, Probe, SecureInputHolder, TrustStatus, INPUT_MONITORING_FIX,
-};
+use crate::platform::{ConfigInspection, Platform, PlatformAdapter};
 
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
-const MANIFEST: &str = include_str!("../plugin.toml");
-const DRIVER_NAME: &str = "Karabiner-DriverKit-VirtualHIDDevice";
-
-fn required_driver() -> Result<SystemDependency> {
-    PluginManifest::parse_and_validate(MANIFEST)?
-        .dependencies
-        .and_then(|dependencies| {
-            dependencies
-                .system
-                .into_iter()
-                .find(|system| system.name == DRIVER_NAME)
-        })
-        .ok_or_else(|| anyhow::anyhow!("plugin.toml does not declare {DRIVER_NAME}"))
-}
-
-fn install_command() -> String {
-    let binary = std::env::current_exe()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| PLUGIN_ID.to_string());
-    format!("sudo \"{binary}\" install-hid-helper")
-}
-
-fn install_fix() -> String {
-    format!("Run: {}", install_command())
-}
+const SUPPORTED_FIX: &str = "Run Key Remap on macOS or Windows.";
 
 pub(crate) fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     app(Platform).run(args)
@@ -71,10 +44,11 @@ where
         .default_command(["run"])
         .command(
             Command::new("run")
-                .about("Run the key-remap daemon and native event tap.")
+                .about("Run the key-remap daemon and native input hooks.")
                 .usage(format!("{PLUGIN_ID} run"))
                 .detail("Loads and resolves config before enabling interception.")
-                .detail("Waits for Accessibility trust before installing CGEventTap.")
+                .detail("On macOS, waits for Accessibility trust before installing CGEventTap.")
+                .detail("On Windows, installs low-level keyboard and mouse hooks.")
                 .output("Lifecycle diagnostics on stderr.")
                 .exit_behavior("Runs until killed; exits non-zero on unsupported platforms.")
                 .run_result(move |context| {
@@ -216,7 +190,7 @@ where
         ),
         DoctorCheck::new(
             "accessibility_trust",
-            "Observe Accessibility trust without prompting for permission.",
+            "Observe the input capture permission without prompting for it.",
             move || Ok(trust_result(&trust)),
         ),
         DoctorCheck::new(
@@ -224,10 +198,7 @@ where
             "Check the virtual keyboard driver package and its system extension.",
             move || {
                 supported_or(&driver, "virtual_hid_driver", |adapter| {
-                    Ok(driver_result(
-                        &adapter.virtual_hid_driver(),
-                        &required_driver()?,
-                    ))
+                    adapter.virtual_hid_driver()
                 })
             },
         ),
@@ -236,7 +207,7 @@ where
             "Check the virtual keyboard daemon is running.",
             move || {
                 supported_or(&daemon, "virtual_hid_daemon", |adapter| {
-                    Ok(daemon_result(&adapter.virtual_hid_daemon()))
+                    Ok(adapter.virtual_hid_daemon())
                 })
             },
         ),
@@ -245,7 +216,7 @@ where
             "Ask the root keyboard helper for its status without changing anything.",
             move || {
                 supported_or(&helper, "hid_helper", |adapter| {
-                    Ok(helper_result(&adapter.hid_helper_state()))
+                    Ok(adapter.hid_helper_state())
                 })
             },
         ),
@@ -253,12 +224,11 @@ where
             "secure_input",
             "Report which app holds Secure Input and which key strategy is active.",
             move || {
-                supported_or(&secure, "secure_input", |adapter| {
-                    Ok(secure_input_result(
-                        &adapter.secure_input(),
-                        &adapter.hid_helper_state(),
-                    ))
-                })
+                supported_or(
+                    &secure,
+                    "secure_input",
+                    |adapter| Ok(adapter.secure_input()),
+                )
             },
         ),
         DoctorCheck::new(
@@ -266,7 +236,7 @@ where
             "Check every character rule can be typed in the active keyboard layout.",
             move || {
                 supported_or(&characters, "layout_characters", |adapter| {
-                    Ok(layout_result(&adapter.layout_gaps()))
+                    Ok(adapter.layout_characters())
                 })
             },
         ),
@@ -283,203 +253,9 @@ fn supported_or<A: PlatformAdapter>(
             id,
             "The virtual keyboard path is unavailable on this platform.",
         )
-        .with_fix("Run Key Remap on macOS."));
+        .with_fix(SUPPORTED_FIX));
     }
     check(adapter)
-}
-
-fn unknown(id: &str, reason: &str) -> DoctorCheckResult {
-    DoctorCheckResult::warn(id, format!("Could not tell: {reason}."))
-}
-
-fn driver_result(probe: &Probe<DriverState>, required: &SystemDependency) -> DoctorCheckResult {
-    let id = "virtual_hid_driver";
-    let state = match probe {
-        Probe::Known(state) => state,
-        Probe::Unknown(reason) => return unknown(id, reason),
-    };
-    let download = format!(
-        "Install {} {} or newer from {}, then run: {}",
-        required.name,
-        required.min_version,
-        required.url,
-        install_command()
-    );
-    let Some(installed) = &state.installed_version else {
-        return DoctorCheckResult::warn(
-            id,
-            "The virtual keyboard driver is not installed, so Key Remap stops while an app holds Secure Input.",
-        )
-        .with_fix(download);
-    };
-    let current_enough = match (
-        parse_version(installed),
-        parse_version(&required.min_version),
-    ) {
-        (Some(installed), Some(minimum)) => installed >= minimum,
-        _ => false,
-    };
-    if !current_enough {
-        return DoctorCheckResult::warn(
-            id,
-            format!(
-                "The virtual keyboard driver is {installed}, older than {}.",
-                required.min_version
-            ),
-        )
-        .with_fix(download);
-    }
-    match state.extension {
-        ExtensionState::Activated => DoctorCheckResult::ok(
-            id,
-            format!("The virtual keyboard driver {installed} is installed and its extension is active."),
-        ),
-        ExtensionState::NotActivated | ExtensionState::Missing => DoctorCheckResult::warn(
-            id,
-            format!("The virtual keyboard driver {installed} is installed but its extension is not active."),
-        )
-        .with_fix(install_fix()),
-    }
-}
-
-fn daemon_result(probe: &Probe<bool>) -> DoctorCheckResult {
-    let id = "virtual_hid_daemon";
-    match probe {
-        Probe::Known(true) => DoctorCheckResult::ok(id, "The virtual keyboard daemon is running."),
-        Probe::Known(false) => {
-            DoctorCheckResult::warn(id, "The virtual keyboard daemon is not running.")
-                .with_fix(install_fix())
-        }
-        Probe::Unknown(reason) => unknown(id, reason),
-    }
-}
-
-fn helper_result(probe: &Probe<HelperState>) -> DoctorCheckResult {
-    let id = "hid_helper";
-    let report = match probe {
-        Probe::Unknown(reason) => return unknown(id, reason),
-        Probe::Known(HelperState::NotInstalled) => {
-            return DoctorCheckResult::warn(
-                id,
-                "The keyboard helper is not installed, so Key Remap uses the event tap.",
-            )
-            .with_fix(install_fix());
-        }
-        Probe::Known(HelperState::NotRunning) => {
-            return DoctorCheckResult::warn(
-                id,
-                "The keyboard helper is installed but launchd has not started it.",
-            )
-            .with_fix(install_fix());
-        }
-        Probe::Known(HelperState::VersionMismatch { helper, expected }) => {
-            return DoctorCheckResult::warn(
-                id,
-                format!("The keyboard helper speaks protocol {helper} and this Key Remap speaks {expected}."),
-            )
-            .with_fix(install_fix());
-        }
-        Probe::Known(HelperState::Running(report)) => report,
-    };
-    if !report.input_monitoring {
-        return DoctorCheckResult::warn(
-            id,
-            "The keyboard helper cannot read the keyboard: Input Monitoring is off.",
-        )
-        .with_fix(INPUT_MONITORING_FIX);
-    }
-    if !report.conflicts.is_empty() {
-        return DoctorCheckResult::warn(
-            id,
-            format!(
-                "The keyboard helper cannot take {}, so every keyboard stays with the event tap and Secure Input can pause Key Remap.",
-                report.conflicts.join(", ")
-            ),
-        )
-        .with_fix("Quit the app that holds that keyboard, such as Karabiner-Elements, or unplug it. The helper retries every second.");
-    }
-    if !report.virtual_keyboard_ready {
-        return DoctorCheckResult::warn(
-            id,
-            "The keyboard helper is running but the virtual keyboard is not ready.",
-        )
-        .with_fix(install_fix());
-    }
-    let seized = if report.seized.is_empty() {
-        "no keyboards right now, because Key Remap is not connected".to_string()
-    } else {
-        report.seized.join(", ")
-    };
-    DoctorCheckResult::ok(
-        id,
-        format!("The keyboard helper is running and holds {seized}."),
-    )
-}
-
-fn secure_input_result(
-    holder: &Probe<Option<SecureInputHolder>>,
-    helper: &Probe<HelperState>,
-) -> DoctorCheckResult {
-    let id = "secure_input";
-    let virtual_hid = matches!(
-        helper,
-        Probe::Known(HelperState::Running(report)) if !report.seized.is_empty()
-    );
-    let strategy = if virtual_hid {
-        "virtual_hid"
-    } else {
-        "event_tap"
-    };
-    match holder {
-        Probe::Unknown(reason) => unknown(id, reason),
-        Probe::Known(None) => DoctorCheckResult::ok(
-            id,
-            format!("No app holds Secure Input. Key input strategy: {strategy}."),
-        ),
-        Probe::Known(Some(holder)) => {
-            let paused = if virtual_hid {
-                "qol hotkeys are paused"
-            } else {
-                "Key Remap and qol hotkeys are paused"
-            };
-            DoctorCheckResult::warn(
-                id,
-                format!(
-                    "{} (pid {}) holds Secure Input, so {paused}. Key input strategy: {strategy}.",
-                    holder.app, holder.pid
-                ),
-            )
-            .with_fix(format!(
-                "Quit {} or turn off its secure keyboard entry.",
-                holder.app
-            ))
-        }
-    }
-}
-
-fn layout_result(probe: &Probe<Vec<LayoutGap>>) -> DoctorCheckResult {
-    let id = "layout_characters";
-    match probe {
-        Probe::Unknown(reason) => unknown(id, reason),
-        Probe::Known(gaps) if gaps.is_empty() => DoctorCheckResult::ok(
-            id,
-            "Every character rule can be typed in the active keyboard layout.",
-        ),
-        Probe::Known(gaps) => {
-            let listed: Vec<String> = gaps
-                .iter()
-                .map(|gap| format!("{:?} ({})", gap.character, gap.rule))
-                .collect();
-            DoctorCheckResult::warn(
-                id,
-                format!(
-                    "The active keyboard layout cannot type {}.",
-                    listed.join(", ")
-                ),
-            )
-            .with_fix("Switch to a layout that has these characters, or change the rules.")
-        }
-    }
 }
 
 fn platform_result(adapter: &impl PlatformAdapter) -> DoctorCheckResult {
@@ -496,7 +272,7 @@ fn platform_result(adapter: &impl PlatformAdapter) -> DoctorCheckResult {
             "platform_supported",
             format!("{} is not declared by Key Remap.", adapter.name()),
         )
-        .with_fix("Run Key Remap on macOS.")
+        .with_fix(SUPPORTED_FIX)
     };
     result.with_details(json!({
         "platform": adapter.name(),
@@ -510,7 +286,7 @@ fn config_result(adapter: &impl PlatformAdapter) -> Result<DoctorCheckResult> {
             "config_readable",
             "Typed Key Remap config is unavailable on this platform.",
         )
-        .with_fix("Run Key Remap on macOS."));
+        .with_fix(SUPPORTED_FIX));
     }
 
     let inspected = adapter.inspect_config()?;
@@ -532,7 +308,7 @@ fn rules_result(adapter: &impl PlatformAdapter) -> Result<DoctorCheckResult> {
             "rules_valid",
             "Rule validation is unavailable on this platform.",
         )
-        .with_fix("Run Key Remap on macOS."));
+        .with_fix(SUPPORTED_FIX));
     }
 
     let inspected = adapter.inspect_config()?;
@@ -575,21 +351,33 @@ fn trust_result(adapter: &impl PlatformAdapter) -> DoctorCheckResult {
     if !adapter.supported() {
         return DoctorCheckResult::fail(
             "accessibility_trust",
-            "Accessibility trust is unavailable on this platform.",
+            "Input capture permission is unavailable on this platform.",
         )
-        .with_fix("Run Key Remap on macOS.");
+        .with_fix(SUPPORTED_FIX);
     }
 
-    match adapter.trust_status() {
-        TrustStatus::Trusted => DoctorCheckResult::ok(
-            "accessibility_trust",
-            "Accessibility trust is granted; no prompt was requested.",
+    permission_result(adapter.input_permission())
+}
+
+fn permission_result(state: PermissionState) -> DoctorCheckResult {
+    let id = "accessibility_trust";
+    match state {
+        PermissionState::Granted => DoctorCheckResult::ok(
+            id,
+            "Input capture permission is granted; no prompt was requested.",
         ),
-        TrustStatus::NotTrusted => DoctorCheckResult::warn(
-            "accessibility_trust",
-            "Accessibility trust is not granted; doctor did not prompt.",
+        PermissionState::Denied { grant_at } => DoctorCheckResult::warn(
+            id,
+            "Input capture permission is not granted; doctor did not prompt.",
         )
-        .with_fix("Enable Key Remap in System Settings > Privacy & Security > Accessibility."),
+        .with_fix(format!("Enable Key Remap in {grant_at}.")),
+        PermissionState::NotRequired { because } => DoctorCheckResult::ok(
+            id,
+            format!("No input capture permission is needed: {because}."),
+        ),
+        PermissionState::Unknown { because } => {
+            DoctorCheckResult::warn(id, format!("Could not tell: {because}."))
+        }
     }
 }
 
@@ -603,7 +391,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::platform::HelperReport;
 
     #[derive(Default)]
     struct Calls {
@@ -682,37 +469,29 @@ mod tests {
             })
         }
 
-        fn trust_status(&self) -> TrustStatus {
+        fn input_permission(&self) -> PermissionState {
             self.calls.trust.fetch_add(1, Ordering::SeqCst);
-            TrustStatus::Trusted
+            PermissionState::Granted
         }
 
-        fn virtual_hid_driver(&self) -> Probe<DriverState> {
-            Probe::Known(DriverState {
-                installed_version: Some("8.6.0".to_string()),
-                extension: ExtensionState::Activated,
-            })
+        fn virtual_hid_driver(&self) -> Result<DoctorCheckResult> {
+            Ok(DoctorCheckResult::ok("virtual_hid_driver", "sentinel"))
         }
 
-        fn virtual_hid_daemon(&self) -> Probe<bool> {
-            Probe::Known(true)
+        fn virtual_hid_daemon(&self) -> DoctorCheckResult {
+            DoctorCheckResult::ok("virtual_hid_daemon", "sentinel")
         }
 
-        fn hid_helper_state(&self) -> Probe<HelperState> {
-            Probe::Known(HelperState::Running(HelperReport {
-                virtual_keyboard_ready: true,
-                input_monitoring: true,
-                seized: vec!["Apple Internal Keyboard / Trackpad".to_string()],
-                conflicts: Vec::new(),
-            }))
+        fn hid_helper_state(&self) -> DoctorCheckResult {
+            DoctorCheckResult::ok("hid_helper", "sentinel")
         }
 
-        fn secure_input(&self) -> Probe<Option<SecureInputHolder>> {
-            Probe::Known(None)
+        fn secure_input(&self) -> DoctorCheckResult {
+            DoctorCheckResult::ok("secure_input", "sentinel")
         }
 
-        fn layout_gaps(&self) -> Probe<Vec<LayoutGap>> {
-            Probe::Known(Vec::new())
+        fn layout_characters(&self) -> DoctorCheckResult {
+            DoctorCheckResult::ok("layout_characters", "sentinel")
         }
     }
 
@@ -923,130 +702,39 @@ mod tests {
         assert_eq!(calls.kill.load(Ordering::SeqCst), 1);
     }
 
-    fn driver() -> SystemDependency {
-        required_driver().unwrap()
-    }
-
     #[test]
-    fn the_driver_minimum_comes_from_the_manifest() {
-        assert_eq!(driver().min_version, "8.6.0");
-    }
-
-    #[test]
-    fn a_missing_or_old_driver_warns_with_the_download_url() {
-        let missing = driver_result(
-            &Probe::Known(DriverState {
-                installed_version: None,
-                extension: ExtensionState::Missing,
-            }),
-            &driver(),
-        );
-        assert_eq!(missing.status, DoctorStatus::Warn);
-        assert!(missing.fix.unwrap().contains("github.com/pqrs-org"));
-
-        let old = driver_result(
-            &Probe::Known(DriverState {
-                installed_version: Some("8.5.9".to_string()),
-                extension: ExtensionState::Activated,
-            }),
-            &driver(),
-        );
-        assert_eq!(old.status, DoctorStatus::Warn);
-        assert!(old.message.contains("8.5.9"));
-    }
-
-    #[test]
-    fn an_inactive_extension_names_install_hid_helper() {
-        let result = driver_result(
-            &Probe::Known(DriverState {
-                installed_version: Some("8.6.0".to_string()),
-                extension: ExtensionState::NotActivated,
-            }),
-            &driver(),
-        );
-        assert_eq!(result.status, DoctorStatus::Warn);
-        assert!(result.fix.unwrap().contains("install-hid-helper"));
-    }
-
-    #[test]
-    fn helper_states_map_to_warnings_with_the_install_fix() {
-        for state in [
-            HelperState::NotInstalled,
-            HelperState::NotRunning,
-            HelperState::VersionMismatch {
-                helper: 0,
-                expected: 1,
-            },
-        ] {
-            let result = helper_result(&Probe::Known(state));
-            assert_eq!(result.status, DoctorStatus::Warn);
-            assert!(result.fix.unwrap().contains("install-hid-helper"));
+    fn every_permission_state_maps_to_a_doctor_status() {
+        let cases = [
+            (PermissionState::Granted, DoctorStatus::Ok, None),
+            (
+                PermissionState::Denied {
+                    grant_at: "System Settings > Accessibility",
+                },
+                DoctorStatus::Warn,
+                Some("System Settings > Accessibility"),
+            ),
+            (
+                PermissionState::NotRequired {
+                    because: "hooks need no grant",
+                },
+                DoctorStatus::Ok,
+                None,
+            ),
+            (
+                PermissionState::Unknown {
+                    because: "no standing answer",
+                },
+                DoctorStatus::Warn,
+                None,
+            ),
+        ];
+        for (state, status, fix) in cases {
+            let result = permission_result(state);
+            assert_eq!(result.status, status, "{state:?}");
+            assert_eq!(result.fix.is_some(), fix.is_some(), "{state:?}");
+            if let (Some(expected), Some(actual)) = (fix, result.fix.as_deref()) {
+                assert!(actual.contains(expected), "{actual}");
+            }
         }
-    }
-
-    #[test]
-    fn a_helper_without_input_monitoring_says_how_to_turn_it_on() {
-        let result = helper_result(&Probe::Known(HelperState::Running(HelperReport {
-            virtual_keyboard_ready: true,
-            input_monitoring: false,
-            seized: Vec::new(),
-            conflicts: Vec::new(),
-        })));
-        assert_eq!(result.status, DoctorStatus::Warn);
-        assert!(result.fix.unwrap().contains("Input Monitoring"));
-    }
-
-    #[test]
-    fn a_keyboard_held_by_another_app_is_named() {
-        let result = helper_result(&Probe::Known(HelperState::Running(HelperReport {
-            virtual_keyboard_ready: true,
-            input_monitoring: true,
-            seized: Vec::new(),
-            conflicts: vec!["Keychron K2".to_string()],
-        })));
-        assert_eq!(result.status, DoctorStatus::Warn);
-        assert!(result.message.contains("Keychron K2"));
-    }
-
-    #[test]
-    fn secure_input_names_the_app_and_the_strategy() {
-        let helper = Probe::Known(HelperState::NotRunning);
-        let result = secure_input_result(
-            &Probe::Known(Some(SecureInputHolder {
-                pid: 4242,
-                app: "kitty".to_string(),
-            })),
-            &helper,
-        );
-        assert_eq!(result.status, DoctorStatus::Warn);
-        assert!(result.message.contains("kitty") && result.message.contains("4242"));
-        assert!(result.message.contains("event_tap"));
-
-        let quiet = secure_input_result(&Probe::Known(None), &helper);
-        assert_eq!(quiet.status, DoctorStatus::Ok);
-    }
-
-    #[test]
-    fn untypeable_characters_name_their_rule() {
-        let result = layout_result(&Probe::Known(vec![LayoutGap {
-            rule: "char rule ralt+3 -> あ".to_string(),
-            character: "あ".to_string(),
-        }]));
-        assert_eq!(result.status, DoctorStatus::Warn);
-        assert!(result.message.contains("char rule ralt+3"));
-    }
-
-    #[test]
-    fn unknown_probes_warn_instead_of_passing() {
-        fn unknown<T>() -> Probe<T> {
-            Probe::Unknown("pkgutil is missing".to_string())
-        }
-        assert_eq!(
-            driver_result(&unknown(), &driver()).status,
-            DoctorStatus::Warn
-        );
-        assert_eq!(daemon_result(&unknown()).status, DoctorStatus::Warn);
-        assert_eq!(helper_result(&unknown()).status, DoctorStatus::Warn);
-        assert_eq!(layout_result(&unknown()).status, DoctorStatus::Warn);
     }
 }

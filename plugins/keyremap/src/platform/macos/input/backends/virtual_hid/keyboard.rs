@@ -1,8 +1,10 @@
 use qol_hotkeys::macos_keycode::{self as keycode, PhysicalLayout};
 
 use super::fn_keys;
-use crate::platform::macos::app::config::{ModifierKeys, ModifierTarget};
-use crate::platform::macos::app::remap::{self, KeyAction, Modifiers, ResolvedConfig};
+use crate::platform::engine::config::{ModifierKeys, ModifierTarget};
+use crate::platform::engine::remap::{
+    self, modifiers_from_bits, target_bits, KeyAction, ResolvedConfig,
+};
 use crate::platform::macos::hid_helper::protocol::{PAGE_APPLE_VENDOR_TOP_CASE, PAGE_KEYBOARD};
 use crate::platform::macos::input::marker_for;
 use crate::platform::macos::layout::{CharTable, KeyStroke};
@@ -307,34 +309,6 @@ impl KeyboardState {
     }
 }
 
-pub(crate) fn modifiers_from_bits(bits: u8) -> Modifiers {
-    Modifiers {
-        ctrl: bits & 0x11 != 0,
-        shift: bits & 0x22 != 0,
-        alt: bits & 0x44 != 0,
-        cmd: bits & 0x88 != 0,
-        ralt: bits & 0x40 != 0,
-    }
-}
-
-fn target_bits(physical: u8, from: Modifiers, to: Modifiers) -> u8 {
-    let mut bits = physical;
-    for (was, wanted, both_sides, left) in [
-        (from.ctrl, to.ctrl, 0x11, 0x01),
-        (from.shift, to.shift, 0x22, 0x02),
-        (from.alt, to.alt, 0x44, 0x04),
-        (from.cmd, to.cmd, 0x88, 0x08),
-    ] {
-        if was && !wanted {
-            bits &= !both_sides;
-        }
-        if !was && wanted {
-            bits |= left;
-        }
-    }
-    bits
-}
-
 fn stroke_bits(stroke: KeyStroke) -> u8 {
     let shift = if stroke.shift { LEFT_SHIFT } else { 0 };
     let option = if stroke.option { LEFT_OPTION } else { 0 };
@@ -389,7 +363,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::platform::macos::app::config::RemapConfig;
+    use crate::platform::engine::config::RemapConfig;
+    use crate::platform::engine::remap::Modifiers;
     use crate::platform::macos::hid_helper::protocol::PAGE_CONSUMER;
 
     const OPTION: u32 = 0x08;

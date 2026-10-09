@@ -1,11 +1,18 @@
-use anyhow::Result;
-use qol_headless::CommandResult;
+mod doctor;
+mod elevation;
+mod foreground;
+mod hook;
+mod keys;
+mod machine;
+mod profile;
+mod service;
 
-use super::virtual_keyboard_absent::MACOS_ONLY;
-use super::{
-    ConfigInspection, DriverState, HelperState, LayoutGap, PlatformAdapter, Probe,
-    SecureInputHolder, TrustStatus,
-};
+use anyhow::Result;
+use qol_headless::{CommandResult, DoctorCheckResult};
+use qol_platform::PermissionState;
+
+use super::engine;
+use super::{ConfigInspection, PlatformAdapter};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Adapter;
@@ -16,64 +23,69 @@ impl PlatformAdapter for Adapter {
     }
 
     fn supported(&self) -> bool {
-        false
+        true
     }
 
     fn launch(&self) -> Result<CommandResult> {
-        Ok(unsupported())
+        service::run()?;
+        Ok(CommandResult::success(""))
     }
 
     fn reload(&self) -> Result<CommandResult> {
-        Ok(unsupported())
+        Ok(engine::reload())
+    }
+
+    fn toggle(&self) -> Result<CommandResult> {
+        Ok(engine::toggle())
     }
 
     fn kill(&self) -> Result<CommandResult> {
-        Ok(unsupported())
+        Ok(engine::kill())
     }
 
     fn hid_helper(&self) -> Result<CommandResult> {
-        Ok(unsupported())
+        Ok(CommandResult::runtime_error(
+            "keyremap: the keyboard helper only exists on macOS; Windows remaps in low-level hooks",
+        ))
     }
 
     fn install_hid_helper(&self) -> Result<CommandResult> {
-        Ok(unsupported())
+        Ok(CommandResult::success(
+            "Windows needs no keyboard helper; nothing was installed.\n",
+        ))
     }
 
     fn uninstall_hid_helper(&self) -> Result<CommandResult> {
-        Ok(unsupported())
+        Ok(CommandResult::success(
+            "Windows needs no keyboard helper; nothing was removed.\n",
+        ))
     }
 
     fn inspect_config(&self) -> Result<ConfigInspection> {
-        anyhow::bail!("typed key-remap configuration is only available on macOS")
+        engine::inspection(keys::modifier_key_issues)
     }
 
-    fn trust_status(&self) -> TrustStatus {
-        TrustStatus::from_trusted(false)
+    fn input_permission(&self) -> PermissionState {
+        qol_platform::permission_status(qol_platform::Permission::InputCapture)
     }
 
-    fn virtual_hid_driver(&self) -> Probe<DriverState> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn virtual_hid_driver(&self) -> Result<DoctorCheckResult> {
+        Ok(doctor::driver())
     }
 
-    fn virtual_hid_daemon(&self) -> Probe<bool> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn virtual_hid_daemon(&self) -> DoctorCheckResult {
+        doctor::daemon()
     }
 
-    fn hid_helper_state(&self) -> Probe<HelperState> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn hid_helper_state(&self) -> DoctorCheckResult {
+        doctor::helper()
     }
 
-    fn secure_input(&self) -> Probe<Option<SecureInputHolder>> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn secure_input(&self) -> DoctorCheckResult {
+        doctor::secure_input()
     }
 
-    fn layout_gaps(&self) -> Probe<Vec<LayoutGap>> {
-        Probe::Unknown(MACOS_ONLY.to_string())
+    fn layout_characters(&self) -> DoctorCheckResult {
+        doctor::layout(&engine::remap::character_targets(&service::load()))
     }
-}
-
-fn unsupported() -> CommandResult {
-    CommandResult::runtime_error(
-        "keyremap: only macOS is supported (requires CGEventTap and Accessibility APIs)",
-    )
 }
