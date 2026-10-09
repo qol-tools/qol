@@ -79,7 +79,13 @@ jobs:
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     # Warning parity with CI and the candidate jobs that gated this release.
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro' || '' }}
+    # /Brepro drops the link timestamp from Windows binaries, so the release
+    # probe sees an unchanged plugin as unchanged. The steps are bash, and a
+    # Windows runner defaults to PowerShell.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

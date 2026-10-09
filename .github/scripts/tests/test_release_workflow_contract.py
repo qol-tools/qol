@@ -167,7 +167,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertLess(workflow.index("release_probe.py"), workflow.index("--probe-reports"))
         for contract in [
             "cache-key: plugin-release-${{ matrix.target }}",
-            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}",
+            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro' || '' }}",
             "--kind plugin",
         ]:
             with self.subTest(contract=contract):
@@ -259,12 +259,25 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in [
             "fromJSON(needs.plan.outputs.windows_apps || 'false')",
             "cargo check --locked --all-targets -p qol-tray -p qol-launcher",
+            "RUSTFLAGS: -D warnings -C link-arg=/Brepro",
             "cargo build --release --locked -p qol-tray -p qol-launcher --bin qol-tray --bin qol-launcher",
             "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
             "target/release/qol-tray.exe",
             "target/release/qol-launcher.exe",
         ]:
             self.assertIn(contract, job)
+
+    def test_plugin_release_builds_run_bash_on_windows(self):
+        cases = [
+            (".github/workflows/release.yml", "  build:\n", "  registry:\n"),
+            (".github/workflows/plugin-version.yml", "  probe:\n", "  prepare:\n"),
+            (".github/workflows/plugin-version.yml", "  plugin_candidate:\n", "  qol_tray_linux_candidate:\n"),
+        ]
+        for path, start, end in cases:
+            with self.subTest(path=path, job=start.strip()):
+                workflow = (ROOT / path).read_text()
+                job = workflow.split(start, 1)[1].split(end, 1)[0]
+                self.assertIn("    defaults:\n      run:\n        shell: bash\n", job)
 
     def test_plugins_publish_no_github_release(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()

@@ -340,10 +340,11 @@ jobs:
           RUSTFLAGS: -D warnings
         run: cargo check --locked --all-targets -p qol-tray -p qol-launcher
 
+      # The release build's /Brepro, so a link failure shows here first.
       - name: Build Windows executables
         if: ${{ fromJSON(needs.plan.outputs.windows_apps) }}
         env:
-          RUSTFLAGS: -D warnings
+          RUSTFLAGS: -D warnings -C link-arg=/Brepro
         run: cargo build --release --locked -p qol-tray -p qol-launcher --bin qol-tray --bin qol-launcher
 
       - name: Upload Windows executables
