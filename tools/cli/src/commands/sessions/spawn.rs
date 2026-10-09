@@ -594,6 +594,35 @@ pub(super) fn generate_key() -> String {
     digest[..20].to_owned()
 }
 
+const KEY_FILLER_WORDS: &[&str] = &[
+    "a", "about", "actually", "all", "also", "alright", "an", "and", "any", "are", "as", "at",
+    "be", "but", "by", "can", "could", "do", "does", "ensure", "for", "from", "gain", "get", "has",
+    "have", "here", "hey", "how", "i", "in", "into", "is", "it", "its", "just", "like", "look",
+    "make", "maybe", "me", "my", "need", "now", "of", "ok", "okay", "on", "or", "our", "please",
+    "proper", "properly", "really", "right", "should", "so", "some", "that", "the", "then",
+    "there", "these", "this", "those", "to", "us", "want", "we", "what", "when", "which", "why",
+    "will", "with", "would", "you", "your",
+];
+
+pub(super) fn contextual_key(text: &str) -> Option<String> {
+    let mut slug = String::new();
+    let words = text
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .filter(|word| !word.is_empty() && !KEY_FILLER_WORDS.contains(&word.as_str()))
+        .take(4);
+    for word in words {
+        if !slug.is_empty() && slug.len() + 1 + word.len() > 32 {
+            break;
+        }
+        if !slug.is_empty() {
+            slug.push('-');
+        }
+        slug.push_str(&word[..word.len().min(32)]);
+    }
+    (!slug.is_empty()).then(|| format!("{slug}-{}", &generate_key()[..4]))
+}
+
 fn generated_group(lanes: &[LaneSpec]) -> String {
     let mut digest = Sha256::new();
     for lane in lanes {
@@ -1011,6 +1040,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     if silent_wake && !background {
         bail!("--silent-wake requires --background\nusage: {usage}");
     }
+    let key = key.or_else(|| task.as_deref().and_then(contextual_key));
     Ok(SpawnArgs {
         tool,
         cwd,
@@ -2637,6 +2667,35 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(parsed.resume, Some(false));
+    }
+
+    #[test]
+    fn a_task_without_a_key_names_the_lane_after_the_task() {
+        let parsed = parse_args(&[
+            "--cwd".into(),
+            "/tmp".into(),
+            "--task".into(),
+            "Please review the Cargo.lock merge driver for stale deps".into(),
+        ])
+        .unwrap();
+        let key = parsed.key.unwrap();
+        assert!(key.starts_with("review-cargo-lock-merge-"), "{key}");
+        SpawnKey::new(key).unwrap();
+
+        let parsed = parse_args(&[
+            "--cwd".into(),
+            "/tmp".into(),
+            "--key".into(),
+            "chosen".into(),
+            "--task".into(),
+            "review the driver".into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.key.as_deref(), Some("chosen"));
+
+        assert_eq!(contextual_key("can you please look into it?"), None);
+        let long = contextual_key(&"x".repeat(80)).unwrap();
+        assert_eq!(long.len(), 32 + 5, "{long}");
     }
 
     #[test]
