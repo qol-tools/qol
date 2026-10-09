@@ -78,12 +78,6 @@ fn recency_cls() -> &'static HashSet<&'static str> {
     })
 }
 
-#[allow(dead_code)]
-fn stale_cls() -> &'static HashSet<&'static str> {
-    static STALE_CLS: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    STALE_CLS.get_or_init(|| HashSet::from(["count", "status", "version"]))
-}
-
 fn curated_kinds() -> &'static HashSet<&'static str> {
     static CURATED_KINDS: OnceLock<HashSet<&'static str>> = OnceLock::new();
     CURATED_KINDS.get_or_init(|| HashSet::from(["artifact", "decision", "decision-deter"]))

@@ -3,7 +3,7 @@ use super::super::{
     NvidiaPayload, PolicyStatusView,
 };
 use super::NvidiaPolicyBackend;
-use crate::policy::platform::fail_next;
+use crate::policy::platform::linux::fail_next;
 use crate::policy::{
     cli, journal, lock, managed, read_journal, JournalState, PolicyError, PolicyJournal,
     PolicyPayload, PolicyState, ReleaseFailure, ReleaseStage, ResidencyOwnerId, ResidentPolicy,
@@ -183,7 +183,7 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
 
     fn disable(policy: &ResidentPolicy, owner: &ResidencyOwnerId) -> Result<()> {
         let _guard = lock::acquire(policy)?;
-        if !managed::allows_release()? {
+        if !allows_release()? {
             return Err(PolicyError::NotManaged {
                 policy: policy.id().to_string(),
             }
@@ -247,7 +247,7 @@ impl super::NvidiaPolicyBackend for LinuxNvidia {
     }
 
     fn expected_fingerprint_owner() -> Option<(u32, u32)> {
-        Some(crate::policy::platform::expected_policy_file_owner())
+        Some(crate::policy::platform::linux::expected_policy_file_owner())
     }
 
     fn remove_staged_for_zero_mutation(payload: &NvidiaPayload) -> Result<()> {
@@ -1008,7 +1008,7 @@ fn planned_staged_matches(payload: &NvidiaPayload, entry: &AtEntry) -> bool {
     let Some(identity) = payload.staged_identity.as_ref() else {
         return false;
     };
-    let (expected_uid, expected_gid) = crate::policy::platform::expected_policy_file_owner();
+    let (expected_uid, expected_gid) = crate::policy::platform::linux::expected_policy_file_owner();
     identity.dev != 0
         && identity.ino != 0
         && identity.dev == *dev
@@ -1115,7 +1115,7 @@ fn publish_no_replace(
             .with_context(|| format!("failed to publish the staged fragment to {target_name:?}"));
     }
     let sync_error = match fail_next("publish-fsync") {
-        Ok(()) => crate::policy::platform::sync_directory_fd_strict(dir)
+        Ok(()) => crate::policy::platform::linux::sync_directory_fd_strict(dir)
             .err()
             .map(std::io::Error::other),
         Err(injected) => Some(std::io::Error::other(injected.to_string())),
@@ -1127,12 +1127,12 @@ fn publish_no_replace(
 }
 
 fn sync_fragment_dir(dir: &std::fs::File) -> Result<()> {
-    crate::policy::platform::sync_directory_fd_strict(dir)
+    crate::policy::platform::linux::sync_directory_fd_strict(dir)
         .with_context(|| "failed to fsync the preferences parts directory")
 }
 
 fn fragment_sync_error(dir: &std::fs::File, seam: &str) -> Result<Option<anyhow::Error>> {
-    match crate::policy::platform::sync_directory_fd_strict(dir) {
+    match crate::policy::platform::linux::sync_directory_fd_strict(dir) {
         Ok(()) => match fail_next(seam) {
             Ok(()) => Ok(None),
             Err(injected) => Ok(Some(anyhow::anyhow!("{}", injected))),
@@ -1289,7 +1289,7 @@ fn stage_content(
         });
     }
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    let (expected_uid, expected_gid) = crate::policy::platform::expected_policy_file_owner();
+    let (expected_uid, expected_gid) = crate::policy::platform::linux::expected_policy_file_owner();
     let fchown_result = unsafe { libc::fchown(file.as_raw_fd(), expected_uid, expected_gid) };
     if fchown_result != 0 {
         return Err(std::io::Error::last_os_error())
@@ -2130,7 +2130,7 @@ fn run_privileged_operation(
 ) -> Result<()> {
     match operation {
         PrivilegedOperation::Enable => {
-            let lineage_owner = managed::managed_lineage_owner_activation()?;
+            let lineage_owner = managed_lineage_owner_activation()?;
             policy.enable(&lineage_owner)
         }
         PrivilegedOperation::Disable => {
@@ -2179,6 +2179,17 @@ fn execute(policy: &ResidentPolicy, command: &cli::ResidentCommand) -> Result<i3
         }
         .into()),
     }
+}
+
+fn allows_release() -> Result<bool> {
+    Ok(managed::current_lineage()?.is_some())
+}
+
+fn managed_lineage_owner_activation() -> Result<ResidencyOwnerId> {
+    let lineage = managed::current_lineage_activation()?.with_context(|| {
+        "residency activation requires an activation-grade managed install; raw or portable artifacts cannot derive an activation owner"
+    })?;
+    managed::owner_for_lineage(&lineage)
 }
 
 fn require_root() -> Result<()> {
@@ -4952,7 +4963,8 @@ mod tests {
         let journal = read_journal(NVIDIA_POLICY_ID).unwrap().unwrap();
         let payload = payload_of(&journal.payload).unwrap();
         let expected_hash = payload.rendered_sha256.clone();
-        let (expected_uid, expected_gid) = crate::policy::platform::expected_policy_file_owner();
+        let (expected_uid, expected_gid) =
+            crate::policy::platform::linux::expected_policy_file_owner();
         let meta = std::fs::metadata(&staged).unwrap();
         assert_eq!(
             meta.mode() & 0o7777,

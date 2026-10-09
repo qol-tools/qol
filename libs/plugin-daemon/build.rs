@@ -1,5 +1,5 @@
 fn main() {
-    let source = "src/daemon/platform/unix/macos_socket.c";
+    let source = "src/daemon/platform/unix/platform/macos_socket.c";
     println!("cargo:rerun-if-changed={source}");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()

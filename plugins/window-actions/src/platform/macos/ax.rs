@@ -107,7 +107,7 @@ fn ns_running_app(pid: i32) -> Option<*mut c_void> {
 fn activate_app(pid: i32, app: *const c_void, options: usize) -> bool {
     timed_bool("activate_app", pid, || unsafe {
         let _ = set_ax_bool_attr(app, "AXFrontmost", true);
-        qol_windowing::macos::activation::ax_app_frontmost(pid);
+        qol_windowing::platform::macos::activation::ax_app_frontmost(pid);
         if wait_for_app_active(pid) {
             return true;
         }
@@ -238,7 +238,7 @@ fn is_targetable_window(win: *const c_void) -> bool {
 
 fn window_is_normal(win: *const c_void) -> bool {
     let subrole = ax_attr(win, "AXSubrole").and_then(|guard| cfstring_to_string(guard.as_const()));
-    qol_windowing::macos::ax::is_normal_window_subrole(subrole.as_deref())
+    qol_windowing::platform::macos::ax::is_normal_window_subrole(subrole.as_deref())
 }
 
 fn window_is_minimized(win: *const c_void) -> bool {

@@ -976,16 +976,13 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    use std::sync::MutexGuard;
-
-    #[cfg(target_os = "linux")]
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[cfg(target_os = "linux")]
     const TEST_DEVICE: &str = "test-device";
 
     #[cfg(target_os = "linux")]
-    fn env_lock() -> MutexGuard<'static, ()> {
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         ENV_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

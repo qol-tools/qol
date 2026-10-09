@@ -1,4 +1,4 @@
-use crate::session::{session_subdir, SessionSnapshot, SessionStore};
+use qol_host_session::{SessionSnapshot, SessionStore};
 
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 const ENTRY_ID: &str = "x11-cursor";
@@ -27,7 +27,9 @@ impl SessionSnapshot for CursorSnapshot {
 }
 
 fn store() -> SessionStore {
-    SessionStore::new(session_subdir(CursorSnapshot::SUBDIR))
+    SessionStore::new(crate::session::Platform::session_subdir(
+        CursorSnapshot::SUBDIR,
+    ))
 }
 
 pub fn journal_scaled(root: u64, windows: &[u64]) {

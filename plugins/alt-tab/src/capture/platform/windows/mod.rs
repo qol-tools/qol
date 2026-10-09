@@ -1,6 +1,11 @@
 use crate::discovery::WindowInfo;
 use qol_app_icon::RgbaImage;
 
+pub(crate) use super::fallback::{
+    live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
+    PIXEL_FORMAT_420F,
+};
+
 pub fn capture_previews_cg(
     _targets: &[(usize, u32)],
     _max_w: usize,

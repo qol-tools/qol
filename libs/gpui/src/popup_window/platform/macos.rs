@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Mutex, Once, PoisonError};
+use std::sync::{Mutex, Once, OnceLock, PoisonError};
 
 use block2::{DynBlock, RcBlock};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
@@ -179,7 +179,7 @@ fn ensure_region_poll() {
         std::thread::sleep(REGION_POLL);
         let generation = REGION_GENERATION.load(Ordering::SeqCst);
         let (sender, receiver) = std::sync::mpsc::channel();
-        crate::platform::run_on_main(Box::new(move || {
+        run_on_main(Box::new(move || {
             let _ = sender.send(apply_all_input_regions());
         }));
         if !receiver.recv().unwrap_or(false) {
@@ -200,7 +200,7 @@ fn ensure_region_poll() {
 fn set_input_region_on_main(title: &str, x: i16, y: i16, width: u16, height: u16) -> bool {
     remember_input_region(title, x, y, width, height);
     let title = title.to_owned();
-    crate::platform::run_on_main(Box::new(move || {
+    run_on_main(Box::new(move || {
         apply_input_region(&title);
     }));
     ensure_region_poll();
@@ -305,7 +305,7 @@ fn schedule_focus_return() {
     let generation = FOCUS_RETURN_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
         std::thread::sleep(FOCUS_RETURN_SETTLE);
-        crate::platform::run_on_main(Box::new(move || {
+        run_on_main(Box::new(move || {
             if FOCUS_RETURN_GENERATION.load(Ordering::SeqCst) == generation {
                 return_focus_if_unheld();
             }
@@ -961,7 +961,7 @@ pub fn reassert_focus_while_current(
     gen: &'static std::sync::atomic::AtomicU64,
     commit_gen: u64,
 ) {
-    crate::platform::run_on_main(Box::new(move || {
+    run_on_main(Box::new(move || {
         if gen.load(std::sync::atomic::Ordering::SeqCst) != commit_gen {
             return;
         }
@@ -1324,6 +1324,67 @@ pub fn window_holds_input_focus(title: &str) -> Option<bool> {
         return Some(false);
     };
     Some(frontmost == number)
+}
+
+type DispatchFunction = unsafe extern "C" fn(*mut c_void);
+
+extern "C" {
+    fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+struct DispatchSymbols {
+    main_queue: *const c_void,
+    async_f: unsafe extern "C" fn(*const c_void, *mut c_void, DispatchFunction),
+}
+
+unsafe impl Send for DispatchSymbols {}
+unsafe impl Sync for DispatchSymbols {}
+
+fn dispatch_symbols() -> Option<&'static DispatchSymbols> {
+    static SYMBOLS: OnceLock<Option<DispatchSymbols>> = OnceLock::new();
+    SYMBOLS
+        .get_or_init(|| {
+            let handle = unsafe { dlopen(c"libSystem.B.dylib".as_ptr(), 0x1) };
+            if handle.is_null() {
+                return None;
+            }
+            let main_queue =
+                unsafe { dlsym(handle, c"_dispatch_main_q".as_ptr()) as *const c_void };
+            let async_f = unsafe { dlsym(handle, c"dispatch_async_f".as_ptr()) as *const () };
+            if main_queue.is_null() || async_f.is_null() {
+                return None;
+            }
+            Some(DispatchSymbols {
+                main_queue,
+                async_f: unsafe {
+                    std::mem::transmute::<
+                        *const (),
+                        unsafe extern "C" fn(*const c_void, *mut c_void, DispatchFunction),
+                    >(async_f)
+                },
+            })
+        })
+        .as_ref()
+}
+
+unsafe extern "C" fn run_task_on_main(context: *mut c_void) {
+    let task = Box::from_raw(context as *mut Box<dyn FnOnce() + Send>);
+    task();
+}
+
+fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
+    let Some(symbols) = dispatch_symbols() else {
+        return;
+    };
+    unsafe {
+        let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(task);
+        (symbols.async_f)(
+            symbols.main_queue,
+            Box::into_raw(boxed) as *mut c_void,
+            run_task_on_main,
+        );
+    }
 }
 
 #[cfg(test)]

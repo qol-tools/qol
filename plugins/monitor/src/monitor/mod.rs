@@ -7,8 +7,6 @@ pub mod night;
 pub mod policy;
 
 pub use backends::i2c_ddc::I2cError;
-#[cfg(target_os = "linux")]
-pub use backends::x11_randr_gamma::X11GammaTransport;
 pub use backends::x11_randr_gamma::{GammaBackend, GammaError, GammaTable};
 pub use grant::{GrantBackend, GrantError, I2cGrantState, RevokeOutcome, UdevGrantBackend};
 pub use policy::{BrightnessPolicy, DdcStatus, PolicyControl};

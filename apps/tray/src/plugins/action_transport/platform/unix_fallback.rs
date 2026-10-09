@@ -19,6 +19,14 @@ impl ActionTransportPlatform for Platform {
         unix::dispatch_action(endpoint, action_id, input, timeout)
     }
 
+    fn dispatch_payload(
+        endpoint: &Path,
+        payload: &[u8],
+        timeout: Duration,
+    ) -> DaemonActionDispatch {
+        unix::dispatch_payload(endpoint, payload, timeout)
+    }
+
     fn can_connect(endpoint: &Path) -> bool {
         unix::can_connect(endpoint)
     }

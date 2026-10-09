@@ -1,5 +1,6 @@
 mod display;
 mod game_focus;
+mod journal;
 mod motion;
 mod runtime;
 mod scale;
@@ -31,12 +32,16 @@ impl CursorPlatform for Platform {
     fn external_stop_requested(&self) -> bool {
         EXTERNAL_STOP.load(Ordering::Relaxed)
     }
+
+    fn recover(&self) {
+        recover();
+    }
 }
 
 pub fn recover() {
-    if let Some((root, windows)) = crate::cursor::journal::journaled_scale() {
+    if let Some((root, windows)) = journal::journaled_scale() {
         display::x11::recover_scale(root, &windows);
-        crate::cursor::journal::clear_journal();
+        journal::clear_journal();
     }
 }
 

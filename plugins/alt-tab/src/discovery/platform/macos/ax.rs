@@ -93,7 +93,7 @@ unsafe fn ax_check_subrole(win: *const c_void, attr: *const c_void) -> bool {
     } // include when AX unavailable — safe default
     let subrole = ffi::cfstring_to_string(val);
     CFRelease(val);
-    qol_windowing::macos::ax::is_normal_window_subrole(subrole.as_deref())
+    qol_windowing::platform::macos::ax::is_normal_window_subrole(subrole.as_deref())
 }
 
 unsafe fn ax_has_window_subrole(win: *const c_void, attr: *const c_void) -> bool {
@@ -103,7 +103,7 @@ unsafe fn ax_has_window_subrole(win: *const c_void, attr: *const c_void) -> bool
     }
     let subrole = ffi::cfstring_to_string(val);
     CFRelease(val);
-    qol_windowing::macos::ax::is_normal_window_subrole(subrole.as_deref())
+    qol_windowing::platform::macos::ax::is_normal_window_subrole(subrole.as_deref())
 }
 
 unsafe fn ax_read_window_id(win: *const c_void, attr: *const c_void) -> Option<u32> {

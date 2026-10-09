@@ -207,7 +207,7 @@ fn linux_bindings(bindings: Vec<Binding>) -> Vec<(LinuxCombo, Binding)> {
         .into_iter()
         .filter_map(|binding| {
             let combo = binding.combo.as_ref()?;
-            let key = crate::hotkeys::platform::evdev_keycode(combo.key)?;
+            let key = crate::hotkeys::platform::linux::evdev_keycode(combo.key)?;
             Some((
                 LinuxCombo {
                     mods: combo.mods.clone(),

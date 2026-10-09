@@ -62,3 +62,18 @@ pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {
         let _ = SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
     }
 }
+
+pub(crate) fn native_scale_for(_window: &gpui::Window) -> f32 {
+    1.0
+}
+
+pub(crate) fn native_readback_position(_title: &str) -> Option<(i32, i32)> {
+    None
+}
+
+pub(crate) fn readback_matches(
+    _readback: Option<(i32, i32)>,
+    _native: crate::window::NativeDesktopBounds,
+) -> bool {
+    true
+}

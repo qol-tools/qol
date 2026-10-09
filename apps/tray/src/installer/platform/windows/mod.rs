@@ -53,6 +53,10 @@ impl InstallerOps for Platform {
         Ok(())
     }
 
+    fn ensure_desktop_registration(&self) -> Result<()> {
+        Ok(())
+    }
+
     fn warn_system_install_conflict(&self) {}
 
     fn remove_legacy_install(&self) {}

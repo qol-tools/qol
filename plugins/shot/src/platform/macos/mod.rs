@@ -23,6 +23,21 @@ pub(crate) fn reassert_parked(_title: &str, _cx: &mut gpui::App) {}
 
 pub(crate) fn mark_reveal_requested(_title: &str) {}
 
+pub(crate) fn prepare_preview_window(title: &str) -> bool {
+    qol_gpui::popup_window::configure_popup_window(title);
+    qol_gpui::popup_window::set_override_redirect_by_title(title);
+    qol_gpui::popup_window::hide_invisible(title);
+    true
+}
+
+pub(crate) fn register_pin_transition(
+    _title: &str,
+) -> Option<futures::channel::oneshot::Receiver<bool>> {
+    None
+}
+
+pub(crate) fn complete_pin_transition(_title: &str, _succeeded: bool) {}
+
 pub fn pre_create_pins(cx: &mut gpui::App) {
     crate::ui::pinned::pre_create(cx);
 }

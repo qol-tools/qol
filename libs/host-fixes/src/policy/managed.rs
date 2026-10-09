@@ -744,11 +744,6 @@ pub fn allows_enable() -> Result<bool> {
     Ok(current_lineage_activation()?.is_some())
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn allows_release() -> Result<bool> {
-    Ok(current_lineage()?.is_some())
-}
-
 pub fn current_owner() -> Result<ResidencyOwnerId> {
     let lineage = current_lineage()?.with_context(|| {
         "residency activation requires a managed install; raw or portable artifacts cannot \
@@ -764,14 +759,6 @@ pub fn owner_for_lineage(lineage: &Lineage) -> Result<ResidencyOwnerId> {
 pub fn managed_lineage_owner() -> Result<ResidencyOwnerId> {
     let lineage = current_lineage()?.with_context(|| {
         "residency policy mutations require a proved managed install; raw or portable artifacts cannot derive a default owner"
-    })?;
-    owner_for_lineage(&lineage)
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn managed_lineage_owner_activation() -> Result<ResidencyOwnerId> {
-    let lineage = current_lineage_activation()?.with_context(|| {
-        "residency activation requires an activation-grade managed install; raw or portable artifacts cannot derive an activation owner"
     })?;
     owner_for_lineage(&lineage)
 }

@@ -12,7 +12,7 @@ use crate::discovery::platform::macos::ffi::{
     K_CG_NULL_WINDOW_ID, K_CG_WINDOW_LAYER_NORMAL, K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
     K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
-use qol_windowing::macos::activation;
+use qol_windowing::platform::macos::activation;
 use qol_windowing::{WindowId, WindowOps, WindowRect};
 use std::ffi::c_void;
 

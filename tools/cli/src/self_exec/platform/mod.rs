@@ -12,15 +12,13 @@ mod windows;
 
 #[cfg(unix)]
 mod termios;
-#[cfg(unix)]
-pub(crate) use termios::{apply_prior_termios, capture_prior_termios, restore_resumed_tty};
 
-#[cfg(not(unix))]
-pub(crate) fn apply_prior_termios() {}
-#[cfg(not(unix))]
-pub(crate) fn capture_prior_termios() {}
-#[cfg(not(unix))]
-pub(crate) fn restore_resumed_tty() {}
+#[cfg(not(any(unix, windows)))]
+pub(crate) use fallback::{apply_prior_termios, capture_prior_termios, restore_resumed_tty};
+#[cfg(unix)]
+pub(crate) use unix::{apply_prior_termios, capture_prior_termios, restore_resumed_tty};
+#[cfg(windows)]
+pub(crate) use windows::{apply_prior_termios, capture_prior_termios, restore_resumed_tty};
 
 #[cfg(not(any(unix, windows)))]
 use fallback::Platform;

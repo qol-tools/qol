@@ -5,11 +5,16 @@ use qol_windowing::display::{
     DisplaySnapshot,
 };
 
-use super::{Control, DisplayServer, PlatformControl, PlatformSupport};
-use crate::monitor::backends::i2c_ddc::{I2cDdcBackend, LinuxI2cTransport};
+mod i2c_dev;
+mod x11_randr;
+
+use super::platform_control::PlatformControl;
+use super::{Control, DisplayServer, PlatformSupport};
+use crate::monitor::backends::i2c_ddc::I2cDdcBackend;
 use crate::monitor::backends::shared_display::SharedDisplay;
-use crate::monitor::backends::x11_randr_gamma::X11GammaTransport;
 use crate::monitor::{GammaBackend, PolicyControl};
+use i2c_dev::LinuxI2cTransport;
+use x11_randr::X11GammaTransport;
 
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
@@ -27,7 +32,12 @@ pub(crate) fn control() -> Control {
         SharedDisplay::with_platform(X11Display {
             platform: qol_windowing::Platform,
         }),
+        mode_writes_supported,
     ))
+}
+
+fn mode_writes_supported() -> bool {
+    super::display_server() == DisplayServer::X11
 }
 
 struct X11Display {

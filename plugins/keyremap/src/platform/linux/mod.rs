@@ -1,9 +1,10 @@
 use anyhow::Result;
 use qol_headless::CommandResult;
 
+use super::virtual_keyboard_absent::MACOS_ONLY;
 use super::{
     ConfigInspection, DriverState, HelperState, LayoutGap, PlatformAdapter, Probe,
-    SecureInputHolder, TrustStatus, MACOS_ONLY,
+    SecureInputHolder, TrustStatus,
 };
 
 #[derive(Clone, Copy)]

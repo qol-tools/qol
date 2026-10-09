@@ -6,12 +6,10 @@
 
 mod geometry;
 mod ops;
+pub mod platform;
 mod window_id;
 
 pub mod display;
-
-#[cfg(target_os = "macos")]
-pub mod macos;
 
 pub use display::{
     validate_layout, DisplayEnumerator, DisplayHandle, DisplayMode, DisplayOps, DisplayPlacement,

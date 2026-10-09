@@ -10,6 +10,8 @@ pub(super) trait ActionTransportPlatform {
         input: &serde_json::Value,
         timeout: Duration,
     ) -> DaemonActionDispatch;
+    fn dispatch_payload(endpoint: &Path, payload: &[u8], timeout: Duration)
+        -> DaemonActionDispatch;
     fn can_connect(endpoint: &Path) -> bool;
 }
 
@@ -50,13 +52,14 @@ pub(super) fn dispatch_action(
     Platform::dispatch_action(endpoint, action_id, input, timeout)
 }
 
-pub(super) fn can_connect(endpoint: &Path) -> bool {
-    Platform::can_connect(endpoint)
+pub(super) fn dispatch_payload(
+    endpoint: &Path,
+    payload: &[u8],
+    timeout: Duration,
+) -> DaemonActionDispatch {
+    Platform::dispatch_payload(endpoint, payload, timeout)
 }
 
-#[cfg(unix)]
-pub(super) use unix::dispatch_payload;
-#[cfg(not(unix))]
-pub(super) fn dispatch_payload(_: &Path, _: &[u8], _: Duration) -> DaemonActionDispatch {
-    DaemonActionDispatch::NotSent
+pub(super) fn can_connect(endpoint: &Path) -> bool {
+    Platform::can_connect(endpoint)
 }

@@ -19,6 +19,8 @@ impl CursorPlatform for Platform {
     fn external_stop_requested(&self) -> bool {
         false
     }
+
+    fn recover(&self) {}
 }
 
 struct UnsupportedEffect;

@@ -13,6 +13,11 @@ use std::ffi::c_void;
 mod cg;
 pub(crate) mod shots;
 
+pub(crate) use shots::{
+    live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
+    PIXEL_FORMAT_420F,
+};
+
 const ICON_SIZE: usize = 32;
 
 pub fn capture_previews_cg(

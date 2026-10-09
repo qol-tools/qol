@@ -16,6 +16,8 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
+pub(crate) use imp::{native_readback_position, native_scale_for, readback_matches};
+
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()
 }
@@ -54,11 +56,6 @@ pub fn has_process_focus() -> bool {
 
 pub fn process_focus_truth() -> Option<bool> {
     should_poll_focus().then(has_process_focus)
-}
-
-#[cfg(target_os = "macos")]
-pub fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
-    imp::run_on_main(task)
 }
 
 pub fn start_window_move(window: &mut gpui::Window) {

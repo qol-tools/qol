@@ -92,7 +92,7 @@ pub fn configure_pin_window(title: String, origin: (f64, f64), source_preview: O
             });
             if transitioned {
                 if let Some(source_title) = source_title {
-                    crate::ui::preview::complete_pin_transition(&source_title, true);
+                    crate::platform::complete_pin_transition(&source_title, true);
                 }
             }
             transitioned
@@ -113,7 +113,7 @@ pub fn configure_pin_window(title: String, origin: (f64, f64), source_preview: O
                 source.as_deref().unwrap_or("none")
             );
             if let Some(source) = source {
-                crate::ui::preview::complete_pin_transition(&source, false);
+                crate::platform::complete_pin_transition(&source, false);
             }
         },
     );

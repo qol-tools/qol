@@ -87,70 +87,6 @@ pub fn has_process_focus() -> bool {
     frontmost_pid() == Some(std::process::id() as i32)
 }
 
-use std::ffi::{c_char, c_void};
-use std::sync::OnceLock;
-
-type DispatchFunction = unsafe extern "C" fn(*mut c_void);
-
-extern "C" {
-    fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-
-struct DispatchSymbols {
-    main_queue: *const c_void,
-    async_f: unsafe extern "C" fn(*const c_void, *mut c_void, DispatchFunction),
-}
-
-unsafe impl Send for DispatchSymbols {}
-unsafe impl Sync for DispatchSymbols {}
-
-fn dispatch_symbols() -> Option<&'static DispatchSymbols> {
-    static SYMBOLS: OnceLock<Option<DispatchSymbols>> = OnceLock::new();
-    SYMBOLS
-        .get_or_init(|| {
-            let handle = unsafe { dlopen(c"libSystem.B.dylib".as_ptr(), 0x1) };
-            if handle.is_null() {
-                return None;
-            }
-            let main_queue =
-                unsafe { dlsym(handle, c"_dispatch_main_q".as_ptr()) as *const c_void };
-            let async_f = unsafe { dlsym(handle, c"dispatch_async_f".as_ptr()) as *const () };
-            if main_queue.is_null() || async_f.is_null() {
-                return None;
-            }
-            Some(DispatchSymbols {
-                main_queue,
-                async_f: unsafe {
-                    std::mem::transmute::<
-                        *const (),
-                        unsafe extern "C" fn(*const c_void, *mut c_void, DispatchFunction),
-                    >(async_f)
-                },
-            })
-        })
-        .as_ref()
-}
-
-unsafe extern "C" fn run_task_on_main(context: *mut c_void) {
-    let task = Box::from_raw(context as *mut Box<dyn FnOnce() + Send>);
-    task();
-}
-
-pub fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
-    let Some(symbols) = dispatch_symbols() else {
-        return;
-    };
-    unsafe {
-        let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(task);
-        (symbols.async_f)(
-            symbols.main_queue,
-            Box::into_raw(boxed) as *mut c_void,
-            run_task_on_main,
-        );
-    }
-}
-
 pub fn square_window_corners(window: &mut gpui::Window) {
     use objc2_app_kit::NSWindowStyleMask;
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
@@ -205,3 +141,18 @@ pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdent
 }
 
 pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {}
+
+pub(crate) fn native_scale_for(_window: &gpui::Window) -> f32 {
+    1.0
+}
+
+pub(crate) fn native_readback_position(_title: &str) -> Option<(i32, i32)> {
+    None
+}
+
+pub(crate) fn readback_matches(
+    _readback: Option<(i32, i32)>,
+    _native: crate::window::NativeDesktopBounds,
+) -> bool {
+    true
+}
