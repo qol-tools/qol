@@ -24,7 +24,7 @@ is a commitment; it is a menu.
 | 12 | `caffeine` | Keep-awake per session or per app (presentation mode). | `qol-os-themes`/power adapters, per-app policy |
 | 13 | `focus-timer` | Pomodoro-style timer with notifications, tie-in to DND. | `qol-runtime` push channel |
 | 14 | `qr-share` | Share text/URLs as QR from qol-launcher; `qr_code` field kind already exists. | `qol-config` `qr_code`, qol-launcher |
-| 15 | `worktree-status` | Live board of worktrees/branches/dirty state with checkout actions; pairs with `qol-ide-checkout`. | `qol-ide-checkout` daemon, tray world canvas |
+| 15 | `worktree-status` | Live board of worktrees/branches/dirty state with checkout actions; pairs with `qol-ide-checkout`. | `qol-ide-checkout` daemon, `qol-gpui` surface kit |
 | 16 | `remote-clipboard` | Clipboard sync between PC and phone as a `qol-pointz` extension. | `qol-pointz` wire protocol, UDP discovery |
 
 ## P2 - Platform port matrix
