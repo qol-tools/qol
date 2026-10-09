@@ -4,7 +4,7 @@ uid = "37aae6d0-ae74-4487-946a-32a635a9ef03"
 name = "Remove App"
 icon = "remove-app"
 description = "Uninstall an app and its leftovers"
-version = "0.70.0"
+version = "0.70.1"
 author = "KMRH47"
 platforms = ["linux", "macos"]
 
