@@ -3,7 +3,7 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{null, null_mut};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use windows_sys::w;
@@ -18,6 +18,8 @@ const SHELL_EXECUTE_WAIT: Duration = Duration::from_secs(2);
 const SE_ERR_FNF: usize = 2;
 const SE_ERR_PNF: usize = 3;
 const SE_ERR_ACCESSDENIED: usize = 5;
+
+static LAUNCH_ENV: Mutex<()> = Mutex::new(());
 
 pub(crate) fn daemon_action_args(_path: &Path, exec: &[String]) -> Option<(String, String)> {
     super::daemon_exec_args(exec).map(|(target, action)| (target.to_string(), action.to_string()))
@@ -43,17 +45,17 @@ pub(crate) fn launch_app(_path: &Path, exec: &[String]) -> io::Result<()> {
             }
             let _ = sender.send(result);
         })?;
-    // ShellExecute can block on a shell dialog, so a slow call counts as launched.
     receiver.recv_timeout(SHELL_EXECUTE_WAIT).unwrap_or(Ok(()))
 }
 
-/// ShellExecute gives the child this process's environment, so the daemon
-/// handoff variables are lifted for the duration of the call and restored.
 fn shell_execute_scrubbed(
     file: &[u16],
     parameters: Option<&[u16]>,
     directory: Option<&[u16]>,
 ) -> io::Result<()> {
+    let _env = LAUNCH_ENV
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut keys = qol_conventions::daemon_handoff_env_keys();
     keys.push(qol_conventions::ENV_DAEMON_SOCKET.into());
     keys.push(qol_conventions::ENV_INSTALL_ID.into());
@@ -115,18 +117,18 @@ fn quote_arg(arg: &str) -> String {
         match ch {
             '\\' => backslashes += 1,
             '"' => {
-                quoted.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
                 quoted.push('"');
                 backslashes = 0;
             }
             _ => {
-                quoted.extend(std::iter::repeat('\\').take(backslashes));
+                quoted.extend(std::iter::repeat_n('\\', backslashes));
                 quoted.push(ch);
                 backslashes = 0;
             }
         }
     }
-    quoted.extend(std::iter::repeat('\\').take(backslashes * 2));
+    quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
     quoted.push('"');
     quoted
 }
