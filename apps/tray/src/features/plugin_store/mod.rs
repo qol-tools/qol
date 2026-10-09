@@ -2,7 +2,9 @@ pub(crate) mod github;
 mod index;
 pub mod installer;
 mod platform;
+#[cfg_attr(windows, allow(unused_imports))]
 pub(crate) use index::blob_client;
+#[cfg_attr(windows, allow(unused_imports))]
 pub(crate) use platform::display_label as host_os_label;
 mod plugin_ui;
 mod release_assets;

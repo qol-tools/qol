@@ -25,12 +25,12 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
     SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess,
-    WaitForSingleObject, CREATE_SUSPENDED, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
+    WaitForSingleObject, CREATE_SUSPENDED, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread};
 
@@ -679,9 +679,44 @@ fn create_kill_on_close_job() -> io::Result<JobHandle> {
 }
 
 fn configure_kill_on_close(handle: HANDLE, enabled: bool) -> io::Result<()> {
+    set_job_limit_flags(
+        handle,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE * u32::from(enabled),
+    )
+}
+
+static HOST_LIFETIME_JOB: Mutex<Option<usize>> = Mutex::new(None);
+
+pub(crate) fn bind_to_host_lifetime(pid: u32) -> io::Result<()> {
+    let job = host_lifetime_job()?;
+    let process = open_process(pid, PROCESS_SET_QUOTA | PROCESS_TERMINATE)?;
+    if unsafe { AssignProcessToJobObject(job, process.0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn host_lifetime_job() -> io::Result<HANDLE> {
+    let mut slot = HOST_LIFETIME_JOB
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(job) = *slot {
+        return Ok(job as HANDLE);
+    }
+    let job = create_kill_on_close_job()?;
+    set_job_limit_flags(
+        job.0,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+    )?;
+    let handle = job.0;
+    std::mem::forget(job);
+    *slot = Some(handle as usize);
+    Ok(handle)
+}
+
+fn set_job_limit_flags(handle: HANDLE, flags: u32) -> io::Result<()> {
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-    limits.BasicLimitInformation.LimitFlags =
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE * u32::from(enabled);
+    limits.BasicLimitInformation.LimitFlags = flags;
     let configured = unsafe {
         SetInformationJobObject(
             handle,

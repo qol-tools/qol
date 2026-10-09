@@ -1,18 +1,12 @@
-use super::DaemonActionDispatch;
+use qol_runtime::local_ipc::LocalStream;
 use std::path::Path;
 use std::time::Duration;
 
 pub(super) trait ActionTransportPlatform {
     fn default_io_timeout() -> Duration;
-    fn dispatch_action(
-        endpoint: &Path,
-        action_id: &str,
-        input: &serde_json::Value,
-        timeout: Duration,
-    ) -> DaemonActionDispatch;
-    fn dispatch_payload(endpoint: &Path, payload: &[u8], timeout: Duration)
-        -> DaemonActionDispatch;
-    fn can_connect(endpoint: &Path) -> bool;
+    fn connect(endpoint: &Path, timeout: Duration) -> Result<LocalStream, ()>;
+    /// Runs right before an action is forwarded to a daemon.
+    fn before_forward() {}
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
@@ -43,23 +37,10 @@ pub(super) fn default_io_timeout() -> Duration {
     Platform::default_io_timeout()
 }
 
-pub(super) fn dispatch_action(
-    endpoint: &Path,
-    action_id: &str,
-    input: &serde_json::Value,
-    timeout: Duration,
-) -> DaemonActionDispatch {
-    Platform::dispatch_action(endpoint, action_id, input, timeout)
+pub(super) fn connect(endpoint: &Path, timeout: Duration) -> Result<LocalStream, ()> {
+    Platform::connect(endpoint, timeout)
 }
 
-pub(super) fn dispatch_payload(
-    endpoint: &Path,
-    payload: &[u8],
-    timeout: Duration,
-) -> DaemonActionDispatch {
-    Platform::dispatch_payload(endpoint, payload, timeout)
-}
-
-pub(super) fn can_connect(endpoint: &Path) -> bool {
-    Platform::can_connect(endpoint)
+pub(super) fn before_forward() {
+    Platform::before_forward();
 }

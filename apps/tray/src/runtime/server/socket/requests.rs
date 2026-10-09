@@ -1,17 +1,18 @@
 use std::collections::HashSet;
 #[path = "peer_admin.rs"]
 mod peer_admin;
-use std::os::unix::net::UnixStream;
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
 use qol_plugin_api::manifest::is_valid_plugin_id;
+use qol_runtime::local_ipc::LocalStream;
 use qol_runtime::protocol::{
     ArmedLifelinesResponse, DaemonRequest, NotificationLayout, NotificationLevel,
     PluginConfigResponse, PushAck, RuntimeEvent, RuntimeEventKind, RuntimeRequest, SubscribeAck,
 };
 
 use super::io::{write_flushed_json_line, write_state};
+use super::platform;
 use crate::plugins::config::drain::installed_ids;
 use crate::runtime::server::state_store::SharedState;
 
@@ -21,7 +22,7 @@ const SUBSCRIBER_KEEPALIVE_PROBE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const SUBSCRIBER_KEEPALIVE_PROBE: Duration = Duration::from_millis(50);
 
-pub(super) fn handle_request(request: &str, writer: &mut UnixStream, shared: &SharedState) {
+pub(super) fn handle_request(request: &str, writer: &mut LocalStream, shared: &SharedState) {
     if handle_json_request(request, writer, shared) {
         return;
     }
@@ -40,7 +41,7 @@ pub(super) fn request_is_long_lived(request: &str) -> bool {
     )
 }
 
-fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedState) -> bool {
+fn handle_json_request(request: &str, writer: &mut LocalStream, shared: &SharedState) -> bool {
     let Ok(request) = serde_json::from_str::<RuntimeRequest>(request) else {
         return false;
     };
@@ -105,7 +106,7 @@ fn handle_json_request(request: &str, writer: &mut UnixStream, shared: &SharedSt
 
 #[allow(clippy::too_many_arguments)]
 fn handle_push_notification(
-    writer: &mut UnixStream,
+    writer: &mut LocalStream,
     plugin_id: &str,
     title: &str,
     body: &str,
@@ -179,7 +180,7 @@ fn resolve_artifact(artifact: Option<&str>) -> Option<&str> {
     Some(artifact)
 }
 
-fn handle_push_status(writer: &mut UnixStream, plugin_id: &str, status: &serde_json::Value) {
+fn handle_push_status(writer: &mut LocalStream, plugin_id: &str, status: &serde_json::Value) {
     let accepted = push_plugin_known(plugin_id);
     if accepted {
         log::info!("[runtime/socket] PUSH status from {plugin_id}: {status}");
@@ -200,7 +201,7 @@ fn push_plugin_known(plugin_id: &str) -> bool {
     installed_ids(&plugins_dir).iter().any(|id| id == plugin_id)
 }
 
-fn respond_to_push(writer: &mut UnixStream, plugin_id: &str, kind: &str, accepted: bool) {
+fn respond_to_push(writer: &mut LocalStream, plugin_id: &str, kind: &str, accepted: bool) {
     let clean_id = qol_conventions::plugin_id::short_name(plugin_id);
     if !accepted {
         log::warn!("[runtime/socket] PUSH {kind} rejected: unknown plugin id {plugin_id:?}");
@@ -252,7 +253,7 @@ fn store_plugin_config(plugin_id: &str, config: serde_json::Value) -> PluginConf
     }
 }
 
-fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: String) {
+fn handle_lifeline(writer: &mut LocalStream, shared: &SharedState, plugin_id: String) {
     log::info!("[runtime/socket] host-death lifeline armed by {plugin_id}");
     shared.arm_lifeline(plugin_id.clone());
 
@@ -261,7 +262,7 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
         return;
     }
 
-    register_lifeline_for_exec_handoff(writer);
+    platform::register_lifeline_for_exec_handoff(writer);
 
     let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
 
@@ -272,25 +273,13 @@ fn handle_lifeline(writer: &mut UnixStream, shared: &SharedState, plugin_id: Str
     forward_events(writer, rx);
     drop(keepalive_tx);
 
-    unregister_lifeline_for_exec_handoff(writer);
+    platform::unregister_lifeline_for_exec_handoff(writer);
     shared.disarm_lifeline(&plugin_id);
     log::info!("[runtime/socket] host-death lifeline dropped by {plugin_id}");
 }
 
-fn register_lifeline_for_exec_handoff(writer: &UnixStream) {
-    use std::os::fd::AsRawFd;
-
-    crate::lifeline_handoff::register(writer.as_raw_fd());
-}
-
-fn unregister_lifeline_for_exec_handoff(writer: &UnixStream) {
-    use std::os::fd::AsRawFd;
-
-    crate::lifeline_handoff::unregister(writer.as_raw_fd());
-}
-
 fn handle_subscription(
-    writer: &mut UnixStream,
+    writer: &mut LocalStream,
     shared: &SharedState,
     plugin_id: String,
     events: Vec<RuntimeEventKind>,
@@ -323,7 +312,7 @@ fn handle_subscription(
 }
 
 fn replay_active_monitor(
-    writer: &mut UnixStream,
+    writer: &mut LocalStream,
     shared: &SharedState,
     events: &[RuntimeEventKind],
 ) -> Option<usize> {
@@ -346,7 +335,7 @@ fn replay_active_monitor(
     Some(idx)
 }
 
-fn forward_events(writer: &mut UnixStream, rx: std_mpsc::Receiver<RuntimeEvent>) {
+fn forward_events(writer: &mut LocalStream, rx: std_mpsc::Receiver<RuntimeEvent>) {
     loop {
         match rx.recv_timeout(SUBSCRIBER_KEEPALIVE_PROBE) {
             Ok(event) => {
@@ -355,7 +344,7 @@ fn forward_events(writer: &mut UnixStream, rx: std_mpsc::Receiver<RuntimeEvent>)
                 }
             }
             Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                if !peer_is_alive(writer) {
+                if !platform::peer_is_alive(writer) {
                     return;
                 }
             }
@@ -364,28 +353,7 @@ fn forward_events(writer: &mut UnixStream, rx: std_mpsc::Receiver<RuntimeEvent>)
     }
 }
 
-fn peer_is_alive(writer: &UnixStream) -> bool {
-    use std::os::unix::io::AsRawFd;
-    let fd = writer.as_raw_fd();
-    let mut buf = [0u8; 1];
-    let n = unsafe {
-        libc::recv(
-            fd,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            buf.len(),
-            libc::MSG_PEEK | libc::MSG_DONTWAIT,
-        )
-    };
-    if n == 0 {
-        return false;
-    }
-    if n > 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
-}
-
-fn handle_text_request(request: &str, writer: &mut UnixStream, shared: &SharedState) {
+fn handle_text_request(request: &str, writer: &mut LocalStream, shared: &SharedState) {
     if let Some(rest) = request.strip_prefix("SET_FOCUS ") {
         handle_text_set_focus(rest, shared);
         return;
@@ -426,7 +394,6 @@ mod tests {
     use super::*;
     use qol_runtime::MonitorBounds;
     use std::io::Read;
-    use std::os::unix::net::UnixStream;
     use tempfile::TempDir;
 
     fn mon(x: f32) -> MonitorBounds {
@@ -438,17 +405,18 @@ mod tests {
         }
     }
 
-    fn pair() -> (UnixStream, UnixStream) {
-        UnixStream::pair().expect("UnixStream::pair")
+    fn pair() -> (LocalStream, LocalStream) {
+        LocalStream::pair().expect("LocalStream::pair")
     }
 
-    fn read_to_string(stream: &mut UnixStream) -> String {
+    fn read_to_string(stream: &mut LocalStream) -> String {
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         let mut buf = [0u8; 4096];
         let n = stream.read(&mut buf).unwrap_or(0);
         String::from_utf8_lossy(&buf[..n]).into_owned()
     }
 
+    #[cfg(unix)]
     #[test]
     fn armed_lifeline_socket_stays_close_on_exec() {
         use std::os::fd::AsRawFd;
@@ -850,19 +818,22 @@ mod tests {
         assert_eq!(focus.monitor, monitors[1]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn peer_is_alive_returns_false_when_peer_closed() {
         let (writer, reader) = pair();
         drop(reader);
-        assert!(!peer_is_alive(&writer));
+        assert!(!platform::peer_is_alive(&writer));
     }
 
+    #[cfg(unix)]
     #[test]
     fn peer_is_alive_returns_true_while_peer_holds_handle() {
         let (writer, _reader) = pair();
-        assert!(peer_is_alive(&writer));
+        assert!(platform::peer_is_alive(&writer));
     }
 
+    #[cfg(unix)]
     #[test]
     fn forward_events_exits_after_peer_disconnects_without_any_publish() {
         let (writer, reader) = pair();
@@ -969,6 +940,7 @@ mod tests {
         assert!(response.contains("qol-launcher"), "got: {response:?}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn lifeline_arms_on_connect_and_disarms_on_disconnect() {
         let shared = SharedState::new(vec![mon(0.0)]);

@@ -24,6 +24,7 @@ pub(super) fn sync(
     imp::sync(entries, target, marks)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn verify_target(
     entry: &super::LauncherEntry,
     target: &std::path::Path,

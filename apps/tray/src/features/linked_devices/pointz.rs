@@ -491,7 +491,6 @@ pub(super) fn readable(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
 
     use super::*;
 
@@ -499,7 +498,7 @@ mod tests {
     fn each_verified_command_reaches_the_daemon_as_one_input_request() {
         let temporary = tempfile::tempdir().unwrap();
         let socket = temporary.path().join("pointz.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
+        let listener = qol_runtime::local_ipc::bind_listener(&socket).unwrap();
         let daemon = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut line = String::new();

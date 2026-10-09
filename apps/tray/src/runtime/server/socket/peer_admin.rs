@@ -1,12 +1,12 @@
 use std::io::Write;
-use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 use qol_peers::admin::{Error, Request, Response};
+use qol_runtime::local_ipc::LocalStream;
 
 use crate::runtime::server::state_store::SharedState;
 
-pub(super) fn handle(writer: &mut UnixStream, shared: &SharedState, request: Request) {
+pub(super) fn handle(writer: &mut LocalStream, shared: &SharedState, request: Request) {
     if writer
         .set_write_timeout(Some(Duration::from_secs(10)))
         .is_err()
@@ -45,7 +45,7 @@ mod tests {
     use qol_runtime::PlatformStateClient;
 
     fn route(shared: &SharedState, request: Request) -> Response {
-        let (server, mut client) = UnixStream::pair().unwrap();
+        let (server, mut client) = LocalStream::pair().unwrap();
         let mut payload = serde_json::to_vec(&RuntimeRequest::PeerAdmin { request }).unwrap();
         payload.push(b'\n');
         client.write_all(&payload).unwrap();
@@ -130,7 +130,7 @@ mod tests {
     fn real_runtime_client_attaches_through_the_credential_checked_dispatcher() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("runtime.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let listener = qol_runtime::local_ipc::LocalListener::bind(&path).unwrap();
         let host = host_at(&temporary.path().join("peers"), false);
         let shared = Arc::new(attach(&host));
         let dispatch_state = shared.clone();
@@ -185,7 +185,7 @@ mod tests {
     fn a_lost_mutation_reply_reports_unknown_after_the_real_route_commits_once() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("runtime.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let listener = qol_runtime::local_ipc::LocalListener::bind(&path).unwrap();
         let host = host_at(&temporary.path().join("peers"), false);
         let shared = Arc::new(attach(&host));
         route(
@@ -202,7 +202,7 @@ mod tests {
             let request = qol_runtime::local_ipc::read_line(&mut BufReader::new(&stream))
                 .unwrap()
                 .unwrap();
-            let (mut sink, _ignored_reply) = UnixStream::pair().unwrap();
+            let (mut sink, _ignored_reply) = LocalStream::pair().unwrap();
             super::super::handle_request(&request, &mut sink, &server_state);
         });
         let client = PlatformStateClient::new(path);
@@ -224,7 +224,7 @@ mod tests {
     fn peer_admin_waits_past_the_platform_state_clients_short_timeout() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("runtime.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let listener = qol_runtime::local_ipc::LocalListener::bind(&path).unwrap();
         let host = host_at(&temporary.path().join("peers"), false);
         let shared = attach(&host);
         let worker = std::thread::spawn(move || {
@@ -695,7 +695,7 @@ mod enrollment_tests {
 }
 
 pub(super) fn handle_operation(
-    writer: &mut UnixStream,
+    writer: &mut LocalStream,
     shared: &SharedState,
     request: qol_peers::operations::Request,
 ) {

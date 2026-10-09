@@ -1,0 +1,312 @@
+use std::ptr::null_mut;
+
+use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE};
+use windows_sys::Win32::System::Threading::{
+    AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
+};
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+};
+
+use super::PopupPresentation;
+
+pub use super::fallback::*;
+
+const BASE_DPI: f64 = 96.0;
+
+pub struct Platform;
+
+impl PopupPresentation for Platform {
+    fn present_topmost(title: &str) {
+        if let Some(hwnd) = find_window(title) {
+            place(hwnd, HWND_TOPMOST, SWP_NOACTIVATE);
+        }
+    }
+
+    fn restore_composite(_title: &str) {}
+}
+
+struct TitleSearch {
+    pid: u32,
+    title: Vec<u16>,
+    found: HWND,
+}
+
+fn find_window(title: &str) -> Option<HWND> {
+    let mut search = TitleSearch {
+        pid: unsafe { GetCurrentProcessId() },
+        title: title.encode_utf16().collect(),
+        found: null_mut(),
+    };
+    unsafe {
+        EnumWindows(Some(match_title), &mut search as *mut TitleSearch as LPARAM);
+    }
+    (!search.found.is_null()).then_some(search.found)
+}
+
+unsafe extern "system" fn match_title(hwnd: HWND, data: LPARAM) -> BOOL {
+    let search = unsafe { &mut *(data as *mut TitleSearch) };
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+    if pid != search.pid {
+        return TRUE;
+    }
+    let mut buffer = vec![0u16; search.title.len() + 2];
+    let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+    if copied as usize == search.title.len() && buffer[..search.title.len()] == search.title[..] {
+        search.found = hwnd;
+        return FALSE;
+    }
+    TRUE
+}
+
+fn place(hwnd: HWND, after: HWND, flags: u32) -> bool {
+    unsafe { SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | flags) != 0 }
+}
+
+fn window_scale(hwnd: HWND) -> f64 {
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        1.0
+    } else {
+        f64::from(dpi) / BASE_DPI
+    }
+}
+
+fn window_rect(hwnd: HWND) -> Option<RECT> {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    (unsafe { GetWindowRect(hwnd, &mut rect) } != 0).then_some(rect)
+}
+
+fn raise_foreground(hwnd: HWND) {
+    unsafe {
+        let this_thread = GetCurrentThreadId();
+        let foreground_thread = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
+        let attached = foreground_thread != 0
+            && foreground_thread != this_thread
+            && AttachThreadInput(this_thread, foreground_thread, TRUE) != 0;
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        if attached {
+            AttachThreadInput(this_thread, foreground_thread, FALSE);
+        }
+    }
+}
+
+fn show_window(title: &str, topmost: bool, focus: bool) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    let after = if topmost {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    };
+    let placed = place(hwnd, after, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    if focus {
+        raise_foreground(hwnd);
+    }
+    placed
+}
+
+fn apply_tool_window_style(hwnd: HWND) {
+    let current = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let wanted = (current | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize);
+    if wanted == current {
+        return;
+    }
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+fn move_window(hwnd: HWND, x: i32, y: i32) -> bool {
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        ) != 0
+    }
+}
+
+fn gpui_to_native(hwnd: HWND, gpui_x: f64, gpui_y: f64) -> (i32, i32) {
+    let scale = window_scale(hwnd);
+    (
+        (gpui_x * scale).round() as i32,
+        (gpui_y * scale).round() as i32,
+    )
+}
+
+#[derive(Clone)]
+pub struct WindowGeometrySession {
+    hwnd: isize,
+}
+
+impl WindowGeometrySession {
+    fn handle(&self) -> HWND {
+        self.hwnd as HWND
+    }
+
+    pub fn set_bounds(&self, x: i32, y: i32, width: u32, height: u32) {
+        unsafe {
+            SetWindowPos(
+                self.handle(),
+                null_mut(),
+                x,
+                y,
+                width as i32,
+                height as i32,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub fn set_position(&self, x: i32, y: i32) {
+        move_window(self.handle(), x, y);
+    }
+
+    pub fn reposition(&self, x: i32, y: i32) -> bool {
+        let (x, y) = gpui_to_native(self.handle(), f64::from(x), f64::from(y));
+        move_window(self.handle(), x, y)
+    }
+
+    pub fn pointer_root(&self) -> Option<(i32, i32)> {
+        cursor_position()
+    }
+
+    pub fn bounds(&self) -> Option<(i32, i32, u32, u32)> {
+        let rect = window_rect(self.handle())?;
+        Some((
+            rect.left,
+            rect.top,
+            (rect.right - rect.left).max(0) as u32,
+            (rect.bottom - rect.top).max(0) as u32,
+        ))
+    }
+
+    pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
+        None
+    }
+
+    pub fn set_input_region(&self, _x: i16, _y: i16, _width: u16, _height: u16) -> bool {
+        false
+    }
+
+    pub fn anchor_content(&self, _right: bool, _bottom: bool) {}
+}
+
+pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
+    find_window(title).map(|hwnd| WindowGeometrySession {
+        hwnd: hwnd as isize,
+    })
+}
+
+fn cursor_position() -> Option<(i32, i32)> {
+    let mut point = POINT { x: 0, y: 0 };
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
+}
+
+pub fn window_position_by_title(title: &str) -> Option<(i32, i32)> {
+    let rect = window_rect(find_window(title)?)?;
+    Some((rect.left, rect.top))
+}
+
+pub fn pointer_over_window_by_title(title: &str) -> bool {
+    let Some(rect) = find_window(title).and_then(window_rect) else {
+        return false;
+    };
+    cursor_position()
+        .is_some_and(|(x, y)| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom)
+}
+
+pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    let (x, y) = gpui_to_native(hwnd, gpui_x, gpui_y);
+    move_window(hwnd, x, y)
+}
+
+pub fn focus_window_by_title(title: &str) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    raise_foreground(hwnd);
+    true
+}
+
+pub fn hide_window_by_title(title: &str) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    unsafe { ShowWindow(hwnd, SW_HIDE) };
+    true
+}
+
+pub fn hide_invisible(title: &str) -> bool {
+    hide_window_by_title(title)
+}
+
+pub fn park_window_by_title(title: &str) -> bool {
+    hide_window_by_title(title)
+}
+
+pub fn show_window_by_title(title: &str) -> bool {
+    show_window(title, true, true)
+}
+
+pub fn show_window_passive_by_title(title: &str) -> bool {
+    show_window(title, true, false)
+}
+
+pub fn show_window_interactive_by_title(title: &str) -> bool {
+    show_window(title, true, false)
+}
+
+pub fn show_toast_window_by_title(title: &str) -> bool {
+    show_window(title, true, false)
+}
+
+pub fn show_normal_window_by_title(title: &str) -> bool {
+    show_window(title, false, true)
+}
+
+pub fn configure_popup_window(title: &str) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    apply_tool_window_style(hwnd);
+    true
+}
+
+pub fn configure_overlay_window(title: &str) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    apply_tool_window_style(hwnd);
+    place(hwnd, HWND_TOPMOST, SWP_NOACTIVATE)
+}

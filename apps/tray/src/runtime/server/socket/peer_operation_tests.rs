@@ -113,7 +113,7 @@ async fn operation_shared(
                     qol_runtime::local_ipc::read_secret_line(&mut std::io::BufReader::new(&stream))
                         .unwrap()
                         .unwrap();
-                let (mut sink, _reply) = std::os::unix::net::UnixStream::pair().unwrap();
+                let (mut sink, _reply) = qol_runtime::local_ipc::LocalStream::pair().unwrap();
                 super::super::handle_request(&request, &mut sink, &shared);
                 return;
             }
@@ -213,7 +213,7 @@ peer = {{ replay = "idempotent" }}
         root.into(),
     );
     let child = std::process::Command::new(&executable)
-        .args(["--exact", "runtime::server::socket::platform::unix::requests::peer_admin::operation_tests::operation_fixture_daemon", "--nocapture"])
+        .args(["--exact", "runtime::server::socket::requests::peer_admin::operation_tests::operation_fixture_daemon", "--nocapture"])
         .env_remove(qol_conventions::ENV_STATE_SOCKET)
         .env_remove(qol_conventions::ENV_DAEMON_LISTENER_FD)
         .env_remove(qol_conventions::ENV_DAEMON_PORT_FD)

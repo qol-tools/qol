@@ -333,6 +333,7 @@ impl PluginManager {
         Some(DaemonInstance { pid, incarnation })
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     #[cfg(test)]
     pub(crate) fn acknowledged_plugin_generation(&self, plugin_id: &str) -> Option<u64> {
         self.last_reconciled_plugin_generations
@@ -341,6 +342,7 @@ impl PluginManager {
     }
 
     #[cfg(test)]
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn has_pending_config_reload(&self, plugin_id: &str) -> bool {
         self.pending_reloads.is_pending(plugin_id)
     }
@@ -557,6 +559,7 @@ items = []
         .unwrap()
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     fn plugin_with_daemon(id: &str, gpui: bool, daemon: std::process::Child) -> Plugin {
         let mut plugin = Plugin::new(
             PluginId::new(id),

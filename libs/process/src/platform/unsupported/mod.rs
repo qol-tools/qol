@@ -179,6 +179,10 @@ pub(crate) fn terminate_owned(_child: &mut Child, _grace: Duration) -> io::Resul
     Err(unsupported())
 }
 
+pub(crate) fn bind_to_host_lifetime(_pid: u32) -> io::Result<()> {
+    Err(unsupported())
+}
+
 pub(crate) fn spawn_detached(_command: &mut Command) -> io::Result<()> {
     Err(unsupported())
 }

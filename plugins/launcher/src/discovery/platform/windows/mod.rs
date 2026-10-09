@@ -15,19 +15,22 @@ pub fn cache_dir() -> Option<PathBuf> {
 }
 
 pub fn app_roots() -> Vec<AppRoot> {
-    Vec::new()
+    qol_apps::start_menu::start_menu_roots()
 }
 
-pub fn scan_root(_root: &AppRoot) -> Vec<AppEntry> {
-    Vec::new()
+pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {
+    qol_apps::start_menu::scan_start_menu_root(root)
 }
 
 pub fn app_watch_root(root: &AppRoot) -> WatchRoot {
-    WatchRoot::shallow(root.path.clone())
+    WatchRoot::deep(root.path.clone())
 }
 
-pub fn app_change(_root: &AppRoot, _path: &Path) -> Option<PathBuf> {
-    None
+pub fn app_change(_root: &AppRoot, path: &Path) -> Option<PathBuf> {
+    match path.extension() {
+        Some(_) if !qol_apps::start_menu::is_start_menu_shortcut(path) => None,
+        _ => Some(path.to_path_buf()),
+    }
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {

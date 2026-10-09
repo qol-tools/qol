@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use std::ptr;
+use std::{
+    collections::HashMap,
+    ptr,
+    sync::mpsc::{self, Receiver, Sender},
+    thread::JoinHandle,
+};
 
 use keyboard_types::{Code, Modifiers};
 use windows_sys::Win32::{
@@ -10,67 +15,71 @@ use windows_sys::Win32::{
     UI::{
         Input::KeyboardAndMouse::*,
         WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, CW_USEDEFAULT,
-            WM_HOTKEY, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-            WS_EX_TRANSPARENT, WS_OVERLAPPED,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+            KillTimer, PostMessageW, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage,
+            CW_USEDEFAULT, MSG, WM_APP, WM_CLOSE, WM_DESTROY, WM_HOTKEY, WM_TIMER, WNDCLASSW,
+            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_OVERLAPPED,
         },
     },
 };
 
 use crate::{hotkey::HotKey, GlobalHotKeyEvent};
 
+/// Wakes the pump thread to drain the request queue.
+const WM_REQUEST: u32 = WM_APP;
+const RELEASE_POLL_TIMER: usize = 1;
+const RELEASE_POLL_INTERVAL_MS: u32 = 10;
+
+enum Request {
+    Register {
+        hotkey: HotKey,
+        mods: HOT_KEY_MODIFIERS,
+        vk: VIRTUAL_KEY,
+        reply: Sender<crate::Result<()>>,
+    },
+    Unregister {
+        hotkey: HotKey,
+        reply: Sender<crate::Result<()>>,
+    },
+}
+
+/// RegisterHotKey binds to the calling thread's window, so one dedicated
+/// thread owns the hidden window, pumps its messages and runs every
+/// register and unregister.
 pub struct GlobalHotKeyManager {
-    hwnd: HWND,
+    hwnd: usize,
+    requests: Sender<Request>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Drop for GlobalHotKeyManager {
     fn drop(&mut self) {
-        unsafe { DestroyWindow(self.hwnd) };
+        // WM_CLOSE destroys the window, WM_DESTROY posts WM_QUIT, the pump returns.
+        unsafe { PostMessageW(self.hwnd as HWND, WM_CLOSE, 0, 0) };
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
 impl GlobalHotKeyManager {
     pub fn new() -> crate::Result<Self> {
-        let class_name = encode_wide("global_hotkey_app");
-        unsafe {
-            let hinstance = get_instance_handle();
-
-            let wnd_class = WNDCLASSW {
-                lpfnWndProc: Some(global_hotkey_proc),
-                lpszClassName: class_name.as_ptr(),
-                hInstance: hinstance,
-                ..std::mem::zeroed()
-            };
-
-            RegisterClassW(&wnd_class);
-
-            let hwnd = CreateWindowExW(
-                WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED |
-                // WS_EX_TOOLWINDOW prevents this window from ever showing up in the taskbar, which
-                // we want to avoid. If you remove this style, this window won't show up in the
-                // taskbar *initially*, but it can show up at some later point. This can sometimes
-                // happen on its own after several hours have passed, although this has proven
-                // difficult to reproduce. Alternatively, it can be manually triggered by killing
-                // `explorer.exe` and then starting the process back up.
-                // It is unclear why the bug is triggered by waiting for several hours.
-                WS_EX_TOOLWINDOW,
-                class_name.as_ptr(),
-                ptr::null(),
-                WS_OVERLAPPED,
-                CW_USEDEFAULT,
-                0,
-                CW_USEDEFAULT,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                hinstance,
-                std::ptr::null_mut(),
-            );
-            if hwnd.is_null() {
-                return Err(crate::Error::OsError(std::io::Error::last_os_error()));
+        let (requests, request_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("global-hotkey".into())
+            .spawn(move || pump(request_rx, ready_tx))?;
+        match ready_rx.recv() {
+            Ok(Ok(hwnd)) => Ok(Self {
+                hwnd,
+                requests,
+                thread: Some(thread),
+            }),
+            Ok(Err(error)) => {
+                let _ = thread.join();
+                Err(error)
             }
-
-            Ok(Self { hwnd })
+            Err(_) => Err(thread_gone()),
         }
     }
 
@@ -89,44 +98,22 @@ impl GlobalHotKeyManager {
             mods |= MOD_CONTROL;
         }
 
-        // get key scan code
-        match key_to_vk(&hotkey.key) {
-            Some(vk_code) => {
-                let result =
-                    unsafe { RegisterHotKey(self.hwnd, hotkey.id() as _, mods, vk_code as _) };
-                if result == 0 {
-                    let error = std::io::Error::last_os_error();
-
-                    return match error.raw_os_error() {
-                        Some(raw_os_error) => {
-                            let win32error = WIN32_ERROR::try_from(raw_os_error);
-                            if let Ok(ERROR_HOTKEY_ALREADY_REGISTERED) = win32error {
-                                Err(crate::Error::AlreadyRegistered(hotkey))
-                            } else {
-                                Err(crate::Error::OsError(error))
-                            }
-                        }
-                        _ => Err(crate::Error::OsError(error)),
-                    };
-                }
-            }
-            _ => {
-                return Err(crate::Error::FailedToRegister(format!(
-                    "Unknown VKCode for {}",
-                    hotkey.key
-                )))
-            }
-        }
-
-        Ok(())
+        let Some(vk) = key_to_vk(&hotkey.key) else {
+            return Err(crate::Error::FailedToRegister(format!(
+                "Unknown VKCode for {}",
+                hotkey.key
+            )));
+        };
+        self.call(|reply| Request::Register {
+            hotkey,
+            mods,
+            vk,
+            reply,
+        })
     }
 
     pub fn unregister(&self, hotkey: HotKey) -> crate::Result<()> {
-        let result = unsafe { UnregisterHotKey(self.hwnd, hotkey.id() as _) };
-        if result == 0 {
-            return Err(crate::Error::FailedToUnRegister(hotkey));
-        }
-        Ok(())
+        self.call(|reply| Request::Unregister { hotkey, reply })
     }
 
     pub fn register_all(&self, hotkeys: &[HotKey]) -> crate::Result<()> {
@@ -142,28 +129,192 @@ impl GlobalHotKeyManager {
         }
         Ok(())
     }
+
+    fn call(
+        &self,
+        request: impl FnOnce(Sender<crate::Result<()>>) -> Request,
+    ) -> crate::Result<()> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.requests
+            .send(request(reply_tx))
+            .map_err(|_| thread_gone())?;
+        if unsafe { PostMessageW(self.hwnd as HWND, WM_REQUEST, 0, 0) } == 0 {
+            return Err(crate::Error::OsError(std::io::Error::last_os_error()));
+        }
+        reply_rx.recv().map_err(|_| thread_gone())?
+    }
 }
+
+fn thread_gone() -> crate::Error {
+    crate::Error::OsError(std::io::Error::new(
+        std::io::ErrorKind::BrokenPipe,
+        "the global hotkey thread exited",
+    ))
+}
+
+fn pump(requests: Receiver<Request>, ready: Sender<crate::Result<usize>>) {
+    let hwnd = match create_window() {
+        Ok(hwnd) => hwnd,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
+    let _ = ready.send(Ok(hwnd as usize));
+
+    // hotkey id -> virtual key still held down
+    let mut held: HashMap<u32, u16> = HashMap::new();
+    unsafe {
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
+            match msg.message {
+                WM_REQUEST => handle_requests(hwnd, &requests, &mut held),
+                WM_HOTKEY => {
+                    let vk = HIWORD(msg.lParam as u32);
+                    press(hwnd, &mut held, msg.wParam as u32, vk);
+                }
+                WM_TIMER if msg.wParam == RELEASE_POLL_TIMER => poll_released(hwnd, &mut held),
+                _ => {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+        DestroyWindow(hwnd);
+    }
+}
+
+fn create_window() -> crate::Result<HWND> {
+    let class_name = encode_wide("global_hotkey_app");
+    unsafe {
+        let hinstance = get_instance_handle();
+
+        let wnd_class = WNDCLASSW {
+            lpfnWndProc: Some(global_hotkey_proc),
+            lpszClassName: class_name.as_ptr(),
+            hInstance: hinstance,
+            ..std::mem::zeroed()
+        };
+
+        RegisterClassW(&wnd_class);
+
+        let hwnd = CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED |
+            // WS_EX_TOOLWINDOW prevents this window from ever showing up in the taskbar, which
+            // we want to avoid. If you remove this style, this window won't show up in the
+            // taskbar *initially*, but it can show up at some later point. This can sometimes
+            // happen on its own after several hours have passed, although this has proven
+            // difficult to reproduce. Alternatively, it can be manually triggered by killing
+            // `explorer.exe` and then starting the process back up.
+            // It is unclear why the bug is triggered by waiting for several hours.
+            WS_EX_TOOLWINDOW,
+            class_name.as_ptr(),
+            ptr::null(),
+            WS_OVERLAPPED,
+            CW_USEDEFAULT,
+            0,
+            CW_USEDEFAULT,
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            hinstance,
+            ptr::null_mut(),
+        );
+        if hwnd.is_null() {
+            return Err(crate::Error::OsError(std::io::Error::last_os_error()));
+        }
+        Ok(hwnd)
+    }
+}
+
+fn handle_requests(hwnd: HWND, requests: &Receiver<Request>, held: &mut HashMap<u32, u16>) {
+    while let Ok(request) = requests.try_recv() {
+        match request {
+            Request::Register {
+                hotkey,
+                mods,
+                vk,
+                reply,
+            } => {
+                let _ = reply.send(register_on_thread(hwnd, hotkey, mods, vk));
+            }
+            Request::Unregister { hotkey, reply } => {
+                let result = unsafe { UnregisterHotKey(hwnd, hotkey.id() as _) };
+                if result == 0 {
+                    let _ = reply.send(Err(crate::Error::FailedToUnRegister(hotkey)));
+                    continue;
+                }
+                if held.remove(&hotkey.id()).is_some() {
+                    send_released(hotkey.id());
+                }
+                let _ = reply.send(Ok(()));
+            }
+        }
+    }
+}
+
+fn register_on_thread(
+    hwnd: HWND,
+    hotkey: HotKey,
+    mods: HOT_KEY_MODIFIERS,
+    vk: VIRTUAL_KEY,
+) -> crate::Result<()> {
+    let result = unsafe { RegisterHotKey(hwnd, hotkey.id() as _, mods, vk as _) };
+    if result != 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(raw_os_error) => {
+            let win32error = WIN32_ERROR::try_from(raw_os_error);
+            if let Ok(ERROR_HOTKEY_ALREADY_REGISTERED) = win32error {
+                Err(crate::Error::AlreadyRegistered(hotkey))
+            } else {
+                Err(crate::Error::OsError(error))
+            }
+        }
+        _ => Err(crate::Error::OsError(error)),
+    }
+}
+
+fn press(hwnd: HWND, held: &mut HashMap<u32, u16>, id: u32, vk: u16) {
+    GlobalHotKeyEvent::send(GlobalHotKeyEvent {
+        id,
+        state: crate::HotKeyState::Pressed,
+    });
+    held.insert(id, vk);
+    unsafe { SetTimer(hwnd, RELEASE_POLL_TIMER, RELEASE_POLL_INTERVAL_MS, None) };
+}
+
+fn poll_released(hwnd: HWND, held: &mut HashMap<u32, u16>) {
+    held.retain(|id, vk| {
+        let down = unsafe { GetAsyncKeyState(*vk as i32) } as u16 & 0x8000 != 0;
+        if !down {
+            send_released(*id);
+        }
+        down
+    });
+    if held.is_empty() {
+        unsafe { KillTimer(hwnd, RELEASE_POLL_TIMER) };
+    }
+}
+
+fn send_released(id: u32) {
+    GlobalHotKeyEvent::send(GlobalHotKeyEvent {
+        id,
+        state: crate::HotKeyState::Released,
+    });
+}
+
 unsafe extern "system" fn global_hotkey_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_HOTKEY {
-        GlobalHotKeyEvent::send(GlobalHotKeyEvent {
-            id: wparam as _,
-            state: crate::HotKeyState::Pressed,
-        });
-        std::thread::spawn(move || loop {
-            let state = GetAsyncKeyState(HIWORD(lparam as u32) as i32);
-            if state == 0 {
-                GlobalHotKeyEvent::send(GlobalHotKeyEvent {
-                    id: wparam as _,
-                    state: crate::HotKeyState::Released,
-                });
-                break;
-            }
-        });
+    if msg == WM_DESTROY {
+        PostQuitMessage(0);
+        return 0;
     }
 
     DefWindowProcW(hwnd, msg, wparam, lparam)

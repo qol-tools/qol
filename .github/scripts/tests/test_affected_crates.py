@@ -123,6 +123,9 @@ class LocalPlannerContract(unittest.TestCase):
                         emit.call_args.args[0]["windows_qol"], expected
                     )
                     self.assertIs(
+                        emit.call_args.args[0]["windows_apps"], expected
+                    )
+                    self.assertIs(
                         emit.call_args.args[0]["ubuntu_skip"], not expected
                     )
                     build_args = emit.call_args.args[0]["ubuntu_build"]
@@ -254,17 +257,23 @@ class LocalPlannerContract(unittest.TestCase):
                 "doctest": True,
             },
             "qol": {"dir": "tools/cli", "deps": {"qol-dev-build"}, "doctest": False},
+            "qol-launcher": {
+                "dir": "plugins/launcher",
+                "deps": {"qol-process"},
+                "doctest": False,
+            },
             "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
         cases = [
-            ("libs/process/src/lib.rs", True, True, True),
-            ("libs/foundation/src/lib.rs", True, True, True),
-            ("libs/dev-build/src/lib.rs", False, True, True),
-            ("tools/cli/src/main.rs", False, False, True),
-            ("libs/unrelated/src/lib.rs", False, False, False),
+            ("libs/process/src/lib.rs", True, True, True, True),
+            ("libs/foundation/src/lib.rs", True, True, True, True),
+            ("libs/dev-build/src/lib.rs", False, True, True, False),
+            ("tools/cli/src/main.rs", False, False, True, False),
+            ("plugins/launcher/src/lib.rs", False, False, False, True),
+            ("libs/unrelated/src/lib.rs", False, False, False, False),
         ]
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
-            for path, process_expected, dev_build_expected, qol_expected in cases:
+            for path, process_expected, dev_build_expected, qol_expected, apps_expected in cases:
                 with self.subTest(path=path):
                     changed_files.return_value = [path]
                     emit.reset_mock()
@@ -283,8 +292,11 @@ class LocalPlannerContract(unittest.TestCase):
                         emit.call_args.args[0]["windows_qol"], qol_expected
                     )
                     self.assertIs(
+                        emit.call_args.args[0]["windows_apps"], apps_expected
+                    )
+                    self.assertIs(
                         emit.call_args.args[0]["ubuntu_doctest"],
-                        path != "tools/cli/src/main.rs",
+                        path not in ("tools/cli/src/main.rs", "plugins/launcher/src/lib.rs"),
                     )
 
     def test_documentation_targets_follow_cargo_metadata(self):

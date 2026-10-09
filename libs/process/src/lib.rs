@@ -417,6 +417,13 @@ where
     }
 }
 
+/// Ends `pid` together with this process: a kill-on-close job on Windows, whose
+/// own children break away so apps a daemon launches outlive it. Unix daemons
+/// watch their host themselves, so this is a no-op there.
+pub fn bind_to_host_lifetime(pid: u32) -> io::Result<()> {
+    platform::bind_to_host_lifetime(pid)
+}
+
 /// Spawns a command without inherited standard streams or a parent-owned child
 /// process that needs later cleanup.
 pub fn spawn_detached(command: &mut Command) -> io::Result<()> {

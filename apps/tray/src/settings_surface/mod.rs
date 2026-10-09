@@ -32,6 +32,7 @@ impl CoreTool {
         }
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn from_wire_id(value: &str) -> Option<Self> {
         match value {
             "__core-hotkeys-add" => Some(Self::AddHotkey),
@@ -46,6 +47,7 @@ impl CoreTool {
         }
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn page_wire_id(self) -> &'static str {
         match self {
             Self::AddHotkey | Self::Hotkeys => "__core-hotkeys",

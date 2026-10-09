@@ -1,3 +1,5 @@
+// Windows daemons bind their own AF_UNIX socket path through the local IPC
+// facade, so there is no listener to pre-bind and hand down.
 use crate::plugins::manifest::DaemonConfig;
 use crate::plugins::Plugin;
 use std::process::Command;

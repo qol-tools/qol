@@ -216,6 +216,10 @@ pub(crate) fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<
     Ok(())
 }
 
+pub(crate) fn bind_to_host_lifetime(_pid: u32) -> io::Result<()> {
+    Ok(())
+}
+
 pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<()> {
     command
         .stdin(Stdio::null())

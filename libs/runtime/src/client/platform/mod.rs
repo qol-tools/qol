@@ -2,15 +2,21 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
-#[cfg(not(unix))]
+use crate::local_ipc::LocalStream;
+
+#[cfg(not(any(unix, windows)))]
 mod fallback;
 #[cfg(unix)]
 mod unix;
+#[cfg(windows)]
+mod windows;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use fallback as active;
 #[cfg(unix)]
 use unix as active;
+#[cfg(windows)]
+use windows as active;
 
 pub(crate) trait Connection: Read + Write + Send + Sync {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
@@ -25,6 +31,24 @@ pub(crate) trait Connection: Read + Write + Send + Sync {
 
 type Connected = Box<dyn Connection>;
 type ConnectResult = io::Result<Connected>;
+
+impl Connection for LocalStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        LocalStream::set_read_timeout(self, timeout)
+    }
+
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        LocalStream::set_write_timeout(self, timeout)
+    }
+
+    fn try_clone(&self) -> io::Result<Box<dyn Connection>> {
+        Ok(Box::new(LocalStream::try_clone(self)?))
+    }
+
+    fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
+        LocalStream::shutdown(self, how)
+    }
+}
 
 pub(crate) fn connect(path: &Path) -> ConnectResult {
     active::connect(path)

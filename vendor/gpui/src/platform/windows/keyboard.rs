@@ -136,7 +136,20 @@ impl WindowsKeyboardLayout {
                 b"040E" | // Hungarian
                 b"0424" | // Slovenian
                 b"041B" | // Slovak
-                b"0418" // Romanian
+                b"0418" | // Romanian
+                b"0406" |
+                b"0410" |
+                b"0416" |
+                b"040F" |
+                b"080C" |
+                b"0807" |
+                b"100C" |
+                b"041A" |
+                b"0425" |
+                b"0426" |
+                b"0427" |
+                b"0408" |
+                b"0402"
             )
         } else {
             false

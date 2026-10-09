@@ -27,7 +27,7 @@ pub(super) async fn local_call(
                     qol_runtime::local_ipc::read_secret_line(&mut BufReader::new(&stream))
                         .unwrap()
                         .unwrap();
-                let (mut sink, _reply) = std::os::unix::net::UnixStream::pair().unwrap();
+                let (mut sink, _reply) = qol_runtime::local_ipc::LocalStream::pair().unwrap();
                 super::super::handle_request(&request, &mut sink, &shared);
                 return;
             }

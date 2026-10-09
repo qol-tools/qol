@@ -249,6 +249,23 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             self.assertIn(contract, workflow)
 
+    def test_windows_apps_are_checked_built_and_uploaded(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        job = workflow.split("  process-windows:\n", 1)[1].split("  release-build:\n", 1)[0]
+
+        self.assertIn(
+            "windows_apps: ${{ steps.affected.outputs.windows_apps }}", workflow
+        )
+        for contract in [
+            "fromJSON(needs.plan.outputs.windows_apps || 'false')",
+            "cargo check --locked --all-targets -p qol-tray -p qol-launcher",
+            "cargo build --release --locked -p qol-tray -p qol-launcher --bin qol-tray --bin qol-launcher",
+            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+            "target/release/qol-tray.exe",
+            "target/release/qol-launcher.exe",
+        ]:
+            self.assertIn(contract, job)
+
     def test_plugins_publish_no_github_release(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
 

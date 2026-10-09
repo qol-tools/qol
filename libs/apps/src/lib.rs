@@ -1,6 +1,7 @@
 pub mod bundle;
 pub mod desktop;
 pub mod desktop_integration;
+pub mod start_menu;
 pub mod tray_install;
 
 pub use bundle::{

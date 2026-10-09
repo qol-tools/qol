@@ -4,13 +4,21 @@ use crate::menu::router::EventRouter;
 use crate::plugins::PluginManager;
 use crate::tray::TrayManager;
 use anyhow::Result;
-use std::sync::{Arc, Mutex, OnceLock as OnceCell};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tray_icon::menu::MenuEvent;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::HiDpi::{
+    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, GetMessageW, PostThreadMessageW, TranslateMessage, MSG, WM_QUIT,
+};
 
-static QUIT_SIGNAL: OnceCell<std::sync::Condvar> = OnceCell::new();
-static QUIT_MUTEX: OnceCell<std::sync::Mutex<bool>> = OnceCell::new();
+static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static PUMP_THREAD: AtomicU32 = AtomicU32::new(0);
 
 pub enum PlatformTray {
     Windows { _tray_icon: TrayIcon },
@@ -46,6 +54,7 @@ pub fn run_app<F>(init: F) -> Result<()>
 where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {
+    init_process();
     let (tray, plugin_manager) = init()?;
     let _signal_listener = crate::signal::install_signal_handler(tray.shutdown_sender())?;
     let _tray = tray;
@@ -65,9 +74,6 @@ fn spawn_tray(
     update_available: bool,
     events: Arc<EventBus>,
 ) -> Result<TrayIcon> {
-    QUIT_SIGNAL.get_or_init(std::sync::Condvar::new);
-    QUIT_MUTEX.get_or_init(|| std::sync::Mutex::new(false));
-
     let (menu, router) =
         crate::menu::builder::build_menu(feature_registry, update_available, events)?;
 
@@ -82,19 +88,35 @@ fn spawn_tray(
     Ok(tray_icon)
 }
 
-fn run_event_loop() {
-    let mutex = QUIT_MUTEX.get().unwrap();
-    let condvar = QUIT_SIGNAL.get().unwrap();
+fn init_process() {
+    if unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) } == 0 {
+        log::debug!("per-monitor DPI awareness was already set or is unavailable");
+    }
+}
 
-    let guard = mutex.lock().unwrap();
-    let _guard = condvar.wait_while(guard, |quit| !*quit);
+fn run_event_loop() {
+    PUMP_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
+    let mut message: MSG = unsafe { std::mem::zeroed() };
+    while !QUIT_REQUESTED.load(Ordering::SeqCst) {
+        match unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } {
+            0 => break,
+            -1 => {
+                log::error!("GetMessageW failed: {}", std::io::Error::last_os_error());
+                break;
+            }
+            _ => unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            },
+        }
+    }
 }
 
 fn signal_quit() {
-    if let (Some(mutex), Some(condvar)) = (QUIT_MUTEX.get(), QUIT_SIGNAL.get()) {
-        let mut quit = mutex.lock().unwrap();
-        *quit = true;
-        condvar.notify_all();
+    QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    let pump_thread = PUMP_THREAD.load(Ordering::SeqCst);
+    if pump_thread != 0 {
+        unsafe { PostThreadMessageW(pump_thread, WM_QUIT, 0, 0) };
     }
 }
 

@@ -1,6 +1,5 @@
-use qol_runtime::local_ipc::SecretReader;
+use qol_runtime::local_ipc::{LocalStream, SecretReader};
 use std::io::{BufRead, Write};
-use std::os::unix::net::UnixStream;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
@@ -10,7 +9,9 @@ use crate::runtime::server::state_store::SharedState;
 
 const IO_TIMEOUT_MS: u64 = 50;
 
-pub(super) fn prepare_stream(stream: UnixStream) -> Option<(SecretReader<UnixStream>, UnixStream)> {
+pub(super) fn prepare_stream(
+    stream: LocalStream,
+) -> Option<(SecretReader<LocalStream>, LocalStream)> {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(IO_TIMEOUT_MS)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(IO_TIMEOUT_MS)));
     let writer = stream.try_clone().ok()?;
@@ -27,14 +28,14 @@ pub(super) fn read_request(reader: &mut impl BufRead) -> Option<Zeroizing<String
     Some(Zeroizing::new(trimmed.to_string()))
 }
 
-pub(super) fn write_flushed_json_line<T: Serialize>(writer: &mut UnixStream, value: &T) -> bool {
+pub(super) fn write_flushed_json_line<T: Serialize>(writer: &mut LocalStream, value: &T) -> bool {
     if !write_json_line(writer, value) {
         return false;
     }
     writer.flush().is_ok()
 }
 
-pub(super) fn write_json_line<T: Serialize>(writer: &mut UnixStream, value: &T) -> bool {
+pub(super) fn write_json_line<T: Serialize>(writer: &mut LocalStream, value: &T) -> bool {
     let Ok(json) = serde_json::to_string(value) else {
         return false;
     };
@@ -46,7 +47,7 @@ pub(super) fn write_json_line<T: Serialize>(writer: &mut UnixStream, value: &T) 
     writer.write_all(b"\n").is_ok()
 }
 
-pub(super) fn write_state(writer: &mut UnixStream, shared: &SharedState) {
+pub(super) fn write_state(writer: &mut LocalStream, shared: &SharedState) {
     let _ = write_json_line(writer, &shared.build_state());
 }
 
@@ -63,8 +64,8 @@ mod tests {
         value: i32,
     }
 
-    fn pair() -> (UnixStream, UnixStream) {
-        UnixStream::pair().expect("UnixStream::pair")
+    fn pair() -> (LocalStream, LocalStream) {
+        LocalStream::pair().expect("LocalStream::pair")
     }
 
     #[test]

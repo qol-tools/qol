@@ -495,6 +495,7 @@ pub fn finish_restart_resume() {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub(super) fn verify_host_update(
     path: &Path,
     expected_version: Option<&str>,
@@ -517,6 +518,7 @@ pub(super) fn verify_host_update(
     Ok(())
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn host_update_expectation(
     running_target: &str,
     expected_version: Option<&str>,
