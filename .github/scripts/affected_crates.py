@@ -37,8 +37,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKTREE_HEAD = "WORKTREE"
 
 
-def platform_excludes():
-    ubuntu, macos = set(), set()
+def platform_sets():
+    ubuntu, macos, windows = set(), set(), set()
     for manifest in sorted(REPO_ROOT.glob("plugins/*/plugin.toml")):
         platforms = (
             tomllib.loads(manifest.read_text())
@@ -50,7 +50,9 @@ def platform_excludes():
             ubuntu.add(name)
         if "macos" not in platforms:
             macos.add(name)
-    return ubuntu, macos
+        if "windows" in platforms:
+            windows.add(name)
+    return ubuntu, macos, windows
 
 
 def package_features():
@@ -64,9 +66,10 @@ def package_features():
     return features
 
 
-UBUNTU_EXCLUDE, MACOS_EXCLUDE = platform_excludes()
+UBUNTU_EXCLUDE, MACOS_EXCLUDE, WINDOWS_PLUGINS = platform_sets()
 PACKAGE_FEATURES = package_features()
-WINDOWS_APP_CRATES = ("qol-tray", "qol-launcher")
+WINDOWS_APP_CRATES = ("qol-tray", *sorted(WINDOWS_PLUGINS))
+WINDOWS_APP_PACKAGES = " ".join(f"-p {name}" for name in WINDOWS_APP_CRATES)
 
 
 def exclude_flags(names):
@@ -114,6 +117,7 @@ def full_workspace(reason):
             "windows_dev_build": True,
             "windows_qol": True,
             "windows_apps": True,
+            "windows_apps_packages": WINDOWS_APP_PACKAGES,
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
@@ -137,6 +141,7 @@ def skip_all(reason):
             "windows_dev_build": False,
             "windows_qol": False,
             "windows_apps": False,
+            "windows_apps_packages": "",
             "ubuntu_clippy": "",
             "ubuntu_build": "",
             "ubuntu_test": "",
@@ -324,6 +329,7 @@ def main():
             "windows_dev_build": "qol-dev-build" in affected,
             "windows_qol": "qol" in affected,
             "windows_apps": any(name in affected for name in WINDOWS_APP_CRATES),
+            "windows_apps_packages": WINDOWS_APP_PACKAGES,
             "ubuntu_clippy": args(ubuntu, True),
             "ubuntu_build": args(ubuntu, False),
             "ubuntu_test": args(ubuntu, False),

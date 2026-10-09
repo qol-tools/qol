@@ -21,7 +21,7 @@ pub struct InputHandlerImpl {
 pub(in crate::input) fn platform_support() -> PlatformSupport {
     PlatformSupport {
         name: "windows",
-        declared: false,
+        declared: true,
         input_backend: true,
     }
 }
@@ -29,11 +29,11 @@ pub(in crate::input) fn platform_support() -> PlatformSupport {
 pub(in crate::input) fn inspect_readiness() -> InputReadiness {
     InputReadiness {
         platform: "windows",
-        ready: false,
+        ready: true,
         authorization_granted: None,
         display_env_set: None,
         backend: "send-input",
-        issue: Some("PointZ is not declared for Windows".to_string()),
+        issue: None,
     }
 }
 

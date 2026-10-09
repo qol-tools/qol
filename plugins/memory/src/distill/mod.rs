@@ -90,7 +90,7 @@ pub fn run(store: &Store, notes_runs_kept: usize) -> Result<DistillReport> {
     }
 
     let _lock = DistillLock::acquire(store, "distill")?.ok_or_else(|| anyhow!(BUSY_MESSAGE))?;
-    let name = crate::text::now_iso();
+    let name = crate::platform::run_dir_name(&crate::text::now_iso());
     let notes_root = store.notes_root();
     let tmp = notes_root.join(format!(".tmp-{name}"));
     std::fs::create_dir_all(&tmp)?;

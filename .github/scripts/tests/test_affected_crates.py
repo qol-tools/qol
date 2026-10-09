@@ -18,8 +18,10 @@ _SPEC.loader.exec_module(ac)
 
 class PlatformExcludeDerivation(unittest.TestCase):
     def test_excludes_derived_from_plugin_platforms(self):
-        ubuntu, macos = ac.platform_excludes()
+        ubuntu, macos, windows = ac.platform_sets()
         cases = [
+            ("qol-launcher", windows, True),
+            ("qol-alt-tab", windows, False),
             ("qol-keyremap", ubuntu, True),
             ("qol-removeapp", ubuntu, False),
             ("qol-os-themes", ubuntu, False),

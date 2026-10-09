@@ -256,9 +256,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "windows_apps: ${{ steps.affected.outputs.windows_apps }}", workflow
         )
+        self.assertIn(
+            "windows_apps_packages: ${{ steps.affected.outputs.windows_apps_packages }}",
+            workflow,
+        )
         for contract in [
             "fromJSON(needs.plan.outputs.windows_apps || 'false')",
-            "cargo check --locked --all-targets -p qol-tray -p qol-launcher",
+            "PACKAGES: ${{ needs.plan.outputs.windows_apps_packages }}",
+            "cargo check --locked --all-targets $PACKAGES",
             "RUSTFLAGS: -D warnings -C link-arg=/Brepro",
             "cargo build --release --locked -p qol-tray -p qol-launcher --bin qol-tray --bin qol-launcher",
             "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",

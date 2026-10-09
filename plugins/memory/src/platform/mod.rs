@@ -16,4 +16,9 @@ pub(crate) use linux::current_support;
 pub(crate) use macos::current_support;
 pub(crate) use support::PlatformSupport;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::current_support;
+pub(crate) use windows::{current_support, run_dir_name};
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn run_dir_name(stamp: &str) -> String {
+    stamp.to_owned()
+}

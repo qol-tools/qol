@@ -6,7 +6,7 @@ icon = "memory"
 description = "Long-context memory: retrieve settled facts from your agent session history"
 version = "0.23.0"
 author = "KMRH47"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 [runtime]
 command = "qol-memory"

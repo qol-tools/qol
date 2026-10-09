@@ -43,6 +43,7 @@ jobs:
       windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}
       windows_qol: ${{ steps.affected.outputs.windows_qol }}
       windows_apps: ${{ steps.affected.outputs.windows_apps }}
+      windows_apps_packages: ${{ steps.affected.outputs.windows_apps_packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -334,11 +335,14 @@ jobs:
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
 
+      # qol-tray and every plugin whose plugin.toml lists windows.
       - name: Check Windows apps
         if: ${{ fromJSON(needs.plan.outputs.windows_apps) }}
+        shell: bash
         env:
           RUSTFLAGS: -D warnings
-        run: cargo check --locked --all-targets -p qol-tray -p qol-launcher
+          PACKAGES: ${{ needs.plan.outputs.windows_apps_packages }}
+        run: cargo check --locked --all-targets $PACKAGES
 
       # The release build's /Brepro, so a link failure shows here first.
       - name: Build Windows executables
