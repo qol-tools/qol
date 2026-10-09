@@ -51,7 +51,7 @@ pub(crate) fn resolve_audio_device(
     Ok(resolve_in(&devices, requested))
 }
 
-fn listed(direction: Direction, device: &Device) -> bool {
+pub(super) fn listed(direction: Direction, device: &Device) -> bool {
     match direction {
         Direction::Output => true,
         Direction::Input => !is_monitor(device),
@@ -79,7 +79,7 @@ fn audio_device(device: &Device, direction: Direction) -> AudioDevice {
     }
 }
 
-fn device_identity(device: &Device) -> Identity {
+pub(super) fn device_identity(device: &Device) -> Identity {
     let device_name = device
         .properties
         .get("device.name")

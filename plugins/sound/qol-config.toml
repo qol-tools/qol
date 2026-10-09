@@ -1,30 +1,20 @@
 schema_version = 1
-title = "Sound"
-description = "Where sound plays on this computer."
+title = "Audio"
+description = "Where sound plays and which microphone every app hears on this computer."
 
 [section.output]
 label = "Output"
 description = "The output every app plays on."
 
-[field.volume]
-type = "number"
-label = "Volume"
-description = "How loud the output that is playing is."
-section = "output"
-default = 0
-min = 0
-max = 100
-step = 5
-variant = "wide_slider"
-action = "set_volume"
-active_query = "volume"
-active_value_from = "volume"
+[section.input]
+label = "Input"
+description = "The microphone every app listens to."
 
 [field.output_device]
 type = "select"
 config_key = "output.device"
-label = "Sound output"
-description = "Where sound plays right now. Pick one to switch; System Default leaves the output alone."
+label = "Output"
+description = "Where sound plays right now. Pick one to switch."
 section = "output"
 default = "default"
 query = "outputs"
@@ -38,3 +28,86 @@ default = "System default"
 
 [field.output_device.option_pictures]
 default = "speaker-default"
+
+[field.volume]
+type = "number"
+label = "Volume"
+description = "Lit is what is playing; the knob is how loud it can get."
+section = "output"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "level_slider"
+level_query = "levels"
+level_value_from = "output"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+
+[field.output_mute]
+type = "action"
+label = "Mute output"
+active_label = "Mute output"
+description = "Nothing plays until you turn it back on."
+section = "output"
+action = "mute_output"
+active_action = "unmute_output"
+active_query = "mute_status"
+active_value_from = "output"
+variant = "toggle"
+
+[field.input_device]
+type = "select"
+config_key = "input.device"
+label = "Microphone"
+description = "What every app hears. Pick one to switch."
+section = "input"
+default = "default"
+query = "inputs"
+active_query = "input_status"
+active_value_from = "shown"
+lookup_label = "microphones"
+card_description = "What every app hears."
+
+[field.input_device.option_labels]
+default = "System default"
+
+[field.input_device.option_pictures]
+default = "mic-default"
+
+[field.input_volume]
+type = "number"
+label = "Volume"
+description = "Lit is what every app hears; the knob is how loud you can get."
+section = "input"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "level_slider"
+level_query = "levels"
+level_value_from = "input"
+action = "set_input_volume"
+active_query = "input_volume"
+active_value_from = "volume"
+
+[field.input_mute]
+type = "action"
+label = "Mute microphone"
+active_label = "Mute microphone"
+description = "Every app hears silence until you turn it back on."
+section = "input"
+action = "mute_input"
+active_action = "unmute_input"
+active_query = "mute_status"
+active_value_from = "input"
+variant = "toggle"
+
+[field.input_follow_output]
+type = "boolean"
+config_key = "input.follow_output"
+label = "Microphone follows the output"
+description = "Picking a headset for sound picks its microphone too."
+section = "input"
+default = true

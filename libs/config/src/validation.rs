@@ -110,6 +110,7 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_entry_fields(id, field, errors);
         validate_number_constraints(id, field, errors);
         validate_row_slider(id, field, errors);
+        validate_level_slider(id, field, errors);
         validate_show_when(id, field, spec, errors);
     }
     validate_config_key_collisions(spec, errors);
@@ -510,6 +511,44 @@ fn validate_row_slider(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationE
         errors.push(ValidationError::new(
             format!("field.{id}.row_slider.step"),
             "step must be greater than 0",
+        ));
+    }
+}
+
+const LEVEL_SLIDER: &str = "level_slider";
+
+fn validate_level_slider(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    if field.variant.as_deref() != Some(LEVEL_SLIDER) {
+        for (key, value) in [
+            ("level_query", &field.level_query),
+            ("level_value_from", &field.level_value_from),
+        ] {
+            if value.is_some() {
+                errors.push(ValidationError::new(
+                    format!("field.{id}.{key}"),
+                    format!("{key} is only valid for the level_slider variant"),
+                ));
+            }
+        }
+        return;
+    }
+    if field.kind != FieldKind::Number {
+        errors.push(ValidationError::new(
+            format!("field.{id}.variant"),
+            "level_slider is only supported for number fields",
+        ));
+        return;
+    }
+    if field.level_query.as_deref().is_none_or(str::is_empty) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.level_query"),
+            "is required for the level_slider variant",
+        ));
+    }
+    if field.level_value_from.as_deref().is_none_or(str::is_empty) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.level_value_from"),
+            "is required for the level_slider variant",
         ));
     }
 }
@@ -1166,6 +1205,96 @@ active_value_from = "volume"
 "#,
         );
         assert!(sound.is_empty(), "{sound:?}");
+    }
+
+    #[test]
+    fn level_slider_requires_both_level_keys_on_a_number() {
+        let valid = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+variant = "level_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+level_query = "levels"
+level_value_from = "output"
+"#,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
+
+        let missing = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+variant = "level_slider"
+"#,
+        );
+        assert_has_error(&missing, "field.volume.level_query", "is required");
+        assert_has_error(&missing, "field.volume.level_value_from", "is required");
+
+        let no_key = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+variant = "level_slider"
+level_query = "levels"
+"#,
+        );
+        assert_has_error(&no_key, "field.volume.level_value_from", "is required");
+
+        let not_a_number = validate_contract(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "string"
+default = ""
+variant = "level_slider"
+level_query = "levels"
+level_value_from = "output"
+"#,
+        );
+        assert_has_error(
+            &not_a_number,
+            "field.volume.variant",
+            "only supported for number fields",
+        );
+    }
+
+    #[test]
+    fn level_keys_are_refused_on_every_other_variant() {
+        for variant in ["", "variant = \"wide_slider\"", "variant = \"slider\""] {
+            let errors = validate_contract(&format!(
+                r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+{variant}
+level_query = "levels"
+level_value_from = "output"
+"#
+            ));
+            assert_has_error(&errors, "field.volume.level_query", "level_slider variant");
+            assert_has_error(
+                &errors,
+                "field.volume.level_value_from",
+                "level_slider variant",
+            );
+        }
     }
 
     fn validate_contract(contract: &str) -> Vec<ValidationError> {

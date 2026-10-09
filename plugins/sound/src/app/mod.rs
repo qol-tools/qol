@@ -5,11 +5,32 @@
 //! second process.
 
 use std::process::ExitCode;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
+use qol_audio::meter::Meter;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
+use serde::Serialize;
 
+use crate::config::SoundConfig;
+use crate::device::{Role, INPUT, OUTPUT};
+use crate::levels::Levels;
 use crate::output::{OutputRow, OutputStatus, SYSTEM_DEFAULT};
+
+const LEVELS_IDLE: Duration = Duration::from_secs(3);
+
+struct Meters {
+    output: Option<Meter>,
+    input: Option<Meter>,
+    last_ask: Instant,
+    checked: Option<Instant>,
+    output_percent: Option<u32>,
+    input_percent: Option<u32>,
+}
+
+const METER_RECHECK: Duration = Duration::from_secs(1);
+
+static METERS: Mutex<Option<Meters>> = Mutex::new(None);
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -29,6 +50,17 @@ enum Action {
     SetVolume,
     VolumeUp,
     VolumeDown,
+    Inputs,
+    InputStatus,
+    SwitchInput,
+    InputVolume,
+    SetInputVolume,
+    MuteStatus,
+    MuteOutput,
+    UnmuteOutput,
+    MuteInput,
+    UnmuteInput,
+    Levels,
     Settings,
 }
 
@@ -68,6 +100,17 @@ fn classify(action: &str) -> Option<Action> {
         "set_volume" => Action::SetVolume,
         "volume_up" => Action::VolumeUp,
         "volume_down" => Action::VolumeDown,
+        "inputs" => Action::Inputs,
+        "input_status" => Action::InputStatus,
+        "switch_input" => Action::SwitchInput,
+        "input_volume" => Action::InputVolume,
+        "set_input_volume" => Action::SetInputVolume,
+        "mute_status" => Action::MuteStatus,
+        "mute_output" => Action::MuteOutput,
+        "unmute_output" => Action::UnmuteOutput,
+        "mute_input" => Action::MuteInput,
+        "unmute_input" => Action::UnmuteInput,
+        "levels" => Action::Levels,
         "settings" => Action::Settings,
         _ => return None,
     })
@@ -89,6 +132,23 @@ fn dispatch(action: &str, input: &serde_json::Value) -> ReadResult<Command> {
         Action::SetVolume => set_volume(input),
         Action::VolumeUp => volume_step(crate::volume::STEP),
         Action::VolumeDown => volume_step(-crate::volume::STEP),
+        Action::Inputs => query(crate::input::list(), "failed to list microphones"),
+        Action::InputStatus => query(
+            crate::input::status(),
+            "failed to read the microphone status",
+        ),
+        Action::SwitchInput => switch_input(input),
+        Action::InputVolume => query(
+            crate::volume::input_status(),
+            "failed to read the microphone volume",
+        ),
+        Action::SetInputVolume => set_input_volume(input),
+        Action::MuteStatus => query(crate::mute::status(), "failed to read the mute status"),
+        Action::MuteOutput => handled(crate::mute::set(OUTPUT, true)),
+        Action::UnmuteOutput => handled(crate::mute::set(OUTPUT, false)),
+        Action::MuteInput => handled(crate::mute::set(INPUT, true)),
+        Action::UnmuteInput => handled(crate::mute::set(INPUT, false)),
+        Action::Levels => levels(),
         Action::Settings => settings(),
     }
 }
@@ -113,20 +173,67 @@ fn apply_saved_choice() {
     if inspection.source.is_none() {
         return;
     }
-    let device = inspection.config.output.device;
-    if device == SYSTEM_DEFAULT {
+    if apply_saved_output(&inspection.config) {
         return;
     }
-    match crate::output::list() {
-        Ok(rows) if rows.iter().any(|row| row.value == device) => {}
-        Ok(_) => return,
+    apply_saved_input(&inspection.config.input.device);
+}
+
+fn apply_saved_output(config: &SoundConfig) -> bool {
+    let device = config.output.device.as_str();
+    if !saved_choice_connected(OUTPUT, device) {
+        return false;
+    }
+    let before = match crate::device::effective(OUTPUT) {
+        Ok(before) => before,
         Err(error) => {
-            log::warn!("sound: cannot list the sound outputs: {error:#}");
-            return;
+            log::warn!("sound: {error:#}");
+            None
+        }
+    };
+    let applied = match crate::device::switch(OUTPUT, device) {
+        Ok(applied) => applied,
+        Err(error) => {
+            log::warn!("sound: cannot apply the saved output `{device}`: {error:#}");
+            return false;
+        }
+    };
+    let before = before.as_ref().map(|identity| identity.as_str());
+    if !should_follow(config.input.follow_output, before, applied.as_str()) {
+        return false;
+    }
+    match crate::input::follow(&applied) {
+        Ok(followed) => followed.is_some(),
+        Err(error) => {
+            log::warn!("sound: the microphone did not follow the output `{device}`: {error:#}");
+            false
         }
     }
-    if let Err(error) = crate::output::switch(&device) {
-        log::warn!("sound: cannot apply the saved output `{device}`: {error:#}");
+}
+
+fn should_follow(follow_output: bool, before: Option<&str>, applied: &str) -> bool {
+    follow_output && before != Some(applied)
+}
+
+fn apply_saved_input(device: &str) {
+    if !saved_choice_connected(INPUT, device) {
+        return;
+    }
+    if let Err(error) = crate::device::switch(INPUT, device) {
+        log::warn!("sound: cannot apply the saved microphone `{device}`: {error:#}");
+    }
+}
+
+fn saved_choice_connected(role: Role, device: &str) -> bool {
+    if device == SYSTEM_DEFAULT {
+        return false;
+    }
+    match crate::device::list(role) {
+        Ok(rows) => rows.iter().any(|row| row.value == device),
+        Err(error) => {
+            log::warn!("sound: cannot list the {}: {error:#}", role.plural);
+            false
+        }
     }
 }
 
@@ -162,21 +269,31 @@ fn status_payload(status: &OutputStatus) -> Result<serde_json::Value, String> {
 }
 
 fn switch(input: &serde_json::Value) -> ReadResult<Command> {
-    let Some(output) = input
-        .get("output")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|output| !output.is_empty())
-    else {
+    let Some(output) = requested(input, "output") else {
         return ReadResult::Error("switch requires an output".to_string());
     };
     if output == SYSTEM_DEFAULT {
         return ReadResult::Handled;
     }
-    match crate::output::switch(output) {
-        Ok(()) => ReadResult::Handled,
-        Err(error) => ReadResult::Error(format!("{error:#}")),
+    handled(crate::output::switch(output))
+}
+
+fn switch_input(input: &serde_json::Value) -> ReadResult<Command> {
+    let Some(microphone) = requested(input, "input") else {
+        return ReadResult::Error("switch_input requires an input microphone".to_string());
+    };
+    if microphone == SYSTEM_DEFAULT {
+        return ReadResult::Handled;
     }
+    handled(crate::input::switch(microphone))
+}
+
+fn requested<'a>(input: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    input
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn next_output() -> ReadResult<Command> {
@@ -197,20 +314,30 @@ fn volume() -> ReadResult<Command> {
 }
 
 fn set_volume(input: &serde_json::Value) -> ReadResult<Command> {
-    let Some(percent) = input
-        .get("value")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-    else {
+    let Some(percent) = requested_percent(input) else {
         return ReadResult::Error(format!(
             "set_volume requires a value from 0 to {}",
             crate::volume::MAX_PERCENT
         ));
     };
-    match crate::volume::set(percent) {
-        Ok(()) => ReadResult::Handled,
-        Err(error) => ReadResult::Error(format!("{error:#}")),
-    }
+    handled(crate::volume::set(percent))
+}
+
+fn set_input_volume(input: &serde_json::Value) -> ReadResult<Command> {
+    let Some(percent) = requested_percent(input) else {
+        return ReadResult::Error(format!(
+            "set_input_volume requires a value from 0 to {}",
+            crate::volume::MAX_PERCENT
+        ));
+    };
+    handled(crate::volume::set_input(percent))
+}
+
+fn requested_percent(input: &serde_json::Value) -> Option<u32> {
+    input
+        .get("value")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
 }
 
 fn volume_step(delta: i32) -> ReadResult<Command> {
@@ -220,10 +347,113 @@ fn volume_step(delta: i32) -> ReadResult<Command> {
     }
 }
 
+fn levels() -> ReadResult<Command> {
+    match serde_json::to_value(read_levels(Instant::now())) {
+        Ok(data) => ReadResult::HandledWithData(data),
+        Err(error) => ReadResult::Error(format!("failed to encode the audio levels: {error}")),
+    }
+}
+
+fn read_levels(now: Instant) -> Levels {
+    let mut guard = METERS.lock().unwrap_or_else(PoisonError::into_inner);
+    let opened = guard.is_none();
+    let meters = guard.get_or_insert_with(|| Meters {
+        output: None,
+        input: None,
+        last_ask: now,
+        checked: None,
+        output_percent: None,
+        input_percent: None,
+    });
+    if meters
+        .checked
+        .is_none_or(|checked| now.duration_since(checked) >= METER_RECHECK)
+    {
+        meters.output = current_meter(meters.output.take(), OUTPUT);
+        meters.input = current_meter(meters.input.take(), INPUT);
+        meters.output_percent = crate::volume::percent().ok().flatten();
+        meters.input_percent = crate::volume::input_percent().ok().flatten();
+        meters.checked = Some(now);
+    }
+    meters.last_ask = now;
+    let levels = Levels {
+        output: crate::levels::before_volume(meters.output.as_ref(), meters.output_percent),
+        input: crate::levels::before_volume(meters.input.as_ref(), meters.input_percent),
+    };
+    drop(guard);
+    if opened {
+        spawn_idle_close();
+    }
+    levels
+}
+
+fn current_meter(meter: Option<Meter>, role: Role) -> Option<Meter> {
+    match meter {
+        Some(meter) if crate::levels::is_current(&meter, role) => Some(meter),
+        Some(_) | None => crate::levels::open(role),
+    }
+}
+
+fn spawn_idle_close() {
+    let spawned = std::thread::Builder::new()
+        .name("qol-sound-levels".to_string())
+        .spawn(close_meters_when_idle);
+    if let Err(error) = spawned {
+        log::warn!("sound: cannot watch the level meters for idleness, closing them: {error}");
+        *METERS.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+}
+
+fn close_meters_when_idle() {
+    loop {
+        let wait = {
+            let mut guard = METERS.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(meters) = guard.as_ref() else {
+                return;
+            };
+            match idle_wait(meters.last_ask, Instant::now()) {
+                Some(wait) => wait,
+                None => {
+                    *guard = None;
+                    return;
+                }
+            }
+        };
+        std::thread::sleep(wait);
+    }
+}
+
+fn idle_wait(last_ask: Instant, now: Instant) -> Option<Duration> {
+    LEVELS_IDLE
+        .checked_sub(now.saturating_duration_since(last_ask))
+        .filter(|wait| !wait.is_zero())
+}
+
+fn query<T: Serialize>(result: anyhow::Result<T>, failure: &str) -> ReadResult<Command> {
+    match result {
+        Ok(value) => match payload(&value) {
+            Ok(data) => ReadResult::HandledWithData(data),
+            Err(message) => ReadResult::Error(message),
+        },
+        Err(error) => ReadResult::Error(format!("{failure}: {error:#}")),
+    }
+}
+
+fn payload<T: Serialize>(value: &T) -> Result<serde_json::Value, String> {
+    serde_json::to_value(value).map_err(|error| format!("failed to encode the answer: {error}"))
+}
+
+fn handled(result: anyhow::Result<()>) -> ReadResult<Command> {
+    match result {
+        Ok(()) => ReadResult::Handled,
+        Err(error) => ReadResult::Error(format!("{error:#}")),
+    }
+}
+
 fn settings() -> ReadResult<Command> {
     match qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::PLUGIN_ID) {
         Ok(()) => ReadResult::Handled,
-        Err(error) => ReadResult::Error(format!("failed to open the Sound settings: {error}")),
+        Err(error) => ReadResult::Error(format!("failed to open the Audio settings: {error}")),
     }
 }
 
@@ -291,6 +521,17 @@ mod tests {
             ("set_volume", Action::SetVolume),
             ("volume_up", Action::VolumeUp),
             ("volume_down", Action::VolumeDown),
+            ("inputs", Action::Inputs),
+            ("input_status", Action::InputStatus),
+            ("switch_input", Action::SwitchInput),
+            ("input_volume", Action::InputVolume),
+            ("set_input_volume", Action::SetInputVolume),
+            ("mute_status", Action::MuteStatus),
+            ("mute_output", Action::MuteOutput),
+            ("unmute_output", Action::UnmuteOutput),
+            ("mute_input", Action::MuteInput),
+            ("unmute_input", Action::UnmuteInput),
+            ("levels", Action::Levels),
             ("settings", Action::Settings),
         ];
         for (name, expected) in cases {
@@ -349,6 +590,146 @@ mod tests {
         match dispatch("switch", &serde_json::json!({ "output": "default" })) {
             ReadResult::Handled => {}
             _ => panic!("System Default must succeed without switching anything"),
+        }
+    }
+
+    #[test]
+    fn the_contract_lays_out_output_then_input_and_validates_against_the_runtime() {
+        let manifest =
+            PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
+        let config =
+            qol_config::contract::parse_spec("qol-config.toml").expect("qol-config.toml invalid");
+        assert_eq!(manifest.plugin.name, "Audio");
+        assert_eq!(manifest.menu.label, "Audio");
+        assert_eq!(config.title.as_deref(), Some("Audio"));
+        let sections: Vec<&str> = config.sections.keys().map(String::as_str).collect();
+        assert_eq!(sections, ["output", "input"]);
+        let rows: Vec<(&str, Option<&str>)> = config
+            .fields
+            .iter()
+            .map(|(id, field)| (id.as_str(), field.section.as_deref()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("output_device", Some("output")),
+                ("volume", Some("output")),
+                ("output_mute", Some("output")),
+                ("input_device", Some("input")),
+                ("input_volume", Some("input")),
+                ("input_mute", Some("input")),
+                ("input_follow_output", Some("input")),
+            ]
+        );
+        let runtime = qol_config::contract::parse_runtime_spec("qol-runtime.toml")
+            .expect("qol-runtime.toml invalid");
+        qol_config::contract::validate_contracts(&config, Some(&runtime))
+            .expect("qol-config.toml and qol-runtime.toml must validate together");
+    }
+
+    #[test]
+    fn switch_input_without_a_microphone_is_an_error() {
+        for input in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({ "input": 7 }),
+            serde_json::json!({ "input": "   " }),
+            serde_json::json!({ "output": "speaker-a" }),
+        ] {
+            match dispatch("switch_input", &input) {
+                ReadResult::Error(message) => {
+                    assert!(
+                        message.contains("microphone"),
+                        "the error names the missing microphone"
+                    );
+                }
+                _ => panic!("switch_input without a microphone must be an error"),
+            }
+        }
+    }
+
+    #[test]
+    fn switch_input_to_system_default_is_handled_without_touching_the_host() {
+        match dispatch("switch_input", &serde_json::json!({ "input": "default" })) {
+            ReadResult::Handled => {}
+            _ => panic!("System Default must succeed without switching anything"),
+        }
+    }
+
+    #[test]
+    fn a_volume_set_without_a_whole_percent_is_an_error() {
+        for action in ["set_volume", "set_input_volume"] {
+            for input in [
+                serde_json::Value::Null,
+                serde_json::json!({}),
+                serde_json::json!({ "value": "loud" }),
+                serde_json::json!({ "value": -5 }),
+            ] {
+                match dispatch(action, &input) {
+                    ReadResult::Error(message) => {
+                        assert!(message.contains(action), "the error names `{action}`");
+                    }
+                    _ => panic!("`{action}` without a percent must be an error"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_microphone_follows_only_a_real_output_change() {
+        let cases = [
+            (true, Some("speaker-a"), "headset", true),
+            (true, None, "headset", true),
+            (true, Some("headset"), "headset", false),
+            (false, Some("speaker-a"), "headset", false),
+            (false, None, "headset", false),
+        ];
+        for (follow_output, before, applied, expected) in cases {
+            assert_eq!(
+                should_follow(follow_output, before, applied),
+                expected,
+                "follow {follow_output}, before {before:?}, applied {applied}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_level_meters_close_three_seconds_after_the_last_ask() {
+        let asked = Instant::now();
+        assert_eq!(idle_wait(asked, asked), Some(LEVELS_IDLE));
+        assert_eq!(
+            idle_wait(asked, asked + Duration::from_secs(1)),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(idle_wait(asked, asked + LEVELS_IDLE), None);
+        assert_eq!(idle_wait(asked, asked + Duration::from_secs(10)), None);
+    }
+
+    #[test]
+    fn a_query_answer_is_the_encoded_value_and_a_failure_names_the_query() {
+        let rows = vec![crate::input::InputRow {
+            value: "mic-a".to_string(),
+            label: "Virtuoso".to_string(),
+            picture: "mic".to_string(),
+            connected: true,
+        }];
+        match query(Ok(rows), "failed to list microphones") {
+            ReadResult::HandledWithData(data) => {
+                assert!(data.is_array(), "the inputs payload is a JSON array");
+                assert_eq!(data[0]["value"], "mic-a");
+                assert_eq!(data[0]["label"], "Virtuoso");
+            }
+            _ => panic!("a listed answer must carry its data"),
+        }
+        match query::<()>(
+            Err(anyhow::anyhow!("server gone")),
+            "failed to list microphones",
+        ) {
+            ReadResult::Error(message) => {
+                assert!(message.contains("failed to list microphones"));
+                assert!(message.contains("server gone"));
+            }
+            _ => panic!("a failed query must be an error"),
         }
     }
 
@@ -435,7 +816,13 @@ mod tests {
             }
             _ => panic!("reload must acknowledge the generation or refuse with the reason"),
         }
-        for action in ["outputs", "output_status"] {
+        for action in [
+            "outputs",
+            "output_status",
+            "inputs",
+            "input_status",
+            "mute_status",
+        ] {
             match dispatch(action, &serde_json::Value::Null) {
                 ReadResult::Error(message) => {
                     assert!(
@@ -445,6 +832,13 @@ mod tests {
                 }
                 _ => panic!("`{action}` must refuse when the backend is unreachable"),
             }
+        }
+        match dispatch("levels", &serde_json::Value::Null) {
+            ReadResult::HandledWithData(data) => {
+                assert_eq!(data["output"].as_f64(), Some(0.0));
+                assert_eq!(data["input"].as_f64(), Some(0.0));
+            }
+            _ => panic!("levels must read silence when nothing can be measured"),
         }
     }
 }

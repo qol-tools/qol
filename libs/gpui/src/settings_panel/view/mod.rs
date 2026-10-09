@@ -30,9 +30,9 @@ use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Int
 use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
-    apply_runtime_query, filtered_list_items, merged_config, query_flag_value, retire_number_holds,
-    row_action, row_query_names, row_streams, runtime_query_names, stream_gated, Row, RowControl,
-    RowQueryState, RowSection, SliderHold,
+    apply_level_query, apply_runtime_query, filtered_list_items, level_query_names, merged_config,
+    query_flag_value, retire_number_holds, row_action, row_query_names, row_streams,
+    runtime_query_names, stream_gated, Row, RowControl, RowQueryState, RowSection, SliderHold,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -52,6 +52,7 @@ type QueryResult = Result<serde_json::Value, String>;
 type SampledQueryResults = std::sync::Arc<std::sync::Mutex<Vec<(String, QueryResult)>>>;
 
 const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const LEVEL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
 const LIST_FIT_MIN_VISIBLE: usize = 3;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
@@ -1132,7 +1133,9 @@ impl SettingsPanelView {
         cx: &mut Context<Self>,
     ) {
         let attention = self.panel.attention.clone();
-        if self.runtime_queries.is_empty() && attention.is_none() {
+        let source = self.materialized_source;
+        let levels = level_query_names(self.root().rows.iter().filter(|row| row.source == source));
+        if self.runtime_queries.is_empty() && attention.is_none() && levels.is_empty() {
             return;
         }
         self.pause_runtime_poll();
@@ -1143,10 +1146,12 @@ impl SettingsPanelView {
         if let Some(feed) = attention {
             self.start_attention_poll(feed, generation, stop.clone(), visible.clone(), cx);
         }
+        if !levels.is_empty() {
+            self.start_level_poll(levels, generation, stop.clone(), visible.clone(), cx);
+        }
         if self.runtime_queries.is_empty() {
             return;
         }
-        let source = self.materialized_source;
         let runtime = self.runtime.clone();
         let queries = self.runtime_queries.clone();
         let apply_tick = queries
@@ -1258,6 +1263,60 @@ impl SettingsPanelView {
                         break;
                     }
                     async_cx.background_executor().timer(interval).await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Polls the page's level queries every `LEVEL_POLL_INTERVAL`, apart from
+    /// the contract-cadence poller. It shares that poller's generation and stop
+    /// flag, so hiding the page, switching source or closing the panel ends it.
+    fn start_level_poll(
+        &mut self,
+        queries: Vec<String>,
+        generation: u64,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        cx: &mut Context<Self>,
+    ) {
+        let source = self.materialized_source;
+        let runtime = self.runtime.clone();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                loop {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    if visible.load(std::sync::atomic::Ordering::Relaxed) {
+                        for query in &queries {
+                            let runtime = runtime.clone();
+                            let name = query.clone();
+                            let result = async_cx
+                                .background_spawn(async move { runtime.query(&name) })
+                                .await;
+                            let applied = this
+                                .update(&mut async_cx, |this, cx| {
+                                    if this.runtime_poll_generation != generation {
+                                        return false;
+                                    }
+                                    let rows = &mut this.root_mut().rows;
+                                    if apply_level_query(rows, source, query, &result) {
+                                        cx.notify();
+                                    }
+                                    true
+                                })
+                                .unwrap_or(false);
+                            if !applied {
+                                return;
+                            }
+                        }
+                    }
+                    async_cx
+                        .background_executor()
+                        .timer(LEVEL_POLL_INTERVAL)
+                        .await;
                 }
             }
         })
@@ -2120,6 +2179,7 @@ impl SettingsPanelView {
                 max,
                 step,
                 live,
+                ..
             } => {
                 let Some(parsed) = parsed_number(&edit, *min, *max, *step) else {
                     return;
@@ -2372,6 +2432,7 @@ impl SettingsPanelView {
             max: Some(max),
             step,
             live,
+            ..
         }) = self
             .level_mut()
             .rows
@@ -2950,6 +3011,12 @@ impl SettingsPanelView {
             let fraction = slider_fraction(number_preview(edit, value, min, max, step), min, max);
             track = Some((fraction, style));
         }
+        let level = match &self.level().rows[index].control {
+            RowControl::Number {
+                level: Some(level), ..
+            } => level.value,
+            _ => 0.0,
+        };
         let id = self.level().rows[index].id.clone();
         let interact = move |element: Div| {
             element.child(slider_drag_track(
@@ -2978,6 +3045,7 @@ impl SettingsPanelView {
             self.display_value(index),
             number_unit(&self.level().rows[index].id),
             track,
+            level,
             interact,
             row,
             self.kit,
@@ -5206,6 +5274,7 @@ mod tests {
                 max: None,
                 step: None,
                 live: None,
+                level: None,
             },
         };
         let dynamic = Row {
@@ -6148,6 +6217,7 @@ active_value_from = "active"
                 query: "brightness".into(),
                 value_from: None,
             }),
+            level: None,
         };
         row
     }

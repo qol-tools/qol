@@ -92,6 +92,14 @@ pub fn list_outputs() -> Result<Vec<AudioDevice>, AudioError> {
     platform::list_audio_devices(Direction::Output)
 }
 
+pub fn list_inputs() -> Result<Vec<AudioDevice>, AudioError> {
+    platform::list_audio_devices(Direction::Input)
+}
+
+pub fn companion_input(output: &Identity) -> Result<Option<Identity>, AudioError> {
+    platform::companion_input(output)
+}
+
 /// Resolves an exact identity or an unambiguous label match.
 pub fn resolve(direction: Direction, requested: &str) -> Result<Resolution, AudioError> {
     platform::resolve_audio_device(direction, requested)

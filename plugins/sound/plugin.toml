@@ -1,9 +1,9 @@
 [plugin]
 id = "qol-sound"
 uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
-name = "Sound"
+name = "Audio"
 icon = "sound"
-description = "Choose where sound plays and how loud"
+description = "Choose where sound plays, which microphone every app hears, and how loud each is"
 version = "0.14.0"
 author = "KMRH47"
 platforms = ["linux"]
@@ -40,6 +40,57 @@ label = "Volume Down"
 args = ["down"]
 continuous = true
 
+[action.inputs]
+label = "List Microphones"
+args = ["inputs"]
+hotkey = false
+
+[action.input_status]
+label = "Microphone Status"
+args = ["input-status"]
+hotkey = false
+
+[action.switch_input]
+label = "Switch Microphone"
+args = ["switch-input"]
+hotkey = false
+
+[action.input_volume]
+label = "Microphone Volume"
+args = ["input-volume"]
+hotkey = false
+
+[action.set_input_volume]
+label = "Set Microphone Volume"
+args = ["input-volume"]
+hotkey = false
+
+[action.mute_status]
+label = "Mute Status"
+args = ["mute-status"]
+hotkey = false
+
+[action.mute_output]
+label = "Mute Output"
+args = ["mute", "output"]
+
+[action.unmute_output]
+label = "Unmute Output"
+args = ["unmute", "output"]
+
+[action.mute_input]
+label = "Mute Microphone"
+args = ["mute", "input"]
+
+[action.unmute_input]
+label = "Unmute Microphone"
+args = ["unmute", "input"]
+
+[action.levels]
+label = "Audio Levels"
+args = ["levels"]
+hotkey = false
+
 [action.settings]
 label = "Settings"
 kind = "settings"
@@ -59,9 +110,10 @@ doctor = true
 
 [config.scope]
 output = "device"
+input = "device"
 
 [menu]
-label = "Sound"
+label = "Audio"
 items = []
 
 [[dependencies.binaries]]

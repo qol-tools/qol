@@ -1,7 +1,18 @@
+use pulseaudio::protocol::{self, ChannelVolume};
+
 use crate::devices::{Direction, Identity};
 use crate::AudioError;
 
 use super::connection::Connection;
+
+pub(super) struct DefaultNode {
+    pub(super) index: u32,
+    pub(super) name: String,
+    pub(super) volume: ChannelVolume,
+    pub(super) muted: bool,
+    pub(super) monitor_source_index: Option<u32>,
+    pub(super) hardware_volume: bool,
+}
 
 pub(crate) fn effective_default(
     connection: &mut Connection,
@@ -14,19 +25,75 @@ pub(crate) fn effective_default(
     })
 }
 
+pub(super) fn default_node(
+    connection: &mut Connection,
+    direction: Direction,
+) -> Result<Option<DefaultNode>, AudioError> {
+    let Some(name) = effective_default(connection, direction)? else {
+        return Ok(None);
+    };
+    let nodes = match direction {
+        Direction::Output => connection
+            .request::<Vec<protocol::SinkInfo>>(&protocol::Command::GetSinkInfoList)?
+            .into_iter()
+            .map(sink_node)
+            .collect::<Vec<_>>(),
+        Direction::Input => connection
+            .request::<Vec<protocol::SourceInfo>>(&protocol::Command::GetSourceInfoList)?
+            .into_iter()
+            .map(source_node)
+            .collect::<Vec<_>>(),
+    };
+    Ok(nodes.into_iter().find(|node| node.name == name))
+}
+
 pub(crate) fn set_default_output(
     direction: Direction,
     output: &Identity,
 ) -> Result<(), AudioError> {
-    if direction == Direction::Input {
-        return Err(AudioError::Operation(
-            "the default input cannot be set through this backend".to_owned(),
-        ));
-    }
-    let node = super::identity::node_for_identity(direction, output)?
-        .ok_or_else(|| AudioError::Operation(format!("the output '{output}' is not present")))?;
-    super::set_default_sink(&node)?;
+    let node = super::identity::node_for_identity(direction, output)?.ok_or_else(|| {
+        AudioError::Operation(format!("the {} '{output}' is not present", noun(direction)))
+    })?;
+    apply_default(direction, &node)?;
     require_effective(direction, &node)
+}
+
+fn apply_default(direction: Direction, node: &str) -> Result<(), AudioError> {
+    match direction {
+        Direction::Output => super::set_default_sink(node),
+        Direction::Input => super::with_connection(|connection| {
+            super::control::set_default_source(connection, node)
+        }),
+    }
+}
+
+fn noun(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Output => "output",
+        Direction::Input => "input",
+    }
+}
+
+fn sink_node(info: protocol::SinkInfo) -> DefaultNode {
+    DefaultNode {
+        index: info.index,
+        name: info.name.to_string_lossy().into_owned(),
+        volume: info.cvolume,
+        muted: info.muted,
+        monitor_source_index: info.monitor_source_index,
+        hardware_volume: info.flags.contains(protocol::SinkFlags::HW_VOLUME_CTRL),
+    }
+}
+
+fn source_node(info: protocol::SourceInfo) -> DefaultNode {
+    DefaultNode {
+        index: info.index,
+        name: info.name.to_string_lossy().into_owned(),
+        volume: info.cvolume,
+        muted: info.muted,
+        monitor_source_index: None,
+        hardware_volume: info.flags.contains(protocol::SourceFlags::HW_VOLUME_CTRL),
+    }
 }
 
 fn require_effective(direction: Direction, node: &str) -> Result<(), AudioError> {

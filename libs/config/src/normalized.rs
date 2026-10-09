@@ -64,6 +64,10 @@ pub struct ResolvedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub level_query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level_value_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
@@ -183,6 +187,8 @@ pub fn resolve_config(
             active_query: field.active_query.clone(),
             active_value_from: field.active_value_from.clone(),
             active_label: field.active_label.clone(),
+            level_query: field.level_query.clone(),
+            level_value_from: field.level_value_from.clone(),
             variant: field.variant.clone(),
             query: field.query.clone(),
             stream: field.stream.clone(),
@@ -694,6 +700,33 @@ options = ["top-left", "top_left"]
         .unwrap();
         let normalized = normalize_config(&ambiguous, &serde_json::json!({"corner": " TOP_LEFT "}));
         assert_eq!(normalized["corner"], " TOP_LEFT ");
+    }
+
+    #[test]
+    fn the_resolved_field_carries_the_level_query() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+variant = "level_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+level_query = "levels"
+level_value_from = "output"
+"#,
+        )
+        .unwrap();
+        let resolved = resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let field = &resolved.fields[0];
+        assert_eq!(field.variant.as_deref(), Some("level_slider"));
+        assert_eq!(field.level_query.as_deref(), Some("levels"));
+        assert_eq!(field.level_value_from.as_deref(), Some("output"));
     }
 
     #[test]

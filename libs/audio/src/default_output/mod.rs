@@ -26,23 +26,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_input_direction_and_an_absent_output_refuse_instead_of_applying_anything() {
-        let attempted = Identity::from_raw("alsa_output.hdmi");
-        match set(Direction::Input, &attempted) {
-            Err(AudioError::Operation(reason)) => {
-                assert!(reason.contains("input"), "reason: {reason}");
+    fn an_absent_input_or_output_refuses_instead_of_applying_anything() {
+        for (direction, noun) in [(Direction::Input, "input"), (Direction::Output, "output")] {
+            let absent = Identity::from_raw("qol_audio_test_no_such_device:-:-");
+            match set(direction, &absent) {
+                Err(AudioError::Operation(reason)) => {
+                    assert!(reason.contains("not present"), "reason: {reason}");
+                    assert!(reason.contains(noun), "reason: {reason}");
+                }
+                // CI runners have no sound server; there the refusal arrives as ServerUnavailable.
+                Err(AudioError::ServerUnavailable(_)) => {}
+                other => panic!("expected an operation error for an absent {noun}, got {other:?}"),
             }
-            other => panic!("expected an operation error for input, got {other:?}"),
-        }
-
-        let absent = Identity::from_raw("qol_audio_test_no_such_output:-:-");
-        match set(Direction::Output, &absent) {
-            Err(AudioError::Operation(reason)) => {
-                assert!(reason.contains("not present"), "reason: {reason}");
-            }
-            // CI runners have no sound server; there the refusal arrives as ServerUnavailable.
-            Err(AudioError::ServerUnavailable(_)) => {}
-            other => panic!("expected an operation error for an absent output, got {other:?}"),
         }
     }
 }
