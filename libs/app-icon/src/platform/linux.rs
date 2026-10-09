@@ -1,4 +1,4 @@
-use crate::RgbaImage;
+use crate::{ProcessEntry, RgbaImage};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -39,6 +39,37 @@ impl AppIconPlatform for Platform {
     fn process_executable(&self, pid: i32) -> Option<PathBuf> {
         std::fs::read_link(format!("/proc/{pid}/exe")).ok()
     }
+
+    fn processes(&self) -> Vec<ProcessEntry> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+            .filter_map(|pid| {
+                let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+                process_from_stat(pid, &stat)
+            })
+            .collect()
+    }
+}
+
+fn process_from_stat(pid: i32, stat: &str) -> Option<ProcessEntry> {
+    let open = stat.find('(')?;
+    let close = stat.rfind(')')?;
+    let name = stat.get(open + 1..close)?.to_string();
+    let parent_pid = stat
+        .get(close + 1..)?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    Some(ProcessEntry {
+        pid,
+        parent_pid,
+        name,
+    })
 }
 
 fn icon_for_bundle_id(_bundle_id: &str, _size: usize) -> Option<RgbaImage> {
@@ -139,7 +170,30 @@ fn application_dirs() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::desktop_entry_field;
+    use super::{desktop_entry_field, process_from_stat};
+    use crate::ProcessEntry;
+
+    #[test]
+    fn process_from_stat_reads_the_name_and_parent() {
+        let cases = [
+            ("1 (systemd) S 0 1 1", Some((0, "systemd"))),
+            ("42 (tmux: server) S 7 42 42", Some((7, "tmux: server"))),
+            ("43 (a) b) R 9 43 43", Some((9, "a) b"))),
+            ("44 broken", None),
+        ];
+        for (stat, expected) in cases {
+            let pid = stat.split(' ').next().unwrap().parse().unwrap();
+            assert_eq!(
+                process_from_stat(pid, stat),
+                expected.map(|(parent_pid, name)| ProcessEntry {
+                    pid,
+                    parent_pid,
+                    name: name.to_string(),
+                }),
+                "{stat}"
+            );
+        }
+    }
 
     #[test]
     fn desktop_entry_field_reads_plain_name_and_skips_localized_and_actions() {

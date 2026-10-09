@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -26,7 +26,7 @@ use crate::monitor::{
     BrightnessState, DisplayControl, DisplayMode, GammaStateControl, MonitorError, BRIGHTNESS_MAX,
     BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
-use crate::platform::MonitorControl;
+use crate::platform::{install_signal_handlers, MonitorControl};
 use crate::session::{
     LayoutSnapshot, LutProvider, ModeRecord, OwnedGamma, PlacementRecord, RestoreMode, Session,
     SessionStore, Snapshot,
@@ -2368,32 +2368,6 @@ fn drain_all_queued(rx: &Receiver<Command>) {
     while rx.try_recv().is_ok() {}
 }
 
-fn install_signal_handlers(tx: Sender<Command>) -> signal_hook::iterator::Handle {
-    let mut signals = signal_hook::iterator::Signals::new([
-        signal_hook::consts::SIGTERM,
-        signal_hook::consts::SIGHUP,
-    ])
-    .expect("failed to register the SIGTERM and SIGHUP handlers");
-    let handle = signals.handle();
-    std::thread::Builder::new()
-        .name("monitor-signals".into())
-        .spawn(move || {
-            for signal in signals.forever() {
-                let command = match signal {
-                    signal_hook::consts::SIGTERM => Some(Command::Kill),
-                    signal_hook::consts::SIGHUP => Some(Command::Handoff),
-                    _ => None,
-                };
-                if let Some(command) = command {
-                    let _ = tx.send(command);
-                    return;
-                }
-            }
-        })
-        .expect("failed to spawn the signal forwarder");
-    handle
-}
-
 pub fn run() -> Result<(), String> {
     if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_none() {
         return Err(format!(
@@ -2544,6 +2518,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Condvar, Mutex as StdMutex};
 
+    #[cfg(unix)]
     static SIGNAL_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn handle(id: &str, connector: &str) -> DisplayHandle {
@@ -7095,6 +7070,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn sigterm_runs_the_exit_restore_and_marks_clean() {
         let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
@@ -7133,6 +7109,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn sighup_handoff_exits_without_restoring_and_marks_the_snapshot() {
         let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
@@ -7252,6 +7229,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn fallback_session_dir_is_created_private() {
         use std::os::unix::fs::PermissionsExt;

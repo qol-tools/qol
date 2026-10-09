@@ -236,7 +236,7 @@ fn remove_after_package_with(
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
     for (item, snapshot) in plan.items.iter().zip(&plan.snapshots) {
-        if is_primary(item.kind) {
+        if is_primary(item.kind) || (snapshot.exists && !item.path.exists()) {
             continue;
         }
         items.push(item.clone());
@@ -258,7 +258,7 @@ pub fn app_sizes(apps: &[InstalledApp]) -> std::collections::HashMap<PathBuf, u6
         .collect()
 }
 
-fn dir_size(path: &Path) -> u64 {
+pub(crate) fn dir_size(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return 0;
     };
@@ -272,6 +272,16 @@ fn dir_size(path: &Path) -> u64 {
         return 0;
     };
     entries.flatten().map(|entry| dir_size(&entry.path())).sum()
+}
+
+pub(crate) fn delete_path(path: &Path) -> std::result::Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    let result = if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    result.map_err(|error| error.to_string())
 }
 
 pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
@@ -649,6 +659,37 @@ mod tests {
         let recorded = fake.removed.borrow();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].1, Disposal::Trash);
+    }
+
+    #[test]
+    fn remove_after_package_skips_leftovers_the_package_already_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kept = tmp.path().join("kept");
+        let gone = tmp.path().join("gone");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::create_dir_all(&gone).unwrap();
+        let p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![
+                leftover(kept.to_str().unwrap(), LeftoverKind::Data, MatchKind::Exact),
+                leftover(gone.to_str().unwrap(), LeftoverKind::Data, MatchKind::Exact),
+            ],
+        );
+        std::fs::remove_dir_all(&gone).unwrap();
+        let package =
+            ManagedPackage::parse(PackageManager::Windows, "Foo", PackageScope::User).unwrap();
+        let fake = FakePlat::default();
+
+        let outcome = remove_after_package_with(
+            &fake,
+            &p,
+            Disposal::Trash,
+            &PackageStatus::Managed(package),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.removed, vec![kept]);
     }
 
     #[test]

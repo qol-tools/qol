@@ -16,7 +16,6 @@ use crate::daemon::reconcile;
 #[cfg(debug_assertions)]
 use crate::diagnostics::anomaly;
 use crate::diagnostics::snapshot;
-use crate::host::kitty::Kitty;
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;
 use crate::session::service::{SharedSnapshotCache, SystemServiceProbe};
@@ -56,7 +55,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     anomaly::enable();
 
     let registry: Arc<Mutex<Registry>> = Arc::new(Mutex::new(Registry::default()));
-    let host: Arc<dyn TerminalHost + Send + Sync> = Arc::new(Kitty::default());
+    let host: Arc<dyn TerminalHost + Send + Sync> = crate::host::system();
 
     if let Some(path) = paths::state_path() {
         if let Ok(mut reg) = registry.lock() {

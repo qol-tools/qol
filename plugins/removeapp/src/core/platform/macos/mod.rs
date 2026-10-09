@@ -10,11 +10,12 @@ use anyhow::Result;
 use crate::cli::PLUGIN_ID;
 use crate::core::classify::{normalize_entry, owner_of};
 use crate::core::guards::{
-    sanitize_stderr, ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
+    ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
 };
+use crate::core::platform::unix::sanitize_stderr;
 use crate::core::{
-    AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind, MatchKind,
-    RemovalOutcome, RemovalPlan,
+    delete_path, AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind,
+    MatchKind, RemovalOutcome, RemovalPlan,
 };
 
 use self::cask::{parse_cask_map, CaskIndex, CaskStatus};
@@ -141,16 +142,6 @@ fn is_writable(path: &Path) -> bool {
         return false;
     };
     unsafe { libc::access(cstr.as_ptr(), libc::W_OK) == 0 }
-}
-
-fn delete_path(path: &Path) -> std::result::Result<(), String> {
-    let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-    let res = if meta.is_dir() && !meta.file_type().is_symlink() {
-        fs::remove_dir_all(path)
-    } else {
-        fs::remove_file(path)
-    };
-    res.map_err(|e| e.to_string())
 }
 
 fn trash_path(path: &Path) -> std::result::Result<(), String> {

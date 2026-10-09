@@ -677,6 +677,7 @@ impl RemoveAppView {
                         crate::core::PackageManager::Homebrew => "uninstall with Homebrew",
                         crate::core::PackageManager::Apt => "uninstall with APT",
                         crate::core::PackageManager::Flatpak => "uninstall with Flatpak",
+                        crate::core::PackageManager::Windows => "uninstall with Windows",
                     };
                     hints.push((Key::ENTER, label, Command::Primary));
                 }

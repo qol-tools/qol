@@ -6430,6 +6430,7 @@ dependencies = [
  "pulseaudio",
  "socket2",
  "tempfile",
+ "windows 0.61.3",
  "workspace-hack",
 ]
 
@@ -6467,6 +6468,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "windows 0.61.3",
  "workspace-hack",
 ]
 
@@ -6510,6 +6512,7 @@ dependencies = [
  "log",
  "proptest",
  "qol-agent-launch",
+ "qol-app-icon",
  "qol-apps",
  "qol-color",
  "qol-config",
@@ -6523,10 +6526,12 @@ dependencies = [
  "qol-process",
  "qol-runtime",
  "qol-terminal-sessions",
+ "qol-windowing",
  "serde",
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 
@@ -6572,6 +6577,7 @@ dependencies = [
  "qol-plugin-daemon",
  "serde_json",
  "tempfile",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 
@@ -6781,6 +6787,7 @@ dependencies = [
 name = "qol-ide-checkout"
 version = "1.54.0"
 dependencies = [
+ "dirs 6.0.0",
  "log",
  "qol-apps",
  "qol-config",
@@ -6988,8 +6995,10 @@ dependencies = [
  "qol-windowing",
  "serde",
  "serde_json",
+ "sha2",
  "signal-hook",
  "tempfile",
+ "windows-sys 0.59.0",
  "workspace-hack",
  "x11rb",
 ]
@@ -7198,6 +7207,7 @@ dependencies = [
  "log",
  "objc2",
  "objc2-app-kit",
+ "qol-app-icon",
  "qol-apps",
  "qol-conventions",
  "qol-gpui",
@@ -7206,11 +7216,13 @@ dependencies = [
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
+ "qol-windowing",
  "serde",
  "serde_json",
  "tempfile",
  "trash",
  "wait-timeout",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 
@@ -11563,6 +11575,9 @@ dependencies = [
  "url",
  "uuid",
  "winapi",
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+ "windows-numerics",
  "windows-sys 0.59.0",
  "windows-sys 0.60.2",
  "windows-sys 0.61.2",

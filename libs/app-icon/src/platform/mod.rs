@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::RgbaImage;
+use crate::{ProcessEntry, RgbaImage};
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
@@ -29,6 +29,7 @@ pub(super) trait AppIconPlatform {
     fn parent_pid(&self, pid: i32) -> Option<i32>;
     fn process_start_time_us(&self, pid: i32) -> Option<u64>;
     fn process_executable(&self, pid: i32) -> Option<PathBuf>;
+    fn processes(&self) -> Vec<ProcessEntry>;
 }
 
 pub(super) fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
@@ -61,4 +62,8 @@ pub(super) fn process_start_time_us(pid: i32) -> Option<u64> {
 
 pub(super) fn process_executable(pid: i32) -> Option<PathBuf> {
     Platform.process_executable(pid)
+}
+
+pub(super) fn processes() -> Vec<ProcessEntry> {
+    Platform.processes()
 }

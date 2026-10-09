@@ -12,6 +12,7 @@ mod tests;
 mod translation;
 mod volume;
 
+use crate::bluetooth::BluetoothEndpoint;
 use crate::control::{Card, ServerFacts, Sink, Source, SourceOutput};
 use crate::devices::{Device, Direction};
 use crate::AudioError;
@@ -68,4 +69,22 @@ fn with_connection<T>(
 ) -> Result<T, AudioError> {
     let mut connection = connection::Connection::connect()?;
     operation(&mut connection)
+}
+
+pub(crate) fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError> {
+    Err(bluez_owns_links())
+}
+
+pub(crate) fn reconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+    let _ = address;
+    Err(bluez_owns_links())
+}
+
+pub(crate) fn disconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+    let _ = address;
+    Err(bluez_owns_links())
+}
+
+fn bluez_owns_links() -> AudioError {
+    AudioError::Operation("BlueZ owns Bluetooth links on Linux, not the sound server".to_owned())
 }

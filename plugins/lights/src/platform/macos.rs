@@ -29,6 +29,10 @@ pub(crate) fn candidate_coordinator_ports(ports: &[SerialPortInfo]) -> Vec<Strin
     super::port_detection::ranked_port_names(ports, candidate_score)
 }
 
+pub(crate) fn serial_port_present(path: &str) -> bool {
+    super::unix::serial_port_present(path)
+}
+
 pub(crate) fn inspect_serial_access(path: &str) -> SerialAccess {
     super::unix::inspect_serial_access(path)
 }

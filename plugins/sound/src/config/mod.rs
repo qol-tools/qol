@@ -172,6 +172,10 @@ mod tests {
             env.set(qol_conventions::ENV_INSTALL_ID, &install_id);
             env.set("XDG_DATA_HOME", &data_home);
             env.set("XDG_CONFIG_HOME", &config_home);
+            let pinned = qol_config::data_dir().is_some_and(|dir| dir.starts_with(&data_home));
+            if !pinned {
+                return None;
+            }
             Some(Self {
                 _env: env,
                 _root: root,

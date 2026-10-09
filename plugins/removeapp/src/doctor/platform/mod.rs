@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod directory;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(target_os = "linux")]

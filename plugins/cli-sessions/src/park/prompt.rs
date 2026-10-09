@@ -87,11 +87,7 @@ pub fn unpark_prompt(record: &ParkRecord, log_path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::anyhow;
-    use qol_terminal_sessions::park::ParkState;
-
     use super::*;
-    use crate::park::tests::record;
 
     #[test]
     fn tail_keeps_the_last_lines_within_the_byte_cap() {
@@ -108,6 +104,11 @@ mod tests {
     #[test]
     fn wake_prompt_reports_the_exit_code_and_the_output_tail() {
         use std::os::unix::process::ExitStatusExt;
+
+        use anyhow::anyhow;
+        use qol_terminal_sessions::park::ParkState;
+
+        use crate::park::tests::record;
 
         let log = Path::new("/data/park-1-2.log");
         let prompt = wake_prompt(

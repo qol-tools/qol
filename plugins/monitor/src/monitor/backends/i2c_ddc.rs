@@ -444,6 +444,10 @@ impl<T: I2cTransport> DdcStatus for I2cDdcBackend<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_dir as symlink;
     use std::sync::Arc;
 
     use crate::monitor::{BrightnessSource, DisplayCapabilities};
@@ -613,8 +617,7 @@ mod tests {
             let adapter = adapters.join(link);
             fs::create_dir_all(&adapter).unwrap();
             fs::write(adapter.join("name"), name).unwrap();
-            std::os::unix::fs::symlink(format!("../adapters/{link}"), connector_dir.join(link))
-                .unwrap();
+            symlink(format!("../adapters/{link}"), connector_dir.join(link)).unwrap();
         }
         dir
     }

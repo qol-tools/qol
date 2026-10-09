@@ -4,6 +4,7 @@ version = "1.54.0"
 edition = "2021"
 
 [dependencies]
+dirs = "6.0"
 log.workspace = true
 qol-log.workspace = true
 qol-apps.workspace = true

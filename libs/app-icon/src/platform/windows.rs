@@ -19,7 +19,7 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Shell::SHDefExtractIconW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL, HICON};
 
-use crate::RgbaImage;
+use crate::{ProcessEntry, RgbaImage};
 
 use super::AppIconPlatform;
 
@@ -65,6 +65,19 @@ impl AppIconPlatform for Platform {
         let mut path = executable_path(u32::try_from(pid).ok()?)?;
         path.pop();
         Some(PathBuf::from(OsString::from_wide(&path)))
+    }
+
+    fn processes(&self) -> Vec<ProcessEntry> {
+        process_entries()
+            .iter()
+            .filter_map(|entry| {
+                Some(ProcessEntry {
+                    pid: i32::try_from(entry.th32ProcessID).ok()?,
+                    parent_pid: i32::try_from(entry.th32ParentProcessID).ok()?,
+                    name: wide_name(&entry.szExeFile),
+                })
+            })
+            .collect()
     }
 
     fn process_start_time_us(&self, pid: i32) -> Option<u64> {
@@ -187,6 +200,14 @@ fn process_entries() -> Vec<PROCESSENTRY32W> {
     entries
 }
 
+fn wide_name(wide: &[u16]) -> String {
+    let end = wide
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(wide.len());
+    String::from_utf16_lossy(&wide[..end])
+}
+
 fn empty_filetime() -> FILETIME {
     FILETIME {
         dwLowDateTime: 0,
@@ -196,7 +217,20 @@ fn empty_filetime() -> FILETIME {
 
 #[cfg(test)]
 mod tests {
-    use super::rgba_from_bgra;
+    use super::{rgba_from_bgra, wide_name};
+
+    #[test]
+    fn wide_name_stops_at_the_first_nul() {
+        let cases = [
+            ("cmd.exe\0\0junk", "cmd.exe"),
+            ("pwsh.exe", "pwsh.exe"),
+            ("", ""),
+        ];
+        for (raw, expected) in cases {
+            let wide: Vec<u16> = raw.encode_utf16().collect();
+            assert_eq!(wide_name(&wide), expected, "{raw:?}");
+        }
+    }
 
     #[test]
     fn bgra_pixels_become_rgba() {

@@ -9,7 +9,14 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
     assert_eq!(m.plugin.name, "CLI Sessions");
     assert_eq!(
         m.plugin.platforms.as_deref(),
-        Some(["linux".to_string(), "macos".to_string()].as_slice())
+        Some(
+            [
+                "linux".to_string(),
+                "macos".to_string(),
+                "windows".to_string()
+            ]
+            .as_slice()
+        )
     );
 
     let runtime = m.runtime.as_ref().expect("runtime");

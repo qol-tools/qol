@@ -9,6 +9,13 @@ pub struct RgbaImage {
     pub height: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessEntry {
+    pub pid: i32,
+    pub parent_pid: i32,
+    pub name: String,
+}
+
 pub fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
     platform::icon_for_bundle_id(bundle_id, size)
 }
@@ -39,4 +46,8 @@ pub fn process_start_time_us(pid: i32) -> Option<u64> {
 
 pub fn process_executable(pid: i32) -> Option<PathBuf> {
     platform::process_executable(pid)
+}
+
+pub fn processes() -> Vec<ProcessEntry> {
+    platform::processes()
 }

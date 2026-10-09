@@ -3,7 +3,7 @@ name = "qol-audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Bundled native PulseAudio control client for qol-tools"
+description = "Native audio control client for qol-tools: PulseAudio on Linux, Core Audio on Windows"
 
 [dependencies]
 workspace-hack.workspace = true
@@ -11,6 +11,19 @@ workspace-hack.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 mio = { version = "1", features = ["net", "os-poll"] }
 pulseaudio = "=0.3.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_Media_KernelStreaming",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_UI_Shell_PropertiesSystem",
+] }
 
 [dev-dependencies]
 tempfile = "3.8"

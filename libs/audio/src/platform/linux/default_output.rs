@@ -51,9 +51,8 @@ pub(crate) fn set_default_output(
     direction: Direction,
     output: &Identity,
 ) -> Result<(), AudioError> {
-    let node = super::identity::node_for_identity(direction, output)?.ok_or_else(|| {
-        AudioError::Operation(format!("the {} '{output}' is not present", noun(direction)))
-    })?;
+    let node = super::identity::node_for_identity(direction, output)?
+        .ok_or_else(|| AudioError::not_present(direction, output))?;
     apply_default(direction, &node)?;
     require_effective(direction, &node)
 }
@@ -64,13 +63,6 @@ fn apply_default(direction: Direction, node: &str) -> Result<(), AudioError> {
         Direction::Input => super::with_connection(|connection| {
             super::control::set_default_source(connection, node)
         }),
-    }
-}
-
-fn noun(direction: Direction) -> &'static str {
-    match direction {
-        Direction::Output => "output",
-        Direction::Input => "input",
     }
 }
 

@@ -12,7 +12,7 @@ fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(
         PLATFORM_SUPPORTED,
         format!(
-            "Sound has no platform backend on {}. This plugin runs on Linux only.",
+            "Sound has no platform backend on {}. This plugin runs on Linux and Windows only.",
             std::env::consts::OS
         ),
     )

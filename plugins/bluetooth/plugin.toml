@@ -6,7 +6,7 @@ icon = "bluetooth"
 description = "Reliably reconnect the Bluetooth devices you choose"
 version = "0.56.0"
 author = "KMRH47"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 [runtime]
 command = "qol-bluetooth"

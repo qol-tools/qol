@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::RgbaImage;
+use crate::{ProcessEntry, RgbaImage};
 
 use super::AppIconPlatform;
 
@@ -37,5 +37,9 @@ impl AppIconPlatform for Platform {
 
     fn process_executable(&self, _pid: i32) -> Option<PathBuf> {
         None
+    }
+
+    fn processes(&self) -> Vec<ProcessEntry> {
+        Vec::new()
     }
 }
