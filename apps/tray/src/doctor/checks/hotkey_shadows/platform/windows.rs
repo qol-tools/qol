@@ -31,11 +31,6 @@ struct ReservedDefinition {
 
 const RESERVED: &[ReservedDefinition] = &[
     ReservedDefinition {
-        label: "Windows input switcher",
-        combo: "Win+Space",
-        hint: "open Settings -> Time & language -> Language -> Advanced keyboard settings -> Input language hot keys and clear it",
-    },
-    ReservedDefinition {
         label: "Windows Task View",
         combo: "Win+Tab",
         hint: "owned by Windows shell; remap qol-tray to a different combo",
@@ -216,7 +211,6 @@ mod tests {
     #[test]
     fn explorer_reserved_combos_emit_reserved_kind() {
         let cases = [
-            ("Win+Space", "Windows input switcher"),
             ("Win+Tab", "Windows Task View"),
             ("Win+R", "Windows Run dialog"),
             ("Win+E", "Windows File Explorer"),
@@ -262,7 +256,7 @@ mod tests {
 
     #[test]
     fn registry_and_reserved_on_distinct_combos_both_reported() {
-        let qol = index(&["Ctrl+Shift+E", "Win+Space"]);
+        let qol = index(&["Ctrl+Shift+E", "Win+Tab"]);
         let mut reader = StubReader(vec![AppKeyEntry {
             app_key: "17".to_string(),
             combo: Some("Ctrl+Shift+E".to_string()),
@@ -273,7 +267,14 @@ mod tests {
             .flat_map(|s| s.qol_combos.iter().map(String::as_str))
             .collect();
         combos.sort();
-        assert_eq!(combos, ["Ctrl+Shift+E", "Win+Space"]);
+        assert_eq!(combos, ["Ctrl+Shift+E", "Win+Tab"]);
+    }
+
+    #[test]
+    fn win_space_is_captured_by_the_keyboard_hook_not_reported_as_reserved() {
+        let qol = index(&["Win+Space"]);
+        let mut reader = StubReader(Vec::new());
+        assert!(collect_shadows_with_reader(&qol, &mut reader).is_empty());
     }
 
     #[test]

@@ -1,3 +1,5 @@
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+mod key_matcher;
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 #[cfg(target_os = "macos")]
