@@ -66,7 +66,14 @@ pub struct FinalizeJob {
 
 impl FinalizeJob {
     pub fn run(self) -> Option<PathBuf> {
-        platform::recording_stopped(&self.session, &self.config)
+        let saved = platform::recording_stopped(&self.session, &self.config)?;
+        crate::capture::completion::background_saved(
+            "Recording saved",
+            &saved.message,
+            &saved.path,
+            self.config.capture.open_folder_after_save,
+        );
+        Some(saved.path)
     }
 }
 

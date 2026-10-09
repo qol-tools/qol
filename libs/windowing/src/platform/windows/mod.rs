@@ -8,9 +8,10 @@ use windows_sys::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors,
-    GetMonitorInfoW, MonitorFromWindow, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors,
+    GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SelectObject, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows_sys::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
@@ -279,7 +280,35 @@ pub struct WindowPixels {
 
 const PW_RENDERFULLCONTENT: PRINT_WINDOW_FLAGS = 2;
 
+pub fn capture_screen_bgra(x: i32, y: i32, width: usize, height: usize) -> Option<Vec<u8>> {
+    let columns = i32::try_from(width).ok()?;
+    let rows = i32::try_from(height).ok()?;
+    let screen = unsafe { GetDC(null_mut()) };
+    if screen.is_null() {
+        return None;
+    }
+    let pixels = render_to_dib(width, height, |dc| unsafe {
+        BitBlt(dc, 0, 0, columns, rows, screen, x, y, SRCCOPY | CAPTUREBLT) != 0
+    });
+    unsafe { ReleaseDC(null_mut(), screen) };
+    let mut pixels = pixels?;
+    make_opaque(&mut pixels);
+    Some(pixels)
+}
+
+fn make_opaque(bgra: &mut [u8]) {
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel[3] = u8::MAX;
+    }
+}
+
 fn print_window(hwnd: HWND, width: usize, height: usize) -> Option<Vec<u8>> {
+    render_to_dib(width, height, |dc| unsafe {
+        PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT) != 0
+    })
+}
+
+fn render_to_dib(width: usize, height: usize, draw: impl FnOnce(HDC) -> bool) -> Option<Vec<u8>> {
     let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -307,7 +336,7 @@ fn print_window(hwnd: HWND, width: usize, height: usize) -> Option<Vec<u8>> {
         return None;
     }
     let previous = unsafe { SelectObject(dc, bitmap) };
-    let printed = unsafe { PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT) } != 0;
+    let drawn = draw(dc);
     let pixels =
         unsafe { std::slice::from_raw_parts(bits as *const u8, width * height * 4) }.to_vec();
     unsafe {
@@ -315,7 +344,7 @@ fn print_window(hwnd: HWND, width: usize, height: usize) -> Option<Vec<u8>> {
         DeleteObject(bitmap);
         DeleteDC(dc);
     }
-    printed.then_some(pixels)
+    drawn.then_some(pixels)
 }
 
 fn cropped_rgba(bgra: &[u8], source_width: usize, crop: WindowRect) -> WindowPixels {
@@ -387,6 +416,22 @@ mod tests {
                 (width, height, rgba),
                 "{name}"
             );
+        }
+    }
+
+    #[test]
+    fn make_opaque_sets_only_the_alpha_channel() {
+        let cases: [(Vec<u8>, Vec<u8>); 3] = [
+            (vec![], vec![]),
+            (vec![1, 2, 3, 0], vec![1, 2, 3, 255]),
+            (
+                vec![9, 8, 7, 6, 5, 4, 3, 2],
+                vec![9, 8, 7, 255, 5, 4, 3, 255],
+            ),
+        ];
+        for (mut bgra, expected) in cases {
+            make_opaque(&mut bgra);
+            assert_eq!(bgra, expected);
         }
     }
 

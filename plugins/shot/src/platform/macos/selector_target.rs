@@ -1,11 +1,9 @@
-use gpui::{Pixels, Point};
+use gpui::Pixels;
 use qol_gpui::monitor::ActiveMonitor;
 use std::ffi::c_void;
 use std::rc::Rc;
 
-use crate::ui::region_selector::{
-    DetectedTarget, DetectedTargetRole, HoverTarget, HoverTargetSource,
-};
+use crate::ui::region_selector::{HoverTargetSource, SnapshotTargets};
 use crate::Rect;
 
 const MIN_TARGET_SIZE: i32 = 24;
@@ -105,35 +103,6 @@ pub(super) fn snapshot(monitors: &[ActiveMonitor]) -> Option<HoverTargetSource> 
         windows,
         monitors: monitor_rects,
     }))
-}
-
-struct SnapshotTargets {
-    windows: Vec<Rect>,
-    monitors: Vec<Rect>,
-}
-
-impl HoverTarget for SnapshotTargets {
-    fn target_at(&self, point: Point<Pixels>) -> Option<DetectedTarget> {
-        let x = f32::from(point.x).round() as i32;
-        let y = f32::from(point.y).round() as i32;
-        let hit =
-            |rect: &Rect| x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
-        if let Some(rect) = self.windows.iter().copied().find(hit) {
-            return Some(detected_target(rect, true));
-        }
-        self.monitors
-            .iter()
-            .copied()
-            .find(hit)
-            .map(|rect| detected_target(rect, false))
-    }
-}
-
-fn detected_target(rect: Rect, is_window: bool) -> DetectedTarget {
-    DetectedTarget {
-        rect,
-        role: DetectedTargetRole { is_window },
-    }
 }
 
 #[derive(Default)]
@@ -289,46 +258,4 @@ fn rects_intersect(left: Rect, right: Rect) -> bool {
         && left.x + left.w > right.x
         && left.y < right.y + right.h
         && left.y + left.h > right.y
-}
-
-#[cfg(test)]
-mod tests {
-    use gpui::{point, px};
-
-    use super::{detected_target, HoverTarget, Rect, SnapshotTargets};
-
-    #[test]
-    fn hit_testing_prefers_the_frontmost_window_then_the_monitor() {
-        let front = Rect {
-            x: 40,
-            y: 40,
-            w: 120,
-            h: 80,
-        };
-        let back = Rect {
-            x: 0,
-            y: 0,
-            w: 240,
-            h: 180,
-        };
-        let monitor = Rect {
-            x: 0,
-            y: 0,
-            w: 400,
-            h: 300,
-        };
-        let targets = SnapshotTargets {
-            windows: vec![front, back],
-            monitors: vec![monitor],
-        };
-
-        assert_eq!(
-            targets.target_at(point(px(80.0), px(60.0))),
-            Some(detected_target(front, true))
-        );
-        assert_eq!(
-            targets.target_at(point(px(300.0), px(200.0))),
-            Some(detected_target(monitor, false))
-        );
-    }
 }

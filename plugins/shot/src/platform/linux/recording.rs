@@ -9,7 +9,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::ConnectionExt as XfixesExt;
 use x11rb::rust_connection::RustConnection;
 
-use crate::platform::{CaptureProcess, CaptureSession};
+use crate::platform::{CaptureProcess, CaptureSession, SavedRecording};
 use crate::{Config, Rect};
 
 use super::process_alive;
@@ -650,7 +650,7 @@ pub fn recording_format(format: &str) -> String {
 
 pub fn recording_started(_session: &CaptureSession) {}
 
-pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
+pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<SavedRecording> {
     send_notification("Recording stopped", "Saving recording");
     let output_file = session.output_file.as_deref()?;
     let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
@@ -688,14 +688,12 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
     let message = saved_file
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("Saved in Videos");
-    crate::capture::completion::background_saved(
-        "Recording saved",
+        .unwrap_or("Saved in Videos")
+        .to_string();
+    Some(SavedRecording {
+        path: saved_file,
         message,
-        &saved_file,
-        config.capture.open_folder_after_save,
-    );
-    Some(saved_file)
+    })
 }
 
 fn convert_cinnamon_recording(

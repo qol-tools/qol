@@ -39,6 +39,12 @@ pub struct AudioDevice {
     pub picture: Option<String>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SavedRecording {
+    pub path: PathBuf,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CaptureProcess {
     pub pid: u32,
