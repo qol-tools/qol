@@ -112,12 +112,19 @@ fn target(connection: &mut Connection, direction: Direction) -> Result<Target, A
         })?,
         Direction::Input => node.index,
     };
-    let includes_volume = !node.hardware_volume;
+    let includes_volume = includes_volume(direction, node.hardware_volume);
     Ok(Target {
         device: node.name,
         source_index,
         includes_volume,
     })
+}
+
+fn includes_volume(direction: Direction, hardware_volume: bool) -> bool {
+    match direction {
+        Direction::Output => !hardware_volume,
+        Direction::Input => true,
+    }
 }
 
 fn record_params(source_index: u32) -> RecordStreamParams {
@@ -227,6 +234,18 @@ mod tests {
         assert_eq!(before_volume(0.9, 30, true), 1.0);
         assert_eq!(before_volume(0.4, 0, true), 0.0);
         assert_eq!(before_volume(0.4, 30, false), 0.4);
+    }
+
+    #[test]
+    fn a_microphone_is_captured_after_its_volume_even_when_the_gain_is_in_hardware() {
+        assert!(includes_volume(Direction::Input, true));
+        assert!(includes_volume(Direction::Input, false));
+    }
+
+    #[test]
+    fn an_output_monitor_taps_before_a_hardware_volume() {
+        assert!(!includes_volume(Direction::Output, true));
+        assert!(includes_volume(Direction::Output, false));
     }
 
     #[test]
