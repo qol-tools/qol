@@ -1,29 +1,252 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::daemon::EventBus;
+use crate::daemon::{DaemonEvent, EventBus};
+use crate::features::plugin_store::release_integrity;
 
+use super::super::{latest_version, verify_host_update, GITHUB_REPO};
+use super::download;
 use super::InstallKind;
 
+const RETIRED_SUFFIX: &str = "old";
+const STAGED_SUFFIX: &str = "new";
+
 pub(super) fn detect_install_kind() -> InstallKind {
-    let executable = std::env::current_exe()
-        .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
-        .ok();
-    let executable = executable
-        .as_deref()
-        .and_then(|path| path.to_str())
-        .unwrap_or_default();
-    let home = dirs::home_dir().and_then(|path| path.to_str().map(String::from));
-    InstallKind::for_path(executable, home.as_deref(), false)
+    let Ok(executable) = std::env::current_exe() else {
+        return InstallKind::SystemWide;
+    };
+    let install_dir = qol_apps::tray_install::install_dir().ok();
+    install_kind_for(&executable, install_dir.as_deref())
 }
 
-#[allow(clippy::unused_async)]
-pub(super) async fn download_and_install(_events: Arc<EventBus>) -> Result<()> {
-    log::info!("Install kind: {:?}", InstallKind::detect());
-    let url = format!(
-        "https://github.com/{}/releases/latest",
-        super::super::GITHUB_REPO
-    );
-    crate::paths::open_url(&url)?;
+fn install_kind_for(executable: &Path, install_dir: Option<&Path>) -> InstallKind {
+    let executable = comparable(executable);
+    let in_install_dir = install_dir.is_some_and(|dir| {
+        executable
+            .rsplit_once('/')
+            .is_some_and(|(parent, _)| parent == comparable(dir))
+    });
+    InstallKind::for_path(&executable, None, in_install_dir)
+}
+
+fn comparable(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    let text = text.strip_prefix("//?/").unwrap_or(&text);
+    text.trim_end_matches('/').to_lowercase()
+}
+
+fn asset_name() -> String {
+    format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)
+}
+
+fn sibling(target: &Path, suffix: &str) -> PathBuf {
+    let mut name = target.file_name().unwrap_or_default().to_os_string();
+    name.push(".");
+    name.push(suffix);
+    target.with_file_name(name)
+}
+
+fn replace_running_binary(source: &Path, target: &Path) -> Result<()> {
+    let staged = sibling(target, STAGED_SUFFIX);
+    let retired = sibling(target, RETIRED_SUFFIX);
+    let _ = std::fs::remove_file(&staged);
+    let _ = std::fs::remove_file(&retired);
+    std::fs::copy(source, &staged).with_context(|| {
+        format!(
+            "Failed to stage {} to {}",
+            source.display(),
+            staged.display()
+        )
+    })?;
+    if target.exists() {
+        if let Err(error) = std::fs::rename(target, &retired) {
+            let _ = std::fs::remove_file(&staged);
+            return Err(error)
+                .with_context(|| format!("Failed to move aside {}", target.display()));
+        }
+    }
+    if let Err(error) = std::fs::rename(&staged, target) {
+        let rollback = std::fs::rename(&retired, target);
+        let _ = std::fs::remove_file(&staged);
+        return match rollback {
+            Ok(()) => Err(error).with_context(|| format!("Failed to replace {}", target.display())),
+            Err(rollback_error) => Err(error).with_context(|| {
+                format!(
+                    "Failed to replace {}; restoring the previous binary also failed: {rollback_error}",
+                    target.display()
+                )
+            }),
+        };
+    }
     Ok(())
+}
+
+pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
+    let install_kind = InstallKind::detect();
+    log::info!("Install kind: {install_kind:?}");
+    let dev_url = download::dev_update_url();
+    let dev_override = dev_url.is_some();
+
+    if !dev_override {
+        match install_kind {
+            InstallKind::SystemWide => {
+                log::warn!(
+                    "Updating a qol-tray outside the per-user install directory; the binary is replaced in place"
+                );
+            }
+            InstallKind::Development => {
+                anyhow::bail!("Self-update is disabled in development builds")
+            }
+            InstallKind::UserLocal => {}
+        }
+    }
+
+    let work_dir = tempfile::Builder::new()
+        .prefix("qol-tray-update-")
+        .tempdir()?;
+    let dest = work_dir.path().join(asset_name());
+    let expected_version = if dev_override {
+        None
+    } else {
+        Some(latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?)
+    };
+    let verified_asset = if let Some(version) = expected_version.as_deref() {
+        let release =
+            release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
+        Some(release_integrity::verified_asset(&release, &asset_name())?)
+    } else {
+        None
+    };
+    let url = dev_url
+        .or_else(|| {
+            verified_asset
+                .as_ref()
+                .map(|asset| asset.browser_download_url.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
+
+    log::info!("Downloading update from {}", url);
+    download::download_asset(&url, &dest, &events).await?;
+    if let Some(asset) = &verified_asset {
+        release_integrity::verify_file(asset, &dest)?;
+    }
+    verify_host_update(
+        &dest,
+        expected_version.as_deref(),
+        qol_artifact::ArtifactExpectation::with_exact_target,
+    )?;
+
+    let current_exe = std::env::current_exe()?;
+    replace_running_binary(&dest, &current_exe)?;
+
+    events.send(DaemonEvent::UpdateComplete);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    log::info!("Update installed, restarting...");
+    crate::window_reopen::capture_before_restart();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let error = crate::relaunch::spawn_successor_and_exit(&current_exe, &args);
+    crate::window_reopen::discard_reopen_list();
+    anyhow::bail!("restart after update failed: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_kind_follows_the_executable_location() {
+        let install_dir = Path::new(r"C:\Users\x\AppData\Local\Programs\qol-tray\bin");
+        let cases = [
+            (
+                r"C:\Users\x\AppData\Local\Programs\qol-tray\bin\qol-tray.exe",
+                InstallKind::UserLocal,
+            ),
+            (
+                r"\\?\C:\USERS\X\AppData\Local\Programs\qol-tray\bin\qol-tray.exe",
+                InstallKind::UserLocal,
+            ),
+            (
+                r"C:\Users\x\repos\qol\target\release\qol-tray.exe",
+                InstallKind::Development,
+            ),
+            (
+                r"C:\Users\x\repos\qol\target\debug\qol-tray.exe",
+                InstallKind::Development,
+            ),
+            (
+                r"C:\Users\x\Downloads\qol-tray-windows-x86_64.exe",
+                InstallKind::SystemWide,
+            ),
+            (
+                r"C:\Users\x\AppData\Local\Programs\qol-tray\bin\nested\qol-tray.exe",
+                InstallKind::SystemWide,
+            ),
+        ];
+        for (executable, expected) in cases {
+            assert_eq!(
+                install_kind_for(Path::new(executable), Some(install_dir)),
+                expected,
+                "{executable}"
+            );
+        }
+        assert_eq!(
+            install_kind_for(
+                Path::new(r"C:\Users\x\AppData\Local\Programs\qol-tray\bin\qol-tray.exe"),
+                None
+            ),
+            InstallKind::SystemWide
+        );
+    }
+
+    #[test]
+    fn windows_release_asset_matches_the_plugin_naming() {
+        assert_eq!(
+            asset_name(),
+            format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)
+        );
+    }
+
+    #[test]
+    fn replacing_swaps_the_binary_and_keeps_the_previous_one_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("download.exe");
+        let target = dir.path().join("qol-tray.exe");
+        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::write(sibling(&target, RETIRED_SUFFIX), b"older").unwrap();
+
+        replace_running_binary(&source, &target).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(
+            std::fs::read(sibling(&target, RETIRED_SUFFIX)).unwrap(),
+            b"old"
+        );
+        assert!(!sibling(&target, STAGED_SUFFIX).exists());
+    }
+
+    #[test]
+    fn replacing_a_running_executable_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("running.exe");
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let ping = Path::new(&system_root).join("System32").join("PING.EXE");
+        std::fs::copy(ping, &target).unwrap();
+        let mut child = std::process::Command::new(&target)
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let source = dir.path().join("download.exe");
+        std::fs::write(&source, b"new").unwrap();
+
+        let replaced = replace_running_binary(&source, &target);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        replaced.unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    }
 }

@@ -1,4 +1,5 @@
 mod doctor;
+mod glide;
 
 use std::path::PathBuf;
 
@@ -12,35 +13,7 @@ use crate::restore::{self, WindowSystem};
 use qol_windowing::platform::windows::{self as win32, Window};
 
 pub(crate) use doctor::{platform_supported_check, required_binaries_check};
-
-pub(crate) struct GlideController;
-
-impl GlideController {
-    pub(crate) fn connect() -> Result<Self, String> {
-        Err("continuous window movement is not yet available on Windows".into())
-    }
-
-    pub(crate) fn update(
-        &mut self,
-        _direction: crate::glide::Direction,
-        _phase: crate::glide::Phase,
-        _speed: f64,
-    ) -> Result<String, String> {
-        Err("continuous window movement is not yet available on Windows".into())
-    }
-
-    pub(crate) fn stop_all(&mut self) -> Result<(), String> {
-        Ok(())
-    }
-
-    pub(crate) fn maintain(&mut self) -> Option<Result<(), String>> {
-        None
-    }
-
-    pub(crate) fn is_active(&self) -> bool {
-        false
-    }
-}
+pub(crate) use glide::GlideController;
 
 pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
 

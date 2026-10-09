@@ -35,6 +35,13 @@ pub(crate) fn install_cancellation_handler() -> io::Result<()> {
     }
 }
 
+pub(crate) fn wait_for_stop_request() -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Unix stop requests arrive as SIGTERM, which callers observe with their own signal handling",
+    ))
+}
+
 pub(crate) fn cancellation_requested() -> bool {
     cancellation_signal_count() > 0
 }

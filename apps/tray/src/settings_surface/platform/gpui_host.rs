@@ -1115,14 +1115,13 @@ mod tests {
     #[test]
     fn manager_shutdown_contacts_only_the_isolated_settings_host() {
         use std::io::{BufRead, Write};
-        use std::os::unix::net::UnixListener;
 
         let super::SocketSource::Path(path) = config().socket else {
             panic!("settings host must have an explicit socket");
         };
         assert!(!path.starts_with(qol_config::runtime_dir().unwrap()));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let listener = UnixListener::bind(path).unwrap();
+        let listener = qol_runtime::local_ipc::bind_listener(&path).unwrap();
         let responder = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             drop(listener);

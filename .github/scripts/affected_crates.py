@@ -37,8 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKTREE_HEAD = "WORKTREE"
 
 
-def platform_sets():
-    ubuntu, macos, windows = set(), set(), set()
+def plugin_platforms():
     for manifest in sorted(REPO_ROOT.glob("plugins/*/plugin.toml")):
         platforms = (
             tomllib.loads(manifest.read_text())
@@ -46,6 +45,12 @@ def platform_sets():
             .get("platforms", ["linux"])
         )
         name = tomllib.loads((manifest.parent / "Cargo.toml").read_text())["package"]["name"]
+        yield name, platforms
+
+
+def platform_sets():
+    ubuntu, macos, windows = set(), set(), set()
+    for name, platforms in plugin_platforms():
         if "linux" not in platforms:
             ubuntu.add(name)
         if "macos" not in platforms:
@@ -53,6 +58,10 @@ def platform_sets():
         if "windows" in platforms:
             windows.add(name)
     return ubuntu, macos, windows
+
+
+def windows_excludes():
+    return {name for name, platforms in plugin_platforms() if "windows" not in platforms}
 
 
 def package_features():
@@ -67,9 +76,9 @@ def package_features():
 
 
 UBUNTU_EXCLUDE, MACOS_EXCLUDE, WINDOWS_PLUGINS = platform_sets()
+WINDOWS_EXCLUDE = windows_excludes()
 PACKAGE_FEATURES = package_features()
 WINDOWS_APP_CRATES = ("qol-tray", *sorted(WINDOWS_PLUGINS))
-WINDOWS_APP_PACKAGES = " ".join(f"-p {name}" for name in WINDOWS_APP_CRATES)
 
 
 def exclude_flags(names):
@@ -115,9 +124,7 @@ def full_workspace(reason):
             "full": True,
             "windows_process": True,
             "windows_dev_build": True,
-            "windows_qol": True,
             "windows_apps": True,
-            "windows_apps_packages": WINDOWS_APP_PACKAGES,
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
@@ -128,6 +135,11 @@ def full_workspace(reason):
             "macos_test": f"--workspace{exclude_flags(MACOS_EXCLUDE)}{workspace_feature_flags(MACOS_EXCLUDE)}",
             "macos_doctest": True,
             "macos_skip": False,
+            "windows_clippy": f"--workspace{exclude_flags(WINDOWS_EXCLUDE)} --all-targets{workspace_feature_flags(WINDOWS_EXCLUDE)}",
+            "windows_build": f"--workspace{exclude_flags(WINDOWS_EXCLUDE)}{workspace_feature_flags(WINDOWS_EXCLUDE)}",
+            "windows_test": f"--workspace{exclude_flags(WINDOWS_EXCLUDE)}{workspace_feature_flags(WINDOWS_EXCLUDE)}",
+            "windows_doctest": True,
+            "windows_skip": False,
         }
     )
 
@@ -139,9 +151,7 @@ def skip_all(reason):
             "full": False,
             "windows_process": False,
             "windows_dev_build": False,
-            "windows_qol": False,
             "windows_apps": False,
-            "windows_apps_packages": "",
             "ubuntu_clippy": "",
             "ubuntu_build": "",
             "ubuntu_test": "",
@@ -152,6 +162,11 @@ def skip_all(reason):
             "macos_test": "",
             "macos_doctest": False,
             "macos_skip": True,
+            "windows_clippy": "",
+            "windows_build": "",
+            "windows_test": "",
+            "windows_doctest": False,
+            "windows_skip": True,
         }
     )
 
@@ -321,15 +336,14 @@ def main():
     affected = dependents_closure(seeds, pkgs)
     macos = sorted(a for a in affected if a not in MACOS_EXCLUDE)
     ubuntu = sorted(a for a in affected if a not in UBUNTU_EXCLUDE)
+    windows = sorted(a for a in affected if a not in WINDOWS_EXCLUDE)
     sys.stderr.write(f"[affected] changed={sorted(seeds)} affected={macos}\n")
     emit(
         {
             "full": False,
             "windows_process": "qol-process" in affected,
             "windows_dev_build": "qol-dev-build" in affected,
-            "windows_qol": "qol" in affected,
             "windows_apps": any(name in affected for name in WINDOWS_APP_CRATES),
-            "windows_apps_packages": WINDOWS_APP_PACKAGES,
             "ubuntu_clippy": args(ubuntu, True),
             "ubuntu_build": args(ubuntu, False),
             "ubuntu_test": args(ubuntu, False),
@@ -340,6 +354,11 @@ def main():
             "macos_test": args(macos, False),
             "macos_doctest": any(pkgs[name]["doctest"] for name in macos),
             "macos_skip": not macos,
+            "windows_clippy": args(windows, True),
+            "windows_build": args(windows, False),
+            "windows_test": args(windows, False),
+            "windows_doctest": any(pkgs[name]["doctest"] for name in windows),
+            "windows_skip": not windows,
         }
     )
 

@@ -1,17 +1,22 @@
 #![allow(unsafe_code)]
 
 mod attach;
+mod close;
 mod keys;
+mod launch;
 mod peb;
 mod probe;
 mod report;
 mod send;
+mod spawn;
+mod tabs;
+mod title;
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -21,15 +26,17 @@ use qol_windowing::WindowId;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindow, IsWindowVisible, GW_OWNER};
 
-use crate::console::{PROBE_COMMAND, SEND_COMMAND};
+use crate::console::{PROBE_COMMAND, SEND_COMMAND, TITLE_COMMAND};
 use crate::{
-    BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionFocus,
-    SessionInventory, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
+    BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionCloser, SessionFacts,
+    SessionFocus, SessionId, SessionInventory, SessionSpawner, SpawnRequest, SpawnSurface,
+    TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
 };
 
+use self::close::{belongs, settle, token_start, Member};
 use self::keys::Key;
 use self::report::{
-    candidate_roots, image_stem, listed, parse_reports, session_facts, ConsoleReport,
+    candidate_roots, image_stem, listed, parse_reports, session_facts, ConsoleReport, Root,
 };
 
 const BACKEND: &str = "console";
@@ -38,6 +45,8 @@ const HELPER_TIMEOUT: Duration = Duration::from_secs(5);
 const SCREEN_TTL: Duration = Duration::from_secs(2);
 const ANCESTOR_LIMIT: usize = 8;
 const DESKTOP_SHELL: &str = "explorer";
+const CLOSE_GRACE: Duration = Duration::from_secs(2);
+const GRACEFUL_EXIT: u32 = 0;
 
 static BACKEND_ID: LazyLock<BackendId> =
     LazyLock::new(|| BackendId::new(BACKEND).expect("console is a valid terminal backend id"));
@@ -54,6 +63,18 @@ pub(crate) fn console_send(args: &[String]) -> io::Result<String> {
     send::run(args)
 }
 
+pub(crate) fn console_launch(args: &[String]) -> io::Result<String> {
+    launch::run(args)
+}
+
+pub(crate) fn console_title(args: &[String]) -> io::Result<String> {
+    title::run(args)
+}
+
+pub(crate) fn spawn_backend() -> &'static BackendId {
+    &BACKEND_ID
+}
+
 struct Probed {
     report: ConsoleReport,
     at: Instant,
@@ -62,6 +83,7 @@ struct Probed {
 #[derive(Default)]
 struct ConsoleBackend {
     reports: Mutex<HashMap<i32, Probed>>,
+    current: OnceLock<SessionId>,
 }
 
 impl ConsoleBackend {
@@ -124,6 +146,102 @@ impl TerminalBackend for ConsoleBackend {
     fn id(&self) -> &BackendId {
         &BACKEND_ID
     }
+
+    fn current_session_id(&self) -> Option<SessionId> {
+        if let Some(current) = self.current.get() {
+            return Some(current.clone());
+        }
+        let table = qol_app_icon::processes();
+        let own = i32::try_from(std::process::id()).ok()?;
+        let roots = candidate_roots(&table, own);
+        let chain = console_chain(&table, &roots, own);
+        if chain.is_empty() {
+            return None;
+        }
+        let reports = probe_consoles(&chain).ok()?;
+        self.remember(&reports);
+        let shown: Vec<i32> = listed(&reports, &roots)
+            .into_iter()
+            .map(|report| report.root)
+            .collect();
+        let root = chain.into_iter().find(|pid| shown.contains(pid))?;
+        let current = SessionId::new(BACKEND_ID.clone(), native_id(root)).ok()?;
+        let _ = self.current.set(current.clone());
+        Some(current)
+    }
+
+    fn spawner(&self) -> Option<&dyn SessionSpawner> {
+        Some(self)
+    }
+
+    fn closer(&self) -> Option<&dyn SessionCloser> {
+        Some(self)
+    }
+}
+
+impl SessionSpawner for ConsoleBackend {
+    fn supports(&self, _surface: SpawnSurface) -> bool {
+        true
+    }
+
+    fn spawn(&self, request: &SpawnRequest) -> Result<SessionId, TerminalError> {
+        let root = spawn::spawn(request)?;
+        let session = SessionId::new(BACKEND_ID.clone(), native_id(root)).map_err(|error| {
+            TerminalError::SpawnFailed {
+                backend: BACKEND_ID.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        qol_runtime::probe!(
+            "TERMINAL_SESSIONS",
+            "backend={} operation=spawn surface={} root={} outcome=ok",
+            &*BACKEND_ID,
+            request.identity.surface,
+            root
+        );
+        Ok(session)
+    }
+}
+
+impl SessionCloser for ConsoleBackend {
+    fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+        let report = self.fresh(target)?;
+        let refused = |message: &str| TerminalError::CommandFailed {
+            backend: BACKEND_ID.clone(),
+            operation: "close session",
+            code: None,
+            stderr: message.to_owned(),
+        };
+        let started = token_start(target.session_id().native())
+            .ok_or_else(|| refused("the session start time is unknown"))?;
+        let root = Member::open(report.root)
+            .filter(|root| belongs(started, true, root.start()))
+            .ok_or_else(|| TerminalError::TargetMissing(target.clone()))?;
+        let own = i32::try_from(std::process::id()).unwrap_or_default();
+        let mut members: Vec<Member> = report
+            .attached
+            .iter()
+            .filter(|pid| **pid != report.root && **pid != own)
+            .filter_map(|pid| Member::open(*pid))
+            .filter(|member| belongs(started, false, member.start()))
+            .collect();
+        let asked =
+            report.window_visible && window_from(report.window).is_some_and(Window::request_close);
+        if !asked && !root.terminate(GRACEFUL_EXIT) {
+            return Err(refused("the session root refused to terminate"));
+        }
+        qol_runtime::probe!(
+            "TERMINAL_SESSIONS",
+            "backend={} operation=close root={} members={} window_close={}",
+            &*BACKEND_ID,
+            report.root,
+            members.len(),
+            asked
+        );
+        members.push(root);
+        settle(&members, CLOSE_GRACE);
+        Ok(())
+    }
 }
 
 impl SessionInventory for ConsoleBackend {
@@ -173,7 +291,12 @@ impl ScreenReader for ConsoleBackend {
 impl SessionFocus for ConsoleBackend {
     fn focus(&self, target: &SessionBinding) -> Result<(), TerminalError> {
         let report = self.report(target)?;
-        let focused = focus_window(&report).is_some_and(Window::activate);
+        let focused = focus_window(&report).is_some_and(|window| {
+            if !report.window_visible {
+                select_tab(window, &report);
+            }
+            window.activate()
+        });
         if focused {
             return Ok(());
         }
@@ -271,6 +394,32 @@ fn focus_window(report: &ConsoleReport) -> Option<Window> {
                     .is_some_and(|owner| i32::try_from(owner).ok() == Some(pid))
         })
     })
+}
+
+fn select_tab(window: Window, report: &ConsoleReport) -> bool {
+    let Some(handle) = window.id().as_u32() else {
+        return false;
+    };
+    let root = report.root;
+    let selected = tabs::select_tab(handle, &report.title, move |title| {
+        let args = [TITLE_COMMAND.to_owned(), root.to_string()];
+        run_helper("set title", &args, Some(title)).is_ok()
+    });
+    qol_runtime::probe!(
+        "TERMINAL_SESSIONS",
+        "backend={} operation=select_tab root={} selected={}",
+        &*BACKEND_ID,
+        root,
+        selected
+    );
+    selected
+}
+
+fn console_chain(table: &[ProcessEntry], roots: &[Root], own: i32) -> Vec<i32> {
+    ancestors(table, own)
+        .into_iter()
+        .filter(|pid| roots.iter().any(|root| root.pid == *pid))
+        .collect()
 }
 
 fn ancestors(table: &[ProcessEntry], pid: i32) -> Vec<i32> {
@@ -408,6 +557,24 @@ mod tests {
         for (pid, expected) in cases {
             assert_eq!(ancestors(&table, pid), expected, "pid {pid}");
         }
+    }
+
+    #[test]
+    fn the_console_chain_lists_ancestor_roots_nearest_first() {
+        let table = [
+            process(1, 0, "explorer.exe"),
+            process(2, 1, "WindowsTerminal.exe"),
+            process(3, 2, "pwsh.exe"),
+            process(4, 3, "claude.exe"),
+            process(5, 4, "cmd.exe"),
+            process(6, 5, "conhost.exe"),
+            process(7, 5, "qol.exe"),
+            process(8, 7, "conhost.exe"),
+        ];
+        let roots = candidate_roots(&table, 7);
+        assert_eq!(console_chain(&table, &roots, 7), vec![5, 3]);
+        assert_eq!(console_chain(&table, &roots, 4), vec![3]);
+        assert!(console_chain(&table, &roots, 2).is_empty());
     }
 
     #[test]

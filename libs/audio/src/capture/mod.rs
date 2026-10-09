@@ -6,6 +6,12 @@ use crate::platform;
 use crate::AudioError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Microphone,
+    Loopback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pcm16Format {
     pub sample_rate: u32,
     pub channels: u16,
@@ -21,8 +27,20 @@ pub struct CaptureStop(Arc<AtomicBool>);
 
 impl Capture {
     pub fn open(device: Option<&str>, format: Pcm16Format) -> Result<Self, AudioError> {
+        Self::open_source(Source::Microphone, device, format)
+    }
+
+    pub fn open_loopback(device: Option<&str>, format: Pcm16Format) -> Result<Self, AudioError> {
+        Self::open_source(Source::Loopback, device, format)
+    }
+
+    fn open_source(
+        source: Source,
+        device: Option<&str>,
+        format: Pcm16Format,
+    ) -> Result<Self, AudioError> {
         let stop = Arc::new(AtomicBool::new(false));
-        let inner = platform::Capture::open(device, format, Arc::clone(&stop))?;
+        let inner = platform::Capture::open(source, device, format, Arc::clone(&stop))?;
         Ok(Self { inner, stop })
     }
 

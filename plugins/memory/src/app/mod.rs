@@ -261,7 +261,7 @@ mod tests {
     }
 
     fn seed_run(store: &Store, name: &str) {
-        let run = store.notes_root().join(name);
+        let run = store.notes_root().join(crate::platform::run_dir_name(name));
         std::fs::create_dir_all(&run).unwrap();
         std::fs::write(run.join("notes.jsonl"), "{\"key\":\"n\"}\n").unwrap();
     }
@@ -311,7 +311,9 @@ mod tests {
         let store = Store::resolve(Some(dir.0.as_path())).unwrap();
         let stale_temp = dir.0.join(".units.jsonl.abc123.tmp");
         std::fs::write(&stale_temp, b"x").unwrap();
-        std::fs::File::open(&stale_temp)
+        std::fs::File::options()
+            .write(true)
+            .open(&stale_temp)
             .unwrap()
             .set_modified(SystemTime::now() - Duration::from_secs(2 * 60 * 60))
             .unwrap();

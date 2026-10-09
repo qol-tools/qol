@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use windows::Win32::Media::Audio::{
     IAudioCaptureClient, IAudioClient, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
-    WAVE_FORMAT_PCM,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 
-use crate::capture::Pcm16Format;
+use crate::capture::{Pcm16Format, Source};
 use crate::devices::Direction;
 use crate::AudioError;
 
@@ -34,6 +34,7 @@ pub(crate) struct Capture {
 
 impl Capture {
     pub(crate) fn open(
+        source: Source,
         device: Option<&str>,
         format: Pcm16Format,
         stop: Arc<AtomicBool>,
@@ -46,6 +47,7 @@ impl Capture {
             .name("qol-audio-capture".to_owned())
             .spawn(move || {
                 record(
+                    source,
                     requested.as_deref(),
                     format,
                     &opened_tx,
@@ -54,12 +56,16 @@ impl Capture {
                 )
             })
             .map_err(|error| {
-                AudioError::Operation(format!("cannot start microphone capture: {error}"))
+                AudioError::Operation(format!(
+                    "cannot start {} capture: {error}",
+                    source_noun(source)
+                ))
             })?;
         let opened = opened_rx.recv().unwrap_or_else(|_| {
-            Err(AudioError::Operation(
-                "microphone capture stopped before it opened".to_owned(),
-            ))
+            Err(AudioError::Operation(format!(
+                "{} capture stopped before it opened",
+                source_noun(source)
+            )))
         });
         match opened {
             Ok(device) => Ok(Self {
@@ -126,6 +132,7 @@ impl Drop for Stream {
 }
 
 fn record(
+    source: Source,
     device: Option<&str>,
     format: Pcm16Format,
     opened: &mpsc::Sender<Result<String, AudioError>>,
@@ -139,7 +146,7 @@ fn record(
             return;
         }
     };
-    let stream = match open_stream(device, format) {
+    let stream = match open_stream(source, device, format) {
         Ok(stream) => stream,
         Err(error) => {
             let _ = opened.send(Err(error));
@@ -153,7 +160,8 @@ fn record(
         let mut pcm = Vec::new();
         if let Err(error) = stream.drain(&mut pcm) {
             let _ = chunks.send(Err(io::Error::other(format!(
-                "the microphone stream failed: {error}"
+                "the {} stream failed: {error}",
+                source_noun(source)
             ))));
             return;
         }
@@ -164,21 +172,29 @@ fn record(
     }
 }
 
-fn open_stream(device: Option<&str>, format: Pcm16Format) -> Result<Stream, AudioError> {
+fn open_stream(
+    source: Source,
+    device: Option<&str>,
+    format: Pcm16Format,
+) -> Result<Stream, AudioError> {
     let enumerator = com::enumerator()?;
+    let direction = source_direction(source);
     let endpoint = match device {
-        Some(id) => com::endpoint(&enumerator, Direction::Input, id)?,
-        None => com::default_endpoint(&enumerator, Direction::Input)?
-            .ok_or_else(|| AudioError::no_default(Direction::Input))?,
+        Some(id) => com::endpoint(&enumerator, direction, id)?,
+        None => com::default_endpoint(&enumerator, direction)?
+            .ok_or_else(|| AudioError::no_default(direction))?,
     };
-    let failed = com::failed("cannot record from the microphone");
+    let failed = com::failed(match source {
+        Source::Microphone => "cannot record from the microphone",
+        Source::Loopback => "cannot record system audio",
+    });
     let client: IAudioClient =
         unsafe { endpoint.device.Activate(CLSCTX_ALL, None) }.map_err(&failed)?;
     let wave = wave_format(format);
     unsafe {
         client.Initialize(
             AUDCLNT_SHAREMODE_SHARED,
-            AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            stream_flags(source),
             BUFFER_HNS,
             0,
             &wave,
@@ -194,6 +210,28 @@ fn open_stream(device: Option<&str>, format: Pcm16Format) -> Result<Stream, Audi
         reader,
         block_align: usize::from(wave.nBlockAlign),
     })
+}
+
+fn source_direction(source: Source) -> Direction {
+    match source {
+        Source::Microphone => Direction::Input,
+        Source::Loopback => Direction::Output,
+    }
+}
+
+fn source_noun(source: Source) -> &'static str {
+    match source {
+        Source::Microphone => "microphone",
+        Source::Loopback => "system audio",
+    }
+}
+
+fn stream_flags(source: Source) -> u32 {
+    let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    match source {
+        Source::Microphone => flags,
+        Source::Loopback => flags | AUDCLNT_STREAMFLAGS_LOOPBACK,
+    }
 }
 
 fn wave_format(format: Pcm16Format) -> WAVEFORMATEX {
@@ -229,5 +267,31 @@ impl Stream {
             unsafe { self.reader.ReleaseBuffer(frames)? };
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_loopback_reads_the_render_endpoint() {
+        let cases = [
+            (Source::Microphone, Direction::Input, false),
+            (Source::Loopback, Direction::Output, true),
+        ];
+        for (source, direction, loopback) in cases {
+            assert_eq!(source_direction(source), direction, "{source:?}");
+            assert_eq!(
+                stream_flags(source) & AUDCLNT_STREAMFLAGS_LOOPBACK != 0,
+                loopback,
+                "{source:?}"
+            );
+            assert_ne!(
+                stream_flags(source) & AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+                0,
+                "{source:?}"
+            );
+        }
     }
 }

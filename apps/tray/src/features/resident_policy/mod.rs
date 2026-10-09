@@ -153,7 +153,7 @@ mod tests {
         let _serial = serialized();
         let mut recorder = CountedPhaseRecorder::default();
         let args = mutation_args();
-        let code = run_cli_with(&args, |_| Ok(()), &mut recorder);
+        let code = run_cli_with(&args, false, |_| Ok(()), &mut recorder);
         assert_eq!(code, 0);
         assert_eq!(
             recorder.requests, 1,
@@ -172,6 +172,7 @@ mod tests {
         let args = mutation_args();
         let code = run_cli_with(
             &args,
+            false,
             |_| Err(anyhow::anyhow!("pkexec refused")),
             &mut recorder,
         );
@@ -187,6 +188,7 @@ mod tests {
         let args = vec!["disable".to_string(), "--bogus".to_string()];
         let code = run_cli_with(
             &args,
+            false,
             |_| unreachable!("must not reach escalation"),
             &mut recorder,
         );
@@ -295,7 +297,7 @@ mod tests {
                 .iter()
                 .map(|value| value.to_string())
                 .collect::<Vec<_>>();
-            let code = run_hidden_with(&args, &mut recorder);
+            let code = run_hidden_with(&args, false, &mut recorder);
             assert_eq!(
                 code, 2,
                 "malformed hidden command must fail before any privilege check: {values:?}"
@@ -310,7 +312,7 @@ mod tests {
         ];
         let mut recorder = CountedPhaseRecorder::default();
         assert_eq!(
-            run_hidden_with(&valid, &mut recorder),
+            run_hidden_with(&valid, false, &mut recorder),
             2,
             "a valid hidden command as an unprivileged process must hit the root check"
         );
@@ -394,6 +396,7 @@ mod tests {
         let resident = vec!["residency".to_string(), "--resident".to_string()];
         let code = run_cli_with(
             &resident,
+            false,
             |_| panic!("residency must not reach elevation"),
             &mut recorder,
         );
@@ -401,6 +404,7 @@ mod tests {
         let portable = vec!["residency".to_string(), "--portable".to_string()];
         let code = run_cli_with(
             &portable,
+            false,
             |_| panic!("residency must not reach elevation"),
             &mut recorder,
         );

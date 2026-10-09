@@ -1,15 +1,24 @@
-use anyhow::{Context, Result};
+mod registration;
+mod registry;
+pub(in crate::installer) mod run_key;
+mod shortcut;
+
+use anyhow::{bail, Context, Result};
 use std::fs;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, CREATE_NO_WINDOW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
+use self::registration::Layout;
 use super::InstallerOps;
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
@@ -66,17 +75,111 @@ impl InstallerOps for Platform {
         Ok(false)
     }
 
-    fn register_application(&self, _binary_path: &Path) -> Result<()> {
-        Ok(())
+    fn register_application(&self, binary_path: &Path) -> Result<()> {
+        let layout = Layout::for_binary(binary_path)?;
+        install_uninstaller(&layout.uninstaller)?;
+        registration::register(&layout)
     }
 
     fn ensure_desktop_registration(&self) -> Result<()> {
-        Ok(())
+        let Ok(current_exe) = std::env::current_exe() else {
+            return Ok(());
+        };
+        let installed = qol_apps::tray_install::installed_binary()?;
+        if comparable_path(&current_exe) != comparable_path(&installed)
+            || !crate::installer::has_install_marker(&installed)
+            || !crate::installer::mode::is_production_mode()
+        {
+            return Ok(());
+        }
+        registration::refresh(&Layout::for_binary(&installed)?)
     }
 
     fn warn_system_install_conflict(&self) {}
 
     fn remove_legacy_install(&self) {}
+
+    fn uninstall(&self, binary_path: &Path) -> Result<()> {
+        let layout = Layout::for_binary(binary_path)?;
+        self.stop_running(binary_path)?;
+        run_key::remove()?;
+        registration::remove(&layout)?;
+        remove_install_files(binary_path)
+    }
+}
+
+fn install_uninstaller(destination: &Path) -> Result<()> {
+    let current = std::env::current_exe().context("Failed to determine the installer path")?;
+    let is_installer = current
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(&registration::uninstaller_filename()));
+    if !is_installer || comparable_path(&current) == comparable_path(destination) {
+        return Ok(());
+    }
+    let staged = destination.with_extension("new");
+    fs::copy(&current, &staged).with_context(|| {
+        format!(
+            "Failed to copy the uninstaller {} to {}",
+            current.display(),
+            staged.display()
+        )
+    })?;
+    fs::rename(&staged, destination).with_context(|| {
+        format!(
+            "Failed to install the uninstaller {}",
+            destination.display()
+        )
+    })
+}
+
+fn remove_install_files(binary_path: &Path) -> Result<()> {
+    let install_dir = qol_apps::tray_install::install_dir()?;
+    if comparable_path(binary_path.parent().unwrap_or(binary_path)) != comparable_path(&install_dir)
+    {
+        bail!(
+            "refusing to remove {}: it is not the QoL Tray install directory {}",
+            binary_path.display(),
+            install_dir.display()
+        );
+    }
+    let root = install_dir
+        .parent()
+        .context("Install directory has no parent")?
+        .to_path_buf();
+    let current = std::env::current_exe().context("Failed to determine the uninstaller path")?;
+    if !comparable_path(&current).starts_with(&comparable_path(&root)) {
+        return fs::remove_dir_all(&root)
+            .or_else(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(error),
+            })
+            .with_context(|| format!("Failed to remove {}", root.display()));
+    }
+    registration::remove_file_if_present(binary_path)?;
+    if let Some(marker) = crate::paths::install_marker::marker_path(binary_path) {
+        registration::remove_file_if_present(&marker)?;
+    }
+    remove_after_exit(&root)
+}
+
+fn remove_after_exit(root: &Path) -> Result<()> {
+    let root = root.display().to_string();
+    if root.contains(['"', '%']) {
+        log::warn!("leaving {root} in place: its path cannot be quoted for cmd.exe");
+        return Ok(());
+    }
+    Command::new("cmd.exe")
+        .raw_arg(format!(
+            "/d /c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{root}\""
+        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .with_context(|| format!("Failed to schedule removal of {root}"))?;
+    Ok(())
 }
 
 fn request_graceful_shutdown() {

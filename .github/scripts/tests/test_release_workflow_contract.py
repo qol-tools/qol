@@ -153,6 +153,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "needs.plugin_candidate.result == 'success'",
             "needs.qol_tray_linux_candidate.result == 'success'",
             "needs.qol_tray_macos_candidate.result == 'success'",
+            "needs.qol_tray_windows_candidate.result == 'success'",
             'git push --atomic origin "${new_tags[@]}"',
         ]
         for contract in required:
@@ -249,21 +250,71 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             self.assertIn(contract, workflow)
 
-    def test_windows_apps_are_checked_built_and_uploaded(self):
+    def test_windows_lints_and_tests_the_affected_plan_like_the_other_runners(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        for key in ["clippy", "build", "test", "doctest", "skip"]:
+            with self.subTest(key=key):
+                self.assertIn(
+                    f"windows_{key}: ${{{{ steps.affected.outputs.windows_{key} }}}}",
+                    workflow,
+                )
+        for contract in [
+            "          - os: windows-latest\n",
+            "clippy_args: ${{ needs.plan.outputs.windows_clippy }}",
+            "build_args: ${{ needs.plan.outputs.windows_build }}",
+            "test_args: ${{ needs.plan.outputs.windows_test }}",
+            "doctest: ${{ needs.plan.outputs.windows_doctest }}",
+            "skip: ${{ needs.plan.outputs.windows_skip }}",
+            "    defaults:\n      run:\n        shell: bash\n",
+            "if: runner.os != 'Linux' && matrix.skip != 'true'",
+            "cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, check)
+
+    def test_main_warms_the_windows_build_cache_without_a_release_build(self):
+        warm = (ROOT / ".github/workflows/build-cache.yml").read_text()
+        for contract in [
+            "          - os: windows-latest\n            plan: windows\n            release_build: false\n",
+            "          - os: ubuntu-latest\n            plan: ubuntu\n            release_build: true\n",
+            "          - os: macos-latest\n            plan: macos\n            release_build: true\n",
+            "    defaults:\n      run:\n        shell: bash\n",
+            'if [ "$RELEASE_BUILD" = "true" ]; then',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, warm)
+
+    def test_tray_release_ships_the_windows_executable_and_installer_bundle(self):
+        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+        job = workflow.split("  build_windows:\n", 1)[1].split("  release:\n", 1)[0]
+        for contract in [
+            "runs-on: windows-latest",
+            "RUSTFLAGS: -D warnings -C link-arg=/Brepro",
+            "cache-key: qol-tray-windows",
+            "--kind qol-tray-windows",
+            'cp "${BUILT}/qol-tray.exe" "dist/${BUNDLE}.exe"',
+            'cp "${BUILT}/qol-tray.exe" "${BUILT}/qol-tray-install.exe" "${BUNDLE}/"',
+            '7z a -tzip "dist/${BUNDLE}.zip" "${BUNDLE}"',
+            "BUNDLE=qol-tray-windows-x86_64",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, job)
+        self.assertIn(
+            "needs: [build_linux_deb, build_macos, build_windows]", workflow
+        )
+        updater = (ROOT / "apps/tray/src/updates/platform/windows.rs").read_text()
+        self.assertIn('format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)', updater)
+
+    def test_windows_apps_are_built_and_uploaded(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         job = workflow.split("  process-windows:\n", 1)[1].split("  release-build:\n", 1)[0]
 
         self.assertIn(
             "windows_apps: ${{ steps.affected.outputs.windows_apps }}", workflow
         )
-        self.assertIn(
-            "windows_apps_packages: ${{ steps.affected.outputs.windows_apps_packages }}",
-            workflow,
-        )
         for contract in [
             "fromJSON(needs.plan.outputs.windows_apps || 'false')",
-            "PACKAGES: ${{ needs.plan.outputs.windows_apps_packages }}",
-            "cargo check --locked --all-targets $PACKAGES",
             "RUSTFLAGS: -D warnings -C link-arg=/Brepro",
             "cargo build --release --locked -p qol-tray -p qol-launcher --bin qol-tray --bin qol-launcher",
             "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
@@ -277,6 +328,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             (".github/workflows/release.yml", "  build:\n", "  registry:\n"),
             (".github/workflows/plugin-version.yml", "  probe:\n", "  prepare:\n"),
             (".github/workflows/plugin-version.yml", "  plugin_candidate:\n", "  qol_tray_linux_candidate:\n"),
+            (".github/workflows/plugin-version.yml", "  qol_tray_windows_candidate:\n", "  tag_and_dispatch:\n"),
+            (".github/workflows/qol-tray-release.yml", "  build_windows:\n", "  release:\n"),
         ]
         for path, start, end in cases:
             with self.subTest(path=path, job=start.strip()):

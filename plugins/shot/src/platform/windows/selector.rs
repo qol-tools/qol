@@ -135,12 +135,19 @@ fn snapshot_targets(
     monitor_bounds: &[Bounds<Pixels>],
 ) -> Option<HoverTargetSource> {
     let own_pid = std::process::id();
+    let include_frame = crate::config::load().capture.include_window_frame;
     let windows = qol_windowing::platform::windows::top_level_windows()
         .into_iter()
         .filter(|window| {
             window.is_switchable() && !window.is_minimized() && window.pid() != Some(own_pid)
         })
-        .filter_map(|window| window.frame())
+        .filter_map(|window| {
+            if include_frame {
+                window.frame()
+            } else {
+                window.client_frame()
+            }
+        })
         .filter_map(|frame| logical_rect(rect_from_frame(frame), displays))
         .filter(|rect| rect.w >= MIN_TARGET_PX && rect.h >= MIN_TARGET_PX)
         .collect::<Vec<_>>();
@@ -151,7 +158,7 @@ fn snapshot_targets(
         .collect::<Vec<_>>();
     qol_runtime::probe!(
         "SHOT_SELECT_DISCOVERY",
-        "platform=windows windows={} monitors={}",
+        "platform=windows windows={} monitors={} frame={include_frame}",
         windows.len(),
         monitors.len()
     );

@@ -356,7 +356,10 @@ impl Platform {
     }
 }
 
-pub(crate) fn metadata_identity(meta: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
+pub(crate) fn metadata_identity(
+    _path: &std::path::Path,
+    meta: &std::fs::Metadata,
+) -> (Option<u64>, Option<u64>) {
     use std::os::unix::fs::MetadataExt;
     (Some(meta.dev()), Some(meta.ino()))
 }
@@ -532,7 +535,7 @@ impl AppPlatform for Platform {
         match package.manager() {
             PackageManager::Apt => self.uninstall_apt(app, package),
             PackageManager::Flatpak => self.uninstall_flatpak(app, package),
-            PackageManager::Homebrew | PackageManager::Windows => {
+            PackageManager::Homebrew | PackageManager::Windows | PackageManager::MicrosoftStore => {
                 anyhow::bail!(
                     "{PLUGIN_ID}: {} packages are not supported on Linux",
                     package.manager().label()

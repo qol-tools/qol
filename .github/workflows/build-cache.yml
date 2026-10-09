@@ -31,14 +31,22 @@ jobs:
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             plan: ubuntu
+            release_build: true
           - os: macos-latest
             plan: macos
+            release_build: true
+          - os: windows-latest
+            plan: windows
+            release_build: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,12 +59,17 @@ jobs:
           cache-key: ci-${{ matrix.os }}
           components: rustfmt, clippy
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.rust_setup.outputs.build-cache-hit != 'true'
+        with:
+          python-version: "3.12"
+
       - name: Workspace arguments
         id: workspace
         if: steps.rust_setup.outputs.build-cache-hit != 'true'
         env:
           BASE_SHA: ""
-        run: python3 .github/scripts/affected_crates.py
+        run: python .github/scripts/affected_crates.py
 
       - name: Install cargo-nextest
         if: steps.rust_setup.outputs.build-cache-hit != 'true'
@@ -70,8 +83,11 @@ jobs:
           CLIPPY_ARGS: ${{ steps.workspace.outputs[format('{0}_clippy', matrix.plan)] }}
           BUILD_ARGS: ${{ steps.workspace.outputs[format('{0}_build', matrix.plan)] }}
           TEST_ARGS: ${{ steps.workspace.outputs[format('{0}_test', matrix.plan)] }}
+          RELEASE_BUILD: ${{ matrix.release_build }}
         run: |
           cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
           cargo check --release --locked $BUILD_ARGS
-          cargo build --release --locked $BUILD_ARGS
+          if [ "$RELEASE_BUILD" = "true" ]; then
+            cargo build --release --locked $BUILD_ARGS
+          fi
           cargo nextest run --locked $TEST_ARGS --no-run

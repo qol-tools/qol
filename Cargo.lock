@@ -6389,6 +6389,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-graphics",
  "objc2-foundation",
+ "png 0.17.16",
  "windows-sys 0.59.0",
  "workspace-hack",
 ]
@@ -6398,6 +6399,7 @@ name = "qol-apps"
 version = "1.0.0"
 dependencies = [
  "dirs 6.0.0",
+ "log",
  "open",
  "plist",
  "qol-conventions",
@@ -6698,6 +6700,7 @@ dependencies = [
  "qol-config",
  "qol-conventions",
  "qol-hotkeys",
+ "qol-process",
  "qol-runtime",
  "qol-theme",
  "qol-window-state",
@@ -6759,6 +6762,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 
@@ -6928,6 +6932,7 @@ name = "qol-memory"
 version = "0.23.0"
 dependencies = [
  "anyhow",
+ "dirs 6.0.0",
  "flate2",
  "gethostname",
  "log",
@@ -7108,6 +7113,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "windows 0.61.3",
+ "windows-sys 0.59.0",
  "workspace-hack",
  "zbus",
 ]
@@ -7225,6 +7232,7 @@ dependencies = [
  "tempfile",
  "trash",
  "wait-timeout",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
  "workspace-hack",
 ]
@@ -7243,6 +7251,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uds_windows",
+ "windows-sys 0.59.0",
  "workspace-hack",
  "zeroize",
 ]
@@ -7342,6 +7351,7 @@ name = "qol-terminal-sessions"
 version = "1.0.0"
 dependencies = [
  "chrono",
+ "dirs 6.0.0",
  "qol-agent-homes",
  "qol-app-icon",
  "qol-config",
@@ -7353,6 +7363,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
  "workspace-hack",
 ]
@@ -7450,6 +7461,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "walkdir",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
  "workspace-hack",
  "x11rb",
@@ -11565,7 +11577,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
- "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_edit 0.25.12+spec-1.1.0",

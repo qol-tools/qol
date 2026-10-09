@@ -64,7 +64,7 @@ impl IdentitySnapshot {
         let ancestor_symlink = ancestor_has_symlink(path);
         match std::fs::symlink_metadata(path) {
             Ok(m) => {
-                let (dev, ino) = platform::metadata_identity(&m);
+                let (dev, ino) = platform::metadata_identity(path, &m);
                 let modified_ns = m
                     .modified()
                     .ok()

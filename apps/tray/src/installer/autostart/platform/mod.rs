@@ -15,8 +15,6 @@ mod linux;
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(all(test, not(target_os = "windows")))]
-mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use fallback::Platform;

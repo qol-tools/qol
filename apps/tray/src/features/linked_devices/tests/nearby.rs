@@ -4,15 +4,15 @@ use std::{
     time::Duration,
 };
 
-use qol_peers::admin::{Lifecycle, NearbyDevice, NearbyRequest, NearbyState, Request, Response};
+use qol_peers::admin::{NearbyDevice, NearbyRequest, NearbyState, Request, Response};
 use qol_peers::service::network::discovery::{
     Advertisement, DiscoveryEvent, DiscoveryFactory, DiscoveryFuture, NearbyAdvertisement,
 };
-use qol_peers::{AuthorityLifetime, PeerId};
+use qol_peers::PeerId;
 use tokio::sync::{mpsc, watch};
 
+use super::authority;
 use super::enrollment::Fixture;
-use super::{authority, status};
 use crate::features::linked_devices::Defaults;
 
 type Members = Arc<Mutex<Vec<(Advertisement, mpsc::Sender<DiscoveryEvent>)>>>;
@@ -108,50 +108,60 @@ fn confirm(fixture: &Fixture, peer_id: PeerId) -> Response {
     })
 }
 
-#[tokio::test]
-async fn enabling_follows_residency_and_names_the_device() {
-    let temporary = tempfile::tempdir().unwrap();
-    let lan = Lan::default();
-    let resident = device(
-        &temporary.path().join("resident"),
-        &lan,
-        Defaults {
-            resident: || true,
-            name: || "Workstation".into(),
-        },
-    )
-    .await;
-    let portable = device(
-        &temporary.path().join("portable"),
-        &lan,
-        Defaults {
-            resident: || false,
-            name: || "Borrowed".into(),
-        },
-    )
-    .await;
-    for (fixture, name, lifetime) in [
-        (&resident, "Workstation", AuthorityLifetime::Persistent),
-        (&portable, "Borrowed", AuthorityLifetime::Session),
-    ] {
-        assert_eq!(status(&fixture.shared).lifecycle, Lifecycle::Inactive);
-        fixture.shared.peer_admin(Request::Enable);
-        let active = authority(&fixture.shared);
-        assert_eq!((active.name.as_str(), active.lifetime), (name, lifetime));
-        fixture.shared.peer_admin(Request::Enable);
-        assert_eq!(authority(&fixture.shared), active);
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod residency {
+    use qol_peers::admin::{Lifecycle, Request};
+    use qol_peers::AuthorityLifetime;
+
+    use super::super::{authority, status};
+    use super::{device, until, Lan};
+    use crate::features::linked_devices::Defaults;
+
+    #[tokio::test]
+    async fn enabling_follows_residency_and_names_the_device() {
+        let temporary = tempfile::tempdir().unwrap();
+        let lan = Lan::default();
+        let resident = device(
+            &temporary.path().join("resident"),
+            &lan,
+            Defaults {
+                resident: || true,
+                name: || "Workstation".into(),
+            },
+        )
+        .await;
+        let portable = device(
+            &temporary.path().join("portable"),
+            &lan,
+            Defaults {
+                resident: || false,
+                name: || "Borrowed".into(),
+            },
+        )
+        .await;
+        for (fixture, name, lifetime) in [
+            (&resident, "Workstation", AuthorityLifetime::Persistent),
+            (&portable, "Borrowed", AuthorityLifetime::Session),
+        ] {
+            assert_eq!(status(&fixture.shared).lifecycle, Lifecycle::Inactive);
+            fixture.shared.peer_admin(Request::Enable);
+            let active = authority(&fixture.shared);
+            assert_eq!((active.name.as_str(), active.lifetime), (name, lifetime));
+            fixture.shared.peer_admin(Request::Enable);
+            assert_eq!(authority(&fixture.shared), active);
+        }
+        assert!(temporary.path().join("resident").exists());
+        assert!(!temporary.path().join("portable").exists());
+        let before = authority(&resident.shared);
+        resident.shared.peer_admin(Request::Stop {
+            expected: before.expected(),
+        });
+        until(|| (status(&resident.shared).lifecycle == Lifecycle::Inactive).then_some(())).await;
+        resident.shared.peer_admin(Request::Enable);
+        assert_eq!(authority(&resident.shared).peer_id, before.peer_id);
+        resident.close().await;
+        portable.close().await;
     }
-    assert!(temporary.path().join("resident").exists());
-    assert!(!temporary.path().join("portable").exists());
-    let before = authority(&resident.shared);
-    resident.shared.peer_admin(Request::Stop {
-        expected: before.expected(),
-    });
-    until(|| (status(&resident.shared).lifecycle == Lifecycle::Inactive).then_some(())).await;
-    resident.shared.peer_admin(Request::Enable);
-    assert_eq!(authority(&resident.shared).peer_id, before.peer_id);
-    resident.close().await;
-    portable.close().await;
 }
 
 async fn pair(temporary: &std::path::Path) -> (Fixture, Fixture) {

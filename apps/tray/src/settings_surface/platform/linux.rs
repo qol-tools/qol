@@ -1,9 +1,9 @@
+#[path = "gpui_host.rs"]
+mod gpui_host;
 #[path = "native_tools/mod.rs"]
 mod native_tools;
-#[path = "unix_common.rs"]
-mod unix_common;
 
-pub(in crate::settings_surface) use unix_common::{
+pub(in crate::settings_surface) use gpui_host::{
     apply_theme, plugins_changed, prewarm, request, run, show_toast, stop, wait_until_ready,
 };
 

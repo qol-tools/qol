@@ -1,15 +1,22 @@
 mod catalog;
 mod launch;
 mod registry;
+mod store;
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use qol_apps::shell_link::{LinkTarget, ShellLink};
 use qol_windowing::platform::windows::top_level_windows;
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+};
 
 use crate::cli::PLUGIN_ID;
 use crate::core::guards::{
@@ -21,14 +28,15 @@ use crate::core::{
 };
 
 use self::catalog::{
-    build_catalog, normalize, owned_keys, path_key, same_path, uninstall_launch, within,
-    CatalogApp, Roots, Shortcut,
+    build_catalog, normalize, owned_keys, path_key, same_path, uninstall_launch, with_store,
+    within, CatalogApp, Roots, Shortcut,
 };
 
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const UNREGISTER_TIMEOUT: Duration = Duration::from_secs(15);
 const UNREGISTER_POLL: Duration = Duration::from_millis(250);
 const SELF_PREFIX: &str = "qol";
+const STORE_DATA_DIR: &str = "Packages";
 const PROTECTED_ENV_ROOTS: &[&str] = &[
     "ProgramFiles",
     "ProgramFiles(x86)",
@@ -65,12 +73,28 @@ impl Platform {
     }
 
     fn catalog(&self) -> Vec<CatalogApp> {
-        build_catalog(
+        let catalog = build_catalog(
             registry::uninstall_entries(),
             start_menu_shortcuts(),
             &self.roots,
             Path::is_dir,
-        )
+        );
+        with_store(catalog, &store::packages())
+    }
+
+    fn store_data(&self, package: &store::StorePackage) -> Option<Leftover> {
+        let dir = self
+            .roots
+            .local
+            .as_ref()?
+            .join(STORE_DATA_DIR)
+            .join(&package.family_name);
+        dir.is_dir().then(|| Leftover {
+            size_bytes: dir_size(&dir),
+            path: dir,
+            kind: LeftoverKind::Data,
+            match_kind: MatchKind::Exact,
+        })
     }
 
     fn leftovers(&self, target: &CatalogApp, catalog: &[CatalogApp]) -> Vec<Leftover> {
@@ -206,8 +230,26 @@ fn matching_processes(install_dir: &Path) -> Vec<MatchedProcess> {
         .collect()
 }
 
-pub(crate) fn metadata_identity(_meta: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
-    (None, None)
+pub(crate) fn metadata_identity(
+    path: &Path,
+    _meta: &std::fs::Metadata,
+) -> (Option<u64>, Option<u64>) {
+    file_identity(path).map_or((None, None), |(volume, index)| (Some(volume), Some(index)))
+}
+
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    let file = fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return None;
+    }
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Some((u64::from(info.dwVolumeSerialNumber), index))
 }
 
 impl AppPlatform for Platform {
@@ -224,6 +266,9 @@ impl AppPlatform for Platform {
         let target = find(&catalog, app)
             .with_context(|| format!("{PLUGIN_ID}: {} is no longer installed", app.name))?;
         let mut items = Vec::new();
+        if let Some(package) = target.store() {
+            items.extend(self.store_data(package));
+        }
         if let Some((dir, match_kind)) = &target.install_dir {
             items.push(Leftover {
                 path: dir.clone(),
@@ -277,6 +322,12 @@ impl AppPlatform for Platform {
     }
 
     fn is_protected(&self, app: &InstalledApp) -> bool {
+        if let Some(package) = store::packages()
+            .iter()
+            .find(|package| same_path(&package.install_dir, &app.path))
+        {
+            return package.protected;
+        }
         let under_windows = self
             .roots
             .windows
@@ -333,6 +384,24 @@ impl AppPlatform for Platform {
             let Some(candidate) = find(&catalog, app) else {
                 continue;
             };
+            if let Some(package) = candidate.store() {
+                let status = ManagedPackage::parse(
+                    PackageManager::MicrosoftStore,
+                    &package.full_name,
+                    PackageScope::User,
+                )
+                .map_or_else(
+                    || {
+                        PackageStatus::Unavailable(format!(
+                            "invalid package name {:?}",
+                            package.full_name
+                        ))
+                    },
+                    PackageStatus::Managed,
+                );
+                index.insert(app.path.clone(), status);
+                continue;
+            }
             let Some(entry) = candidate.entry() else {
                 continue;
             };
@@ -360,6 +429,9 @@ impl AppPlatform for Platform {
     }
 
     fn uninstall_package(&self, app: &InstalledApp, package: &ManagedPackage) -> Result<()> {
+        if package.manager() == PackageManager::MicrosoftStore {
+            return uninstall_store_package(&self.catalog(), app, package);
+        }
         if package.manager() != PackageManager::Windows {
             bail!(
                 "{PLUGIN_ID}: {} packages are not supported on Windows",
@@ -402,4 +474,32 @@ impl AppPlatform for Platform {
         }
         Ok(())
     }
+}
+
+fn uninstall_store_package(
+    catalog: &[CatalogApp],
+    app: &InstalledApp,
+    package: &ManagedPackage,
+) -> Result<()> {
+    let stored = find(catalog, app)
+        .and_then(|candidate| candidate.store().cloned())
+        .filter(|stored| stored.full_name == package.id() && !stored.protected)
+        .with_context(|| {
+            format!(
+                "{PLUGIN_ID}: the Microsoft Store registration for {} changed",
+                app.name
+            )
+        })?;
+    log::debug!(
+        "[{PLUGIN_ID}] package-remove manager=store id={}",
+        stored.full_name
+    );
+    store::remove(&stored.full_name)?;
+    if store::is_installed(&stored.full_name) {
+        bail!(
+            "{PLUGIN_ID}: {} is still installed after Windows removed it",
+            app.name
+        );
+    }
+    Ok(())
 }

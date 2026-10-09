@@ -1,18 +1,19 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::capture::Pcm16Format;
+use crate::capture::{Pcm16Format, Source};
 use crate::AudioError;
 
 pub(crate) enum Capture {}
 
 impl Capture {
     pub(crate) fn open(
+        source: Source,
         device: Option<&str>,
         format: Pcm16Format,
         stop: Arc<AtomicBool>,
     ) -> Result<Self, AudioError> {
-        let _ = (device, format, stop);
+        let _ = (source, device, format, stop);
         Err(AudioError::Unsupported)
     }
 

@@ -2,6 +2,8 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod recorder;
 #[cfg(unix)]
 mod unix;
 #[cfg(target_os = "windows")]

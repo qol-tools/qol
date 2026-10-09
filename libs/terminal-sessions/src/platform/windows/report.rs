@@ -3,6 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use qol_app_icon::ProcessEntry;
 use serde::{Deserialize, Serialize};
 
+use super::launch::{tag_in_command_line, LaunchTag};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 const TERMINAL_HOSTS: &[&str] = &["alacritty", "wezterm-gui", "windowsterminal"];
@@ -108,6 +109,15 @@ pub(super) fn listed<'a>(reports: &'a [ConsoleReport], roots: &[Root]) -> Vec<&'
                     .any(|root| root.pid == report.root && root.hosted)
         })
         .collect()
+}
+
+pub(super) fn tagged(report: &ConsoleReport) -> Option<LaunchTag> {
+    report
+        .processes
+        .iter()
+        .find(|detail| detail.pid == report.root)
+        .and_then(|detail| detail.command_line.as_deref())
+        .and_then(tag_in_command_line)
 }
 
 pub(super) fn live_rows(top: i16, bottom: i16, cursor: i16) -> Option<(i16, i16)> {
@@ -229,7 +239,7 @@ pub(super) fn session_facts(
         capabilities: SessionCapabilities::SCREEN_READING
             | SessionCapabilities::FOCUS
             | SessionCapabilities::TEXT_INPUT,
-        spawn_identity: None,
+        spawn_identity: tagged(report).map(|tag| tag.identity),
     })
 }
 
@@ -450,5 +460,46 @@ mod tests {
         for (raw, expected) in cases {
             assert_eq!(usable_cwd(raw).as_deref(), expected, "{raw:?}");
         }
+    }
+
+    #[test]
+    fn a_report_is_tagged_by_its_root_command_line() {
+        let tag = LaunchTag {
+            nonce: "7-9".to_owned(),
+            identity: crate::SpawnIdentity {
+                key: crate::SpawnKey::new("lane-1").unwrap(),
+                tool: crate::cli::CliToolId::new("claude").unwrap(),
+                surface: crate::SpawnSurface::Tab,
+            },
+        };
+        let launcher = format!(
+            r#""C:\a b\qol.exe" console-launch {} C:\t\s.json"#,
+            tag.encode()
+        );
+        let tagged_report = |root: i32| ConsoleReport {
+            root,
+            attached: vec![12, 13],
+            processes: vec![
+                ProcessDetail {
+                    pid: 12,
+                    cwd: None,
+                    command_line: Some(launcher.clone()),
+                },
+                ProcessDetail {
+                    pid: 13,
+                    cwd: None,
+                    command_line: Some("claude.exe".to_owned()),
+                },
+            ],
+            ..ConsoleReport::default()
+        };
+        assert_eq!(tagged(&tagged_report(12)), Some(tag.clone()));
+        assert_eq!(tagged(&tagged_report(13)), None);
+        assert_eq!(tagged(&tagged_report(99)), None);
+        let backend = BackendId::new("console").unwrap();
+        let facts = session_facts(&backend, "12-1", &tagged_report(12), &[]).unwrap();
+        assert_eq!(facts.spawn_identity, Some(tag.identity));
+        let untagged = session_facts(&backend, "13-1", &tagged_report(13), &[]).unwrap();
+        assert_eq!(untagged.spawn_identity, None);
     }
 }

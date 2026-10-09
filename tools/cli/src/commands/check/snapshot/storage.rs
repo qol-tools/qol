@@ -106,16 +106,14 @@ impl StagedStorage {
 }
 
 fn isolated_worktree_root(source_root: &Path) -> Result<PathBuf> {
-    let source = source_root
-        .canonicalize()
+    let source = plain_canonical(source_root)
         .with_context(|| format!("canonicalizing source root {}", source_root.display()))?;
     let cache = dirs::cache_dir()
         .context("locating the user cache directory for staged checks")?
         .join("qol-check/staged-worktrees");
     std::fs::create_dir_all(&cache)
         .with_context(|| format!("creating staged worktree storage {}", cache.display()))?;
-    let cache = cache
-        .canonicalize()
+    let cache = plain_canonical(&cache)
         .with_context(|| format!("canonicalizing staged worktree storage {}", cache.display()))?;
     let identity = Sha256::digest(source.as_os_str().as_encoded_bytes());
     let root = cache.join(format!("{identity:x}"));
@@ -126,6 +124,16 @@ fn isolated_worktree_root(source_root: &Path) -> Result<PathBuf> {
         );
     }
     Ok(root)
+}
+
+fn plain_canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let canonical = path.canonicalize()?;
+    let plain = canonical
+        .to_str()
+        .and_then(|text| text.strip_prefix(r"\\?\"))
+        .filter(|rest| !rest.starts_with(r"UNC\"))
+        .map(PathBuf::from);
+    Ok(plain.unwrap_or(canonical))
 }
 
 pub(super) fn acquire_lock(path: &Path, busy: &str) -> Result<StorageLock> {

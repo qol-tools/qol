@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use crate::daemon::EventBus;
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+mod download;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
 mod install_kind;
@@ -11,7 +13,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) mod unix;
+mod unix;
 #[cfg(target_os = "windows")]
 mod windows;
 

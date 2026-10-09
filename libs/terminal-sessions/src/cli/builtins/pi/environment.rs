@@ -357,6 +357,7 @@ mod tests {
         std::env::set_var("HOME", "/home/u");
         std::env::set_var("PI_CODING_AGENT_SESSION_DIR", "~/relay-sessions");
         let directory = session_dir("/work/proj");
+        let user_home = dirs::home_dir().unwrap();
         match previous_override {
             Some(value) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", value),
             None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
@@ -367,7 +368,7 @@ mod tests {
         }
         assert_eq!(
             directory,
-            Some(PathBuf::from("/home/u/relay-sessions/--work-proj--"))
+            Some(user_home.join("relay-sessions").join("--work-proj--"))
         );
     }
 
@@ -431,7 +432,7 @@ mod tests {
     fn write_marker_file(directory: &std::path::Path, name: &str, marker: &str) -> PathBuf {
         let path = directory.join(name);
         std::fs::write(&path, user_message_line(&format!("task {marker}"))).unwrap();
-        let file = std::fs::File::open(&path).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
         file.set_modified(SystemTime::now()).unwrap();
         path
     }
@@ -443,7 +444,7 @@ mod tests {
         let assistant = r#"{"type":"message","timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"launched with __TEXT__"}]}}"#
             .replace("__TEXT__", marker);
         std::fs::write(&path, format!("{tool_result}\n{assistant}\n")).unwrap();
-        let file = std::fs::File::open(&path).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
         file.set_modified(SystemTime::now()).unwrap();
         path
     }
@@ -481,7 +482,7 @@ mod tests {
         write_echo_file(&directory, &stamped_session_name(-400), &marker);
         let lane = write_marker_file(&directory, &stamped_session_name(-100), &marker);
         std::fs::write(&lane, "").unwrap();
-        let file = std::fs::File::open(&lane).unwrap();
+        let file = std::fs::File::options().write(true).open(&lane).unwrap();
         file.set_modified(SystemTime::now()).unwrap();
         with_session_dir_override(root.path(), || {
             assert_eq!(
@@ -509,7 +510,7 @@ mod tests {
     fn a_marker_file_with_an_old_mtime_is_excluded() {
         let (root, directory, marker, since) = marker_fixture();
         let path = write_marker_file(&directory, &stamped_session_name(-400), &marker);
-        let file = std::fs::File::open(&path).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
         file.set_modified(SystemTime::now() - std::time::Duration::from_secs(7200))
             .unwrap();
         with_session_dir_override(root.path(), || {

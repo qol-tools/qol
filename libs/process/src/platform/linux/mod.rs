@@ -7,8 +7,8 @@ pub(crate) use super::unix::{
     bind_to_host_lifetime, cancellation_requested, cancellation_signal_count,
     guard_current_process_tree, install_cancellation_handler, is_group_alive, is_pid_alive,
     isolate_owned_command, kill_group, kill_pid, reload_group, signal_term_group, signal_term_pid,
-    spawn_detached, terminate_group, terminate_owned, terminate_pid, try_wait_pid, wait_pid,
-    CurrentProcessTreeGuard,
+    spawn_detached, terminate_group, terminate_owned, terminate_pid, try_wait_pid,
+    wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
 };
 pub(crate) use containment::{
     is_pid_zombie, isolate_owned_session, own_current_process_tree_with_guardian, process_identity,

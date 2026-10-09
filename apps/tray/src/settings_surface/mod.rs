@@ -32,7 +32,6 @@ impl CoreTool {
         }
     }
 
-    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn from_wire_id(value: &str) -> Option<Self> {
         match value {
             "__core-hotkeys-add" => Some(Self::AddHotkey),
@@ -47,7 +46,6 @@ impl CoreTool {
         }
     }
 
-    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn page_wire_id(self) -> &'static str {
         match self {
             Self::AddHotkey | Self::Hotkeys => "__core-hotkeys",
@@ -149,7 +147,11 @@ mod tests {
 
     #[test]
     fn native_availability_matches_platform_dispatch() {
-        let expected = cfg!(any(target_os = "linux", target_os = "macos"));
+        let expected = cfg!(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows"
+        ));
         assert_eq!(super::native_available(), expected);
     }
 

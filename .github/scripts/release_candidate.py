@@ -32,6 +32,7 @@ REQUIRED_CI_JOBS = {
     PLAN_CI_JOB,
     "lint + test (ubuntu-latest)",
     "lint + test (macos-latest)",
+    "lint + test (windows-latest)",
 }
 QUEUE_BUILD_CI_JOBS = {
     PLAN_CI_JOB,
@@ -251,6 +252,22 @@ def build_commands(
                 "x86_64-apple-darwin",
                 "--bin",
                 "qol-tray",
+            ],
+            verify,
+        ]
+    if kind == "qol-tray-windows":
+        return [
+            [
+                "cargo",
+                "build",
+                "--release",
+                "--locked",
+                "--target",
+                "x86_64-pc-windows-msvc",
+                "--bin",
+                "qol-tray",
+                "--bin",
+                "qol-tray-install",
             ],
             verify,
         ]
@@ -672,7 +689,7 @@ def build_parser() -> argparse.ArgumentParser:
     build = commands.add_parser("build")
     build.add_argument(
         "--kind",
-        choices=["plugin", "qol-tray-linux", "qol-tray-macos"],
+        choices=["plugin", "qol-tray-linux", "qol-tray-macos", "qol-tray-windows"],
         required=True,
     )
     build.add_argument("--package")

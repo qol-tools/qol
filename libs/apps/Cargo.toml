@@ -7,6 +7,7 @@ description = "Shared app inventory and desktop entry helpers for qol-tools"
 
 [dependencies]
 dirs = "6.0"
+log.workspace = true
 open.workspace = true
 qol-conventions.workspace = true
 qol-platform.workspace = true
@@ -24,6 +25,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_System_Com",
   "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]

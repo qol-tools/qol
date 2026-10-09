@@ -242,10 +242,12 @@ fn subscribe_falls_back_to_the_session_group_when_no_state_file_exists_yet() {
     std::fs::create_dir_all(&group).unwrap();
     std::fs::write(
         root.path().join("session_index.jsonl"),
-        format!(
-            r#"{{"sessionId":"session_old","sessionDir":"{}/session_old","workDir":"/work/proj"}}"#,
-            group.display()
-        ),
+        serde_json::json!({
+            "sessionId": "session_old",
+            "sessionDir": format!("{}/session_old", group.display()),
+            "workDir": "/work/proj",
+        })
+        .to_string(),
     )
     .unwrap();
     let (changed, events) = std::sync::mpsc::channel();

@@ -9,27 +9,30 @@ use std::time::{Duration, Instant};
 use crate::{PlatformSpawnFailure, PreparedSpawnCleanup};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA,
-    ERROR_NO_MORE_FILES, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    CloseHandle, GetLastError, SetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS,
+    ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES, FILETIME,
+    HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Console::{
     SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT,
     CTRL_SHUTDOWN_EVENT,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First, Thread32Next,
+    PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
-    JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
-    SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-    JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+    JobObjectBasicAccountingInformation, JobObjectBasicProcessIdList,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, TerminateProcess,
-    WaitForSingleObject, CREATE_SUSPENDED, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    CreateEventW, GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenEventW, OpenProcess,
+    ResetEvent, SetEvent, TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED,
+    EVENT_MODIFY_STATE, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
     PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread};
@@ -40,8 +43,14 @@ const TERMINATE_AND_WAIT_ACCESS: u32 =
 const WAIT_INTERVAL: Duration = Duration::from_millis(50);
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const KILL_SETTLE: Duration = Duration::from_secs(1);
+const STOP_EVENT_PREFIX: &str = "Local\\qol-stop-";
+const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
+static STOP_LISTENER_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
+static STOP_SIGNAL: Mutex<()> = Mutex::new(());
+static STOP_SIGNALLED: Condvar = Condvar::new();
 
 struct JobHandle(HANDLE);
 
@@ -816,16 +825,32 @@ fn job_process_ids(handle: HANDLE) -> io::Result<Vec<u32>> {
 }
 
 pub(crate) fn install_cancellation_handler() -> io::Result<()> {
-    let result = CANCELLATION_INSTALL.get_or_init(|| {
+    let console = CANCELLATION_INSTALL.get_or_init(|| {
         if unsafe { SetConsoleCtrlHandler(Some(cancellation_control_handler), 1) } != 0 {
             return Ok(());
         }
         Err(io::Error::last_os_error().raw_os_error().unwrap_or(1))
     });
-    match result {
+    if let Err(code) = console {
+        return Err(io::Error::from_raw_os_error(*code));
+    }
+    match STOP_LISTENER_INSTALL.get_or_init(|| start_stop_listener().map_err(raw_error_code)) {
         Ok(()) => Ok(()),
         Err(code) => Err(io::Error::from_raw_os_error(*code)),
     }
+}
+
+pub(crate) fn wait_for_stop_request() -> io::Result<()> {
+    install_cancellation_handler()?;
+    let mut signal = STOP_SIGNAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    while cancellation_signal_count() == 0 {
+        signal = STOP_SIGNALLED
+            .wait(signal)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+    Ok(())
 }
 
 pub(crate) fn cancellation_requested() -> bool {
@@ -834,6 +859,14 @@ pub(crate) fn cancellation_requested() -> bool {
 
 pub(crate) fn cancellation_signal_count() -> usize {
     CANCELLATION_SIGNAL_COUNT.load(Ordering::Acquire)
+}
+
+fn record_cancellation_signal() {
+    let _signal = STOP_SIGNAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    CANCELLATION_SIGNAL_COUNT.fetch_add(1, Ordering::Release);
+    STOP_SIGNALLED.notify_all();
 }
 
 unsafe extern "system" fn cancellation_control_handler(control: u32) -> BOOL {
@@ -847,8 +880,76 @@ unsafe extern "system" fn cancellation_control_handler(control: u32) -> BOOL {
     ) {
         return 0;
     }
-    CANCELLATION_SIGNAL_COUNT.fetch_add(1, Ordering::Release);
+    record_cancellation_signal();
     1
+}
+
+struct EventHandle(HANDLE);
+
+unsafe impl Send for EventHandle {}
+
+impl EventHandle {
+    fn wait(&self) -> u32 {
+        unsafe { WaitForSingleObject(self.0, INFINITE) }
+    }
+}
+
+impl Drop for EventHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+fn stop_event_name(pid: u32) -> Vec<u16> {
+    format!("{STOP_EVENT_PREFIX}{pid}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+fn start_stop_listener() -> io::Result<()> {
+    let name = stop_event_name(std::process::id());
+    unsafe { SetLastError(0) };
+    let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+    if event.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let event = EventHandle(event);
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS && unsafe { ResetEvent(event.0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    std::thread::Builder::new()
+        .name("qol-process-stop-listener".to_string())
+        .spawn(move || loop {
+            if event.wait() != WAIT_OBJECT_0 {
+                return;
+            }
+            record_cancellation_signal();
+        })?;
+    Ok(())
+}
+
+fn request_graceful_stop(pid: u32) -> io::Result<bool> {
+    let name = stop_event_name(pid);
+    let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+    if event.is_null() {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    let event = EventHandle(event);
+    if unsafe { SetEvent(event.0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(true)
+}
+
+fn raw_error_code(error: io::Error) -> i32 {
+    error.raw_os_error().unwrap_or(1)
 }
 
 struct ProcessHandle(HANDLE);
@@ -886,6 +987,20 @@ pub(crate) fn is_pid_zombie(_pid: u32) -> bool {
 
 pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     let process = open_process(pid, QUERY_AND_WAIT_ACCESS)?;
+    if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("process {pid} has exited"),
+        ));
+    }
+    Ok(format!("windows:{}", process_creation_time(&process)?))
+}
+
+pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
+    actual == expected
+}
+
+fn process_creation_time(process: &ProcessHandle) -> io::Result<u64> {
     let mut creation: FILETIME = unsafe { std::mem::zeroed() };
     let mut exit: FILETIME = unsafe { std::mem::zeroed() };
     let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
@@ -894,23 +1009,170 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     {
         return Err(io::Error::last_os_error());
     }
-    let created = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
-    Ok(format!("windows:{created}"))
+    Ok((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
 
-pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
-    actual == expected
+struct Member {
+    pid: u32,
+    created: u64,
+    handle: ProcessHandle,
+}
+
+impl Member {
+    fn open(pid: u32) -> io::Result<Self> {
+        let handle = open_process(pid, TERMINATE_AND_WAIT_ACCESS)?;
+        let created = process_creation_time(&handle)?;
+        Ok(Self {
+            pid,
+            created,
+            handle,
+        })
+    }
+
+    fn running(&self) -> bool {
+        unsafe { WaitForSingleObject(self.handle.0, 0) == WAIT_TIMEOUT }
+    }
+
+    fn in_job(&self) -> bool {
+        let mut result: BOOL = 0;
+        unsafe {
+            IsProcessInJob(self.handle.0, std::ptr::null_mut(), &mut result) != 0 && result != 0
+        }
+    }
+
+    fn request_stop_or_kill(&self) -> bool {
+        if !self.running() {
+            return false;
+        }
+        if request_graceful_stop(self.pid).unwrap_or(false) {
+            return true;
+        }
+        self.kill();
+        false
+    }
+
+    fn kill(&self) -> bool {
+        unsafe { TerminateProcess(self.handle.0, 1) != 0 }
+    }
+}
+
+fn filetime_now() -> u64 {
+    let since_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let ticks = u64::try_from(since_epoch.as_nanos() / 100).unwrap_or(u64::MAX);
+    FILETIME_UNIX_EPOCH.saturating_add(ticks)
+}
+
+fn process_parents() -> io::Result<Vec<(u32, u32)>> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let snapshot = SnapshotHandle(snapshot);
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>())
+        .map_err(|_| io::Error::other("process entry is too large"))?;
+    if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut parents = Vec::new();
+    loop {
+        parents.push((entry.th32ProcessID, entry.th32ParentProcessID));
+        if unsafe { Process32NextW(snapshot.0, &mut entry) } != 0 {
+            continue;
+        }
+        let error = unsafe { GetLastError() };
+        if error != ERROR_NO_MORE_FILES {
+            return Err(io::Error::from_raw_os_error(error as i32));
+        }
+        return Ok(parents);
+    }
+}
+
+fn extend_with_descendants(members: &mut Vec<Member>, contained: bool) -> io::Result<()> {
+    let own_pid = std::process::id();
+    loop {
+        let observed_at = filetime_now();
+        let mut added = false;
+        for (pid, parent) in process_parents()? {
+            if pid == 0 || pid == own_pid || members.iter().any(|member| member.pid == pid) {
+                continue;
+            }
+            let Some(parent_created) = members
+                .iter()
+                .find(|member| member.pid == parent)
+                .map(|member| member.created)
+            else {
+                continue;
+            };
+            let Ok(member) = Member::open(pid) else {
+                continue;
+            };
+            if member.created < parent_created || member.created > observed_at {
+                continue;
+            }
+            if contained && !member.in_job() {
+                continue;
+            }
+            members.push(member);
+            added = true;
+        }
+        if !added {
+            return Ok(());
+        }
+    }
+}
+
+fn process_group(pid: u32) -> io::Result<Vec<Member>> {
+    let root = Member::open(pid)?;
+    let contained = root.in_job();
+    let mut members = vec![root];
+    extend_with_descendants(&mut members, contained)?;
+    Ok(members)
+}
+
+fn wait_for_members(members: &[Member], deadline: Instant) -> bool {
+    members.iter().all(|member| {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        unsafe { WaitForSingleObject(member.handle.0, duration_millis(remaining)) == WAIT_OBJECT_0 }
+    })
+}
+
+fn stop_members(mut members: Vec<Member>, grace: Duration, include_descendants: bool) {
+    let mut listening = false;
+    for member in &members {
+        listening |= member.request_stop_or_kill();
+    }
+    if listening {
+        wait_for_members(&members, Instant::now() + grace);
+    }
+    if include_descendants {
+        let contained = members.first().is_some_and(Member::in_job);
+        let _ = extend_with_descendants(&mut members, contained);
+    }
+    for member in members.iter().filter(|member| member.running()) {
+        member.kill();
+    }
+    wait_for_members(&members, Instant::now() + KILL_SETTLE);
 }
 
 pub(crate) fn signal_term_pid(pid: u32) -> io::Result<()> {
-    kill_pid(pid)
+    let member = Member::open(pid)?;
+    if !member.running() || request_graceful_stop(pid)? {
+        return Ok(());
+    }
+    if member.kill() {
+        return Ok(());
+    }
+    Err(io::Error::last_os_error())
 }
 
-pub(crate) fn signal_term_group(_pid: u32) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "Windows process groups do not provide verified tree termination",
-    ))
+pub(crate) fn signal_term_group(pid: u32) -> io::Result<()> {
+    for member in process_group(pid)? {
+        member.request_stop_or_kill();
+    }
+    Ok(())
 }
 
 pub(crate) fn kill_pid(pid: u32) -> io::Result<()> {
@@ -921,11 +1183,16 @@ pub(crate) fn kill_pid(pid: u32) -> io::Result<()> {
     Err(io::Error::last_os_error())
 }
 
-pub(crate) fn kill_group(_pid: u32) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "Windows process groups do not provide verified tree termination",
-    ))
+pub(crate) fn kill_group(pid: u32) -> io::Result<()> {
+    let members = process_group(pid)?;
+    let root_error = members
+        .first()
+        .and_then(|root| (!root.kill()).then(io::Error::last_os_error))
+        .filter(|_| members.first().is_some_and(Member::running));
+    for member in members.iter().skip(1) {
+        member.kill();
+    }
+    root_error.map_or(Ok(()), Err)
 }
 
 pub(crate) fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
@@ -968,13 +1235,10 @@ pub(crate) fn wait_pid(pid: u32) -> io::Result<ExitStatus> {
 }
 
 pub(crate) fn terminate_pid(pid: u32, grace: Duration) {
-    let Ok(handle) = open_process(pid, TERMINATE_AND_WAIT_ACCESS) else {
+    let Ok(member) = Member::open(pid) else {
         return;
     };
-    unsafe {
-        let _ = TerminateProcess(handle.0, 1);
-        let _ = WaitForSingleObject(handle.0, duration_millis(grace));
-    }
+    stop_members(vec![member], grace, false);
 }
 
 pub(crate) fn reload_group(pid: u32, grace: Duration) {
@@ -982,12 +1246,26 @@ pub(crate) fn reload_group(pid: u32, grace: Duration) {
 }
 
 pub(crate) fn terminate_group(pid: u32, grace: Duration) {
-    terminate_pid(pid, grace);
+    let Ok(members) = process_group(pid) else {
+        return;
+    };
+    stop_members(members, grace, true);
 }
 
-pub(crate) fn terminate_owned(child: &mut Child, _: Duration) -> io::Result<()> {
+pub(crate) fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<()> {
     if child.try_wait()?.is_some() {
         return Ok(());
+    }
+    if request_graceful_stop(child.id()).unwrap_or(false) {
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            std::thread::sleep(
+                WAIT_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
     }
     child.kill()?;
     child.wait()?;

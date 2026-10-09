@@ -135,7 +135,11 @@ fn atomic_write_inner(
     if durable {
         temp.as_file().sync_all()?;
     }
-    temp.persist(path).map_err(|error| error.error)?;
+    let staged = temp.into_temp_path().keep().map_err(|error| error.error)?;
+    if let Err(error) = fs::rename(&staged, path) {
+        let _ = fs::remove_file(&staged);
+        return Err(error);
+    }
     if durable {
         platform::sync_parent(parent)?;
     }

@@ -21,7 +21,7 @@ class PlatformExcludeDerivation(unittest.TestCase):
         ubuntu, macos, windows = ac.platform_sets()
         cases = [
             ("qol-launcher", windows, True),
-            ("qol-template", windows, False),
+            ("qol-template", windows, True),
             ("qol-keyremap", ubuntu, True),
             ("qol-removeapp", ubuntu, False),
             ("qol-os-themes", ubuntu, False),
@@ -34,6 +34,51 @@ class PlatformExcludeDerivation(unittest.TestCase):
             self.assertEqual(
                 package in excluded, expected, f"{package} in {sorted(excluded)}"
             )
+
+    def test_declared_platforms_decide_each_platform_set(self):
+        cases = [
+            ("qol-all", '["linux", "macos", "windows"]', (False, False, True)),
+            ("qol-unix", '["linux", "macos"]', (False, False, False)),
+            ("qol-mac-win", '["macos", "windows"]', (True, False, True)),
+            ("qol-linux-win", '["linux", "windows"]', (False, True, True)),
+            ("qol-undeclared", None, (False, True, False)),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for package, platforms, _ in cases:
+                plugin = root / "plugins" / package
+                plugin.mkdir(parents=True)
+                declared = f"platforms = {platforms}\n" if platforms else ""
+                (plugin / "plugin.toml").write_text(f"[plugin]\n{declared}")
+                (plugin / "Cargo.toml").write_text(f'[package]\nname = "{package}"\n')
+            with patch.object(ac, "REPO_ROOT", root):
+                ubuntu, macos, windows = ac.platform_sets()
+        for package, _, (no_ubuntu, no_macos, on_windows) in cases:
+            self.assertEqual(
+                (package in ubuntu, package in macos, package in windows),
+                (no_ubuntu, no_macos, on_windows),
+                package,
+            )
+
+    def test_windows_excludes_plugins_that_do_not_list_windows(self):
+        cases = [
+            ("qol-all", '["linux", "macos", "windows"]', False),
+            ("qol-unix", '["linux", "macos"]', True),
+            ("qol-mac-win", '["macos", "windows"]', False),
+            ("qol-undeclared", None, True),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for package, platforms, _ in cases:
+                plugin = root / "plugins" / package
+                plugin.mkdir(parents=True)
+                declared = f"platforms = {platforms}\n" if platforms else ""
+                (plugin / "plugin.toml").write_text(f"[plugin]\n{declared}")
+                (plugin / "Cargo.toml").write_text(f'[package]\nname = "{package}"\n')
+            with patch.object(ac, "REPO_ROOT", root):
+                excluded = ac.windows_excludes()
+        for package, _, expected in cases:
+            self.assertEqual(package in excluded, expected, package)
 
     def test_exclude_flags_sorted_and_spaced(self):
         self.assertEqual(ac.exclude_flags(set()), "")
@@ -80,7 +125,7 @@ class LocalPlannerContract(unittest.TestCase):
                         "macos_build": "",
                         "windows_process": True,
                         "windows_dev_build": True,
-                        "windows_qol": False,
+                        "windows_apps": False,
                     }
                 )
 
@@ -94,7 +139,7 @@ class LocalPlannerContract(unittest.TestCase):
                     "ubuntu_test": "",
                     "windows_process": True,
                     "windows_dev_build": True,
-                    "windows_qol": False,
+                    "windows_apps": False,
                 },
             )
             self.assertEqual(
@@ -102,7 +147,7 @@ class LocalPlannerContract(unittest.TestCase):
                 "full=false\nubuntu_build=\nubuntu_skip=true\nubuntu_test=\n"
                 "macos_build=\n"
                 "windows_process=true\nwindows_dev_build=true\n"
-                "windows_qol=false\n",
+                "windows_apps=false\n",
             )
 
     def test_terminal_plans_set_windows_targets(self):
@@ -122,11 +167,18 @@ class LocalPlannerContract(unittest.TestCase):
                         emit.call_args.args[0]["windows_dev_build"], expected
                     )
                     self.assertIs(
-                        emit.call_args.args[0]["windows_qol"], expected
-                    )
-                    self.assertIs(
                         emit.call_args.args[0]["windows_apps"], expected
                     )
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_doctest"], expected
+                    )
+                    self.assertIs(
+                        emit.call_args.args[0]["windows_skip"], not expected
+                    )
+                    for key in ["windows_clippy", "windows_build", "windows_test"]:
+                        self.assertEqual(
+                            bool(emit.call_args.args[0][key]), expected, key
+                        )
                     self.assertIs(
                         emit.call_args.args[0]["ubuntu_skip"], not expected
                     )
@@ -267,15 +319,15 @@ class LocalPlannerContract(unittest.TestCase):
             "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
         cases = [
-            ("libs/process/src/lib.rs", True, True, True, True),
-            ("libs/foundation/src/lib.rs", True, True, True, True),
-            ("libs/dev-build/src/lib.rs", False, True, True, False),
-            ("tools/cli/src/main.rs", False, False, True, False),
-            ("plugins/launcher/src/lib.rs", False, False, False, True),
-            ("libs/unrelated/src/lib.rs", False, False, False, False),
+            ("libs/process/src/lib.rs", True, True, True, "qol-dev-build"),
+            ("libs/foundation/src/lib.rs", True, True, True, "foundation"),
+            ("libs/dev-build/src/lib.rs", False, True, False, "qol-dev-build"),
+            ("tools/cli/src/main.rs", False, False, False, "qol"),
+            ("plugins/launcher/src/lib.rs", False, False, True, "qol-launcher"),
+            ("libs/unrelated/src/lib.rs", False, False, False, "unrelated"),
         ]
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
-            for path, process_expected, dev_build_expected, qol_expected, apps_expected in cases:
+            for path, process_expected, dev_build_expected, apps_expected, checked in cases:
                 with self.subTest(path=path):
                     changed_files.return_value = [path]
                     emit.reset_mock()
@@ -291,15 +343,45 @@ class LocalPlannerContract(unittest.TestCase):
                         dev_build_expected,
                     )
                     self.assertIs(
-                        emit.call_args.args[0]["windows_qol"], qol_expected
-                    )
-                    self.assertIs(
                         emit.call_args.args[0]["windows_apps"], apps_expected
                     )
+                    self.assertIn(
+                        f"-p {checked}", emit.call_args.args[0]["windows_clippy"]
+                    )
+                    self.assertIn("--all-targets", emit.call_args.args[0]["windows_clippy"])
+                    self.assertIn(f"-p {checked}", emit.call_args.args[0]["windows_test"])
+                    self.assertIs(emit.call_args.args[0]["windows_skip"], False)
                     self.assertIs(
                         emit.call_args.args[0]["ubuntu_doctest"],
                         path not in ("tools/cli/src/main.rs", "plugins/launcher/src/lib.rs"),
                     )
+
+    @patch.object(ac, "emit")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_windows_plan_drops_plugins_that_do_not_list_windows(
+        self, changed_files, graph, emit
+    ):
+        graph.return_value = {
+            "shared": {"dir": "libs/shared", "deps": set(), "doctest": True},
+            "qol-everywhere": {"dir": "plugins/everywhere", "deps": {"shared"}, "doctest": False},
+            "qol-unix-only": {"dir": "plugins/unix-only", "deps": {"shared"}, "doctest": False},
+        }
+        changed_files.return_value = ["libs/shared/src/lib.rs"]
+        cases = [
+            ("windows_clippy", "-p qol-everywhere", True),
+            ("windows_clippy", "-p qol-unix-only", False),
+            ("windows_test", "-p shared", True),
+            ("windows_test", "-p qol-unix-only", False),
+            ("ubuntu_test", "-p qol-unix-only", True),
+        ]
+        with patch.object(ac, "WINDOWS_EXCLUDE", {"qol-unix-only"}), patch.object(
+            ac, "UBUNTU_EXCLUDE", set()
+        ), patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            ac.main()
+        for key, flag, expected in cases:
+            with self.subTest(key=key, flag=flag):
+                self.assertEqual(flag in emit.call_args.args[0][key], expected)
 
     def test_documentation_targets_follow_cargo_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -313,11 +313,13 @@ fn string_data_fields_are_read_in_order() {
             fixture
         };
         let link = ShellLink::parse(&fixture.bytes()).unwrap();
+        assert_eq!(link.description.as_deref(), Some("Foo"), "{unicode}");
         assert_eq!(
             link.relative_path.as_deref(),
             Some(r"..\Foo\foo.exe"),
             "{unicode}"
         );
+        assert_eq!(link.arguments.as_deref(), Some("--fast"), "{unicode}");
         assert_eq!(
             link.icon_location.as_deref(),
             Some(r"%ProgramFiles%\Foo\foo.ico"),

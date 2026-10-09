@@ -3,19 +3,24 @@ use std::ptr::null_mut;
 use anyhow::{bail, Result};
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, LPARAM, WIN32_ERROR};
 use windows_sys::Win32::System::Registry::{
-    RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_DWORD,
+    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD,
+    RRF_RT_REG_DWORD,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
 };
 
+use crate::session::{RestoreMode, RestoreReport};
 use crate::theme::ColorScheme;
+
+use super::super::snapshot;
 
 const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 const APPS_VALUE: &str = "AppsUseLightTheme";
 const SYSTEM_VALUE: &str = "SystemUsesLightTheme";
 const SCHEME_VALUES: [&str; 2] = [APPS_VALUE, SYSTEM_VALUE];
 const CHANGE_AREA: &str = "ImmersiveColorSet";
+const SNAPSHOT_SCHEMA: &str = "personalize";
 const BROADCAST_TIMEOUT_MS: u32 = 500;
 
 pub(super) fn current_scheme() -> Result<ColorScheme> {
@@ -25,11 +30,40 @@ pub(super) fn current_scheme() -> Result<ColorScheme> {
 pub(super) fn apply_scheme(target: ColorScheme) -> Result<()> {
     let flag = light_flag(target);
     for name in SCHEME_VALUES {
+        let prior = read_dword(name)?;
+        snapshot::record_baseline(SNAPSHOT_SCHEMA, name, &stored_value(prior))?;
         write_dword(name, flag)?;
     }
     broadcast_color_set_change();
     log::debug!("applied Windows {} mode", target.as_str());
     Ok(())
+}
+
+pub(super) fn restore(mode: RestoreMode, report: &mut RestoreReport) {
+    let before = report.restored;
+    snapshot::restore(mode, report, |saved| {
+        if saved.schema != SNAPSHOT_SCHEMA || !SCHEME_VALUES.contains(&saved.key.as_str()) {
+            bail!("unknown Windows theme value {}:{}", saved.schema, saved.key);
+        }
+        match restored_value(&saved.value)? {
+            Some(value) => write_dword(&saved.key, value),
+            None => delete_value(&saved.key),
+        }
+    });
+    if report.restored > before {
+        broadcast_color_set_change();
+    }
+}
+
+fn stored_value(value: Option<u32>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn restored_value(stored: &str) -> Result<Option<u32>> {
+    if stored.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(stored.parse()?))
 }
 
 fn scheme_from_light_flag(flag: Option<u32>) -> ColorScheme {
@@ -88,6 +122,17 @@ fn write_dword(name: &str, value: u32) -> Result<()> {
     registry_error("write", name, status)
 }
 
+fn delete_value(name: &str) -> Result<()> {
+    let key = wide(PERSONALIZE_KEY);
+    let value_name = wide(name);
+    let status =
+        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value_name.as_ptr()) };
+    match status {
+        ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
+        error => registry_error("delete", name, error),
+    }
+}
+
 fn registry_error<T>(verb: &str, name: &str, status: WIN32_ERROR) -> Result<T> {
     let error = std::io::Error::from_raw_os_error(status as i32);
     bail!(r"could not {verb} HKCU\{PERSONALIZE_KEY}\{name}: {error}")
@@ -134,6 +179,18 @@ mod tests {
         for (flag, expected) in cases {
             assert_eq!(scheme_from_light_flag(flag), expected, "flag={flag:?}");
         }
+    }
+
+    #[test]
+    fn stored_values_round_trip_including_an_absent_value() {
+        for value in [None, Some(0), Some(1), Some(7)] {
+            assert_eq!(
+                restored_value(&stored_value(value)).unwrap(),
+                value,
+                "{value:?}"
+            );
+        }
+        assert!(restored_value("dark").is_err());
     }
 
     #[test]

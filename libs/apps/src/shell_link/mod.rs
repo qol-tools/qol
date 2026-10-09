@@ -58,7 +58,9 @@ pub enum IdList {
 pub struct ShellLink {
     pub id_list: Option<IdList>,
     pub local_path: Option<String>,
+    pub description: Option<String>,
     pub relative_path: Option<String>,
+    pub arguments: Option<String>,
     pub icon_location: Option<String>,
     pub environment_target: Option<String>,
     pub advertised: bool,
@@ -105,7 +107,9 @@ impl ShellLink {
             let (value, next) = string_data(bytes, offset, has(IS_UNICODE))?;
             offset = next;
             match flag {
+                HAS_NAME => link.description = non_empty(value),
                 HAS_RELATIVE_PATH => link.relative_path = non_empty(value),
+                HAS_ARGUMENTS => link.arguments = non_empty(value),
                 HAS_ICON_LOCATION => link.icon_location = non_empty(value),
                 _ => {}
             }

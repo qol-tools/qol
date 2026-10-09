@@ -80,6 +80,13 @@ impl InstallerOps for Platform {
             let _ = std::fs::remove_file(&legacy_marker);
         }
     }
+
+    fn uninstall(&self, binary_path: &Path) -> Result<()> {
+        Err(anyhow!(
+            "qol-tray-install uninstall is for Windows; on macOS quit QoL Tray and move the app bundle holding {} to the Trash",
+            binary_path.display()
+        ))
+    }
 }
 
 fn bundle_root_from_binary(binary_path: &Path) -> Result<PathBuf> {

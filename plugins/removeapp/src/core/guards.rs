@@ -8,6 +8,7 @@ pub enum PackageManager {
     Apt,
     Flatpak,
     Windows,
+    MicrosoftStore,
 }
 
 impl PackageManager {
@@ -17,6 +18,7 @@ impl PackageManager {
             PackageManager::Apt => "APT",
             PackageManager::Flatpak => "Flatpak",
             PackageManager::Windows => "Windows",
+            PackageManager::MicrosoftStore => "Microsoft Store",
         }
     }
 }
@@ -39,6 +41,7 @@ impl ManagedPackage {
     pub fn parse(manager: PackageManager, id: &str, scope: PackageScope) -> Option<ManagedPackage> {
         let valid = match manager {
             PackageManager::Windows => valid_registry_key(id),
+            PackageManager::MicrosoftStore => valid_store_package(id),
             _ => valid_package_id(manager, id),
         };
         valid.then(|| ManagedPackage {
@@ -69,6 +72,14 @@ fn valid_package_id(manager: PackageManager, id: &str) -> bool {
                 || matches!(c, '+' | '.' | '_' | '-')
                 || (c == ':' && manager == PackageManager::Apt)
         })
+}
+
+fn valid_store_package(id: &str) -> bool {
+    id.len() <= 255
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~'))
 }
 
 fn valid_registry_key(id: &str) -> bool {
@@ -178,6 +189,30 @@ mod tests {
         for (id, expected) in cases {
             assert_eq!(
                 ManagedPackage::parse(PackageManager::Windows, id, PackageScope::System).is_some(),
+                expected,
+                "{id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn store_package_ids_are_package_full_names() {
+        let cases = [
+            (
+                "Microsoft.WindowsCalculator_11.2405.2.0_x64__8wekyb3d8bbwe",
+                true,
+            ),
+            ("Contoso.App_1.0.0.0_neutral_~_abcdefghijklm", true),
+            ("", false),
+            ("-Microsoft.App", false),
+            ("Microsoft App_1.0", false),
+            ("Microsoft.App;calc", false),
+            ("Microsoft\\App", false),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(
+                ManagedPackage::parse(PackageManager::MicrosoftStore, id, PackageScope::User)
+                    .is_some(),
                 expected,
                 "{id:?}"
             );

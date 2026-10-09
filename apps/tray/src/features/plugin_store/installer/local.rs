@@ -212,10 +212,14 @@ pattern = "qol-bluetooth-{os}-{arch}"
         tokio::fs::write(plugin.join("src/main.rs"), "source")
             .await
             .unwrap();
-        tokio::fs::write(plugin.join("qol-bluetooth"), "stale")
-            .await
-            .unwrap();
-        tokio::fs::write(workspace.join("target/release/qol-bluetooth"), "release")
+        let binary = |dir: &Path| {
+            crate::features::plugin_store::platform::dependency_binary_output_path(
+                dir,
+                "qol-bluetooth",
+            )
+        };
+        tokio::fs::write(binary(&plugin), "stale").await.unwrap();
+        tokio::fs::write(binary(&workspace.join("target/release")), "release")
             .await
             .unwrap();
         tokio::fs::write(target.join("config.json"), "{}")
@@ -227,9 +231,7 @@ pattern = "qol-bluetooth-{os}-{arch}"
             .unwrap();
 
         assert_eq!(
-            tokio::fs::read_to_string(target.join("qol-bluetooth"))
-                .await
-                .unwrap(),
+            tokio::fs::read_to_string(binary(&target)).await.unwrap(),
             "release"
         );
         assert!(target.join("plugin.toml").is_file());

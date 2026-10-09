@@ -1,9 +1,9 @@
-mod platform;
-
 #[cfg(feature = "dev")]
 use super::super::super::types::AppState;
+use crate::plugins::action_transport::{dispatch_daemon_action, DaemonActionDispatch};
 use crate::plugins::manager::reload_delivery::ReloadDeliveryOutcome;
 use crate::plugins::PluginManager;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "dev")]
@@ -31,7 +31,10 @@ pub(super) fn notify_plugin_reload_outcome(
         return Ok(ReloadDeliveryOutcome::NoDaemon);
     }
     if let Some(socket_path) = snapshot.socket_path.as_deref() {
-        if platform::notify_plugin_reload(socket_path) {
+        if matches!(
+            dispatch_daemon_action(Path::new(socket_path), "reload"),
+            DaemonActionDispatch::Handled { .. }
+        ) {
             return Ok(ReloadDeliveryOutcome::Handled);
         }
     }

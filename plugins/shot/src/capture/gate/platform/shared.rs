@@ -1,4 +1,4 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -9,19 +9,7 @@ pub(crate) struct CaptureGuard {
     file: File,
 }
 
-impl CaptureGuard {
-    fn new(action: &'static str, file: File) -> Self {
-        Self { action, file }
-    }
-}
-
 pub(crate) fn try_acquire(action: &'static str) -> Option<CaptureGuard> {
-    try_acquire_unix(action)
-}
-
-fn try_acquire_unix(action: &'static str) -> Option<CaptureGuard> {
-    use std::os::fd::AsRawFd;
-
     let path = lock_path();
     let mut file = match OpenOptions::new()
         .create(true)
@@ -41,28 +29,24 @@ fn try_acquire_unix(action: &'static str) -> Option<CaptureGuard> {
         }
     };
 
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if result != 0 {
-        let error = std::io::Error::last_os_error();
-        qol_runtime::probe!(
-            "SHOT_CAPTURE_LOCK",
-            "action={action} result=busy err={}",
-            error.raw_os_error().unwrap_or_default()
-        );
+    if let Err(error) = file.try_lock() {
+        let reason = match error {
+            TryLockError::WouldBlock => "busy".to_string(),
+            TryLockError::Error(error) => format!("lock-error err={}", error.kind()),
+        };
+        qol_runtime::probe!("SHOT_CAPTURE_LOCK", "action={action} result={reason}");
         return None;
     }
 
     let _ = file.set_len(0);
     let _ = writeln!(file, "pid={} action={action}", std::process::id());
     qol_runtime::probe!("SHOT_CAPTURE_LOCK", "action={action} result=acquired");
-    Some(CaptureGuard::new(action, file))
+    Some(CaptureGuard { action, file })
 }
 
 impl Drop for CaptureGuard {
     fn drop(&mut self) {
-        use std::os::fd::AsRawFd;
-
-        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        let _ = self.file.unlock();
         qol_runtime::probe!(
             "SHOT_CAPTURE_LOCK",
             "action={} result=released",
@@ -73,4 +57,18 @@ impl Drop for CaptureGuard {
 
 fn lock_path() -> PathBuf {
     std::env::temp_dir().join(LOCK_FILE_NAME)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::try_acquire;
+
+    #[test]
+    fn a_held_capture_lock_refuses_a_second_capture_until_released() {
+        let first = try_acquire("test-first").expect("first capture takes the lock");
+        assert!(try_acquire("test-second").is_none());
+        drop(first);
+        let again = try_acquire("test-again");
+        assert!(again.is_some());
+    }
 }

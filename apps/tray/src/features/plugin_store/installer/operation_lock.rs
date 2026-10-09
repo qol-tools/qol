@@ -1,4 +1,4 @@
-use super::lock::{instance, open_lock_file, stale_lockfile};
+use super::lock::{instance, open_lock_file, owner_identity, stale_lockfile};
 use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -56,7 +56,11 @@ fn create_operation_lock(
 }
 
 fn write_lock_owner(file: &mut std::fs::File, plugin_id: &str) {
-    let _ = writeln!(file, "{} {} {}", std::process::id(), plugin_id, instance());
+    let pid = std::process::id();
+    let _ = match owner_identity() {
+        Some(identity) => writeln!(file, "{pid} {plugin_id} {} {identity}", instance()),
+        None => writeln!(file, "{pid} {plugin_id} {}", instance()),
+    };
 }
 
 fn reacquire_stale_lock(path: &Path, plugin_id: &str) -> Result<PluginOperationLock> {

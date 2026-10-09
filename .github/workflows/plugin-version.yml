@@ -444,6 +444,52 @@ jobs:
           path: ${{ runner.temp }}/release-build-report.json
           if-no-files-found: error
 
+  qol_tray_windows_candidate:
+    name: Candidate qol-tray (windows)
+    needs: prepare
+    if: needs.prepare.outputs.has_qol_tray == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=/Brepro
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: qol-tray-windows
+          targets: x86_64-pc-windows-msvc
+
+      - name: Export production artifact identity
+        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+
+      - name: Build exact qol-tray candidate
+        run: >
+          python .github/scripts/release_candidate.py build
+          --kind qol-tray-windows
+          --report "${RUNNER_TEMP}/release-build-report.json"
+
+      - name: Upload build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-${{ needs.prepare.outputs.qol_tray_tag }}-windows
+          path: ${{ runner.temp }}/release-build-report.json
+          if-no-files-found: error
+
   tag_and_dispatch:
     name: Attest, tag, and dispatch
     needs:
@@ -451,6 +497,7 @@ jobs:
       - plugin_candidate
       - qol_tray_linux_candidate
       - qol_tray_macos_candidate
+      - qol_tray_windows_candidate
     if: >-
       ${{
         always() &&
@@ -462,7 +509,9 @@ jobs:
         (needs.qol_tray_linux_candidate.result == 'success' ||
          needs.qol_tray_linux_candidate.result == 'skipped') &&
         (needs.qol_tray_macos_candidate.result == 'success' ||
-         needs.qol_tray_macos_candidate.result == 'skipped')
+         needs.qol_tray_macos_candidate.result == 'skipped') &&
+        (needs.qol_tray_windows_candidate.result == 'success' ||
+         needs.qol_tray_windows_candidate.result == 'skipped')
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

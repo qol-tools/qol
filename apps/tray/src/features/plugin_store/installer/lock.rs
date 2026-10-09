@@ -12,6 +12,13 @@ pub(super) fn instance() -> &'static str {
     })
 }
 
+pub(super) fn owner_identity() -> Option<&'static str> {
+    static IDENTITY: OnceLock<Option<String>> = OnceLock::new();
+    IDENTITY
+        .get_or_init(|| qol_process::process_identity(std::process::id()).ok())
+        .as_deref()
+}
+
 pub(super) fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .create_new(true)
@@ -33,14 +40,22 @@ pub(super) fn stale_lockfile(path: &Path, max_age: Duration) -> bool {
     let Ok(pid) = raw_pid.parse::<u32>() else {
         return lockfile_too_old(path, max_age);
     };
+    let _plugin_id = fields.next();
+    let owner_instance = fields.next();
+    let recorded_identity = fields.next();
     if pid == std::process::id() {
-        return fields.nth(1) != Some(instance());
+        return owner_instance != Some(instance());
     }
 
     if let Some(alive) = super::super::platform::lock_owner_alive(pid) {
-        return !alive;
+        return !alive || recorded_identity.is_some_and(|expected| owner_replaced(pid, expected));
     }
     lockfile_too_old(path, max_age)
+}
+
+fn owner_replaced(pid: u32, expected: &str) -> bool {
+    qol_process::process_identity(pid).is_ok()
+        && !qol_process::process_identity_matches(pid, expected)
 }
 
 fn owner_line_complete(content: &str) -> bool {

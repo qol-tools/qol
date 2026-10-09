@@ -117,6 +117,10 @@ pub(crate) fn install_cancellation_handler() -> io::Result<()> {
     Err(unsupported())
 }
 
+pub(crate) fn wait_for_stop_request() -> io::Result<()> {
+    Err(unsupported())
+}
+
 pub(crate) fn cancellation_requested() -> bool {
     false
 }

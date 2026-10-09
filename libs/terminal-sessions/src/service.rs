@@ -129,6 +129,21 @@ impl TerminalSessionService {
         Ok(spawned)
     }
 
+    pub fn spawn(&self, request: &SpawnRequest) -> Result<SessionId, TerminalError> {
+        let preferred = crate::platform::spawn_backend();
+        if self.backends.contains_key(preferred) {
+            return self.spawn_on(preferred, request);
+        }
+        let mut spawners = self
+            .backends
+            .values()
+            .filter(|backend| backend.spawner().is_some());
+        match (spawners.next(), spawners.next()) {
+            (Some(only), None) => self.spawn_on(only.id(), request),
+            _ => Err(TerminalError::UnknownBackend(preferred.clone())),
+        }
+    }
+
     fn backend_for_id(&self, backend: &BackendId) -> Result<&dyn TerminalBackend, TerminalError> {
         self.backends
             .get(backend)
@@ -960,5 +975,122 @@ mod tests {
             ],
             "a changed screen must drop the sleep back to the base"
         );
+    }
+
+    struct Spawning {
+        id: BackendId,
+        spawns: bool,
+    }
+
+    impl SessionInventory for Spawning {
+        fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+            Ok(Vec::new())
+        }
+    }
+
+    impl ScreenReader for Spawning {
+        fn read_screen(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+            Err(TerminalError::TargetMissing(target.clone()))
+        }
+    }
+
+    impl SessionFocus for Spawning {
+        fn focus(&self, _target: &SessionBinding) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TextInput for Spawning {
+        fn send_text(
+            &self,
+            _target: &SessionBinding,
+            _text: &str,
+            _mode: DeliveryMode,
+        ) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn send_key(&self, _target: &SessionBinding, _key: &str) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TerminalBackend for Spawning {
+        fn read_screen_from_snapshot(
+            &self,
+            _snapshot: &TerminalSnapshot,
+            target: &SessionBinding,
+        ) -> Result<String, TerminalError> {
+            Err(TerminalError::TargetMissing(target.clone()))
+        }
+
+        fn id(&self) -> &BackendId {
+            &self.id
+        }
+
+        fn spawner(&self) -> Option<&dyn SessionSpawner> {
+            self.spawns.then_some(self as &dyn SessionSpawner)
+        }
+    }
+
+    impl SessionSpawner for Spawning {
+        fn supports(&self, _surface: crate::SpawnSurface) -> bool {
+            true
+        }
+
+        fn spawn(&self, _request: &SpawnRequest) -> Result<SessionId, TerminalError> {
+            Ok(SessionId::new(self.id.clone(), "spawned").unwrap())
+        }
+    }
+
+    fn spawn_request() -> SpawnRequest {
+        SpawnRequest {
+            identity: crate::SpawnIdentity {
+                key: crate::SpawnKey::new("lane-1").unwrap(),
+                tool: crate::cli::CliToolId::new("codex").unwrap(),
+                surface: crate::SpawnSurface::Tab,
+            },
+            launch: crate::cli::CliLaunchProgram::new("codex"),
+            cwd: std::path::PathBuf::from("/work/project"),
+            title: None,
+        }
+    }
+
+    #[test]
+    fn spawn_prefers_the_platform_backend_and_otherwise_the_only_spawner() {
+        let preferred = crate::platform::spawn_backend().to_string();
+        type Case<'a> = (&'a [(&'a str, bool)], Option<&'a str>);
+        let cases: [Case; 6] = [
+            (&[(&preferred, true)], Some(&preferred)),
+            (&[(&preferred, true), ("other", true)], Some(&preferred)),
+            (&[("other", true)], Some("other")),
+            (&[("other", true), ("idle", false)], Some("other")),
+            (&[("other", true), ("second", true)], None),
+            (&[("idle", false)], None),
+        ];
+        for (backends, expected) in cases {
+            let terminals =
+                TerminalSessionService::from_backends(backends.iter().map(|(id, spawns)| {
+                    Arc::new(Spawning {
+                        id: BackendId::new(*id).unwrap(),
+                        spawns: *spawns,
+                    }) as Arc<dyn TerminalBackend>
+                }))
+                .unwrap();
+            let spawned = terminals.spawn(&spawn_request());
+            match expected {
+                Some(backend) => {
+                    assert_eq!(
+                        spawned.unwrap().backend().to_string(),
+                        backend,
+                        "{backends:?}"
+                    );
+                }
+                None => assert!(
+                    matches!(spawned, Err(TerminalError::UnknownBackend(_))),
+                    "{backends:?}"
+                ),
+            }
+        }
     }
 }

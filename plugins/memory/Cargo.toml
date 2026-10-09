@@ -30,6 +30,7 @@ workspace-hack.workspace = true
 qol-conventions.workspace = true
 
 [dev-dependencies]
+dirs = "6.0"
 qol-plugin-api.workspace = true
 
 [lints]

@@ -1531,6 +1531,11 @@ options = ["top-left", "top-right"]
         let profile_path = crate::paths::profile_dir().unwrap();
         let url = init_bare_origin(&tmp.path().join("origin.git"));
         let repo = GitRepo::init(&profile_path, &url).unwrap();
+        std::fs::write(
+            profile_path.join(".gitignore"),
+            qol_profile_sync::GITIGNORE_CONTENTS,
+        )
+        .unwrap();
         write_file(
             &profile_path.join("default/manifest.json"),
             &json!({"version": 1}),
@@ -1649,7 +1654,7 @@ items = []
             ])
             .await
             .unwrap();
-        assert!(result.applied_remote);
+        assert!(result.applied_remote, "{}", result.message);
         assert!(crate::plugins::config::current_profile_config_generation() > before_generation);
         assert_eq!(
             read_json(&profile_path.join("default/core/plugin-configs/plugin-a.json")),

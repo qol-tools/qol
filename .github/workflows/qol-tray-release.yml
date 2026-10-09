@@ -210,9 +210,61 @@ jobs:
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
 
+  build_windows:
+    name: Build Windows release
+    needs: gate
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=/Brepro
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: qol-tray-windows
+          targets: x86_64-pc-windows-msvc
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Export production artifact identity
+        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+
+      - name: Build Windows binaries
+        run: |
+          python .github/scripts/release_candidate.py build \
+            --kind qol-tray-windows \
+            --report "${RUNNER_TEMP}/release-build-report.json"
+
+      - name: Prepare artifacts
+        run: |
+          BUILT=target/x86_64-pc-windows-msvc/release
+          BUNDLE=qol-tray-windows-x86_64
+          mkdir -p dist "${BUNDLE}"
+          cp "${BUILT}/qol-tray.exe" "dist/${BUNDLE}.exe"
+          cp "${BUILT}/qol-tray.exe" "${BUILT}/qol-tray-install.exe" "${BUNDLE}/"
+          cp libs/gpui/assets/fonts/OFL.txt "${BUNDLE}/IBM-Plex-OFL.txt"
+          7z a -tzip "dist/${BUNDLE}.zip" "${BUNDLE}"
+          ls -l dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-dist
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Create GitHub Release
-    needs: [build_linux_deb, build_macos]
+    needs: [build_linux_deb, build_macos, build_windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

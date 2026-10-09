@@ -129,7 +129,7 @@ pub(super) struct BridgeAttach {
 #[derive(Debug)]
 pub(super) struct BridgeOwner {
     file: File,
-    path: PathBuf,
+    pid_path: PathBuf,
     binding: String,
     attaches: Arc<Mutex<HashMap<String, Arc<BridgeAttach>>>>,
     attach: Option<Arc<BridgeAttach>>,
@@ -157,7 +157,7 @@ impl Drop for BridgeOwner {
                 attaches.remove(&self.binding);
             }
         }
-        let _ = fs::write(&self.path, "");
+        let _ = fs::write(&self.pid_path, "");
         let _ = self.file.unlock();
     }
 }
@@ -787,6 +787,7 @@ impl PendingBridgeStore {
                                 let _ = fs::remove_file(self.role_lock_for(&binding));
                                 let _ = fs::remove_file(self.lock_for(&binding));
                                 let _ = fs::remove_file(self.owner_for(&binding));
+                                let _ = fs::remove_file(self.owner_pid_for(&binding));
                             }
                         }
                     }
@@ -827,7 +828,7 @@ impl PendingBridgeStore {
                             "event=owner_conflict target_backend={}",
                             binding.session_id().backend()
                         );
-                        bail!("{}", self.owner_conflict(binding, &path));
+                        bail!("{}", self.owner_conflict(binding));
                     }
                     if Instant::now() >= deadline {
                         qol_runtime::probe!(
@@ -835,7 +836,7 @@ impl PendingBridgeStore {
                             "event=owner_supersede_timeout target_backend={}",
                             binding.session_id().backend()
                         );
-                        bail!("{}", self.owner_conflict(binding, &path));
+                        bail!("{}", self.owner_conflict(binding));
                     }
                     drop(attaches);
                     std::thread::sleep(ATTACH_TAKEOVER_POLL);
@@ -845,7 +846,9 @@ impl PendingBridgeStore {
                 }
             }
         };
-        fs::write(&path, process::id().to_string()).context("failed to record the bridge owner")?;
+        let pid_path = self.owner_pid_for(binding);
+        fs::write(&pid_path, process::id().to_string())
+            .context("failed to record the bridge owner")?;
         let attach = cancel.map(|cancel| {
             Arc::new(BridgeAttach {
                 cancel,
@@ -857,15 +860,15 @@ impl PendingBridgeStore {
         }
         Ok(BridgeOwner {
             file,
-            path,
+            pid_path,
             binding: binding.token(),
             attaches: Arc::clone(&self.attaches),
             attach,
         })
     }
 
-    fn owner_conflict(&self, binding: &SessionBinding, path: &Path) -> String {
-        let owner = fs::read_to_string(path).unwrap_or_default();
+    fn owner_conflict(&self, binding: &SessionBinding) -> String {
+        let owner = fs::read_to_string(self.owner_pid_for(binding)).unwrap_or_default();
         let owner = owner.trim();
         let owner = if owner.is_empty() { "unknown" } else { owner };
         format!(
@@ -892,7 +895,7 @@ impl PendingBridgeStore {
     }
 
     pub(super) fn owner_pid(&self, binding: &SessionBinding) -> Option<String> {
-        let recorded = fs::read_to_string(self.owner_for(binding)).ok()?;
+        let recorded = fs::read_to_string(self.owner_pid_for(binding)).ok()?;
         let recorded = recorded.trim();
         let pid = recorded.parse::<u32>().ok()?;
         if pid != process::id() && qol_process::is_pid_gone(pid) {
@@ -948,6 +951,10 @@ impl PendingBridgeStore {
 
     fn owner_for(&self, binding: &SessionBinding) -> PathBuf {
         self.file_for(binding).with_extension("owner")
+    }
+
+    fn owner_pid_for(&self, binding: &SessionBinding) -> PathBuf {
+        self.file_for(binding).with_extension("pid")
     }
 }
 
@@ -4003,7 +4010,7 @@ mod tests {
     }
 
     fn age_file(path: &std::path::Path, age: Duration) {
-        let file = fs::File::open(path).unwrap();
+        let file = fs::File::options().write(true).open(path).unwrap();
         let times = std::fs::FileTimes::new().set_modified(SystemTime::now() - age);
         file.set_times(times).unwrap();
     }

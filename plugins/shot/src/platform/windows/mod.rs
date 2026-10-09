@@ -1,18 +1,18 @@
-use anyhow::{anyhow, Result};
-use std::path::Path;
-
-use crate::platform::{CaptureSession, SavedRecording};
-use crate::{Config, Rect};
-
 mod capture;
 mod clipboard;
 mod display;
+mod ffmpeg;
+mod recording;
 mod selector;
 mod system;
 
 pub use capture::{capture_frozen_frame, capture_screenshot, grab_preview_rgba};
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
+pub use recording::{
+    capture_log_path, recording_format, recording_started, recording_stopped, start_capture,
+    stop_capture,
+};
 pub use selector::{select_region, select_region_in_app};
 pub use system::{
     external_services_check, list_audio_sinks, list_audio_sources, platform_supported_check,
@@ -52,33 +52,7 @@ pub fn after_pin_open(_title: &str) {}
 
 pub fn run_internal_mode() -> Option<std::process::ExitCode> {
     qol_windowing::platform::windows::ensure_dpi_awareness();
-    None
-}
-
-pub fn start_capture(
-    _rect: &Rect,
-    _config: &Config,
-    _output_file: &Path,
-) -> Result<CaptureSession> {
-    Err(anyhow!(
-        "qol-shot: capture start is not implemented on Windows"
-    ))
-}
-
-pub fn recording_format(format: &str) -> String {
-    format.to_string()
-}
-
-pub fn recording_started(_session: &CaptureSession) {}
-
-pub fn recording_stopped(_session: &CaptureSession, _config: &Config) -> Option<SavedRecording> {
-    None
-}
-
-pub fn stop_capture(_session: &CaptureSession) -> Result<()> {
-    Err(anyhow!(
-        "qol-shot: capture stop is not implemented on Windows"
-    ))
+    recording::run_internal_capture_helper()
 }
 
 #[derive(Clone)]

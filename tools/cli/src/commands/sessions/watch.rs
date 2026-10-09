@@ -1303,7 +1303,7 @@ fn screen_tail(screen: &str) -> &str {
     &screen[start..]
 }
 
-fn sanitize_token(token: &str) -> String {
+pub(super) fn sanitize_token(token: &str) -> String {
     token.replace([':', '.'], "_")
 }
 
@@ -7540,7 +7540,10 @@ mod tests {
         let transcript =
             encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
         std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_a")).unwrap();
-        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        let transcript_file = std::fs::File::options()
+            .write(true)
+            .open(&transcript)
+            .unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = PinProbeTool::new();
         tool.set_report("the pinned transcript body");
@@ -7685,7 +7688,10 @@ mod tests {
         let transcript =
             encoded_dir.join("2020-01-01T00-00-00-000Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
         std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_c")).unwrap();
-        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        let transcript_file = std::fs::File::options()
+            .write(true)
+            .open(&transcript)
+            .unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = PinProbeTool::new();
         tool.set_report("the resumed lane's report");
@@ -7755,7 +7761,10 @@ mod tests {
         let transcript =
             encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
         std::fs::write(&transcript, "the transcript is still running\n").unwrap();
-        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        let transcript_file = std::fs::File::options()
+            .write(true)
+            .open(&transcript)
+            .unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = PinProbeTool::new();
         let interpreter = CliSessionInterpreter::from_strategies([
@@ -7793,7 +7802,10 @@ mod tests {
             );
             assert!(!round.transcript_pinned);
             std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_d")).unwrap();
-            let transcript_file = std::fs::File::open(&transcript).unwrap();
+            let transcript_file = std::fs::File::options()
+                .write(true)
+                .open(&transcript)
+                .unwrap();
             transcript_file.set_modified(SystemTime::now()).unwrap();
             let second = poll_round(
                 &terminals,
@@ -7857,7 +7869,10 @@ mod tests {
         let transcript =
             encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
         std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_e")).unwrap();
-        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        let transcript_file = std::fs::File::options()
+            .write(true)
+            .open(&transcript)
+            .unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = PinProbeTool::new();
         let interpreter = CliSessionInterpreter::from_strategies([
@@ -7939,7 +7954,10 @@ mod tests {
         let transcript =
             encoded_dir.join("2026-08-29T11-06-48-266Z_01a04d33-624a-732a-aff8-4ec4b90ffd45.jsonl");
         std::fs::write(&transcript, user_message_line("task QOL_BRIDGE_DONE_pin_f")).unwrap();
-        let transcript_file = std::fs::File::open(&transcript).unwrap();
+        let transcript_file = std::fs::File::options()
+            .write(true)
+            .open(&transcript)
+            .unwrap();
         transcript_file.set_modified(SystemTime::now()).unwrap();
         let tool = FakeTool::new(Transcript::Working);
         tool.set_transcript_runtime(CliRuntimeState::Working);

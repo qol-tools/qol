@@ -3,14 +3,14 @@ use std::ptr::null_mut;
 use std::sync::Once;
 
 use crate::{WindowId, WindowRect};
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EnumDisplayMonitors,
-    GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SelectObject, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO,
+    BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
+    EnumDisplayMonitors, GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SelectObject,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO,
     MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows_sys::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindow,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
     IsWindowVisible, IsZoomed, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow,
     GWL_EXSTYLE, GW_OWNER, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
@@ -101,6 +101,23 @@ impl Window {
 
     pub fn frame(self) -> Option<WindowRect> {
         self.visible_rect().map(to_frame)
+    }
+
+    pub fn client_frame(self) -> Option<WindowRect> {
+        let mut client = empty_rect();
+        if unsafe { GetClientRect(self.0, &mut client) } == 0 {
+            return None;
+        }
+        let mut origin = POINT { x: 0, y: 0 };
+        if unsafe { ClientToScreen(self.0, &mut origin) } == 0 {
+            return None;
+        }
+        Some(to_frame(RECT {
+            left: origin.x,
+            top: origin.y,
+            right: origin.x + client.right - client.left,
+            bottom: origin.y + client.bottom - client.top,
+        }))
     }
 
     fn visible_rect(self) -> Option<RECT> {

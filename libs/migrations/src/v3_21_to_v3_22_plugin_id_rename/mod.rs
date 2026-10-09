@@ -856,17 +856,23 @@ mod tests {
                 copy_tree(&from, &to, config_dir);
                 continue;
             }
-            let text = std::fs::read_to_string(&from)
-                .unwrap()
-                .replace(CONFIG_TOKEN, &path_string(config_dir));
-            std::fs::write(&to, text).unwrap();
+            let mut value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&from).unwrap()).unwrap();
+            expand_config_token(&mut value, config_dir);
+            std::fs::write(&to, serde_json::to_string_pretty(&value).unwrap()).unwrap();
         }
     }
 
     fn expand_config_token(value: &mut serde_json::Value, config_dir: &Path) {
         match value {
             serde_json::Value::String(text) => {
-                *text = text.replace(CONFIG_TOKEN, &path_string(config_dir));
+                if let Some(rest) = text.strip_prefix(CONFIG_TOKEN) {
+                    let path = rest
+                        .split('/')
+                        .filter(|part| !part.is_empty())
+                        .fold(config_dir.to_path_buf(), |path, part| path.join(part));
+                    *text = path_string(&path);
+                }
             }
             serde_json::Value::Array(items) => {
                 for item in items {

@@ -61,6 +61,7 @@ objc2-app-kit = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+qol-process.workspace = true
 raw-window-handle = { workspace = true }
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",

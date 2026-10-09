@@ -18,7 +18,7 @@ impl ThemePlatform for Platform {
         personalize::apply_scheme(target)
     }
 
-    fn restore(&self, _mode: RestoreMode, _report: &mut RestoreReport) {
-        log::debug!("theme restore skipped: Windows keeps the chosen scheme as a user preference");
+    fn restore(&self, mode: RestoreMode, report: &mut RestoreReport) {
+        personalize::restore(mode, report);
     }
 }

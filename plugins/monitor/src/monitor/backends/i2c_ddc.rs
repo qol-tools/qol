@@ -154,7 +154,7 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
             .iter()
             .find(|(_, path)| self.adapter_is_ddc(path))
             .unwrap_or(&links[0]);
-        Ok(PathBuf::from("/dev").join(&selected.0))
+        Ok(PathBuf::from(format!("/dev/{}", selected.0)))
     }
 
     fn resolve_connector_dir(&self, connector: &str) -> Result<PathBuf, I2cError> {

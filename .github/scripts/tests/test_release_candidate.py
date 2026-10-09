@@ -140,6 +140,7 @@ class SourceCiTests(unittest.TestCase):
             {"name": "Plan affected crates", "conclusion": "success"},
             {"name": "lint + test (ubuntu-latest)", "conclusion": "success"},
             {"name": "lint + test (macos-latest)", "conclusion": "success"},
+            {"name": "lint + test (windows-latest)", "conclusion": "success"},
             {"name": "sandbox lifecycle (windows)", "conclusion": "skipped"},
         ]
 
@@ -663,6 +664,26 @@ class BuildNodeTests(unittest.TestCase):
                         "x86_64-apple-darwin",
                         "--bin",
                         "qol-tray",
+                    ],
+                    verify,
+                ],
+            ),
+            (
+                "qol-tray-windows",
+                None,
+                None,
+                [
+                    [
+                        "cargo",
+                        "build",
+                        "--release",
+                        "--locked",
+                        "--target",
+                        "x86_64-pc-windows-msvc",
+                        "--bin",
+                        "qol-tray",
+                        "--bin",
+                        "qol-tray-install",
                     ],
                     verify,
                 ],

@@ -5,6 +5,8 @@ use qol_headless::CommandResult;
 
 pub const PROBE_COMMAND: &str = "console-probe";
 pub const SEND_COMMAND: &str = "console-send";
+pub const LAUNCH_COMMAND: &str = "console-launch";
+pub const TITLE_COMMAND: &str = "console-title";
 
 pub fn helper(args: &[impl AsRef<OsStr>]) -> Option<CommandResult> {
     let (command, rest) = args.split_first()?;
@@ -12,6 +14,8 @@ pub fn helper(args: &[impl AsRef<OsStr>]) -> Option<CommandResult> {
     let run: fn(&[String]) -> io::Result<String> = match command {
         PROBE_COMMAND => crate::platform::console_probe,
         SEND_COMMAND => crate::platform::console_send,
+        LAUNCH_COMMAND => crate::platform::console_launch,
+        TITLE_COMMAND => crate::platform::console_title,
         _ => return None,
     };
     let outcome = rest
@@ -32,12 +36,14 @@ mod tests {
 
     #[test]
     fn only_helper_commands_are_claimed() {
-        let cases: [(&[&str], bool); 6] = [
+        let cases: [(&[&str], bool); 8] = [
             (&[], false),
             (&["doctor"], false),
             (&["console-probes"], false),
             (&[PROBE_COMMAND, "not-a-pid"], true),
             (&[SEND_COMMAND, "not-a-pid", "insert"], true),
+            (&[LAUNCH_COMMAND, "not-a-tag"], true),
+            (&[TITLE_COMMAND, "not-a-pid"], true),
             (&["status", PROBE_COMMAND], false),
         ];
         for (args, claimed) in cases {

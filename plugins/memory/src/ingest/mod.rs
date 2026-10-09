@@ -913,8 +913,14 @@ mod tests {
             claude_roots[0].path,
             PathBuf::from("/env-home/.claude/projects")
         );
-        assert_eq!(claude_roots[0].agent_home, "/qol-memory-env-home/.claude");
+        assert_eq!(
+            claude_roots[0].agent_home,
+            user_home.join(".claude").to_string_lossy()
+        );
         let pi = roots.roots.iter().find(|root| root.source == "pi").unwrap();
-        assert_eq!(pi.agent_home, "/qol-memory-env-home/.pi/agent");
+        assert_eq!(
+            pi.agent_home,
+            user_home.join(".pi").join("agent").to_string_lossy()
+        );
     }
 }

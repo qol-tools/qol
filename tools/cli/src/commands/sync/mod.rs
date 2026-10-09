@@ -289,6 +289,7 @@ fn apply_merged_profile(
     merged: &BTreeMap<String, Value>,
 ) -> Result<()> {
     repo.reset_to_remote()?;
+    ensure_gitignore(repo_path)?;
     write_merged_profile(repo_path, merged)
 }
 

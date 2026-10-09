@@ -216,8 +216,19 @@ impl WindowGeometrySession {
         None
     }
 
-    pub fn set_input_region(&self, _x: i16, _y: i16, _width: u16, _height: u16) -> bool {
-        false
+    pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
+        let hwnd = self.handle();
+        let scale = window_scale(hwnd);
+        let native = |value: f64| (value * scale).round() as i32;
+        let left = native(f64::from(x));
+        let top = native(f64::from(y));
+        apply_input_region(
+            hwnd,
+            left,
+            top,
+            native(f64::from(x) + f64::from(width)) - left,
+            native(f64::from(y) + f64::from(height)) - top,
+        )
     }
 
     pub fn anchor_content(&self, _right: bool, _bottom: bool) {}
@@ -292,9 +303,17 @@ pub fn set_input_region_by_title(title: &str, x: i16, y: i16, width: u16, height
     let Some(hwnd) = find_window(title) else {
         return false;
     };
-    let (left, top) = (i32::from(x), i32::from(y));
-    let region =
-        unsafe { CreateRectRgn(left, top, left + i32::from(width), top + i32::from(height)) };
+    apply_input_region(
+        hwnd,
+        i32::from(x),
+        i32::from(y),
+        i32::from(width),
+        i32::from(height),
+    )
+}
+
+fn apply_input_region(hwnd: HWND, left: i32, top: i32, width: i32, height: i32) -> bool {
+    let region = unsafe { CreateRectRgn(left, top, left + width, top + height) };
     if region.is_null() {
         return false;
     }

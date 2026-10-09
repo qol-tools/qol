@@ -17,7 +17,7 @@ pub(crate) mod platform;
 mod source;
 
 pub use boot_environment::BootEnvironment;
-pub use cli::run;
+pub use cli::{run, uninstall};
 pub(crate) use platform::binary_filename;
 
 pub fn autostart_path() -> Result<PathBuf> {

@@ -12,7 +12,8 @@ use x11rb::rust_connection::RustConnection;
 use crate::platform::{CaptureProcess, CaptureSession, SavedRecording};
 use crate::{Config, Rect};
 
-use super::process_alive;
+use super::super::recorder;
+pub use super::super::recorder::recording_format;
 use qol_plugin_daemon::notification::send_notification;
 
 const CINNAMON_HELPER_ENV: &str = "QOL_SHOT_CINNAMON_CAPTURE_REQUEST";
@@ -508,20 +509,6 @@ fn cinnamon_pipeline(config: &Config) -> String {
     pipeline
 }
 
-fn normalized_h264_preset(preset: &str) -> &'static str {
-    match preset {
-        "ultrafast" => "ultrafast",
-        "superfast" => "superfast",
-        "faster" => "faster",
-        "fast" => "fast",
-        "medium" => "medium",
-        "slow" => "slow",
-        "slower" => "slower",
-        "veryslow" => "veryslow",
-        _ => "veryfast",
-    }
-}
-
 fn audio_inputs(config: &Config) -> Vec<String> {
     if !config.audio.enabled {
         return Vec::new();
@@ -641,35 +628,13 @@ pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
     Err(anyhow!("ffmpeg screenshot capture exited with {status}"))
 }
 
-pub fn recording_format(format: &str) -> String {
-    match format.to_ascii_lowercase().as_str() {
-        "mkv" | "mp4" | "mov" | "webm" => format.to_ascii_lowercase(),
-        _ => "mov".to_string(),
-    }
-}
-
 pub fn recording_started(_session: &CaptureSession) {}
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<SavedRecording> {
     send_notification("Recording stopped", "Saving recording");
     let output_file = session.output_file.as_deref()?;
     let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
-    if let Err(error) = wait_for_recording_file(session, capture_file) {
-        log::warn!("recording finalization failed: {error:#}");
-        if discard_empty_capture(capture_file) {
-            qol_runtime::probe!(
-                "SHOT_RECORD_FINALIZE",
-                "stage=failed reason=empty-capture removed=true"
-            );
-            send_notification("Recording failed", "No video frames were produced");
-            return None;
-        }
-        send_notification(
-            "Recording save delayed",
-            "The recorder is still finalizing the file",
-        );
-        return None;
-    }
+    recorder::await_capture_file(session, capture_file)?;
     let saved_file = if capture_file == output_file {
         output_file.to_path_buf()
     } else {
@@ -740,81 +705,15 @@ fn cinnamon_conversion_args(
     output_file: &Path,
     config: &Config,
 ) -> Vec<String> {
-    let format = recording_format(&config.video.format);
     let mut args = vec![
         "-y".to_string(),
         "-i".to_string(),
         capture_file.to_string_lossy().to_string(),
     ];
-    if format == "webm" {
-        args.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf"].map(str::to_string));
-        args.push(config.video.crf.clamp(0, 63).to_string());
-        args.extend(["-c:a", "libopus", "-b:a", "192k"].map(str::to_string));
-    } else {
-        args.extend(["-c:v", "libx264", "-crf"].map(str::to_string));
-        args.push(config.video.crf.clamp(0, 51).to_string());
-        args.extend(["-preset", normalized_h264_preset(&config.video.preset)].map(str::to_string));
-        args.extend(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"].map(str::to_string));
-        if matches!(format.as_str(), "mp4" | "mov") {
-            args.extend(["-movflags", "+faststart"].map(str::to_string));
-        }
-    }
+    args.extend(recorder::encoder_args(config, false));
     args.extend(["-fps_mode", "passthrough"].map(str::to_string));
     args.push(output_file.to_string_lossy().to_string());
     args
-}
-
-fn discard_empty_capture(capture_file: &Path) -> bool {
-    let Ok(metadata) = capture_file.symlink_metadata() else {
-        return false;
-    };
-    if !metadata.file_type().is_file() || metadata.len() != 0 {
-        return false;
-    }
-    match std::fs::remove_file(capture_file) {
-        Ok(()) => true,
-        Err(error) => {
-            log::warn!(
-                "failed to remove empty capture {}: {error}",
-                capture_file.display()
-            );
-            false
-        }
-    }
-}
-
-fn wait_for_recording_file(session: &CaptureSession, output_file: &Path) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(12);
-    let mut previous_len = None;
-    let mut stable_samples = 0;
-    while Instant::now() < deadline {
-        let recording = session
-            .processes
-            .iter()
-            .any(|process| process_alive(process.pid));
-        let len = output_file.metadata().ok().map(|metadata| metadata.len());
-        if !recording && len.is_some_and(|len| len > 0) {
-            if len == previous_len {
-                stable_samples += 1;
-                if stable_samples >= 2 {
-                    qol_runtime::probe!(
-                        "SHOT_RECORD_FINALIZE",
-                        "stage=file-ready len={}",
-                        len.unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-            } else {
-                previous_len = len;
-                stable_samples = 0;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(anyhow!(
-        "recording file did not finish writing: {}",
-        output_file.display()
-    ))
 }
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {
@@ -829,7 +728,7 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 mod tests {
     use super::{
         cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote,
-        recording_format, CinnamonCaptureRequest,
+        CinnamonCaptureRequest,
     };
     use crate::{Config, Rect};
 
@@ -931,19 +830,5 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["-fps_mode", "passthrough"]));
-    }
-
-    #[test]
-    fn recording_format_normalizes_supported_values_and_fallback() {
-        let cases = [
-            ("MP4", "mp4"),
-            ("mkv", "mkv"),
-            ("MOV", "mov"),
-            ("WebM", "webm"),
-            ("avi", "mov"),
-        ];
-        for (input, expected) in cases {
-            assert_eq!(recording_format(input), expected, "{input}");
-        }
     }
 }

@@ -60,7 +60,7 @@ impl PluginSource {
         if let Some(path) = self.repo.strip_prefix("file://") {
             return path.to_string();
         }
-        if self.repo.starts_with('/') {
+        if self.repo.starts_with('/') || std::path::Path::new(&self.repo).is_absolute() {
             return self.repo.clone();
         }
         format!("https://github.com/{}.git", self.repo)

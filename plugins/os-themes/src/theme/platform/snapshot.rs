@@ -1,5 +1,7 @@
 use qol_host_session::{SessionSnapshot, SessionStore};
 
+use crate::session::{RestoreMode, RestoreReport};
+
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -39,7 +41,7 @@ pub fn store() -> SessionStore {
 }
 
 pub fn id_for(schema: &str, key: &str) -> String {
-    format!("{schema}::{key}")
+    format!("{schema}@{key}")
 }
 
 pub fn record_baseline(schema: &str, key: &str, value: &str) -> anyhow::Result<()> {
@@ -76,6 +78,50 @@ pub fn write(snapshot: &ThemeSnapshot) -> anyhow::Result<()> {
     store().write(snapshot)
 }
 
+pub fn restore(
+    mode: RestoreMode,
+    report: &mut RestoreReport,
+    apply: impl Fn(&ThemeSnapshot) -> anyhow::Result<()>,
+) {
+    let Ok(ids) = ids() else {
+        return;
+    };
+    for id in ids {
+        let Ok(Some(snapshot)) = load(&id) else {
+            report.unreadable += 1;
+            continue;
+        };
+        if snapshot.mutations == 0 || snapshot.clean {
+            report.nothing_to_restore += 1;
+            let _ = delete(&id);
+            continue;
+        }
+        match apply(&snapshot) {
+            Ok(()) => {
+                match mode {
+                    RestoreMode::Exit => {
+                        let mut cleaned = snapshot.clone();
+                        cleaned.set_clean();
+                        let _ = write(&cleaned);
+                    }
+                    RestoreMode::Recovery => {
+                        let _ = delete(&id);
+                    }
+                }
+                report.restored += 1;
+            }
+            Err(error) => {
+                log::warn!(
+                    "failed to restore pre-qol value of {}:{}: {error:#}",
+                    snapshot.schema,
+                    snapshot.key
+                );
+                report.failed += 1;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -107,20 +153,20 @@ mod tests {
     fn store_round_trips_and_rejects_tampering() {
         let dir = test_dir();
         let store = SessionStore::new(dir.join("theme"));
-        let snap = snapshot("s::k", "adwaita", 3, false);
+        let snap = snapshot("s@k", "adwaita", 3, false);
         store.write(&snap).unwrap();
         assert_eq!(
-            store.load::<ThemeSnapshot>("s::k").unwrap(),
+            store.load::<ThemeSnapshot>("s@k").unwrap(),
             Some(snap.clone())
         );
         assert!(store.load::<ThemeSnapshot>("missing").unwrap().is_none());
 
-        let path = store.dir().join("s::k.json");
+        let path = store.dir().join("s@k.json");
         let mut raw = std::fs::read(&path).unwrap();
         raw[10] ^= 0xff;
         std::fs::write(&path, &raw).unwrap();
         assert!(
-            store.load::<ThemeSnapshot>("s::k").is_err(),
+            store.load::<ThemeSnapshot>("s@k").is_err(),
             "tampered snapshot must not load"
         );
     }

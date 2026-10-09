@@ -1,6 +1,7 @@
 pub mod bundle;
 pub mod desktop;
 pub mod desktop_integration;
+pub mod shell_execute;
 pub mod shell_link;
 pub mod start_menu;
 pub mod tray_install;

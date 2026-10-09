@@ -818,7 +818,6 @@ mod tests {
         assert_eq!(focus.monitor, monitors[1]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn peer_is_alive_returns_false_when_peer_closed() {
         let (writer, reader) = pair();
@@ -826,14 +825,12 @@ mod tests {
         assert!(!platform::peer_is_alive(&writer));
     }
 
-    #[cfg(unix)]
     #[test]
     fn peer_is_alive_returns_true_while_peer_holds_handle() {
         let (writer, _reader) = pair();
         assert!(platform::peer_is_alive(&writer));
     }
 
-    #[cfg(unix)]
     #[test]
     fn forward_events_exits_after_peer_disconnects_without_any_publish() {
         let (writer, reader) = pair();

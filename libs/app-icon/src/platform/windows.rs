@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
@@ -9,14 +9,19 @@ use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
 };
+use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows_sys::Win32::UI::Shell::SHDefExtractIconW;
+use windows_sys::Win32::UI::Shell::{
+    SHDefExtractIconW, SHGetFileInfoW, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON, SHGFI_ICONLOCATION,
+    SHGFI_LARGEICON,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL, HICON};
 
 use crate::{ProcessEntry, RgbaImage};
@@ -32,8 +37,12 @@ impl AppIconPlatform for Platform {
         None
     }
 
-    fn icon_png_for_path(&self, _path: &Path, _size: usize) -> Option<Vec<u8>> {
-        None
+    fn icon_png_for_path(&self, path: &Path, size: usize) -> Option<Vec<u8>> {
+        let _com = ComApartment::enter();
+        let icon = shell_icon(path, size)?;
+        let image = render_icon(icon, size);
+        unsafe { DestroyIcon(icon) };
+        encode_png(&image?)
     }
 
     fn icon_png_for_bundle_id(&self, _bundle_id: &str, _size: usize) -> Option<Vec<u8>> {
@@ -42,7 +51,7 @@ impl AppIconPlatform for Platform {
 
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage> {
         let path = executable_path(u32::try_from(pid).ok()?)?;
-        let icon = extract_icon(&path, size)?;
+        let icon = extract_icon(&path, 0, size)?;
         let image = render_icon(icon, size);
         unsafe { DestroyIcon(icon) };
         image
@@ -121,11 +130,92 @@ fn executable_path(pid: u32) -> Option<Vec<u16>> {
     Some(buffer)
 }
 
-fn extract_icon(path: &[u16], size: usize) -> Option<HICON> {
+fn extract_icon(path: &[u16], index: i32, size: usize) -> Option<HICON> {
     let mut icon: HICON = null_mut();
     let result =
-        unsafe { SHDefExtractIconW(path.as_ptr(), 0, 0, &mut icon, null_mut(), size as u32) };
+        unsafe { SHDefExtractIconW(path.as_ptr(), index, 0, &mut icon, null_mut(), size as u32) };
     (result >= 0 && !icon.is_null()).then_some(icon)
+}
+
+struct ComApartment(bool);
+
+impl ComApartment {
+    fn enter() -> Self {
+        let result = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+        Self(result >= 0)
+    }
+}
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
+fn shell_icon(path: &Path, size: usize) -> Option<HICON> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let located = file_info(&wide, SHGFI_ICONLOCATION).and_then(|info| {
+        let location = expanded(&nul_terminated(&info.szDisplayName))?;
+        (location.len() > 1).then(|| extract_icon(&location, info.iIcon, size))?
+    });
+    located.or_else(|| {
+        file_info(&wide, SHGFI_ICON | SHGFI_LARGEICON)
+            .map(|info| info.hIcon)
+            .filter(|icon| !icon.is_null())
+    })
+}
+
+fn expanded(location: &[u16]) -> Option<Vec<u16>> {
+    if !location.contains(&u16::from(b'%')) {
+        return Some(location.to_vec());
+    }
+    let needed = unsafe { ExpandEnvironmentStringsW(location.as_ptr(), null_mut(), 0) };
+    if needed == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; needed as usize];
+    let written =
+        unsafe { ExpandEnvironmentStringsW(location.as_ptr(), buffer.as_mut_ptr(), needed) };
+    (written != 0 && written <= needed).then(|| nul_terminated(&buffer))
+}
+
+fn file_info(path: &[u16], flags: SHGFI_FLAGS) -> Option<SHFILEINFOW> {
+    let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };
+    let found = unsafe {
+        SHGetFileInfoW(
+            path.as_ptr(),
+            0,
+            &mut info,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            flags,
+        )
+    };
+    (found != 0).then_some(info)
+}
+
+fn nul_terminated(wide: &[u16]) -> Vec<u16> {
+    let end = wide
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(wide.len());
+    wide[..end].iter().copied().chain(Some(0)).collect()
+}
+
+fn encode_png(image: &RgbaImage) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(
+        &mut bytes,
+        u32::try_from(image.width).ok()?,
+        u32::try_from(image.height).ok()?,
+    );
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().ok()?;
+    writer.write_image_data(&image.data).ok()?;
+    writer.finish().ok()?;
+    Some(bytes)
 }
 
 fn render_icon(icon: HICON, size: usize) -> Option<RgbaImage> {
@@ -217,7 +307,29 @@ fn empty_filetime() -> FILETIME {
 
 #[cfg(test)]
 mod tests {
-    use super::{rgba_from_bgra, wide_name};
+    use super::{encode_png, nul_terminated, rgba_from_bgra, wide_name, RgbaImage};
+
+    #[test]
+    fn icon_locations_keep_one_terminating_nul() {
+        let cases = [("shell32.dll\0junk", "shell32.dll\0"), ("", "\0")];
+        for (raw, expected) in cases {
+            let wide: Vec<u16> = raw.encode_utf16().collect();
+            let want: Vec<u16> = expected.encode_utf16().collect();
+            assert_eq!(nul_terminated(&wide), want, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn png_bytes_carry_the_signature_and_size() {
+        let image = RgbaImage {
+            data: vec![255; 2 * 3 * 4],
+            width: 2,
+            height: 3,
+        };
+        let png = encode_png(&image).expect("encodes");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&png[16..24], &[0, 0, 0, 2, 0, 0, 0, 3]);
+    }
 
     #[test]
     fn wide_name_stops_at_the_first_nul() {

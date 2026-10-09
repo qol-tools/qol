@@ -3,6 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use qol_apps::shell_link::LinkTarget;
 
+use super::store::StorePackage;
 use crate::core::guards::PackageScope;
 use crate::core::{InstalledApp, LeftoverKind, MatchKind};
 
@@ -334,6 +335,7 @@ pub(super) fn path_key(path: &Path) -> String {
 pub(super) enum Source {
     Registry(UninstallEntry),
     Shortcut,
+    Store(StorePackage),
 }
 
 #[derive(Debug, Clone)]
@@ -350,7 +352,14 @@ impl CatalogApp {
     pub(super) fn entry(&self) -> Option<&UninstallEntry> {
         match &self.source {
             Source::Registry(entry) => Some(entry),
-            Source::Shortcut => None,
+            Source::Shortcut | Source::Store(_) => None,
+        }
+    }
+
+    pub(super) fn store(&self) -> Option<&StorePackage> {
+        match &self.source {
+            Source::Store(package) => Some(package),
+            Source::Registry(_) | Source::Shortcut => None,
         }
     }
 }
@@ -480,6 +489,34 @@ pub(super) fn build_catalog(
             None => {}
         }
     }
+    sort_by_name(&mut apps);
+    apps
+}
+
+pub(super) fn with_store(mut apps: Vec<CatalogApp>, packages: &[StorePackage]) -> Vec<CatalogApp> {
+    let mut claimed: BTreeSet<String> = apps.iter().map(|app| path_key(&app.app.path)).collect();
+    for package in packages {
+        if !claimed.insert(path_key(&package.install_dir)) {
+            continue;
+        }
+        apps.push(CatalogApp {
+            app: InstalledApp {
+                name: package.name.clone(),
+                bundle_id: Some(package.family_name.clone()),
+                path: package.install_dir.clone(),
+            },
+            source: Source::Store(package.clone()),
+            install_dir: None,
+            shortcuts: Vec::new(),
+            keys: BTreeSet::new(),
+            publisher_keys: BTreeSet::new(),
+        });
+    }
+    sort_by_name(&mut apps);
+    apps
+}
+
+fn sort_by_name(apps: &mut [CatalogApp]) {
     apps.sort_by(|left, right| {
         left.app
             .name
@@ -487,7 +524,6 @@ pub(super) fn build_catalog(
             .cmp(&right.app.name.to_lowercase())
             .then_with(|| left.app.path.cmp(&right.app.path))
     });
-    apps
 }
 
 fn install_dir(
@@ -1164,5 +1200,37 @@ mod tests {
             |_| false,
         );
         assert!(owned_keys(&catalog[0], &catalog).is_empty());
+    }
+
+    #[test]
+    fn store_packages_join_the_catalog_unless_their_folder_is_already_listed() {
+        let package = |name: &str, dir: &str| StorePackage {
+            full_name: format!("{name}_1.0.0.0_x64__abc"),
+            family_name: format!("{name}_abc"),
+            name: name.to_string(),
+            install_dir: PathBuf::from(dir),
+            protected: false,
+        };
+        let listed = UninstallEntry {
+            install_location: Some(PathBuf::from(r"C:\Program Files\Widget")),
+            ..entry("W", "Widget", "w.exe")
+        };
+        let catalog = with_store(
+            build_catalog(vec![listed], Vec::new(), &roots(), |_| true),
+            &[
+                package(
+                    "Calculator",
+                    r"C:\Program Files\WindowsApps\Calc_1.0.0.0_x64__abc",
+                ),
+                package("Widget Store", r"C:\Program Files\Widget"),
+            ],
+        );
+        let names: Vec<&str> = catalog.iter().map(|app| app.app.name.as_str()).collect();
+        assert_eq!(names, ["Calculator", "Widget"]);
+        let calculator = &catalog[0];
+        assert_eq!(calculator.app.bundle_id.as_deref(), Some("Calculator_abc"));
+        assert!(calculator.store().is_some());
+        assert!(calculator.entry().is_none());
+        assert!(calculator.install_dir.is_none());
     }
 }

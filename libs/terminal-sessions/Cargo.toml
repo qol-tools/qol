@@ -20,6 +20,13 @@ workspace-hack.workspace = true
 qol-app-icon.workspace = true
 qol-process.workspace = true
 qol-windowing.workspace = true
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_Variant",
+  "Win32_UI_Accessibility",
+] }
 windows-sys = { version = "0.59", features = [
   "Wdk_System_Threading",
   "Win32_Foundation",
@@ -33,6 +40,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+dirs = "6.0"
 tempfile = "3.8"
 
 [lints.rust]
