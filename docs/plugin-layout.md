@@ -1,14 +1,15 @@
 # Plugin Source Layout
 
 Plugin directories contain two different kinds of artifacts: code compiled into
-the plugin binary and optional browser assets packaged for qol-tray. Their
+the plugin binary and optional browser assets packaged with the plugin. Their
 locations are part of the architecture, not interchangeable styling choices.
+qol-tray's own UI is native GPUI; it has no web UI.
 
 ## The two UI locations
 
 | Path | Owner | Contents |
 |---|---|---|
-| `ui/` | qol-tray's web host | Packaged HTML, JavaScript, CSS, and schemas. The host discovers `ui/index.html` from the installed plugin root. |
+| `ui/` | qol-tray's HTTP API | Packaged HTML, JavaScript, CSS, and schemas. The API serves `ui/index.html` from the installed plugin root at `/plugins/<id>/`. |
 | `src/ui/` | the plugin crate | Rust modules for native GPUI windows, views, toasts, panels, and presentation state. |
 
 Root `ui/` is therefore correct for custom web pages such as qol-keyremap and
@@ -25,7 +26,7 @@ plugin-name/
 ├── plugin.toml
 ├── qol-config.toml          optional settings contract
 ├── qol-runtime.toml         optional runtime contract
-├── ui/                      optional host-served web assets
+├── ui/                      optional HTTP-served web assets
 └── src/
     ├── main.rs              thin binary entrypoint
     ├── lib.rs               crate composition and public facade
