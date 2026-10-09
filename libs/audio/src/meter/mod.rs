@@ -21,6 +21,10 @@ impl Meter {
         self.inner.device()
     }
 
+    pub fn is_finished(&self) -> bool {
+        self.inner.is_finished()
+    }
+
     pub fn peak_before_volume(&self, percent: u32) -> f32 {
         self.inner.peak_before_volume(percent)
     }

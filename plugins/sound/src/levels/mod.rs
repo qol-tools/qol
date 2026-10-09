@@ -23,6 +23,9 @@ pub fn open(role: Role) -> Option<Meter> {
 }
 
 pub fn is_current(meter: &Meter, role: Role) -> bool {
+    if meter.is_finished() {
+        return false;
+    }
     match default_output::effective(role.direction) {
         Ok(default) => measures(meter.device(), default.as_deref()),
         Err(error) => {

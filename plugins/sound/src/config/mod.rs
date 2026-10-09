@@ -62,9 +62,15 @@ pub fn save_input_device(device: &str) -> anyhow::Result<()> {
 }
 
 fn current() -> anyhow::Result<SoundConfig> {
-    inspect()
-        .map(|inspection| inspection.config)
-        .map_err(|error| anyhow::anyhow!("cannot read the saved audio configuration: {error}"))
+    match inspect() {
+        Ok(inspection) => Ok(inspection.config),
+        Err(error) => {
+            log::warn!("sound: the saved configuration cannot be read, using defaults: {error}");
+            qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).map_err(|errors| {
+                anyhow::anyhow!("cannot load the audio configuration defaults: {errors:?}")
+            })
+        }
+    }
 }
 
 fn save(config: &SoundConfig, choice: &str) -> anyhow::Result<()> {

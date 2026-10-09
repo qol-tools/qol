@@ -32,6 +32,8 @@ const METER_RECHECK: Duration = Duration::from_secs(1);
 
 static METERS: Mutex<Option<Meters>> = Mutex::new(None);
 
+static LAST_SAVED_OUTPUT: Mutex<Option<String>> = Mutex::new(None);
+
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: true,
@@ -199,7 +201,10 @@ fn apply_saved_output(config: &SoundConfig) -> bool {
         }
     };
     let before = before.as_ref().map(|identity| identity.as_str());
-    if !should_follow(config.input.follow_output, before, applied.as_str()) {
+    let choice_changed = note_saved_output(device);
+    if !choice_changed
+        || !should_follow(config.input.follow_output, before, applied.as_str())
+    {
         return false;
     }
     match crate::input::follow(&applied) {
@@ -209,6 +214,17 @@ fn apply_saved_output(config: &SoundConfig) -> bool {
             false
         }
     }
+}
+
+fn note_saved_output(device: &str) -> bool {
+    let mut last = LAST_SAVED_OUTPUT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let changed = last.as_deref() != Some(device);
+    if changed {
+        *last = Some(device.to_owned());
+    }
+    changed
 }
 
 fn should_follow(follow_output: bool, before: Option<&str>, applied: &str) -> bool {

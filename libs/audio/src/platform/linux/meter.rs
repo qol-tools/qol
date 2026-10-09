@@ -58,6 +58,10 @@ impl Meter {
         &self.device
     }
 
+    pub(crate) fn is_finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
     pub(crate) fn peak_before_volume(&self, percent: u32) -> f32 {
         before_volume(self.peak(), percent, self.includes_volume)
     }
@@ -108,10 +112,7 @@ fn target(connection: &mut Connection, direction: Direction) -> Result<Target, A
         })?,
         Direction::Input => node.index,
     };
-    let includes_volume = match direction {
-        Direction::Output => !node.hardware_volume,
-        Direction::Input => true,
-    };
+    let includes_volume = !node.hardware_volume;
     Ok(Target {
         device: node.name,
         source_index,

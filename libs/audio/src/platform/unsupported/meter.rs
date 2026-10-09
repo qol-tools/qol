@@ -17,6 +17,10 @@ impl Meter {
         match *self {}
     }
 
+    pub(crate) fn is_finished(&self) -> bool {
+        match *self {}
+    }
+
     pub(crate) fn peak_before_volume(&self, percent: u32) -> f32 {
         let _ = percent;
         match *self {}
