@@ -5,11 +5,15 @@ use qol_headless::{Command, Execution, HeadlessApp};
 use crate::commands::{agents, peers, sessions};
 
 pub(super) fn execution(args: &CliArgs) -> Result<Option<Execution>> {
-    let has_help = args.values.iter().any(|value| {
-        value
-            .to_str()
-            .is_some_and(|value| matches!(value, "help" | "-h" | "--help"))
-    });
+    let has_help = args
+        .values
+        .iter()
+        .take_while(|value| value.to_str() != Some("--"))
+        .any(|value| {
+            value
+                .to_str()
+                .is_some_and(|value| matches!(value, "help" | "-h" | "--help"))
+        });
     let is_agents = args.values.first().and_then(|value| value.to_str()) == Some("agents");
     let is_peers = args.values.first().and_then(|value| value.to_str()) == Some("peers");
     if !is_agents && !is_peers && !args.values.is_empty() && !has_help && !args.json {
@@ -258,6 +262,30 @@ fn app() -> HeadlessApp {
                 "Prints one row per recorded fork: key, tool, tier, session token, and the path to its brief. Forks are never collected, so this listing is the only link back to a tree that was deliberately cut loose.",
                 "Fork rows on stdout; diagnostics on stderr.",
                 "Exits non-zero when the fork directory cannot be read.",
+            ))
+            .subcommand(command(
+                "park",
+                "Close this harness and resume it when a long command exits.",
+                "qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]",
+                "Forwards to the installed CLI Sessions plugin, which owns parking. It parks the calling harness session on a long wait such as a pull request watcher: a detached CLI Sessions process runs the command, closes the calling terminal once its current turn ends, and when the command exits resumes the same conversation in a new tab with the exit code and the tail of the output. The resumed tab closes once its turn ends, unless it parks again or the user writes in it. If the calling terminal is still open when the command exits, the result is submitted into it instead.",
+                "Park JSON on stdout; diagnostics on stderr.",
+                "Exits non-zero when CLI Sessions is not installed or its park fails.",
+            ))
+            .subcommand(command(
+                "parked",
+                "List parked sessions and what became of them.",
+                "qol sessions parked",
+                "Forwards to the installed CLI Sessions plugin and prints one row per parked session.",
+                "Park rows on stdout; diagnostics on stderr.",
+                "Exits non-zero when CLI Sessions is not installed or cannot read its parked sessions.",
+            ))
+            .subcommand(command(
+                "unpark",
+                "Stop a parked wait and resume the conversation now.",
+                "qol sessions unpark <id>",
+                "Forwards to the installed CLI Sessions plugin, which stops the waiting command and resumes the conversation now, or reopens a finished one.",
+                "A confirmation line on stdout; diagnostics on stderr.",
+                "Exits non-zero when CLI Sessions is not installed or the unpark fails.",
             ))
             .subcommand(command(
                 "submit",
