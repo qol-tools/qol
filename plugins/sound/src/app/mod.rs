@@ -184,6 +184,7 @@ fn apply_saved_choice() {
 fn apply_saved_output(config: &SoundConfig) -> bool {
     let device = config.output.device.as_str();
     if !saved_choice_connected(OUTPUT, device) {
+        note_saved_output(device);
         return false;
     }
     let before = match crate::device::effective(OUTPUT) {
@@ -218,8 +219,8 @@ fn note_saved_output(device: &str) -> bool {
     let mut last = LAST_SAVED_OUTPUT
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    let changed = last.as_deref() != Some(device);
-    if changed {
+    let changed = last.as_deref().is_some_and(|saved| saved != device);
+    if last.as_deref() != Some(device) {
         *last = Some(device.to_owned());
     }
     changed
@@ -385,10 +386,10 @@ fn read_levels(now: Instant) -> Levels {
     {
         meters.output = current_meter(meters.output.take(), OUTPUT);
         meters.input = current_meter(meters.input.take(), INPUT);
-        meters.output_percent = crate::volume::percent().ok().flatten();
-        meters.input_percent = crate::volume::input_percent().ok().flatten();
         meters.checked = Some(now);
     }
+    meters.output_percent = crate::volume::percent().ok().flatten();
+    meters.input_percent = crate::volume::input_percent().ok().flatten();
     meters.last_ask = now;
     let levels = Levels {
         output: crate::levels::before_volume(meters.output.as_ref(), meters.output_percent),

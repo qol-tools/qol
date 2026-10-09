@@ -63,8 +63,8 @@ pub fn sample(settle: Duration) -> Levels {
     let input = open(INPUT);
     std::thread::sleep(settle);
     Levels {
-        output: peak(output.as_ref()),
-        input: peak(input.as_ref()),
+        output: before_volume(output.as_ref(), crate::volume::percent().ok().flatten()),
+        input: before_volume(input.as_ref(), crate::volume::input_percent().ok().flatten()),
     }
 }
 
