@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use qol_app_icon::ProcessEntry;
-use qol_terminal_sessions::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 use serde::{Deserialize, Serialize};
+
+use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 const TERMINAL_HOSTS: &[&str] = &["alacritty", "wezterm-gui", "windowsterminal"];
 const CONSOLE_SERVERS: &[&str] = &["conhost", "openconsole"];
@@ -37,7 +38,8 @@ pub(super) struct ConsoleReport {
     pub(super) window: u64,
     pub(super) window_visible: bool,
     pub(super) screen: String,
-    pub(super) viewport_current: bool,
+    #[serde(default)]
+    pub(super) live_screen: Option<String>,
     pub(super) processes: Vec<ProcessDetail>,
 }
 
@@ -90,6 +92,29 @@ pub(super) fn candidate_roots(table: &[ProcessEntry], own_pid: i32) -> Vec<Root>
             hosted: hosted.contains(&pid),
         })
         .collect()
+}
+
+pub(super) fn parse_reports(text: &str) -> Result<Vec<ConsoleReport>, serde_json::Error> {
+    serde_json::from_str(text.trim())
+}
+
+pub(super) fn listed<'a>(reports: &'a [ConsoleReport], roots: &[Root]) -> Vec<&'a ConsoleReport> {
+    reports
+        .iter()
+        .filter(|report| {
+            report.window_visible
+                || roots
+                    .iter()
+                    .any(|root| root.pid == report.root && root.hosted)
+        })
+        .collect()
+}
+
+pub(super) fn live_rows(top: i16, bottom: i16, cursor: i16) -> Option<(i16, i16)> {
+    if (top..=bottom).contains(&cursor) {
+        return None;
+    }
+    Some((cursor.saturating_sub(bottom - top).max(0), cursor))
 }
 
 pub(super) fn foreground_order(report: &ConsoleReport, table: &[ProcessEntry]) -> Vec<i32> {
@@ -201,7 +226,9 @@ pub(super) fn session_facts(
         reported_cmd,
         foreground_basenames: basenames,
         foreground_pids: foreground,
-        capabilities: SessionCapabilities::SCREEN_READING | SessionCapabilities::FOCUS,
+        capabilities: SessionCapabilities::SCREEN_READING
+            | SessionCapabilities::FOCUS
+            | SessionCapabilities::TEXT_INPUT,
         spawn_identity: None,
     })
 }
@@ -314,12 +341,102 @@ mod tests {
         assert!(!busy.at_prompt);
         assert_eq!(busy.cwd, r"C:\work\project");
         assert_eq!(busy.title, "Claude Code");
-        assert!(!busy.capabilities.contains(SessionCapabilities::TEXT_INPUT));
+        assert_eq!(busy.capabilities, SessionCapabilities::ALL);
 
         let idle = session_facts(&backend, "202-1", &report(202, &[202]), &table()).unwrap();
         assert!(idle.at_prompt);
         assert_eq!(idle.reported_cmd, None);
         assert_eq!(idle.cwd, r"C:\work\shell");
+    }
+
+    #[test]
+    fn helper_output_parses_into_reports() {
+        let cases = [
+            ("[]", Some("")),
+            ("[]\n", Some("")),
+            (
+                r#"[{"root":7,"attached":[7],"title":"t","window":0,"window_visible":true,"screen":"s","processes":[]}]"#,
+                Some("7:-"),
+            ),
+            (
+                r#"[{"root":8,"attached":[],"title":"","window":1,"window_visible":false,"screen":"old","live_screen":"new","processes":[]}]"#,
+                Some("8:new"),
+            ),
+            ("", None),
+            ("console-probe: invalid process id", None),
+        ];
+        for (text, expected) in cases {
+            let parsed = parse_reports(text).ok().map(|reports| {
+                reports
+                    .iter()
+                    .map(|report| {
+                        format!(
+                            "{}:{}",
+                            report.root,
+                            report.live_screen.as_deref().unwrap_or("-")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            });
+            assert_eq!(parsed.as_deref(), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn only_visible_or_terminal_hosted_consoles_are_listed() {
+        let roots = [
+            Root {
+                pid: 1,
+                hosted: true,
+            },
+            Root {
+                pid: 2,
+                hosted: false,
+            },
+            Root {
+                pid: 3,
+                hosted: false,
+            },
+        ];
+        let cases = [
+            (1, false, true),
+            (2, true, true),
+            (3, false, false),
+            (9, false, false),
+            (9, true, true),
+        ];
+        for (root, window_visible, expected) in cases {
+            let reports = [ConsoleReport {
+                root,
+                window_visible,
+                ..ConsoleReport::default()
+            }];
+            assert_eq!(
+                !listed(&reports, &roots).is_empty(),
+                expected,
+                "root {root} visible {window_visible}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_rows_follow_the_cursor_when_the_view_scrolled_away() {
+        let cases = [
+            (0, 29, 10, None),
+            (100, 129, 129, None),
+            (100, 129, 100, None),
+            (50, 79, 200, Some((171, 200))),
+            (300, 329, 20, Some((0, 20))),
+            (0, 29, 40, Some((11, 40))),
+        ];
+        for (top, bottom, cursor, expected) in cases {
+            assert_eq!(
+                live_rows(top, bottom, cursor),
+                expected,
+                "view {top}..={bottom} cursor {cursor}"
+            );
+        }
     }
 
     #[test]

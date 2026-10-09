@@ -6,7 +6,7 @@ icon = "voice"
 description = "Transcribe speech and route completed turns to live terminal sessions"
 version = "0.48.0"
 author = "KMRH47"
-platforms = ["linux"]
+platforms = ["linux", "windows"]
 
 [build]
 features = ["local-stt", "sherpa-stt"]

@@ -1,12 +1,9 @@
 pub mod kitty;
-mod platform;
 
 use std::sync::Arc;
 
 pub use qol_terminal_sessions::SessionFacts as Pane;
 use qol_terminal_sessions::{SessionBinding, SessionId};
-
-pub const CONSOLE_PROBE: &str = "console-probe";
 
 pub trait TerminalHost {
     fn discover(&self) -> Vec<Pane>;
@@ -18,11 +15,7 @@ pub trait TerminalHost {
 }
 
 pub fn system() -> Arc<dyn TerminalHost + Send + Sync> {
-    platform::system()
-}
-
-pub fn console_probe(args: &[String]) -> anyhow::Result<String> {
-    platform::console_probe(args)
+    Arc::new(kitty::Kitty::default())
 }
 
 pub fn kitty_session_id(window_id: u64) -> SessionId {

@@ -6526,7 +6526,6 @@ dependencies = [
  "qol-process",
  "qol-runtime",
  "qol-terminal-sessions",
- "qol-windowing",
  "serde",
  "serde_json",
  "tempfile",
@@ -7344,12 +7343,17 @@ version = "1.0.0"
 dependencies = [
  "chrono",
  "qol-agent-homes",
+ "qol-app-icon",
  "qol-config",
+ "qol-headless",
+ "qol-process",
  "qol-runtime",
  "qol-watch",
+ "qol-windowing",
  "serde",
  "serde_json",
  "tempfile",
+ "windows-sys 0.59.0",
  "workspace-hack",
 ]
 

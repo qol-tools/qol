@@ -74,10 +74,8 @@ pub struct TerminalSessionService {
 
 impl TerminalSessionService {
     pub fn system() -> Self {
-        Self::from_backends([
-            Arc::new(crate::kitty::KittyBackend::default()) as Arc<dyn TerminalBackend>
-        ])
-        .expect("built-in terminal backend ids are unique")
+        Self::from_backends(crate::platform::system_backends())
+            .expect("built-in terminal backend ids are unique")
     }
 
     pub fn from_backends(
