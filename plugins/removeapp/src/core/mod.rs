@@ -236,11 +236,22 @@ fn remove_after_package_with(
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
     for (item, snapshot) in plan.items.iter().zip(&plan.snapshots) {
-        if is_primary(item.kind) || (snapshot.exists && !item.path.exists()) {
+        if snapshot.exists && !item.path.exists() {
             continue;
         }
-        items.push(item.clone());
-        snapshots.push(snapshot.clone());
+        if !is_primary(item.kind) {
+            items.push(item.clone());
+            snapshots.push(snapshot.clone());
+        } else if item.kind == LeftoverKind::AppBundle
+            && plat.trashes_install_remnant()
+            && item.path.exists()
+        {
+            items.push(Leftover {
+                size_bytes: dir_size(&item.path),
+                ..item.clone()
+            });
+            snapshots.push(IdentitySnapshot::capture(&item.path));
+        }
     }
     let total_bytes = items.iter().map(|l| l.size_bytes).sum();
     let sub = RemovalPlan {
@@ -451,6 +462,7 @@ mod tests {
         running: RefCell<Vec<bool>>,
         removed: RefCell<Vec<(PathBuf, Disposal)>>,
         uninstalled: RefCell<usize>,
+        trashes_remnant: bool,
     }
 
     impl AppPlatform for FakePlat {
@@ -483,6 +495,9 @@ mod tests {
         }
         fn package_index(&self, _inventory: &[InstalledApp]) -> PackageIndex {
             PackageIndex::absent()
+        }
+        fn trashes_install_remnant(&self) -> bool {
+            self.trashes_remnant
         }
         fn uninstall_package(&self, _app: &InstalledApp, _package: &ManagedPackage) -> Result<()> {
             *self.uninstalled.borrow_mut() += 1;
@@ -690,6 +705,48 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.removed, vec![kept]);
+    }
+
+    #[test]
+    fn remove_after_package_trashes_a_changed_install_remnant_only_when_the_platform_asks() {
+        for (trashes_remnant, expected_removed) in [(true, 1), (false, 0)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let install = tmp.path().join("Foo");
+            std::fs::create_dir_all(&install).unwrap();
+            std::fs::write(install.join("foo.exe"), "app").unwrap();
+            let p = plan_with(
+                app("Foo", "com.acme.foo"),
+                vec![leftover(
+                    install.to_str().unwrap(),
+                    LeftoverKind::AppBundle,
+                    MatchKind::Fuzzy,
+                )],
+            );
+            std::fs::remove_file(install.join("foo.exe")).unwrap();
+            std::fs::write(install.join("uninstall.log"), "left behind").unwrap();
+            let package =
+                ManagedPackage::parse(PackageManager::Windows, "Foo", PackageScope::User).unwrap();
+            let fake = FakePlat {
+                trashes_remnant,
+                ..FakePlat::default()
+            };
+
+            let outcome = remove_after_package_with(
+                &fake,
+                &p,
+                Disposal::Delete,
+                &PackageStatus::Managed(package),
+                true,
+            )
+            .unwrap();
+
+            assert_eq!(outcome.removed.len(), expected_removed, "{trashes_remnant}");
+            assert!(fake
+                .removed
+                .borrow()
+                .iter()
+                .all(|(_, disposal)| *disposal == Disposal::Trash));
+        }
     }
 
     #[test]

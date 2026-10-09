@@ -1,6 +1,3 @@
-#[cfg(feature = "sherpa-stt")]
-mod sherpa_onnx;
-
 use std::sync::OnceLock;
 
 #[cfg(feature = "local-stt")]
@@ -14,8 +11,6 @@ pub(super) fn providers() -> &'static [TranscriberRegistration] {
         let mut providers = Vec::new();
         #[cfg(feature = "local-stt")]
         providers.extend([candle_whisper::REGISTRATION]);
-        #[cfg(feature = "sherpa-stt")]
-        providers.extend([sherpa_onnx::REGISTRATION]);
         providers.extend([websocket::REGISTRATION]);
         providers
     })

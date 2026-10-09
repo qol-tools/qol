@@ -4,6 +4,8 @@ mod linux;
 mod pulse_only;
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod unsupported;
+#[cfg(not(target_os = "windows"))]
+mod wasapi_only;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -26,9 +28,12 @@ pub(crate) use unsupported::{
     identity_for_node, is_muted, list_audio_devices, list_devices, reconnect_bluetooth,
     resolve_audio_device, set_default_output, set_muted, set_volume_percent, volume_percent, Meter,
 };
+#[cfg(not(target_os = "windows"))]
+pub(crate) use wasapi_only::Capture;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{
     bluetooth_endpoints, companion_input, disconnect_bluetooth, effective_default,
     identity_for_node, is_muted, list_audio_devices, list_devices, reconnect_bluetooth,
-    resolve_audio_device, set_default_output, set_muted, set_volume_percent, volume_percent, Meter,
+    resolve_audio_device, set_default_output, set_muted, set_volume_percent, volume_percent,
+    Capture, Meter,
 };

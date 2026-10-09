@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use windows::core::{Error, GUID, HRESULT, PWSTR};
+use windows::core::{Error, GUID, HRESULT, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_ContainerId;
 use windows::Win32::Foundation::{ERROR_NOT_FOUND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::Media::Audio::{
@@ -14,7 +14,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Variant::{VARENUM, VT_CLSID, VT_LPWSTR, VT_UI4};
 
-use crate::devices::Direction;
+use crate::devices::{Direction, Identity};
 use crate::AudioError;
 
 pub(super) struct Com {
@@ -104,6 +104,27 @@ pub(super) fn default_endpoint(
         })),
         Err(error) if error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) => Ok(None),
         Err(error) => Err(failed("cannot read the default audio endpoint")(error)),
+    }
+}
+
+pub(super) fn endpoint(
+    enumerator: &IMMDeviceEnumerator,
+    direction: Direction,
+    id: &str,
+) -> Result<Endpoint, AudioError> {
+    let wide = id
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>();
+    match unsafe { enumerator.GetDevice(PCWSTR(wide.as_ptr())) } {
+        Ok(device) => Ok(Endpoint {
+            id: id_of(&device)?,
+            device,
+        }),
+        Err(error) if error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0) => {
+            Err(AudioError::not_present(direction, &Identity::from_raw(id)))
+        }
+        Err(error) => Err(failed("cannot open the audio endpoint")(error)),
     }
 }
 

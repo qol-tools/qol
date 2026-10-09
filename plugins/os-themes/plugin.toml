@@ -6,7 +6,7 @@ icon = "os-themes"
 description = "Cursor effects and OS-wide theming"
 version = "0.60.0"
 author = "KMRH47"
-platforms = ["linux"]
+platforms = ["linux", "windows"]
 
 [runtime]
 command = "qol-os-themes"

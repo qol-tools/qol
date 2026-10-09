@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use qol_apps::shell_link::{LinkTarget, ShellLink};
 use qol_windowing::platform::windows::top_level_windows;
 
 use crate::cli::PLUGIN_ID;
@@ -144,10 +145,14 @@ fn start_menu_shortcuts() -> Vec<Shortcut> {
     let mut shortcuts = Vec::new();
     for root in qol_apps::start_menu::start_menu_roots() {
         for entry in qol_apps::start_menu::scan_start_menu_root(&root) {
+            let target = ShellLink::read(&entry.path).map_or(LinkTarget::Unknown, |link| {
+                link.target(&entry.path, |name| std::env::var(name).ok())
+            });
             shortcuts.push(Shortcut {
                 folder: top_folder(&root.path, &entry.path),
                 name: entry.name,
                 path: entry.path,
+                target,
             });
         }
     }
@@ -348,6 +353,10 @@ impl AppPlatform for Platform {
             index.insert(app.path.clone(), status);
         }
         index
+    }
+
+    fn trashes_install_remnant(&self) -> bool {
+        true
     }
 
     fn uninstall_package(&self, app: &InstalledApp, package: &ManagedPackage) -> Result<()> {

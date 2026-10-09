@@ -5,7 +5,7 @@ use std::ptr;
 use anyhow::{ensure, Result};
 use x11::{xcursor, xfixes, xlib};
 
-use crate::cursor::platform::linux::scale::scale_bilinear;
+use crate::cursor::platform::shake::{scale_bilinear, scaled_dimension, scaled_raster_hotspot};
 
 const MAX_CURSOR_DIMENSION: u32 = 512;
 const XFIXES_CURSOR_NOTIFY: i32 = 1;

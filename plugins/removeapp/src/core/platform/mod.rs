@@ -13,6 +13,9 @@ pub trait AppPlatform {
     fn package_index(&self, inventory: &[InstalledApp]) -> PackageIndex;
     fn uninstall_package(&self, app: &InstalledApp, package: &ManagedPackage)
         -> anyhow::Result<()>;
+    fn trashes_install_remnant(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(target_os = "linux")]

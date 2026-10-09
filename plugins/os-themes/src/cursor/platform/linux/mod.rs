@@ -1,9 +1,7 @@
 mod display;
 mod game_focus;
 mod journal;
-mod motion;
 mod runtime;
-mod scale;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
+use qol_apps::shell_link::LinkTarget;
+
 use crate::core::guards::PackageScope;
 use crate::core::{InstalledApp, LeftoverKind, MatchKind};
 
@@ -298,6 +300,17 @@ impl Roots {
             .any(|root| same_path(path, root));
         deep_enough && !under_windows && !is_root
     }
+
+    fn is_system_target(&self, target: &LinkTarget) -> bool {
+        match target {
+            LinkTarget::ShellFolder => true,
+            LinkTarget::Path(path) => self
+                .windows
+                .as_ref()
+                .is_some_and(|windows| within(path, windows)),
+            LinkTarget::Advertised | LinkTarget::Unknown => false,
+        }
+    }
 }
 
 pub(super) fn same_path(left: &Path, right: &Path) -> bool {
@@ -346,10 +359,32 @@ pub(super) struct Shortcut {
     pub(super) name: String,
     pub(super) path: PathBuf,
     pub(super) folder: Option<String>,
+    pub(super) target: LinkTarget,
 }
 
-pub(super) fn is_system_shortcut(folder: Option<&str>) -> bool {
-    folder.is_some_and(|folder| SYSTEM_SHORTCUT_FOLDERS.contains(&normalize(folder).as_str()))
+fn system_folders(shortcuts: &[Shortcut], roots: &Roots) -> BTreeSet<String> {
+    let mut verdicts: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+    for shortcut in shortcuts {
+        let Some(folder) = shortcut.folder.as_deref() else {
+            continue;
+        };
+        let (system, app) = verdicts.entry(normalize(folder)).or_default();
+        if roots.is_system_target(&shortcut.target) {
+            *system = true;
+        } else if shortcut.target != LinkTarget::Unknown {
+            *app = true;
+        }
+    }
+    verdicts
+        .into_iter()
+        .filter(|(_, (system, app))| *system && !*app)
+        .map(|(folder, _)| folder)
+        .chain(
+            SYSTEM_SHORTCUT_FOLDERS
+                .iter()
+                .map(|folder| folder.to_string()),
+        )
+        .collect()
 }
 
 pub(super) fn build_catalog(
@@ -384,33 +419,61 @@ pub(super) fn build_catalog(
             source: Source::Registry(entry),
         });
     }
+    let system_folders = system_folders(&shortcuts, roots);
     for shortcut in shortcuts {
-        if is_system_shortcut(shortcut.folder.as_deref()) {
+        let folder_key = shortcut.folder.as_deref().map(normalize);
+        if roots.is_system_target(&shortcut.target)
+            || folder_key
+                .as_ref()
+                .is_some_and(|folder| system_folders.contains(folder))
+        {
             continue;
         }
         let shortcut_key = normalize(&shortcut.name);
-        let folder_key = shortcut.folder.as_deref().map(normalize);
-        let owner = apps.iter_mut().find(|app| {
+        let target = match &shortcut.target {
+            LinkTarget::Path(path) => Some(path.as_path()),
+            _ => None,
+        };
+        let installed_in = |app: &CatalogApp| {
+            target
+                .zip(app.install_dir.as_ref())
+                .is_some_and(|(target, (dir, _))| within(target, dir))
+        };
+        let named = |app: &CatalogApp| {
             app.entry().is_some()
                 && (app.keys.contains(&shortcut_key)
                     || folder_key
                         .as_ref()
                         .is_some_and(|folder| app.keys.contains(folder)))
-        });
+        };
+        let owner = apps
+            .iter()
+            .position(installed_in)
+            .or_else(|| apps.iter().position(named));
         match owner {
-            Some(owner) => owner.shortcuts.push(shortcut.path),
+            Some(owner) => apps[owner].shortcuts.push(shortcut.path),
             None if !claimed_paths.contains(&path_key(&shortcut.path)) => {
+                let keys = usable_keys([shortcut.name.as_str()]);
+                let install_dir = target
+                    .and_then(Path::parent)
+                    .filter(|dir| owns_dir(dir, &keys, roots, &is_dir))
+                    .filter(|dir| !claimed_paths.contains(&path_key(dir)))
+                    .map(|dir| (dir.to_path_buf(), MatchKind::Fuzzy));
+                let path = install_dir
+                    .as_ref()
+                    .map_or_else(|| shortcut.path.clone(), |(dir, _)| dir.clone());
                 claimed_paths.insert(path_key(&shortcut.path));
+                claimed_paths.insert(path_key(&path));
                 apps.push(CatalogApp {
                     app: InstalledApp {
                         name: shortcut.name.clone(),
                         bundle_id: None,
-                        path: shortcut.path.clone(),
+                        path,
                     },
                     source: Source::Shortcut,
-                    install_dir: None,
+                    install_dir,
                     shortcuts: vec![shortcut.path],
-                    keys: usable_keys([shortcut.name.as_str()]),
+                    keys,
                     publisher_keys: BTreeSet::new(),
                 });
             }
@@ -442,16 +505,29 @@ fn install_dir(
     [entry.display_icon.clone(), uninstaller]
         .into_iter()
         .flatten()
-        .filter_map(|file| file.parent().map(Path::to_path_buf))
-        .find(|dir| {
-            is_dir(dir)
-                && roots.is_safe_dir(dir)
-                && dir
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| keys.iter().any(|key| name_matches(name, key)))
+        .flat_map(|file| {
+            file.ancestors()
+                .skip(1)
+                .take(2)
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>()
         })
+        .find(|dir| owns_dir(dir, keys, roots, is_dir))
         .map(|dir| (dir, MatchKind::Fuzzy))
+}
+
+fn owns_dir(
+    dir: &Path,
+    keys: &BTreeSet<String>,
+    roots: &Roots,
+    is_dir: &impl Fn(&Path) -> bool,
+) -> bool {
+    is_dir(dir)
+        && roots.is_safe_dir(dir)
+        && dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| keys.iter().any(|key| name_matches(name, key)))
 }
 
 fn name_matches(dir_name: &str, key: &str) -> bool {
@@ -676,6 +752,51 @@ mod tests {
     }
 
     #[test]
+    fn install_dir_looks_one_folder_above_versioned_binaries() {
+        let onedrive = r"C:\Users\me\AppData\Local\Microsoft\OneDrive";
+        let cases = [
+            (
+                r"C:\Users\me\AppData\Local\Microsoft\OneDrive\25.087.0506.0001\OneDriveSetup.exe",
+                Some(onedrive),
+            ),
+            (
+                r"C:\Users\me\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+                Some(onedrive),
+            ),
+            (
+                r"C:\Users\me\AppData\Local\Microsoft\Edge\1.2.3\setup.exe",
+                None,
+            ),
+        ];
+        for (uninstaller, expected) in cases {
+            let raw = RawValues {
+                publisher: Some("Microsoft Corporation".into()),
+                ..values(
+                    "Microsoft OneDrive",
+                    &format!("\"{uninstaller}\" /uninstall"),
+                )
+            };
+            let entry = entry_from(
+                location(Hive::CurrentUser, View::Native, "OneDriveSetup.exe"),
+                raw,
+            )
+            .unwrap();
+            let keys = entry_keys(&entry);
+            let found = install_dir(&entry, &keys, &roots(), &|path: &Path| {
+                Path::new(uninstaller)
+                    .ancestors()
+                    .skip(1)
+                    .any(|dir| same_path(path, dir))
+            });
+            assert_eq!(
+                found,
+                expected.map(|dir| (PathBuf::from(dir), MatchKind::Fuzzy)),
+                "{uninstaller}"
+            );
+        }
+    }
+
+    #[test]
     fn split_command_handles_quoted_and_unquoted_programs() {
         let cases = [
             (
@@ -819,6 +940,7 @@ mod tests {
             name: name.to_string(),
             path: PathBuf::from(format!(r"C:\Menu\{name}.lnk")),
             folder: folder.map(str::to_string),
+            target: LinkTarget::Unknown,
         };
         let shortcuts = vec![
             shortcut("Firefox", None),
@@ -862,6 +984,159 @@ mod tests {
             vec![PathBuf::from(r"C:\Menu\7-Zip File Manager.lnk")]
         );
         assert_eq!(catalog[3].entry(), None);
+    }
+
+    #[test]
+    fn shortcut_targets_drop_system_entries_and_attach_install_dirs() {
+        let shortcut = |name: &str, folder: Option<&str>, target: LinkTarget| Shortcut {
+            name: name.to_string(),
+            path: PathBuf::from(match folder {
+                Some(folder) => format!(r"C:\Menu\{folder}\{name}.lnk"),
+                None => format!(r"C:\Menu\{name}.lnk"),
+            }),
+            folder: folder.map(str::to_string),
+            target,
+        };
+        let at = |path: &str| LinkTarget::Path(PathBuf::from(path));
+        let firefox = (
+            "Mozilla Firefox (x64 en-US)",
+            r"C:\Program Files\Mozilla Firefox",
+            0,
+        );
+        let cases = [
+            (
+                "shell folder",
+                vec![shortcut("File Explorer", None, LinkTarget::ShellFolder)],
+                vec![firefox],
+            ),
+            (
+                "windows target",
+                vec![shortcut(
+                    "Administrative Tools",
+                    None,
+                    at(r"C:\WINDOWS\system32\control.exe"),
+                )],
+                vec![firefox],
+            ),
+            (
+                "windows setup stub",
+                vec![shortcut(
+                    "Microsoft OneDrive",
+                    None,
+                    at(r"C:\Windows\System32\OneDriveSetup.exe"),
+                )],
+                vec![firefox],
+            ),
+            (
+                "installed target",
+                vec![shortcut(
+                    "Microsoft OneDrive",
+                    None,
+                    at(r"C:\Program Files\Microsoft OneDrive\OneDrive.exe"),
+                )],
+                vec![
+                    (
+                        "Microsoft OneDrive",
+                        r"C:\Program Files\Microsoft OneDrive",
+                        1,
+                    ),
+                    firefox,
+                ],
+            ),
+            (
+                "target in an unrelated folder",
+                vec![shortcut(
+                    "Portable",
+                    None,
+                    at(r"C:\Users\me\Desktop\portable.exe"),
+                )],
+                vec![firefox, ("Portable", r"C:\Menu\Portable.lnk", 1)],
+            ),
+            (
+                "target inside a registry install",
+                vec![shortcut(
+                    "Firefox Private Browsing",
+                    None,
+                    at(r"C:\Program Files\Mozilla Firefox\private_browsing.exe"),
+                )],
+                vec![(firefox.0, firefox.1, 1)],
+            ),
+            (
+                "two shortcuts into one portable folder",
+                vec![
+                    shortcut("Tool", None, at(r"C:\Tools\Tool\tool.exe")),
+                    shortcut("Tool Settings", None, at(r"C:\Tools\Tool\settings.exe")),
+                ],
+                vec![firefox, ("Tool", r"C:\Tools\Tool", 2)],
+            ),
+            (
+                "folder of system shortcuts and unknowns",
+                vec![
+                    shortcut(
+                        "Debugger",
+                        Some("Debugging Tools"),
+                        at(r"C:\Windows\System32\dbg.exe"),
+                    ),
+                    shortcut(
+                        "Debugger Notes",
+                        Some("Debugging Tools"),
+                        LinkTarget::Unknown,
+                    ),
+                ],
+                vec![firefox],
+            ),
+            (
+                "folder with an installed app keeps it",
+                vec![
+                    shortcut(
+                        "Office Help",
+                        Some("Office Tools"),
+                        at(r"C:\Windows\hh.exe"),
+                    ),
+                    shortcut("Office Word", Some("Office Tools"), LinkTarget::Advertised),
+                ],
+                vec![
+                    firefox,
+                    ("Office Word", r"C:\Menu\Office Tools\Office Word.lnk", 1),
+                ],
+            ),
+        ];
+        let entries = || {
+            vec![UninstallEntry {
+                install_location: Some(PathBuf::from(r"C:\Program Files\Mozilla Firefox")),
+                ..entry(
+                    "Mozilla Firefox 128.0 (x64 en-US)",
+                    "Mozilla Firefox (x64 en-US)",
+                    r#""C:\Program Files\Mozilla Firefox\uninstall\helper.exe""#,
+                )
+            }]
+        };
+        let dirs = [
+            r"C:\Program Files\Mozilla Firefox",
+            r"C:\Program Files\Microsoft OneDrive",
+            r"C:\Tools\Tool",
+            r"C:\Users\me\Desktop",
+        ];
+        for (label, shortcuts, expected) in cases {
+            let catalog = build_catalog(entries(), shortcuts, &roots(), |path| {
+                dirs.iter().any(|dir| same_path(path, Path::new(dir)))
+            });
+            let actual: Vec<(&str, PathBuf, usize)> = catalog
+                .iter()
+                .map(|app| {
+                    (
+                        app.app.name.as_str(),
+                        app.app.path.clone(),
+                        app.shortcuts.len(),
+                    )
+                })
+                .collect();
+            let expected: Vec<(&str, PathBuf, usize)> = expected
+                .into_iter()
+                .map(|(name, path, count)| (name, PathBuf::from(path), count))
+                .collect();
+            assert_eq!(actual, expected, "{label}");
+        }
     }
 
     #[test]

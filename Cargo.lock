@@ -7021,8 +7021,10 @@ dependencies = [
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-runtime",
+ "qol-windowing",
  "serde",
  "serde_json",
+ "windows-sys 0.59.0",
  "workspace-hack",
  "x11",
 ]

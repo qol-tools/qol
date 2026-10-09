@@ -21,7 +21,7 @@ class PlatformExcludeDerivation(unittest.TestCase):
         ubuntu, macos, windows = ac.platform_sets()
         cases = [
             ("qol-launcher", windows, True),
-            ("qol-os-themes", windows, False),
+            ("qol-keyremap", windows, False),
             ("qol-keyremap", ubuntu, True),
             ("qol-removeapp", ubuntu, False),
             ("qol-os-themes", ubuntu, False),

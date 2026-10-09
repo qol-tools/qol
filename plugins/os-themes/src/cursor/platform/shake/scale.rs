@@ -30,6 +30,25 @@ pub fn scale_bilinear(
     }
 }
 
+pub fn scaled_dimension(base: u32, factor: f32, max: u32) -> Option<u32> {
+    let scaled = (base as f32 * factor).round();
+    if !scaled.is_finite() || scaled < 1.0 || scaled > i32::MAX as f32 {
+        return None;
+    }
+    Some((scaled as u32).clamp(1, max.max(1)))
+}
+
+pub fn scaled_raster_hotspot(hotspot: u32, source_bound: u32, target_bound: u32) -> u32 {
+    if source_bound == 0 {
+        return 0;
+    }
+    let scaled = hotspot as f32 * target_bound as f32 / source_bound as f32;
+    if !scaled.is_finite() || scaled < 0.0 {
+        return 0;
+    }
+    (scaled.round() as u32).min(target_bound.saturating_sub(1))
+}
+
 struct ScaleRequest<'a> {
     src: PixelGrid<'a>,
     dst: ImageSize,
@@ -198,7 +217,43 @@ fn rounded_byte(value: f32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::scale_bilinear;
+    use super::{scale_bilinear, scaled_dimension, scaled_raster_hotspot};
+
+    #[test]
+    fn scaled_dimension_respects_the_backend_ceiling() {
+        let cases = [
+            (32, 1.0, 512, Some(32)),
+            (32, 4.0, 512, Some(128)),
+            (48, 8.0, 256, Some(256)),
+            (24, 2.5, 512, Some(60)),
+            (32, 0.0, 512, None),
+            (32, f32::INFINITY, 512, None),
+        ];
+        for (base, factor, max, expected) in cases {
+            assert_eq!(
+                scaled_dimension(base, factor, max),
+                expected,
+                "base={base} factor={factor} max={max}"
+            );
+        }
+    }
+
+    #[test]
+    fn scaled_hotspot_tracks_the_target_bounds() {
+        let cases = [
+            (0, 32, 128, 0),
+            (4, 32, 128, 16),
+            (31, 32, 128, 124),
+            (5, 0, 64, 0),
+        ];
+        for (hotspot, source, target, expected) in cases {
+            assert_eq!(
+                scaled_raster_hotspot(hotspot, source, target),
+                expected,
+                "hotspot={hotspot} source={source} target={target}"
+            );
+        }
+    }
 
     #[test]
     fn scale_bilinear_2x_maps_source_corners() {
