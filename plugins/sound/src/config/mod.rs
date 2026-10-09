@@ -12,8 +12,35 @@ pub struct OutputConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct InputConfig {
+    #[serde(default = "system_default")]
+    pub device: String,
+    #[serde(default = "follows_output")]
+    pub follow_output: bool,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self {
+            device: system_default(),
+            follow_output: follows_output(),
+        }
+    }
+}
+
+fn system_default() -> String {
+    crate::device::SYSTEM_DEFAULT.to_owned()
+}
+
+fn follows_output() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SoundConfig {
     pub output: OutputConfig,
+    #[serde(default)]
+    pub input: InputConfig,
 }
 
 pub fn inspect(
@@ -23,16 +50,29 @@ pub fn inspect(
 }
 
 pub fn save_output_device(device: &str) -> anyhow::Result<()> {
-    let config = SoundConfig {
-        output: OutputConfig {
-            device: device.to_owned(),
-        },
-    };
-    if qol_runtime::plugin_config::save(&config) {
+    let mut config = current()?;
+    config.output.device = device.to_owned();
+    save(&config, "sound output")
+}
+
+pub fn save_input_device(device: &str) -> anyhow::Result<()> {
+    let mut config = current()?;
+    config.input.device = device.to_owned();
+    save(&config, "microphone")
+}
+
+fn current() -> anyhow::Result<SoundConfig> {
+    let inspection = inspect()
+        .map_err(|error| anyhow::anyhow!("the saved configuration cannot be read: {error}"))?;
+    Ok(inspection.config)
+}
+
+fn save(config: &SoundConfig, choice: &str) -> anyhow::Result<()> {
+    if qol_runtime::plugin_config::save(config) {
         Ok(())
     } else {
         anyhow::bail!(
-            "{}: failed to persist the sound output choice over the runtime socket",
+            "{}: failed to persist the {choice} choice over the runtime socket",
             crate::PLUGIN_ID
         )
     }
@@ -154,6 +194,8 @@ mod tests {
         let config: SoundConfig =
             qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
         assert_eq!(config.output.device, "default");
+        assert_eq!(config.input.device, "default");
+        assert!(config.input.follow_output);
     }
 
     #[test]
@@ -180,6 +222,60 @@ mod tests {
         let stored = inspect().unwrap();
         assert_eq!(stored.config.output.device, "Luna 2");
         assert_eq!(stored.source.as_deref(), Some(pinned.config_path.as_path()));
+
+        pinned.write(
+            r#"{"output":{"device":"Luna 2"},"input":{"device":"Virtuoso","follow_output":false}}"#,
+        );
+        let both = inspect().unwrap();
+        assert_eq!(both.config.output.device, "Luna 2");
+        assert_eq!(both.config.input.device, "Virtuoso");
+        assert!(!both.config.input.follow_output);
+    }
+
+    #[test]
+    fn a_file_saved_before_input_existed_still_loads_with_input_defaults() {
+        let _lock = env_lock();
+        let Some(pinned) = PinnedInstall::new("output-only") else {
+            return;
+        };
+
+        pinned.write(r#"{"output":{"device":"Luna 2"}}"#);
+        let stored = inspect().unwrap();
+        assert_eq!(stored.config.output.device, "Luna 2");
+        assert_eq!(stored.config.input, InputConfig::default());
+    }
+
+    #[test]
+    fn a_config_without_an_input_section_deserializes_with_input_defaults() {
+        let config: SoundConfig =
+            serde_json::from_str(r#"{"output":{"device":"Luna 2"}}"#).unwrap();
+        assert_eq!(config.input.device, crate::device::SYSTEM_DEFAULT);
+        assert!(config.input.follow_output);
+        let partial: SoundConfig =
+            serde_json::from_str(r#"{"output":{"device":"a"},"input":{"device":"b"}}"#).unwrap();
+        assert_eq!(partial.input.device, "b");
+        assert!(partial.input.follow_output);
+    }
+
+    #[test]
+    fn a_saved_config_keeps_both_sections() {
+        let config = SoundConfig {
+            output: OutputConfig {
+                device: "Luna 2".to_string(),
+            },
+            input: InputConfig {
+                device: "Virtuoso".to_string(),
+                follow_output: false,
+            },
+        };
+        let payload = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "output": { "device": "Luna 2" },
+                "input": { "device": "Virtuoso", "follow_output": false },
+            })
+        );
     }
 
     #[test]

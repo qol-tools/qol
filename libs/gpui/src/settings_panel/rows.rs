@@ -63,6 +63,13 @@ pub(super) struct LiveQuery {
     pub(super) value_from: Option<String>,
 }
 
+/// The live level a `level_slider` lights under its thumb, 0.0 to 1.0.
+#[derive(Debug)]
+pub(super) struct NumberLevel {
+    pub(super) source: LiveQuery,
+    pub(super) value: f32,
+}
+
 #[derive(Debug)]
 pub(super) struct SelectLive {
     pub(super) source: LiveQuery,
@@ -108,6 +115,7 @@ pub(super) enum RowControl {
         max: Option<f64>,
         step: Option<f64>,
         live: Option<LiveQuery>,
+        level: Option<NumberLevel>,
     },
     Text(String),
     TextList(Vec<String>),
@@ -425,6 +433,7 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 max: field.number.max,
                 step: field.number.step,
                 live: live_query(field),
+                level: number_level(field),
             },
             _ => unsupported_mismatch(field),
         },
@@ -636,6 +645,72 @@ fn live_query(field: &ResolvedField) -> Option<LiveQuery> {
         query: query.clone(),
         value_from: field.active_value_from.clone(),
     })
+}
+
+fn number_level(field: &ResolvedField) -> Option<NumberLevel> {
+    field.level_query.as_ref().map(|query| NumberLevel {
+        source: LiveQuery {
+            query: query.clone(),
+            value_from: field.level_value_from.clone(),
+        },
+        value: 0.0,
+    })
+}
+
+/// The level queries a page polls on its own fast cadence. They stay out of
+/// `runtime_query_names`, so the contract-cadence poller never asks them.
+pub(super) fn level_query_names<'a>(rows: impl IntoIterator<Item = &'a Row>) -> Vec<String> {
+    rows.into_iter()
+        .filter_map(|row| match &row.control {
+            RowControl::Number {
+                level: Some(level), ..
+            } => Some(level.source.query.clone()),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// A level answer is a fraction: clamped to 0.0..=1.0, and 0 when the key is
+/// missing, null, not a number, or the query failed.
+pub(super) fn parse_level(
+    answer: &Result<serde_json::Value, String>,
+    value_from: Option<&str>,
+) -> f32 {
+    answer
+        .as_ref()
+        .ok()
+        .and_then(|answer| query_value(answer, value_from))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|level| level.is_finite())
+        .map_or(0.0, |level| level.clamp(0.0, 1.0) as f32)
+}
+
+pub(super) fn apply_level_query(
+    rows: &mut [Row],
+    source: usize,
+    query: &str,
+    result: &Result<serde_json::Value, String>,
+) -> bool {
+    let mut changed = false;
+    for row in rows.iter_mut().filter(|row| row.source == source) {
+        let RowControl::Number {
+            level: Some(level), ..
+        } = &mut row.control
+        else {
+            continue;
+        };
+        if level.source.query != query {
+            continue;
+        }
+        let next = parse_level(result, level.source.value_from.as_deref());
+        if next != level.value {
+            level.value = next;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn field_options(
@@ -1403,12 +1478,13 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_query, begin_list_item_action, clear_slider_hold, filtered_list_items,
-        list_item_actions, list_items, list_slider_value, merged_config, option_accent,
-        options_from_value, primary_list_item_action, row_action, row_is_visible, row_streams,
-        row_value_json, rows_from_resolved, runtime_query_names, sections_from_resolved,
-        selected_list_item, set_config_value, stream_gated, visible_row_indices, FieldDefault,
-        ListActions, ListItem, ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
+        apply_level_query, apply_runtime_query, begin_list_item_action, clear_slider_hold,
+        filtered_list_items, level_query_names, list_item_actions, list_items, list_slider_value,
+        merged_config, option_accent, options_from_value, parse_level, primary_list_item_action,
+        row_action, row_is_visible, row_streams, row_value_json, rows_from_resolved,
+        runtime_query_names, sections_from_resolved, selected_list_item, set_config_value,
+        stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig,
+        Row, RowControl, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -2357,6 +2433,7 @@ query = "modes"
                     max: None,
                     step: Some(1.0),
                     live: None,
+                    level: None,
                 },
             },
         ];
@@ -2445,6 +2522,83 @@ active_value_from = "volume"
         assert_eq!(live_number_value(&rows), 60.0);
     }
 
+    const LEVEL_NUMBER_SPEC: &str = r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+label = "Volume"
+default = 0
+min = 0
+max = 100
+step = 5
+variant = "level_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+level_query = "levels"
+level_value_from = "output"
+"#;
+
+    fn level_number_rows() -> Vec<Row> {
+        let spec = qol_config::contract::parse_spec_str(LEVEL_NUMBER_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        rows_from_resolved(&resolved, 0)
+    }
+
+    fn level_of(rows: &[Row]) -> f32 {
+        match &rows[0].control {
+            RowControl::Number {
+                level: Some(level), ..
+            } => level.value,
+            other => panic!("expected a level number, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_level_parse_clamps_and_reads_missing_as_silence() {
+        let cases = [
+            (Ok(serde_json::json!({ "output": 0.42 })), 0.42),
+            (Ok(serde_json::json!({ "output": 1.7 })), 1.0),
+            (Ok(serde_json::json!({ "output": -0.3 })), 0.0),
+            (Ok(serde_json::json!({ "output": null })), 0.0),
+            (Ok(serde_json::json!({ "input": 0.9 })), 0.0),
+            (Ok(serde_json::json!({ "output": "loud" })), 0.0),
+            (Err("the daemon is not running".to_string()), 0.0),
+        ];
+        for (answer, expected) in cases {
+            assert_eq!(parse_level(&answer, Some("output")), expected, "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn the_level_query_is_polled_apart_from_the_runtime_queries() {
+        let rows = level_number_rows();
+        assert_eq!(runtime_query_names(&rows), ["volume"]);
+        assert_eq!(level_query_names(&rows), ["levels"]);
+        assert!(level_query_names(&live_number_rows()).is_empty());
+    }
+
+    #[test]
+    fn a_level_answer_lights_only_its_own_row_and_source() {
+        let mut rows = level_number_rows();
+        let levels = Ok(serde_json::json!({ "output": 0.5, "input": 0.2 }));
+        assert!(!apply_level_query(&mut rows, 1, "levels", &levels));
+        assert!(!apply_level_query(&mut rows, 0, "volume", &levels));
+        assert_eq!(level_of(&rows), 0.0);
+        assert!(apply_level_query(&mut rows, 0, "levels", &levels));
+        assert_eq!(level_of(&rows), 0.5);
+        assert!(!apply_level_query(&mut rows, 0, "levels", &levels));
+        assert!(apply_level_query(
+            &mut rows,
+            0,
+            "levels",
+            &Ok(serde_json::json!({}))
+        ));
+        assert_eq!(level_of(&rows), 0.0);
+    }
+
     #[test]
     fn number_value_json_emits_integers_for_whole_values() {
         let cases = [
@@ -2460,6 +2614,7 @@ active_value_from = "volume"
                 max: None,
                 step: Some(1.0),
                 live: None,
+                level: None,
             };
             assert_eq!(row_value_json(&control), Some(expected), "value: {value}");
         }

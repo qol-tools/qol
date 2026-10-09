@@ -96,6 +96,10 @@ pub struct FieldSpec {
     #[serde(default)]
     pub active_label: Option<String>,
     #[serde(default)]
+    pub level_query: Option<String>,
+    #[serde(default)]
+    pub level_value_from: Option<String>,
+    #[serde(default)]
     pub variant: Option<String>,
     #[serde(default)]
     pub query: Option<String>,
@@ -415,6 +419,25 @@ active_label = "Stop search"
         assert_eq!(field.active_query.as_deref(), Some("search_status"));
         assert_eq!(field.active_value_from.as_deref(), Some("searching"));
         assert_eq!(field.active_label.as_deref(), Some("Stop search"));
+    }
+
+    #[test]
+    fn parses_level_slider_number_field() {
+        let spec_str = r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+variant = "level_slider"
+level_query = "levels"
+level_value_from = "output"
+"#;
+        let spec = parse_spec_str(spec_str).expect("parse");
+        let field = spec.fields.get("volume").expect("field present");
+        assert_eq!(field.variant.as_deref(), Some("level_slider"));
+        assert_eq!(field.level_query.as_deref(), Some("levels"));
+        assert_eq!(field.level_value_from.as_deref(), Some("output"));
     }
 
     #[test]

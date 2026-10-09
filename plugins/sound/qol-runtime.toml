@@ -12,6 +12,26 @@ poll_interval_ms = 5000
 description = "The volume of the output everything plays on"
 poll_interval_ms = 2000
 
+[query.inputs]
+description = "Microphones every app can listen to"
+poll_interval_ms = 5000
+
+[query.input_status]
+description = "Saved choice, applied microphone, and whether a switch is pending"
+poll_interval_ms = 5000
+
+[query.input_volume]
+description = "The volume of the microphone every app listens to"
+poll_interval_ms = 2000
+
+[query.mute_status]
+description = "Whether the output and the microphone are muted"
+poll_interval_ms = 2000
+
+[query.levels]
+description = "Live peak level of the output and the microphone, from 0 to 1"
+poll_interval_ms = 100
+
 [action.set_volume]
 description = "Set the volume of the output everything plays on: input requires a value between 0 and 100"
 input = { value = "number" }
@@ -28,3 +48,23 @@ description = "Raise the volume of the output everything plays on"
 
 [action.volume_down]
 description = "Lower the volume of the output everything plays on"
+
+[action.set_input_volume]
+description = "Set the volume of the microphone every app listens to: input requires a value between 0 and 100"
+input = { value = "number" }
+
+[action.switch_input]
+description = "Make the given microphone the one every app listens to"
+input = { input = "string" }
+
+[action.mute_output]
+description = "Mute the output everything plays on"
+
+[action.unmute_output]
+description = "Unmute the output everything plays on"
+
+[action.mute_input]
+description = "Mute the microphone every app listens to"
+
+[action.unmute_input]
+description = "Unmute the microphone every app listens to"

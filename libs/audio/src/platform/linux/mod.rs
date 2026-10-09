@@ -1,9 +1,12 @@
+mod companion;
 mod connection;
 mod control;
 mod default_output;
 mod devices;
 mod environment;
 mod identity;
+mod meter;
+mod mute;
 #[cfg(test)]
 mod tests;
 mod translation;
@@ -13,9 +16,12 @@ use crate::control::{Card, ServerFacts, Sink, Source, SourceOutput};
 use crate::devices::{Device, Direction};
 use crate::AudioError;
 
+pub(crate) use companion::companion_input;
 pub(crate) use default_output::set_default_output;
 pub(crate) use identity::{identity_for_node, list_audio_devices, resolve_audio_device};
-pub(crate) use volume::{output_volume_percent, set_output_volume_percent};
+pub(crate) use meter::Meter;
+pub(crate) use mute::{is_muted, set_muted};
+pub(crate) use volume::{set_volume_percent, volume_percent};
 
 pub(crate) fn list_devices(direction: Direction) -> Result<Vec<Device>, AudioError> {
     with_connection(|connection| devices::list_devices(connection, direction))

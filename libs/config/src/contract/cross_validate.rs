@@ -12,6 +12,7 @@ pub fn validate_contracts(
     for (id, field) in &config.fields {
         validate_runable_ref(id, field, runtime, &mut errors);
         validate_runtime_active_refs(id, field, runtime, &mut errors);
+        validate_level_query_ref(id, field, runtime, &mut errors);
         validate_display_layout_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
         validate_row_action_ref(id, field, runtime, &mut errors);
@@ -151,6 +152,34 @@ fn validate_active_query_refs(
     if !runtime.queries.contains_key(query) {
         errors.push(ValidationError::new(
             format!("field.{id}.active_query"),
+            format!("references undeclared query: {query}"),
+        ));
+    }
+}
+
+fn validate_level_query_ref(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(query) = field
+        .level_query
+        .as_deref()
+        .filter(|query| !query.is_empty())
+    else {
+        return;
+    };
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            "level_query requires qol-runtime.toml",
+        ));
+        return;
+    };
+    if !runtime.queries.contains_key(query) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.level_query"),
             format!("references undeclared query: {query}"),
         ));
     }
@@ -752,6 +781,76 @@ description = "Set the volume"
         assert!(errors
             .iter()
             .any(|error| error.path == "field.volume.active_query"));
+    }
+
+    #[test]
+    fn validates_level_query_references() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+variant = "level_slider"
+action = "set_volume"
+active_query = "volume"
+active_value_from = "volume"
+level_query = "levels"
+level_value_from = "output"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.volume]
+description = "Volume"
+poll_interval_ms = 2000
+
+[query.levels]
+description = "Live levels"
+poll_interval_ms = 100
+
+[action.set_volume]
+description = "Set the volume"
+"#,
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&runtime)).is_ok());
+
+        let undeclared = parse_runtime_spec_str(
+            r#"
+schema_version = 1
+
+[query.volume]
+description = "Volume"
+poll_interval_ms = 2000
+
+[action.set_volume]
+description = "Set the volume"
+"#,
+        )
+        .expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&undeclared)).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path == "field.volume.level_query"
+                    && error.message.contains("levels")),
+            "{errors:?}"
+        );
+
+        let errors = validate_contracts(&config, None).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error
+                .message
+                .contains("level_query requires qol-runtime.toml")),
+            "{errors:?}"
+        );
     }
 
     #[test]

@@ -21,3 +21,8 @@ pub(crate) fn identity_for_node(
     let _ = (direction, node);
     Err(AudioError::Unsupported)
 }
+
+pub(crate) fn companion_input(output: &Identity) -> Result<Option<Identity>, AudioError> {
+    let _ = output;
+    Err(AudioError::Unsupported)
+}

@@ -1,4 +1,5 @@
 use std::io::{BufReader, ErrorKind, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -79,6 +80,26 @@ impl Connection {
         Ok(())
     }
 
+    pub(super) fn closer(&self) -> Result<Closer, AudioError> {
+        let stream = self.reader.get_ref().stream.try_clone().map_err(map_io)?;
+        Ok(Closer(stream))
+    }
+
+    pub(super) fn read_message(&mut self) -> Result<(protocol::Descriptor, Vec<u8>), AudioError> {
+        self.reader.get_mut().clear_deadline().map_err(map_io)?;
+        self.reader.get_mut().begin_message();
+        let descriptor = protocol::read_descriptor(&mut self.reader).map_err(from_protocol)?;
+        let length = usize::try_from(descriptor.length).unwrap_or(usize::MAX);
+        if length > MAX_MESSAGE_BYTES {
+            return Err(AudioError::Protocol(format!(
+                "the audio server announced a {length} byte message over the {MAX_MESSAGE_BYTES} byte limit"
+            )));
+        }
+        let mut payload = vec![0u8; length];
+        self.reader.read_exact(&mut payload).map_err(map_io)?;
+        Ok((descriptor, payload))
+    }
+
     fn handshake(&mut self, cookie: &[u8; COOKIE_LENGTH]) -> Result<(), AudioError> {
         let auth = protocol::AuthParams {
             version: protocol::MAX_VERSION,
@@ -128,6 +149,15 @@ impl Connection {
 }
 
 #[derive(Debug)]
+pub(super) struct Closer(UnixStream);
+
+impl Closer {
+    pub(super) fn close(&self) {
+        let _ = self.0.shutdown(Shutdown::Both);
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct DeadlineStream {
     stream: UnixStream,
     deadline: Option<Instant>,
@@ -149,6 +179,12 @@ impl DeadlineStream {
 
     pub(super) fn begin_message(&mut self) {
         self.message_bytes = 0;
+    }
+
+    fn clear_deadline(&mut self) -> std::io::Result<()> {
+        self.deadline = None;
+        self.stream.set_read_timeout(None)?;
+        self.stream.set_write_timeout(None)
     }
 
     fn remaining(&self) -> std::io::Result<Option<Duration>> {

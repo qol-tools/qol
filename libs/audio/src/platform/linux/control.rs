@@ -69,6 +69,15 @@ pub(super) fn set_default_sink(connection: &mut Connection, name: &str) -> Resul
     )?))
 }
 
+pub(super) fn set_default_source(
+    connection: &mut Connection,
+    name: &str,
+) -> Result<(), AudioError> {
+    connection.request_ack(&protocol::Command::SetDefaultSource(translation::cstring(
+        name,
+    )?))
+}
+
 pub(super) fn server_facts(connection: &mut Connection) -> Result<ServerFacts, AudioError> {
     let info = connection.request::<protocol::ServerInfo>(&protocol::Command::GetServerInfo)?;
     Ok(ServerFacts {

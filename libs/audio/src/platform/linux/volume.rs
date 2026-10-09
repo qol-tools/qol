@@ -1,38 +1,30 @@
 use pulseaudio::protocol::{self, ChannelVolume, Volume};
 
+use crate::devices::Direction;
 use crate::AudioError;
 
-use super::connection::Connection;
+use super::default_output::default_node;
 
-pub(crate) fn output_volume_percent() -> Result<Option<u32>, AudioError> {
+pub(crate) fn volume_percent(direction: Direction) -> Result<Option<u32>, AudioError> {
     super::with_connection(|connection| {
-        Ok(default_sink(connection)?.map(|sink| percent_of(&sink.cvolume)))
+        Ok(default_node(connection, direction)?.map(|node| percent_of(&node.volume)))
     })
 }
 
-pub(crate) fn set_output_volume_percent(percent: u32) -> Result<(), AudioError> {
+pub(crate) fn set_volume_percent(direction: Direction, percent: u32) -> Result<(), AudioError> {
     super::with_connection(|connection| {
-        let sink = default_sink(connection)?
-            .ok_or_else(|| AudioError::Operation("there is no default sound output".to_owned()))?;
-        connection.request_ack(&protocol::Command::SetSinkVolume(
-            protocol::SetDeviceVolumeParams {
-                device_index: Some(sink.index),
-                device_name: None,
-                volume: scaled_to(&sink.cvolume, percent),
-            },
-        ))
+        let node = default_node(connection, direction)?
+            .ok_or_else(|| super::mute::no_default(direction))?;
+        let params = protocol::SetDeviceVolumeParams {
+            device_index: Some(node.index),
+            device_name: None,
+            volume: scaled_to(&node.volume, percent),
+        };
+        connection.request_ack(&match direction {
+            Direction::Output => protocol::Command::SetSinkVolume(params),
+            Direction::Input => protocol::Command::SetSourceVolume(params),
+        })
     })
-}
-
-fn default_sink(connection: &mut Connection) -> Result<Option<protocol::SinkInfo>, AudioError> {
-    let Some(name) = super::control::server_facts(connection)?.default_sink else {
-        return Ok(None);
-    };
-    let sinks =
-        connection.request::<Vec<protocol::SinkInfo>>(&protocol::Command::GetSinkInfoList)?;
-    Ok(sinks
-        .into_iter()
-        .find(|sink| sink.name.to_string_lossy() == name))
 }
 
 fn loudest(volume: &ChannelVolume) -> u64 {
@@ -109,5 +101,14 @@ mod tests {
         let norm = Volume::NORM.as_u32();
         assert_eq!(raw(&scaled_to(&volume(&[0, 0]), 100)), vec![norm, norm]);
         assert_eq!(raw(&scaled_to(&ChannelVolume::empty(), 100)), vec![norm]);
+    }
+
+    #[test]
+    fn a_mono_microphone_scales_its_one_channel_and_can_be_boosted() {
+        let norm = Volume::NORM.as_u32();
+        let lowered = scaled_to(&volume(&[norm]), 80);
+        assert_eq!(percent_of(&lowered), 80);
+        assert_eq!(raw(&lowered).len(), 1);
+        assert_eq!(percent_of(&scaled_to(&volume(&[norm]), 150)), 150);
     }
 }

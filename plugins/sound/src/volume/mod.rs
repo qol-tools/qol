@@ -13,15 +13,35 @@ pub fn percent() -> anyhow::Result<Option<u32>> {
     qol_audio::volume::output_percent().context("cannot read the sound volume")
 }
 
+pub fn input_percent() -> anyhow::Result<Option<u32>> {
+    qol_audio::volume::input_percent().context("cannot read the microphone volume")
+}
+
 pub fn status() -> anyhow::Result<VolumeStatus> {
     Ok(VolumeStatus { volume: percent()? })
 }
 
+pub fn input_status() -> anyhow::Result<VolumeStatus> {
+    Ok(VolumeStatus {
+        volume: input_percent()?,
+    })
+}
+
 pub fn set(percent: u32) -> anyhow::Result<()> {
+    in_range(percent)?;
+    qol_audio::volume::set_output_percent(percent).context("cannot set the sound volume")
+}
+
+pub fn set_input(percent: u32) -> anyhow::Result<()> {
+    in_range(percent)?;
+    qol_audio::volume::set_input_percent(percent).context("cannot set the microphone volume")
+}
+
+fn in_range(percent: u32) -> anyhow::Result<()> {
     if percent > MAX_PERCENT {
         anyhow::bail!("the volume must be between 0 and {MAX_PERCENT}, got {percent}");
     }
-    qol_audio::volume::set_output_percent(percent).context("cannot set the sound volume")
+    Ok(())
 }
 
 pub fn step(delta: i32) -> anyhow::Result<u32> {
@@ -52,8 +72,12 @@ mod tests {
 
     #[test]
     fn a_volume_above_the_maximum_is_refused_before_touching_the_server() {
-        let error = set(MAX_PERCENT + 1).unwrap_err();
-        assert!(error.to_string().contains("between 0 and 100"), "{error}");
+        for error in [
+            set(MAX_PERCENT + 1).unwrap_err(),
+            set_input(MAX_PERCENT + 1).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("between 0 and 100"), "{error}");
+        }
     }
 
     #[test]

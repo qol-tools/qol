@@ -24,7 +24,7 @@ pub(super) fn list_devices(
     }
 }
 
-fn sink_device(sink: &protocol::SinkInfo) -> Device {
+pub(super) fn sink_device(sink: &protocol::SinkInfo) -> Device {
     let name = sink.name.to_string_lossy().into_owned();
     Device {
         index: sink.index,
@@ -37,7 +37,7 @@ fn sink_device(sink: &protocol::SinkInfo) -> Device {
     }
 }
 
-fn source_device(source: &protocol::SourceInfo) -> Device {
+pub(super) fn source_device(source: &protocol::SourceInfo) -> Device {
     let name = source.name.to_string_lossy().into_owned();
     Device {
         index: source.index,
