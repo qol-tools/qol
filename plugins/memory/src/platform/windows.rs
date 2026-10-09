@@ -7,7 +7,6 @@ pub(crate) fn current_support() -> PlatformSupport {
     }
 }
 
-// Windows refuses ':' in a file name, so a run stamped 12:30:00 is named 12-30-00.
 pub(crate) fn run_dir_name(stamp: &str) -> String {
     stamp.replace(':', "-")
 }
