@@ -82,6 +82,10 @@ description = "Daily start time in 24-hour HH:MM format."
 section = "night"
 default = "20:00"
 
+[field.night_from.show_when]
+field = "night_schedule"
+equals = "daily"
+
 [field.night_to]
 type = "string"
 config_key = "night_to"
@@ -90,23 +94,27 @@ description = "Daily end time in 24-hour HH:MM format."
 section = "night"
 default = "06:00"
 
+[field.night_to.show_when]
+field = "night_schedule"
+equals = "daily"
+
 [field.night_coordination]
 type = "select"
 config_key = "night_coordination"
-label = "Coordination"
-description = "Choose whether qol owns displays or only watches them while night mode runs."
+label = "Other night lights"
+description = "What happens when another app already tints a display. Take over replaces its tint; Yield leaves that display to the other app."
 section = "night"
 default = "own"
-card_description = "Who owns the display in night mode."
+card_description = "When another app tints a display."
 options = ["own", "detect"]
 
 [field.night_coordination.option_labels]
-own = "Own"
-detect = "Detect"
+own = "Take over"
+detect = "Yield"
 
 [field.night_coordination.option_pictures]
-own = "letters:O"
-detect = "letters:D"
+own = "letters:T"
+detect = "letters:Y"
 
 [field.policy]
 type = "object_map"

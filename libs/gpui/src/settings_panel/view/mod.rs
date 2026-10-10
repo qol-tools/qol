@@ -4070,7 +4070,7 @@ impl SettingsPanelView {
 
     fn enter_hint(&self) -> Option<&'static str> {
         if let Some(state) = self.level().display_layout.as_ref() {
-            return display_layout_card::enter_hint(self.level().selected, state.editing());
+            return display_layout_card::enter_hint(self.level().selected, state);
         }
         if let Some(hint) = card_enter_hint(self.level()) {
             return Some(hint);
@@ -4978,7 +4978,7 @@ fn card_enter_hint(level: &Level) -> Option<&'static str> {
         return Some("choose");
     }
     if let Some(state) = level.display_layout.as_ref() {
-        return display_layout_card::enter_hint(level.selected, state.editing());
+        return display_layout_card::enter_hint(level.selected, state);
     }
     if level.list_card {
         return Some("open");

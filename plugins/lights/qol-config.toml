@@ -47,7 +47,8 @@ card_description = "The lights the coordinator found."
 
 [field.toggle_power]
 type = "action"
-label = "Toggle"
+label = "Turn lights on or off"
+description = "Switches the main light's power to the opposite of what it is now."
 section = "controls"
 action = "toggle_main"
 variant = "primary"

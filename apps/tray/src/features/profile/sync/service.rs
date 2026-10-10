@@ -216,11 +216,7 @@ impl SyncService {
         Ok(pushed)
     }
 
-    pub fn set_auto_sync(&self, on: bool) -> Result<SyncStatus> {
-        let toggles = SyncToggles {
-            pull_on_launch: on,
-            push_on_change: on,
-        };
+    pub fn set_auto_sync(&self, toggles: SyncToggles) -> Result<SyncStatus> {
         save_toggles(&sync_paths()?, toggles)?;
         *self.toggles_mut() = toggles;
         Ok(self.status())

@@ -31,7 +31,8 @@ pub(crate) async fn get_sync_status(State(state): State<super::ProfileHttpState>
 
 #[derive(serde::Deserialize)]
 struct AutoSyncRequest {
-    on: bool,
+    pull_on_launch: bool,
+    push_on_change: bool,
 }
 
 pub(crate) async fn set_auto_sync(
@@ -42,7 +43,11 @@ pub(crate) async fn set_auto_sync(
         Ok(request) => request,
         Err(response) => return *response,
     };
-    match tokio::task::spawn_blocking(move || state.sync_service.set_auto_sync(request.on)).await {
+    let toggles = qol_profile_sync::SyncToggles {
+        pull_on_launch: request.pull_on_launch,
+        push_on_change: request.push_on_change,
+    };
+    match tokio::task::spawn_blocking(move || state.sync_service.set_auto_sync(toggles)).await {
         Ok(Ok(status)) => Json(status).into_response(),
         Ok(Err(error)) => sync_error_response(error),
         Err(error) => {

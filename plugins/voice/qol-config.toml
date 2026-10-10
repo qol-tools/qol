@@ -137,6 +137,10 @@ query = "stt_models"
 lookup_label = "models"
 card_description = "The model files Voice loads."
 
+[field.stt_model_dir.show_when]
+field = "stt_provider"
+equals = "sherpa-onnx"
+
 [field.stt_model_dir.option_labels]
 "" = "No model selected"
 
@@ -172,6 +176,10 @@ paraformer = "Paraformer"
 nemo-ctc = "NeMo CTC"
 moonshine = "Moonshine"
 
+[field.stt_model_kind.show_when]
+field = "stt_provider"
+equals = "sherpa-onnx"
+
 [field.stt_model_kind.option_pictures]
 auto = "family-auto"
 transducer = "letters:ZT"
@@ -190,6 +198,10 @@ description = "Required when the WebSocket compatibility provider is selected."
 section = "recognition"
 default = ""
 
+[field.websocket_endpoint.show_when]
+field = "stt_provider"
+equals = "websocket"
+
 [field.websocket_engine]
 type = "string"
 config_key = "recognition.websocket_engine"
@@ -197,6 +209,10 @@ label = "Server engine"
 description = "Engine identifier understood by the selected WebSocket server."
 section = "recognition"
 default = ""
+
+[field.websocket_engine.show_when]
+field = "stt_provider"
+equals = "websocket"
 
 [section.segmentation]
 label = "Utterance segmentation"
@@ -206,7 +222,8 @@ description = "When qol decides you have started and stopped talking."
 type = "number"
 variant = "slider"
 config_key = "segmentation.threshold_permille"
-label = "Activation threshold"
+label = "Speech level threshold"
+description = "Input level, in thousandths of full scale, that counts as speech. Higher ignores quieter sound."
 section = "segmentation"
 default = 10
 min = 1
@@ -216,8 +233,8 @@ step = 1
 [field.onset]
 type = "number"
 config_key = "segmentation.onset_ms"
-label = "Onset duration"
-description = "Continuous voice activity required before opening a turn."
+label = "Onset duration (ms)"
+description = "Milliseconds of continuous speech needed before a turn starts."
 section = "segmentation"
 default = 100
 min = 10
@@ -227,8 +244,8 @@ step = 10
 [field.silence]
 type = "number"
 config_key = "segmentation.silence_ms"
-label = "Silence duration"
-description = "Silence required before finalizing a turn."
+label = "Silence duration (ms)"
+description = "Milliseconds of silence that end a turn."
 section = "segmentation"
 default = 700
 min = 50
@@ -238,8 +255,8 @@ step = 50
 [field.pre_roll]
 type = "number"
 config_key = "segmentation.pre_roll_ms"
-label = "Pre-roll"
-description = "Audio retained before voice activity is confirmed."
+label = "Pre-roll (ms)"
+description = "Milliseconds of audio kept from just before speech is detected, so the first word is not cut off."
 section = "segmentation"
 default = 300
 min = 0
@@ -249,8 +266,8 @@ step = 50
 [field.max_utterance]
 type = "number"
 config_key = "segmentation.max_utterance_ms"
-label = "Maximum utterance"
-description = "Long speech is segmented at this duration."
+label = "Maximum utterance (ms)"
+description = "Milliseconds of continuous speech after which a turn is split."
 section = "segmentation"
 default = 30000
 min = 1000

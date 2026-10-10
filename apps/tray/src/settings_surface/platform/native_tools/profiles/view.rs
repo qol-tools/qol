@@ -303,7 +303,14 @@ impl ProfilesView {
                         .detach();
                 }
             }
-            Action::Auto(on) => self.run(move || data::set_auto_sync(on), |_, (), _| {}, cx),
+            Action::Auto {
+                pull_on_launch,
+                push_on_change,
+            } => self.run(
+                move || data::set_auto_sync(pull_on_launch, push_on_change),
+                |_, (), _| {},
+                cx,
+            ),
             Action::Disconnect => self.run(
                 data::disconnect,
                 |view, (), cx| {
