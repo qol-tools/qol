@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::cli::{ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
+use qol_terminal_sessions::pin::PinStore;
 use qol_terminal_sessions::{
     DeliveryMode, SessionBinding, SessionFacts, TerminalSessionService, TextInput,
 };
@@ -195,7 +196,11 @@ fn wake(
         terminals,
         interpreter,
         record,
-        &format!("{prompt}{CLOSE_NOTE}"),
+        &if PinStore::system().is_pinned(&record.external_id) {
+            prompt.to_owned()
+        } else {
+            format!("{prompt}{CLOSE_NOTE}")
+        },
     ) {
         Ok(session) => {
             record.state = ParkState::Resumed;
