@@ -6,6 +6,11 @@ mod candle_whisper;
 mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(all(
+    feature = "sherpa-stt",
+    any(target_os = "linux", target_os = "windows")
+))]
+mod sherpa_onnx;
 #[cfg(target_os = "windows")]
 mod windows;
 

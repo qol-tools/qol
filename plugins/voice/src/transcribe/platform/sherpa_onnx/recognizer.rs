@@ -138,7 +138,7 @@ mod tests {
 
     use super::super::layout::{ModelFiles, ModelKind, ModelLayout};
     use super::{append_pcm, recognizer_config};
-    use crate::transcribe::platform::linux::sherpa_onnx::SherpaOnnxConfig;
+    use crate::transcribe::platform::sherpa_onnx::SherpaOnnxConfig;
 
     fn config() -> SherpaOnnxConfig {
         SherpaOnnxConfig {

@@ -1,10 +1,9 @@
-#[cfg(feature = "sherpa-stt")]
-mod sherpa_onnx;
-
 use std::sync::OnceLock;
 
 #[cfg(feature = "local-stt")]
 use super::candle_whisper;
+#[cfg(feature = "sherpa-stt")]
+use super::sherpa_onnx;
 use crate::transcribe::{websocket, TranscriberRegistration};
 
 static PROVIDERS: OnceLock<Vec<TranscriberRegistration>> = OnceLock::new();
