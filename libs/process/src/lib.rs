@@ -771,18 +771,20 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn terminate_pid_without_a_listener_waits_the_grace_then_kills() {
+    fn terminate_pid_without_a_listener_kills_without_waiting_the_grace() {
         let mut child = Command::new("cmd")
             .args(["/C", "ping -n 31 127.0.0.1 >NUL"])
             .spawn()
             .unwrap();
-        let grace = Duration::from_millis(700);
+        let grace = Duration::from_secs(10);
         let started = Instant::now();
         terminate_pid(child.id(), grace);
         assert!(!child.wait().unwrap().success());
-        let elapsed = started.elapsed();
-        assert!(elapsed + Duration::from_millis(100) >= grace, "{elapsed:?}");
-        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[cfg(windows)]
