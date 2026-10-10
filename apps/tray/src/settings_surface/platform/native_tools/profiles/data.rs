@@ -107,8 +107,12 @@ pub(super) fn sync_now() -> anyhow::Result<()> {
     request_text(Method::Post, "/api/sync/now", Some("{}"), SYNC_TIMEOUT).map(drop)
 }
 
-pub(super) fn set_auto_sync(on: bool) -> anyhow::Result<()> {
-    let body = serde_json::json!({ "on": on }).to_string();
+pub(super) fn set_auto_sync(pull_on_launch: bool, push_on_change: bool) -> anyhow::Result<()> {
+    let body = serde_json::json!({
+        "pull_on_launch": pull_on_launch,
+        "push_on_change": push_on_change,
+    })
+    .to_string();
     request_text(Method::Post, "/api/sync/auto", Some(&body), REQUEST_TIMEOUT).map(drop)
 }
 

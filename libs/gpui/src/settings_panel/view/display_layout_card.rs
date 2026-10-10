@@ -7,10 +7,10 @@ use gpui::*;
 use qol_config::contract::resolve_slider_action;
 
 use super::super::components::{
-    display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_spinner,
-    settings_busy_message, settings_description, settings_label, settings_label_group,
-    settings_message, settings_value_text, ChoiceArt, DisplayLayoutTile, RowGround,
-    SettingsChoiceValue, SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
+    display_layout_ghost, display_layout_stage, display_layout_tile, settings_action_affordance,
+    settings_action_spinner, settings_busy_message, settings_description, settings_label,
+    settings_label_group, settings_message, settings_value_text, ChoiceArt, DisplayLayoutTile,
+    RowGround, SettingsChoiceValue, SettingsFeedback, SettingsRow, SettingsValueTone, TileArt,
 };
 use super::super::display_layout::{mode_label, nudge_step, Display, DisplayLayoutState, Rect};
 use super::super::form_nav::adjacent_visible_row;
@@ -80,11 +80,6 @@ impl SettingsPanelView {
             }
             DisplayLayoutCardAction::ChoosePrimary => {
                 self.stage_display_layout_primary();
-                cx.notify();
-                true
-            }
-            DisplayLayoutCardAction::CyclePrimary(step) => {
-                self.cycle_display_layout_primary(step);
                 cx.notify();
                 true
             }
@@ -181,13 +176,6 @@ impl SettingsPanelView {
             return;
         };
         self.make_display_layout_primary(&id);
-    }
-
-    fn cycle_display_layout_primary(&mut self, step: i32) {
-        if let Some(state) = self.level_mut().display_layout.as_mut() {
-            state.cycle(step);
-            state.set_primary();
-        }
     }
 
     fn set_display_layout_brightness(
@@ -677,6 +665,9 @@ impl SettingsPanelView {
             display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_RESOLUTION_ROW),
             self.body_has_focus(),
         );
+        let selected_connector: Option<SharedString> = staged
+            .selected()
+            .map(|display| display.connector.clone().into());
         let options = staged.modes_for_selected();
         let modes_available = !options.is_empty() && staged.modes_writable();
         let staged_mode = staged.selected_id().and_then(|id| staged.staged_mode(id));
@@ -734,7 +725,7 @@ impl SettingsPanelView {
             )
             .child(settings_label_group(
                 RESOLUTION_LABEL,
-                None,
+                selected_connector.clone(),
                 resolution_ground,
                 palette,
             ))
@@ -750,29 +741,29 @@ impl SettingsPanelView {
             }));
         }
         let mode_control = div().child(mode_row);
-        let mut primary_group = self.kit.segmented_group();
-        for (index, display) in staged.displays().iter().enumerate() {
-            let active = staged.is_primary(display);
-            let id = display.id.clone();
-            primary_group = primary_group.child(
-                self.kit
-                    .segment(display.connector.clone(), active)
-                    .id(("settings-display-layout-primary", index))
-                    .cursor(CursorStyle::PointingHand)
-                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                        if !event.standard_click() {
-                            return;
-                        }
-                        this.make_display_layout_primary(&id);
-                        cx.notify();
-                    })),
-            );
-        }
         let primary_ground = RowGround::of(
             display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_PRIMARY_ROW),
             self.body_has_focus(),
         );
-        let primary_row =
+        let selected_is_primary = staged.selected().map(|display| staged.is_primary(display));
+        let primary_value = match selected_is_primary {
+            Some(true) => settings_value_text(
+                "primary",
+                SettingsValueTone::Normal,
+                primary_ground,
+                palette,
+            ),
+            Some(false) => settings_action_affordance(
+                ("settings-display-layout-primary", 0usize),
+                "make primary",
+                None,
+                false,
+                primary_ground,
+                palette,
+            ),
+            None => settings_description("unavailable", primary_ground, palette),
+        };
+        let mut primary_row =
             SettingsRow::rule(("settings-display-layout-primary-row", 0usize), palette)
                 .selected(
                     display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_PRIMARY_ROW),
@@ -780,11 +771,21 @@ impl SettingsPanelView {
                 )
                 .child(settings_label_group(
                     "Primary display",
-                    None,
+                    selected_connector.clone(),
                     primary_ground,
                     palette,
                 ))
-                .child(primary_group);
+                .child(primary_value);
+        if selected_is_primary == Some(false) {
+            primary_row = primary_row.on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                cx.stop_propagation();
+                this.stage_display_layout_primary();
+                cx.notify();
+            }));
+        }
         let apply_row = SettingsRow::rule(("settings-display-layout-apply", 0usize), palette)
             .selected(
                 display_layout_row_selected(self.level().selected, DISPLAY_LAYOUT_APPLY_ROW),
@@ -899,7 +900,7 @@ impl SettingsPanelView {
                     )
                     .child(settings_label_group(
                         "Brightness",
-                        None,
+                        selected_connector,
                         brightness_ground,
                         palette,
                     ))
@@ -1158,7 +1159,6 @@ enum DisplayLayoutCardAction {
     ToggleEditing,
     OpenModePicker,
     ChoosePrimary,
-    CyclePrimary(i32),
     MoveSelection(i32),
     StepBrightness(i32),
     Consume,
@@ -1207,9 +1207,6 @@ fn display_layout_card_action(
         "left" | "right" if selected == DISPLAY_LAYOUT_BRIGHTNESS_ROW => {
             DisplayLayoutCardAction::StepBrightness(if key == "left" { -1 } else { 1 })
         }
-        "left" | "right" if selected == DISPLAY_LAYOUT_PRIMARY_ROW => {
-            DisplayLayoutCardAction::CyclePrimary(if key == "left" { -1 } else { 1 })
-        }
         "escape" => DisplayLayoutCardAction::Discard,
         _ => DisplayLayoutCardAction::FallThrough,
     }
@@ -1219,12 +1216,15 @@ pub(super) fn arrows_hint(selected: usize, editing: bool) -> Option<&'static str
     (selected == DISPLAY_LAYOUT_STAGE_ROW && !editing).then_some("display")
 }
 
-pub(super) fn enter_hint(selected: usize, editing: bool) -> Option<&'static str> {
+pub(super) fn enter_hint(selected: usize, state: &DisplayLayoutState) -> Option<&'static str> {
     match selected {
-        DISPLAY_LAYOUT_STAGE_ROW if editing => Some("done"),
+        DISPLAY_LAYOUT_STAGE_ROW if state.editing() => Some("done"),
         DISPLAY_LAYOUT_STAGE_ROW => Some("edit"),
         DISPLAY_LAYOUT_RESOLUTION_ROW => Some("choose"),
-        DISPLAY_LAYOUT_PRIMARY_ROW => Some("choose"),
+        DISPLAY_LAYOUT_PRIMARY_ROW => state
+            .selected()
+            .is_some_and(|display| !state.is_primary(display))
+            .then_some("make primary"),
         DISPLAY_LAYOUT_APPLY_ROW => Some("apply"),
         DISPLAY_LAYOUT_CANCEL_ROW => Some("back"),
         _ => None,
@@ -1649,7 +1649,7 @@ mod tests {
                 "left",
                 false,
             ),
-            super::DisplayLayoutCardAction::CyclePrimary(-1)
+            super::DisplayLayoutCardAction::FallThrough
         );
         assert_eq!(
             super::display_layout_card_action(
@@ -1658,7 +1658,7 @@ mod tests {
                 "right",
                 false,
             ),
-            super::DisplayLayoutCardAction::CyclePrimary(1)
+            super::DisplayLayoutCardAction::FallThrough
         );
         assert_eq!(
             super::display_layout_card_action(
@@ -1745,7 +1745,7 @@ mod tests {
             (super::DISPLAY_LAYOUT_STAGE_ROW, Some("edit")),
             (super::DISPLAY_LAYOUT_BRIGHTNESS_ROW, None),
             (super::DISPLAY_LAYOUT_RESOLUTION_ROW, Some("choose")),
-            (super::DISPLAY_LAYOUT_PRIMARY_ROW, Some("choose")),
+            (super::DISPLAY_LAYOUT_PRIMARY_ROW, None),
             (super::DISPLAY_LAYOUT_APPLY_ROW, Some("apply")),
             (super::DISPLAY_LAYOUT_CANCEL_ROW, Some("back")),
         ];
@@ -1765,8 +1765,15 @@ mod tests {
                 "row: {selected}"
             );
         }
+        let mut state = display_layout_state();
+        state.select("beta");
         assert_eq!(
-            super::enter_hint(super::DISPLAY_LAYOUT_STAGE_ROW, true),
+            super::enter_hint(super::DISPLAY_LAYOUT_PRIMARY_ROW, &state),
+            Some("make primary")
+        );
+        state.set_editing(true);
+        assert_eq!(
+            super::enter_hint(super::DISPLAY_LAYOUT_STAGE_ROW, &state),
             Some("done")
         );
     }
