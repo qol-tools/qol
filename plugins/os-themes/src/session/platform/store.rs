@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-pub(crate) fn session_subdir(subdir: &str) -> PathBuf {
+pub(super) fn session_subdir(subdir: &str) -> PathBuf {
     if let Some(base) = qol_config::data_subdir("os-themes-session") {
         let dir = base.join(subdir);
         if let Err(error) = qol_fs::create_private_dir(&dir) {

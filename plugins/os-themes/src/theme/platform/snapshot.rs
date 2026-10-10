@@ -35,7 +35,7 @@ impl SessionSnapshot for ThemeSnapshot {
 }
 
 pub fn store() -> SessionStore {
-    SessionStore::new(crate::session::platform::session_subdir(
+    SessionStore::new(crate::session::Platform::session_subdir(
         ThemeSnapshot::SUBDIR,
     ))
 }
