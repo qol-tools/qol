@@ -7,8 +7,9 @@ use windows_sys::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VIRTUAL_KEY, VK_ESCAPE, VK_MENU, VK_SHIFT,
+    GetAsyncKeyState, ReleaseCapture, VIRTUAL_KEY, VK_ESCAPE, VK_MENU, VK_SHIFT,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN};
 
 #[link(name = "shell32")]
 extern "system" {
@@ -73,7 +74,21 @@ pub fn square_window_corners(window: &mut gpui::Window) {
 }
 
 pub fn start_window_move(window: &mut gpui::Window) {
-    window.start_window_move();
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    unsafe {
+        ReleaseCapture();
+        PostMessageW(
+            handle.hwnd.get() as HWND,
+            WM_NCLBUTTONDOWN,
+            HTCAPTION as usize,
+            0,
+        );
+    }
 }
 
 pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdentity {
