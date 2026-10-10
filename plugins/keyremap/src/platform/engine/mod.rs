@@ -61,8 +61,13 @@ pub(crate) fn serve<R: Remapper>(
             }
             Err(RecvTimeoutError::Disconnected) => break,
         };
+        if matches!(command, daemon::Command::Toggle) {
+            if let Err(message) = flip_enabled() {
+                log::warn!("{message}");
+            }
+        }
         match command {
-            daemon::Command::Reload => {
+            daemon::Command::Reload | daemon::Command::Toggle => {
                 let new_resolved = load();
                 log::debug!(
                     "reloaded {} char rules, {} key rules, {} mouse rules, {} scroll rules",
@@ -109,17 +114,25 @@ pub(crate) fn kill() -> CommandResult {
     action_result(daemon::send_kill(), "kill sent", "no daemon running")
 }
 
-pub(crate) fn toggle() -> CommandResult {
+fn flip_enabled() -> Result<bool, &'static str> {
     let enabled = !config::load_config().enabled;
     let mut stored = qol_runtime::plugin_config::load_json()
         .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
     let Some(fields) = stored.as_object_mut() else {
-        return CommandResult::runtime_error("keyremap: stored config is not an object");
+        return Err("keyremap: stored config is not an object");
     };
     fields.insert("enabled".to_string(), serde_json::Value::Bool(enabled));
     if !qol_runtime::plugin_config::save(&stored) {
-        return CommandResult::runtime_error("keyremap: failed to persist the new remapping state");
+        return Err("keyremap: failed to persist the new remapping state");
     }
+    Ok(enabled)
+}
+
+pub(crate) fn toggle() -> CommandResult {
+    let enabled = match flip_enabled() {
+        Ok(enabled) => enabled,
+        Err(message) => return CommandResult::runtime_error(message),
+    };
     let state = if enabled {
         "key remapping enabled"
     } else {

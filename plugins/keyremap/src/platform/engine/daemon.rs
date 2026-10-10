@@ -9,6 +9,7 @@ const CONFIG: DaemonConfig = DaemonConfig {
 
 pub enum Command {
     Reload,
+    Toggle,
     Kill,
     Settings,
 }
@@ -33,8 +34,22 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
     match cmd {
         "ping" => ReadResult::Handled,
         "reload" => ReadResult::Command(Command::Reload),
+        "toggle" => ReadResult::Command(Command::Toggle),
         "kill" => ReadResult::Command(Command::Kill),
         "settings" => ReadResult::Command(Command::Settings),
         _ => ReadResult::Fallback,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_is_a_daemon_command() {
+        assert!(matches!(
+            parse_command("toggle"),
+            ReadResult::Command(Command::Toggle)
+        ));
     }
 }
