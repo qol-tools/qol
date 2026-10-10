@@ -92,6 +92,7 @@ default = 1.5
 min = 0.5
 max = 2.5
 step = 0.1
+variant = "slider"
 
 [field.display_dynamic_card_scale]
 type = "boolean"
@@ -111,6 +112,7 @@ default = 4
 min = 0
 max = 24
 step = 1
+variant = "slider"
 
 [field.display_icon_position]
 type = "select"
@@ -165,6 +167,7 @@ default = 1.0
 min = 0.0
 max = 1.0
 step = 0.05
+variant = "slider"
 
 [field.display_card_background_opacity]
 type = "number"
@@ -175,6 +178,7 @@ default = 0.85
 min = 0.0
 max = 1.0
 step = 0.05
+variant = "slider"
 
 [field.display_unselected_card_opacity]
 type = "number"
@@ -186,6 +190,7 @@ default = 0.85
 min = 0.2
 max = 1.0
 step = 0.05
+variant = "slider"
 
 [section.labels]
 label = "Labels"

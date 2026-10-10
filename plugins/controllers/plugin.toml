@@ -4,7 +4,7 @@ uid = "eb274823-d360-47bb-a668-6bf047ba8baf"
 name = "Controllers"
 icon = "controllers"
 description = "Inspect connected game controllers and apply relevant driver-specific fixes"
-version = "0.47.0"
+version = "0.47.1"
 author = "KMRH47"
 platforms = ["linux", "windows"]
 

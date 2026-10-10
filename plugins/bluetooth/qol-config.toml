@@ -110,10 +110,10 @@ actions = ["reconnect", "reconnect_trusted"]
 
 [field.managed_devices]
 type = "string_array"
-label = "Managed device addresses"
-description = "Paired Bluetooth MAC addresses to reconnect automatically."
+label = "Managed devices"
+description = "Paired devices qol reconnects automatically when they drop."
 section = "reconnection"
-placeholder = "AA:BB:CC:DD:EE:FF"
+placeholder = "No devices"
 default = []
 card_description = "Devices qol reconnects on its own."
 query = "managed_device_options"

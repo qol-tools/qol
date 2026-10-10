@@ -22,7 +22,10 @@ pub(super) enum Action {
     Sync,
     Connect,
     OpenGitHub,
-    Auto(bool),
+    Auto {
+        pull_on_launch: bool,
+        push_on_change: bool,
+    },
     Disconnect,
     OpenBackups,
     OpenBackup(String),
@@ -98,6 +101,11 @@ impl Row {
         self
     }
 
+    fn toggle(self, on: bool) -> Self {
+        self.value(Value::Toggle(on))
+            .verb(if on { "turn off" } else { "turn on" })
+    }
+
     fn chip(self, verb: &'static str) -> Self {
         self.value(Value::Chip).verb(verb)
     }
@@ -155,15 +163,27 @@ pub(super) fn main_rows(page: &Page<'_>) -> Vec<Row> {
     rows.push(Row::header("sync", "keep your profiles on every computer"));
     rows.push(status_row(sync, page.syncing, page.now_secs));
     if sync.configured {
-        let on = sync.pull_on_launch && sync.push_on_change;
         rows.push(
             Row::new(
-                "Auto sync",
-                "Sync when qol starts and after every change",
-                Some(Action::Auto(!on)),
+                "Sync on start",
+                "Get the latest setup when qol starts",
+                Some(Action::Auto {
+                    pull_on_launch: !sync.pull_on_launch,
+                    push_on_change: sync.push_on_change,
+                }),
             )
-            .value(Value::Toggle(on))
-            .verb(if on { "turn off" } else { "turn on" }),
+            .toggle(sync.pull_on_launch),
+        );
+        rows.push(
+            Row::new(
+                "Sync after changes",
+                "Send every change to GitHub",
+                Some(Action::Auto {
+                    pull_on_launch: sync.pull_on_launch,
+                    push_on_change: !sync.push_on_change,
+                }),
+            )
+            .toggle(sync.push_on_change),
         );
         rows.push(
             Row::new(
@@ -535,7 +555,8 @@ mod tests {
                 "Profile",
                 "sync",
                 "Synced 4 minutes ago",
-                "Auto sync",
+                "Sync on start",
+                "Sync after changes",
                 "Stop syncing",
                 "this computer",
                 "Backups",
@@ -546,12 +567,26 @@ mod tests {
         assert_eq!(rows[3].detail, "github.com/KMRH47/qol-tray-profiles");
         assert_eq!(rows[3].action, Some(Action::Sync));
         assert_eq!(rows[4].value, Value::Toggle(true));
-        assert_eq!(rows[4].action, Some(Action::Auto(false)));
         assert_eq!(
-            rows[7].detail,
+            rows[4].action,
+            Some(Action::Auto {
+                pull_on_launch: false,
+                push_on_change: true,
+            })
+        );
+        assert_eq!(rows[5].value, Value::Toggle(true));
+        assert_eq!(
+            rows[5].action,
+            Some(Action::Auto {
+                pull_on_launch: true,
+                push_on_change: false,
+            })
+        );
+        assert_eq!(
+            rows[8].detail,
             "Saved before sync replaced anything · newest 11 Aug"
         );
-        assert_eq!(rows[7].value, Value::Open("9".to_string()));
+        assert_eq!(rows[8].value, Value::Open("9".to_string()));
     }
 
     #[test]
@@ -573,7 +608,8 @@ mod tests {
     fn an_unsynced_page_offers_connect_and_hides_the_sync_switches() {
         let snapshot = snapshot(false);
         let rows = main_rows(&page(&snapshot));
-        assert!(!labels(&rows).contains(&"Auto sync"));
+        assert!(!labels(&rows).contains(&"Sync on start"));
+        assert!(!labels(&rows).contains(&"Sync after changes"));
         assert!(!labels(&rows).contains(&"Stop syncing"));
         assert_eq!(rows[3].label, "Not syncing");
         assert_eq!(rows[3].action, Some(Action::Connect));

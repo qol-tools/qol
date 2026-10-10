@@ -21,6 +21,10 @@ section = "answers"
 placeholder = "http://127.0.0.1:11434"
 default = ""
 
+[field.verifier_endpoint.show_when]
+field = "verify_answers"
+equals = true
+
 [section.storage]
 label = "Storage"
 description = "How much disk the memory history keeps."

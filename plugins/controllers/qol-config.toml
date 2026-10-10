@@ -28,12 +28,13 @@ item_card_field = "input_test"
 
 [[field.detected_pads.row_actions]]
 action = "apply_fixes"
-label = "Fix"
+label = "Fix driver"
+description = "Applies the compatibility fix that matches this controller's active driver. Asks for your password once."
 when = "fixable"
 
 [[field.detected_pads.row_actions]]
 action = "reclaim_controller"
-label = "Fix"
+label = "Unstick"
 description = "Keeps apps like Steam from grabbing the controller, then reconnects it. Press Home on the controller afterwards."
 when = "reclaimable"
 
