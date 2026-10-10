@@ -6736,6 +6736,7 @@ dependencies = [
  "anyhow",
  "qol-dev-guest",
  "qol-headless",
+ "qol-platform",
  "qol-process",
  "serde_json",
  "tempfile",
