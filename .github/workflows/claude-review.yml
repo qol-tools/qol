@@ -332,11 +332,12 @@ jobs:
   # merged, so the merge group run passes. Dependabot runs get no secrets and are
   # not reviewed, so only dependabot's own branch in this repository, last pushed
   # by dependabot, passes unreviewed; an actor name alone is not trusted. It
-  # waits for publish so the review comment lands first.
+  # waits for publish so the review comment lands first. A draft is not
+  # reviewed, so the check is skipped until ready_for_review runs it.
   verdict:
     name: claude review
     needs: [review, publish]
-    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    if: ${{ always() && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
