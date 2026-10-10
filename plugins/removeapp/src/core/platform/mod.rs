@@ -28,6 +28,9 @@ mod unix;
 mod unsupported;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod windows_paths;
 
 #[cfg(target_os = "linux")]
 pub use linux::Platform;

@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::cli::PLUGIN_ID;
 
-use super::catalog::Launch;
+use crate::core::platform::windows_paths::Launch;
 
 const POLL: Duration = Duration::from_millis(250);
 const SUCCESS_CODES: &[u32] = &[0, 1605, 1614, 1641, 3010];

@@ -28,8 +28,11 @@ use crate::core::{
 };
 
 use self::catalog::{
-    build_catalog, normalize, owned_keys, path_key, same_path, uninstall_launch, with_store,
-    within, CatalogApp, Roots, Shortcut,
+    build_catalog, normalize, owned_keys, uninstall_launch, with_store, CatalogApp, Shortcut,
+};
+use self::store::StorePackage;
+use super::windows_paths::{
+    has_parent_dir, path_key, same_path, strip_verbatim, within, PathProbe, Roots,
 };
 
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -43,7 +46,6 @@ const PROTECTED_ENV_ROOTS: &[&str] = &[
     "ProgramW6432",
     "CommonProgramFiles",
     "CommonProgramFiles(x86)",
-    "USERPROFILE",
 ];
 
 pub struct Platform {
@@ -58,6 +60,7 @@ impl Default for Platform {
                 local: env_path("LOCALAPPDATA"),
                 program_data: env_path("ProgramData"),
                 windows: env_path("SystemRoot").or_else(|| env_path("windir")),
+                profile: env_path("USERPROFILE"),
                 protected: PROTECTED_ENV_ROOTS
                     .iter()
                     .filter_map(|name| env_path(name))
@@ -77,7 +80,7 @@ impl Platform {
             registry::uninstall_entries(),
             start_menu_shortcuts(),
             &self.roots,
-            Path::is_dir,
+            &DiskProbe,
         );
         with_store(catalog, &store::packages())
     }
@@ -102,7 +105,7 @@ impl Platform {
         let other_installs: Vec<&PathBuf> = catalog
             .iter()
             .filter(|other| !same_path(&other.app.path, &target.app.path))
-            .filter_map(|other| other.install_dir.as_ref().map(|(dir, _)| dir))
+            .filter_map(|other| other.known_dir.as_ref())
             .collect();
         let mut found = Vec::new();
         for (kind, root) in self.roots.data_roots() {
@@ -135,9 +138,58 @@ impl Platform {
         found
     }
 
-    fn contains_current_exe(path: &Path) -> bool {
-        std::env::current_exe().is_ok_and(|exe| within(&exe, path))
+    fn protected_app(
+        &self,
+        app: &InstalledApp,
+        packages: &[StorePackage],
+        current_exe: Option<&Path>,
+        catalog: impl FnOnce() -> Vec<CatalogApp>,
+    ) -> bool {
+        if let Some(package) = packages
+            .iter()
+            .find(|package| same_path(&package.install_dir, &app.path))
+        {
+            return package.protected;
+        }
+        let path = canonical(&app.path).unwrap_or_else(|| app.path.clone());
+        let under_windows = self
+            .roots
+            .windows
+            .as_ref()
+            .is_some_and(|windows| within(&path, windows));
+        if app.name.to_lowercase().starts_with(SELF_PREFIX)
+            || under_windows
+            || current_exe.is_some_and(|exe| within(exe, &path))
+        {
+            return true;
+        }
+        find(&catalog(), app)
+            .and_then(|candidate| candidate.entry().map(|entry| entry.no_remove))
+            .unwrap_or(false)
     }
+}
+
+struct DiskProbe;
+
+impl PathProbe for DiskProbe {
+    fn canonical(&self, path: &Path) -> Option<PathBuf> {
+        if has_parent_dir(path) {
+            return None;
+        }
+        canonical(path)
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+}
+
+fn canonical(path: &Path) -> Option<PathBuf> {
+    fs::canonicalize(path).ok().map(strip_verbatim)
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
@@ -145,6 +197,7 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
+        .map(|path| canonical(&path).unwrap_or(path))
 }
 
 fn find(catalog: &[CatalogApp], app: &InstalledApp) -> Option<CatalogApp> {
@@ -322,26 +375,10 @@ impl AppPlatform for Platform {
     }
 
     fn is_protected(&self, app: &InstalledApp) -> bool {
-        if let Some(package) = store::packages()
-            .iter()
-            .find(|package| same_path(&package.install_dir, &app.path))
-        {
-            return package.protected;
-        }
-        let under_windows = self
-            .roots
-            .windows
-            .as_ref()
-            .is_some_and(|windows| within(&app.path, windows));
-        if app.name.to_lowercase().starts_with(SELF_PREFIX)
-            || under_windows
-            || Self::contains_current_exe(&app.path)
-        {
-            return true;
-        }
-        find(&self.catalog(), app)
-            .and_then(|candidate| candidate.entry().map(|entry| entry.no_remove))
-            .unwrap_or(false)
+        let current_exe = std::env::current_exe().ok().and_then(|exe| canonical(&exe));
+        self.protected_app(app, &store::packages(), current_exe.as_deref(), || {
+            self.catalog()
+        })
     }
 
     fn is_running(&self, app: &InstalledApp) -> bool {
@@ -410,9 +447,12 @@ impl AppPlatform for Platform {
                 &entry.location.key,
                 entry.location.scope(),
             ) {
-                Some(_) if uninstall_launch(entry).is_none() => PackageStatus::Unavailable(
-                    format!("{} has no usable uninstall command", entry.name),
-                ),
+                Some(_) if uninstall_launch(entry, &self.roots, &DiskProbe).is_none() => {
+                    PackageStatus::Unavailable(format!(
+                        "{} has no usable uninstall command",
+                        entry.name
+                    ))
+                }
                 Some(package) => PackageStatus::Managed(package),
                 None => PackageStatus::Unavailable(format!(
                     "invalid uninstall key {:?}",
@@ -449,7 +489,7 @@ impl AppPlatform for Platform {
                     app.name
                 )
             })?;
-        let launch = uninstall_launch(&entry).with_context(|| {
+        let launch = uninstall_launch(&entry, &self.roots, &DiskProbe).with_context(|| {
             format!("{PLUGIN_ID}: {} has no usable uninstall command", app.name)
         })?;
         log::debug!(
@@ -502,4 +542,213 @@ fn uninstall_store_package(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::catalog::{entry_from, Hive, KeyLocation, RawValues, Source, View};
+    use super::*;
+
+    fn catalog_app(
+        name: &str,
+        path: PathBuf,
+        keys: &[&str],
+        publishers: &[&str],
+        known_dir: Option<PathBuf>,
+    ) -> CatalogApp {
+        CatalogApp {
+            app: InstalledApp {
+                name: name.to_string(),
+                bundle_id: None,
+                path,
+            },
+            source: Source::Shortcut,
+            install_dir: None,
+            known_dir,
+            shortcuts: Vec::new(),
+            keys: keys.iter().map(|key| key.to_string()).collect(),
+            publisher_keys: publishers.iter().map(|key| key.to_string()).collect(),
+        }
+    }
+
+    fn make_dirs(root: &Path, dirs: &[&str]) {
+        for dir in dirs {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+    }
+
+    #[test]
+    fn leftovers_are_owned_keys_outside_other_installs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonical(temp.path()).unwrap();
+        make_dirs(
+            &root,
+            &[
+                r"Roaming\Widget",
+                r"Roaming\Acme\Widget",
+                r"Roaming\Acme\Other",
+                r"Roaming\Shared",
+                r"Local\Gizmo",
+                r"Local\Programs\Widget",
+                r"ProgramData\Widget",
+                r"ProgramData\Unrelated",
+            ],
+        );
+        let platform = Platform {
+            roots: Roots {
+                roaming: Some(root.join("Roaming")),
+                local: Some(root.join("Local")),
+                program_data: Some(root.join("ProgramData")),
+                windows: Some(root.join("Windows")),
+                profile: None,
+                protected: Vec::new(),
+            },
+        };
+        let target = catalog_app(
+            "Widget",
+            root.join(r"Local\Programs\Widget"),
+            &["widget", "gizmo", "shared"],
+            &["acme"],
+            None,
+        );
+        let gizmo = catalog_app(
+            "Gizmo",
+            root.join(r"Local\Gizmo"),
+            &["gizmo app"],
+            &[],
+            Some(root.join(r"Local\Gizmo")),
+        );
+        let sharer = catalog_app("Sharer", root.join("Sharer"), &["shared"], &[], None);
+        let catalog = vec![target.clone(), gizmo, sharer];
+        let mut found: Vec<(String, LeftoverKind)> = platform
+            .leftovers(&target, &catalog)
+            .into_iter()
+            .map(|leftover| (path_key(&leftover.path), leftover.kind))
+            .collect();
+        found.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut expected: Vec<(String, LeftoverKind)> = [
+            (r"Roaming\Widget", LeftoverKind::Config),
+            (r"Roaming\Acme\Widget", LeftoverKind::Config),
+            (r"Local\Programs\Widget", LeftoverKind::Data),
+            (r"ProgramData\Widget", LeftoverKind::Data),
+        ]
+        .into_iter()
+        .map(|(path, kind)| (path_key(&root.join(path)), kind))
+        .collect();
+        expected.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn protected_apps_cover_store_self_windows_running_exe_and_no_remove() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = canonical(temp.path()).unwrap();
+        make_dirs(
+            &root,
+            &[r"Windows\App", r"Tool\bin", "Plain", "Locked", "Store"],
+        );
+        let platform = Platform {
+            roots: Roots {
+                roaming: None,
+                local: None,
+                program_data: None,
+                windows: Some(root.join("Windows")),
+                profile: None,
+                protected: Vec::new(),
+            },
+        };
+        let packages = [
+            StorePackage {
+                full_name: "Locked_1.0.0.0_x64__abc".into(),
+                family_name: "Locked_abc".into(),
+                name: "Locked Store".into(),
+                install_dir: root.join("Store"),
+                protected: true,
+            },
+            StorePackage {
+                full_name: "Open_1.0.0.0_x64__abc".into(),
+                family_name: "Open_abc".into(),
+                name: "Open Store".into(),
+                install_dir: root.join("Plain"),
+                protected: false,
+            },
+        ];
+        let locked = entry_from(
+            KeyLocation {
+                hive: Hive::LocalMachine,
+                view: View::Native,
+                key: "Locked".into(),
+            },
+            RawValues {
+                display_name: Some("Locked".into()),
+                uninstall_string: Some("locked.exe".into()),
+                no_remove: true,
+                ..RawValues::default()
+            },
+        )
+        .unwrap();
+        let current_exe = root.join(r"Tool\bin\tool.exe");
+        let windows_by_parent = root.join(r"Tool\..\Windows\App");
+        let windows_verbatim =
+            PathBuf::from(format!(r"\\?\{}", root.join(r"Windows\App").display()));
+        let cases = [
+            (
+                "protected store package",
+                "Locked Store",
+                root.join("Store"),
+                true,
+            ),
+            (
+                "removable store package",
+                "Open Store",
+                root.join("Plain"),
+                false,
+            ),
+            ("self", "qol-tray", root.join("Elsewhere"), true),
+            ("windows tree", "App", root.join(r"Windows\App"), true),
+            (
+                "windows tree via parent dir",
+                "App",
+                windows_by_parent,
+                true,
+            ),
+            (
+                "windows tree via verbatim prefix",
+                "App",
+                windows_verbatim,
+                true,
+            ),
+            ("holds the running exe", "Tool", root.join("Tool"), true),
+            ("no remove", "Locked", root.join("Locked"), true),
+            ("plain", "Plain App", root.join("Elsewhere"), false),
+        ];
+        for (label, name, path, expected) in cases {
+            let app = InstalledApp {
+                name: name.to_string(),
+                bundle_id: None,
+                path,
+            };
+            let catalog = || {
+                let mut app = catalog_app("Locked", root.join("Locked"), &[], &[], None);
+                app.source = Source::Registry(locked.clone());
+                vec![app]
+            };
+            assert_eq!(
+                platform.protected_app(&app, &packages, Some(current_exe.as_path()), catalog),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn disk_probe_strips_verbatim_prefixes_and_refuses_parent_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        make_dirs(temp.path(), &["App"]);
+        let probe = DiskProbe;
+        let resolved = probe.canonical(&temp.path().join("App")).unwrap();
+        assert!(!resolved.to_string_lossy().starts_with(r"\\?\"));
+        assert!(probe.is_dir(&resolved));
+        assert_eq!(probe.canonical(&temp.path().join(r"App\..\App")), None);
+    }
 }

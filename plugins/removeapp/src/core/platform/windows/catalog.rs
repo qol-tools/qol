@@ -1,11 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use qol_apps::shell_link::LinkTarget;
 
 use super::store::StorePackage;
 use crate::core::guards::PackageScope;
-use crate::core::{InstalledApp, LeftoverKind, MatchKind};
+use crate::core::platform::windows_paths::{
+    has_parent_dir, path_key, resolve_program, same_path, split_command, within, Launch, PathProbe,
+    Roots,
+};
+use crate::core::{InstalledApp, MatchKind};
 
 const UNINSTALL_SUBKEY: &str = r"Microsoft\Windows\CurrentVersion\Uninstall";
 const SKIPPED_RELEASE_TYPES: &[&str] = &["hotfix", "security update", "service pack", "update"];
@@ -184,47 +188,29 @@ fn icon_path(raw: &str) -> PathBuf {
     clean_path(without_index)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Launch {
-    pub(super) program: String,
-    pub(super) arguments: String,
-}
-
-pub(super) fn uninstall_launch(entry: &UninstallEntry) -> Option<Launch> {
-    let command = split_command(entry.quiet.as_deref().unwrap_or(&entry.uninstall))?;
-    let msi = entry.windows_installer || program_stem(&command.program) == MSI_PROGRAM;
+pub(super) fn uninstall_launch(
+    entry: &UninstallEntry,
+    roots: &Roots,
+    probe: &impl PathProbe,
+) -> Option<Launch> {
+    let system = roots.system32();
+    let command = split_command(
+        entry.quiet.as_deref().unwrap_or(&entry.uninstall),
+        system.as_deref(),
+        probe,
+    );
+    let msi = entry.windows_installer
+        || command
+            .as_ref()
+            .is_some_and(|command| program_stem(&command.program) == MSI_PROGRAM);
     if msi {
-        return product_code(&entry.location.key).map(|code| Launch {
-            program: format!("{MSI_PROGRAM}.exe"),
+        let code = product_code(&entry.location.key)?;
+        return Some(Launch {
+            program: resolve_program(MSI_PROGRAM, system.as_deref(), probe)?,
             arguments: format!("/x {code} {MSI_ARGUMENTS}"),
         });
     }
-    Some(command)
-}
-
-pub(super) fn split_command(raw: &str) -> Option<Launch> {
-    let raw = raw.trim();
-    if let Some(rest) = raw.strip_prefix('"') {
-        let (program, arguments) = rest.split_once('"')?;
-        return (!program.trim().is_empty()).then(|| Launch {
-            program: program.trim().to_string(),
-            arguments: arguments.trim().to_string(),
-        });
-    }
-    let lower = raw.to_ascii_lowercase();
-    let exe_end = lower
-        .match_indices(".exe")
-        .map(|(index, _)| index + 4)
-        .find(|end| lower[*end..].chars().next().is_none_or(char::is_whitespace));
-    let split = exe_end.or_else(|| raw.find(char::is_whitespace));
-    let (program, arguments) = match split {
-        Some(end) => raw.split_at(end),
-        None => (raw, ""),
-    };
-    (!program.is_empty()).then(|| Launch {
-        program: program.to_string(),
-        arguments: arguments.trim().to_string(),
-    })
+    command
 }
 
 fn program_stem(program: &str) -> String {
@@ -244,93 +230,6 @@ fn product_code(key: &str) -> Option<&str> {
     valid.then_some(key)
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct Roots {
-    pub(super) roaming: Option<PathBuf>,
-    pub(super) local: Option<PathBuf>,
-    pub(super) program_data: Option<PathBuf>,
-    pub(super) windows: Option<PathBuf>,
-    pub(super) protected: Vec<PathBuf>,
-}
-
-impl Roots {
-    pub(super) fn data_roots(&self) -> Vec<(LeftoverKind, PathBuf)> {
-        let mut roots = Vec::new();
-        if let Some(roaming) = &self.roaming {
-            roots.push((LeftoverKind::Config, roaming.clone()));
-        }
-        if let Some(local) = &self.local {
-            roots.push((LeftoverKind::Data, local.clone()));
-            roots.push((LeftoverKind::Data, local.join("Programs")));
-        }
-        if let Some(program_data) = &self.program_data {
-            roots.push((LeftoverKind::Data, program_data.clone()));
-        }
-        roots
-    }
-
-    fn all_protected(&self) -> Vec<&PathBuf> {
-        self.data_roots_paths()
-            .chain(self.windows.iter())
-            .chain(self.protected.iter())
-            .collect()
-    }
-
-    fn data_roots_paths(&self) -> impl Iterator<Item = &PathBuf> {
-        self.roaming
-            .iter()
-            .chain(self.local.iter())
-            .chain(self.program_data.iter())
-    }
-
-    pub(super) fn is_safe_dir(&self, path: &Path) -> bool {
-        let deep_enough = path
-            .components()
-            .filter(|component| matches!(component, Component::Normal(_)))
-            .count()
-            >= 2;
-        let under_windows = self
-            .windows
-            .as_ref()
-            .is_some_and(|windows| within(path, windows));
-        let programs = self.local.as_ref().map(|local| local.join("Programs"));
-        let is_root = self
-            .all_protected()
-            .into_iter()
-            .chain(programs.iter())
-            .any(|root| same_path(path, root));
-        deep_enough && !under_windows && !is_root
-    }
-
-    fn is_system_target(&self, target: &LinkTarget) -> bool {
-        match target {
-            LinkTarget::ShellFolder => true,
-            LinkTarget::Path(path) => self
-                .windows
-                .as_ref()
-                .is_some_and(|windows| within(path, windows)),
-            LinkTarget::Advertised | LinkTarget::Unknown => false,
-        }
-    }
-}
-
-pub(super) fn same_path(left: &Path, right: &Path) -> bool {
-    path_key(left) == path_key(right)
-}
-
-pub(super) fn within(child: &Path, parent: &Path) -> bool {
-    let parent = path_key(parent);
-    let child = path_key(child);
-    !parent.is_empty() && (child == parent || child.starts_with(&format!("{parent}\\")))
-}
-
-pub(super) fn path_key(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase()
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Source {
     Registry(UninstallEntry),
@@ -343,6 +242,7 @@ pub(super) struct CatalogApp {
     pub(super) app: InstalledApp,
     pub(super) source: Source,
     pub(super) install_dir: Option<(PathBuf, MatchKind)>,
+    pub(super) known_dir: Option<PathBuf>,
     pub(super) shortcuts: Vec<PathBuf>,
     pub(super) keys: BTreeSet<String>,
     pub(super) publisher_keys: BTreeSet<String>,
@@ -400,7 +300,7 @@ pub(super) fn build_catalog(
     entries: Vec<UninstallEntry>,
     shortcuts: Vec<Shortcut>,
     roots: &Roots,
-    is_dir: impl Fn(&Path) -> bool,
+    probe: &impl PathProbe,
 ) -> Vec<CatalogApp> {
     let mut apps: Vec<CatalogApp> = Vec::new();
     let mut claimed_paths: BTreeSet<String> = BTreeSet::new();
@@ -408,7 +308,7 @@ pub(super) fn build_catalog(
     entries.sort_by(|left, right| left.location.cmp(&right.location));
     for entry in entries {
         let keys = entry_keys(&entry);
-        let install_dir = install_dir(&entry, &keys, roots, &is_dir);
+        let install_dir = install_dir(&entry, &keys, roots, probe);
         let path = install_dir
             .as_ref()
             .map(|(dir, _)| dir.clone())
@@ -422,6 +322,7 @@ pub(super) fn build_catalog(
                 path,
             },
             publisher_keys: publisher_keys(entry.publisher.as_deref()),
+            known_dir: install_dir.as_ref().map(|(dir, _)| dir.clone()),
             install_dir,
             shortcuts: Vec::new(),
             keys,
@@ -429,6 +330,17 @@ pub(super) fn build_catalog(
         });
     }
     let system_folders = system_folders(&shortcuts, roots);
+    let shortcut_targets: Vec<(String, String)> = shortcuts
+        .iter()
+        .filter_map(|shortcut| match &shortcut.target {
+            LinkTarget::Path(path) => probe.canonical(path).and_then(|target| {
+                target
+                    .parent()
+                    .map(|dir| (path_key(dir), normalize(&shortcut.name)))
+            }),
+            _ => None,
+        })
+        .collect();
     for shortcut in shortcuts {
         let folder_key = shortcut.folder.as_deref().map(normalize);
         if roots.is_system_target(&shortcut.target)
@@ -440,13 +352,14 @@ pub(super) fn build_catalog(
         }
         let shortcut_key = normalize(&shortcut.name);
         let target = match &shortcut.target {
-            LinkTarget::Path(path) => Some(path.as_path()),
+            LinkTarget::Path(path) => probe.canonical(path),
             _ => None,
         };
         let installed_in = |app: &CatalogApp| {
             target
-                .zip(app.install_dir.as_ref())
-                .is_some_and(|(target, (dir, _))| within(target, dir))
+                .as_deref()
+                .zip(app.known_dir.as_deref())
+                .is_some_and(|(target, dir)| within(target, dir))
         };
         let named = |app: &CatalogApp| {
             app.entry().is_some()
@@ -464,8 +377,10 @@ pub(super) fn build_catalog(
             None if !claimed_paths.contains(&path_key(&shortcut.path)) => {
                 let keys = usable_keys([shortcut.name.as_str()]);
                 let install_dir = target
+                    .as_deref()
                     .and_then(Path::parent)
-                    .filter(|dir| owns_dir(dir, &keys, roots, &is_dir))
+                    .filter(|dir| dedicated_dir(dir, &shortcut_targets))
+                    .filter(|dir| owns_dir(dir, &keys, roots, probe))
                     .filter(|dir| !claimed_paths.contains(&path_key(dir)))
                     .map(|dir| (dir.to_path_buf(), MatchKind::Fuzzy));
                 let path = install_dir
@@ -480,6 +395,7 @@ pub(super) fn build_catalog(
                         path,
                     },
                     source: Source::Shortcut,
+                    known_dir: install_dir.as_ref().map(|(dir, _)| dir.clone()),
                     install_dir,
                     shortcuts: vec![shortcut.path],
                     keys,
@@ -489,8 +405,40 @@ pub(super) fn build_catalog(
             None => {}
         }
     }
+    release_shared_install_dirs(&mut apps);
     sort_by_name(&mut apps);
     apps
+}
+
+fn release_shared_install_dirs(apps: &mut [CatalogApp]) {
+    let known: Vec<Option<PathBuf>> = apps.iter().map(|app| app.known_dir.clone()).collect();
+    for (index, app) in apps.iter_mut().enumerate() {
+        let keep = app.install_dir.as_ref().is_some_and(|(dir, _)| {
+            same_path(&app.app.path, dir)
+                && !known.iter().enumerate().any(|(other, known)| {
+                    other != index
+                        && known
+                            .as_deref()
+                            .is_some_and(|known| within(known, dir) || within(dir, known))
+                })
+        });
+        if !keep {
+            app.install_dir = None;
+        }
+    }
+}
+
+fn dedicated_dir(dir: &Path, shortcut_targets: &[(String, String)]) -> bool {
+    let Some(dir_name) = dir.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let dir_name = normalize(dir_name);
+    let dir_key = path_key(dir);
+    !is_generic(&dir_name)
+        && shortcut_targets
+            .iter()
+            .filter(|(parent, _)| *parent == dir_key)
+            .all(|(_, name)| *name == dir_name || name.starts_with(&format!("{dir_name} ")))
 }
 
 pub(super) fn with_store(mut apps: Vec<CatalogApp>, packages: &[StorePackage]) -> Vec<CatalogApp> {
@@ -507,6 +455,7 @@ pub(super) fn with_store(mut apps: Vec<CatalogApp>, packages: &[StorePackage]) -
             },
             source: Source::Store(package.clone()),
             install_dir: None,
+            known_dir: None,
             shortcuts: Vec::new(),
             keys: BTreeSet::new(),
             publisher_keys: BTreeSet::new(),
@@ -530,17 +479,33 @@ fn install_dir(
     entry: &UninstallEntry,
     keys: &BTreeSet<String>,
     roots: &Roots,
-    is_dir: &impl Fn(&Path) -> bool,
+    probe: &impl PathProbe,
 ) -> Option<(PathBuf, MatchKind)> {
-    if let Some(location) = &entry.install_location {
-        if is_dir(location) && roots.is_safe_dir(location) {
-            return Some((location.clone(), MatchKind::Exact));
-        }
-    }
-    let uninstaller = split_command(&entry.uninstall).map(|launch| PathBuf::from(launch.program));
-    [entry.display_icon.clone(), uninstaller]
+    let system = roots.system32();
+    let uninstaller = split_command(&entry.uninstall, system.as_deref(), probe)
+        .map(|launch| PathBuf::from(launch.program));
+    let anchors: Vec<PathBuf> = [entry.display_icon.clone(), uninstaller]
         .into_iter()
         .flatten()
+        .filter(|file| !has_parent_dir(file))
+        .filter_map(|file| probe.canonical(&file))
+        .collect();
+    let exact = entry
+        .install_location
+        .as_ref()
+        .filter(|location| !has_parent_dir(location))
+        .and_then(|location| probe.canonical(location))
+        .filter(|location| probe.is_dir(location) && roots.is_safe_dir(location))
+        .filter(|location| {
+            anchors
+                .iter()
+                .any(|file| within(file, location) && !same_path(file, location))
+        });
+    if let Some(location) = exact {
+        return Some((location, MatchKind::Exact));
+    }
+    anchors
+        .iter()
         .flat_map(|file| {
             file.ancestors()
                 .skip(1)
@@ -548,17 +513,12 @@ fn install_dir(
                 .map(Path::to_path_buf)
                 .collect::<Vec<_>>()
         })
-        .find(|dir| owns_dir(dir, keys, roots, is_dir))
+        .find(|dir| owns_dir(dir, keys, roots, probe))
         .map(|dir| (dir, MatchKind::Fuzzy))
 }
 
-fn owns_dir(
-    dir: &Path,
-    keys: &BTreeSet<String>,
-    roots: &Roots,
-    is_dir: &impl Fn(&Path) -> bool,
-) -> bool {
-    is_dir(dir)
+fn owns_dir(dir: &Path, keys: &BTreeSet<String>, roots: &Roots, probe: &impl PathProbe) -> bool {
+    probe.is_dir(dir)
         && roots.is_safe_dir(dir)
         && dir
             .file_name()
@@ -693,6 +653,7 @@ pub(super) fn owned_keys(app: &CatalogApp, catalog: &[CatalogApp]) -> BTreeSet<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::platform::windows_paths::FakeDisk;
 
     fn location(hive: Hive, view: View, key: &str) -> KeyLocation {
         KeyLocation {
@@ -724,10 +685,10 @@ mod tests {
             local: Some(PathBuf::from(r"C:\Users\me\AppData\Local")),
             program_data: Some(PathBuf::from(r"C:\ProgramData")),
             windows: Some(PathBuf::from(r"C:\Windows")),
+            profile: Some(PathBuf::from(r"C:\Users\me")),
             protected: vec![
                 PathBuf::from(r"C:\Program Files"),
                 PathBuf::from(r"C:\Program Files (x86)"),
-                PathBuf::from(r"C:\Users\me"),
             ],
         }
     }
@@ -818,56 +779,21 @@ mod tests {
             )
             .unwrap();
             let keys = entry_keys(&entry);
-            let found = install_dir(&entry, &keys, &roots(), &|path: &Path| {
-                Path::new(uninstaller)
+            let disk = FakeDisk {
+                dirs: Path::new(uninstaller)
                     .ancestors()
                     .skip(1)
-                    .any(|dir| same_path(path, dir))
-            });
+                    .map(Path::to_path_buf)
+                    .collect(),
+                files: vec![PathBuf::from(uninstaller)],
+            };
+            let found = install_dir(&entry, &keys, &roots(), &disk);
             assert_eq!(
                 found,
                 expected.map(|dir| (PathBuf::from(dir), MatchKind::Fuzzy)),
                 "{uninstaller}"
             );
         }
-    }
-
-    #[test]
-    fn split_command_handles_quoted_and_unquoted_programs() {
-        let cases = [
-            (
-                r#""C:\Program Files\Foo\uninst.exe" /S"#,
-                r"C:\Program Files\Foo\uninst.exe",
-                "/S",
-            ),
-            (
-                r"C:\Program Files\Foo Bar\unins000.exe /SILENT",
-                r"C:\Program Files\Foo Bar\unins000.exe",
-                "/SILENT",
-            ),
-            (
-                r"C:\Users\me\AppData\Local\Discord\Update.exe --uninstall",
-                r"C:\Users\me\AppData\Local\Discord\Update.exe",
-                "--uninstall",
-            ),
-            (r"C:\Tools\remove.exe", r"C:\Tools\remove.exe", ""),
-            (
-                r"RunDll32 C:\PROGRA~1\Foo\setup.dll,Uninstall",
-                "RunDll32",
-                r"C:\PROGRA~1\Foo\setup.dll,Uninstall",
-            ),
-        ];
-        for (raw, program, arguments) in cases {
-            assert_eq!(
-                split_command(raw),
-                Some(Launch {
-                    program: program.to_string(),
-                    arguments: arguments.to_string(),
-                }),
-                "{raw}"
-            );
-        }
-        assert_eq!(split_command(r#""unterminated"#), None);
     }
 
     #[test]
@@ -879,14 +805,40 @@ mod tests {
             ..entry("Foo", "Foo", r#""C:\Foo\uninst.exe""#)
         };
         let msi_without_code = entry("Foo", "Foo", "MsiExec.exe /I{nope}");
+        let unquoted = entry(
+            "Bar",
+            "Bar",
+            r"C:\Program Files\Foo Bar\unins000.exe /SILENT",
+        );
+        let missing = entry(
+            "Gone",
+            "Gone",
+            r"C:\Program Files\Gone\unins000.exe /SILENT",
+        );
+        let disk = FakeDisk::new(
+            &[],
+            &[
+                r"C:\Windows\System32\msiexec.exe",
+                r"C:\Foo\uninst.exe",
+                r"C:\Program Files\Foo Bar\unins000.exe",
+            ],
+        );
         let cases = [
             (
-                msi,
+                msi.clone(),
                 Some(Launch {
-                    program: "msiexec.exe".into(),
+                    program: r"C:\Windows\System32\msiexec.exe".into(),
                     arguments: format!("/x {guid} /qb- /norestart"),
                 }),
             ),
+            (
+                unquoted,
+                Some(Launch {
+                    program: r"C:\Program Files\Foo Bar\unins000.exe".into(),
+                    arguments: "/SILENT".into(),
+                }),
+            ),
+            (missing, None),
             (
                 quiet,
                 Some(Launch {
@@ -897,8 +849,18 @@ mod tests {
             (msi_without_code, None),
         ];
         for (entry, expected) in cases {
-            assert_eq!(uninstall_launch(&entry), expected, "{}", entry.name);
+            assert_eq!(
+                uninstall_launch(&entry, &roots(), &disk),
+                expected,
+                "{}",
+                entry.name
+            );
         }
+        let no_system = Roots {
+            windows: None,
+            ..roots()
+        };
+        assert_eq!(uninstall_launch(&msi, &no_system, &disk), None);
     }
 
     #[test]
@@ -940,24 +902,6 @@ mod tests {
     }
 
     #[test]
-    fn safe_dirs_exclude_roots_and_the_windows_tree() {
-        let roots = roots();
-        let cases = [
-            (r"C:\Program Files\Foo", true),
-            (r"C:\Users\me\AppData\Local\Programs\Foo", true),
-            (r"C:\Program Files", false),
-            (r"c:\program files\", false),
-            (r"C:\Users\me\AppData\Local\Programs", false),
-            (r"C:\Windows\System32\Foo", false),
-            (r"C:\Users\me", false),
-            (r"C:\Foo", false),
-        ];
-        for (path, expected) in cases {
-            assert_eq!(roots.is_safe_dir(Path::new(path)), expected, "{path}");
-        }
-    }
-
-    #[test]
     fn catalog_pairs_shortcuts_with_registry_apps_and_keeps_orphans() {
         let firefox = UninstallEntry {
             install_location: Some(PathBuf::from(r"C:\Program Files\Mozilla Firefox")),
@@ -985,13 +929,17 @@ mod tests {
             shortcut("Portable Tool", None),
             shortcut("Notepad", Some("Accessories")),
         ];
-        let dirs = [
-            r"C:\Program Files\Mozilla Firefox",
-            r"C:\Program Files\7-Zip",
-        ];
-        let catalog = build_catalog(vec![firefox, zip], shortcuts, &roots(), |path| {
-            dirs.iter().any(|dir| same_path(path, Path::new(dir)))
-        });
+        let disk = FakeDisk::new(
+            &[
+                r"C:\Program Files\Mozilla Firefox",
+                r"C:\Program Files\7-Zip",
+            ],
+            &[
+                r"C:\Program Files\Mozilla Firefox\uninstall\helper.exe",
+                r"C:\Program Files\7-Zip\Uninstall.exe",
+            ],
+        );
+        let catalog = build_catalog(vec![firefox, zip], shortcuts, &roots(), &disk);
 
         let names: Vec<&str> = catalog.iter().map(|app| app.app.name.as_str()).collect();
         assert_eq!(
@@ -1106,6 +1054,23 @@ mod tests {
                 vec![firefox, ("Tool", r"C:\Tools\Tool", 2)],
             ),
             (
+                "two apps sharing one portable folder",
+                vec![
+                    shortcut("Tool", None, at(r"C:\Tools\Tool\tool.exe")),
+                    shortcut("Editor", None, at(r"C:\Tools\Tool\editor.exe")),
+                ],
+                vec![
+                    ("Editor", r"C:\Menu\Editor.lnk", 1),
+                    firefox,
+                    ("Tool", r"C:\Menu\Tool.lnk", 1),
+                ],
+            ),
+            (
+                "folder name only a prefix of the app name",
+                vec![shortcut("Program X", None, at(r"C:\Tools\Pro\x.exe"))],
+                vec![firefox, ("Program X", r"C:\Menu\Program X.lnk", 1)],
+            ),
+            (
                 "folder of system shortcuts and unknowns",
                 vec![
                     shortcut(
@@ -1147,16 +1112,18 @@ mod tests {
                 )
             }]
         };
-        let dirs = [
-            r"C:\Program Files\Mozilla Firefox",
-            r"C:\Program Files\Microsoft OneDrive",
-            r"C:\Tools\Tool",
-            r"C:\Users\me\Desktop",
-        ];
+        let disk = FakeDisk::new(
+            &[
+                r"C:\Program Files\Mozilla Firefox",
+                r"C:\Program Files\Microsoft OneDrive",
+                r"C:\Tools\Tool",
+                r"C:\Tools\Pro",
+                r"C:\Users\me\Desktop",
+            ],
+            &[r"C:\Program Files\Mozilla Firefox\uninstall\helper.exe"],
+        );
         for (label, shortcuts, expected) in cases {
-            let catalog = build_catalog(entries(), shortcuts, &roots(), |path| {
-                dirs.iter().any(|dir| same_path(path, Path::new(dir)))
-            });
+            let catalog = build_catalog(entries(), shortcuts, &roots(), &disk);
             let actual: Vec<(&str, PathBuf, usize)> = catalog
                 .iter()
                 .map(|app| {
@@ -1176,19 +1143,134 @@ mod tests {
     }
 
     #[test]
-    fn apps_sharing_an_install_dir_fall_back_to_their_registry_path() {
-        let one = UninstallEntry {
-            install_location: Some(PathBuf::from(r"C:\Program Files\Suite")),
-            ..entry("A", "Suite", "a.exe")
+    fn apps_sharing_or_nesting_an_install_dir_do_not_remove_it() {
+        let installed = |key: &str, name: &str, dir: &str, uninstaller: &str| UninstallEntry {
+            install_location: Some(PathBuf::from(dir)),
+            ..entry(key, name, &format!("\"{dir}\\{uninstaller}\""))
         };
-        let two = UninstallEntry {
-            install_location: Some(PathBuf::from(r"C:\Program Files\Suite")),
-            ..entry("B", "Suite Helper", "b.exe")
-        };
-        let catalog = build_catalog(vec![one, two], Vec::new(), &roots(), |_| true);
-        let paths: BTreeSet<PathBuf> = catalog.iter().map(|app| app.app.path.clone()).collect();
-        assert_eq!(paths.len(), 2);
-        assert!(paths.contains(Path::new(r"C:\Program Files\Suite")));
+        let disk = FakeDisk::new(
+            &[
+                r"C:\Program Files\Suite",
+                r"C:\Program Files\Suite\Addon",
+                r"C:\Program Files\Widget",
+            ],
+            &[
+                r"C:\Program Files\Suite\a.exe",
+                r"C:\Program Files\Suite\b.exe",
+                r"C:\Program Files\Suite\Addon\remove.exe",
+                r"C:\Program Files\Widget\w.exe",
+            ],
+        );
+        let cases = [
+            (
+                "shared",
+                vec![
+                    installed("A", "Suite", r"C:\Program Files\Suite", "a.exe"),
+                    installed("B", "Suite Helper", r"C:\Program Files\Suite", "b.exe"),
+                ],
+            ),
+            (
+                "nested",
+                vec![
+                    installed("A", "Suite", r"C:\Program Files\Suite", "a.exe"),
+                    installed(
+                        "B",
+                        "Suite Addon",
+                        r"C:\Program Files\Suite\Addon",
+                        "remove.exe",
+                    ),
+                ],
+            ),
+        ];
+        for (label, entries) in cases {
+            let mut entries = entries;
+            entries.push(installed(
+                "W",
+                "Widget",
+                r"C:\Program Files\Widget",
+                "w.exe",
+            ));
+            let catalog = build_catalog(entries, Vec::new(), &roots(), &disk);
+            let paths: BTreeSet<PathBuf> = catalog.iter().map(|app| app.app.path.clone()).collect();
+            assert_eq!(paths.len(), 3, "{label}");
+            assert!(
+                paths.contains(Path::new(r"C:\Program Files\Suite")),
+                "{label}"
+            );
+            for app in &catalog {
+                let expected = (app.app.name == "Widget")
+                    .then(|| (PathBuf::from(r"C:\Program Files\Widget"), MatchKind::Exact));
+                assert_eq!(app.install_dir, expected, "{label}: {}", app.app.name);
+            }
+        }
+    }
+
+    #[test]
+    fn install_location_is_exact_only_when_it_holds_the_uninstaller_or_icon() {
+        let disk = FakeDisk::new(
+            &[
+                r"C:\Program Files\Foo",
+                r"C:\Users\me\Documents",
+                r"C:\ProgramData\Package Cache\{1}",
+            ],
+            &[
+                r"C:\Program Files\Foo\foo.exe",
+                r"C:\Program Files\Foo\unins.exe",
+                r"C:\ProgramData\Package Cache\{1}\setup.exe",
+                r"C:\Users\me\Documents\setup.exe",
+            ],
+        );
+        let foo = Some((PathBuf::from(r"C:\Program Files\Foo"), MatchKind::Exact));
+        let cases = [
+            (
+                "uninstaller inside",
+                r"C:\Program Files\Foo",
+                r#""C:\Program Files\Foo\unins.exe" /S"#,
+                None,
+                foo.clone(),
+            ),
+            (
+                "icon inside",
+                r"C:\Program Files\Foo",
+                r#""C:\ProgramData\Package Cache\{1}\setup.exe" /uninstall"#,
+                Some(r"C:\Program Files\Foo\foo.exe"),
+                foo,
+            ),
+            (
+                "nothing inside",
+                r"C:\Program Files\Foo",
+                r#""C:\ProgramData\Package Cache\{1}\setup.exe" /uninstall"#,
+                None,
+                None,
+            ),
+            (
+                "parent dir components",
+                r"C:\Program Files\Foo\..\Foo",
+                r#""C:\Program Files\Foo\unins.exe" /S"#,
+                None,
+                Some((PathBuf::from(r"C:\Program Files\Foo"), MatchKind::Fuzzy)),
+            ),
+            (
+                "profile known folder",
+                r"C:\Users\me\Documents",
+                r#""C:\Users\me\Documents\setup.exe" /S"#,
+                None,
+                None,
+            ),
+        ];
+        for (label, location, uninstall, icon, expected) in cases {
+            let entry = UninstallEntry {
+                install_location: Some(PathBuf::from(location)),
+                display_icon: icon.map(PathBuf::from),
+                ..entry("Bar", "Bar", uninstall)
+            };
+            let keys = entry_keys(&entry);
+            assert_eq!(
+                install_dir(&entry, &keys, &roots(), &disk),
+                expected,
+                "{label}"
+            );
+        }
     }
 
     #[test]
@@ -1197,7 +1279,7 @@ mod tests {
             vec![entry("A", "Widget", "a.exe"), entry("B", "Widget", "b.exe")],
             Vec::new(),
             &roots(),
-            |_| false,
+            &FakeDisk::default(),
         );
         assert!(owned_keys(&catalog[0], &catalog).is_empty());
     }
@@ -1213,10 +1295,14 @@ mod tests {
         };
         let listed = UninstallEntry {
             install_location: Some(PathBuf::from(r"C:\Program Files\Widget")),
-            ..entry("W", "Widget", "w.exe")
+            ..entry("W", "Widget", r#""C:\Program Files\Widget\w.exe""#)
         };
+        let disk = FakeDisk::new(
+            &[r"C:\Program Files\Widget"],
+            &[r"C:\Program Files\Widget\w.exe"],
+        );
         let catalog = with_store(
-            build_catalog(vec![listed], Vec::new(), &roots(), |_| true),
+            build_catalog(vec![listed], Vec::new(), &roots(), &disk),
             &[
                 package(
                     "Calculator",
