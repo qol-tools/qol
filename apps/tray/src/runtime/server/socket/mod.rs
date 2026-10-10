@@ -243,9 +243,19 @@ mod tests {
         String::from_utf8_lossy(&buf[..n]).into_owned()
     }
 
-    fn assert_state_response(label: &str, response: &str) {
-        assert!(
-            response.contains("monitors"),
+    fn monitor_count(response: &str) -> usize {
+        let state: serde_json::Value = serde_json::from_str(response.trim())
+            .unwrap_or_else(|error| panic!("state must be one JSON line ({error}): {response:?}"));
+        state["monitors"]
+            .as_array()
+            .unwrap_or_else(|| panic!("state must carry a monitors array: {response:?}"))
+            .len()
+    }
+
+    fn assert_state_response(label: &str, response: &str, monitors: usize) {
+        assert_eq!(
+            monitor_count(response),
+            monitors,
             "{label} must receive state: {response:?}",
         );
     }
@@ -259,10 +269,7 @@ mod tests {
         handle_connection(server_side, &shared);
 
         let response = read_response(&mut client_side, 200);
-        assert!(
-            response.contains("monitors"),
-            "response must include serialized monitors: {response:?}",
-        );
+        assert_state_response("text GET_STATE", &response, 1);
     }
 
     #[test]
@@ -343,10 +350,7 @@ mod tests {
         dispatcher.dispatch(Ok(server_side));
 
         let response = read_response(&mut client_side, 5_000);
-        assert!(
-            response.contains("monitors"),
-            "worker must service the request: {response:?}",
-        );
+        assert_state_response("worker", &response, 1);
     }
 
     #[test]
@@ -362,10 +366,7 @@ mod tests {
         }
         for (i, mut client) in clients.into_iter().enumerate() {
             let response = read_response(&mut client, 5_000);
-            assert!(
-                response.contains("monitors"),
-                "client #{i} must be served: {response:?}",
-            );
+            assert_state_response(&format!("client #{i}"), &response, 2);
         }
     }
 
@@ -391,7 +392,7 @@ mod tests {
         dispatcher.dispatch(Ok(server_side));
 
         let response = read_response(&mut client_side, 5_000);
-        assert_state_response("queued fast request behind stalled readers", &response);
+        assert_state_response("queued fast request behind stalled readers", &response, 2);
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "stalled readers must be bounded by socket read timeout",
@@ -420,10 +421,7 @@ mod tests {
         dispatcher.dispatch(Ok(server_side));
 
         let response = read_response(&mut client_side, 5_000);
-        assert!(
-            response.contains("monitors"),
-            "short request must not wait behind held-open subscriptions: {response:?}",
-        );
+        assert_state_response("short request behind held-open subscriptions", &response, 2);
     }
 
     #[test]
@@ -508,7 +506,7 @@ mod tests {
 
         for (i, mut client_side) in client_sides.into_iter().enumerate() {
             let response = read_response(&mut client_side, 5_000);
-            assert_state_response(&format!("client #{i}"), &response);
+            assert_state_response(&format!("client #{i}"), &response, 2);
         }
 
         for handle in handles {
@@ -582,7 +580,7 @@ mod tests {
             handle_connection(server_side, &shared);
 
             let response = read_response(&mut client_side, 200);
-            prop_assert!(response.contains("monitors"), "response: {response:?}");
+            prop_assert_eq!(monitor_count(&response), n_monitors, "response: {:?}", response);
             prop_assert!(response.ends_with('\n'), "response must end with newline: {response:?}");
         }
 

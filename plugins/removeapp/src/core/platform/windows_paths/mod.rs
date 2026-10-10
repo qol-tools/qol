@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use qol_apps::shell_link::LinkTarget;
+use qol_platform::windows_path::parent;
+pub(super) use qol_platform::windows_path::{path_key, same_path, strip_verbatim, within};
 
 use crate::core::LeftoverKind;
 
-const VERBATIM_UNC_PREFIX: &str = r"\\?\UNC\";
-const VERBATIM_PREFIX: &str = r"\\?\";
 const PROGRAMS_DIR: &str = "Programs";
 const APP_DATA_DIR: &str = "AppData";
 const LOCAL_LOW_DIR: &str = "LocalLow";
@@ -129,40 +129,8 @@ impl Roots {
     }
 }
 
-pub(super) fn same_path(left: &Path, right: &Path) -> bool {
-    path_key(left) == path_key(right)
-}
-
-pub(super) fn within(child: &Path, parent: &Path) -> bool {
-    let parent = path_key(parent);
-    let child = path_key(child);
-    !parent.is_empty() && (child == parent || child.starts_with(&format!("{parent}\\")))
-}
-
 fn strictly_within(child: &Path, parent: &Path) -> bool {
     within(child, parent) && !same_path(child, parent)
-}
-
-pub(super) fn path_key(path: &Path) -> String {
-    strip_verbatim(path.to_path_buf())
-        .to_string_lossy()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .to_lowercase()
-}
-
-pub(super) fn strip_verbatim(path: PathBuf) -> PathBuf {
-    let raw = path.to_string_lossy();
-    let unc = raw
-        .get(..VERBATIM_UNC_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(VERBATIM_UNC_PREFIX));
-    if unc {
-        return PathBuf::from(format!(r"\\{}", &raw[VERBATIM_UNC_PREFIX.len()..]));
-    }
-    match raw.strip_prefix(VERBATIM_PREFIX) {
-        Some(rest) => PathBuf::from(rest),
-        None => path.clone(),
-    }
 }
 
 pub(super) fn has_parent_dir(path: &Path) -> bool {
@@ -187,12 +155,6 @@ fn segments(path: &Path) -> Vec<String> {
         .filter(|segment| !segment.is_empty())
         .map(str::to_string)
         .collect()
-}
-
-fn parent(path: &Path) -> Option<PathBuf> {
-    let raw = path.to_string_lossy();
-    let (head, _) = raw.trim_end_matches(SEPARATORS).rsplit_once(SEPARATORS)?;
-    (!head.is_empty() && !head.ends_with(':')).then(|| PathBuf::from(head))
 }
 
 fn join(base: &Path, parts: &[&str]) -> PathBuf {
@@ -299,44 +261,6 @@ mod tests {
                 PathBuf::from(r"C:\Program Files"),
                 PathBuf::from(r"C:\Program Files (x86)"),
             ],
-        }
-    }
-
-    #[test]
-    fn path_keys_fold_case_separators_and_verbatim_prefixes() {
-        let cases = [
-            (r"C:\Program Files\Foo", r"c:\program files\foo"),
-            (r"c:/program files/foo/", r"c:\program files\foo"),
-            (r"\\?\C:\Program Files\Foo", r"c:\program files\foo"),
-            (r"\\?\UNC\server\share\Foo", r"\\server\share\foo"),
-            (r"\\?\unc\server\share", r"\\server\share"),
-        ];
-        for (path, expected) in cases {
-            assert_eq!(path_key(Path::new(path)), expected, "{path}");
-        }
-        assert!(within(
-            Path::new(r"\\?\C:\Program Files\Foo\bin"),
-            Path::new(r"C:\PROGRAM FILES\foo")
-        ));
-        assert!(!within(
-            Path::new(r"C:\Program Files\Foobar"),
-            Path::new(r"C:\Program Files\Foo")
-        ));
-    }
-
-    #[test]
-    fn strip_verbatim_keeps_case_and_rewrites_unc() {
-        let cases = [
-            (r"\\?\C:\Program Files\Foo", r"C:\Program Files\Foo"),
-            (r"\\?\UNC\Server\Share\Foo", r"\\Server\Share\Foo"),
-            (r"C:\Plain", r"C:\Plain"),
-        ];
-        for (path, expected) in cases {
-            assert_eq!(
-                strip_verbatim(PathBuf::from(path)),
-                PathBuf::from(expected),
-                "{path}"
-            );
         }
     }
 

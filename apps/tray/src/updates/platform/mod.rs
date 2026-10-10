@@ -17,6 +17,8 @@ mod macos;
 mod unix;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod windows_install_kind;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use fallback as active;

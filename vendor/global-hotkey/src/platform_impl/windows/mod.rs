@@ -470,3 +470,45 @@ fn key_to_vk(key: &Code) -> Option<VIRTUAL_KEY> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    const DROP_TIMEOUT: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn hotkeys_register_once_across_threads_and_the_manager_drops_promptly() {
+        let manager = GlobalHotKeyManager::new().unwrap();
+        let hotkey = HotKey::new(
+            Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
+            Code::F24,
+        );
+
+        manager.register(hotkey).unwrap();
+        match manager.register(hotkey) {
+            Err(crate::Error::AlreadyRegistered(registered)) => assert_eq!(registered, hotkey),
+            other => panic!("expected AlreadyRegistered, got {other:?}"),
+        }
+        manager.unregister(hotkey).unwrap();
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| manager.register(hotkey))
+                .join()
+                .unwrap()
+                .unwrap();
+        });
+        manager.unregister(hotkey).unwrap();
+
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(manager);
+            let _ = dropped_tx.send(());
+        });
+        assert!(
+            dropped_rx.recv_timeout(DROP_TIMEOUT).is_ok(),
+            "dropping the manager must stop its message pump"
+        );
+    }
+}

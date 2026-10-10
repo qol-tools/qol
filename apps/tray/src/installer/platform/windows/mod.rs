@@ -3,7 +3,8 @@ mod registry;
 pub(in crate::installer) mod run_key;
 mod shortcut;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
+use qol_platform::windows_path::same_path;
 use std::fs;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use self::registration::Layout;
+use super::windows_rules::uninstall::{plan, UninstallPlan};
 use super::InstallerOps;
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
@@ -78,7 +80,7 @@ impl InstallerOps for Platform {
             return Ok(());
         };
         let installed = qol_apps::tray_install::installed_binary()?;
-        if comparable_path(&current_exe) != comparable_path(&installed)
+        if !same_path(&current_exe, &installed)
             || !crate::installer::has_install_marker(&installed)
             || !crate::installer::mode::is_production_mode()
         {
@@ -106,7 +108,7 @@ fn install_uninstaller(destination: &Path) -> Result<()> {
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case(&registration::uninstaller_filename()));
-    if !is_installer || comparable_path(&current) == comparable_path(destination) {
+    if !is_installer || same_path(&current, destination) {
         return Ok(());
     }
     let staged = destination.with_extension("new");
@@ -127,32 +129,22 @@ fn install_uninstaller(destination: &Path) -> Result<()> {
 
 fn remove_install_files(binary_path: &Path) -> Result<()> {
     let install_dir = qol_apps::tray_install::install_dir()?;
-    if comparable_path(binary_path.parent().unwrap_or(binary_path)) != comparable_path(&install_dir)
-    {
-        bail!(
-            "refusing to remove {}: it is not the QoL Tray install directory {}",
-            binary_path.display(),
-            install_dir.display()
-        );
-    }
-    let root = install_dir
-        .parent()
-        .context("Install directory has no parent")?
-        .to_path_buf();
     let current = std::env::current_exe().context("Failed to determine the uninstaller path")?;
-    if !comparable_path(&current).starts_with(&comparable_path(&root)) {
-        return fs::remove_dir_all(&root)
+    match plan(binary_path, &install_dir, &current)? {
+        UninstallPlan::RemoveRoot(root) => fs::remove_dir_all(&root)
             .or_else(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => Ok(()),
                 _ => Err(error),
             })
-            .with_context(|| format!("Failed to remove {}", root.display()));
+            .with_context(|| format!("Failed to remove {}", root.display())),
+        UninstallPlan::RemoveAfterExit(root) => {
+            registration::remove_file_if_present(binary_path)?;
+            if let Some(marker) = crate::paths::install_marker::marker_path(binary_path) {
+                registration::remove_file_if_present(&marker)?;
+            }
+            remove_after_exit(&root)
+        }
     }
-    registration::remove_file_if_present(binary_path)?;
-    if let Some(marker) = crate::paths::install_marker::marker_path(binary_path) {
-        registration::remove_file_if_present(&marker)?;
-    }
-    remove_after_exit(&root)
 }
 
 fn remove_after_exit(root: &Path) -> Result<()> {
@@ -198,7 +190,6 @@ fn installed_pids(binary_path: &Path) -> Vec<u32> {
     let Some(exe_name) = binary_path.file_name().and_then(|name| name.to_str()) else {
         return Vec::new();
     };
-    let target = comparable_path(binary_path);
     let own_pid = std::process::id();
     let Ok(processes) = qol_process::processes() else {
         return Vec::new();
@@ -208,13 +199,7 @@ fn installed_pids(binary_path: &Path) -> Vec<u32> {
         .filter(|entry| entry.pid != own_pid && entry.exe.eq_ignore_ascii_case(exe_name))
         .map(|entry| entry.pid)
         .filter(|pid| {
-            qol_process::process_image_path(*pid)
-                .is_ok_and(|image| comparable_path(&image) == target)
+            qol_process::process_image_path(*pid).is_ok_and(|image| same_path(&image, binary_path))
         })
         .collect()
-}
-
-fn comparable_path(path: &Path) -> String {
-    let text = path.to_string_lossy().replace('/', "\\");
-    text.strip_prefix(r"\\?\").unwrap_or(&text).to_lowercase()
 }

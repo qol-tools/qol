@@ -8,6 +8,7 @@ use crate::plugins::PluginManager;
 
 use super::super::{latest_version, verify_host_update, GITHUB_REPO};
 use super::download;
+use super::windows_install_kind::install_kind_for;
 use super::InstallKind;
 
 const RETIRED_SUFFIX: &str = "old";
@@ -19,22 +20,6 @@ pub(super) fn detect_install_kind() -> InstallKind {
     };
     let install_dir = qol_apps::tray_install::install_dir().ok();
     install_kind_for(&executable, install_dir.as_deref())
-}
-
-fn install_kind_for(executable: &Path, install_dir: Option<&Path>) -> InstallKind {
-    let executable = comparable(executable);
-    let in_install_dir = install_dir.is_some_and(|dir| {
-        executable
-            .rsplit_once('/')
-            .is_some_and(|(parent, _)| parent == comparable(dir))
-    });
-    InstallKind::for_path(&executable, None, in_install_dir)
-}
-
-fn comparable(path: &Path) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
-    let text = text.strip_prefix("//?/").unwrap_or(&text);
-    text.trim_end_matches('/').to_lowercase()
 }
 
 fn asset_name() -> String {
@@ -49,6 +34,16 @@ fn sibling(target: &Path, suffix: &str) -> PathBuf {
 }
 
 fn replace_running_binary(source: &Path, target: &Path) -> Result<()> {
+    replace_binary_with(source, target, |from: &Path, to: &Path| {
+        std::fs::rename(from, to)
+    })
+}
+
+fn replace_binary_with(
+    source: &Path,
+    target: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<()> {
     let staged = sibling(target, STAGED_SUFFIX);
     let retired = sibling(target, RETIRED_SUFFIX);
     let _ = std::fs::remove_file(&staged);
@@ -61,14 +56,14 @@ fn replace_running_binary(source: &Path, target: &Path) -> Result<()> {
         )
     })?;
     if target.exists() {
-        if let Err(error) = std::fs::rename(target, &retired) {
+        if let Err(error) = rename(target, &retired) {
             let _ = std::fs::remove_file(&staged);
             return Err(error)
                 .with_context(|| format!("Failed to move aside {}", target.display()));
         }
     }
-    if let Err(error) = std::fs::rename(&staged, target) {
-        let rollback = std::fs::rename(&retired, target);
+    if let Err(error) = rename(&staged, target) {
+        let rollback = rename(&retired, target);
         let _ = std::fs::remove_file(&staged);
         return match rollback {
             Ok(()) => Err(error).with_context(|| format!("Failed to replace {}", target.display())),
@@ -174,56 +169,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn install_kind_follows_the_executable_location() {
-        let install_dir = Path::new(r"C:\Users\x\AppData\Local\Programs\qol-tray\bin");
-        let cases = [
-            (
-                r"C:\Users\x\AppData\Local\Programs\qol-tray\bin\qol-tray.exe",
-                InstallKind::UserLocal,
-            ),
-            (
-                r"\\?\C:\USERS\X\AppData\Local\Programs\qol-tray\bin\qol-tray.exe",
-                InstallKind::UserLocal,
-            ),
-            (
-                r"C:\Users\x\repos\qol\target\release\qol-tray.exe",
-                InstallKind::Development,
-            ),
-            (
-                r"C:\Users\x\repos\qol\target\debug\qol-tray.exe",
-                InstallKind::Development,
-            ),
-            (
-                r"C:\Users\x\Downloads\qol-tray-windows-x86_64.exe",
-                InstallKind::SystemWide,
-            ),
-            (
-                r"C:\Users\x\AppData\Local\Programs\qol-tray\bin\nested\qol-tray.exe",
-                InstallKind::SystemWide,
-            ),
-        ];
-        for (executable, expected) in cases {
-            assert_eq!(
-                install_kind_for(Path::new(executable), Some(install_dir)),
-                expected,
-                "{executable}"
-            );
-        }
-        assert_eq!(
-            install_kind_for(
-                Path::new(r"C:\Users\x\AppData\Local\Programs\qol-tray\bin\qol-tray.exe"),
-                None
-            ),
-            InstallKind::SystemWide
-        );
-    }
-
-    #[test]
     fn windows_release_asset_matches_the_plugin_naming() {
-        assert_eq!(
-            asset_name(),
-            format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)
-        );
+        assert_eq!(asset_name(), "qol-tray-windows-x86_64.exe");
     }
 
     #[test]
@@ -243,6 +190,51 @@ mod tests {
             b"old"
         );
         assert!(!sibling(&target, STAGED_SUFFIX).exists());
+    }
+
+    #[test]
+    fn a_failed_swap_restores_the_previous_binary() {
+        for restore_fails in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("download.exe");
+            let target = dir.path().join("qol-tray.exe");
+            let staged = sibling(&target, STAGED_SUFFIX);
+            let retired = sibling(&target, RETIRED_SUFFIX);
+            std::fs::write(&source, b"new").unwrap();
+            std::fs::write(&target, b"old").unwrap();
+
+            let error = replace_binary_with(&source, &target, |from, to| {
+                let refused = from == staged || (restore_fails && from == retired);
+                if refused {
+                    return Err(std::io::Error::other("refused"));
+                }
+                std::fs::rename(from, to)
+            })
+            .unwrap_err();
+
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("Failed to replace"),
+                "restore_fails: {restore_fails} message: {message}"
+            );
+            assert_eq!(
+                message.contains("restoring the previous binary also failed"),
+                restore_fails,
+                "restore_fails: {restore_fails} message: {message}"
+            );
+            assert!(!staged.exists(), "restore_fails: {restore_fails}");
+            let (restored, aside) = if restore_fails {
+                (&retired, &target)
+            } else {
+                (&target, &retired)
+            };
+            assert_eq!(
+                std::fs::read(restored).unwrap(),
+                b"old",
+                "restore_fails: {restore_fails}"
+            );
+            assert!(!aside.exists(), "restore_fails: {restore_fails}");
+        }
     }
 
     #[test]

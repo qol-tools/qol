@@ -11,6 +11,8 @@ use qol_runtime::local_ipc::{self, LocalListener, LocalStream};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, ReadinessPhase};
 
 mod platform;
+#[cfg(test)]
+mod tests;
 
 use platform::{fallback_socket_dir, inherited_listener, remove_socket_file};
 pub use platform::{inherited_port_fd, inherited_primary_port_fd, restore_cloexec};

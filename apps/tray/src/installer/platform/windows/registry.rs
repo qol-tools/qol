@@ -36,26 +36,35 @@ mod tests {
 
     const TEST_KEY: &str = r"Software\qol-tray-installer-registry-test";
 
+    struct KeyGuard(String);
+
+    impl Drop for KeyGuard {
+        fn drop(&mut self) {
+            let _ = delete_key(&self.0);
+        }
+    }
+
     #[test]
     fn values_round_trip_and_delete_cleanly() {
-        let key = format!("{TEST_KEY}-{}", std::process::id());
+        let guard = KeyGuard(format!("{TEST_KEY}-{}", std::process::id()));
+        let key = guard.0.as_str();
         let cases = [
             ("Name", "QoL Tray"),
             ("Path", r"C:\Users\x y\qol-tray.exe"),
             ("Empty", ""),
         ];
         for (name, value) in cases {
-            set(&key, name, &Value::Text(value.to_string())).unwrap();
+            set(key, name, &Value::Text(value.to_string())).unwrap();
         }
-        set(&key, "Flag", &Value::Number(1)).unwrap();
+        set(key, "Flag", &Value::Number(1)).unwrap();
         for (name, value) in cases {
-            assert_eq!(text(&key, name).unwrap().as_deref(), Some(value), "{name}");
+            assert_eq!(text(key, name).unwrap().as_deref(), Some(value), "{name}");
         }
-        delete_value(&key, "Name").unwrap();
-        delete_value(&key, "Name").unwrap();
-        assert_eq!(text(&key, "Name").unwrap(), None);
-        delete_key(&key).unwrap();
-        delete_key(&key).unwrap();
-        assert_eq!(text(&key, "Path").unwrap(), None);
+        delete_value(key, "Name").unwrap();
+        delete_value(key, "Name").unwrap();
+        assert_eq!(text(key, "Name").unwrap(), None);
+        delete_key(key).unwrap();
+        delete_key(key).unwrap();
+        assert_eq!(text(key, "Path").unwrap(), None);
     }
 }
