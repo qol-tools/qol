@@ -3,15 +3,17 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-
 #[cfg(target_os = "windows")]
-use fallback as imp;
+mod windows;
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use fallback as imp;
 #[cfg(target_os = "linux")]
 use linux as imp;
 #[cfg(target_os = "macos")]
 use macos as imp;
+#[cfg(target_os = "windows")]
+use windows as imp;
 
 trait DevPluginCpuPlatformOps {
     fn cpu_percent_window_samples() -> usize;
