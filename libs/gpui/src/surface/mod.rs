@@ -590,7 +590,7 @@ impl Surface {
 
     fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
         self.placement
-            .bounds(placement_area(self.kind, monitor.bounds()), self.size)
+            .bounds(placement_area(self.kind, monitor), self.size)
     }
 
     fn window_kind(&self) -> WindowKind {
@@ -682,11 +682,12 @@ fn constrain_native_size(title: &str, size: Size<Pixels>) -> bool {
         || crate::popup_window::set_window_fixed_size_by_title(title, size)
 }
 
-fn placement_area(kind: SurfaceKind, monitor: Bounds<Pixels>) -> Bounds<Pixels> {
-    match kind {
-        SurfaceKind::Toast => crate::popup_window::work_area_within(monitor).unwrap_or(monitor),
-        SurfaceKind::Panel | SurfaceKind::OverlayPanel => monitor,
-    }
+fn placement_area(kind: SurfaceKind, monitor: &ActiveMonitor) -> Bounds<Pixels> {
+    let native = monitor.bounds();
+    monitor.logical(match kind {
+        SurfaceKind::Toast => crate::popup_window::work_area_within(native).unwrap_or(native),
+        SurfaceKind::Panel | SurfaceKind::OverlayPanel => native,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -1060,7 +1061,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 (Some(restored), _, _) => restored.bounds,
                 (None, _, Some(monitor)) => self
                     .placement
-                    .bounds(placement_area(self.kind, monitor.bounds()), self.size()),
+                    .bounds(placement_area(self.kind, &monitor), self.size()),
                 (None, SurfaceKind::Toast, None) => return false,
                 (None, SurfaceKind::Panel | SurfaceKind::OverlayPanel, None) => {
                     Bounds::centered(None, self.size(), cx)

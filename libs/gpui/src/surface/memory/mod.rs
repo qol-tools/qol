@@ -9,7 +9,7 @@ use gpui::{point, px, size, App, AppContext, AsyncApp, Bounds, Pixels, Size};
 use qol_window_state::{Monitor, Reopen, WindowState, WindowStateStore, SCHEMA_VERSION};
 use qol_windowing::{DisplayEnumerator, MonitorBounds, WindowRect};
 
-use crate::monitor::MonitorTracker;
+use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::placement::MonitorPlacement;
 
 mod platform;
@@ -237,12 +237,16 @@ fn current_monitors(cx: &App) -> Vec<Monitor> {
     match qol_windowing::Platform.snapshot() {
         Ok(snapshots) if !snapshots.is_empty() => snapshots
             .into_iter()
-            .map(|snapshot| Monitor {
-                id: snapshot.handle.id().to_string(),
-                connector: snapshot.handle.connector().to_string(),
-                work_area: work_area(snapshot.bounds),
-                bounds: snapshot.bounds,
-                primary: snapshot.primary,
+            .map(|snapshot| {
+                let (bounds, work_area) =
+                    logical_areas(&ActiveMonitor::from_bounds(snapshot.bounds));
+                Monitor {
+                    id: snapshot.handle.id().to_string(),
+                    connector: snapshot.handle.connector().to_string(),
+                    work_area,
+                    bounds,
+                    primary: snapshot.primary,
+                }
             })
             .collect(),
         _ => MonitorTracker::start(cx)
@@ -250,11 +254,12 @@ fn current_monitors(cx: &App) -> Vec<Monitor> {
             .into_iter()
             .enumerate()
             .map(|(index, monitor)| {
-                let bounds = monitor_bounds(monitor.bounds());
+                let id = geometry_id(monitor_bounds(monitor.bounds()));
+                let (bounds, work_area) = logical_areas(&monitor);
                 Monitor {
-                    id: geometry_id(bounds),
-                    connector: geometry_id(bounds),
-                    work_area: work_area(bounds),
+                    id: id.clone(),
+                    connector: id,
+                    work_area,
                     bounds,
                     primary: index == 0,
                 }
@@ -270,10 +275,13 @@ fn geometry_id(bounds: MonitorBounds) -> String {
     )
 }
 
-fn work_area(bounds: MonitorBounds) -> MonitorBounds {
-    crate::popup_window::work_area_within(to_bounds(rect_of(bounds)))
-        .map(monitor_bounds)
-        .unwrap_or(bounds)
+fn logical_areas(monitor: &ActiveMonitor) -> (MonitorBounds, MonitorBounds) {
+    let native = monitor.bounds();
+    let work_area = crate::popup_window::work_area_within(native).unwrap_or(native);
+    (
+        monitor_bounds(monitor.logical(native)),
+        monitor_bounds(monitor.logical(work_area)),
+    )
 }
 
 fn contains(monitor: MonitorBounds, window: WindowRect) -> bool {

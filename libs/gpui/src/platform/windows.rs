@@ -126,3 +126,20 @@ pub(crate) fn display_scale_factor(display: gpui::DisplayId) -> f32 {
         .get(u32::from(display) as usize)
         .map_or(1.0, |monitor| monitor.scale)
 }
+
+pub(crate) fn monitor_scale(monitor: &gpui::Bounds<gpui::Pixels>) -> f32 {
+    let wanted = [
+        monitor.origin.x.to_f64(),
+        monitor.origin.y.to_f64(),
+        monitor.size.width.to_f64(),
+        monitor.size.height.to_f64(),
+    ]
+    .map(f64::round);
+    qol_windowing::platform::windows::monitors()
+        .into_iter()
+        .find(|candidate| {
+            let bounds = candidate.bounds;
+            [bounds.x, bounds.y, bounds.width, bounds.height].map(f64::round) == wanted
+        })
+        .map_or(1.0, |candidate| candidate.scale)
+}

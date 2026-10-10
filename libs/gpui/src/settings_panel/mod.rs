@@ -919,7 +919,7 @@ fn size_prepared_panel(
     let monitor = tracker
         .snapshot_monitor()
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
-    let available = (monitor.bounds().size.height.to_f64() as f32
+    let available = (monitor.logical_bounds().size.height.to_f64() as f32
         - 2.0 * crate::placement::CORNER_MARGIN)
         .min(PANEL_MAX_HEIGHT);
     let has_custom_source = prepared.panel.sources.iter().any(|source| source.custom);

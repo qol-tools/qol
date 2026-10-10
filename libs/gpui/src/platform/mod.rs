@@ -17,7 +17,8 @@ use macos as imp;
 use windows as imp;
 
 pub(crate) use imp::{
-    display_scale_factor, native_readback_position, native_scale_for, readback_matches,
+    display_scale_factor, monitor_scale, native_readback_position, native_scale_for,
+    readback_matches,
 };
 
 pub fn is_modifier_held() -> bool {

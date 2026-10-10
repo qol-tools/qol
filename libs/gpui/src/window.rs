@@ -86,7 +86,7 @@ impl PopupPlacement {
     pub fn origin(&self) -> Point<Pixels> {
         self.monitor
             .as_ref()
-            .map(|monitor| monitor.bounds().origin)
+            .map(|monitor| monitor.logical_bounds().origin)
             .unwrap_or(point(px(0.0), px(0.0)))
     }
 }
