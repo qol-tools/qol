@@ -40,12 +40,13 @@ pub fn app_change(_root: &AppRoot, path: &Path) -> Option<PathBuf> {
 }
 
 pub fn file_watch_roots() -> Vec<PathBuf> {
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    vec![
-        PathBuf::from(format!("{home}\\Desktop")),
-        PathBuf::from(format!("{home}\\Documents")),
-        PathBuf::from(format!("{home}\\Downloads")),
-    ]
+    let mut roots = qol_apps::known_folder::user_content_folders();
+    if let Some(home) = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()) {
+        roots.push(PathBuf::from(home).join("Projects"));
+    }
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 struct Shortcut {
