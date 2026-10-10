@@ -17,7 +17,8 @@ use args::ParkArgs;
 pub use args::HELP;
 use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION};
 use resume::resume;
-use runner::{caller_state, target, CallerState, Target};
+use runner::{caller_state, CallerState};
+pub(crate) use runner::{target, Target};
 use store::ParkStore;
 
 pub const PARK: &str = "park";
@@ -62,7 +63,7 @@ pub fn run(args: &[String]) -> Result<Invocation> {
     Ok(Invocation::Parked(outcome))
 }
 
-fn calling_session(terminals: &TerminalSessionService) -> Option<SessionBinding> {
+pub(crate) fn calling_session(terminals: &TerminalSessionService) -> Option<SessionBinding> {
     terminals
         .discover()
         .ok()?

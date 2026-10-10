@@ -608,6 +608,14 @@ fn chat_transcript_keeps_human_turns_and_drops_tool_and_harness_noise() {
             "\n",
             r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"meta noise"}}"#,
             "\n",
+            r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"do not close this tab","commandMode":"prompt"}}"#,
+            "\n",
+            r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>","commandMode":"task-notification"}}"#,
+            "\n",
+            r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"<system-reminder>noise</system-reminder>","commandMode":"prompt"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Keeping it open."}]}}"#,
+            "\n",
             r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary of earlier work."}}"#,
             "\n",
             "{\"type\":\"assistant\"",
@@ -625,6 +633,14 @@ fn chat_transcript_keeps_human_turns_and_drops_tool_and_harness_noise() {
             role: ChatRole::Assistant,
             text: "Looking at the queue now.\n\nThe queue holds one item.\n\nThe lock went stale."
                 .to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::User,
+            text: "do not close this tab".to_owned(),
+        },
+        ChatTurn {
+            role: ChatRole::Assistant,
+            text: "Keeping it open.".to_owned(),
         },
         ChatTurn {
             role: ChatRole::User,

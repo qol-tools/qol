@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
+use crate::pin::{PinStore, PINNED_REASON};
 use crate::{
     SessionBinding, SessionFacts, SessionInventory, TerminalError, TerminalSessionService,
 };
@@ -34,12 +35,19 @@ impl std::error::Error for CliInterpreterError {}
 pub struct CliSessionInterpreter {
     strategies: Vec<Arc<dyn CliSessionStrategy>>,
     fallback: GenericStrategy,
+    pins: PinStore,
 }
 
 impl CliSessionInterpreter {
     pub fn system() -> Self {
         Self::from_strategies(super::builtins::system_strategies())
             .expect("built-in CLI session strategy ids are unique")
+            .with_pins(PinStore::system())
+    }
+
+    pub fn with_pins(mut self, pins: PinStore) -> Self {
+        self.pins = pins;
+        self
     }
 
     pub fn from_strategies(
@@ -62,6 +70,7 @@ impl CliSessionInterpreter {
         Ok(Self {
             strategies,
             fallback: GenericStrategy::default(),
+            pins: PinStore::default(),
         })
     }
 
@@ -195,7 +204,14 @@ impl CliSessionInterpreter {
     }
 
     pub fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {
-        self.strategy_for(session).keep_open_reason(session)
+        let strategy = self.strategy_for(session);
+        strategy.keep_open_reason(session).or_else(|| {
+            strategy
+                .describe(session)
+                .external_id
+                .filter(|id| self.pins.is_pinned(id))
+                .map(|_| PINNED_REASON.to_owned())
+        })
     }
 
     pub fn keep_open_reason_for(
@@ -278,6 +294,7 @@ mod tests {
         priority: i32,
         chat: Option<Vec<ChatTurn>>,
         keep_open: Option<&'static str>,
+        external_id: Option<&'static str>,
     }
 
     impl CliSessionStrategy for NamedStrategy {
@@ -300,7 +317,7 @@ mod tests {
             CliSessionDescriptor {
                 tool: self.tool.clone(),
                 display_name: Some(self.tool.label.clone()),
-                external_id: None,
+                external_id: self.external_id.map(str::to_owned),
                 external_id_authoritative: false,
                 has_activity: None,
                 evidence: CliSessionEvidence::default(),
@@ -328,6 +345,7 @@ mod tests {
             priority: 0,
             chat: None,
             keep_open: Some("a remote viewer is attached"),
+            external_id: None,
         });
         let strategies: [Arc<dyn CliSessionStrategy>; 2] =
             [holding, strategy("plain", "Plain", "plain", 1)];
@@ -341,6 +359,37 @@ mod tests {
         );
         assert_eq!(interpreter.keep_open_reason(&session(&["plain"])), None);
         assert_eq!(interpreter.keep_open_reason(&session(&["bash"])), None);
+    }
+
+    #[test]
+    fn a_pinned_conversation_keeps_its_terminal_open_until_it_is_unpinned() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pins = crate::pin::PinStore::with_dir(root.path().to_path_buf());
+        let pinnable = Arc::new(NamedStrategy {
+            tool: CliTool::new(
+                CliToolId::new("pinnable").unwrap(),
+                "Pinnable",
+                CliToolColor::new(0x80, 0x80, 0x80),
+            ),
+            process: "pinnable",
+            priority: 0,
+            chat: None,
+            keep_open: None,
+            external_id: Some("conversation-1"),
+        });
+        let interpreter = CliSessionInterpreter::from_strategies([pinnable as _])
+            .unwrap()
+            .with_pins(pins.clone());
+        let facts = session(&["pinnable"]);
+
+        assert_eq!(interpreter.keep_open_reason(&facts), None);
+        pins.set("conversation-1", true).unwrap();
+        assert_eq!(
+            interpreter.keep_open_reason(&facts).as_deref(),
+            Some(crate::pin::PINNED_REASON)
+        );
+        pins.set("conversation-1", false).unwrap();
+        assert_eq!(interpreter.keep_open_reason(&facts), None);
     }
 
     #[test]
@@ -626,6 +675,7 @@ mod tests {
             priority,
             chat: None,
             keep_open: None,
+            external_id: None,
         })
     }
 
@@ -653,6 +703,7 @@ mod tests {
                 },
             ]),
             keep_open: None,
+            external_id: None,
         })
     }
 
