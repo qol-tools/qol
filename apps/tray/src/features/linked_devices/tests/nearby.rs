@@ -108,7 +108,7 @@ fn confirm(fixture: &Fixture, peer_id: PeerId) -> Response {
     })
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod residency {
     use qol_peers::admin::{Lifecycle, Request};
     use qol_peers::AuthorityLifetime;

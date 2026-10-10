@@ -132,7 +132,7 @@ fn cursors_reject_changed_identity_revision_and_out_of_range_offsets() {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[test]
 fn real_store_pages_are_complete_and_old_cursors_fail_after_a_mutation() {
     let temporary = tempfile::tempdir().unwrap();

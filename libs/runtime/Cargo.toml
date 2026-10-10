@@ -20,12 +20,12 @@ workspace-hack.workspace = true
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+qol-platform.workspace = true
 qol-process.workspace = true
 uds_windows = "1.2.1"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Networking_WinSock",
-  "Win32_Security",
   "Win32_System_IO",
   "Win32_System_Threading",
 ] }

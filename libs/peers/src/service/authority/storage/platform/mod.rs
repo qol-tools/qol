@@ -4,8 +4,10 @@ mod linux;
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod unsupported;
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[cfg(target_os = "linux")]
 use linux as anchor;
@@ -13,10 +15,15 @@ use linux as anchor;
 use macos as anchor;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::service::authority) use unix::Store;
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(in crate::service::authority) use unsupported::Store;
+#[cfg(target_os = "windows")]
+pub(in crate::service::authority) use windows::Store;
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 #[derive(Clone, Copy)]
 pub(in crate::service::authority) enum CommitFault {
     BeforeReplace,

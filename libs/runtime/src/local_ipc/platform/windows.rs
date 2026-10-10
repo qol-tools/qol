@@ -2,16 +2,12 @@ use std::io;
 use std::os::windows::io::AsRawSocket;
 use std::path::Path;
 
+use qol_platform::native::security::TokenSid;
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, HANDLE};
 use windows_sys::Win32::Networking::WinSock::{
     WSAGetLastError, WSAIoctl, SIO_AF_UNIX_GETPEERPID, WSAEINVAL, WSAEOPNOTSUPP,
 };
-use windows_sys::Win32::Security::{
-    EqualSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
-};
-use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
-};
+use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
 pub type LocalListener = uds_windows::UnixListener;
 pub type LocalStream = uds_windows::UnixStream;
@@ -74,7 +70,7 @@ impl Drop for Handle {
 fn same_user(pid: u32) -> io::Result<bool> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if process.is_null() {
-        let error = denied_or_last_error();
+        let error = denied(io::Error::last_os_error());
         if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
@@ -84,13 +80,11 @@ fn same_user(pid: u32) -> io::Result<bool> {
         return Err(error);
     }
     let process = Handle(process);
-    let peer = token_user(&process)?;
-    let current = token_user(&Handle(unsafe { GetCurrentProcess() }))?;
-    Ok(unsafe { EqualSid(sid_of(&peer), sid_of(&current)) } != 0)
+    let peer = TokenSid::user_of(process.0).map_err(denied)?;
+    Ok(peer.same_as(&TokenSid::current_user().map_err(denied)?))
 }
 
-fn denied_or_last_error() -> io::Error {
-    let error = io::Error::last_os_error();
+fn denied(error: io::Error) -> io::Error {
     if error.kind() == io::ErrorKind::PermissionDenied {
         io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -99,34 +93,6 @@ fn denied_or_last_error() -> io::Error {
     } else {
         error
     }
-}
-
-fn sid_of(buffer: &[u64]) -> *mut core::ffi::c_void {
-    unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid }
-}
-
-fn token_user(process: &Handle) -> io::Result<Vec<u64>> {
-    let mut token = std::ptr::null_mut();
-    if unsafe { OpenProcessToken(process.0, TOKEN_QUERY, &mut token) } == 0 {
-        return Err(denied_or_last_error());
-    }
-    let token = Handle(token);
-    let mut needed = 0u32;
-    unsafe { GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut needed) };
-    let mut buffer = vec![0u64; (needed as usize).div_ceil(8).max(1)];
-    let ok = unsafe {
-        GetTokenInformation(
-            token.0,
-            TokenUser,
-            buffer.as_mut_ptr().cast(),
-            (buffer.len() * 8) as u32,
-            &mut needed,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(buffer)
 }
 
 #[cfg(test)]

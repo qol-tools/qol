@@ -16,6 +16,7 @@ service = [
   "dep:mdns-sd",
   "dep:p256",
   "dep:qol-fs",
+  "dep:qol-platform",
   "dep:rcgen",
   "dep:rustls",
   "dep:sha2",
@@ -24,6 +25,7 @@ service = [
   "dep:time",
   "dep:tokio",
   "dep:tokio-rustls",
+  "dep:windows-sys",
   "dep:workspace-hack",
   "dep:x509-cert",
   "dep:x25519-dalek",
@@ -57,7 +59,16 @@ zeroize = "1"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = { version = "0.2", optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 qol-fs = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+qol-platform = { workspace = true, optional = true }
+windows-sys = { version = "0.59", optional = true, features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+] }
 
 [dev-dependencies]
 rustls = { version = "=0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
