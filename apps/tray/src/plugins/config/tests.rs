@@ -807,8 +807,10 @@ fn materialization_waits_for_mutation_and_reads_post_mutation_value() {
     })));
     let store = manager.store().clone();
     let manifest_for_thread = manifest.clone();
+    let worker_root = env_root.path().to_path_buf();
     let (result_tx, result_rx) = mpsc::channel();
     let worker = thread::spawn(move || {
+        let _path_root = crate::paths::push_test_path_root(&worker_root);
         let manager = PluginConfigManager::with_store(store);
         let result =
             manager.materialize_runtime_config_for_manifest("test-plugin", &manifest_for_thread);

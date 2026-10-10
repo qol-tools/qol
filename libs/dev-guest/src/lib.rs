@@ -859,6 +859,7 @@ mod tests {
     fn cancellable_request_does_not_wait_for_a_stalled_guest_response() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let (released_tx, released_rx) = std::sync::mpsc::channel::<()>();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             write_frame(
@@ -870,7 +871,7 @@ mod tests {
             .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let _: GuestRequest = read_frame(&mut reader).unwrap();
-            thread::sleep(Duration::from_millis(250));
+            let _ = released_rx.recv();
         });
         let mut client = GuestControlClient::connect_verified_identity(
             address,
@@ -889,7 +890,8 @@ mod tests {
             })
             .err()
             .unwrap();
-        assert!(error.to_string().contains("cancelled"));
+        released_tx.send(()).unwrap();
+        assert!(error.to_string().contains("cancelled"), "{error:#}");
         server.join().unwrap();
     }
 }
