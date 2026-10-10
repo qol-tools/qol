@@ -2,7 +2,6 @@ use std::net::TcpListener;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub(in crate::daemon) fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path)
@@ -17,16 +16,10 @@ pub(in crate::daemon) fn launch_path(path: &Path) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path)
 }
 
-pub(in crate::daemon) fn hide_console(_command: &mut Command) {}
-
 pub(in crate::daemon) fn inherited_listener() -> std::io::Result<Option<TcpListener>> {
     let Some(fd) = qol_plugin_daemon::daemon::inherited_primary_port_fd() else {
         return Ok(None);
     };
     qol_plugin_daemon::daemon::restore_cloexec(fd)?;
     Ok(Some(unsafe { TcpListener::from_raw_fd(fd) }))
-}
-
-pub(in crate::daemon) fn spawn_host_death_watchdog() {
-    qol_runtime::spawn_host_death_watchdog();
 }

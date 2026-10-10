@@ -25,7 +25,7 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub(super) fn program_roots() -> Vec<AppRoot> {
+pub fn program_roots() -> Vec<AppRoot> {
     imp::Platform.program_roots()
 }
 

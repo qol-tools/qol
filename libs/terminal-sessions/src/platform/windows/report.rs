@@ -1,6 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
 
-use qol_app_icon::ProcessEntry;
 use serde::{Deserialize, Serialize};
 
 use super::launch::{tag_in_command_line, LaunchTag};
@@ -50,6 +49,27 @@ pub(super) struct ConsoleReport {
 pub(super) struct Root {
     pub(super) pid: i32,
     pub(super) hosted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProcessEntry {
+    pub(super) pid: i32,
+    pub(super) parent_pid: i32,
+    pub(super) name: String,
+}
+
+pub(super) fn process_table() -> Vec<ProcessEntry> {
+    qol_process::processes()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| {
+            Some(ProcessEntry {
+                pid: i32::try_from(entry.pid).ok()?,
+                parent_pid: i32::try_from(entry.parent).ok()?,
+                name: entry.exe,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn image_stem(name: &str) -> String {

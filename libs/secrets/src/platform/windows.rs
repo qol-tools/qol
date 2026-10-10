@@ -1,10 +1,11 @@
 use anyhow::{bail, Result};
+use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::Security::Credentials::{
     CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
 };
 
 pub(crate) fn read(service: &str) -> Result<String> {
-    let target: Vec<u16> = service.encode_utf16().chain(Some(0)).collect();
+    let target = wide_nul(service);
     let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
     // SAFETY: `target` is a NUL-terminated UTF-16 string that outlives the call,
     // and `credential` is a valid out pointer.

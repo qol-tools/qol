@@ -10,7 +10,6 @@ mod virtual_hid;
 
 use anyhow::Result;
 use qol_headless::{CommandResult, DoctorCheckResult};
-use qol_platform::PermissionState;
 
 use super::engine::{self, config, remap};
 use super::{ConfigInspection, PlatformAdapter};
@@ -33,18 +32,6 @@ impl PlatformAdapter for Adapter {
         Ok(CommandResult::success(""))
     }
 
-    fn reload(&self) -> Result<CommandResult> {
-        Ok(engine::reload())
-    }
-
-    fn toggle(&self) -> Result<CommandResult> {
-        Ok(engine::toggle())
-    }
-
-    fn kill(&self) -> Result<CommandResult> {
-        Ok(engine::kill())
-    }
-
     fn hid_helper(&self) -> Result<CommandResult> {
         hid_helper::run()?;
         Ok(CommandResult::success(""))
@@ -60,10 +47,6 @@ impl PlatformAdapter for Adapter {
 
     fn inspect_config(&self) -> Result<ConfigInspection> {
         engine::inspection(|_| Vec::new())
-    }
-
-    fn input_permission(&self) -> PermissionState {
-        qol_platform::permission_status(qol_platform::Permission::InputCapture)
     }
 
     fn virtual_hid_driver(&self) -> Result<DoctorCheckResult> {

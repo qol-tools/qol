@@ -1,10 +1,9 @@
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessId, WaitForSingleObject,
@@ -51,12 +50,16 @@ pub(super) fn run_and_wait(launch: &Launch, elevate: bool, timeout: Duration) ->
         tracked.insert(root, start);
     }
     loop {
-        let table: Vec<ProcessRow> = qol_app_icon::processes()
+        let table: Vec<ProcessRow> = qol_process::processes()
+            .unwrap_or_default()
             .into_iter()
-            .map(|entry| ProcessRow {
-                pid: entry.pid,
-                parent_pid: entry.parent_pid,
-                start: qol_app_icon::process_start_time_us(entry.pid),
+            .filter_map(|entry| {
+                let pid = i32::try_from(entry.pid).ok()?;
+                Some(ProcessRow {
+                    pid,
+                    parent_pid: i32::try_from(entry.parent).ok()?,
+                    start: qol_app_icon::process_start_time_us(pid),
+                })
             })
             .collect();
         track_descendants(&mut tracked, &table);
@@ -79,9 +82,9 @@ pub(super) fn run_and_wait(launch: &Launch, elevate: bool, timeout: Duration) ->
 }
 
 fn start(launch: &Launch, elevate: bool) -> Result<Process> {
-    let verb = wide("runas");
-    let file = wide(&launch.program);
-    let parameters = wide(&launch.arguments);
+    let verb = wide_nul("runas");
+    let file = wide_nul(&launch.program);
+    let parameters = wide_nul(&launch.arguments);
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
     info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
@@ -136,10 +139,6 @@ fn is_alive(table: &[ProcessRow], pid: i32, start: u64) -> bool {
     table
         .iter()
         .any(|row| row.pid == pid && row.start == Some(start))
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
 #[cfg(test)]

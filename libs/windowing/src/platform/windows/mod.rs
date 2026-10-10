@@ -1,31 +1,33 @@
 use std::ffi::c_void;
-use std::ptr::null_mut;
+use std::ptr::{null, null_mut};
 use std::sync::Once;
 
-use crate::{WindowId, WindowRect};
+use crate::{WindowId, WindowOps, WindowRect};
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EnumDisplayMonitors, GetDC, GetMonitorInfoW, MonitorFromWindow, ReleaseDC, SelectObject,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, SRCCOPY,
+    EnumDisplayMonitors, GetDC, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, ReleaseDC,
+    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR,
+    MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows_sys::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::HiDpi::{
-    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    MDT_EFFECTIVE_DPI,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, PostMessageW, SetForegroundWindow, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GW_OWNER, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-    WM_CLOSE, WS_EX_TOOLWINDOW,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetCursorPos, GetForegroundWindow,
+    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SetForegroundWindow, SetWindowPos,
+    ShowWindow, GWL_EXSTYLE, GW_OWNER, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE,
+    SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW,
 };
 
+const BASE_DPI: f32 = 96.0;
 const SHELL_CLASSES: [&str; 4] = [
     "Progman",
     "WorkerW",
@@ -53,6 +55,10 @@ impl Window {
 
     pub fn from_id(id: &WindowId) -> Option<Self> {
         id.as_u32().map(|handle| Self(handle as usize as HWND))
+    }
+
+    pub fn try_from_id(id: &WindowId) -> Result<Self, String> {
+        Self::from_id(id).ok_or_else(|| format!("Invalid window ID: {}", id.as_str()))
     }
 
     pub fn id(self) -> WindowId {
@@ -196,9 +202,12 @@ impl Window {
         }
     }
 
+    pub fn monitor(self) -> Option<Monitor> {
+        monitor_info(unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) })
+    }
+
     pub fn work_area(self) -> Option<WindowRect> {
-        let monitor = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
-        monitor_work_area(monitor)
+        self.monitor().map(|monitor| monitor.work_area)
     }
 
     pub fn title(self) -> String {
@@ -233,6 +242,46 @@ impl Window {
     }
 }
 
+pub struct Win32Windows;
+
+impl WindowOps for Win32Windows {
+    fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
+        Ok(top_level_windows()
+            .into_iter()
+            .filter(|window| window.is_switchable())
+            .map(Window::id)
+            .collect())
+    }
+
+    fn window_geometry(&self, window_id: &WindowId) -> Result<Option<WindowRect>, String> {
+        let window = Window::try_from_id(window_id)?;
+        if !window.exists() {
+            return Ok(None);
+        }
+        Ok(window.frame())
+    }
+
+    fn move_resize(&self, window_id: &WindowId, rect: WindowRect) -> Result<(), String> {
+        Window::try_from_id(window_id)?.set_frame(rect)
+    }
+
+    fn focus_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        Ok(Window::try_from_id(window_id)?.activate())
+    }
+
+    fn minimize_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        Ok(Window::try_from_id(window_id)?.minimize())
+    }
+
+    fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
+        self.focus_window(window_id)
+    }
+
+    fn active_window_id(&self) -> Result<Option<WindowId>, String> {
+        Ok(Window::foreground().map(Window::id))
+    }
+}
+
 pub fn top_level_windows() -> Vec<Window> {
     let mut windows: Vec<Window> = Vec::new();
     unsafe {
@@ -250,17 +299,41 @@ unsafe extern "system" fn collect_window(hwnd: HWND, data: LPARAM) -> BOOL {
     TRUE
 }
 
-pub fn work_areas_left_to_right() -> Vec<WindowRect> {
-    let mut monitors: Vec<HMONITOR> = Vec::new();
+#[derive(Clone, Debug, PartialEq)]
+pub struct Monitor {
+    pub bounds: WindowRect,
+    pub work_area: WindowRect,
+    pub device_name: String,
+    pub scale: f32,
+}
+
+pub fn monitors() -> Vec<Monitor> {
+    let mut handles: Vec<HMONITOR> = Vec::new();
     unsafe {
         EnumDisplayMonitors(
             null_mut(),
-            std::ptr::null(),
+            null(),
             Some(collect_monitor),
-            &mut monitors as *mut Vec<HMONITOR> as LPARAM,
+            &mut handles as *mut Vec<HMONITOR> as LPARAM,
         );
     }
-    let mut areas: Vec<WindowRect> = monitors.into_iter().filter_map(monitor_work_area).collect();
+    handles.into_iter().filter_map(monitor_info).collect()
+}
+
+pub fn monitor_at(x: i32, y: i32) -> Option<Monitor> {
+    monitor_info(unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) })
+}
+
+pub fn cursor_position() -> Option<(i32, i32)> {
+    let mut point = POINT { x: 0, y: 0 };
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
+}
+
+pub fn work_areas_left_to_right() -> Vec<WindowRect> {
+    let mut areas: Vec<WindowRect> = monitors()
+        .into_iter()
+        .map(|monitor| monitor.work_area)
+        .collect();
     areas.sort_by(|a, b| a.x.total_cmp(&b.x));
     areas
 }
@@ -276,17 +349,36 @@ unsafe extern "system" fn collect_monitor(
     TRUE
 }
 
-fn monitor_work_area(monitor: HMONITOR) -> Option<WindowRect> {
+fn monitor_info(monitor: HMONITOR) -> Option<Monitor> {
     if monitor.is_null() {
         return None;
     }
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: empty_rect(),
-        rcWork: empty_rect(),
-        dwFlags: 0,
-    };
-    (unsafe { GetMonitorInfoW(monitor, &mut info) } != 0).then(|| to_frame(info.rcWork))
+    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    let read = unsafe { GetMonitorInfoW(monitor, (&mut info as *mut MONITORINFOEXW).cast()) };
+    if read == 0 {
+        return None;
+    }
+    let device = &info.szDevice;
+    let end = device
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(device.len());
+    Some(Monitor {
+        bounds: to_frame(info.monitorInfo.rcMonitor),
+        work_area: to_frame(info.monitorInfo.rcWork),
+        device_name: String::from_utf16_lossy(&device[..end]),
+        scale: monitor_scale(monitor),
+    })
+}
+
+fn monitor_scale(monitor: HMONITOR) -> f32 {
+    let (mut dpi_x, mut dpi_y) = (0u32, 0u32);
+    let result = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+    if result < 0 || dpi_x == 0 {
+        return 1.0;
+    }
+    dpi_x as f32 / BASE_DPI
 }
 
 pub struct WindowPixels {

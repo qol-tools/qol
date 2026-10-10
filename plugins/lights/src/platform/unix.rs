@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::SerialAccess;
 
-pub(super) fn serial_port_present(path: &str) -> bool {
+pub(crate) fn serial_port_present(path: &str) -> bool {
     Path::new(path).exists()
 }
 

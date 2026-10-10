@@ -1,5 +1,7 @@
 use std::io::{self, Read};
 
+use qol_platform::native::wide::wide_nul;
+
 use windows_sys::Win32::System::Console::SetConsoleTitleW;
 
 use super::attach::Detached;
@@ -26,7 +28,7 @@ pub(super) fn run(args: &[String]) -> io::Result<String> {
 }
 
 pub(super) fn set(title: &str) -> io::Result<()> {
-    let wide: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+    let wide = wide_nul(title);
     if unsafe { SetConsoleTitleW(wide.as_ptr()) } == 0 {
         return Err(io::Error::last_os_error());
     }

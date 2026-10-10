@@ -38,6 +38,7 @@ qol-process.workspace = true
 tokio = { version = "1.35", features = ["macros", "process", "rt", "signal", "sync", "time"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+qol-platform.workspace = true
 qol-audio.workspace = true
 windows = { version = "0.61", features = [
   "Devices_Radios",

@@ -86,7 +86,6 @@ pub(crate) async fn download_verified(asset: &GitHubAsset, destination: &Path) -
     })
 }
 
-#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn verify_file(asset: &GitHubAsset, path: &Path) -> Result<()> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read downloaded asset {}", path.display()))?;

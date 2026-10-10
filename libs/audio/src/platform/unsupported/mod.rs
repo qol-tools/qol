@@ -20,16 +20,16 @@ pub(crate) fn list_devices(_direction: Direction) -> Result<Vec<Device>, AudioEr
     Err(AudioError::Unsupported)
 }
 
-pub(crate) fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError> {
+pub fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError> {
     Err(AudioError::Unsupported)
 }
 
-pub(crate) fn reconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+pub fn reconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
     let _ = address;
     Err(AudioError::Unsupported)
 }
 
-pub(crate) fn disconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+pub fn disconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
     let _ = address;
     Err(AudioError::Unsupported)
 }

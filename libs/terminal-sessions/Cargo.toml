@@ -17,6 +17,7 @@ serde_json.workspace = true
 workspace-hack.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+qol-platform.workspace = true
 qol-app-icon.workspace = true
 qol-process.workspace = true
 qol-windowing.workspace = true

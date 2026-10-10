@@ -1,18 +1,14 @@
 use std::ffi::{c_int, c_void};
-use std::ptr::{null, null_mut};
 
+use qol_platform::native::wide::wide_nul;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
+use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
 };
-use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VIRTUAL_KEY, VK_ESCAPE, VK_MENU, VK_SHIFT,
 };
-
-const BASE_DPI: f32 = 96.0;
 
 #[link(name = "shell32")]
 extern "system" {
@@ -89,10 +85,7 @@ pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdent
 }
 
 pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {
-    let mut app_id: Vec<u16> = qol_conventions::SETTINGS_SURFACE_APP_ID
-        .encode_utf16()
-        .collect();
-    app_id.push(0);
+    let app_id = wide_nul(qol_conventions::SETTINGS_SURFACE_APP_ID);
     unsafe {
         let _ = SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
     }
@@ -114,34 +107,7 @@ pub(crate) fn readback_matches(
 }
 
 pub(crate) fn display_scale_factor(display: gpui::DisplayId) -> f32 {
-    let mut monitors: Vec<HMONITOR> = Vec::new();
-    unsafe {
-        EnumDisplayMonitors(
-            null_mut(),
-            null(),
-            Some(collect_monitor),
-            &mut monitors as *mut Vec<HMONITOR> as LPARAM,
-        );
-    }
-    monitors
+    qol_windowing::platform::windows::monitors()
         .get(u32::from(display) as usize)
-        .and_then(|monitor| monitor_scale(*monitor))
-        .unwrap_or(1.0)
-}
-
-unsafe extern "system" fn collect_monitor(
-    monitor: HMONITOR,
-    _hdc: HDC,
-    _rect: *mut RECT,
-    data: LPARAM,
-) -> BOOL {
-    let monitors = unsafe { &mut *(data as *mut Vec<HMONITOR>) };
-    monitors.push(monitor);
-    TRUE
-}
-
-fn monitor_scale(monitor: HMONITOR) -> Option<f32> {
-    let (mut dpi_x, mut dpi_y) = (0u32, 0u32);
-    let result = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
-    (result >= 0 && dpi_x > 0).then(|| dpi_x as f32 / BASE_DPI)
+        .map_or(1.0, |monitor| monitor.scale)
 }

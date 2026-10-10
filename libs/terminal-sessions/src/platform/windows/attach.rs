@@ -1,9 +1,8 @@
-use std::ffi::OsStr;
 use std::io;
 use std::marker::PhantomData;
-use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null, null_mut};
 
+use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::Foundation::{
     CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, TRUE,
 };
@@ -65,7 +64,7 @@ impl Drop for ConsoleFile {
 
 impl ConsoleFile {
     pub(super) fn open(name: &str) -> io::Result<ConsoleFile> {
-        let name: Vec<u16> = OsStr::new(name).encode_wide().chain(Some(0)).collect();
+        let name = wide_nul(name);
         let handle = unsafe {
             CreateFileW(
                 name.as_ptr(),

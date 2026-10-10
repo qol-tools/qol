@@ -1,9 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use std::io::Write;
-use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
-use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use super::audio;
 use super::plan::CapturePlan;
@@ -86,12 +84,12 @@ fn run(request: &str) -> Result<()> {
         plan.audio.len(),
         audio.is_some()
     );
-    let mut child = Command::new(&plan.ffmpeg)
+    let mut command = Command::new(&plan.ffmpeg);
+    let mut child = qol_process::hide_console_window(&mut command)
         .args(&args)
         .env(COMPAT_LAYER_ENV, COMPAT_LAYER_DPI_AWARE)
         .env_remove(HELPER_ENV)
         .stdin(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .with_context(|| format!("failed to start {}", plan.ffmpeg.display()))?;
     if let Err(error) = qol_process::bind_to_host_lifetime(child.id()) {

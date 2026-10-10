@@ -13,6 +13,13 @@ workspace-hack.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 

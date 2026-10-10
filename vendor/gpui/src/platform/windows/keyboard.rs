@@ -137,19 +137,19 @@ impl WindowsKeyboardLayout {
                 b"0424" | // Slovenian
                 b"041B" | // Slovak
                 b"0418" | // Romanian
-                b"0406" |
-                b"0410" |
-                b"0416" |
-                b"040F" |
-                b"080C" |
-                b"0807" |
-                b"100C" |
-                b"041A" |
-                b"0425" |
-                b"0426" |
-                b"0427" |
-                b"0408" |
-                b"0402"
+                b"0406" | // Danish
+                b"0410" | // Italian
+                b"0416" | // Portuguese (Brazil)
+                b"040F" | // Icelandic
+                b"080C" | // French (Belgium)
+                b"0807" | // German (Switzerland)
+                b"100C" | // French (Switzerland)
+                b"041A" | // Croatian
+                b"0425" | // Estonian
+                b"0426" | // Latvian
+                b"0427" | // Lithuanian
+                b"0408" | // Greek
+                b"0402" // Bulgarian
             )
         } else {
             false

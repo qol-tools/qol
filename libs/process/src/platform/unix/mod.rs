@@ -27,6 +27,10 @@ pub(crate) fn isolate_owned_command(command: &mut Command) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn hide_console_window(command: &mut Command) -> &mut Command {
+    command
+}
+
 pub(crate) fn install_cancellation_handler() -> io::Result<()> {
     let result = CANCELLATION_INSTALL.get_or_init(install_signal_handlers);
     match result {

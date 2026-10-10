@@ -13,12 +13,32 @@ pub use bounded_output::{
 };
 
 use std::io;
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub parent: u32,
+    pub exe: String,
+}
+
+pub fn processes() -> io::Result<Vec<ProcessEntry>> {
+    platform::processes()
+}
+
+pub fn process_image_path(pid: u32) -> io::Result<PathBuf> {
+    platform::process_image_path(pid)
+}
+
+pub fn hide_console_window(command: &mut Command) -> &mut Command {
+    platform::hide_console_window(command)
+}
 
 pub const PROCESS_TREE_GUARDIAN_COMMAND: &str = "__process-tree-guardian";
 

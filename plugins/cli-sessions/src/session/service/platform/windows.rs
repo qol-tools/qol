@@ -12,16 +12,17 @@ use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 use super::super::ProcessSnapshot;
 
 pub(in super::super) fn process_snapshot() -> Option<ProcessSnapshot> {
-    let processes = qol_app_icon::processes();
+    let processes = qol_process::processes().ok()?;
     if processes.is_empty() {
         return None;
     }
     let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
     for process in processes {
-        children
-            .entry(process.parent_pid)
-            .or_default()
-            .push(process.pid);
+        let (Ok(pid), Ok(parent)) = (i32::try_from(process.pid), i32::try_from(process.parent))
+        else {
+            continue;
+        };
+        children.entry(parent).or_default().push(pid);
     }
     Some(ProcessSnapshot {
         listeners: listening_pids()?,

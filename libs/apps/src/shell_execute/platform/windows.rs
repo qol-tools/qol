@@ -1,14 +1,12 @@
 use std::ffi::OsStr;
 use std::io;
-use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null, null_mut};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
+use qol_platform::native::com::{Apartment, ComApartment};
+use qol_platform::native::wide::wide_nul;
 use windows_sys::w;
-use windows_sys::Win32::System::Com::{
-    CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
-};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -20,10 +18,10 @@ const SE_ERR_ACCESSDENIED: usize = 5;
 
 static LAUNCH_ENV: Mutex<()> = Mutex::new(());
 
-pub(in crate::shell_execute) fn shell_execute(target: &OsStr, args: &[String]) -> io::Result<()> {
-    let file = wide(target);
-    let parameters = (!args.is_empty()).then(|| wide(OsStr::new(&join_args(args))));
-    let directory = qol_platform::launch_working_dir().map(|dir| wide(dir.as_os_str()));
+pub fn shell_execute(target: &OsStr, args: &[String]) -> io::Result<()> {
+    let file = wide_nul(target);
+    let parameters = (!args.is_empty()).then(|| wide_nul(join_args(args)));
+    let directory = qol_platform::launch_working_dir().map(wide_nul);
     let (sender, receiver) = mpsc::channel();
     std::thread::Builder::new()
         .name("shell-execute".into())
@@ -67,12 +65,7 @@ fn shell_execute_now(
     parameters: Option<&[u16]>,
     directory: Option<&[u16]>,
 ) -> io::Result<()> {
-    let com = unsafe {
-        CoInitializeEx(
-            null(),
-            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
-        )
-    };
+    let _com = ComApartment::enter(Apartment::SingleThreaded);
     let result = unsafe {
         ShellExecuteW(
             null_mut(),
@@ -83,9 +76,6 @@ fn shell_execute_now(
             SW_SHOWNORMAL,
         )
     } as usize;
-    if com >= 0 {
-        unsafe { CoUninitialize() };
-    }
     shell_execute_result(result)
 }
 
@@ -131,8 +121,4 @@ fn shell_execute_result(code: usize) -> io::Result<()> {
             "ShellExecute failed with code {code}"
         ))),
     }
-}
-
-fn wide(value: &OsStr) -> Vec<u16> {
-    value.encode_wide().chain(Some(0)).collect()
 }

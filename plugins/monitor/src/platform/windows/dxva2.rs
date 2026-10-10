@@ -1,5 +1,6 @@
 use std::ptr::{null, null_mut};
 
+use qol_platform::native::wide::from_wide;
 use windows_sys::Win32::Devices::Display::{
     DestroyPhysicalMonitors, GetNumberOfPhysicalMonitorsFromHMONITOR,
     GetPhysicalMonitorsFromHMONITOR, GetVCPFeatureAndVCPFeatureReply, SetVCPFeature,
@@ -10,7 +11,6 @@ use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
 
-use super::display::from_wide;
 use crate::monitor::backends::gdi_display::connector_from_device;
 use crate::monitor::backends::vcp_ddc::{VcpReading, VcpTransport};
 use crate::monitor::I2cError;

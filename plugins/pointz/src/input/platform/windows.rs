@@ -6,11 +6,11 @@ use crate::input::{
 use anyhow::Result;
 use std::sync::Mutex;
 use std::time::Duration;
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN,
 };
-use windows::{Win32::Foundation::POINT, Win32::UI::Input::KeyboardAndMouse::*};
 
 pub struct InputHandlerImpl {
     current_pos: Mutex<Option<(f64, f64)>>,
@@ -47,14 +47,8 @@ impl InputHandlerImpl {
     }
 
     fn get_cursor_position() -> Option<(f64, f64)> {
-        unsafe {
-            let mut point = POINT { x: 0, y: 0 };
-            if GetCursorPos(&mut point).is_ok() {
-                Some((point.x as f64, point.y as f64))
-            } else {
-                None
-            }
-        }
+        qol_windowing::platform::windows::cursor_position()
+            .map(|(x, y)| (f64::from(x), f64::from(y)))
     }
 }
 

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use std::os::windows::ffi::OsStrExt;
+use qol_platform::native::wide::wide_nul;
 use std::path::Path;
 use std::ptr::null_mut;
 use std::time::Duration;
@@ -36,19 +36,14 @@ pub fn copy_path_to_clipboard(path: &Path) -> Result<()> {
 }
 
 fn utf16_text_bytes(path: &Path) -> Vec<u8> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
+    wide_nul(path)
+        .into_iter()
         .flat_map(u16::to_le_bytes)
         .collect()
 }
 
-fn wide_name(name: &str) -> Vec<u16> {
-    name.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
 fn registered_format(name: &str) -> Result<u32> {
-    let wide = wide_name(name);
+    let wide = wide_nul(name);
     let format = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
     if format == 0 {
         return Err(anyhow!(
@@ -169,7 +164,7 @@ fn set_clipboard_bytes(format: u32, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bitmap_header, dib_from_rgba, utf16_text_bytes, wide_name};
+    use super::{bitmap_header, dib_from_rgba, utf16_text_bytes};
     use std::path::Path;
 
     #[test]
@@ -232,9 +227,10 @@ mod tests {
             (Path::new("C:\\Bilder\\skærm.png"), "C:\\Bilder\\skærm.png"),
         ];
         for (path, text) in cases {
-            let expected: Vec<u8> = wide_name(text)
-                .into_iter()
+            let expected: Vec<u8> = text
+                .encode_utf16()
                 .flat_map(u16::to_le_bytes)
+                .chain([0, 0])
                 .collect();
             assert_eq!(utf16_text_bytes(path), expected, "{text}");
         }

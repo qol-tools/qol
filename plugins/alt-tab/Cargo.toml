@@ -70,6 +70,9 @@ objc2-app-kit = { version = "0.3", features = [
   "objc2-core-graphics",
 ] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+qol-process.workspace = true
+
 [dev-dependencies]
 tempfile = "3"
 

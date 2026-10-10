@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use qol_audio::bluetooth::BluetoothEndpoint;
 use qol_headless::DoctorCheckResult;
+use qol_platform::native::wide::from_wide;
 use windows::core::{Owned, GUID, HRESULT};
 use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
 use windows::Win32::Devices::Bluetooth::{
@@ -121,11 +122,7 @@ fn address_value(address: &str) -> Result<u64> {
 }
 
 fn name_text(units: &[u16]) -> String {
-    let end = units
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(units.len());
-    String::from_utf16_lossy(&units[..end]).trim().to_owned()
+    from_wide(units).trim().to_owned()
 }
 
 fn uuid_text(value: u128) -> String {

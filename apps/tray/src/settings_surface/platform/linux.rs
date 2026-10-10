@@ -1,9 +1,4 @@
-#[path = "gpui_host.rs"]
-mod gpui_host;
-#[path = "native_tools/mod.rs"]
-mod native_tools;
-
-pub(in crate::settings_surface) use gpui_host::{
+pub(in crate::settings_surface) use super::gpui_host::{
     apply_theme, plugins_changed, prewarm, request, run, show_toast, stop, wait_until_ready,
 };
 
@@ -13,7 +8,7 @@ pub(in crate::settings_surface) fn native_available() -> bool {
 
 const USER_HZ: u64 = 100;
 
-fn process_elapsed_ms() -> Option<u64> {
+pub(super) fn process_elapsed_ms() -> Option<u64> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     let start_ticks = stat
         .rsplit_once(')')?

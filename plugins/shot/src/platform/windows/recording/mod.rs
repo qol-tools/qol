@@ -1,11 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use qol_plugin_daemon::notification::send_notification;
 use std::fs::File;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use crate::capture::geometry::{even_dimensions, rect_label};
 use crate::platform::{recorder, CaptureProcess, CaptureSession, SavedRecording};
@@ -56,12 +54,12 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
         .try_clone()
         .context("failed to clone recording log")?;
     let executable = std::env::current_exe().context("failed to resolve qol-shot executable")?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    let mut child = qol_process::hide_console_window(&mut command)
         .env(helper::HELPER_ENV, request)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(log_file))
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .context("failed to start the Windows capture helper")?;
     if let Err(error) = wait_for_ready(&mut child, output_file) {

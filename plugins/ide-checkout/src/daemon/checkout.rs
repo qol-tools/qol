@@ -91,7 +91,7 @@ pub fn open_app(app_id: &str, path: &str, config: &Config) -> Result<(), Checkou
         CheckoutError::InvalidParams(format!("Could not resolve app path: {error}"))
     })?;
     let mut command = Command::new(executable);
-    super::platform::hide_console(&mut command);
+    qol_process::hide_console_window(&mut command);
     command
         .arg(launch_path)
         .stdin(Stdio::null())
@@ -255,7 +255,7 @@ fn spawn_git(
     stderr: Stdio,
 ) -> Result<Child, CheckoutError> {
     let mut command = Command::new("git");
-    super::platform::hide_console(&mut command);
+    qol_process::hide_console_window(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())

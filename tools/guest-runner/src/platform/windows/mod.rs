@@ -1,7 +1,6 @@
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,7 +12,6 @@ use qol_dev_guest::{
 use qol_headless::DoctorCheckResult;
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows_sys::Win32::System::SystemInformation::GetSystemFirmwareTable;
-use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 mod virtio_port;
 
@@ -59,7 +57,7 @@ impl GuestRunnerPlatform for Platform {
             || virtio_port::open(&options.device_path),
             &hello,
             |command| {
-                command.creation_flags(CREATE_NO_WINDOW);
+                qol_process::hide_console_window(command);
             },
             log_error,
         )

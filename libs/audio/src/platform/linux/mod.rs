@@ -71,16 +71,16 @@ fn with_connection<T>(
     operation(&mut connection)
 }
 
-pub(crate) fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError> {
+pub fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError> {
     Err(bluez_owns_links())
 }
 
-pub(crate) fn reconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+pub fn reconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
     let _ = address;
     Err(bluez_owns_links())
 }
 
-pub(crate) fn disconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+pub fn disconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
     let _ = address;
     Err(bluez_owns_links())
 }

@@ -13,7 +13,7 @@ use windows::Win32::System::Com::{CoTaskMemFree, CLSCTX_ALL};
 use crate::devices::Direction;
 use crate::AudioError;
 
-use super::com::{self, Com};
+use super::com;
 
 const POLL: Duration = Duration::from_millis(40);
 const CAPTURE_BUFFER_HNS: i64 = 1_000_000;
@@ -107,7 +107,7 @@ fn measure(
     peak: &AtomicU32,
     stop: &AtomicBool,
 ) {
-    let _com = match Com::enter() {
+    let _com = match com::apartment() {
         Ok(com) => com,
         Err(error) => {
             let _ = opened.send(Err(error));

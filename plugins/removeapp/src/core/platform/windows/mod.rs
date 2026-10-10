@@ -264,18 +264,17 @@ fn matching_processes(install_dir: &Path) -> Vec<MatchedProcess> {
         return Vec::new();
     }
     let own_pid = std::process::id();
-    qol_app_icon::processes()
+    let Ok(processes) = qol_process::processes() else {
+        return Vec::new();
+    };
+    processes
         .into_iter()
-        .filter_map(|process| {
-            u32::try_from(process.pid)
-                .ok()
-                .map(|pid| (pid, process.pid))
+        .map(|process| process.pid)
+        .filter(|pid| *pid != 0 && *pid != own_pid)
+        .filter(|pid| {
+            qol_process::process_image_path(*pid).is_ok_and(|exe| within(&exe, install_dir))
         })
-        .filter(|(pid, _)| *pid != 0 && *pid != own_pid)
-        .filter(|(_, raw)| {
-            qol_app_icon::process_executable(*raw).is_some_and(|exe| within(&exe, install_dir))
-        })
-        .filter_map(|(pid, _)| {
+        .filter_map(|pid| {
             qol_process::process_identity(pid)
                 .ok()
                 .map(|identity| MatchedProcess { pid, identity })

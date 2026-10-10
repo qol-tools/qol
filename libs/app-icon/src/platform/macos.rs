@@ -1,6 +1,6 @@
-use crate::{ProcessEntry, RgbaImage};
+use crate::RgbaImage;
 use std::ffi::c_void;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::AppIconPlatform;
 
@@ -33,24 +33,6 @@ impl AppIconPlatform for Platform {
 
     fn process_start_time_us(&self, pid: i32) -> Option<u64> {
         process_start_time_us(pid)
-    }
-
-    fn process_executable(&self, _pid: i32) -> Option<PathBuf> {
-        None
-    }
-
-    fn processes(&self) -> Vec<ProcessEntry> {
-        all_pids()
-            .into_iter()
-            .filter_map(|pid| {
-                let info = read_proc_bsd_info(pid)?;
-                Some(ProcessEntry {
-                    pid,
-                    parent_pid: info.pbi_ppid as i32,
-                    name: c_name(&info.pbi_comm),
-                })
-            })
-            .collect()
     }
 }
 
@@ -100,7 +82,6 @@ extern "C" {
 #[link(name = "proc")]
 extern "C" {
     fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, buffersize: i32) -> i32;
-    fn proc_listallpids(buffer: *mut c_void, buffersize: i32) -> i32;
 }
 
 const PROC_PIDTBSDINFO: i32 = 3;
@@ -147,27 +128,6 @@ fn read_proc_bsd_info(pid: i32) -> Option<ProcBsdInfo> {
         )
     };
     (read == size).then_some(info)
-}
-
-fn all_pids() -> Vec<i32> {
-    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-    let Ok(capacity) = usize::try_from(count) else {
-        return Vec::new();
-    };
-    let mut pids = vec![0i32; capacity + 64];
-    let bytes = i32::try_from(pids.len() * std::mem::size_of::<i32>()).unwrap_or(i32::MAX);
-    let filled = unsafe { proc_listallpids(pids.as_mut_ptr().cast::<c_void>(), bytes) };
-    pids.truncate(usize::try_from(filled).unwrap_or(0));
-    pids.retain(|pid| *pid > 0);
-    pids
-}
-
-fn c_name(bytes: &[u8]) -> String {
-    let end = bytes
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 fn parent_pid(pid: i32) -> Option<i32> {

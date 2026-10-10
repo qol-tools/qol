@@ -1,11 +1,7 @@
-use std::ptr::null_mut;
-
-use anyhow::{bail, Result};
-use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, LPARAM, WIN32_ERROR};
-use windows_sys::Win32::System::Registry::{
-    RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD,
-    RRF_RT_REG_DWORD,
-};
+use anyhow::{bail, Context, Result};
+use qol_platform::native::registry::{self, Hive};
+use qol_platform::native::wide::wide_nul;
+use windows_sys::Win32::Foundation::LPARAM;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
 };
@@ -81,65 +77,26 @@ fn light_flag(scheme: ColorScheme) -> u32 {
 }
 
 fn read_dword(name: &str) -> Result<Option<u32>> {
-    let key = wide(PERSONALIZE_KEY);
-    let value_name = wide(name);
-    let mut value = 0u32;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            key.as_ptr(),
-            value_name.as_ptr(),
-            RRF_RT_REG_DWORD,
-            null_mut(),
-            (&mut value as *mut u32).cast(),
-            &mut size,
-        )
-    };
-    match status {
-        ERROR_SUCCESS => Ok(Some(value)),
-        ERROR_FILE_NOT_FOUND => Ok(None),
-        error => registry_error("read", name, error),
-    }
+    registry::read_dword(Hive::CurrentUser, PERSONALIZE_KEY, name)
+        .with_context(|| registry_context("read", name))
 }
 
 fn write_dword(name: &str, value: u32) -> Result<()> {
-    let key = wide(PERSONALIZE_KEY);
-    let value_name = wide(name);
-    let status = unsafe {
-        RegSetKeyValueW(
-            HKEY_CURRENT_USER,
-            key.as_ptr(),
-            value_name.as_ptr(),
-            REG_DWORD,
-            (&value as *const u32).cast(),
-            std::mem::size_of::<u32>() as u32,
-        )
-    };
-    if status == ERROR_SUCCESS {
-        return Ok(());
-    }
-    registry_error("write", name, status)
+    registry::write_dword(Hive::CurrentUser, PERSONALIZE_KEY, name, value)
+        .with_context(|| registry_context("write", name))
 }
 
 fn delete_value(name: &str) -> Result<()> {
-    let key = wide(PERSONALIZE_KEY);
-    let value_name = wide(name);
-    let status =
-        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value_name.as_ptr()) };
-    match status {
-        ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
-        error => registry_error("delete", name, error),
-    }
+    registry::delete_value(Hive::CurrentUser, PERSONALIZE_KEY, name)
+        .with_context(|| registry_context("delete", name))
 }
 
-fn registry_error<T>(verb: &str, name: &str, status: WIN32_ERROR) -> Result<T> {
-    let error = std::io::Error::from_raw_os_error(status as i32);
-    bail!(r"could not {verb} HKCU\{PERSONALIZE_KEY}\{name}: {error}")
+fn registry_context(verb: &str, name: &str) -> String {
+    format!(r"could not {verb} HKCU\{PERSONALIZE_KEY}\{name}")
 }
 
 fn broadcast_color_set_change() {
-    let area = wide(CHANGE_AREA);
+    let area = wide_nul(CHANGE_AREA);
     let mut result = 0usize;
     let sent = unsafe {
         SendMessageTimeoutW(
@@ -158,10 +115,6 @@ fn broadcast_color_set_change() {
             std::io::Error::last_os_error()
         );
     }
-}
-
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 #[cfg(test)]

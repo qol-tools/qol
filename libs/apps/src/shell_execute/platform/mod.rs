@@ -4,6 +4,6 @@ mod fallback;
 mod windows;
 
 #[cfg(not(target_os = "windows"))]
-pub(super) use fallback::shell_execute;
+pub use fallback::shell_execute;
 #[cfg(target_os = "windows")]
-pub(super) use windows::shell_execute;
+pub use windows::shell_execute;

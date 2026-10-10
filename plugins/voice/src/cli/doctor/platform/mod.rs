@@ -16,10 +16,8 @@ use linux as selected;
 #[cfg(target_os = "windows")]
 use windows as selected;
 
+pub(super) use selected::audio_service_fix;
+
 pub(super) fn model_cache_dir() -> Option<PathBuf> {
     selected::model_cache_dir()
-}
-
-pub(super) fn audio_service_fix() -> &'static str {
-    selected::audio_service_fix()
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+pub mod native;
 mod permissions;
 mod platform;
 

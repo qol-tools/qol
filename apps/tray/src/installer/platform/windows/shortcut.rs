@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Context, Result};
+use qol_platform::native::com::{Apartment, ComApartment};
 use std::path::{Path, PathBuf};
 use windows::core::{Interface, HSTRING};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoTaskMemFree, IPersistFile, CLSCTX_INPROC_SERVER,
 };
 use windows::Win32::UI::Shell::{
     FOLDERID_Programs, IShellLinkW, SHGetKnownFolderPath, ShellLink, KF_FLAG_DEFAULT,
@@ -58,13 +58,9 @@ fn on_com_thread<T: Send>(work: impl FnOnce() -> Result<T> + Send) -> Result<T> 
     std::thread::scope(|scope| {
         scope
             .spawn(|| {
-                let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-                initialized
-                    .ok()
+                let _com = ComApartment::enter(Apartment::SingleThreaded)
                     .context("Failed to initialize COM for the Start menu shortcut")?;
-                let result = work();
-                unsafe { CoUninitialize() };
-                result
+                work()
             })
             .join()
             .map_err(|_| anyhow!("Start menu shortcut worker panicked"))?

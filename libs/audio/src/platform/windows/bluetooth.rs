@@ -40,7 +40,7 @@ struct Candidate {
     container: Option<GUID>,
 }
 
-pub(crate) fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError> {
+pub fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError> {
     com::with_enumerator(|enumerator| {
         Ok(links(enumerator)?
             .into_iter()
@@ -53,11 +53,11 @@ pub(crate) fn bluetooth_endpoints() -> Result<Vec<BluetoothEndpoint>, AudioError
     })
 }
 
-pub(crate) fn reconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+pub fn reconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
     request(address, KSPROPERTY_ONESHOT_RECONNECT)
 }
 
-pub(crate) fn disconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
+pub fn disconnect_bluetooth(address: &str) -> Result<usize, AudioError> {
     request(address, KSPROPERTY_ONESHOT_DISCONNECT)
 }
 

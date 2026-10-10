@@ -24,7 +24,7 @@ pub(crate) fn enumerate_serial_metadata() -> Result<SerialMetadata> {
 }
 
 pub(crate) fn detect_coordinator_port(ports: &[SerialPortInfo]) -> Option<String> {
-    super::port_detection::select_best_port(ports, score_port)
+    super::port_detection::select_best_port(ports, super::port_detection::base_usb_score)
 }
 
 pub(crate) fn candidate_coordinator_ports(ports: &[SerialPortInfo]) -> Vec<String> {
@@ -48,12 +48,8 @@ pub(crate) fn inspect_serial_access(path: &str) -> SerialAccess {
     }
 }
 
-fn score_port(port: &SerialPortInfo) -> Option<u16> {
-    super::port_detection::base_usb_score(port)
-}
-
 fn candidate_score(port: &SerialPortInfo) -> Option<u16> {
-    score_port(port)
+    super::port_detection::base_usb_score(port)
         .or_else(|| super::port_detection::secondary_usb_score(port))
         .or_else(|| {
             matches!(port.port_type, SerialPortType::UsbPort(_)).then_some(GENERIC_USB_SERIAL_SCORE)

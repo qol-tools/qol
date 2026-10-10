@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 mod platform;
 
@@ -7,13 +7,6 @@ pub struct RgbaImage {
     pub data: Vec<u8>,
     pub width: usize,
     pub height: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProcessEntry {
-    pub pid: i32,
-    pub parent_pid: i32,
-    pub name: String,
 }
 
 pub fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
@@ -42,12 +35,4 @@ pub fn parent_pid(pid: i32) -> Option<i32> {
 
 pub fn process_start_time_us(pid: i32) -> Option<u64> {
     platform::process_start_time_us(pid)
-}
-
-pub fn process_executable(pid: i32) -> Option<PathBuf> {
-    platform::process_executable(pid)
-}
-
-pub fn processes() -> Vec<ProcessEntry> {
-    platform::processes()
 }

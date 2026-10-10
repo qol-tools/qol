@@ -14,13 +14,11 @@ mod title;
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use qol_app_icon::ProcessEntry;
 use qol_windowing::platform::windows::{top_level_windows, Window};
 use qol_windowing::WindowId;
 use windows_sys::Win32::Foundation::HWND;
@@ -36,11 +34,11 @@ use crate::{
 use self::close::{belongs, settle, token_start, Member};
 use self::keys::Key;
 use self::report::{
-    candidate_roots, image_stem, listed, parse_reports, session_facts, ConsoleReport, Root,
+    candidate_roots, image_stem, listed, parse_reports, process_table, session_facts,
+    ConsoleReport, ProcessEntry, Root,
 };
 
 const BACKEND: &str = "console";
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const HELPER_TIMEOUT: Duration = Duration::from_secs(5);
 const SCREEN_TTL: Duration = Duration::from_secs(2);
 const ANCESTOR_LIMIT: usize = 8;
@@ -151,7 +149,7 @@ impl TerminalBackend for ConsoleBackend {
         if let Some(current) = self.current.get() {
             return Some(current.clone());
         }
-        let table = qol_app_icon::processes();
+        let table = process_table();
         let own = i32::try_from(std::process::id()).ok()?;
         let roots = candidate_roots(&table, own);
         let chain = console_chain(&table, &roots, own);
@@ -247,7 +245,7 @@ impl SessionCloser for ConsoleBackend {
 
 impl SessionInventory for ConsoleBackend {
     fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
-        let table = qol_app_icon::processes();
+        let table = process_table();
         let own = i32::try_from(std::process::id()).unwrap_or_default();
         let roots = candidate_roots(&table, own);
         let reports = if roots.is_empty() {
@@ -389,7 +387,7 @@ fn focus_window(report: &ConsoleReport) -> Option<Window> {
             return window_from(owner as usize as u64);
         }
     }
-    let table = qol_app_icon::processes();
+    let table = process_table();
     let windows = top_level_windows();
     ancestors(&table, report.root).into_iter().find_map(|pid| {
         windows.iter().copied().find(|window| {
@@ -471,7 +469,8 @@ fn run_helper(
         source,
     };
     let executable = std::env::current_exe().map_err(unavailable)?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    let mut child = qol_process::hide_console_window(&mut command)
         .args(args)
         .stdin(if input.is_some() {
             Stdio::piped()
@@ -480,7 +479,6 @@ fn run_helper(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(unavailable)?;
     let writer = feed(&mut child, input);

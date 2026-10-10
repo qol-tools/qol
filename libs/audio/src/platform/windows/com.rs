@@ -1,45 +1,24 @@
 use std::ffi::c_void;
 
+use qol_platform::native::com::{Apartment, ComApartment};
+use qol_platform::native::wide::wide_nul;
 use windows::core::{Error, GUID, HRESULT, PCWSTR, PWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_ContainerId;
-use windows::Win32::Foundation::{ERROR_NOT_FOUND, PROPERTYKEY, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{ERROR_NOT_FOUND, PROPERTYKEY};
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, EDataFlow, IConnector, IDeviceTopology, IMMDevice,
     IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE,
 };
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
-    COINIT_MULTITHREADED, STGM_READ,
-};
+use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, STGM_READ};
 use windows::Win32::System::Variant::{VARENUM, VT_CLSID, VT_LPWSTR, VT_UI4};
 
 use crate::devices::{Direction, Identity};
 use crate::AudioError;
 
-pub(super) struct Com {
-    owned: bool,
-}
-
-impl Com {
-    pub(super) fn enter() -> Result<Self, AudioError> {
-        let started = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        if started == RPC_E_CHANGED_MODE {
-            return Ok(Self { owned: false });
-        }
-        started.ok().map_err(|error| {
-            AudioError::ServerUnavailable(format!("COM did not start: {error}"))
-        })?;
-        Ok(Self { owned: true })
-    }
-}
-
-impl Drop for Com {
-    fn drop(&mut self) {
-        if self.owned {
-            unsafe { CoUninitialize() };
-        }
-    }
+pub(super) fn apartment() -> Result<ComApartment, AudioError> {
+    ComApartment::enter(Apartment::MultiThreaded)
+        .map_err(|error| AudioError::ServerUnavailable(format!("COM did not start: {error}")))
 }
 
 pub(super) struct Endpoint {
@@ -50,7 +29,7 @@ pub(super) struct Endpoint {
 pub(super) fn with_enumerator<T>(
     operation: impl FnOnce(&IMMDeviceEnumerator) -> Result<T, AudioError>,
 ) -> Result<T, AudioError> {
-    let _com = Com::enter()?;
+    let _com = apartment()?;
     let enumerator = enumerator()?;
     operation(&enumerator)
 }
@@ -112,10 +91,7 @@ pub(super) fn endpoint(
     direction: Direction,
     id: &str,
 ) -> Result<Endpoint, AudioError> {
-    let wide = id
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<u16>>();
+    let wide = wide_nul(id);
     match unsafe { enumerator.GetDevice(PCWSTR(wide.as_ptr())) } {
         Ok(device) => Ok(Endpoint {
             id: id_of(&device)?,

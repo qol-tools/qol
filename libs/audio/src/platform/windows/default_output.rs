@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+use qol_platform::native::wide::wide_nul;
 use windows::core::{IUnknown, IUnknown_Vtbl, Interface, GUID, HRESULT, PCWSTR};
 use windows::Win32::Media::Audio::{
     eCommunications, eConsole, eMultimedia, ERole, DEVICE_STATE_ACTIVE,
@@ -51,11 +52,7 @@ pub(crate) fn set_default_output(
             unsafe { CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL) }.map_err(
                 com::failed("cannot reach the Windows default device policy"),
             )?;
-        let id = output
-            .as_str()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<u16>>();
+        let id = wide_nul(output.as_str());
         for role in ROLES {
             unsafe {
                 (policy.vtable().set_default_endpoint)(policy.as_raw(), PCWSTR(id.as_ptr()), role)

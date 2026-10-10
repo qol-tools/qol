@@ -1,7 +1,7 @@
 use qol_runtime::local_ipc::LocalStream;
 use std::os::fd::AsRawFd;
 
-pub(super) fn peer_is_alive(stream: &LocalStream) -> bool {
+pub(crate) fn peer_is_alive(stream: &LocalStream) -> bool {
     let fd = stream.as_raw_fd();
     let mut buf = [0u8; 1];
     let n = unsafe {
@@ -21,10 +21,10 @@ pub(super) fn peer_is_alive(stream: &LocalStream) -> bool {
     std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
 }
 
-pub(super) fn register_lifeline_for_exec_handoff(stream: &LocalStream) {
-    crate::lifeline_handoff::register(stream.as_raw_fd());
+pub(crate) fn register_lifeline_for_exec_handoff(stream: &LocalStream) {
+    crate::lifeline_handoff::platform::unix::register(stream.as_raw_fd());
 }
 
-pub(super) fn unregister_lifeline_for_exec_handoff(stream: &LocalStream) {
-    crate::lifeline_handoff::unregister(stream.as_raw_fd());
+pub(crate) fn unregister_lifeline_for_exec_handoff(stream: &LocalStream) {
+    crate::lifeline_handoff::platform::unix::unregister(stream.as_raw_fd());
 }

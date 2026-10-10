@@ -16,6 +16,9 @@ use macos as active;
 #[cfg(target_os = "windows")]
 use windows as active;
 
+#[cfg(not(test))]
+pub(super) use active::fallback_runtime_dir;
+
 pub(super) fn os_bucket() -> &'static str {
     active::os_bucket()
 }

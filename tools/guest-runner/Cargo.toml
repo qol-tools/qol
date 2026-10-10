@@ -17,6 +17,7 @@ serde_json.workspace = true
 workspace-hack.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+qol-process.workspace = true
 windows-sys = { version = "0.61", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Foundation",

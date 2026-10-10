@@ -12,7 +12,7 @@ pub(crate) fn open_settings() -> std::io::Result<()> {
 }
 
 pub fn run() -> u8 {
-    platform::spawn_host_death_watchdog();
+    qol_runtime::spawn_host_death_watchdog();
     let config = config::Config::load();
     match server::serve(daemon_port(), config) {
         Ok(()) => 0,

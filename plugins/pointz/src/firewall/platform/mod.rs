@@ -1,9 +1,9 @@
 #[cfg(not(target_os = "windows"))]
-mod other;
+mod fallback;
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) use other::{allow, check};
+pub(crate) use fallback::{allow, check};
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{allow, check};

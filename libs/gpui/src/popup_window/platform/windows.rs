@@ -1,20 +1,19 @@
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE};
-use windows_sys::Win32::Graphics::Gdi::{
-    CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, SetWindowRgn, HDC, HMONITOR,
-    MONITORINFO,
-};
+use qol_windowing::platform::windows::{cursor_position, monitors};
+use qol_windowing::WindowRect;
+use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
+use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows_sys::Win32::System::Threading::{
     AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
 };
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WS_EX_APPWINDOW,
+    WS_EX_TOOLWINDOW,
 };
 
 use super::PopupPresentation;
@@ -240,107 +239,36 @@ pub fn window_geometry_session(title: &str) -> Option<WindowGeometrySession> {
     })
 }
 
-fn cursor_position() -> Option<(i32, i32)> {
-    let mut point = POINT { x: 0, y: 0 };
-    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
-}
-
 pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bounds<gpui::Pixels>> {
-    let handle = monitor_at_logical_center(monitor)?;
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: empty_rect(),
-        rcWork: empty_rect(),
-        dwFlags: 0,
-    };
-    if unsafe { GetMonitorInfoW(handle, &mut info) } == 0 {
-        return None;
-    }
-    work_area_in(monitor, info.rcMonitor, info.rcWork)
-}
-
-struct MonitorSearch {
-    x: f64,
-    y: f64,
-    found: HMONITOR,
-}
-
-fn monitor_at_logical_center(monitor: gpui::Bounds<gpui::Pixels>) -> Option<HMONITOR> {
     let center = monitor.center();
-    let mut search = MonitorSearch {
-        x: f64::from(center.x),
-        y: f64::from(center.y),
-        found: null_mut(),
-    };
-    unsafe {
-        EnumDisplayMonitors(
-            null_mut(),
-            std::ptr::null(),
-            Some(match_logical_monitor),
-            &mut search as *mut MonitorSearch as LPARAM,
-        );
-    }
-    (!search.found.is_null()).then_some(search.found)
-}
-
-unsafe extern "system" fn match_logical_monitor(
-    handle: HMONITOR,
-    _dc: HDC,
-    rect: *mut RECT,
-    data: LPARAM,
-) -> BOOL {
-    let search = unsafe { &mut *(data as *mut MonitorSearch) };
-    let rect = unsafe { *rect };
-    let scale = monitor_scale(handle);
-    let logical = |native: i32| f64::from(native) / scale;
-    let inside = (logical(rect.left)..logical(rect.right)).contains(&search.x)
-        && (logical(rect.top)..logical(rect.bottom)).contains(&search.y);
-    if inside {
-        search.found = handle;
-        return FALSE;
-    }
-    TRUE
-}
-
-fn monitor_scale(handle: HMONITOR) -> f64 {
-    let mut dpi_x = 0u32;
-    let mut dpi_y = 0u32;
-    let result = unsafe { GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
-    if result != 0 || dpi_x == 0 {
-        1.0
-    } else {
-        f64::from(dpi_x) / BASE_DPI
-    }
-}
-
-fn empty_rect() -> RECT {
-    RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    }
+    let (x, y) = (f64::from(center.x), f64::from(center.y));
+    let found = monitors().into_iter().find(|candidate| {
+        let scale = f64::from(candidate.scale);
+        let bounds = candidate.bounds;
+        (bounds.x / scale..(bounds.x + bounds.width) / scale).contains(&x)
+            && (bounds.y / scale..(bounds.y + bounds.height) / scale).contains(&y)
+    })?;
+    work_area_in(monitor, found.bounds, found.work_area)
 }
 
 fn work_area_in(
     monitor: gpui::Bounds<gpui::Pixels>,
-    full: RECT,
-    work: RECT,
+    full: WindowRect,
+    work: WindowRect,
 ) -> Option<gpui::Bounds<gpui::Pixels>> {
-    let native_width = full.right - full.left;
-    if native_width <= 0 {
+    if full.width <= 0.0 {
         return None;
     }
-    let scale = f64::from(monitor.size.width) / f64::from(native_width);
-    let inset = |native: i32| gpui::px((f64::from(native) * scale) as f32);
+    let scale = f64::from(monitor.size.width) / full.width;
+    let inset = |native: f64| gpui::px((native * scale) as f32);
     Some(gpui::Bounds::from_corners(
         gpui::point(
-            monitor.origin.x + inset(work.left - full.left),
-            monitor.origin.y + inset(work.top - full.top),
+            monitor.origin.x + inset(work.x - full.x),
+            monitor.origin.y + inset(work.y - full.y),
         ),
         gpui::point(
-            monitor.right() - inset(full.right - work.right),
-            monitor.bottom() - inset(full.bottom - work.bottom),
+            monitor.right() - inset(full.x + full.width - work.x - work.width),
+            monitor.bottom() - inset(full.y + full.height - work.y - work.height),
         ),
     ))
 }
@@ -455,12 +383,12 @@ pub fn configure_overlay_window(title: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
-        RECT {
-            left,
-            top,
-            right,
-            bottom,
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> WindowRect {
+        WindowRect {
+            x: f64::from(left),
+            y: f64::from(top),
+            width: f64::from(right - left),
+            height: f64::from(bottom - top),
         }
     }
 

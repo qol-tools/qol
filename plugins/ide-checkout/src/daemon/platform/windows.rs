@@ -1,9 +1,6 @@
 use std::net::TcpListener;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
 
 pub(in crate::daemon) fn is_executable(path: &Path) -> bool {
@@ -22,16 +19,8 @@ pub(in crate::daemon) fn launch_path(path: &Path) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path).map(|resolved| without_verbatim_prefix(&resolved))
 }
 
-pub(in crate::daemon) fn hide_console(command: &mut Command) {
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
 pub(in crate::daemon) fn inherited_listener() -> std::io::Result<Option<TcpListener>> {
     Ok(None)
-}
-
-pub(in crate::daemon) fn spawn_host_death_watchdog() {
-    qol_runtime::spawn_host_death_watchdog();
 }
 
 fn program_file_names(program: &str, pathext: &str) -> Vec<String> {

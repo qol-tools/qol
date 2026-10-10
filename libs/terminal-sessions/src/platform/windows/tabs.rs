@@ -3,10 +3,9 @@ use std::mem::ManuallyDrop;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use qol_platform::native::com::{Apartment, ComApartment};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
-};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4};
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationSelectionItemPattern,
@@ -16,22 +15,6 @@ use windows::Win32::UI::Accessibility::{
 
 const MARK_TIMEOUT: Duration = Duration::from_millis(1500);
 const MARK_POLL: Duration = Duration::from_millis(50);
-
-struct Apartment;
-
-impl Apartment {
-    fn enter() -> Option<Apartment> {
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
-            .is_ok()
-            .then_some(Apartment)
-    }
-}
-
-impl Drop for Apartment {
-    fn drop(&mut self) {
-        unsafe { CoUninitialize() };
-    }
-}
 
 struct TabStrip {
     automation: IUIAutomation,
@@ -135,7 +118,7 @@ fn in_apartment<T: Send>(work: impl FnOnce() -> Option<T> + Send) -> Option<T> {
     thread::scope(|scope| {
         scope
             .spawn(|| {
-                let _apartment = Apartment::enter()?;
+                let _apartment = ComApartment::enter(Apartment::MultiThreaded).ok()?;
                 work()
             })
             .join()
@@ -180,7 +163,7 @@ pub(super) fn keeping_selection<T: Send>(window: u32, work: impl FnOnce() -> T +
     let outcome = thread::scope(|scope| {
         scope
             .spawn(|| {
-                let apartment = Apartment::enter();
+                let apartment = ComApartment::enter(Apartment::MultiThreaded).ok();
                 let strip = apartment.as_ref().and_then(|_| TabStrip::open(window));
                 let selected = strip.as_ref().and_then(TabStrip::selected);
                 let result = work();

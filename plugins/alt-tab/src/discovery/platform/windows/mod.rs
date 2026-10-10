@@ -41,7 +41,7 @@ fn window_info(window: Window) -> Option<WindowInfo> {
 fn app_name(window: Window) -> String {
     window
         .pid()
-        .and_then(|pid| qol_app_icon::process_executable(i32::try_from(pid).ok()?))
+        .and_then(|pid| qol_process::process_image_path(pid).ok())
         .and_then(|path| {
             path.file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())

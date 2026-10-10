@@ -3,6 +3,7 @@ use std::ptr::{null, null_mut};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use qol_platform::native::wide::{from_wide, wide_nul};
 use windows_sys::core::GUID;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
@@ -266,7 +267,7 @@ fn interface_path(set: HDEVINFO, interface: &SP_DEVICE_INTERFACE_DATA) -> Option
             (required_bytes - offset) / size_of::<u16>(),
         )
     };
-    Some(wide_to_string(units)).filter(|path| !path.is_empty())
+    Some(from_wide(units)).filter(|path| !path.is_empty())
 }
 
 struct DeviceInfoSet(HDEVINFO);
@@ -281,7 +282,7 @@ struct DeviceHandle(HANDLE);
 
 impl DeviceHandle {
     fn open(path: &str) -> Option<Self> {
-        let wide = path.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+        let wide = wide_nul(path);
         let handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
@@ -325,7 +326,7 @@ impl DeviceHandle {
         if read == 0 {
             return None;
         }
-        let name = wide_to_string(&buffer).trim().to_string();
+        let name = from_wide(&buffer).trim().to_string();
         (!name.is_empty()).then_some(name)
     }
 }
@@ -428,14 +429,6 @@ fn trigger(value: u8) -> f32 {
 
 fn stick(value: i16) -> f32 {
     (f32::from(value) / STICK_RANGE).clamp(-1.0, 1.0)
-}
-
-fn wide_to_string(units: &[u16]) -> String {
-    let end = units
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(units.len());
-    String::from_utf16_lossy(&units[..end])
 }
 
 fn is_game_controller_usage(usage_page: u16, usage: u16) -> bool {
@@ -626,18 +619,6 @@ mod tests {
                 overrides,
                 [(LEFT_STICK_BUTTON, true), (RIGHT_STICK_BUTTON, false)]
             );
-        }
-    }
-
-    #[test]
-    fn wide_strings_stop_at_the_first_nul() {
-        let cases: [(&[u16], &str); 3] = [
-            (&[0x50, 0x61, 0x64, 0, 0x58], "Pad"),
-            (&[0x50, 0x61, 0x64], "Pad"),
-            (&[0], ""),
-        ];
-        for (units, expected) in cases {
-            assert_eq!(wide_to_string(units), expected);
         }
     }
 

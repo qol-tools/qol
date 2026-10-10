@@ -1,22 +1,17 @@
 use std::ffi::c_void;
-use std::ffi::OsString;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::ptr::null_mut;
 
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
+use qol_platform::native::com::{Apartment, ComApartment};
+use qol_platform::native::wide::wide_nul;
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
 };
-use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
 use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows_sys::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Shell::{
     SHDefExtractIconW, SHGetFileInfoW, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON, SHGFI_ICONLOCATION,
@@ -24,7 +19,7 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL, HICON};
 
-use crate::{ProcessEntry, RgbaImage};
+use crate::RgbaImage;
 
 use super::AppIconPlatform;
 
@@ -38,7 +33,7 @@ impl AppIconPlatform for Platform {
     }
 
     fn icon_png_for_path(&self, path: &Path, size: usize) -> Option<Vec<u8>> {
-        let _com = ComApartment::enter();
+        let _com = ComApartment::enter(Apartment::SingleThreaded);
         let icon = shell_icon(path, size)?;
         let image = render_icon(icon, size);
         unsafe { DestroyIcon(icon) };
@@ -50,8 +45,9 @@ impl AppIconPlatform for Platform {
     }
 
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage> {
-        let path = executable_path(u32::try_from(pid).ok()?)?;
-        let icon = extract_icon(&path, 0, size)?;
+        let path = qol_process::process_image_path(u32::try_from(pid).ok()?).ok()?;
+        let wide = wide_nul(&path);
+        let icon = extract_icon(&wide, 0, size)?;
         let image = render_icon(icon, size);
         unsafe { DestroyIcon(icon) };
         image
@@ -63,30 +59,12 @@ impl AppIconPlatform for Platform {
 
     fn parent_pid(&self, pid: i32) -> Option<i32> {
         let pid = u32::try_from(pid).ok()?;
-        let parent = process_entries()
+        let parent = qol_process::processes()
+            .ok()?
             .into_iter()
-            .find(|entry| entry.th32ProcessID == pid)?
-            .th32ParentProcessID;
+            .find(|entry| entry.pid == pid)?
+            .parent;
         i32::try_from(parent).ok()
-    }
-
-    fn process_executable(&self, pid: i32) -> Option<PathBuf> {
-        let mut path = executable_path(u32::try_from(pid).ok()?)?;
-        path.pop();
-        Some(PathBuf::from(OsString::from_wide(&path)))
-    }
-
-    fn processes(&self) -> Vec<ProcessEntry> {
-        process_entries()
-            .iter()
-            .filter_map(|entry| {
-                Some(ProcessEntry {
-                    pid: i32::try_from(entry.th32ProcessID).ok()?,
-                    parent_pid: i32::try_from(entry.th32ParentProcessID).ok()?,
-                    name: wide_name(&entry.szExeFile),
-                })
-            })
-            .collect()
     }
 
     fn process_start_time_us(&self, pid: i32) -> Option<u64> {
@@ -109,27 +87,6 @@ fn open_process(pid: u32) -> Option<HANDLE> {
     (!process.is_null()).then_some(process)
 }
 
-fn executable_path(pid: u32) -> Option<Vec<u16>> {
-    let process = open_process(pid)?;
-    let mut buffer = vec![0u16; 1024];
-    let mut length = buffer.len() as u32;
-    let read = unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            buffer.as_mut_ptr(),
-            &mut length,
-        )
-    };
-    unsafe { CloseHandle(process) };
-    if read == 0 {
-        return None;
-    }
-    buffer.truncate(length as usize);
-    buffer.push(0);
-    Some(buffer)
-}
-
 fn extract_icon(path: &[u16], index: i32, size: usize) -> Option<HICON> {
     let mut icon: HICON = null_mut();
     let result =
@@ -137,25 +94,8 @@ fn extract_icon(path: &[u16], index: i32, size: usize) -> Option<HICON> {
     (result >= 0 && !icon.is_null()).then_some(icon)
 }
 
-struct ComApartment(bool);
-
-impl ComApartment {
-    fn enter() -> Self {
-        let result = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
-        Self(result >= 0)
-    }
-}
-
-impl Drop for ComApartment {
-    fn drop(&mut self) {
-        if self.0 {
-            unsafe { CoUninitialize() };
-        }
-    }
-}
-
 fn shell_icon(path: &Path, size: usize) -> Option<HICON> {
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let wide = wide_nul(path);
     let located = file_info(&wide, SHGFI_ICONLOCATION).and_then(|info| {
         let location = expanded(&nul_terminated(&info.szDisplayName))?;
         (location.len() > 1).then(|| extract_icon(&location, info.iIcon, size))?
@@ -273,31 +213,6 @@ fn rgba_from_bgra(mut pixels: Vec<u8>) -> Vec<u8> {
     pixels
 }
 
-fn process_entries() -> Vec<PROCESSENTRY32W> {
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return Vec::new();
-    }
-    let mut entries = Vec::new();
-    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
-    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
-    while more {
-        entries.push(entry);
-        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
-    }
-    unsafe { CloseHandle(snapshot) };
-    entries
-}
-
-fn wide_name(wide: &[u16]) -> String {
-    let end = wide
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(wide.len());
-    String::from_utf16_lossy(&wide[..end])
-}
-
 fn empty_filetime() -> FILETIME {
     FILETIME {
         dwLowDateTime: 0,
@@ -307,7 +222,7 @@ fn empty_filetime() -> FILETIME {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_png, nul_terminated, rgba_from_bgra, wide_name, RgbaImage};
+    use super::{encode_png, nul_terminated, rgba_from_bgra, RgbaImage};
 
     #[test]
     fn icon_locations_keep_one_terminating_nul() {
@@ -329,19 +244,6 @@ mod tests {
         let png = encode_png(&image).expect("encodes");
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         assert_eq!(&png[16..24], &[0, 0, 0, 2, 0, 0, 0, 3]);
-    }
-
-    #[test]
-    fn wide_name_stops_at_the_first_nul() {
-        let cases = [
-            ("cmd.exe\0\0junk", "cmd.exe"),
-            ("pwsh.exe", "pwsh.exe"),
-            ("", ""),
-        ];
-        for (raw, expected) in cases {
-            let wide: Vec<u16> = raw.encode_utf16().collect();
-            assert_eq!(wide_name(&wide), expected, "{raw:?}");
-        }
     }
 
     #[test]

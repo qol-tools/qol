@@ -49,7 +49,11 @@ impl PlatformStateClient {
     pub fn peer_admin(&self, request: Request) -> Result<Response, PeerAdminClientError> {
         let mutation = request.is_mutation();
         let payload = encode(request)?;
-        let connection = platform::connect(&self.socket_path).map_err(connection_error)?;
+        let path = self
+            .socket_path
+            .as_deref()
+            .ok_or(PeerAdminClientError::Unavailable)?;
+        let connection = platform::connect(path).map_err(connection_error)?;
         exchange(connection, &payload, mutation, ADMIN_TIMEOUT)
     }
 }
@@ -171,7 +175,11 @@ impl PlatformStateClient {
         let payload =
             crate::local_ipc::encode_secret_json(&RuntimeRequest::PeerOperation { request })
                 .map_err(|_| PeerAdminClientError::RequestTooLarge)?;
-        let connection = platform::connect(&self.socket_path).map_err(connection_error)?;
+        let path = self
+            .socket_path
+            .as_deref()
+            .ok_or(PeerAdminClientError::Unavailable)?;
+        let connection = platform::connect(path).map_err(connection_error)?;
         exchange_value(connection, &payload, true, Duration::from_secs(12))
     }
 }

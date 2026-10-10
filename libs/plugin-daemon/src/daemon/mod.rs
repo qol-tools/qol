@@ -370,7 +370,7 @@ pub fn run_stateful_request_listener<S, F>(
 where
     F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
 {
-    run_stateful_request_listener_inner(
+    run_stateful_request_listener_with_boundary(
         config,
         None,
         DaemonBoundary::from_environment(),
@@ -388,7 +388,7 @@ pub fn run_stateful_request_listener_with_readiness<S, F>(
 where
     F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
 {
-    run_stateful_request_listener_inner(
+    run_stateful_request_listener_with_boundary(
         config,
         Some(readiness),
         DaemonBoundary::from_environment(),
@@ -397,7 +397,7 @@ where
     )
 }
 
-fn run_stateful_request_listener_inner<S, F>(
+pub fn run_stateful_request_listener_with_boundary<S, F>(
     config: &DaemonConfig,
     readiness: Option<&ReadinessGate>,
     boundary: DaemonBoundary,
@@ -713,17 +713,4 @@ impl DaemonBoundary {
         }
         parse_with_theme_override(request, parser)
     }
-}
-
-pub fn run_stateful_request_listener_with_boundary<S, F>(
-    config: &DaemonConfig,
-    readiness: Option<&ReadinessGate>,
-    boundary: DaemonBoundary,
-    state: S,
-    handler: F,
-) -> io::Result<()>
-where
-    F: FnMut(&mut S, &DaemonRequest) -> ReadResult<()>,
-{
-    run_stateful_request_listener_inner(config, readiness, boundary, state, handler)
 }

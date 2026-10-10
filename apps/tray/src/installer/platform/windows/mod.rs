@@ -9,14 +9,6 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
-use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, CREATE_NO_WINDOW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
-};
 
 use self::registration::Layout;
 use super::InstallerOps;
@@ -165,18 +157,18 @@ fn remove_install_files(binary_path: &Path) -> Result<()> {
 
 fn remove_after_exit(root: &Path) -> Result<()> {
     let root = root.display().to_string();
-    if root.contains(['"', '%']) {
+    if root.contains(['"', '%', '!']) {
         log::warn!("leaving {root} in place: its path cannot be quoted for cmd.exe");
         return Ok(());
     }
-    Command::new("cmd.exe")
+    let mut command = Command::new("cmd.exe");
+    qol_process::hide_console_window(&mut command)
         .raw_arg(format!(
-            "/d /c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{root}\""
+            "/d /v:off /c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{root}\""
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .with_context(|| format!("Failed to schedule removal of {root}"))?;
     Ok(())
@@ -208,57 +200,21 @@ fn installed_pids(binary_path: &Path) -> Vec<u32> {
     };
     let target = comparable_path(binary_path);
     let own_pid = std::process::id();
-    pids_named(exe_name)
+    let Ok(processes) = qol_process::processes() else {
+        return Vec::new();
+    };
+    processes
         .into_iter()
-        .filter(|pid| *pid != own_pid)
-        .filter(|pid| image_path(*pid).is_some_and(|image| comparable_path(&image) == target))
+        .filter(|entry| entry.pid != own_pid && entry.exe.eq_ignore_ascii_case(exe_name))
+        .map(|entry| entry.pid)
+        .filter(|pid| {
+            qol_process::process_image_path(*pid)
+                .is_ok_and(|image| comparable_path(&image) == target)
+        })
         .collect()
 }
 
 fn comparable_path(path: &Path) -> String {
     let text = path.to_string_lossy().replace('/', "\\");
     text.strip_prefix(r"\\?\").unwrap_or(&text).to_lowercase()
-}
-
-fn pids_named(exe_name: &str) -> Vec<u32> {
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return Vec::new();
-    }
-    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
-    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-    let mut pids = Vec::new();
-    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
-    while more {
-        let len = entry
-            .szExeFile
-            .iter()
-            .position(|unit| *unit == 0)
-            .unwrap_or(entry.szExeFile.len());
-        if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(exe_name) {
-            pids.push(entry.th32ProcessID);
-        }
-        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
-    }
-    unsafe { CloseHandle(snapshot) };
-    pids
-}
-
-fn image_path(pid: u32) -> Option<PathBuf> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return None;
-    }
-    let mut buffer = vec![0u16; 32768];
-    let mut length = buffer.len() as u32;
-    let queried = unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            buffer.as_mut_ptr(),
-            &mut length,
-        )
-    };
-    unsafe { CloseHandle(process) };
-    (queried != 0).then(|| PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])))
 }

@@ -1,46 +1,7 @@
 use qol_windowing::platform::windows::{top_level_windows, Window};
-use qol_windowing::{WindowId, WindowOps, WindowRect};
+use qol_windowing::WindowId;
 
-pub struct Platform;
-
-fn window(window_id: &WindowId) -> Result<Window, String> {
-    Window::from_id(window_id)
-        .ok_or_else(|| format!("alt-tab: invalid window id {}", window_id.as_str()))
-}
-
-impl WindowOps for Platform {
-    fn enumerate_windows(&self) -> Result<Vec<WindowId>, String> {
-        Ok(top_level_windows()
-            .into_iter()
-            .filter(|window| window.is_switchable())
-            .map(Window::id)
-            .collect())
-    }
-
-    fn window_geometry(&self, window_id: &WindowId) -> Result<Option<WindowRect>, String> {
-        let window = window(window_id)?;
-        if !window.exists() {
-            return Ok(None);
-        }
-        Ok(window.frame())
-    }
-
-    fn move_resize(&self, window_id: &WindowId, rect: WindowRect) -> Result<(), String> {
-        window(window_id)?.set_frame(rect)
-    }
-
-    fn focus_window(&self, window_id: &WindowId) -> Result<bool, String> {
-        Ok(window(window_id)?.activate())
-    }
-
-    fn minimize_window(&self, window_id: &WindowId) -> Result<bool, String> {
-        Ok(window(window_id)?.minimize())
-    }
-
-    fn restore_window(&self, window_id: &WindowId) -> Result<bool, String> {
-        Ok(window(window_id)?.activate())
-    }
-}
+pub use qol_windowing::platform::windows::Win32Windows as Platform;
 
 pub fn cancel_pending_activation() {}
 

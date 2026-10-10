@@ -1,9 +1,10 @@
 use std::ptr::null;
 
+use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::Graphics::Gdi::{CreateDCW, DeleteDC, HDC};
 use windows_sys::Win32::UI::ColorSystem::{GetDeviceGammaRamp, SetDeviceGammaRamp};
 
-use super::display::{attached_adapters, wide};
+use super::display::attached_adapters;
 use crate::monitor::backends::gdi_display::connector_from_device;
 use crate::monitor::backends::gdi_gamma::{ramp_from_table, table_from_ramp, GammaRamp, RAMP_SIZE};
 use crate::monitor::backends::x11_randr_gamma::{GammaBus, GammaTransport};
@@ -50,8 +51,8 @@ impl GdiGammaBus {
 
     fn context(&self, crtc: u32) -> Result<(DeviceContext, &str), GammaError> {
         let device = self.device(crtc)?;
-        let driver = wide("DISPLAY");
-        let name = wide(device);
+        let driver = wide_nul("DISPLAY");
+        let name = wide_nul(device);
         let hdc = unsafe { CreateDCW(driver.as_ptr(), name.as_ptr(), null(), null()) };
         if hdc.is_null() {
             return Err(GammaError::Unsupported {

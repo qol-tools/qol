@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use qol_headless::DoctorCheckResult;
+use qol_platform::native::com::{Apartment, ComApartment};
 use windows::core::{BSTR, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, VARIANT_FALSE, WAIT_OBJECT_0};
 use windows::Win32::NetworkManagement::WindowsFirewall::{
@@ -8,10 +9,7 @@ use windows::Win32::NetworkManagement::WindowsFirewall::{
     NET_FW_PROFILE2_DOMAIN, NET_FW_PROFILE2_PRIVATE, NET_FW_PROFILE2_PUBLIC, NET_FW_PROFILE_TYPE2,
     NET_FW_RULE_DIR_IN,
 };
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED,
-};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
 use windows::Win32::UI::Shell::{
     ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
@@ -49,7 +47,7 @@ struct RuleFacts {
 }
 
 pub(crate) fn check(id: &str) -> DoctorCheckResult {
-    let _com = ComApartment::enter();
+    let _com = ComApartment::enter(Apartment::SingleThreaded);
     let state = read_state().unwrap_or_else(|error| FirewallState::Unreadable(error.to_string()));
     check_result(id, state)
 }
@@ -92,7 +90,7 @@ fn check_result(id: &str, state: FirewallState) -> DoctorCheckResult {
 }
 
 pub(crate) fn allow() -> Result<String, String> {
-    let _com = ComApartment::enter();
+    let _com = ComApartment::enter(Apartment::SingleThreaded);
     let policy = policy().map_err(|error| error.to_string())?;
     let active = unsafe { policy.CurrentProfileTypes() }.map_err(|error| error.to_string())?;
     let exists = unsafe { policy.Rules() }
@@ -224,22 +222,6 @@ fn run_elevated(program: &str, arguments: &str) -> Result<(), String> {
         return Err(format!("netsh exited with code {code}"));
     }
     Ok(())
-}
-
-struct ComApartment(bool);
-
-impl ComApartment {
-    fn enter() -> Self {
-        Self(unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok())
-    }
-}
-
-impl Drop for ComApartment {
-    fn drop(&mut self) {
-        if self.0 {
-            unsafe { CoUninitialize() };
-        }
-    }
 }
 
 #[cfg(test)]

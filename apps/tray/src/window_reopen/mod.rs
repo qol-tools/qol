@@ -1,5 +1,3 @@
-#![cfg_attr(windows, allow(dead_code))]
-
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

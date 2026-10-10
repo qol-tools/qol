@@ -1,16 +1,8 @@
 use anyhow::{anyhow, Result};
-use std::ptr::{null, null_mut};
-use windows_sys::Win32::Foundation::{BOOL, LPARAM, POINT, RECT, TRUE};
-use windows_sys::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
-};
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+use qol_windowing::platform::windows::{cursor_position, ensure_dpi_awareness, monitors};
 
 use crate::capture::geometry::{rect_intersection, union_bounds};
 use crate::{Monitor, Rect};
-
-const BASE_DPI: f32 = 96.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct NativeDisplay {
@@ -117,64 +109,28 @@ pub(super) fn logical_point(x: i32, y: i32, displays: &[NativeDisplay]) -> Optio
 }
 
 pub(super) fn logical_cursor(displays: &[NativeDisplay]) -> Option<(f32, f32)> {
-    let mut point = POINT { x: 0, y: 0 };
-    if unsafe { GetCursorPos(&mut point) } == 0 {
-        return None;
-    }
-    logical_point(point.x, point.y, displays)
+    let (x, y) = cursor_position()?;
+    logical_point(x, y, displays)
 }
 
 pub(super) fn native_displays() -> Vec<NativeDisplay> {
-    qol_windowing::platform::windows::ensure_dpi_awareness();
-    let mut handles: Vec<HMONITOR> = Vec::new();
-    unsafe {
-        EnumDisplayMonitors(
-            null_mut(),
-            null(),
-            Some(collect_monitor),
-            &mut handles as *mut Vec<HMONITOR> as LPARAM,
-        );
-    }
-    handles.into_iter().filter_map(native_display).collect()
-}
-
-unsafe extern "system" fn collect_monitor(
-    monitor: HMONITOR,
-    _hdc: HDC,
-    _rect: *mut RECT,
-    data: LPARAM,
-) -> BOOL {
-    let handles = unsafe { &mut *(data as *mut Vec<HMONITOR>) };
-    handles.push(monitor);
-    TRUE
-}
-
-fn native_display(monitor: HMONITOR) -> Option<NativeDisplay> {
-    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-        return None;
-    }
-    let bounds = info.rcMonitor;
-    let physical = Rect {
-        x: bounds.left,
-        y: bounds.top,
-        w: bounds.right - bounds.left,
-        h: bounds.bottom - bounds.top,
-    };
-    (physical.w > 0 && physical.h > 0).then(|| NativeDisplay {
-        physical,
-        scale: monitor_scale(monitor),
-    })
-}
-
-fn monitor_scale(monitor: HMONITOR) -> f32 {
-    let (mut dpi_x, mut dpi_y) = (0u32, 0u32);
-    let result = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
-    if result < 0 || dpi_x == 0 {
-        return 1.0;
-    }
-    dpi_x as f32 / BASE_DPI
+    ensure_dpi_awareness();
+    monitors()
+        .into_iter()
+        .filter_map(|monitor| {
+            let bounds = monitor.bounds;
+            let physical = Rect {
+                x: bounds.x as i32,
+                y: bounds.y as i32,
+                w: bounds.width as i32,
+                h: bounds.height as i32,
+            };
+            (physical.w > 0 && physical.h > 0).then_some(NativeDisplay {
+                physical,
+                scale: monitor.scale,
+            })
+        })
+        .collect()
 }
 
 pub fn get_monitors() -> Result<Vec<Monitor>> {

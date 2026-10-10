@@ -25,6 +25,7 @@ qol-apps.workspace = true
 workspace-hack.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+qol-windowing.workspace = true
 windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",

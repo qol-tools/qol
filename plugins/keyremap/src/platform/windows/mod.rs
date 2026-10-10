@@ -9,7 +9,6 @@ mod service;
 
 use anyhow::Result;
 use qol_headless::{CommandResult, DoctorCheckResult};
-use qol_platform::PermissionState;
 
 use super::engine;
 use super::{ConfigInspection, PlatformAdapter};
@@ -29,18 +28,6 @@ impl PlatformAdapter for Adapter {
     fn launch(&self) -> Result<CommandResult> {
         service::run()?;
         Ok(CommandResult::success(""))
-    }
-
-    fn reload(&self) -> Result<CommandResult> {
-        Ok(engine::reload())
-    }
-
-    fn toggle(&self) -> Result<CommandResult> {
-        Ok(engine::toggle())
-    }
-
-    fn kill(&self) -> Result<CommandResult> {
-        Ok(engine::kill())
     }
 
     fn hid_helper(&self) -> Result<CommandResult> {
@@ -63,10 +50,6 @@ impl PlatformAdapter for Adapter {
 
     fn inspect_config(&self) -> Result<ConfigInspection> {
         engine::inspection(keys::modifier_key_issues)
-    }
-
-    fn input_permission(&self) -> PermissionState {
-        qol_platform::permission_status(qol_platform::Permission::InputCapture)
     }
 
     fn virtual_hid_driver(&self) -> Result<DoctorCheckResult> {

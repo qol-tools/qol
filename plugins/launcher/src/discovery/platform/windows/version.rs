@@ -1,8 +1,8 @@
 use std::ffi::c_void;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::null_mut;
 
+use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
@@ -44,7 +44,7 @@ fn string_path((language, codepage): (u16, u16), name: &str) -> String {
 }
 
 fn version_block(binary: &Path) -> Option<Vec<u8>> {
-    let path: Vec<u16> = binary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let path = wide_nul(binary);
     let size = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), null_mut()) };
     if size == 0 {
         return None;
@@ -55,7 +55,7 @@ fn version_block(binary: &Path) -> Option<Vec<u8>> {
 }
 
 fn query<'a>(block: &'a [u8], sub_block: &str, unit_bytes: usize) -> Option<&'a [u8]> {
-    let sub_block: Vec<u16> = sub_block.encode_utf16().chain(Some(0)).collect();
+    let sub_block = wide_nul(sub_block);
     let mut value: *mut c_void = null_mut();
     let mut length = 0u32;
     let found = unsafe {

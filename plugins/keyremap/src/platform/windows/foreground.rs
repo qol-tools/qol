@@ -57,11 +57,14 @@ impl Foreground {
 }
 
 fn executable_name(pid: u32) -> Option<String> {
-    let pid = i32::try_from(pid).ok().filter(|pid| *pid > 0)?;
-    qol_app_icon::processes()
+    if pid == 0 {
+        return None;
+    }
+    qol_process::processes()
+        .ok()?
         .into_iter()
         .find(|entry| entry.pid == pid)
-        .map(|entry| entry.name)
+        .map(|entry| entry.exe)
 }
 
 pub(super) fn app_id(executable: &str, excluded: &HashSet<String>) -> String {

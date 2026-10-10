@@ -1,12 +1,17 @@
+use std::ffi::OsString;
 use std::io;
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::{CommandExt, ExitStatusExt};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::{PlatformSpawnFailure, PreparedSpawnCleanup};
+use qol_platform::native::wide::wide_nul;
+
+use crate::{PlatformSpawnFailure, PreparedSpawnCleanup, ProcessEntry};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, SetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS,
@@ -31,9 +36,10 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenEventW, OpenProcess,
-    ResetEvent, SetEvent, TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED,
-    EVENT_MODIFY_STATE, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
+    QueryFullProcessImageNameW, ResetEvent, SetEvent, TerminateProcess, WaitForSingleObject,
+    CREATE_SUSPENDED, EVENT_MODIFY_STATE, INFINITE, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    THREAD_SUSPEND_RESUME,
 };
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread};
 
@@ -46,6 +52,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const KILL_SETTLE: Duration = Duration::from_secs(1);
 const STOP_EVENT_PREFIX: &str = "Local\\qol-stop-";
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
+const IMAGE_PATH_CAPACITY: usize = 32_768;
 static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static STOP_LISTENER_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
@@ -903,10 +910,7 @@ impl Drop for EventHandle {
 }
 
 fn stop_event_name(pid: u32) -> Vec<u16> {
-    format!("{STOP_EVENT_PREFIX}{pid}")
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect()
+    wide_nul(format!("{STOP_EVENT_PREFIX}{pid}"))
 }
 
 fn start_stop_listener() -> io::Result<()> {
@@ -1064,7 +1068,7 @@ fn filetime_now() -> u64 {
     FILETIME_UNIX_EPOCH.saturating_add(ticks)
 }
 
-fn process_parents() -> io::Result<Vec<(u32, u32)>> {
+pub(crate) fn processes() -> io::Result<Vec<ProcessEntry>> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
@@ -1076,9 +1080,18 @@ fn process_parents() -> io::Result<Vec<(u32, u32)>> {
     if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut parents = Vec::new();
+    let mut entries = Vec::new();
     loop {
-        parents.push((entry.th32ProcessID, entry.th32ParentProcessID));
+        let name = &entry.szExeFile;
+        let end = name
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(name.len());
+        entries.push(ProcessEntry {
+            pid: entry.th32ProcessID,
+            parent: entry.th32ParentProcessID,
+            exe: String::from_utf16_lossy(&name[..end]),
+        });
         if unsafe { Process32NextW(snapshot.0, &mut entry) } != 0 {
             continue;
         }
@@ -1086,8 +1099,31 @@ fn process_parents() -> io::Result<Vec<(u32, u32)>> {
         if error != ERROR_NO_MORE_FILES {
             return Err(io::Error::from_raw_os_error(error as i32));
         }
-        return Ok(parents);
+        return Ok(entries);
     }
+}
+
+pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
+    let process = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    let mut buffer = vec![0u16; IMAGE_PATH_CAPACITY];
+    let mut length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+    let read = unsafe {
+        QueryFullProcessImageNameW(
+            process.0,
+            PROCESS_NAME_WIN32,
+            buffer.as_mut_ptr(),
+            &mut length,
+        )
+    };
+    if read == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    buffer.truncate(length as usize);
+    Ok(PathBuf::from(OsString::from_wide(&buffer)))
+}
+
+pub(crate) fn hide_console_window(command: &mut Command) -> &mut Command {
+    command.creation_flags(CREATE_NO_WINDOW)
 }
 
 fn extend_with_descendants(members: &mut Vec<Member>, contained: bool) -> io::Result<()> {
@@ -1095,7 +1131,7 @@ fn extend_with_descendants(members: &mut Vec<Member>, contained: bool) -> io::Re
     loop {
         let observed_at = filetime_now();
         let mut added = false;
-        for (pid, parent) in process_parents()? {
+        for ProcessEntry { pid, parent, .. } in processes()? {
             if pid == 0 || pid == own_pid || members.iter().any(|member| member.pid == pid) {
                 continue;
             }

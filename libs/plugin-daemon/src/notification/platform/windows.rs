@@ -1,10 +1,10 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
+use qol_platform::native::registry::{self, Hive};
 use windows::core::HSTRING;
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
-use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
 use windows_sys::Win32::UI::Shell::{
     SHQueryUserNotificationState, QUERY_USER_NOTIFICATION_STATE, QUNS_ACCEPTS_NOTIFICATIONS,
 };
@@ -63,23 +63,13 @@ fn app_id_registered() -> bool {
 }
 
 fn register_app_id() -> bool {
-    let key = wide(&format!("{APP_ID_REGISTRY_KEY}{TOAST_APP_ID}"));
-    let name = wide("DisplayName");
-    let value = wide(qol_conventions::TRAY_DISPLAY_NAME);
-    let Ok(bytes) = u32::try_from(value.len() * std::mem::size_of::<u16>()) else {
-        return false;
-    };
-    let status = unsafe {
-        RegSetKeyValueW(
-            HKEY_CURRENT_USER,
-            key.as_ptr(),
-            name.as_ptr(),
-            REG_SZ,
-            value.as_ptr().cast(),
-            bytes,
-        )
-    };
-    status == 0
+    registry::write_string(
+        Hive::CurrentUser,
+        &format!("{APP_ID_REGISTRY_KEY}{TOAST_APP_ID}"),
+        "DisplayName",
+        qol_conventions::TRAY_DISPLAY_NAME,
+    )
+    .is_ok()
 }
 
 fn show_toast(title: &str, message: &str) -> windows::core::Result<()> {
@@ -110,10 +100,6 @@ fn xml_escape(input: &str) -> String {
         }
     }
     escaped
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn focus_assist_profile() -> Option<u32> {
@@ -197,10 +183,5 @@ mod tests {
         for (title, body, fragment) in cases {
             assert!(toast_xml(title, body).contains(fragment), "{title} {body}");
         }
-    }
-
-    #[test]
-    fn wide_strings_are_nul_terminated() {
-        assert_eq!(wide("ab"), vec![u16::from(b'a'), u16::from(b'b'), 0]);
     }
 }

@@ -1,13 +1,13 @@
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
 use std::ptr::{null, null_mut};
 
+use qol_platform::native::registry::{self, Hive};
+use qol_platform::native::wide::{from_wide, wide_nul};
 use qol_windowing::display::{
     validate_layout, DisplayEnumerator, DisplayError, DisplayHandle, DisplayMode, DisplayOps,
     DisplayPlacement, DisplaySnapshot,
 };
 use qol_windowing::MonitorBounds;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, POINTL};
+use windows_sys::Win32::Foundation::POINTL;
 use windows_sys::Win32::Graphics::Gdi::{
     ChangeDisplaySettingsExW, EnumDisplayDevicesW, EnumDisplaySettingsExW, CDS_NORESET,
     CDS_SET_PRIMARY, CDS_TEST, CDS_TYPE, CDS_UPDATEREGISTRY, DEVMODEW, DISPLAY_DEVICEW,
@@ -15,7 +15,6 @@ use windows_sys::Win32::Graphics::Gdi::{
     DISPLAY_DEVICE_PRIMARY_DEVICE, DISP_CHANGE_SUCCESSFUL, DM_BITSPERPEL, DM_DISPLAYFREQUENCY,
     DM_PELSHEIGHT, DM_PELSWIDTH, DM_POSITION, ENUM_CURRENT_SETTINGS,
 };
-use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_BINARY};
 use windows_sys::Win32::UI::WindowsAndMessaging::EDD_GET_DEVICE_INTERFACE_NAME;
 
 use crate::monitor::backends::gdi_display::{
@@ -198,18 +197,6 @@ pub(super) fn attached_adapters() -> Vec<Adapter> {
     adapters
 }
 
-pub(super) fn wide(value: &str) -> Vec<u16> {
-    OsStr::new(value).encode_wide().chain(Some(0)).collect()
-}
-
-pub(super) fn from_wide(buffer: &[u16]) -> String {
-    let end = buffer
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(buffer.len());
-    String::from_utf16_lossy(&buffer[..end])
-}
-
 fn adapter_for(handle: &DisplayHandle, capability: &'static str) -> Result<Adapter, DisplayError> {
     attached_adapters()
         .into_iter()
@@ -233,7 +220,7 @@ fn devmode() -> DEVMODEW {
 }
 
 fn monitor_interface(device: &str) -> Option<String> {
-    let name = wide(device);
+    let name = wide_nul(device);
     let mut monitor = display_device();
     let found = unsafe {
         EnumDisplayDevicesW(
@@ -248,44 +235,14 @@ fn monitor_interface(device: &str) -> Option<String> {
 }
 
 fn read_edid(instance: &str) -> Option<Vec<u8>> {
-    let key = wide(&edid_registry_key(instance));
-    let value = wide("EDID");
-    let mut size = 0u32;
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            key.as_ptr(),
-            value.as_ptr(),
-            RRF_RT_REG_BINARY,
-            null_mut(),
-            null_mut(),
-            &mut size,
-        )
-    };
-    if status != ERROR_SUCCESS || size == 0 {
-        return None;
-    }
-    let mut edid = vec![0u8; size as usize];
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            key.as_ptr(),
-            value.as_ptr(),
-            RRF_RT_REG_BINARY,
-            null_mut(),
-            edid.as_mut_ptr().cast(),
-            &mut size,
-        )
-    };
-    if status != ERROR_SUCCESS {
-        return None;
-    }
-    edid.truncate(size as usize);
-    Some(edid)
+    registry::read_binary(Hive::LocalMachine, &edid_registry_key(instance), "EDID")
+        .ok()
+        .flatten()
+        .filter(|edid| !edid.is_empty())
 }
 
 fn current_settings(device: &str) -> Result<DEVMODEW, DisplayError> {
-    let name = wide(device);
+    let name = wide_nul(device);
     let mut current = devmode();
     if unsafe { EnumDisplaySettingsExW(name.as_ptr(), ENUM_CURRENT_SETTINGS, &mut current, 0) } == 0
     {
@@ -297,7 +254,7 @@ fn current_settings(device: &str) -> Result<DEVMODEW, DisplayError> {
 }
 
 fn all_settings(device: &str) -> Vec<DisplaySetting> {
-    let name = wide(device);
+    let name = wide_nul(device);
     let mut settings = Vec::new();
     for index in 0u32.. {
         let mut mode = devmode();
@@ -323,7 +280,7 @@ fn position_of(devmode: &DEVMODEW) -> POINTL {
 }
 
 fn change(device: &str, devmode: &DEVMODEW, flags: CDS_TYPE) -> Result<(), DisplayError> {
-    let name = wide(device);
+    let name = wide_nul(device);
     let code =
         unsafe { ChangeDisplaySettingsExW(name.as_ptr(), devmode, null_mut(), flags, null()) };
     if code == DISP_CHANGE_SUCCESSFUL {

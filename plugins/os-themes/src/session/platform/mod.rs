@@ -19,5 +19,7 @@ pub use fallback::Platform;
 pub use linux::Platform;
 #[cfg(target_os = "macos")]
 pub use macos::Platform;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) use store::session_subdir;
 #[cfg(target_os = "windows")]
 pub use windows::Platform;

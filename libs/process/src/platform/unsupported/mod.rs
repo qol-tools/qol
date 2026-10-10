@@ -190,3 +190,15 @@ pub(crate) fn bind_to_host_lifetime(_pid: u32) -> io::Result<()> {
 pub(crate) fn spawn_detached(_command: &mut Command) -> io::Result<()> {
     Err(unsupported())
 }
+
+pub(crate) fn hide_console_window(command: &mut Command) -> &mut Command {
+    command
+}
+
+pub(crate) fn processes() -> io::Result<Vec<crate::ProcessEntry>> {
+    Err(unsupported())
+}
+
+pub(crate) fn process_image_path(_pid: u32) -> io::Result<std::path::PathBuf> {
+    Err(unsupported())
+}

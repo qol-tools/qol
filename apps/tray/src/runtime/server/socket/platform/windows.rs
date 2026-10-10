@@ -4,7 +4,7 @@ use windows_sys::Win32::Networking::WinSock::{
     recv, select, FD_SET, MSG_PEEK, SOCKET, SOCKET_ERROR, TIMEVAL,
 };
 
-pub(super) fn peer_is_alive(stream: &LocalStream) -> bool {
+pub(crate) fn peer_is_alive(stream: &LocalStream) -> bool {
     let socket = stream.as_raw_socket() as SOCKET;
     let mut readable = FD_SET {
         fd_count: 1,
@@ -36,6 +36,6 @@ pub(super) fn peer_is_alive(stream: &LocalStream) -> bool {
 }
 
 /// A Windows restart spawns a fresh tray, so no connection is handed across.
-pub(super) fn register_lifeline_for_exec_handoff(_stream: &LocalStream) {}
+pub(crate) fn register_lifeline_for_exec_handoff(_stream: &LocalStream) {}
 
-pub(super) fn unregister_lifeline_for_exec_handoff(_stream: &LocalStream) {}
+pub(crate) fn unregister_lifeline_for_exec_handoff(_stream: &LocalStream) {}

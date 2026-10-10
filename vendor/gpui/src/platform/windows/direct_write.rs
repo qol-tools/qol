@@ -414,7 +414,13 @@ impl DirectWriteState {
         let mut font = matching(&family_name)?;
         if unsafe { font.GetFontCount() } == 0 {
             if let Some(alias) = unsafe {
-                weight_stretch_style_family(&fontset, &family_name, &self.components.locale)
+                weight_stretch_style_family(
+                    &fontset,
+                    &family_name,
+                    font_weight.into(),
+                    font_style.into(),
+                    &self.components.locale,
+                )
             } {
                 font = matching(&alias)?;
                 family_name = alias;
@@ -1798,6 +1804,8 @@ const fn make_direct_write_tag(tag_name: &str) -> DWRITE_FONT_FEATURE_TAG {
 unsafe fn weight_stretch_style_family(
     fontset: &IDWriteFontSet,
     typographic_family: &str,
+    weight: DWRITE_FONT_WEIGHT,
+    style: DWRITE_FONT_STYLE,
     locale: &str,
 ) -> Option<String> {
     let value = HSTRING::from(typographic_family);
@@ -1808,21 +1816,53 @@ unsafe fn weight_stretch_style_family(
         localeName: PCWSTR(any_locale.as_ptr()),
     };
     let matches = unsafe { fontset.GetMatchingFonts2(&[property]) }.log_err()?;
-    if unsafe { matches.GetFontCount() } == 0 {
-        return None;
+    let mut best: Option<(i32, String)> = None;
+    for index in 0..unsafe { matches.GetFontCount() } {
+        let mut exists = BOOL(0);
+        let mut names = None;
+        let read = unsafe {
+            matches.GetPropertyValues3(
+                index,
+                DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FAMILY_NAME,
+                &mut exists,
+                &mut names,
+            )
+        };
+        if read.log_err().is_none() || !exists.as_bool() {
+            continue;
+        }
+        let Some(name) = names.and_then(|names| get_name(names, locale).log_err()) else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case(typographic_family) {
+            return Some(name);
+        }
+        let Some(face) = unsafe {
+            matches
+                .GetFontFaceReference(index)
+                .and_then(|reference| reference.CreateFontFace())
+        }
+        .log_err() else {
+            continue;
+        };
+        let distance = unsafe { face_distance(&face, weight, style) };
+        if best.as_ref().is_none_or(|(best, _)| distance < *best) {
+            best = Some((distance, name));
+        }
     }
-    let mut exists = BOOL(0);
-    let mut names = None;
-    unsafe {
-        matches.GetPropertyValues3(
-            0,
-            DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FAMILY_NAME,
-            &mut exists,
-            &mut names,
-        )
-    }
-    .log_err()?;
-    get_name(names?, locale).log_err()
+    best.map(|(_, name)| name)
+}
+
+unsafe fn face_distance(
+    face: &IDWriteFontFace3,
+    weight: DWRITE_FONT_WEIGHT,
+    style: DWRITE_FONT_STYLE,
+) -> i32 {
+    let (face_weight, face_stretch, face_style) =
+        unsafe { (face.GetWeight(), face.GetStretch(), face.GetStyle()) };
+    let style_distance = if face_style == style { 0 } else { 100_000 };
+    let stretch_distance = (face_stretch.0 - DWRITE_FONT_STRETCH_NORMAL.0).abs() * 1_000;
+    style_distance + stretch_distance + (face_weight.0 - weight.0).abs()
 }
 
 #[inline]

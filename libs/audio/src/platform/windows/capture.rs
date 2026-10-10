@@ -15,7 +15,7 @@ use crate::capture::{Pcm16Format, Source};
 use crate::devices::Direction;
 use crate::AudioError;
 
-use super::com::{self, Com};
+use super::com;
 
 const POLL: Duration = Duration::from_millis(10);
 const BUFFER_HNS: i64 = 2_000_000;
@@ -139,7 +139,7 @@ fn record(
     chunks: &mpsc::Sender<Chunk>,
     stop: &AtomicBool,
 ) {
-    let _com = match Com::enter() {
+    let _com = match com::apartment() {
         Ok(com) => com,
         Err(error) => {
             let _ = opened.send(Err(error));

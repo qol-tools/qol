@@ -18,6 +18,8 @@ use unix as active;
 #[cfg(windows)]
 use windows as active;
 
+pub(super) use active::fallback_state_socket;
+
 pub(crate) trait Connection: Read + Write + Send + Sync {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
     fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;

@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
+use qol_platform::native::registry::{read_binary, Hive};
 use std::path::{Path, PathBuf};
 
 use super::registry;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const STARTUP_APPROVED_KEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 const VALUE_NAME: &str = "qol-tray";
 const LEGACY_STARTUP_FILE: &str = "qol-tray.cmd";
 
@@ -13,6 +16,9 @@ pub(in crate::installer) fn location() -> PathBuf {
 
 pub(in crate::installer) fn read() -> Result<Option<PathBuf>> {
     if let Some(command) = registry::text(RUN_KEY, VALUE_NAME)? {
+        if disabled_in_startup_apps()? {
+            return Ok(None);
+        }
         return Ok(parse_command(&command));
     }
     let Some(legacy) = legacy_startup_file() else {
@@ -33,6 +39,16 @@ pub(in crate::installer) fn write(binary: &Path) -> Result<()> {
 pub(in crate::installer) fn remove() -> Result<()> {
     registry::delete_value(RUN_KEY, VALUE_NAME)?;
     remove_legacy_startup_file()
+}
+
+fn disabled_in_startup_apps() -> Result<bool> {
+    let state = read_binary(Hive::CurrentUser, STARTUP_APPROVED_KEY, VALUE_NAME)
+        .with_context(|| format!("failed to read HKCU\\{STARTUP_APPROVED_KEY}\\{VALUE_NAME}"))?;
+    Ok(state.is_some_and(|state| approval_disabled(&state)))
+}
+
+fn approval_disabled(state: &[u8]) -> bool {
+    state.first().is_some_and(|flags| flags & 1 == 1)
 }
 
 fn format_command(binary: &Path) -> String {
@@ -124,6 +140,21 @@ mod tests {
                 expected.map(PathBuf::from),
                 "{command}"
             );
+        }
+    }
+
+    #[test]
+    fn startup_approved_odd_first_byte_means_disabled() {
+        let cases: [(&[u8], bool); 6] = [
+            (&[0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], false),
+            (&[0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], false),
+            (&[0x03, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0], true),
+            (&[0x01], true),
+            (&[0x07], true),
+            (&[], false),
+        ];
+        for (state, disabled) in cases {
+            assert_eq!(approval_disabled(state), disabled, "{state:?}");
         }
     }
 

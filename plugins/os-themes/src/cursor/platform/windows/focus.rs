@@ -1,12 +1,5 @@
 use qol_windowing::platform::windows::Window;
 use qol_windowing::WindowRect;
-use windows_sys::Win32::Foundation::{CloseHandle, FALSE, POINT, RECT};
-use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
-use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-};
 use windows_sys::Win32::UI::Shell::{
     SHQueryUserNotificationState, QUERY_USER_NOTIFICATION_STATE, QUNS_BUSY, QUNS_PRESENTATION_MODE,
     QUNS_RUNNING_D3D_FULL_SCREEN,
@@ -14,7 +7,6 @@ use windows_sys::Win32::UI::Shell::{
 
 use crate::cursor::platform::shake::{FocusProbe, GameFocus};
 
-const IMAGE_PATH_CAPACITY: usize = 1024;
 const EDGE_TOLERANCE_PX: f64 = 1.0;
 const GAME_LIBRARIES: [(&str, &str); 3] = [
     (r"\steamapps\common\", "steam_library"),
@@ -31,7 +23,9 @@ impl FocusProbe for GameFocusDetector {
             return GameFocus::inactive();
         };
         let pid = window.pid();
-        let image = pid.and_then(process_image);
+        let image = pid
+            .and_then(|pid| qol_process::process_image_path(pid).ok())
+            .map(|path| path.to_string_lossy().into_owned());
         let evidence = game_evidence(notification_state(), image.as_deref());
         GameFocus {
             active: evidence.is_some(),
@@ -89,45 +83,9 @@ fn notification_state() -> Option<QUERY_USER_NOTIFICATION_STATE> {
 }
 
 fn monitor_at(frame: &WindowRect) -> Option<WindowRect> {
-    let center = POINT {
-        x: (frame.x + frame.width / 2.0) as i32,
-        y: (frame.y + frame.height / 2.0) as i32,
-    };
-    let monitor = unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) };
-    if monitor.is_null() {
-        return None;
-    }
-    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-    (unsafe { GetMonitorInfoW(monitor, &mut info) } != 0).then(|| rect_of(info.rcMonitor))
-}
-
-fn rect_of(rect: RECT) -> WindowRect {
-    WindowRect {
-        x: f64::from(rect.left),
-        y: f64::from(rect.top),
-        width: f64::from(rect.right - rect.left),
-        height: f64::from(rect.bottom - rect.top),
-    }
-}
-
-fn process_image(pid: u32) -> Option<String> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
-    if process.is_null() {
-        return None;
-    }
-    let mut buffer = [0u16; IMAGE_PATH_CAPACITY];
-    let mut length = buffer.len() as u32;
-    let read = unsafe {
-        QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_WIN32,
-            buffer.as_mut_ptr(),
-            &mut length,
-        )
-    };
-    unsafe { CloseHandle(process) };
-    (read != 0).then(|| String::from_utf16_lossy(&buffer[..length as usize]))
+    let x = (frame.x + frame.width / 2.0) as i32;
+    let y = (frame.y + frame.height / 2.0) as i32;
+    qol_windowing::platform::windows::monitor_at(x, y).map(|monitor| monitor.bounds)
 }
 
 #[cfg(test)]

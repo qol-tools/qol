@@ -6,14 +6,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use qol_app_icon::ProcessEntry;
 use qol_windowing::platform::windows::Window;
 
 use super::launch::{
     launcher_args, plain_path, resolve_program, terminal_args, LaunchSpec, LaunchTag,
 };
-use super::report::{candidate_roots, image_stem, listed, tagged, Root};
-use super::{probe_consoles, tabs, BACKEND_ID, CREATE_NO_WINDOW};
+use super::report::{
+    candidate_roots, image_stem, listed, process_table, tagged, ProcessEntry, Root,
+};
+use super::{probe_consoles, tabs, BACKEND_ID};
 use crate::{SpawnRequest, SpawnSurface, TerminalError};
 
 const TERMINAL: &str = "wt.exe";
@@ -41,7 +42,7 @@ pub(super) fn spawn(request: &SpawnRequest) -> Result<i32, TerminalError> {
         .map_err(|error| failed(format!("cannot write the launch spec: {error}")))?;
     let launcher = launcher_args(&token, utf8(&spec_path, "spec path")?);
     let own = i32::try_from(std::process::id()).unwrap_or_default();
-    let before: BTreeSet<i32> = candidate_roots(&qol_app_icon::processes(), own)
+    let before: BTreeSet<i32> = candidate_roots(&process_table(), own)
         .into_iter()
         .map(|root| root.pid)
         .collect();
@@ -120,18 +121,17 @@ fn terminal() -> Option<PathBuf> {
 fn is_terminal_window(window: Window) -> bool {
     window
         .pid()
-        .and_then(|pid| i32::try_from(pid).ok())
-        .and_then(qol_app_icon::process_executable)
+        .and_then(|pid| qol_process::process_image_path(pid).ok())
         .is_some_and(|path| image_stem(&file_name(&path)) == TERMINAL_HOST)
 }
 
 fn open_terminal(terminal: &Path, args: &[String]) -> Result<(), TerminalError> {
-    let mut child = Command::new(terminal)
+    let mut command = Command::new(terminal);
+    let mut child = qol_process::hide_console_window(&mut command)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|error| failed(format!("cannot run {}: {error}", terminal.display())))?;
     let status = qol_process::wait_for_exit_or_terminate(&mut child, TERMINAL_TIMEOUT)
@@ -170,7 +170,7 @@ fn appeared(
     let own = i32::try_from(std::process::id()).unwrap_or_default();
     let started = Instant::now();
     loop {
-        let table = qol_app_icon::processes();
+        let table = process_table();
         let roots = candidate_roots(&table, own);
         let fresh = fresh_roots(&table, &roots, before, launcher);
         if !fresh.is_empty() {

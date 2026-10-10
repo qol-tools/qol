@@ -1,14 +1,10 @@
 use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ACCESS_DENIED, FILETIME, HANDLE, INVALID_HANDLE_VALUE,
-    WAIT_OBJECT_0,
-};
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    CloseHandle, GetLastError, ERROR_ACCESS_DENIED, FILETIME, HANDLE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetProcessTimes, OpenProcess, WaitForSingleObject,
+    GetCurrentProcess, GetProcessTimes, OpenProcess, WaitForSingleObject,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 
@@ -67,24 +63,13 @@ fn open_parent() -> Parent {
 }
 
 fn parent_pid() -> Option<u32> {
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return None;
-    }
-    let own_pid = unsafe { GetCurrentProcessId() };
-    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
-    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-    let mut found = None;
-    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
-    while more {
-        if entry.th32ProcessID == own_pid {
-            found = Some(entry.th32ParentProcessID);
-            break;
-        }
-        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
-    }
-    unsafe { CloseHandle(snapshot) };
-    found.filter(|pid| *pid != 0)
+    let own_pid = std::process::id();
+    qol_process::processes()
+        .ok()?
+        .into_iter()
+        .find(|entry| entry.pid == own_pid)
+        .map(|entry| entry.parent)
+        .filter(|pid| *pid != 0)
 }
 
 fn creation_time(process: HANDLE) -> Option<u64> {
