@@ -112,8 +112,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in [
             "name: claude review",
             "needs: [review, publish]",
-            "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
-            '[ "$EVENT" = merge_group ] || [ "$BOT" = true ] || [ "$VERDICT" = pass ]',
+            "if: ${{ always() && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group') }}",
+            '[ "$BOT" = true ] || [ "$VERDICT" = pass ]',
+            "QUEUE_REF: ${{ github.event.merge_group.head_ref }}",
+            'select(.app.slug == "github-actions" and .conclusion == "success")',
+            '[ "$passed" -gt 0 ]',
             "github.event.pull_request.user.login == 'dependabot[bot]'",
             "github.event.pull_request.head.repo.full_name == github.repository",
         ]:
