@@ -50,6 +50,7 @@ const WAIT_INTERVAL: Duration = Duration::from_millis(50);
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const KILL_SETTLE: Duration = Duration::from_secs(1);
+const SESSION_END_EXIT_GRACE: Duration = Duration::from_millis(4500);
 const STOP_EVENT_PREFIX: &str = "Local\\qol-stop-";
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const IMAGE_PATH_CAPACITY: usize = 32_768;
@@ -888,6 +889,14 @@ unsafe extern "system" fn cancellation_control_handler(control: u32) -> BOOL {
         return 0;
     }
     record_cancellation_signal();
+    if matches!(
+        control,
+        CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT
+    ) {
+        // Windows ends the process once this handler returns, so hold it open
+        // while the caller restores its state and exits on its own.
+        std::thread::sleep(SESSION_END_EXIT_GRACE);
+    }
     1
 }
 
@@ -1176,10 +1185,17 @@ fn wait_for_members(members: &[Member], deadline: Instant) -> bool {
 }
 
 fn stop_members(mut members: Vec<Member>, grace: Duration, include_descendants: bool) {
+    let mut requested = false;
     for member in members.iter().filter(|member| member.running()) {
-        let _ = request_graceful_stop(member.pid);
+        if request_graceful_stop(member.pid).unwrap_or(false) {
+            requested = true;
+        } else {
+            member.kill();
+        }
     }
-    wait_for_members(&members, Instant::now() + grace);
+    if requested {
+        wait_for_members(&members, Instant::now() + grace);
+    }
     if include_descendants {
         let contained = members.first().is_some_and(Member::in_job);
         let _ = extend_with_descendants(&mut members, contained);
