@@ -2597,7 +2597,9 @@ mod tests {
         );
         let closer = Arc::clone(&backend);
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
+            while closer.calls.lock().unwrap().len() < 2 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
             closer.mark_gone();
         });
         let strategy = Arc::new(PiWaitStrategy {
