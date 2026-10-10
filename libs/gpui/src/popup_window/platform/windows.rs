@@ -326,10 +326,21 @@ pub fn sync_window_layout(
     origin: gpui::Point<gpui::Pixels>,
     size: gpui::Size<gpui::Pixels>,
 ) -> bool {
-    let backing = window_backing_scale(title);
-    crate::window::resize_or_sync_scale(window, size, backing);
-    let scale = window.scale_factor();
+    let scale = scale_at(origin).unwrap_or_else(|| window.scale_factor());
+    crate::window::resize_or_sync_scale(window, size, Some(scale));
     sync_window_layout_by_title(title, gpui::point(origin.x * scale, origin.y * scale), size)
+}
+
+fn scale_at(origin: gpui::Point<gpui::Pixels>) -> Option<f32> {
+    let (x, y) = (origin.x.to_f64(), origin.y.to_f64());
+    monitors()
+        .into_iter()
+        .find(|candidate| {
+            let bounds = candidate.bounds;
+            (bounds.x..bounds.x + bounds.width).contains(&x)
+                && (bounds.y..bounds.y + bounds.height).contains(&y)
+        })
+        .map(|candidate| candidate.scale)
 }
 
 pub fn sync_window_layout_by_title(
