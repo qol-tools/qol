@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 
 const ENV_RELAUNCH_AFTER_PID: &str = "QOL_TRAY_RELAUNCH_AFTER_PID";
 const PREDECESSOR_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time a predecessor may spend on cleanup after spawning its successor, kept
+/// well under `PREDECESSOR_EXIT_TIMEOUT` so the successor never gives up first.
+pub const PREDECESSOR_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 const PREDECESSOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub fn spawn_successor_and_exit(binary: &Path, args: &[OsString]) -> std::io::Error {
