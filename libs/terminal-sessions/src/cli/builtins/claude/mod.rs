@@ -118,6 +118,12 @@ impl CliSessionStrategy for ClaudeStrategy {
         metadata::permission_mode(&self.metadata.subscription_path(session)?)
     }
 
+    fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {
+        self.metadata
+            .remote_controlled(session)
+            .then(|| REMOTE_CONTROL_REASON.to_owned())
+    }
+
     fn subscribe(
         &self,
         session: &SessionFacts,
@@ -135,6 +141,7 @@ impl CliSessionStrategy for ClaudeStrategy {
 }
 
 const PLACEHOLDER_TITLE: &str = "Claude Code";
+const REMOTE_CONTROL_REASON: &str = "Claude Code Remote Control is on";
 
 fn clean_title(title: &str) -> Option<String> {
     let stripped = title.trim().trim_start_matches(|character: char| {

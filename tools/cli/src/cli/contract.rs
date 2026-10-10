@@ -267,7 +267,7 @@ fn app() -> HeadlessApp {
                 "park",
                 "Close this harness and resume it when a long command exits.",
                 "qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]",
-                "Forwards to the installed CLI Sessions plugin, which owns parking. It parks the calling harness session on a long wait such as a pull request watcher: a detached CLI Sessions process runs the command, closes the calling terminal once its current turn ends, and when the command exits resumes the same conversation in a new tab with the exit code and the tail of the output. The resumed tab closes once its turn ends, unless it parks again or the user writes in it. If the calling terminal is still open when the command exits, the result is submitted into it instead.",
+                "Forwards to the installed CLI Sessions plugin, which owns parking. It parks the calling harness session on a long wait such as a pull request watcher: a detached CLI Sessions process runs the command, closes the calling terminal once its current turn ends unless its harness reports it must stay open, and when the command exits resumes the same conversation in a new tab with the exit code and the tail of the output. The resumed tab closes once its turn ends, unless it parks again or the user writes in it. If the calling terminal is still open when the command exits, the result is submitted into it instead.",
                 "Park JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when CLI Sessions is not installed or its park fails.",
             ))

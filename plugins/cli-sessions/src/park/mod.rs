@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use args::ParkArgs;
 pub use args::HELP;
-use prompt::{unpark_prompt, PARKED_INSTRUCTION};
+use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION};
 use resume::resume;
 use runner::{caller_state, target, CallerState, Target};
 use store::ParkStore;
@@ -33,7 +33,7 @@ pub struct ParkOutcome {
     cwd: String,
     command: Vec<String>,
     log: String,
-    instruction: &'static str,
+    instruction: String,
 }
 
 pub enum Invocation {
@@ -92,6 +92,10 @@ fn park(
         Target::Unknown => bail!("session discovery failed"),
     };
     let descriptor = interpreter.describe(&facts);
+    let instruction = interpreter.keep_open_reason(&facts).map_or_else(
+        || PARKED_INSTRUCTION.to_owned(),
+        |reason| kept_open_instruction(&reason),
+    );
     let title = parsed
         .title
         .clone()
@@ -153,7 +157,7 @@ fn park(
         external_id,
         cwd: record.cwd,
         command: record.command,
-        instruction: PARKED_INSTRUCTION,
+        instruction,
     })
 }
 

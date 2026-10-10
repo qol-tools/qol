@@ -104,6 +104,13 @@ impl ClaudeMetadataResolver {
             .map(|location| location.transcript_path)
     }
 
+    pub fn remote_controlled(&self, session: &SessionFacts) -> bool {
+        session
+            .foreground_pids
+            .iter()
+            .any(|pid| self.environment.remote_controlled(*pid))
+    }
+
     pub fn subscription_dir(&self, session: &SessionFacts) -> Option<PathBuf> {
         let root = if let Some(root) = &self.projects_root {
             root.clone()

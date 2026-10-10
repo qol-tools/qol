@@ -152,7 +152,7 @@ where
                     "{PLUGIN_ID} park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]"
                 ))
                 .detail("Parks the calling harness session on a long wait such as a pull request watcher.")
-                .detail("A detached CLI Sessions process runs the command, closes the calling terminal once its turn ends, resumes the conversation in a new tab when the command exits, and closes that tab once its turn ends.")
+                .detail("A detached CLI Sessions process runs the command, closes the calling terminal once its turn ends unless its harness reports it must stay open, resumes the conversation in a new tab when the command exits, and closes that tab once its turn ends.")
                 .detail("Everything after `--` is the command, passed through verbatim.")
                 .output("Park JSON on stdout; diagnostics on stderr.")
                 .exit_behavior("Exits non-zero when the calling session cannot be resolved or resumed, or the runner cannot start.")

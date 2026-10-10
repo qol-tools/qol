@@ -1852,6 +1852,27 @@ pub(super) fn close_lane_terminal(terminals: &TerminalSessionService, binding: &
         );
         return;
     }
+    match CliSessionInterpreter::system().keep_open_reason_for(terminals, binding) {
+        Ok(None) => {}
+        Ok(Some(reason)) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_WATCH",
+                "event=autoclose_skipped session={} reason=kept_open detail={}",
+                binding.token(),
+                reason
+            );
+            return;
+        }
+        Err(error) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_WATCH",
+                "event=autoclose_skipped session={} reason=discovery_failed detail={}",
+                binding.token(),
+                error
+            );
+            return;
+        }
+    }
     match terminals.close(binding) {
         Ok(()) => {
             qol_runtime::probe!(

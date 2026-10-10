@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use qol_agent_homes::{Harness, Registry};
 use serde::Deserialize;
@@ -12,6 +12,10 @@ pub(super) struct ClaudeSessionLocation {
 
 pub(super) trait ClaudeEnvironment: Send + Sync {
     fn session(&self, pid: i32) -> Option<ClaudeSessionLocation>;
+
+    fn remote_controlled(&self, _pid: i32) -> bool {
+        false
+    }
 }
 
 pub(super) struct SystemClaudeEnvironment;
@@ -19,9 +23,7 @@ pub(super) struct SystemClaudeEnvironment;
 impl ClaudeEnvironment for SystemClaudeEnvironment {
     fn session(&self, pid: i32) -> Option<ClaudeSessionLocation> {
         let home = Registry::load().current(Harness::Claude).path;
-        let path = home.join("sessions").join(format!("{pid}.json"));
-        let record =
-            serde_json::from_str::<ClaudeSessionRecord>(&fs::read_to_string(path).ok()?).ok()?;
+        let record = read_record(&home, pid)?;
         if record.session_id.is_empty() || record.cwd.is_empty() {
             return None;
         }
@@ -35,6 +37,16 @@ impl ClaudeEnvironment for SystemClaudeEnvironment {
             transcript_path,
         })
     }
+
+    fn remote_controlled(&self, pid: i32) -> bool {
+        read_record(&Registry::load().current(Harness::Claude).path, pid)
+            .is_some_and(|record| record.bridge_session_id.is_some_and(|id| !id.is_empty()))
+    }
+}
+
+fn read_record(home: &Path, pid: i32) -> Option<ClaudeSessionRecord> {
+    let path = home.join("sessions").join(format!("{pid}.json"));
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
 #[derive(Deserialize)]
@@ -42,6 +54,8 @@ struct ClaudeSessionRecord {
     #[serde(rename = "sessionId")]
     session_id: String,
     cwd: String,
+    #[serde(rename = "bridgeSessionId", default)]
+    bridge_session_id: Option<String>,
 }
 
 fn encode_project_dir(cwd: &str) -> String {
@@ -66,6 +80,35 @@ mod tests {
             encode_project_dir("/home/u/my project/Work (v2)"),
             "-home-u-my-project-Work--v2-"
         );
+    }
+
+    #[test]
+    fn only_a_live_bridge_session_id_marks_remote_control() {
+        let home = tempfile::TempDir::new().unwrap();
+        let sessions = home.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let cases = [
+            (r#"{"sessionId":"s","cwd":"/w"}"#, false),
+            (
+                r#"{"sessionId":"s","cwd":"/w","bridgeSessionId":null}"#,
+                false,
+            ),
+            (
+                r#"{"sessionId":"s","cwd":"/w","bridgeSessionId":""}"#,
+                false,
+            ),
+            (
+                r#"{"sessionId":"s","cwd":"/w","bridgeSessionId":"session_01"}"#,
+                true,
+            ),
+        ];
+        for (record, expected) in cases {
+            std::fs::write(sessions.join("7.json"), record).unwrap();
+            let marked = read_record(home.path(), 7)
+                .is_some_and(|record| record.bridge_session_id.is_some_and(|id| !id.is_empty()));
+            assert_eq!(marked, expected, "{record}");
+        }
+        assert!(read_record(home.path(), 8).is_none());
     }
 
     #[test]
