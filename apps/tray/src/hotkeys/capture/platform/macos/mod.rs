@@ -24,6 +24,8 @@ use std::time::Duration;
 mod layout;
 mod recorder;
 
+pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = false;
+
 pub(crate) fn start_recording(session_id: u64, events: Arc<crate::daemon::EventBus>) -> bool {
     recorder::global().start(session_id, events)
 }

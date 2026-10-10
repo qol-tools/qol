@@ -25,7 +25,7 @@ pub(crate) enum KeyTransition {
 #[derive(Debug)]
 pub(crate) struct KeyMatcher {
     resolve: ResolveCombo,
-    bindings: Vec<(KeyCombo, Binding)>,
+    bindings: Vec<(Option<KeyCombo>, Binding)>,
     active_continuous: HashMap<u16, (Binding, Instant)>,
     swallowed_keys: HashSet<u16>,
 }
@@ -47,7 +47,10 @@ impl KeyMatcher {
     }
 
     pub(crate) fn binding_count(&self) -> usize {
-        self.bindings.len()
+        self.bindings
+            .iter()
+            .filter(|(combo, _)| combo.is_some())
+            .count()
     }
 
     #[cfg_attr(target_os = "macos", allow(dead_code))]
@@ -58,7 +61,15 @@ impl KeyMatcher {
     pub(crate) fn match_combo(&self, observed: &KeyCombo) -> Option<&Binding> {
         self.bindings
             .iter()
-            .find_map(|(combo, binding)| (combo == observed).then_some(binding))
+            .find_map(|(combo, binding)| (combo.as_ref() == Some(observed)).then_some(binding))
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn re_resolve(&mut self) {
+        let resolve = self.resolve;
+        for (combo, binding) in &mut self.bindings {
+            *combo = resolve(binding);
+        }
     }
 
     pub(crate) fn reload(&mut self, bindings: Vec<Binding>) -> Vec<CaptureEvent> {
@@ -122,10 +133,10 @@ impl KeyMatcher {
     }
 }
 
-fn resolve_all(bindings: Vec<Binding>, resolve: ResolveCombo) -> Vec<(KeyCombo, Binding)> {
+fn resolve_all(bindings: Vec<Binding>, resolve: ResolveCombo) -> Vec<(Option<KeyCombo>, Binding)> {
     bindings
         .into_iter()
-        .filter_map(|binding| resolve(&binding).map(|combo| (combo, binding)))
+        .map(|binding| (resolve(&binding), binding))
         .collect()
 }
 

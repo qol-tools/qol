@@ -2,13 +2,13 @@ use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateRectRgn, DeleteObject, GetMonitorInfoW, MonitorFromPoint, SetWindowRgn, MONITORINFO,
-    MONITOR_DEFAULTTONULL,
+    CreateRectRgn, DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, SetWindowRgn, HDC, HMONITOR,
+    MONITORINFO,
 };
 use windows_sys::Win32::System::Threading::{
     AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
 };
-use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow,
@@ -246,15 +246,7 @@ fn cursor_position() -> Option<(i32, i32)> {
 }
 
 pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bounds<gpui::Pixels>> {
-    let center = monitor.center();
-    let point = POINT {
-        x: f64::from(center.x).round() as i32,
-        y: f64::from(center.y).round() as i32,
-    };
-    let handle = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) };
-    if handle.is_null() {
-        return None;
-    }
+    let handle = monitor_at_logical_center(monitor)?;
     let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
         rcMonitor: empty_rect(),
@@ -265,6 +257,60 @@ pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bou
         return None;
     }
     work_area_in(monitor, info.rcMonitor, info.rcWork)
+}
+
+struct MonitorSearch {
+    x: f64,
+    y: f64,
+    found: HMONITOR,
+}
+
+fn monitor_at_logical_center(monitor: gpui::Bounds<gpui::Pixels>) -> Option<HMONITOR> {
+    let center = monitor.center();
+    let mut search = MonitorSearch {
+        x: f64::from(center.x),
+        y: f64::from(center.y),
+        found: null_mut(),
+    };
+    unsafe {
+        EnumDisplayMonitors(
+            null_mut(),
+            std::ptr::null(),
+            Some(match_logical_monitor),
+            &mut search as *mut MonitorSearch as LPARAM,
+        );
+    }
+    (!search.found.is_null()).then_some(search.found)
+}
+
+unsafe extern "system" fn match_logical_monitor(
+    handle: HMONITOR,
+    _dc: HDC,
+    rect: *mut RECT,
+    data: LPARAM,
+) -> BOOL {
+    let search = unsafe { &mut *(data as *mut MonitorSearch) };
+    let rect = unsafe { *rect };
+    let scale = monitor_scale(handle);
+    let logical = |native: i32| f64::from(native) / scale;
+    let inside = (logical(rect.left)..logical(rect.right)).contains(&search.x)
+        && (logical(rect.top)..logical(rect.bottom)).contains(&search.y);
+    if inside {
+        search.found = handle;
+        return FALSE;
+    }
+    TRUE
+}
+
+fn monitor_scale(handle: HMONITOR) -> f64 {
+    let mut dpi_x = 0u32;
+    let mut dpi_y = 0u32;
+    let result = unsafe { GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+    if result != 0 || dpi_x == 0 {
+        1.0
+    } else {
+        f64::from(dpi_x) / BASE_DPI
+    }
 }
 
 fn empty_rect() -> RECT {

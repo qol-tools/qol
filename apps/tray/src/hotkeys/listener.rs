@@ -1,6 +1,6 @@
 use super::capture::HEARTBEAT_INTERVAL;
 use super::catalog::load_available_actions;
-use super::manager::RegisteredHotkey;
+use super::manager::{RegisteredHotkey, RegistrationScope};
 use super::platform::PhysicalHotkeyState;
 use super::reload;
 use super::{HotkeyAction, HotkeyManager};
@@ -26,17 +26,25 @@ const REASSERT_SCHEDULE: &[Duration] = &[
 type SharedPluginManager = Arc<Mutex<PluginManager>>;
 
 pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Result<()> {
+    start_listener(plugin_manager, RegistrationScope::All);
+    Ok(())
+}
+
+pub(super) fn start_one_shot_backup_listener(plugin_manager: Arc<Mutex<PluginManager>>) {
+    start_listener(plugin_manager, RegistrationScope::OneShotBackup);
+}
+
+fn start_listener(plugin_manager: Arc<Mutex<PluginManager>>, scope: RegistrationScope) {
     let reload_rx = reload::subscribe();
     std::thread::spawn(move || {
         run_supervised(
-            &mut |reload_rx| run_listener_once(&plugin_manager, reload_rx),
+            &mut |reload_rx| run_listener_once(&plugin_manager, reload_rx, scope),
             reload_rx,
             &mut std::thread::sleep,
             &mut mark_doctor_needed,
             || true,
         );
     });
-    Ok(())
 }
 
 fn mark_doctor_needed(reason: &str) {
@@ -94,9 +102,13 @@ fn next_backoff(current: Duration) -> Duration {
     }
 }
 
-fn run_listener_once(plugin_manager: &SharedPluginManager, reload_rx: &Receiver<()>) -> Result<()> {
-    let manager =
-        HotkeyManager::new().map_err(|e| anyhow!("failed to create hotkey manager: {}", e))?;
+fn run_listener_once(
+    plugin_manager: &SharedPluginManager,
+    reload_rx: &Receiver<()>,
+    scope: RegistrationScope,
+) -> Result<()> {
+    let manager = HotkeyManager::with_scope(scope)
+        .map_err(|e| anyhow!("failed to create hotkey manager: {}", e))?;
     let physical_state = PhysicalHotkeyState::connect()
         .map_err(|e| anyhow!("failed to connect physical hotkey state: {}", e))?;
     HotkeyListenerLoop {

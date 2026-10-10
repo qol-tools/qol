@@ -13,6 +13,8 @@ mod heal;
 mod matcher;
 mod recorder;
 
+pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = false;
+
 #[cfg(feature = "linux_evdev")]
 pub(crate) fn install(
     bindings: Vec<Binding>,
