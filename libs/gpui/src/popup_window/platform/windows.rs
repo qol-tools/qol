@@ -243,10 +243,9 @@ pub fn work_area_within(monitor: gpui::Bounds<gpui::Pixels>) -> Option<gpui::Bou
     let center = monitor.center();
     let (x, y) = (f64::from(center.x), f64::from(center.y));
     let found = monitors().into_iter().find(|candidate| {
-        let scale = f64::from(candidate.scale);
         let bounds = candidate.bounds;
-        (bounds.x / scale..(bounds.x + bounds.width) / scale).contains(&x)
-            && (bounds.y / scale..(bounds.y + bounds.height) / scale).contains(&y)
+        (bounds.x..bounds.x + bounds.width).contains(&x)
+            && (bounds.y..bounds.y + bounds.height).contains(&y)
     })?;
     work_area_in(monitor, found.bounds, found.work_area)
 }
