@@ -4,7 +4,7 @@ use windows_sys::Win32::System::Console::{
     GetConsoleProcessList, GetConsoleScreenBufferInfo, GetConsoleTitleW, GetConsoleWindow,
     ReadConsoleOutputCharacterW, CONSOLE_SCREEN_BUFFER_INFO, COORD,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindow, IsWindowVisible, GW_OWNER};
 
 use super::attach::{ConsoleFile, Detached};
 use super::peb::process_strings;
@@ -75,6 +75,7 @@ fn read_attached(root: u32) -> Option<ConsoleReport> {
         title: String::from_utf16_lossy(&title[..title_length.min(title.len())]),
         window: window as usize as u64,
         window_visible: !window.is_null() && unsafe { IsWindowVisible(window) } != 0,
+        window_owned: !window.is_null() && !unsafe { GetWindow(window, GW_OWNER) }.is_null(),
         screen: rows(&output, view.Left, view.Top, view.Bottom, width),
         live_screen,
         processes,

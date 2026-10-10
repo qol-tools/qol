@@ -38,6 +38,8 @@ pub(super) struct ConsoleReport {
     pub(super) title: String,
     pub(super) window: u64,
     pub(super) window_visible: bool,
+    #[serde(default)]
+    pub(super) window_owned: bool,
     pub(super) screen: String,
     #[serde(default)]
     pub(super) live_screen: Option<String>,
@@ -104,6 +106,7 @@ pub(super) fn listed<'a>(reports: &'a [ConsoleReport], roots: &[Root]) -> Vec<&'
         .iter()
         .filter(|report| {
             report.window_visible
+                || report.window_owned
                 || roots
                     .iter()
                     .any(|root| root.pid == report.root && root.hosted)
@@ -410,22 +413,24 @@ mod tests {
             },
         ];
         let cases = [
-            (1, false, true),
-            (2, true, true),
-            (3, false, false),
-            (9, false, false),
-            (9, true, true),
+            (1, false, false, true),
+            (2, true, false, true),
+            (3, false, false, false),
+            (9, false, false, false),
+            (9, true, false, true),
+            (9, false, true, true),
         ];
-        for (root, window_visible, expected) in cases {
+        for (root, window_visible, window_owned, expected) in cases {
             let reports = [ConsoleReport {
                 root,
                 window_visible,
+                window_owned,
                 ..ConsoleReport::default()
             }];
             assert_eq!(
                 !listed(&reports, &roots).is_empty(),
                 expected,
-                "root {root} visible {window_visible}"
+                "root {root} visible {window_visible} owned {window_owned}"
             );
         }
     }

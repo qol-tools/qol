@@ -19,6 +19,10 @@ pub use system::{
     process_alive, required_binaries_check,
 };
 
+pub fn directory_is_read_only(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
 pub fn pre_create_selector(_cx: &mut gpui::App) {}
 
 pub(crate) fn reassert_parked(_title: &str, _cx: &mut gpui::App) {}

@@ -33,6 +33,15 @@ impl CursorPlatform for Platform {
                 std::io::Error::last_os_error()
             );
         }
+        let listener = std::thread::Builder::new()
+            .name("os-themes-stop".into())
+            .spawn(|| match qol_process::wait_for_stop_request() {
+                Ok(()) => EXTERNAL_STOP.store(true, Ordering::Relaxed),
+                Err(error) => log::warn!("stop request listener unavailable: {error}"),
+            });
+        if let Err(error) = listener {
+            log::warn!("stop request listener thread failed: {error}");
+        }
     }
 
     fn reset_external_stop(&self) {

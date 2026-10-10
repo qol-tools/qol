@@ -2,6 +2,10 @@ pub fn capture_log_path() -> std::path::PathBuf {
     std::path::PathBuf::from(super::CAPTURE_LOG)
 }
 
+pub fn directory_is_read_only(metadata: &std::fs::Metadata) -> bool {
+    metadata.permissions().readonly()
+}
+
 pub(super) fn process_alive(pid: u32) -> bool {
     if matches!(qol_process::try_wait_pid(pid), Ok(Some(_))) {
         return false;

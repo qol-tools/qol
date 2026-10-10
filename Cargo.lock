@@ -7026,6 +7026,7 @@ dependencies = [
  "qol-log",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-process",
  "qol-runtime",
  "qol-windowing",
  "serde",

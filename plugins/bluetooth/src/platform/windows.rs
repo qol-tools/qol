@@ -13,7 +13,9 @@ use windows::Win32::Devices::Bluetooth::{
     BLUETOOTH_DEVICE_SEARCH_PARAMS, BLUETOOTH_FIND_RADIO_PARAMS, BLUETOOTH_RADIO_INFO,
     BLUETOOTH_SERVICE_DISABLE, BLUETOOTH_SERVICE_ENABLE,
 };
-use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HANDLE};
+use windows::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HANDLE,
+};
 
 use crate::bluetooth::{
     connection_ready, normalize_address, AdapterHealth, BackendCapabilities, DeviceInfo,
@@ -184,6 +186,12 @@ fn find_records(inquiry: bool) -> Result<Vec<BLUETOOTH_DEVICE_INFO>> {
     let find = match unsafe { BluetoothFindFirstDevice(&params, &mut first) } {
         Ok(find) => unsafe { Owned::new(find) },
         Err(error) if error.code() == HRESULT::from_win32(ERROR_NO_MORE_ITEMS.0) => {
+            return Ok(Vec::new())
+        }
+        Err(error)
+            if error.code() == HRESULT::from_win32(ERROR_INVALID_HANDLE.0)
+                && radio_info().is_none() =>
+        {
             return Ok(Vec::new())
         }
         Err(error) => bail!("Windows could not list Bluetooth devices: {error}"),

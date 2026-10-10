@@ -37,7 +37,26 @@ impl Mover for Win32Mover {
     }
 
     fn place(&self, id: &WindowId, frame: WindowRect) -> bool {
+        let frame = keep_on_screen(
+            frame,
+            &qol_windowing::platform::windows::work_areas_left_to_right(),
+        );
         Window::from_id(id).is_some_and(|window| window.set_frame(frame).is_ok())
+    }
+}
+
+fn keep_on_screen(frame: WindowRect, work_areas: &[WindowRect]) -> WindowRect {
+    let Some((left, top, right, bottom)) = work_areas
+        .iter()
+        .map(|area| (area.x, area.y, area.x + area.width, area.y + area.height))
+        .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
+    else {
+        return frame;
+    };
+    WindowRect {
+        x: frame.x.min(right - frame.width).max(left),
+        y: frame.y.min(bottom - frame.height).max(top),
+        ..frame
     }
 }
 
@@ -419,6 +438,34 @@ mod tests {
         let mut state = gliding(&[Direction::Right], 1200.0);
         assert!(state.step(Instant::now(), 0.05, &fake));
         assert_eq!(state.target.as_ref().map(|target| target.x), Some(120.0));
+    }
+
+    #[test]
+    fn placement_stops_at_the_edges_of_the_work_areas() {
+        let rect = |x: f64, y: f64, width: f64, height: f64| WindowRect {
+            x,
+            y,
+            width,
+            height,
+        };
+        let single = [rect(0.0, 0.0, 1280.0, 752.0)];
+        let pair = [
+            rect(0.0, 0.0, 1280.0, 752.0),
+            rect(1280.0, 0.0, 1920.0, 1040.0),
+        ];
+        let cases: [(&[WindowRect], WindowRect, (f64, f64)); 6] = [
+            (&single, rect(100.0, 50.0, 400.0, 300.0), (100.0, 50.0)),
+            (&single, rect(1100.0, 600.0, 400.0, 300.0), (880.0, 452.0)),
+            (&single, rect(-50.0, -20.0, 400.0, 300.0), (0.0, 0.0)),
+            (&single, rect(30.0, 30.0, 1600.0, 900.0), (0.0, 0.0)),
+            (&pair, rect(1500.0, 600.0, 400.0, 300.0), (1500.0, 600.0)),
+            (&[], rect(5000.0, 5000.0, 400.0, 300.0), (5000.0, 5000.0)),
+        ];
+        for (areas, frame, expected) in cases {
+            let placed = keep_on_screen(frame, areas);
+            assert_eq!((placed.x, placed.y), expected, "{frame:?} in {areas:?}");
+            assert_eq!((placed.width, placed.height), (frame.width, frame.height));
+        }
     }
 
     #[test]

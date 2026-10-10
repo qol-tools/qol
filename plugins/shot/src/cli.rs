@@ -262,7 +262,7 @@ fn check_runtime_dirs(dirs: &[RuntimeDir]) -> Result<DoctorCheckResult> {
             continue;
         }
 
-        if metadata.permissions().readonly() {
+        if crate::platform::directory_is_read_only(&metadata) {
             failures.push(format!("{} is read-only.", dir.path.display()));
         }
     }

@@ -226,8 +226,9 @@ impl SessionCloser for ConsoleBackend {
             .filter(|member| belongs(started, false, member.start()))
             .collect();
         let asked =
-            report.window_visible && window_from(report.window).is_some_and(Window::request_close);
-        if !asked && !root.terminate(GRACEFUL_EXIT) {
+            owns_window(&report) && window_from(report.window).is_some_and(Window::request_close);
+        let ended = root.terminate(GRACEFUL_EXIT);
+        if !asked && !ended {
             return Err(refused("the session root refused to terminate"));
         }
         qol_runtime::probe!(
@@ -292,7 +293,7 @@ impl SessionFocus for ConsoleBackend {
     fn focus(&self, target: &SessionBinding) -> Result<(), TerminalError> {
         let report = self.report(target)?;
         let focused = focus_window(&report).is_some_and(|window| {
-            if !report.window_visible {
+            if !owns_window(&report) {
                 select_tab(window, &report);
             }
             window.activate()
@@ -373,9 +374,13 @@ fn window_from(handle: u64) -> Option<Window> {
         .and_then(|handle| Window::from_id(&WindowId::from_u32(handle)))
 }
 
+fn owns_window(report: &ConsoleReport) -> bool {
+    report.window_visible && !report.window_owned
+}
+
 fn focus_window(report: &ConsoleReport) -> Option<Window> {
     let console = report.window as usize as HWND;
-    if report.window_visible {
+    if owns_window(report) {
         return window_from(report.window);
     }
     if !console.is_null() {
