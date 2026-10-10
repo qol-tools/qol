@@ -893,8 +893,6 @@ unsafe extern "system" fn cancellation_control_handler(control: u32) -> BOOL {
         control,
         CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT
     ) {
-        // Windows ends the process once this handler returns, so hold it open
-        // while the caller restores its state and exits on its own.
         std::thread::sleep(SESSION_END_EXIT_GRACE);
     }
     1

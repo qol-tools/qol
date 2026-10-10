@@ -144,10 +144,17 @@ pub(super) async fn download_and_install(
 
     log::info!("Update installed, restarting...");
     crate::window_reopen::capture_before_restart();
-    stop_plugins(plugin_manager).await;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    let error = crate::relaunch::spawn_successor_and_exit(&current_exe, &args);
-    crate::window_reopen::discard_reopen_list();    anyhow::bail!("restart after update failed: {error}")
+    match crate::relaunch::spawn_successor(&current_exe, &args) {
+        Ok(pid) => {
+            stop_plugins(plugin_manager).await;
+            crate::relaunch::exit_to_successor(pid)
+        }
+        Err(error) => {
+            crate::window_reopen::discard_reopen_list();
+            anyhow::bail!("restart after update failed: {error}")
+        }
+    }
 }
 
 async fn stop_plugins(plugin_manager: Arc<Mutex<PluginManager>>) {
