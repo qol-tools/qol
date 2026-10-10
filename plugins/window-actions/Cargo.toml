@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 log.workspace = true
 qol-log.workspace = true
+qol-app-icon.workspace = true
 qol-apps.workspace = true
 qol-cinnamon.workspace = true
 qol-config.workspace = true

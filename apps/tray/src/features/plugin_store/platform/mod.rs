@@ -82,6 +82,7 @@ impl HostOs {
         }
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     fn display_label(self) -> &'static str {
         match self {
             Self::Linux => "Linux",
@@ -121,6 +122,7 @@ pub(super) fn current_manifest_token() -> &'static str {
     Platform.host_os().manifest_token()
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn display_label() -> &'static str {
     Platform.host_os().display_label()
 }

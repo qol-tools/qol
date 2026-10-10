@@ -27,7 +27,8 @@ fn full_window_size() -> Size<Pixels> {
 fn launcher_placement(monitor: Option<&monitor::ActiveMonitor>, cx: &App) -> WindowPlacement {
     let mut placement = centered_window_placement(monitor, header_size(), cx);
     if let Some(monitor) = monitor {
-        let area = monitor.bounds();
+        let native = monitor.bounds();
+        let area = monitor.logical(popup_window::work_area_within(native).unwrap_or(native));
         let lowest = area.origin.y + area.size.height - px(full_window_height());
         placement.bounds.origin.y = placement.bounds.origin.y.min(lowest).max(area.origin.y);
     }

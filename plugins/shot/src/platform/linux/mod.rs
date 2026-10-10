@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
-use crate::ui::region_selector::{DetectedTarget, DetectedTargetRole};
+use crate::ui::region_selector::{DetectedTarget, SnapshotTargets};
 use crate::{Monitor, Rect};
 
 mod clipboard;
@@ -22,6 +22,7 @@ mod selector_cache;
 mod system;
 mod window;
 
+pub use super::unix::{capture_log_path, directory_is_read_only};
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, grab_preview_rgba};
@@ -243,25 +244,13 @@ fn initial_default_target(
     monitor: Option<Rect>,
 ) -> Option<crate::ui::region_selector::DetectedTarget> {
     let pointer_target = pointer.and_then(|point| hover_target?.target_at(point));
-    let pointer_monitor = pointer.zip(monitor).map(|(_, rect)| detected_monitor(rect));
+    let pointer_monitor = pointer
+        .zip(monitor)
+        .map(|(_, rect)| DetectedTarget::monitor(rect));
     pointer_target
         .or(pointer_monitor)
-        .or_else(|| focused_window.map(detected_window))
-        .or_else(|| monitor.map(detected_monitor))
-}
-
-fn detected_window(rect: Rect) -> DetectedTarget {
-    DetectedTarget {
-        rect,
-        role: DetectedTargetRole { is_window: true },
-    }
-}
-
-fn detected_monitor(rect: Rect) -> DetectedTarget {
-    DetectedTarget {
-        rect,
-        role: DetectedTargetRole { is_window: false },
-    }
+        .or_else(|| focused_window.map(DetectedTarget::window))
+        .or_else(|| monitor.map(DetectedTarget::monitor))
 }
 
 fn selector_window(
@@ -331,7 +320,7 @@ fn snapshot_hover_target(
     if windows.is_empty() && monitors.is_empty() {
         return None;
     }
-    Some(Rc::new(SnapshotHoverTarget { windows, monitors }))
+    Some(Rc::new(SnapshotTargets { windows, monitors }))
 }
 
 fn runtime_monitor_rects() -> Vec<Rect> {
@@ -348,31 +337,6 @@ fn runtime_monitor_rects() -> Vec<Rect> {
             h: monitor.height.round() as i32,
         })
         .collect()
-}
-
-struct SnapshotHoverTarget {
-    windows: Vec<Rect>,
-    monitors: Vec<Rect>,
-}
-
-impl crate::ui::region_selector::HoverTarget for SnapshotHoverTarget {
-    fn target_at(
-        &self,
-        point: gpui::Point<Pixels>,
-    ) -> Option<crate::ui::region_selector::DetectedTarget> {
-        let x = f32::from(point.x).round() as i32;
-        let y = f32::from(point.y).round() as i32;
-        let hit =
-            |rect: &Rect| x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
-        if let Some(window) = self.windows.iter().copied().find(hit) {
-            return Some(detected_window(window));
-        }
-        self.monitors
-            .iter()
-            .copied()
-            .find(hit)
-            .map(detected_monitor)
-    }
 }
 
 fn x11_stacked_window_rects(include_frame: bool) -> Vec<Rect> {
@@ -707,11 +671,10 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        capturable_window_type, detected_monitor, detected_window, framed_rect,
-        initial_default_target, parse_xdotool_geometry, selector_monitor_bounds, usable_target,
-        SnapshotHoverTarget,
+        capturable_window_type, framed_rect, initial_default_target, parse_xdotool_geometry,
+        selector_monitor_bounds, usable_target,
     };
-    use crate::ui::region_selector::HoverTarget;
+    use crate::ui::region_selector::{DetectedTarget, HoverTarget, SnapshotTargets};
     use crate::Rect;
     use gpui::{point, px, size, Bounds};
     use qol_gpui::monitor::ActiveMonitor;
@@ -748,43 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn hover_target_picks_topmost_window_containing_the_pointer() {
-        let top = Rect {
-            x: 100,
-            y: 100,
-            w: 400,
-            h: 300,
-        };
-        let bottom = Rect {
-            x: 0,
-            y: 0,
-            w: 1920,
-            h: 1080,
-        };
-        let monitor = Rect {
-            x: 1920,
-            y: 0,
-            w: 2560,
-            h: 1440,
-        };
-        let source = SnapshotHoverTarget {
-            windows: vec![top, bottom],
-            monitors: vec![monitor],
-        };
-        let cases = [
-            (point(px(150.0), px(150.0)), Some(detected_window(top))),
-            (point(px(50.0), px(50.0)), Some(detected_window(bottom))),
-            (point(px(499.0), px(399.0)), Some(detected_window(top))),
-            (point(px(500.0), px(400.0)), Some(detected_window(bottom))),
-            (point(px(3000.0), px(50.0)), Some(detected_monitor(monitor))),
-            (point(px(5000.0), px(50.0)), None),
-        ];
-        for (pointer, expected) in cases {
-            assert_eq!(source.target_at(pointer), expected, "pointer: {pointer:?}");
-        }
-    }
-
-    #[test]
     fn initial_target_follows_cursor_before_focus_fallbacks() {
         let hovered = Rect {
             x: 2560,
@@ -804,7 +730,7 @@ mod tests {
             w: 1920,
             h: 1080,
         };
-        let source = SnapshotHoverTarget {
+        let source = SnapshotTargets {
             windows: vec![hovered],
             monitors: vec![cursor_monitor],
         };
@@ -814,28 +740,28 @@ mod tests {
                 Some(&source as &dyn HoverTarget),
                 Some(focused),
                 Some(cursor_monitor),
-                Some(detected_window(hovered)),
+                Some(DetectedTarget::window(hovered)),
             ),
             (
                 Some(point(px(5000.0), px(500.0))),
                 Some(&source as &dyn HoverTarget),
                 Some(focused),
                 Some(cursor_monitor),
-                Some(detected_monitor(cursor_monitor)),
+                Some(DetectedTarget::monitor(cursor_monitor)),
             ),
             (
                 None,
                 Some(&source as &dyn HoverTarget),
                 Some(focused),
                 Some(cursor_monitor),
-                Some(detected_window(focused)),
+                Some(DetectedTarget::window(focused)),
             ),
             (
                 None,
                 None,
                 None,
                 Some(cursor_monitor),
-                Some(detected_monitor(cursor_monitor)),
+                Some(DetectedTarget::monitor(cursor_monitor)),
             ),
             (None, None, None, None, None),
         ];

@@ -23,6 +23,17 @@ workspace-hack.workspace = true
 x11 = { version = "2", features = ["xlib", "xcursor", "xfixes"] }
 libc = "0.2"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+qol-platform.workspace = true
+qol-process.workspace = true
+qol-windowing.workspace = true
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 [build-dependencies]
 qol-conventions.workspace = true
 

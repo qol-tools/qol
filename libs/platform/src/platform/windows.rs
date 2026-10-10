@@ -1,6 +1,6 @@
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
+use crate::native::wide::wide_nul;
 use crate::{DiskSpace, LinuxDisplayBackend, PlatformCapabilities};
 
 use super::{PlatformApi, FULL_CAPABILITIES};
@@ -27,8 +27,7 @@ impl PlatformApi for Platform {
             ) -> i32;
         }
 
-        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-        wide.push(0);
+        let wide = wide_nul(path);
         let mut available = 0;
         let mut total = 0;
         let ok = unsafe {

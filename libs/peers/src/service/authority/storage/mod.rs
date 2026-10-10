@@ -1,6 +1,9 @@
 mod platform;
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 mod faults;
 
 use std::path::Path;
@@ -61,5 +64,8 @@ impl Storage {
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 pub(super) use platform::CommitFault;

@@ -68,7 +68,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         tests = (ROOT / ".github/workflows/ci.yml").read_text()
         rustflags = (
             "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && "
-            "'-C link-arg=-fuse-ld=lld' || '' }}"
+            "'-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && "
+            "'-C target-feature=+crt-static' || '' }}"
         )
         self.assertIn(rustflags, tests)
         for contract in [
@@ -153,6 +154,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "needs.plugin_candidate.result == 'success'",
             "needs.qol_tray_linux_candidate.result == 'success'",
             "needs.qol_tray_macos_candidate.result == 'success'",
+            "needs.qol_tray_windows_candidate.result == 'success'",
             'git push --atomic origin "${new_tags[@]}"',
         ]
         for contract in required:
@@ -167,7 +169,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertLess(workflow.index("release_probe.py"), workflow.index("--probe-reports"))
         for contract in [
             "cache-key: plugin-release-${{ matrix.target }}",
-            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}",
+            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro -C target-feature=+crt-static' || '' }}",
             "--kind plugin",
         ]:
             with self.subTest(contract=contract):
@@ -248,6 +250,137 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "run: cargo test --locked -p qol-dev-build --all-targets",
         ]:
             self.assertIn(contract, workflow)
+
+    def test_windows_lints_and_tests_the_affected_plan_like_the_other_runners(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        for key in ["clippy", "build", "test", "doctest", "skip"]:
+            with self.subTest(key=key):
+                self.assertIn(
+                    f"windows_{key}: ${{{{ steps.affected.outputs.windows_{key} }}}}",
+                    workflow,
+                )
+        for contract in [
+            "          - os: windows-latest\n",
+            "clippy_args: ${{ needs.plan.outputs.windows_clippy }}",
+            "build_args: ${{ needs.plan.outputs.windows_build }}",
+            "test_args: ${{ needs.plan.outputs.windows_test }}",
+            "doctest: ${{ needs.plan.outputs.windows_doctest }}",
+            "skip: ${{ needs.plan.outputs.windows_skip }}",
+            "    defaults:\n      run:\n        shell: bash\n",
+            "if: runner.os != 'Linux' && matrix.skip != 'true'",
+            "cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, check)
+
+    def test_main_warms_the_release_build_cache_on_every_os(self):
+        warm = (ROOT / ".github/workflows/build-cache.yml").read_text()
+        self.assertNotIn("release_build", warm)
+        for contract in [
+            "          - os: windows-latest\n            plan: windows\n",
+            "          - os: ubuntu-latest\n            plan: ubuntu\n",
+            "          - os: macos-latest\n            plan: macos\n",
+            "    defaults:\n      run:\n        shell: bash\n",
+            "          cargo build --release --locked $BUILD_ARGS\n",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, warm)
+
+    def test_tray_release_ships_the_windows_executable_and_installer_bundle(self):
+        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+        job = workflow.split("  build_windows:\n", 1)[1].split("  release:\n", 1)[0]
+        for contract in [
+            "runs-on: windows-latest",
+            "RUSTFLAGS: -D warnings -C link-arg=/Brepro -C target-feature=+crt-static",
+            "cache-key: qol-tray-windows",
+            "--kind qol-tray-windows",
+            'cp "${BUILT}/qol-tray.exe" "dist/${BUNDLE}.exe"',
+            'cp "${BUILT}/qol-tray.exe" "${BUILT}/qol-tray-install.exe" "${BUNDLE}/"',
+            '7z a -tzip "dist/${BUNDLE}.zip" "${BUNDLE}"',
+            "BUNDLE=qol-tray-windows-x86_64",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, job)
+        self.assertIn(
+            "needs: [build_linux_deb, build_macos, build_windows]", workflow
+        )
+        updater = (ROOT / "apps/tray/src/updates/platform/windows.rs").read_text()
+        self.assertIn('format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)', updater)
+
+    def test_merge_queue_builds_windows_release_binaries(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        sandbox = workflow.split("  process-windows:\n", 1)[1].split("  release-build:\n", 1)[0]
+        build = workflow.split("  release-build:\n", 1)[1].split("  gate:\n", 1)[0]
+
+        self.assertNotIn("windows_apps", workflow)
+        self.assertNotIn("cargo build", sandbox)
+        self.assertNotIn("upload-artifact", sandbox)
+        self.assertIn("RUSTFLAGS: -D warnings -C target-feature=+crt-static", sandbox)
+        for contract in [
+            "          - os: windows-latest\n"
+            "            build_args: ${{ needs.plan.outputs.windows_build }}\n"
+            "            skip: ${{ needs.plan.outputs.windows_skip }}\n",
+            "timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}",
+            "    defaults:\n      run:\n        shell: bash\n",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, build)
+
+    def test_windows_builds_link_the_c_runtime_statically(self):
+        for name in [
+            "ci.yml",
+            "build-cache.yml",
+            "release.yml",
+            "plugin-version.yml",
+            "qol-tray-release.yml",
+        ]:
+            workflow = (ROOT / ".github/workflows" / name).read_text()
+            for line in workflow.splitlines():
+                if "RUSTFLAGS:" in line and ("windows" in line or "/Brepro" in line):
+                    with self.subTest(workflow=name, line=line.strip()):
+                        self.assertIn("-C target-feature=+crt-static", line)
+                        self.assertIn("-D warnings", line)
+
+    def test_windows_release_jobs_get_a_longer_timeout(self):
+        conditional = "timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}"
+        cases = [
+            ("release.yml", "  build:\n", "  registry:\n", conditional),
+            ("plugin-version.yml", "  probe:\n", "  prepare:\n", conditional),
+            ("plugin-version.yml", "  plugin_candidate:\n", "  qol_tray_linux_candidate:\n", conditional),
+            ("plugin-version.yml", "  qol_tray_windows_candidate:\n", "    steps:\n", "timeout-minutes: 75"),
+            ("qol-tray-release.yml", "  build_windows:\n", "    steps:\n", "timeout-minutes: 75"),
+        ]
+        for name, start, end, timeout in cases:
+            with self.subTest(workflow=name, job=start.strip()):
+                workflow = (ROOT / ".github/workflows" / name).read_text()
+                job = workflow.split(start, 1)[1].split(end, 1)[0]
+                self.assertIn(timeout, job)
+
+    def test_tray_release_builds_drop_checkout_credentials(self):
+        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+        for job, end in [
+            ("  build_linux_deb:\n", "  build_macos:\n"),
+            ("  build_macos:\n", "  build_windows:\n"),
+            ("  build_windows:\n", "  release:\n"),
+        ]:
+            with self.subTest(job=job.strip()):
+                body = workflow.split(job, 1)[1].split(end, 1)[0]
+                self.assertIn("persist-credentials: false", body)
+
+    def test_plugin_release_builds_run_bash_on_windows(self):
+        cases = [
+            (".github/workflows/release.yml", "  build:\n", "  registry:\n"),
+            (".github/workflows/plugin-version.yml", "  probe:\n", "  prepare:\n"),
+            (".github/workflows/plugin-version.yml", "  plugin_candidate:\n", "  qol_tray_linux_candidate:\n"),
+            (".github/workflows/plugin-version.yml", "  qol_tray_windows_candidate:\n", "  tag_and_dispatch:\n"),
+            (".github/workflows/qol-tray-release.yml", "  build_windows:\n", "  release:\n"),
+        ]
+        for path, start, end in cases:
+            with self.subTest(path=path, job=start.strip()):
+                workflow = (ROOT / path).read_text()
+                job = workflow.split(start, 1)[1].split(end, 1)[0]
+                self.assertIn("    defaults:\n      run:\n        shell: bash\n", job)
 
     def test_plugins_publish_no_github_release(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()

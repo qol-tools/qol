@@ -17,7 +17,11 @@ pub(super) struct ClientWatcher {
 const WATCH_PROGRAM: &str = "qol";
 
 #[cfg(test)]
-const ALWAYS_PRESENT_TEST_PROGRAM: &str = "/bin/echo";
+const ALWAYS_PRESENT_TEST_PROGRAM: &str = if cfg!(windows) {
+    "C:\\Windows\\System32\\whoami.exe"
+} else {
+    "/bin/echo"
+};
 
 fn sessions_dir() -> PathBuf {
     qol_config::data_subdir("sessions").unwrap_or_else(|| ".".into())

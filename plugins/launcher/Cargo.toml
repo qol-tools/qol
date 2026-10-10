@@ -60,6 +60,17 @@ objc2-app-kit = { workspace = true, features = [
   "block2",
 ] }
 
+[target.'cfg(windows)'.dependencies]
+qol-app-icon.workspace = true
+sha2.workspace = true
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
 [build-dependencies]
 qol-conventions.workspace = true
 

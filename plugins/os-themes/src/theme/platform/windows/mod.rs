@@ -1,4 +1,6 @@
-use anyhow::{anyhow, Result};
+mod personalize;
+
+use anyhow::Result;
 
 use crate::session::{RestoreMode, RestoreReport};
 use crate::theme::ColorScheme;
@@ -9,12 +11,14 @@ pub struct Platform;
 
 impl ThemePlatform for Platform {
     fn current_scheme(&self) -> Result<ColorScheme> {
-        Err(anyhow!("theme switching is not implemented on Windows"))
+        personalize::current_scheme()
     }
 
-    fn apply_scheme(&self, _target: ColorScheme) -> Result<()> {
-        Err(anyhow!("theme switching is not implemented on Windows"))
+    fn apply_scheme(&self, target: ColorScheme) -> Result<()> {
+        personalize::apply_scheme(target)
     }
 
-    fn restore(&self, _mode: RestoreMode, _report: &mut RestoreReport) {}
+    fn restore(&self, mode: RestoreMode, report: &mut RestoreReport) {
+        personalize::restore(mode, report);
+    }
 }

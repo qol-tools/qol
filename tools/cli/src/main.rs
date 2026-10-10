@@ -29,7 +29,11 @@ fn main() {
 
 fn run(args: Vec<OsString>) -> Result<()> {
     let args = parse_cli(args);
-    if let Some(execution) = contract_execution(&args)? {
+    let execution = match qol_terminal_sessions::console::helper(&args.values) {
+        Some(execution) => Some(execution),
+        None => contract_execution(&args)?,
+    };
+    if let Some(execution) = execution {
         let exit_code = execution.exit_code;
         let _ = execution.emit();
         if exit_code != qol_headless::EXIT_SUCCESS {

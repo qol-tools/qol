@@ -2,12 +2,12 @@ mod activation;
 pub(crate) mod enrollment;
 mod nearby;
 mod network;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod network_pages;
 mod pagination;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod persistent;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod pointz;
 
 use std::path::Path;
@@ -237,7 +237,7 @@ fn a_queued_local_task_cannot_reopen_an_authority_after_shutdown() {
     assert!(!root.exists());
 }
 
-#[cfg(not(any(any(target_os = "linux", target_os = "macos"), target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 #[test]
 fn unsupported_persistence_is_explicit_and_does_not_create_a_store() {
     let temporary = tempfile::tempdir().unwrap();

@@ -111,6 +111,7 @@ mod tests {
     struct ConfigEnvGuard {
         home: Option<OsString>,
         xdg_config_home: Option<OsString>,
+        _path_root: crate::paths::TestPathRootGuard,
     }
 
     impl ConfigEnvGuard {
@@ -126,6 +127,7 @@ mod tests {
             Self {
                 home,
                 xdg_config_home,
+                _path_root: crate::paths::push_test_path_root(root),
             }
         }
     }

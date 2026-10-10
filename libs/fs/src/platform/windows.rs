@@ -1,7 +1,8 @@
 use std::fs::File;
 use std::io;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+
+use qol_platform::native::wide::wide_nul;
 
 const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
 const INVALID_FILE_ATTRIBUTES: u32 = u32::MAX;
@@ -25,11 +26,7 @@ pub(crate) fn sync_parent(_: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn prepare_file_removal(path: &Path) -> io::Result<()> {
-    let path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+    let path = wide_nul(path);
     let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
     if attributes == INVALID_FILE_ATTRIBUTES {
         return Err(io::Error::last_os_error());

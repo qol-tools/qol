@@ -2,6 +2,8 @@
 mod linux;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod tracker_pre_create;
 #[cfg(target_os = "windows")]
 mod windows;
 

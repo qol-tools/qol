@@ -300,9 +300,20 @@ impl WindowsWindowInner {
     }
 
     fn set_window_placement(&self) -> Result<()> {
-        let Some(open_status) = self.state.borrow_mut().initial_placement.take() else {
+        let Some(mut open_status) = self.state.borrow_mut().initial_placement.take() else {
             return Ok(());
         };
+        let mut current = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        let moved_on_screen = unsafe {
+            GetWindowPlacement(self.hwnd, &mut current).is_ok()
+                && !MonitorFromRect(&current.rcNormalPosition, MONITOR_DEFAULTTONULL).is_invalid()
+        };
+        if moved_on_screen {
+            open_status.placement.rcNormalPosition = current.rcNormalPosition;
+        }
         match open_status.state {
             WindowOpenState::Maximized => unsafe {
                 SetWindowPlacement(self.hwnd, &open_status.placement)
@@ -710,29 +721,31 @@ impl PlatformWindow for WindowsWindow {
                 // so let's just simulate user input as that seems to be the most reliable way
                 // some more info: https://gist.github.com/Aetopia/1581b40f00cc0cadc93a0e8ccb65dc8c
                 // bonus: this bug also doesn't manifest if you have vs attached to the process
-                let inputs = [
-                    INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: VK_MENU,
-                                dwFlags: KEYBD_EVENT_FLAGS(0),
-                                ..Default::default()
+                if unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } >= 0 {
+                    let inputs = [
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VK_MENU,
+                                    dwFlags: KEYBD_EVENT_FLAGS(0),
+                                    ..Default::default()
+                                },
                             },
                         },
-                    },
-                    INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: VK_MENU,
-                                dwFlags: KEYEVENTF_KEYUP,
-                                ..Default::default()
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VK_MENU,
+                                    dwFlags: KEYEVENTF_KEYUP,
+                                    ..Default::default()
+                                },
                             },
                         },
-                    },
-                ];
-                unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                    ];
+                    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                }
 
                 // todo(windows)
                 // crate `windows 0.56` reports true as Err

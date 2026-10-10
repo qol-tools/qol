@@ -1,15 +1,16 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
+use crate::plugins::PluginManager;
 
 use super::super::{latest_version, verify_host_update, GITHUB_REPO};
-use super::unix;
 use super::InstallKind;
+use super::{download, unix};
 use crate::installer::platform::macos::codesign;
 
 const APP_BUNDLE_NAME: &str = "QoL Tray.app";
@@ -166,10 +167,13 @@ fn copy_bundle_dir(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
+pub(super) async fn download_and_install(
+    events: Arc<EventBus>,
+    _plugin_manager: Arc<Mutex<PluginManager>>,
+) -> Result<()> {
     let install_kind = InstallKind::detect();
     log::info!("Install kind: {install_kind:?}");
-    let dev_url = unix::dev_update_url();
+    let dev_url = download::dev_update_url();
     let dev_override = dev_url.is_some();
 
     if !dev_override {
@@ -214,7 +218,7 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
 
     log::info!("Downloading update from {}", url);
-    unix::download_asset(&url, &dest, &events).await?;
+    download::download_asset(&url, &dest, &events).await?;
     if let Some(asset) = &verified_asset {
         release_integrity::verify_file(asset, &dest)?;
     }

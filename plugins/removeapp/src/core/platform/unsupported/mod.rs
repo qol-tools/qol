@@ -19,7 +19,10 @@ const UNSUPPORTED: &str = concat!(
     ": not implemented on this platform yet"
 );
 
-pub(crate) fn metadata_identity(_meta: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
+pub(crate) fn metadata_identity(
+    _path: &std::path::Path,
+    _meta: &std::fs::Metadata,
+) -> (Option<u64>, Option<u64>) {
     (None, None)
 }
 

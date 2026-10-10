@@ -1,5 +1,7 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod icon_cache;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

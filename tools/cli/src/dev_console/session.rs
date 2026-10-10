@@ -1956,7 +1956,7 @@ mod tests {
         let started = SystemTime::now();
         fs::write(&rebuilt, b"cli").unwrap();
 
-        let file = File::open(&rebuilt).unwrap();
+        let file = File::options().write(true).open(&rebuilt).unwrap();
         file.set_times(FileTimes::new().set_modified(started - Duration::from_secs(60)))
             .unwrap();
         drop(file);
@@ -1969,7 +1969,7 @@ mod tests {
             "a binary built before the session stays in-process"
         );
 
-        let file = File::open(&rebuilt).unwrap();
+        let file = File::options().write(true).open(&rebuilt).unwrap();
         file.set_times(FileTimes::new().set_modified(started + Duration::from_secs(60)))
             .unwrap();
         drop(file);

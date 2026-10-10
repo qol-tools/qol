@@ -27,12 +27,23 @@ pub(crate) fn isolate_owned_command(command: &mut Command) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn hide_console_window(command: &mut Command) -> &mut Command {
+    command
+}
+
 pub(crate) fn install_cancellation_handler() -> io::Result<()> {
     let result = CANCELLATION_INSTALL.get_or_init(install_signal_handlers);
     match result {
         Ok(()) => Ok(()),
         Err(code) => Err(io::Error::from_raw_os_error(*code)),
     }
+}
+
+pub(crate) fn wait_for_stop_request() -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Unix stop requests arrive as SIGTERM, which callers observe with their own signal handling",
+    ))
 }
 
 pub(crate) fn cancellation_requested() -> bool {
@@ -213,6 +224,10 @@ pub(crate) fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<
     }
     let _ = signal(signal_target, libc::SIGKILL);
     child.wait()?;
+    Ok(())
+}
+
+pub(crate) fn bind_to_host_lifetime(_pid: u32) -> io::Result<()> {
     Ok(())
 }
 

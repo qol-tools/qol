@@ -32,7 +32,7 @@ pub(super) trait NotificationPlatform {
     fn acquire_inhibit(&self) -> Option<NotificationInhibit>;
 }
 
-pub(super) fn send_notification(title: &str, message: &str) -> bool {
+pub fn send_notification(title: &str, message: &str) -> bool {
     imp::Platform.send_notification(title, message)
 }
 

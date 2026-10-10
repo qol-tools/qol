@@ -6,7 +6,7 @@ icon = "display"
 description = "Display brightness, gamma, and mode control"
 version = "0.29.1"
 author = "KMRH47"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 [runtime]
 command = "qol-monitor"

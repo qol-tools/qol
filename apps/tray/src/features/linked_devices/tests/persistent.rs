@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -152,7 +151,14 @@ fn absent_incomplete_and_corrupt_roots_have_distinct_outcomes_without_repair() {
         let root = temporary.path().join("peers");
         match case {
             "absent" => {}
-            "empty" => fs::DirBuilder::new().mode(0o700).create(&root).unwrap(),
+            "empty" => {
+                drop(
+                    PeerAuthority::create_persistent(&root, "local".into(), SystemTime::now())
+                        .unwrap(),
+                );
+                fs::remove_file(root.join("state.json")).unwrap();
+                fs::remove_file(root.join("writer.lock")).unwrap();
+            }
             _ => {
                 drop(
                     PeerAuthority::create_persistent(&root, "local".into(), SystemTime::now())
@@ -270,7 +276,8 @@ fn faulted_authority_remains_visible_and_rejects_mutations_until_stop_and_reopen
     let peer = populated(&root, 1)[0];
     let host = host_at(&root, false);
     let shared = attach(&host);
-    fs::set_permissions(root.join("state.json"), fs::Permissions::from_mode(0o644)).unwrap();
+    let alias = temporary.path().join("state-alias.json");
+    fs::hard_link(root.join("state.json"), &alias).unwrap();
     let expected = authority(&shared).expected();
     assert!(matches!(
         shared.peer_admin(Request::Rename {
@@ -290,7 +297,7 @@ fn faulted_authority_remains_visible_and_rejects_mutations_until_stop_and_reopen
             error: AuthorityError::Faulted.into()
         }
     );
-    fs::set_permissions(root.join("state.json"), fs::Permissions::from_mode(0o600)).unwrap();
+    fs::remove_file(&alias).unwrap();
     assert!(matches!(
         shared.peer_admin(Request::Stop {
             expected: authority(&shared).expected()

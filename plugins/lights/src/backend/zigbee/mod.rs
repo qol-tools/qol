@@ -160,7 +160,7 @@ fn resolve_serial_port(configured: &str) -> Result<String> {
     }
     // Self-healing: if the user (or a UI bug) wrote a garbage serial_port value
     // into config.json, fall back to auto-detection instead of failing permanently.
-    if std::path::Path::new(configured).exists() {
+    if crate::platform::serial_port_present(configured) {
         return Ok(configured.to_string());
     }
 

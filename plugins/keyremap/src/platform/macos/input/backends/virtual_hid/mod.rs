@@ -14,7 +14,7 @@ use core_foundation::boolean::CFBoolean;
 use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
 
-use crate::platform::macos::app::remap::ResolvedConfig;
+use crate::platform::engine::remap::ResolvedConfig;
 use crate::platform::macos::hid_helper::protocol::{
     self, Role, ToDaemon, ToHelper, PROTOCOL_VERSION, SOCKET_PATH,
 };
@@ -266,8 +266,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::platform::macos::app::config::RemapConfig;
-    use crate::platform::macos::app::remap;
+    use crate::platform::engine::config::RemapConfig;
+    use crate::platform::engine::remap;
     use crate::platform::macos::hid_helper::protocol::PAGE_KEYBOARD;
     use crate::platform::macos::layout::{CharTable, LayoutSnapshot};
 

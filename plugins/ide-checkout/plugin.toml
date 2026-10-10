@@ -6,7 +6,7 @@ icon = "ide-checkout"
 description = "Local HTTP API for a browser extension to check out a git branch and open it in a configured app"
 version = "1.54.0"
 author = "KMRH47"
-platforms = ["macos", "linux"]
+platforms = ["macos", "linux", "windows"]
 
 [runtime]
 command = "qol-ide-checkout"

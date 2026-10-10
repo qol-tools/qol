@@ -246,7 +246,10 @@ mod tests {
         let canonical = cand.path.canonicalize().unwrap();
         std::fs::write(
             &emu_toml,
-            format!("[images.win11]\npath = \"{}\"\n", canonical.display()),
+            format!(
+                "[images.win11]\npath = {}\n",
+                toml::Value::String(canonical.display().to_string())
+            ),
         )
         .unwrap();
         let before = std::fs::read_to_string(&emu_toml).unwrap();
@@ -279,12 +282,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let emu_toml = dir.path().join("emu.toml");
         let cand = candidate(dir.path(), "win11.qcow2", GuestArch::X86_64, Firmware::Bios);
-        let canonical = cand.path.canonicalize().unwrap();
+        let dotted = dir.path().join(".").join("win11.qcow2");
         std::fs::write(
             &emu_toml,
             format!(
-                "[images.other]\npath = \"{}/./win11.qcow2\"\n",
-                canonical.parent().unwrap().display()
+                "[images.other]\npath = {}\n",
+                toml::Value::String(dotted.display().to_string())
             ),
         )
         .unwrap();

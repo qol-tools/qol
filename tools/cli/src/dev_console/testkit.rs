@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::mpsc::channel;
 
 use ratatui::text::Span;
@@ -110,7 +109,7 @@ pub(super) fn known_emu_candidate(id: &str) -> ImageCandidate {
 
 pub(super) fn live_pane(line: &str) -> LogPane {
     let mut pane = LogPane::new();
-    let child = Command::new("true").spawn().unwrap();
+    let child = crate::platform::test_process::exiting().spawn().unwrap();
     let (_tx, rx) = channel::<String>();
     pane.attach(child, rx);
     pane.push(line.to_string());
@@ -164,7 +163,7 @@ pub(super) fn row_bounds(rows: &[String], needle: &str) -> (usize, usize) {
 
 pub(super) fn attach_lines(lines: &[&str]) -> LogPane {
     let mut pane = LogPane::collapsing();
-    let child = Command::new("true").spawn().unwrap();
+    let child = crate::platform::test_process::exiting().spawn().unwrap();
     let (tx, rx) = channel::<String>();
     for line in lines {
         tx.send((*line).to_string()).unwrap();

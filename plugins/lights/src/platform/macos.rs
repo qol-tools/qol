@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serialport::SerialPortInfo;
 
+pub(crate) use super::unix::serial_port_present;
 use super::{DoctorPlatformMetadata, SerialAccess, SerialMetadata};
 
 pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {

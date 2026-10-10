@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use qol_conventions::ENV_PLUGIN_ID;
 
-mod platform;
+use crate::client::PlatformStateClient;
 
 pub fn load<T: DeserializeOwned + Default>() -> T {
     match load_json() {
@@ -14,7 +14,7 @@ pub fn load<T: DeserializeOwned + Default>() -> T {
 
 pub fn load_json() -> Option<serde_json::Value> {
     let plugin_id = plugin_id()?;
-    platform::load_json(&plugin_id)
+    PlatformStateClient::from_env().get_plugin_config(&plugin_id)
 }
 
 pub fn save<T: Serialize>(value: &T) -> bool {
@@ -25,7 +25,7 @@ pub fn save<T: Serialize>(value: &T) -> bool {
     let Ok(json) = serde_json::to_value(value) else {
         return false;
     };
-    platform::save(&plugin_id, &json)
+    PlatformStateClient::from_env().set_plugin_config(&plugin_id, &json)
 }
 
 fn plugin_id() -> Option<String> {

@@ -14,6 +14,7 @@ trait InstallerOps {
     fn ensure_desktop_registration(&self) -> Result<()>;
     fn warn_system_install_conflict(&self);
     fn remove_legacy_install(&self);
+    fn uninstall(&self, binary_path: &Path) -> Result<()>;
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -25,7 +26,9 @@ pub(crate) mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_common;
 #[cfg(target_os = "windows")]
-mod windows;
+pub(in crate::installer) mod windows;
+#[cfg(any(target_os = "windows", test))]
+pub(in crate::installer) mod windows_rules;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use fallback::Platform;
@@ -78,6 +81,10 @@ pub(super) fn warn_system_install_conflict() {
 
 pub(super) fn remove_legacy_install() {
     Platform.remove_legacy_install();
+}
+
+pub(super) fn uninstall(binary_path: &Path) -> Result<()> {
+    Platform.uninstall(binary_path)
 }
 
 pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {

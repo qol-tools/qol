@@ -35,10 +35,12 @@ extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
 }
 
-use super::app::remap::{self, MouseAction, MouseButton, ResolvedConfig, ScrollAction};
 use super::app_tracker::AppTracker;
 use super::input::backends::event_tap::{self, build_flags, extract_modifiers};
 use super::input::{InputState, Strategy};
+use crate::platform::engine::remap::{
+    self, MouseAction, MouseButton, ResolvedConfig, ScrollAction,
+};
 
 pub struct TapState {
     config: RwLock<Arc<ResolvedConfig>>,

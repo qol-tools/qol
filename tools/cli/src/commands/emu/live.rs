@@ -1094,7 +1094,6 @@ mod tests {
     use serde_json::json;
     use std::cell::Cell;
     use std::collections::HashSet;
-    use std::process::Command;
     use std::rc::Rc;
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -1257,7 +1256,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn terminated_tree_proof() -> (qol_process::TerminatedProcessTree, u32) {
         let process_tree = crate::process_guardian::own_process_tree().unwrap();
-        let mut command = Command::new("sleep");
+        let mut command = std::process::Command::new("sleep");
         command.arg("30");
         let prepared = process_tree.prepare_command(command).unwrap();
         let mut child = prepared.spawn().unwrap();
@@ -1535,7 +1534,7 @@ mod tests {
 
     #[test]
     fn dead_supervisor_with_unverified_live_qemu_stays_cleanup_incomplete() {
-        let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let mut child = crate::platform::test_process::exiting().spawn().unwrap();
         let dead_pid = child.id();
         child.wait().unwrap();
         let root = TempDir::new().unwrap();
@@ -1570,7 +1569,7 @@ mod tests {
 
     #[test]
     fn dead_supervisor_and_dead_qemu_are_cleaned_by_system_runtime() {
-        let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let mut child = crate::platform::test_process::exiting().spawn().unwrap();
         let dead_pid = child.id();
         child.wait().unwrap();
         let root = TempDir::new().unwrap();
@@ -1601,7 +1600,7 @@ mod tests {
 
     #[test]
     fn dead_preparing_supervisor_cleans_proven_not_started_artifacts() {
-        let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let mut child = crate::platform::test_process::exiting().spawn().unwrap();
         let dead_pid = child.id();
         child.wait().unwrap();
         let root = TempDir::new().unwrap();
@@ -1689,7 +1688,7 @@ mod tests {
 
     #[test]
     fn dead_launching_supervisor_without_qemu_identity_preserves_artifacts() {
-        let mut child = Command::new("sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let mut child = crate::platform::test_process::exiting().spawn().unwrap();
         let dead_pid = child.id();
         child.wait().unwrap();
         let root = TempDir::new().unwrap();

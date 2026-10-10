@@ -4,20 +4,27 @@ use std::time::{Duration, Instant};
 
 const ENV_RELAUNCH_AFTER_PID: &str = "QOL_TRAY_RELAUNCH_AFTER_PID";
 const PREDECESSOR_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const PREDECESSOR_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 const PREDECESSOR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub fn spawn_successor_and_exit(binary: &Path, args: &[OsString]) -> std::io::Error {
-    let spawned = std::process::Command::new(binary)
-        .args(args)
-        .env(ENV_RELAUNCH_AFTER_PID, std::process::id().to_string())
-        .spawn();
-    match spawned {
-        Ok(child) => {
-            log::info!("relaunched as pid {}, exiting", child.id());
-            std::process::exit(0);
-        }
+    match spawn_successor(binary, args) {
+        Ok(pid) => exit_to_successor(pid),
         Err(error) => error,
     }
+}
+
+pub fn spawn_successor(binary: &Path, args: &[OsString]) -> std::io::Result<u32> {
+    std::process::Command::new(binary)
+        .args(args)
+        .env(ENV_RELAUNCH_AFTER_PID, std::process::id().to_string())
+        .spawn()
+        .map(|child| child.id())
+}
+
+pub fn exit_to_successor(pid: u32) -> ! {
+    log::info!("relaunched as pid {pid}, exiting");
+    std::process::exit(0);
 }
 
 pub fn wait_for_predecessor() {

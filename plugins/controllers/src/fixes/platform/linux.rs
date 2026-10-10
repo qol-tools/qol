@@ -51,3 +51,16 @@ udevadm control --reload"#;
         qol_host_fixes::elevation::run_privileged("qol-controllers", script, &args)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_quirks_are_written_to_the_module_parameter() {
+        assert_eq!(
+            Platform::live_quirk_path("hid_xpadneo").as_deref(),
+            Some("/sys/module/hid_xpadneo/parameters/quirks")
+        );
+    }
+}

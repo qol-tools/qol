@@ -13,18 +13,18 @@ mod tests {
     qol_plugin_api::assert_plugin_toml_valid!();
 
     #[test]
-    fn manifest_declares_macos_only_platform() {
+    fn manifest_declares_the_platforms_with_input_hooks() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
         let platforms = manifest
             .plugin
             .platforms
             .as_ref()
-            .expect("plugin.toml must declare platforms = [\"macos\"]");
+            .expect("plugin.toml must declare platforms = [\"macos\", \"windows\"]");
         assert_eq!(
             platforms,
-            &vec!["macos".to_string()],
-            "keyremap requires CGEventTap; manifest must restrict to macOS so the host never offers it elsewhere"
+            &vec!["macos".to_string(), "windows".to_string()],
+            "keyremap needs CGEventTap on macOS or low-level hooks on Windows; the host must never offer it elsewhere"
         );
         assert!(manifest.capabilities.doctor);
         assert!(manifest.capabilities.gpui);
@@ -63,14 +63,14 @@ mod tests {
         assert_eq!(driver.license, "Unlicense");
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
-    fn non_macos_run_exits_with_error_code() {
+    fn unsupported_run_exits_with_error_code() {
         let code = super::cli::exit_code(["run".to_string()]);
         assert_eq!(
             code,
             std::process::ExitCode::from(1),
-            "on non-macOS hosts keyremap must refuse to start with a non-zero exit code"
+            "without input hooks keyremap must refuse to start with a non-zero exit code"
         );
     }
 }

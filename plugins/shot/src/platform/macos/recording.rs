@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession};
+use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession, SavedRecording};
 use crate::{Config, Rect};
 
 use super::conversion::{convert_recording, run_conversion_command};
@@ -105,7 +105,7 @@ pub fn recording_started(_session: &CaptureSession) {
     );
 }
 
-pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
+pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<SavedRecording> {
     qol_runtime::probe!(
         "SHOT_RECORD_FINALIZE",
         "stage=stopped-entry pids={} segments={}",
@@ -144,13 +144,10 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
                     (reveal_file, message)
                 }
             };
-        crate::capture::completion::background_saved(
-            "Recording saved",
-            &message,
-            &reveal_file,
-            config.capture.open_folder_after_save,
-        );
-        return Some(reveal_file);
+        return Some(SavedRecording {
+            path: reveal_file,
+            message,
+        });
     }
 
     qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=open-videos");

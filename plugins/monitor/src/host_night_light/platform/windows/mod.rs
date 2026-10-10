@@ -5,6 +5,6 @@ use super::super::{HostNightLight, UnavailableHostNightLight};
 
 pub(crate) fn control(_config_root: Option<&Path>) -> Arc<dyn HostNightLight> {
     Arc::new(UnavailableHostNightLight(
-        "Windows Night Light automation is unavailable; no supported display gamma backend",
+        "Windows Night Light automation is unavailable; using the GDI gamma ramp",
     ))
 }

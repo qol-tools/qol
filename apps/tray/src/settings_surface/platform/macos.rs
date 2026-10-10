@@ -1,9 +1,4 @@
-#[path = "native_tools/mod.rs"]
-mod native_tools;
-#[path = "unix_common.rs"]
-mod unix_common;
-
-pub(in crate::settings_surface) use unix_common::{
+pub(in crate::settings_surface) use super::gpui_host::{
     apply_theme, plugins_changed, prewarm, request, run, show_toast, stop, wait_until_ready,
 };
 
@@ -11,7 +6,7 @@ pub(in crate::settings_surface) fn native_available() -> bool {
     true
 }
 
-fn process_elapsed_ms() -> Option<u64> {
+pub(super) fn process_elapsed_ms() -> Option<u64> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>();
     let read = unsafe {

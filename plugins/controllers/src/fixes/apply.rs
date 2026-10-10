@@ -75,12 +75,10 @@ mod tests {
     #[test]
     fn sysfs_writes_target_driver_param() {
         let writes = sysfs_writes(&targets());
-        assert_eq!(
-            writes,
-            vec![(
-                "/sys/module/hid_xpadneo/parameters/quirks".to_string(),
-                "06:71:10:20:26:b4:263".to_string()
-            )]
-        );
+        let expected = super::super::platform::live_quirk_path("hid_xpadneo")
+            .map(|path| (path, "06:71:10:20:26:b4:263".to_string()))
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(writes, expected);
     }
 }

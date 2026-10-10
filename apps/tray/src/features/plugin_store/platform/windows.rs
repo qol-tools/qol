@@ -8,11 +8,11 @@ impl PluginStorePlatformOps for Platform {
     }
 
     fn lockfile_max_age(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(300)
+        std::time::Duration::from_secs(30)
     }
 
-    fn lock_owner_alive(&self, _pid: u32) -> Option<bool> {
-        None
+    fn lock_owner_alive(&self, pid: u32) -> Option<bool> {
+        Some(crate::process_utils::is_pid_alive(pid as i32))
     }
 
     fn executable_permissions(&self, _metadata: std::fs::Metadata) -> Option<std::fs::Permissions> {

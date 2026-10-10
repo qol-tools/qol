@@ -1,5 +1,4 @@
 mod cask;
-mod icon;
 mod spotlight;
 
 use std::path::{Path, PathBuf};
@@ -49,7 +48,7 @@ pub fn app_face(entry: &AppEntry) -> AppFace {
             .launcher_icon
             .map(PathBuf::from)
             .filter(|path| path.is_file())
-            .or_else(|| icon::icon_path(&entry.path)),
+            .or_else(|| super::icon_cache::icon_path(&entry.path)),
         description: cask::owner_of(&entry.path)
             .and_then(|cask| cask.summary)
             .or_else(|| category.as_deref().and_then(kind)),

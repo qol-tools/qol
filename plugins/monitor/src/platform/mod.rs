@@ -12,21 +12,23 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod platform_control;
 mod support;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_signals;
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(crate) use fallback::{control, current_support};
+pub(crate) use fallback::{control, current_support, install_signal_handlers, native_desktop};
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{control, current_support};
+pub(crate) use linux::{control, current_support, install_signal_handlers, native_desktop};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{control, current_support};
+pub(crate) use macos::{control, current_support, install_signal_handlers, native_desktop};
 pub(crate) use support::PlatformSupport;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{control, current_support};
+pub(crate) use windows::{control, current_support, install_signal_handlers, native_desktop};
 
 pub(crate) trait MonitorControl: DisplayControl + GammaStateControl {
     fn select(&self, display_id: &str, policy: BrightnessPolicy);
@@ -70,6 +72,7 @@ where
 pub(crate) enum DisplayServer {
     X11,
     Wayland,
+    Desktop,
     None,
 }
 
@@ -87,18 +90,26 @@ impl DisplayServer {
             Self::None
         }
     }
+
+    fn from_env() -> Self {
+        Self::detect(
+            std::env::var_os("WAYLAND_DISPLAY")
+                .as_deref()
+                .and_then(|value| value.to_str()),
+            std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+            std::env::var_os("DISPLAY")
+                .as_deref()
+                .and_then(|value| value.to_str()),
+        )
+    }
 }
 
 pub(crate) fn display_server() -> DisplayServer {
-    DisplayServer::detect(
-        std::env::var_os("WAYLAND_DISPLAY")
-            .as_deref()
-            .and_then(|value| value.to_str()),
-        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
-        std::env::var_os("DISPLAY")
-            .as_deref()
-            .and_then(|value| value.to_str()),
-    )
+    if native_desktop() {
+        DisplayServer::Desktop
+    } else {
+        DisplayServer::from_env()
+    }
 }
 
 pub(crate) fn apply_configured_policies(control: &Control, device: &crate::config::DeviceConfig) {

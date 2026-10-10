@@ -189,7 +189,7 @@ mod tests {
                 .all(|c| matches!(c, Component::Normal(_))));
             assert_eq!(
                 dir.join("layout.json").to_string_lossy(),
-                format!("{profile}/device/{ns}/layout.json")
+                [profile, "device", ns, "layout.json"].join(std::path::MAIN_SEPARATOR_STR)
             );
         }
     }

@@ -918,6 +918,18 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn absolute(unix: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{unix}")
+        } else {
+            unix.to_string()
+        }
+    }
+
+    fn toml_path(path: &Path) -> String {
+        toml::Value::String(path.display().to_string()).to_string()
+    }
+
     const MINT: &str = r#"
 id = "linux/mint"
 name = "Linux Mint"
@@ -1096,7 +1108,7 @@ shared_folder = "virtio-9p"
             ),
             (
                 "base = \"linux/mint-base.qcow2\"",
-                "base = \"/tmp/mint.qcow2\"",
+                &format!("base = \"{}\"", absolute("/tmp/mint.qcow2")),
                 "relative path",
             ),
             ("kind = \"qcow2\"", "kind = \"vhdx\"", "image.kind"),
@@ -1139,15 +1151,12 @@ shared_folder = "virtio-9p"
 
     #[test]
     fn parses_local_config_and_anchors_relative_roots() {
+        let run_root = absolute("/var/tmp/qol-runs");
+        let ubuntu = absolute("/srv/images/ubuntu.qcow2");
         let config = parse_local_config(
-            r#"
-image_root = "images"
-run_root = "/var/tmp/qol-runs"
-
-[images]
-"linux/mint" = "mint/base.qcow2"
-"linux/ubuntu" = "/srv/images/ubuntu.qcow2"
-"#,
+            &format!(
+                "image_root = \"images\"\nrun_root = \"{run_root}\"\n\n[images]\n\"linux/mint\" = \"mint/base.qcow2\"\n\"linux/ubuntu\" = \"{ubuntu}\"\n"
+            ),
             Path::new("/home/me/.config/qol"),
         )
         .unwrap();
@@ -1155,14 +1164,14 @@ run_root = "/var/tmp/qol-runs"
             config.image_root,
             Some(PathBuf::from("/home/me/.config/qol/images"))
         );
-        assert_eq!(config.run_root, Some(PathBuf::from("/var/tmp/qol-runs")));
+        assert_eq!(config.run_root, Some(PathBuf::from(run_root)));
         assert_eq!(
             config.images["linux/mint"],
             LocalImage::Path(PathBuf::from("mint/base.qcow2"))
         );
         assert_eq!(
             config.images["linux/ubuntu"],
-            LocalImage::Path(PathBuf::from("/srv/images/ubuntu.qcow2"))
+            LocalImage::Path(PathBuf::from(ubuntu))
         );
     }
 
@@ -1460,19 +1469,27 @@ run_root = "/var/tmp/qol-runs"
     fn verified_registration_writer_preserves_config_and_publishes_typed_entry() {
         let root = tempdir().unwrap();
         let config_path = root.path().join("dev-envs.toml");
+        let images = root.path().join("images");
         fs::write(
             &config_path,
-            "# keep me\nimage_root = \"/images\"\n\n[images]\n\"linux/debian\" = \"debian.qcow2\"\n",
+            format!(
+                "# keep me\nimage_root = {}\n\n[images]\n\"linux/debian\" = \"debian.qcow2\"\n",
+                toml_path(&images)
+            ),
         )
         .unwrap();
         let registration = VerifiedImageRegistration {
-            path: PathBuf::from("/images/verified/images/")
+            path: images
+                .join("verified")
+                .join("images")
                 .join(format!("{}.qcow2", "b".repeat(64))),
             revision: "mint-22.3-qol-1".to_string(),
             sha256: "b".repeat(64),
             size_bytes: 1234,
             run_id: "image-import-123".to_string(),
-            report: PathBuf::from("/images/verified/imports/")
+            report: images
+                .join("verified")
+                .join("imports")
                 .join("image-import-123")
                 .join("report.json"),
             provenance: VERIFIED_IMAGE_PROVENANCE.to_string(),
@@ -1514,10 +1531,10 @@ run_root = "/var/tmp/qol-runs"
         fs::write(
             &config_path,
             format!(
-                "[images]\n[images.\"linux/other\"]\npath = \"{}\"\nrevision = \"r\"\nsha256 = \"{}\"\nsize_bytes = 1\nrun_id = \"image-import-000\"\nreport = \"{}\"\nprovenance = \"{VERIFIED_IMAGE_PROVENANCE}\"\n",
-                other_environment.display(),
+                "[images]\n[images.\"linux/other\"]\npath = {}\nrevision = \"r\"\nsha256 = \"{}\"\nsize_bytes = 1\nrun_id = \"image-import-000\"\nreport = {}\nprovenance = \"{VERIFIED_IMAGE_PROVENANCE}\"\n",
+                toml_path(&other_environment),
                 "c".repeat(64),
-                root.path().join("report.json").display(),
+                toml_path(&root.path().join("report.json")),
             ),
         )
         .unwrap();

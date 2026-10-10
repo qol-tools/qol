@@ -6,7 +6,7 @@ icon = "alt-tab"
 description = "Better alt-tab experience with window previews"
 version = "0.95.2"
 author = "KMRH47"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 [config.scope]
 switchable_panels = "os"

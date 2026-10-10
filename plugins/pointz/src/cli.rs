@@ -26,6 +26,7 @@ trait Operations: Clone + Send + Sync + 'static {
     fn send_action(&self, action: &str) -> bool;
     fn send_kill(&self) -> bool;
     fn open_settings(&self);
+    fn allow_firewall(&self) -> Result<String, String>;
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +48,10 @@ impl Operations for ProductionOperations {
 
     fn open_settings(&self) {
         crate::qol::open_settings();
+    }
+
+    fn allow_firewall(&self) -> Result<String, String> {
+        crate::firewall::allow()
     }
 }
 
@@ -71,6 +76,7 @@ where
         .about("Run and control the PointZ remote-input server.")
         .default_command(["server"])
         .command(server_command(operations.clone(), Arc::clone(&args)))
+        .command(firewall_command(operations.clone()))
         .command(action_group(operations.clone(), Arc::clone(&args)))
         .command(legacy_command(
             "kill",
@@ -107,6 +113,29 @@ where
         .output("Lifecycle or daemon-delivery diagnostics are written to stderr.")
         .exit_behavior("Runs until stopped when selected by the no-argument default.")
         .run_result(move |_| Ok(run_legacy(&operations, &args)))
+}
+
+fn firewall_command<O>(operations: O) -> Command
+where
+    O: Operations,
+{
+    Command::new("allow-firewall")
+        .about("Add a host firewall rule that admits the PointZ UDP ports.")
+        .usage(format!("{PLUGIN_ID} allow-firewall"))
+        .detail("Asks for administrator approval, then adds or repairs the rule.")
+        .detail("Where PointZ does not manage the firewall, it says so and changes nothing.")
+        .output("A confirmation on stdout, or the reason on stderr.")
+        .exit_behavior("Exits non-zero if the rule could not be added.")
+        .run_result(move |_| {
+            Ok(match operations.allow_firewall() {
+                Ok(message) => CommandResult::success(format!("{message}\n")),
+                Err(error) => CommandResult::new(
+                    "",
+                    format!("[pointz] {error}\n"),
+                    qol_headless::EXIT_RUNTIME_ERROR,
+                ),
+            })
+        })
 }
 
 fn action_group<O>(operations: O, args: Arc<Vec<String>>) -> Command
@@ -227,6 +256,7 @@ mod tests {
         secret_load_or_create: AtomicUsize,
         input_initialized: AtomicUsize,
         udp_bound: AtomicUsize,
+        firewall: AtomicUsize,
     }
 
     #[derive(Clone)]
@@ -262,6 +292,15 @@ mod tests {
 
         fn open_settings(&self) {
             self.calls.settings.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn allow_firewall(&self) -> Result<String, String> {
+            self.calls.firewall.fetch_add(1, Ordering::SeqCst);
+            if self.daemon_available.load(Ordering::SeqCst) {
+                Ok("allowed".into())
+            } else {
+                Err("refused".into())
+            }
         }
     }
 
@@ -301,6 +340,7 @@ mod tests {
             "{args:?}"
         );
         assert_eq!(calls.udp_bound.load(Ordering::SeqCst), 0, "{args:?}");
+        assert_eq!(calls.firewall.load(Ordering::SeqCst), 0, "{args:?}");
         assert!(
             calls
                 .daemon_actions
@@ -309,6 +349,25 @@ mod tests {
                 .is_empty(),
             "{args:?}"
         );
+    }
+
+    #[test]
+    fn allow_firewall_runs_only_its_own_operation_and_reports_failure() {
+        let cases = [
+            (true, EXIT_SUCCESS, "allowed\n", ""),
+            (false, 1, "", "[pointz] refused\n"),
+        ];
+        for (succeeds, exit_code, stdout, stderr) in cases {
+            let (operations, calls, available) = sentinel();
+            available.store(succeeds, Ordering::SeqCst);
+            let result = execute(operations, &["allow-firewall"]);
+            assert_eq!(result.exit_code, exit_code, "succeeds={succeeds}");
+            assert_eq!(result.stdout, stdout, "succeeds={succeeds}");
+            assert_eq!(result.stderr, stderr, "succeeds={succeeds}");
+            assert_eq!(calls.firewall.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.server.load(Ordering::SeqCst), 0);
+            assert!(calls.daemon_actions.lock().unwrap().is_empty());
+        }
     }
 
     #[test]

@@ -90,7 +90,7 @@ pub fn run(store: &Store, notes_runs_kept: usize) -> Result<DistillReport> {
     }
 
     let _lock = DistillLock::acquire(store, "distill")?.ok_or_else(|| anyhow!(BUSY_MESSAGE))?;
-    let name = crate::text::now_iso();
+    let name = crate::platform::run_dir_name(&crate::text::now_iso());
     let notes_root = store.notes_root();
     let tmp = notes_root.join(format!(".tmp-{name}"));
     std::fs::create_dir_all(&tmp)?;
@@ -293,7 +293,7 @@ mod tests {
     ];
 
     fn seed_run(store: &Store, name: &str) {
-        let run = store.notes_root().join(name);
+        let run = store.notes_root().join(crate::platform::run_dir_name(name));
         std::fs::create_dir_all(&run).unwrap();
         std::fs::write(run.join("notes.jsonl"), "{\"key\":\"n\"}\n").unwrap();
     }
@@ -406,10 +406,14 @@ mod tests {
         let survivors = survivor_runs(&store);
         assert_eq!(
             survivors,
-            vec!["2020-08-05T09:00:00.000Z".to_string(), new_run.clone()]
+            vec![
+                crate::platform::run_dir_name("2020-08-05T09:00:00.000Z"),
+                new_run.clone()
+            ]
         );
         for name in &OLD_RUNS[..4] {
-            assert!(!store.notes_root().join(name).exists(), "{name}");
+            let run = store.notes_root().join(crate::platform::run_dir_name(name));
+            assert!(!run.exists(), "{name}");
         }
         let report_path = store.notes_root().join(&new_run).join("report.json");
         let report_json: serde_json::Value =
@@ -436,7 +440,8 @@ mod tests {
         let new_run = report.run.clone().unwrap();
         assert_eq!(survivor_runs(&store).len(), 6);
         for name in OLD_RUNS {
-            assert!(store.notes_root().join(name).exists(), "{name}");
+            let run = store.notes_root().join(crate::platform::run_dir_name(name));
+            assert!(run.exists(), "{name}");
         }
         assert!(store.notes_root().join(new_run).exists());
     }

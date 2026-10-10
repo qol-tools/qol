@@ -18,6 +18,7 @@ serde_json.workspace = true
 qol-headless.workspace = true
 qol-plugin-daemon.workspace = true
 qol-apps.workspace = true
+qol-platform.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
 workspace-hack.workspace = true
@@ -34,6 +35,23 @@ wait-timeout = "0.2"
 qol-process.workspace = true
 trash = "5"
 wait-timeout = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+qol-app-icon.workspace = true
+qol-process.workspace = true
+qol-windowing.workspace = true
+trash = "5"
+windows = { version = "0.61", features = [
+  "ApplicationModel",
+  "Management_Deployment",
+] }
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 qol-conventions.workspace = true

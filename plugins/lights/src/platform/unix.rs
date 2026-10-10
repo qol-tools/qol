@@ -4,6 +4,10 @@ use std::path::Path;
 
 use super::SerialAccess;
 
+pub(crate) fn serial_port_present(path: &str) -> bool {
+    Path::new(path).exists()
+}
+
 pub(super) fn inspect_serial_access(path: &str) -> SerialAccess {
     let bytes = Path::new(path).as_os_str().as_bytes();
     let Ok(path_c) = CString::new(bytes) else {

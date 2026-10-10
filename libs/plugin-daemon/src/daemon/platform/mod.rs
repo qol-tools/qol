@@ -4,6 +4,9 @@ mod fallback;
 mod unix;
 
 #[cfg(not(unix))]
-pub use fallback::*;
+use fallback as active;
 #[cfg(unix)]
-pub use unix::*;
+use unix as active;
+
+pub(super) use active::{fallback_socket_dir, inherited_listener, remove_socket_file};
+pub use active::{inherited_port_fd, inherited_primary_port_fd, restore_cloexec};

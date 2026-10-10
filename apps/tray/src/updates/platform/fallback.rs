@@ -1,7 +1,8 @@
 use anyhow::Result;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::daemon::EventBus;
+use crate::plugins::PluginManager;
 
 use super::InstallKind;
 
@@ -18,7 +19,10 @@ pub(super) fn detect_install_kind() -> InstallKind {
 }
 
 #[allow(clippy::unused_async)]
-pub(super) async fn download_and_install(_events: Arc<EventBus>) -> Result<()> {
+pub(super) async fn download_and_install(
+    _events: Arc<EventBus>,
+    _plugin_manager: Arc<Mutex<PluginManager>>,
+) -> Result<()> {
     let _ = InstallKind::detect();
     anyhow::bail!("self-update is unavailable on this platform")
 }

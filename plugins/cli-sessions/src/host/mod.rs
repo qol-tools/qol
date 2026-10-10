@@ -1,5 +1,7 @@
 pub mod kitty;
 
+use std::sync::Arc;
+
 pub use qol_terminal_sessions::SessionFacts as Pane;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
@@ -10,6 +12,10 @@ pub trait TerminalHost {
         Some(true)
     }
     fn focus(&self, target: &SessionBinding) -> anyhow::Result<()>;
+}
+
+pub fn system() -> Arc<dyn TerminalHost + Send + Sync> {
+    Arc::new(kitty::Kitty::default())
 }
 
 pub fn kitty_session_id(window_id: u64) -> SessionId {
@@ -25,7 +31,10 @@ pub fn kitty_binding(window_id: u64, root_pid: i32) -> anyhow::Result<SessionBin
 }
 
 pub fn project_of(cwd: &str) -> String {
-    let project = cwd.rsplit('/').find(|s| !s.is_empty()).unwrap_or(cwd);
+    let project = cwd
+        .rsplit(['/', '\\'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(cwd);
     if project.chars().any(|character| character.is_control()) {
         return String::new();
     }
@@ -38,7 +47,15 @@ mod tests {
 
     #[test]
     fn project_fallback_rejects_corrupted_terminal_cwds() {
-        assert_eq!(project_of("/work/project"), "project");
-        assert_eq!(project_of("/Users/kaho/\u{1}"), "");
+        let cases = [
+            ("/work/project", "project"),
+            ("/work/project/", "project"),
+            (r"C:\Users\me\project\", "project"),
+            (r"C:\", "C:"),
+            ("/Users/kaho/\u{1}", ""),
+        ];
+        for (cwd, expected) in cases {
+            assert_eq!(project_of(cwd), expected, "{cwd:?}");
+        }
     }
 }

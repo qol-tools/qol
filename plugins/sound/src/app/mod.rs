@@ -824,6 +824,10 @@ mod tests {
             return;
         }
         println!("{PROBE_CHILD_RAN}");
+        let backend_ignores_isolation = qol_audio::devices::list_outputs().is_ok();
+        if backend_ignores_isolation {
+            return;
+        }
         match dispatch("reload", &serde_json::Value::Null) {
             ReadResult::Command(Command::Reload) => {}
             ReadResult::Error(message) => {

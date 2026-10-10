@@ -3096,6 +3096,7 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::test_process::absolute;
     use qol_dev_env::{BootDefinition, EnvironmentDefinition, ImageDefinition, MountDefinition};
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3333,10 +3334,13 @@ mod tests {
         let parsed = parse_up_args(&os_args(&[
             "linux/mint-cinnamon",
             "--dev-worktree",
-            "/worktrees/qol",
+            absolute("/worktrees/qol"),
         ]))
         .unwrap();
-        assert_eq!(parsed.dev_worktree, Some(PathBuf::from("/worktrees/qol")));
+        assert_eq!(
+            parsed.dev_worktree,
+            Some(PathBuf::from(absolute("/worktrees/qol")))
+        );
         assert!(!parsed.windowed);
 
         for args in [
@@ -3344,7 +3348,7 @@ mod tests {
             vec![
                 "linux/mint-cinnamon",
                 "--dev-worktree",
-                "/worktrees/qol",
+                absolute("/worktrees/qol"),
                 "--windowed",
             ],
         ] {
@@ -3356,21 +3360,21 @@ mod tests {
     fn image_import_parser_requires_exact_absolute_inputs() {
         let parsed = parse_image_import_args(&os_args(&[
             "linux/mint-cinnamon",
-            "/images/mint.qcow2",
+            absolute("/images/mint.qcow2"),
             "--run-id",
             "mint-import-1",
             "--worktree",
-            "/worktrees/mint",
+            absolute("/worktrees/mint"),
         ]))
         .unwrap();
         assert_eq!(parsed.environment_id, "linux/mint-cinnamon");
-        assert_eq!(parsed.source, PathBuf::from("/images/mint.qcow2"));
-        assert_eq!(parsed.worktree, PathBuf::from("/worktrees/mint"));
+        assert_eq!(parsed.source, PathBuf::from(absolute("/images/mint.qcow2")));
+        assert_eq!(parsed.worktree, PathBuf::from(absolute("/worktrees/mint")));
         assert_eq!(parsed.run_id.as_deref(), Some("mint-import-1"));
 
         let cases = [
             (
-                vec!["linux/mint-cinnamon", "/images/mint.qcow2"],
+                vec!["linux/mint-cinnamon", absolute("/images/mint.qcow2")],
                 "--worktree is required",
             ),
             (
@@ -3378,14 +3382,14 @@ mod tests {
                     "linux/mint-cinnamon",
                     "relative.qcow2",
                     "--worktree",
-                    "/worktree",
+                    absolute("/worktree"),
                 ],
                 "absolute path",
             ),
             (
                 vec![
                     "linux/mint-cinnamon",
-                    "/images/mint.qcow2",
+                    absolute("/images/mint.qcow2"),
                     "--worktree",
                     "relative",
                 ],
@@ -3394,9 +3398,9 @@ mod tests {
             (
                 vec![
                     "linux/mint-cinnamon",
-                    "/images/mint.qcow2",
+                    absolute("/images/mint.qcow2"),
                     "--worktree",
-                    "/worktree",
+                    absolute("/worktree"),
                     "--run-id",
                     "../escape",
                 ],
@@ -3405,9 +3409,9 @@ mod tests {
             (
                 vec![
                     "linux/mint-cinnamon",
-                    "/images/mint.qcow2",
+                    absolute("/images/mint.qcow2"),
                     "--worktree",
-                    "/worktree",
+                    absolute("/worktree"),
                     "--unknown",
                 ],
                 "unknown image-import option",

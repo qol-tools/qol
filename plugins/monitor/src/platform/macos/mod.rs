@@ -12,6 +12,8 @@ use crate::monitor::PolicyControl;
 use core_graphics::{display_identity, CoreGraphicsSeam};
 use iokit::IokitAvTransport;
 
+pub(crate) use super::unix_signals::install_signal_handlers;
+
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
         name: "macos",
@@ -28,6 +30,10 @@ pub(crate) fn control() -> Control {
         SharedDisplay::new(),
         mode_writes_supported,
     ))
+}
+
+pub(crate) fn native_desktop() -> bool {
+    false
 }
 
 fn mode_writes_supported() -> bool {

@@ -64,7 +64,7 @@ impl IdentitySnapshot {
         let ancestor_symlink = ancestor_has_symlink(path);
         match std::fs::symlink_metadata(path) {
             Ok(m) => {
-                let (dev, ino) = platform::metadata_identity(&m);
+                let (dev, ino) = platform::metadata_identity(path, &m);
                 let modified_ns = m
                     .modified()
                     .ok()
@@ -236,11 +236,22 @@ fn remove_after_package_with(
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
     for (item, snapshot) in plan.items.iter().zip(&plan.snapshots) {
-        if is_primary(item.kind) {
+        if snapshot.exists && !item.path.exists() {
             continue;
         }
-        items.push(item.clone());
-        snapshots.push(snapshot.clone());
+        if !is_primary(item.kind) {
+            items.push(item.clone());
+            snapshots.push(snapshot.clone());
+        } else if item.kind == LeftoverKind::AppBundle
+            && plat.trashes_install_remnant()
+            && item.path.exists()
+        {
+            items.push(Leftover {
+                size_bytes: dir_size(&item.path),
+                ..item.clone()
+            });
+            snapshots.push(IdentitySnapshot::capture(&item.path));
+        }
     }
     let total_bytes = items.iter().map(|l| l.size_bytes).sum();
     let sub = RemovalPlan {
@@ -258,7 +269,7 @@ pub fn app_sizes(apps: &[InstalledApp]) -> std::collections::HashMap<PathBuf, u6
         .collect()
 }
 
-fn dir_size(path: &Path) -> u64 {
+pub(crate) fn dir_size(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return 0;
     };
@@ -272,6 +283,16 @@ fn dir_size(path: &Path) -> u64 {
         return 0;
     };
     entries.flatten().map(|entry| dir_size(&entry.path())).sum()
+}
+
+pub(crate) fn delete_path(path: &Path) -> std::result::Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    let result = if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    result.map_err(|error| error.to_string())
 }
 
 pub fn filter(apps: &[InstalledApp], query: &str) -> Vec<InstalledApp> {
@@ -441,6 +462,7 @@ mod tests {
         running: RefCell<Vec<bool>>,
         removed: RefCell<Vec<(PathBuf, Disposal)>>,
         uninstalled: RefCell<usize>,
+        trashes_remnant: bool,
     }
 
     impl AppPlatform for FakePlat {
@@ -473,6 +495,9 @@ mod tests {
         }
         fn package_index(&self, _inventory: &[InstalledApp]) -> PackageIndex {
             PackageIndex::absent()
+        }
+        fn trashes_install_remnant(&self) -> bool {
+            self.trashes_remnant
         }
         fn uninstall_package(&self, _app: &InstalledApp, _package: &ManagedPackage) -> Result<()> {
             *self.uninstalled.borrow_mut() += 1;
@@ -649,6 +674,79 @@ mod tests {
         let recorded = fake.removed.borrow();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].1, Disposal::Trash);
+    }
+
+    #[test]
+    fn remove_after_package_skips_leftovers_the_package_already_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kept = tmp.path().join("kept");
+        let gone = tmp.path().join("gone");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::create_dir_all(&gone).unwrap();
+        let p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![
+                leftover(kept.to_str().unwrap(), LeftoverKind::Data, MatchKind::Exact),
+                leftover(gone.to_str().unwrap(), LeftoverKind::Data, MatchKind::Exact),
+            ],
+        );
+        std::fs::remove_dir_all(&gone).unwrap();
+        let package =
+            ManagedPackage::parse(PackageManager::Windows, "Foo", PackageScope::User).unwrap();
+        let fake = FakePlat::default();
+
+        let outcome = remove_after_package_with(
+            &fake,
+            &p,
+            Disposal::Trash,
+            &PackageStatus::Managed(package),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.removed, vec![kept]);
+    }
+
+    #[test]
+    fn remove_after_package_trashes_a_changed_install_remnant_only_when_the_platform_asks() {
+        for (trashes_remnant, expected_removed) in [(true, 1), (false, 0)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let install = tmp.path().join("Foo");
+            std::fs::create_dir_all(&install).unwrap();
+            std::fs::write(install.join("foo.exe"), "app").unwrap();
+            let p = plan_with(
+                app("Foo", "com.acme.foo"),
+                vec![leftover(
+                    install.to_str().unwrap(),
+                    LeftoverKind::AppBundle,
+                    MatchKind::Fuzzy,
+                )],
+            );
+            std::fs::remove_file(install.join("foo.exe")).unwrap();
+            std::fs::write(install.join("uninstall.log"), "left behind").unwrap();
+            let package =
+                ManagedPackage::parse(PackageManager::Windows, "Foo", PackageScope::User).unwrap();
+            let fake = FakePlat {
+                trashes_remnant,
+                ..FakePlat::default()
+            };
+
+            let outcome = remove_after_package_with(
+                &fake,
+                &p,
+                Disposal::Delete,
+                &PackageStatus::Managed(package),
+                true,
+            )
+            .unwrap();
+
+            assert_eq!(outcome.removed.len(), expected_removed, "{trashes_remnant}");
+            assert!(fake
+                .removed
+                .borrow()
+                .iter()
+                .all(|(_, disposal)| *disposal == Disposal::Trash));
+        }
     }
 
     #[test]

@@ -2,6 +2,8 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod recorder;
 #[cfg(unix)]
 mod unix;
 #[cfg(target_os = "windows")]
@@ -37,6 +39,12 @@ pub struct AudioDevice {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SavedRecording {
+    pub path: PathBuf,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]

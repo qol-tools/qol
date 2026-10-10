@@ -10,8 +10,10 @@ description = "Shared runtime defaults for checkout and execution."
 type = "string"
 config_key = "tempDir"
 label = "Temp directory"
+description = "Leave empty to use a qol-ide-checkout folder in the system temp directory."
 section = "general"
-default = "/tmp/qol-ide-checkout"
+placeholder = "qol-ide-checkout in the system temp directory"
+default = ""
 
 [section.apps]
 label = "Applications"
@@ -27,16 +29,16 @@ card_description = "Apps that open checked-out paths."
 item_label = "application"
 
 [field.apps.default.idea]
-paths = ["/opt/homebrew/bin/idea", "/usr/local/bin/idea", "/snap/bin/idea-ultimate", "/snap/bin/intellij-idea-ultimate", "~/.local/share/JetBrains/Toolbox/scripts/idea"]
+paths = ["/opt/homebrew/bin/idea", "/usr/local/bin/idea", "/snap/bin/idea-ultimate", "/snap/bin/intellij-idea-ultimate", "~/.local/share/JetBrains/Toolbox/scripts/idea", "%LOCALAPPDATA%\\JetBrains\\Toolbox\\scripts\\idea.cmd", "%LOCALAPPDATA%\\Programs\\IntelliJ IDEA Ultimate\\bin\\idea64.exe", "%LOCALAPPDATA%\\Programs\\IntelliJ IDEA Community Edition\\bin\\idea64.exe", "idea", "idea64"]
 
 [field.apps.default.vscode]
-paths = ["/usr/bin/code", "/opt/homebrew/bin/code", "/snap/bin/code", "/usr/local/bin/code"]
+paths = ["/usr/bin/code", "/opt/homebrew/bin/code", "/snap/bin/code", "/usr/local/bin/code", "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe", "%ProgramFiles%\\Microsoft VS Code\\Code.exe", "code"]
 
 [field.apps.default.cursor]
-paths = ["/opt/homebrew/bin/cursor", "/usr/bin/cursor", "/usr/local/bin/cursor", "~/.local/bin/cursor"]
+paths = ["/opt/homebrew/bin/cursor", "/usr/bin/cursor", "/usr/local/bin/cursor", "~/.local/bin/cursor", "%LOCALAPPDATA%\\Programs\\cursor\\Cursor.exe", "%ProgramFiles%\\Cursor\\Cursor.exe", "cursor"]
 
 [field.apps.default.zed]
-paths = ["/opt/homebrew/bin/zed", "/usr/bin/zed", "~/.local/bin/zed"]
+paths = ["/opt/homebrew/bin/zed", "/usr/bin/zed", "~/.local/bin/zed", "%LOCALAPPDATA%\\Programs\\Zed\\Zed.exe", "%ProgramFiles%\\Zed\\Zed.exe", "zed"]
 
 [field.apps.entry_fields]
 name = "string"

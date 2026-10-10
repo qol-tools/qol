@@ -109,6 +109,7 @@ mod tests {
     struct EnvGuard {
         home: Option<std::ffi::OsString>,
         xdg_config_home: Option<std::ffi::OsString>,
+        _paths: crate::paths::TestPathRootGuard,
     }
 
     impl EnvGuard {
@@ -124,6 +125,7 @@ mod tests {
             Self {
                 home,
                 xdg_config_home,
+                _paths: crate::paths::push_test_path_root(root),
             }
         }
     }

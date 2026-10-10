@@ -1,7 +1,6 @@
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,9 +10,7 @@ use qol_dev_guest::{
     WINDOWS_DEVICE_PATH, WINDOWS_IDENTITY_PATH,
 };
 use qol_headless::DoctorCheckResult;
-use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows_sys::Win32::System::SystemInformation::GetSystemFirmwareTable;
-use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 mod virtio_port;
 
@@ -24,7 +21,6 @@ use qol_dev_guest::server::{parse_run_id, read_identity, read_run_id, serve_fore
 const RAW_SMBIOS_PROVIDER: u32 = u32::from_be_bytes(*b"RSMB");
 const RAW_SMBIOS_HEADER_BYTES: usize = 8;
 const WINDOWS_DESKTOP: &str = "windows";
-const SERVICES_SESSION: u32 = 0;
 const RUNNER_LOG_PATH: &str = r"C:\ProgramData\qol\guest-runner.log";
 const RUNNER_LOG_MAX_BYTES: u64 = 1024 * 1024;
 
@@ -59,7 +55,7 @@ impl GuestRunnerPlatform for Platform {
             || virtio_port::open(&options.device_path),
             &hello,
             |command| {
-                command.creation_flags(CREATE_NO_WINDOW);
+                qol_process::hide_console_window(command);
             },
             log_error,
         )
@@ -116,7 +112,7 @@ fn log_error(error: &anyhow::Error) {
 }
 
 fn current_session() -> GuestSession {
-    let interactive = interactive_session_id();
+    let interactive = qol_platform::native::session::interactive_session_id();
     GuestSession {
         user: env::var("USERNAME").unwrap_or_default(),
         desktop: interactive.map(|_| WINDOWS_DESKTOP.to_string()),
@@ -125,12 +121,6 @@ fn current_session() -> GuestSession {
         runtime_dir: None,
         dbus_session: false,
     }
-}
-
-fn interactive_session_id() -> Option<u32> {
-    let mut session = 0;
-    let ok = unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
-    (ok != 0 && session != SERVICES_SESSION).then_some(session)
 }
 
 fn firmware_run_id() -> Result<String> {

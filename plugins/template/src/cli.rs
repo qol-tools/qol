@@ -84,7 +84,7 @@ fn platform_supported_result(support: crate::platform::PlatformSupport) -> Docto
         "platform_supported",
         format!("{} is not declared by this plugin.", support.name),
     )
-    .with_fix("Run the plugin on Linux or macOS.")
+    .with_fix("Run the plugin on Linux, macOS or Windows.")
 }
 
 #[cfg(test)]
@@ -190,17 +190,12 @@ mod tests {
         let cases = [
             ("linux", true, DoctorStatus::Ok, None),
             ("macos", true, DoctorStatus::Ok, None),
-            (
-                "windows",
-                false,
-                DoctorStatus::Fail,
-                Some("Run the plugin on Linux or macOS."),
-            ),
+            ("windows", true, DoctorStatus::Ok, None),
             (
                 "other",
                 false,
                 DoctorStatus::Fail,
-                Some("Run the plugin on Linux or macOS."),
+                Some("Run the plugin on Linux, macOS or Windows."),
             ),
         ];
 

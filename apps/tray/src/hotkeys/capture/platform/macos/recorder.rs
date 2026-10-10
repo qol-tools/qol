@@ -1,5 +1,5 @@
+use super::super::key_matcher::KeyCombo;
 use super::layout::LayoutSymbols;
-use super::MacCombo;
 use crate::daemon::{DaemonEvent, EventBus};
 use core_graphics::event::CGEventType;
 use qol_hotkeys::grammar::{self, Hotkey, Key};
@@ -61,7 +61,7 @@ impl RecorderHub {
         self.lock().is_some()
     }
 
-    pub(super) fn handle_event(&self, event_type: CGEventType, observed: &MacCombo) {
+    pub(super) fn handle_event(&self, event_type: CGEventType, observed: &KeyCombo) {
         let mut active = self.lock();
         let Some(recording) = active.as_ref() else {
             return;
@@ -97,7 +97,7 @@ fn tap_alive() -> bool {
     super::TAP_PORT.get().is_some() && !super::TAP_RELEASED.load(Ordering::SeqCst)
 }
 
-fn decide(event_type: CGEventType, observed: &MacCombo, layout: &LayoutSymbols) -> Decision {
+fn decide(event_type: CGEventType, observed: &KeyCombo, layout: &LayoutSymbols) -> Decision {
     if !matches!(event_type, CGEventType::KeyDown) {
         return Decision::Ignore;
     }
@@ -153,8 +153,8 @@ mod tests {
     use qol_hotkeys::grammar::{Modifier, NamedKey};
     use std::collections::BTreeSet;
 
-    fn combo(mods: &[Modifier], key: u16) -> MacCombo {
-        MacCombo {
+    fn combo(mods: &[Modifier], key: u16) -> KeyCombo {
+        KeyCombo {
             mods: mods.iter().copied().collect(),
             key,
         }

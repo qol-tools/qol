@@ -117,7 +117,9 @@ fn validate_socket_path_shape(path_value: &str) -> Result<()> {
 }
 
 fn ensure_absolute_socket_path(path: &Path) -> Result<()> {
-    if path.is_absolute() {
+    // Manifests spell sockets Unix style on every OS, and Windows'
+    // `is_absolute` rejects `/tmp/x.sock` for lacking a drive letter.
+    if path.is_absolute() || path.to_str().is_some_and(|text| text.starts_with('/')) {
         return Ok(());
     }
 

@@ -3,6 +3,7 @@ mod cli;
 mod command;
 mod config;
 mod doctor;
+mod firewall;
 mod input;
 mod network;
 mod qol;

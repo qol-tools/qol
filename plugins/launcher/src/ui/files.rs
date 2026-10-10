@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -381,15 +381,19 @@ pub fn path_label(path: &Path, home: Option<&Path>, link: Option<&Path>) -> Stri
 pub fn spaced_path(path: &Path, home: Option<&Path>, max: usize) -> String {
     let (first, rest) = match home.and_then(|home| path.strip_prefix(home).ok()) {
         Some(rest) => ("~", rest),
+        None if matches!(path.components().next(), Some(Component::Prefix(_))) => ("", path),
         None => ("/", path.strip_prefix("/").unwrap_or(path)),
     };
     let segments: Vec<String> = rest
         .components()
+        .filter(|part| !matches!(part, Component::RootDir))
         .map(|part| part.as_os_str().to_string_lossy().into_owned())
         .collect();
     let joined = shorten(first, segments, max).join(" / ");
     if joined.is_empty() {
         first.to_owned()
+    } else if first.is_empty() {
+        joined
     } else if first == "~" {
         format!("~ / {joined}")
     } else {

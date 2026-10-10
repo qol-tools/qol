@@ -169,6 +169,23 @@ mod command_rules {
     }
 
     #[test]
+    fn validate_accepts_unix_style_absolute_daemon_socket() {
+        let manifest = PluginManifest {
+            daemon: Some(DaemonConfig {
+                enabled: true,
+                command: "qol-pointz".to_string(),
+                socket: Some("/tmp/qol-p.sock".to_string()),
+                port: None,
+                extra_ports: Vec::new(),
+                inherit_listener: false,
+            }),
+            ..base_manifest()
+        };
+
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
     fn validate_rejects_script_runtime_command() {
         let toml = r#"
             [plugin]

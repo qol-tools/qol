@@ -62,3 +62,11 @@ pub(crate) fn readback_matches(
 ) -> bool {
     true
 }
+
+pub(crate) fn display_scale_factor(_display: gpui::DisplayId) -> f32 {
+    1.0
+}
+
+pub(crate) fn monitor_scale(_monitor: &gpui::Bounds<gpui::Pixels>) -> f32 {
+    1.0
+}

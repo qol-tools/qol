@@ -29,6 +29,13 @@ qol-config.workspace = true
 qol-fs.workspace = true
 workspace-hack.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+] }
+
 [build-dependencies]
 qol-conventions.workspace = true
 

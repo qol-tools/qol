@@ -14,6 +14,9 @@ const OPEN: &str = "open";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
+    if let Some(result) = qol_terminal_sessions::console::helper(&args) {
+        return result.emit();
+    }
     if let Some((command, rest)) = args.split_first() {
         if command == crate::park::PARK {
             return park(rest).emit();

@@ -1,4 +1,15 @@
-use std::ffi::c_int;
+use std::ffi::{c_int, c_void};
+
+use qol_platform::native::wide::wide_nul;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, ReleaseCapture, VIRTUAL_KEY, VK_ESCAPE, VK_MENU, VK_SHIFT,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN};
 
 #[link(name = "shell32")]
 extern "system" {
@@ -6,15 +17,20 @@ extern "system" {
 }
 
 pub fn is_modifier_held() -> bool {
-    false
+    key_held(VK_MENU)
 }
 
 pub fn is_shift_held() -> bool {
-    false
+    key_held(VK_SHIFT)
 }
 
 pub fn is_escape_held() -> bool {
-    false
+    key_held(VK_ESCAPE)
+}
+
+fn key_held(key: VIRTUAL_KEY) -> bool {
+    let state = unsafe { GetAsyncKeyState(i32::from(key)) };
+    state as u16 & 0x8000 != 0
 }
 
 pub fn set_accessory_policy() {}
@@ -39,10 +55,40 @@ pub fn has_process_focus() -> bool {
     true
 }
 
-pub fn square_window_corners(_window: &mut gpui::Window) {}
+pub fn square_window_corners(window: &mut gpui::Window) {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let preference = DWMWCP_DONOTROUND;
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            handle.hwnd.get() as HWND,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            (&preference as *const i32).cast::<c_void>(),
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+}
 
 pub fn start_window_move(window: &mut gpui::Window) {
-    window.start_window_move();
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    unsafe {
+        ReleaseCapture();
+        PostMessageW(
+            handle.hwnd.get() as HWND,
+            WM_NCLBUTTONDOWN,
+            HTCAPTION as usize,
+            0,
+        );
+    }
 }
 
 pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdentity {
@@ -54,17 +100,14 @@ pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdent
 }
 
 pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {
-    let mut app_id: Vec<u16> = qol_conventions::SETTINGS_SURFACE_APP_ID
-        .encode_utf16()
-        .collect();
-    app_id.push(0);
+    let app_id = wide_nul(qol_conventions::SETTINGS_SURFACE_APP_ID);
     unsafe {
         let _ = SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
     }
 }
 
-pub(crate) fn native_scale_for(_window: &gpui::Window) -> f32 {
-    1.0
+pub(crate) fn native_scale_for(window: &gpui::Window) -> f32 {
+    window.scale_factor()
 }
 
 pub(crate) fn native_readback_position(_title: &str) -> Option<(i32, i32)> {
@@ -76,4 +119,27 @@ pub(crate) fn readback_matches(
     _native: crate::window::NativeDesktopBounds,
 ) -> bool {
     true
+}
+
+pub(crate) fn display_scale_factor(display: gpui::DisplayId) -> f32 {
+    qol_windowing::platform::windows::monitors()
+        .get(u32::from(display) as usize)
+        .map_or(1.0, |monitor| monitor.scale)
+}
+
+pub(crate) fn monitor_scale(monitor: &gpui::Bounds<gpui::Pixels>) -> f32 {
+    let wanted = [
+        monitor.origin.x.to_f64(),
+        monitor.origin.y.to_f64(),
+        monitor.size.width.to_f64(),
+        monitor.size.height.to_f64(),
+    ]
+    .map(f64::round);
+    qol_windowing::platform::windows::monitors()
+        .into_iter()
+        .find(|candidate| {
+            let bounds = candidate.bounds;
+            [bounds.x, bounds.y, bounds.width, bounds.height].map(f64::round) == wanted
+        })
+        .map_or(1.0, |candidate| candidate.scale)
 }

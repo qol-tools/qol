@@ -1,35 +1,65 @@
-use anyhow::{anyhow, Result};
+mod focus;
+mod raster;
+mod session;
 
-use crate::config::{Config, PLUGIN_ID};
-use crate::cursor::{CursorEffect, RunControl};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use anyhow::Result;
+
+use crate::config::Config;
+use crate::cursor::CursorEffect;
+
+use super::shake::{self, ShakeBackend};
 use super::CursorPlatform;
 
 pub struct Platform;
 
+static EXTERNAL_STOP: AtomicBool = AtomicBool::new(false);
+
 impl CursorPlatform for Platform {
     fn create_effect(&self) -> Box<dyn CursorEffect> {
-        Box::new(UnsupportedEffect)
+        shake::create_effect(WindowsBackend)
     }
 
-    fn install_signal_handlers(&self) {}
+    fn install_signal_handlers(&self) {
+        let listener = std::thread::Builder::new()
+            .name("os-themes-stop".into())
+            .spawn(|| match qol_process::wait_for_stop_request() {
+                Ok(()) => EXTERNAL_STOP.store(true, Ordering::Relaxed),
+                Err(error) => log::warn!("stop request listener unavailable: {error}"),
+            });
+        if let Err(error) = listener {
+            log::warn!("stop request listener thread failed: {error}");
+        }
+    }
 
-    fn reset_external_stop(&self) {}
+    fn reset_external_stop(&self) {
+        EXTERNAL_STOP.store(false, Ordering::SeqCst);
+    }
 
     fn external_stop_requested(&self) -> bool {
-        false
+        EXTERNAL_STOP.load(Ordering::Relaxed)
     }
 
-    fn recover(&self) {}
+    fn recover(&self) {
+        session::reload_system_cursors();
+    }
 }
 
-struct UnsupportedEffect;
+struct WindowsBackend;
 
-impl CursorEffect for UnsupportedEffect {
-    fn run(&self, _config: &Config, control: &dyn RunControl) -> Result<()> {
-        let _ = control.should_stop();
-        Err(anyhow!(
-            "{PLUGIN_ID}: cursor effects are not implemented on Windows"
-        ))
+impl ShakeBackend for WindowsBackend {
+    type Session = session::CursorSession;
+    type Focus = focus::GameFocusDetector;
+
+    fn open_session(&self, config: &Config) -> Result<session::CursorSession> {
+        qol_windowing::platform::windows::ensure_dpi_awareness();
+        log::info!("started mode=system-cursors");
+        Ok(session::CursorSession::open(config.scale_factor))
+    }
+
+    fn open_focus(&self) -> Result<focus::GameFocusDetector> {
+        qol_windowing::platform::windows::ensure_dpi_awareness();
+        Ok(focus::GameFocusDetector)
     }
 }

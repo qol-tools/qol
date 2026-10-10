@@ -598,7 +598,7 @@ mod tests {
     }
 
     fn seed_run(store: &Store, name: &str, body: &str) {
-        let run = store.notes_root().join(name);
+        let run = store.notes_root().join(crate::platform::run_dir_name(name));
         std::fs::create_dir_all(&run).unwrap();
         std::fs::write(run.join("notes.jsonl"), body).unwrap();
     }
@@ -637,19 +637,23 @@ mod tests {
                 seed_run(&store, name, &format!("{{\"key\":\"n{position}\"}}\n"));
             }
             let expected: Vec<String> = if keep == 0 || keep >= names.len() {
-                names.iter().map(|name| (*name).to_string()).collect()
+                names
+                    .iter()
+                    .map(|name| crate::platform::run_dir_name(name))
+                    .collect()
             } else {
                 names[names.len() - keep..]
                     .iter()
-                    .map(|name| (*name).to_string())
+                    .map(|name| crate::platform::run_dir_name(name))
                     .collect()
             };
             let removed = store.prune_notes_runs(keep).unwrap();
             assert_eq!(removed, names.len() - expected.len(), "keep {keep}");
             assert_eq!(run_names(&store), expected, "keep {keep}");
             for (position, name) in names.iter().enumerate() {
-                let path = store.notes_root().join(name);
-                if expected.iter().any(|kept| kept.as_str() == *name) {
+                let name = crate::platform::run_dir_name(name);
+                let path = store.notes_root().join(&name);
+                if expected.contains(&name) {
                     let body = std::fs::read_to_string(path.join("notes.jsonl")).unwrap();
                     assert_eq!(
                         body,
@@ -672,7 +676,7 @@ mod tests {
         assert_eq!(store.prune_notes_runs(0).unwrap(), 0);
         assert_eq!(
             run_names(&store),
-            vec!["2026-08-05T09:00:00.000Z".to_string()]
+            vec![crate::platform::run_dir_name("2026-08-05T09:00:00.000Z")]
         );
     }
 
@@ -683,7 +687,11 @@ mod tests {
         std::fs::create_dir_all(&notes).unwrap();
         let store = Store::resolve(Some(dir.0.as_path())).unwrap();
         std::fs::write(notes.join("loose.txt"), "loose\n").unwrap();
-        std::fs::create_dir_all(notes.join(".tmp-2026-09-14T01:00:00.000Z")).unwrap();
+        let stale_tmp = format!(
+            ".tmp-{}",
+            crate::platform::run_dir_name("2026-09-14T01:00:00.000Z")
+        );
+        std::fs::create_dir_all(notes.join(&stale_tmp)).unwrap();
         std::fs::create_dir_all(notes.join("not-a-run")).unwrap();
         std::fs::create_dir_all(notes.join("2026-9-01T")).unwrap();
         std::fs::create_dir_all(notes.join("notdigits")).unwrap();
@@ -699,13 +707,17 @@ mod tests {
 
         assert_eq!(store.prune_notes_runs(1).unwrap(), 1);
         assert!(notes.join("loose.txt").exists());
-        assert!(notes.join(".tmp-2026-09-14T01:00:00.000Z").exists());
+        assert!(notes.join(&stale_tmp).exists());
         assert!(notes.join("not-a-run").exists());
         assert!(notes.join("2026-9-01T").exists());
         assert!(notes.join("notdigits").exists());
         assert!(notes.join("2026-09-01X00").exists());
-        assert!(notes.join("2026-08-02T09:00:00.000Z").exists());
-        assert!(!notes.join("2026-08-01T09:00:00.000Z").exists());
+        assert!(notes
+            .join(crate::platform::run_dir_name("2026-08-02T09:00:00.000Z"))
+            .exists());
+        assert!(!notes
+            .join(crate::platform::run_dir_name("2026-08-01T09:00:00.000Z"))
+            .exists());
         #[cfg(unix)]
         {
             let link_name = notes.join("2026-07-15T09:00:00.000Z");
@@ -726,7 +738,7 @@ mod tests {
         std::fs::create_dir_all(&notes).unwrap();
         let old_time = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
         let backdate = |path: &Path| {
-            std::fs::File::open(path)
+            crate::platform::open_for_times(path)
                 .unwrap()
                 .set_modified(old_time)
                 .unwrap();
@@ -736,7 +748,10 @@ mod tests {
         let catchall = dir.0.join(".distill-catchall.ts");
         let lock = store.distill_lock_path();
         let units = store.units_path();
-        let stale_tmp_dir = notes.join(".tmp-2026-09-14T01:00:00.000Z");
+        let stale_tmp_dir = notes.join(format!(
+            ".tmp-{}",
+            crate::platform::run_dir_name("2026-09-14T01:00:00.000Z")
+        ));
         let fresh_tmp_dir = notes.join(".tmp-fresh");
         for file in [&stale_temp, &fresh_temp, &catchall, &lock, &units] {
             std::fs::write(file, b"x").unwrap();
@@ -809,9 +824,9 @@ mod tests {
                 let minute = lcg(&mut state) % 60;
                 let second = lcg(&mut state) % 60;
                 let millis = lcg(&mut state) % 1000;
-                names.push(format!(
+                names.push(crate::platform::run_dir_name(&format!(
                     "2026-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
-                ));
+                )));
             }
             names.sort();
             names.dedup();

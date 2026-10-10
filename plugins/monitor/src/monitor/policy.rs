@@ -260,6 +260,10 @@ impl<D: Send + Sync, G: GammaStateControl> GammaStateControl for PolicyControl<D
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_dir as symlink;
     use std::sync::Arc;
 
     fn handle(id: &str, connector: &str) -> DisplayHandle {
@@ -901,8 +905,7 @@ mod tests {
             let adapter = adapters.join(link);
             std::fs::create_dir_all(&adapter).unwrap();
             std::fs::write(adapter.join("name"), name).unwrap();
-            std::os::unix::fs::symlink(format!("../adapters/{link}"), connector_dir.join(link))
-                .unwrap();
+            symlink(format!("../adapters/{link}"), connector_dir.join(link)).unwrap();
         }
         dir
     }

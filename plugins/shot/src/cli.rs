@@ -222,8 +222,8 @@ fn plugin_config_paths() -> Result<Vec<PathBuf>> {
 }
 
 fn runtime_dirs_check() -> Result<DoctorCheckResult> {
-    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
-    check_runtime_dirs(&runtime_dirs_for_home(Path::new(&home)))
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("home directory is not known"))?;
+    check_runtime_dirs(&runtime_dirs_for_home(&home))
 }
 
 struct RuntimeDir {
@@ -262,7 +262,7 @@ fn check_runtime_dirs(dirs: &[RuntimeDir]) -> Result<DoctorCheckResult> {
             continue;
         }
 
-        if metadata.permissions().readonly() {
+        if crate::platform::directory_is_read_only(&metadata) {
             failures.push(format!("{} is read-only.", dir.path.display()));
         }
     }

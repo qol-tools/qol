@@ -311,7 +311,7 @@ fn external_services_result(
 fn audio_capture_check() -> Result<DoctorCheckResult> {
     if let Err(error) = verify_audio_input() {
         return Ok(DoctorCheckResult::fail("audio_capture", error.to_string())
-            .with_fix("verify PipeWire or PulseAudio is running and reconnect the microphone"));
+            .with_fix(platform::audio_service_fix()));
     }
     let devices = audio_input_devices()?;
     if devices.is_empty() {

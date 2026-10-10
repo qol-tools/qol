@@ -12,6 +12,10 @@ use qol_headless::{Command, HeadlessApp, PlainTextOutput};
 use crate::PLUGIN_ID;
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
+    let args: Vec<String> = args.into_iter().collect();
+    if let Some(result) = qol_terminal_sessions::console::helper(&args) {
+        return result.emit();
+    }
     app().run(args)
 }
 

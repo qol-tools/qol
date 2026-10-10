@@ -400,7 +400,7 @@ impl DirectWriteState {
             &self.custom_font_collection
         };
         let fontset = unsafe { collection.GetFontSet().log_err()? };
-        let font = unsafe {
+        let matching = |family_name: &str| unsafe {
             fontset
                 .GetMatchingFonts(
                     &HSTRING::from(family_name),
@@ -408,8 +408,24 @@ impl DirectWriteState {
                     DWRITE_FONT_STRETCH_NORMAL,
                     font_style.into(),
                 )
-                .log_err()?
+                .log_err()
         };
+        let mut family_name = family_name.to_owned();
+        let mut font = matching(&family_name)?;
+        if unsafe { font.GetFontCount() } == 0 {
+            if let Some(alias) = unsafe {
+                weight_stretch_style_family(
+                    &fontset,
+                    &family_name,
+                    font_weight.into(),
+                    font_style.into(),
+                    &self.components.locale,
+                )
+            } {
+                font = matching(&alias)?;
+                family_name = alias;
+            }
+        }
         let total_number = unsafe { font.GetFontCount() };
         for index in 0..total_number {
             let Some(font_face_ref) = (unsafe { font.GetFontFaceReference(index).log_err() })
@@ -430,7 +446,7 @@ impl DirectWriteState {
             let fallbacks = font_fallbacks
                 .and_then(|fallbacks| self.generate_font_fallbacks(fallbacks).log_err().flatten());
             let font_info = FontInfo {
-                font_family: family_name.to_owned(),
+                font_family: family_name.clone(),
                 font_face,
                 features: direct_write_features,
                 fallbacks,
@@ -1783,6 +1799,70 @@ const fn make_open_type_tag(tag_name: &str) -> u32 {
 #[inline]
 const fn make_direct_write_tag(tag_name: &str) -> DWRITE_FONT_FEATURE_TAG {
     DWRITE_FONT_FEATURE_TAG(make_open_type_tag(tag_name))
+}
+
+unsafe fn weight_stretch_style_family(
+    fontset: &IDWriteFontSet,
+    typographic_family: &str,
+    weight: DWRITE_FONT_WEIGHT,
+    style: DWRITE_FONT_STYLE,
+    locale: &str,
+) -> Option<String> {
+    let value = HSTRING::from(typographic_family);
+    let any_locale = HSTRING::new();
+    let property = DWRITE_FONT_PROPERTY {
+        propertyId: DWRITE_FONT_PROPERTY_ID_TYPOGRAPHIC_FAMILY_NAME,
+        propertyValue: PCWSTR(value.as_ptr()),
+        localeName: PCWSTR(any_locale.as_ptr()),
+    };
+    let matches = unsafe { fontset.GetMatchingFonts2(&[property]) }.log_err()?;
+    let mut best: Option<(i32, String)> = None;
+    for index in 0..unsafe { matches.GetFontCount() } {
+        let mut exists = BOOL(0);
+        let mut names = None;
+        let read = unsafe {
+            matches.GetPropertyValues3(
+                index,
+                DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FAMILY_NAME,
+                &mut exists,
+                &mut names,
+            )
+        };
+        if read.log_err().is_none() || !exists.as_bool() {
+            continue;
+        }
+        let Some(name) = names.and_then(|names| get_name(names, locale).log_err()) else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case(typographic_family) {
+            return Some(name);
+        }
+        let Some(face) = unsafe {
+            matches
+                .GetFontFaceReference(index)
+                .and_then(|reference| reference.CreateFontFace())
+        }
+        .log_err() else {
+            continue;
+        };
+        let distance = unsafe { face_distance(&face, weight, style) };
+        if best.as_ref().is_none_or(|(best, _)| distance < *best) {
+            best = Some((distance, name));
+        }
+    }
+    best.map(|(_, name)| name)
+}
+
+unsafe fn face_distance(
+    face: &IDWriteFontFace3,
+    weight: DWRITE_FONT_WEIGHT,
+    style: DWRITE_FONT_STYLE,
+) -> i32 {
+    let (face_weight, face_stretch, face_style) =
+        unsafe { (face.GetWeight(), face.GetStretch(), face.GetStyle()) };
+    let style_distance = if face_style == style { 0 } else { 100_000 };
+    let stretch_distance = (face_stretch.0 - DWRITE_FONT_STRETCH_NORMAL.0).abs() * 1_000;
+    style_distance + stretch_distance + (face_weight.0 - weight.0).abs()
 }
 
 #[inline]

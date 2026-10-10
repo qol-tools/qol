@@ -1,10 +1,11 @@
 use crate::app::AltTabApp;
 use crate::config::AltTabConfig;
+use crate::picker::create::PICKER_WINDOW_TITLE;
 use crate::picker::PickerWindowState;
 use qol_gpui::window::MonitorKey;
 
 pub fn picker_window_title(_target: MonitorKey) -> String {
-    "qol-alt-tab-picker".to_string()
+    PICKER_WINDOW_TITLE.to_string()
 }
 
 pub fn picker_window_kind() -> gpui::WindowKind {
@@ -30,12 +31,13 @@ pub fn disable_window_shadow(_title: &str) {}
 pub fn probe_picker_app_active(_at: &'static str) {}
 
 pub fn pre_create(
-    _config: &AltTabConfig,
-    _current: &PickerWindowState,
-    _preview_cache: crate::picker::run::SharedPreviewCache,
-    _tracker: &qol_gpui::monitor::MonitorTracker,
-    _cx: &mut gpui::App,
+    config: &AltTabConfig,
+    current: &PickerWindowState,
+    preview_cache: crate::picker::run::SharedPreviewCache,
+    tracker: &qol_gpui::monitor::MonitorTracker,
+    cx: &mut gpui::App,
 ) {
+    super::tracker_pre_create::pre_create(config, current, preview_cache, tracker, cx);
 }
 
 pub fn destroy_non_target_windows(

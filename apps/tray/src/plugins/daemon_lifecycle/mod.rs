@@ -224,6 +224,12 @@ fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<
         .entry(plugin.id.to_string())
         .or_default()
         .endpoint = super::action_executor::daemon_socket(plugin);
+    if let Err(error) = qol_process::bind_to_host_lifetime(pid) {
+        log::warn!(
+            "plugin {} daemon {pid} is not bound to the tray lifetime: {error}",
+            plugin.id
+        );
+    }
     track_desktop_state_pid(pid);
     super::daemon_tracker::registry::register(
         &crate::paths::runtime_pids_dir(),

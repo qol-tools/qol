@@ -16,7 +16,10 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub(crate) use imp::{native_readback_position, native_scale_for, readback_matches};
+pub(crate) use imp::{
+    display_scale_factor, monitor_scale, native_readback_position, native_scale_for,
+    readback_matches,
+};
 
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()

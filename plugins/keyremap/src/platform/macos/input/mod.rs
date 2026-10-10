@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use qol_runtime::keyremap_marker;
 
-use super::app::remap::Modifiers;
+use crate::platform::engine::remap::Modifiers;
 
 const MARKER_GRACE: Duration = Duration::from_millis(250);
 

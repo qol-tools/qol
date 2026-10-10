@@ -551,7 +551,7 @@ impl SpawnLocks {
         match file.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
-                let owner = fs::read_to_string(&path).unwrap_or_default();
+                let owner = fs::read_to_string(Self::owner_record(&path)).unwrap_or_default();
                 let owner = if owner.trim().is_empty() {
                     "unknown".to_owned()
                 } else {
@@ -565,13 +565,19 @@ impl SpawnLocks {
                 return Err(error).context("failed to lock the spawn key lock");
             }
         }
-        fs::write(&path, process::id().to_string())
+        fs::write(Self::owner_record(&path), process::id().to_string())
             .context("failed to record the spawn lock owner")?;
         Ok(SpawnLockGuard { file })
     }
 
     pub(super) fn remove(&self, key: &SpawnKey) {
-        let _ = fs::remove_file(self.lock_for(key));
+        let path = self.lock_for(key);
+        let _ = fs::remove_file(Self::owner_record(&path));
+        let _ = fs::remove_file(path);
+    }
+
+    fn owner_record(lock: &Path) -> PathBuf {
+        lock.with_extension("pid")
     }
 
     fn lock_for(&self, key: &SpawnKey) -> PathBuf {
@@ -1714,7 +1720,7 @@ fn launch_background(
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
-        .spawn_on(qol_terminal_sessions::kitty::backend_id(), request)
+        .spawn(request)
         .context("terminal backend refused the spawn request")?;
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -1806,7 +1812,7 @@ fn launch_ready(
 ) -> Result<SpawnOutcome> {
     let started = Instant::now();
     let session_id = terminals
-        .spawn_on(qol_terminal_sessions::kitty::backend_id(), request)
+        .spawn(request)
         .context("terminal backend refused the spawn request")?;
     qol_runtime::probe!(
         "CLI_SESSION_SPAWN",
@@ -1933,7 +1939,7 @@ pub(super) fn spawn_detached(
         title: Some(prepared.title.clone()),
     };
     let session_id = terminals
-        .spawn_on(qol_terminal_sessions::kitty::backend_id(), &request)
+        .spawn(&request)
         .context("terminal backend refused the spawn request")?;
     let facts = poll_ready(
         terminals,

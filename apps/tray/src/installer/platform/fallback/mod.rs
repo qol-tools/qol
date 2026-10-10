@@ -49,4 +49,8 @@ impl InstallerOps for Platform {
     fn warn_system_install_conflict(&self) {}
 
     fn remove_legacy_install(&self) {}
+
+    fn uninstall(&self, _binary_path: &Path) -> Result<()> {
+        unavailable()
+    }
 }

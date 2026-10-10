@@ -69,7 +69,7 @@ pub fn resume(
         title: Some(record.title.clone().unwrap_or_else(|| record.id.clone())),
     };
     let session = terminals
-        .spawn_on(qol_terminal_sessions::kitty::backend_id(), &request)
+        .spawn(&request)
         .context("the terminal refused to open the resumed session")?;
     ready_token(terminals, interpreter, &session, &tool)
 }

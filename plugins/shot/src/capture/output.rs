@@ -1,12 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Local;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn recording_output_file_path(format: &str) -> Result<PathBuf> {
-    let home = env::var("HOME").context("HOME is not set")?;
-    let mut videos = PathBuf::from(home);
+    let mut videos = dirs::home_dir().context("home directory is not known")?;
     videos.push("Videos");
     fs::create_dir_all(&videos).context("failed to create output directory")?;
     let timestamp = Local::now().format("%F_%H-%M-%S").to_string();
@@ -39,8 +37,8 @@ pub(crate) fn latest_screenshot() -> Result<PathBuf> {
 }
 
 fn screenshot_dir() -> Result<PathBuf> {
-    let home = env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join("Pictures"))
+    let home = dirs::home_dir().context("home directory is not known")?;
+    Ok(home.join("Pictures"))
 }
 
 fn is_screenshot_file(path: &Path) -> bool {

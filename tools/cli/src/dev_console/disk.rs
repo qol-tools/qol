@@ -1322,7 +1322,7 @@ mod tests {
             "an unchanged tree verifies to the same rows"
         );
         for (key, record) in &verify_ledger.records {
-            if key.ends_with("/target") {
+            if Path::new(key).ends_with("target") {
                 continue;
             }
             assert_eq!(
