@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::UI::Shell::{FOLDERID_CommonPrograms, FOLDERID_Programs};
 
-use crate::known_folder::known_folder;
+use crate::known_folder::platform::windows::known_folder;
 use crate::start_menu::is_start_menu_shortcut;
 use crate::AppRoot;
 

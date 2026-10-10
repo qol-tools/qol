@@ -9,7 +9,7 @@ use windows_sys::Win32::UI::Shell::{
     FOLDERID_Videos, SHGetKnownFolderPath,
 };
 
-pub fn known_folder(id: &GUID) -> Option<PathBuf> {
+pub(crate) fn known_folder(id: &GUID) -> Option<PathBuf> {
     let mut raw: PWSTR = std::ptr::null_mut();
     // SAFETY: `raw` is a valid out pointer; on success it holds a
     // NUL-terminated wide string that this function frees with CoTaskMemFree,

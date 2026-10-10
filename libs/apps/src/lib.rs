@@ -1,7 +1,6 @@
 pub mod bundle;
 pub mod desktop;
 pub mod desktop_integration;
-#[cfg(windows)]
 pub mod known_folder;
 pub mod shell_execute;
 pub mod shell_link;
