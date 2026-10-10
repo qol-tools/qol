@@ -186,12 +186,13 @@ mod tests {
                 },
             ),
         ];
+        let expected_tokens = Path::new("/models/voice").join("tokens.txt");
         for (label, layout) in cases {
             let kind = layout.kind;
             let built = recognizer_config(Path::new("/models/voice"), &layout, &config());
             assert_eq!(
                 built.model_config.tokens.as_deref(),
-                Some("/models/voice/tokens.txt"),
+                Some(&*expected_tokens.to_string_lossy()),
                 "case: {label}"
             );
             assert_eq!(built.model_config.num_threads, 4, "case: {label}");
