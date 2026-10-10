@@ -29,7 +29,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     # Must equal the tests workflow's RUSTFLAGS: they are part of the cache key.
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
     timeout-minutes: 90
     defaults:
       run:
@@ -40,13 +40,10 @@ jobs:
         include:
           - os: ubuntu-latest
             plan: ubuntu
-            release_build: true
           - os: macos-latest
             plan: macos
-            release_build: true
           - os: windows-latest
             plan: windows
-            release_build: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,11 +80,8 @@ jobs:
           CLIPPY_ARGS: ${{ steps.workspace.outputs[format('{0}_clippy', matrix.plan)] }}
           BUILD_ARGS: ${{ steps.workspace.outputs[format('{0}_build', matrix.plan)] }}
           TEST_ARGS: ${{ steps.workspace.outputs[format('{0}_test', matrix.plan)] }}
-          RELEASE_BUILD: ${{ matrix.release_build }}
         run: |
           cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
           cargo check --release --locked $BUILD_ARGS
-          if [ "$RELEASE_BUILD" = "true" ]; then
-            cargo build --release --locked $BUILD_ARGS
-          fi
+          cargo build --release --locked $BUILD_ARGS
           cargo nextest run --locked $TEST_ARGS --no-run

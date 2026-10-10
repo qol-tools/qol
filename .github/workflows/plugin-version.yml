@@ -73,13 +73,13 @@ jobs:
     needs: probe_plan
     if: needs.probe_plan.outputs.has_probes == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
     permissions:
       contents: read
     # Same invocation as release.yml's build, so an unchanged plugin builds
     # the same bytes as its last release.
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro' || '' }}
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro -C target-feature=+crt-static' || '' }}
     # /Brepro drops the link timestamp from Windows binaries, so the release
     # probe sees an unchanged plugin as unchanged. The steps are bash, and a
     # Windows runner defaults to PowerShell.
@@ -303,14 +303,14 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.has_plugins == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
     permissions:
       contents: read
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     # Warning parity with CI and release.yml; a new lint failure blocks pre-tag.
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro' || '' }}
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro -C target-feature=+crt-static' || '' }}
     # /Brepro drops the link timestamp from Windows binaries, so the release
     # probe sees an unchanged plugin as unchanged. The steps are bash, and a
     # Windows runner defaults to PowerShell.
@@ -449,11 +449,11 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.has_qol_tray == 'true'
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     permissions:
       contents: read
     env:
-      RUSTFLAGS: -D warnings -C link-arg=/Brepro
+      RUSTFLAGS: -D warnings -C link-arg=/Brepro -C target-feature=+crt-static
     defaults:
       run:
         shell: bash

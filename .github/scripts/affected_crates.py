@@ -49,15 +49,13 @@ def plugin_platforms():
 
 
 def platform_sets():
-    ubuntu, macos, windows = set(), set(), set()
+    ubuntu, macos = set(), set()
     for name, platforms in plugin_platforms():
         if "linux" not in platforms:
             ubuntu.add(name)
         if "macos" not in platforms:
             macos.add(name)
-        if "windows" in platforms:
-            windows.add(name)
-    return ubuntu, macos, windows
+    return ubuntu, macos
 
 
 def windows_excludes():
@@ -75,10 +73,9 @@ def package_features():
     return features
 
 
-UBUNTU_EXCLUDE, MACOS_EXCLUDE, WINDOWS_PLUGINS = platform_sets()
+UBUNTU_EXCLUDE, MACOS_EXCLUDE = platform_sets()
 WINDOWS_EXCLUDE = windows_excludes()
 PACKAGE_FEATURES = package_features()
-WINDOWS_APP_CRATES = ("qol-tray", *sorted(WINDOWS_PLUGINS))
 
 
 def exclude_flags(names):
@@ -124,7 +121,6 @@ def full_workspace(reason):
             "full": True,
             "windows_process": True,
             "windows_dev_build": True,
-            "windows_apps": True,
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
@@ -151,7 +147,6 @@ def skip_all(reason):
             "full": False,
             "windows_process": False,
             "windows_dev_build": False,
-            "windows_apps": False,
             "ubuntu_clippy": "",
             "ubuntu_build": "",
             "ubuntu_test": "",
@@ -343,7 +338,6 @@ def main():
             "full": False,
             "windows_process": "qol-process" in affected,
             "windows_dev_build": "qol-dev-build" in affected,
-            "windows_apps": any(name in affected for name in WINDOWS_APP_CRATES),
             "ubuntu_clippy": args(ubuntu, True),
             "ubuntu_build": args(ubuntu, False),
             "ubuntu_test": args(ubuntu, False),

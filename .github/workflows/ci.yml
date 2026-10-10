@@ -46,7 +46,6 @@ jobs:
       windows_skip: ${{ steps.affected.outputs.windows_skip }}
       windows_process: ${{ steps.affected.outputs.windows_process }}
       windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}
-      windows_apps: ${{ steps.affected.outputs.windows_apps }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -140,7 +139,7 @@ jobs:
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
     defaults:
       run:
@@ -237,7 +236,7 @@ jobs:
           steps.rust_setup.outputs.build-cache-hit != 'true')) }}
         env:
           BUILD_ARGS: ${{ matrix.build_args }}
-          RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+          RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
         run: cargo check --release --locked $BUILD_ARGS
 
       - name: Test
@@ -323,10 +322,11 @@ jobs:
     if: >-
       ${{ needs.plan.outputs.reused != 'true' && (
       fromJSON(needs.plan.outputs.windows_process || 'false') ||
-      fromJSON(needs.plan.outputs.windows_dev_build || 'false') ||
-      fromJSON(needs.plan.outputs.windows_apps || 'false')) }}
+      fromJSON(needs.plan.outputs.windows_dev_build || 'false')) }}
     runs-on: windows-latest
     timeout-minutes: 60
+    env:
+      RUSTFLAGS: -D warnings -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -342,24 +342,6 @@ jobs:
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
 
-      # The release build's /Brepro, so a link failure shows here first.
-      - name: Build Windows executables
-        if: ${{ fromJSON(needs.plan.outputs.windows_apps) }}
-        env:
-          RUSTFLAGS: -D warnings -C link-arg=/Brepro
-        run: cargo build --release --locked -p qol-tray -p qol-launcher --bin qol-tray --bin qol-launcher
-
-      - name: Upload Windows executables
-        if: ${{ fromJSON(needs.plan.outputs.windows_apps) }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: qol-windows-executables
-          path: |
-            target/release/qol-tray.exe
-            target/release/qol-launcher.exe
-          if-no-files-found: error
-          retention-days: 7
-
   # Pull requests only check the release profile. Every queue entry builds it
   # here in parallel with lint + test, so the build no longer waits behind
   # clippy and the tests. A push to main never runs it: the build cache
@@ -370,8 +352,11 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'merge_group' }}
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
-    timeout-minutes: 45
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -382,6 +367,9 @@ jobs:
           - os: macos-latest
             build_args: ${{ needs.plan.outputs.macos_build }}
             skip: ${{ needs.plan.outputs.macos_skip }}
+          - os: windows-latest
+            build_args: ${{ needs.plan.outputs.windows_build }}
+            skip: ${{ needs.plan.outputs.windows_skip }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

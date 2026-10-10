@@ -38,6 +38,7 @@ QUEUE_BUILD_CI_JOBS = {
     PLAN_CI_JOB,
     "release build (ubuntu-latest)",
     "release build (macos-latest)",
+    "release build (windows-latest)",
 }
 
 

@@ -266,11 +266,13 @@ class SourceCiTests(unittest.TestCase):
         skipped = {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"}
         ubuntu = {"name": "release build (ubuntu-latest)", "conclusion": "success"}
         macos = {"name": "release build (macos-latest)", "conclusion": "success"}
+        windows = {"name": "release build (windows-latest)", "conclusion": "success"}
         cases = [
-            ([plan, skipped, ubuntu, macos], None),
-            ([plan, skipped, ubuntu], "release build \\(macos-latest\\)"),
+            ([plan, skipped, ubuntu, macos, windows], None),
+            ([plan, skipped, ubuntu, windows], "release build \\(macos-latest\\)"),
+            ([plan, skipped, ubuntu, macos], "release build \\(windows-latest\\)"),
             (
-                [plan, skipped, ubuntu, {**macos, "conclusion": "failure"}],
+                [plan, skipped, ubuntu, {**macos, "conclusion": "failure"}, windows],
                 "release build \\(macos-latest\\)",
             ),
             ([plan, skipped], "lacks successful jobs"),
