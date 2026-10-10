@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use crate::SessionFacts;
+use crate::pin::{PinStore, PINNED_REASON};
+use crate::{
+    SessionBinding, SessionFacts, SessionInventory, TerminalError, TerminalSessionService,
+};
 
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
@@ -32,12 +35,19 @@ impl std::error::Error for CliInterpreterError {}
 pub struct CliSessionInterpreter {
     strategies: Vec<Arc<dyn CliSessionStrategy>>,
     fallback: GenericStrategy,
+    pins: PinStore,
 }
 
 impl CliSessionInterpreter {
     pub fn system() -> Self {
         Self::from_strategies(super::builtins::system_strategies())
             .expect("built-in CLI session strategy ids are unique")
+            .with_pins(PinStore::system())
+    }
+
+    pub fn with_pins(mut self, pins: PinStore) -> Self {
+        self.pins = pins;
+        self
     }
 
     pub fn from_strategies(
@@ -60,6 +70,7 @@ impl CliSessionInterpreter {
         Ok(Self {
             strategies,
             fallback: GenericStrategy::default(),
+            pins: PinStore::default(),
         })
     }
 
@@ -192,6 +203,29 @@ impl CliSessionInterpreter {
         self.strategy_for(session).permission_mode(session)
     }
 
+    pub fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {
+        let strategy = self.strategy_for(session);
+        strategy.keep_open_reason(session).or_else(|| {
+            strategy
+                .describe(session)
+                .external_id
+                .filter(|id| self.pins.is_pinned(id))
+                .map(|_| PINNED_REASON.to_owned())
+        })
+    }
+
+    pub fn keep_open_reason_for(
+        &self,
+        terminals: &TerminalSessionService,
+        binding: &SessionBinding,
+    ) -> Result<Option<String>, TerminalError> {
+        let sessions = terminals.discover()?;
+        Ok(sessions
+            .iter()
+            .find(|session| session.binding().as_ref() == Ok(binding))
+            .and_then(|facts| self.keep_open_reason(facts)))
+    }
+
     pub fn launchable_tools(&self) -> Vec<CliToolId> {
         self.strategies
             .iter()
@@ -259,6 +293,8 @@ mod tests {
         process: &'static str,
         priority: i32,
         chat: Option<Vec<ChatTurn>>,
+        keep_open: Option<&'static str>,
+        external_id: Option<&'static str>,
     }
 
     impl CliSessionStrategy for NamedStrategy {
@@ -281,7 +317,7 @@ mod tests {
             CliSessionDescriptor {
                 tool: self.tool.clone(),
                 display_name: Some(self.tool.label.clone()),
-                external_id: None,
+                external_id: self.external_id.map(str::to_owned),
                 external_id_authoritative: false,
                 has_activity: None,
                 evidence: CliSessionEvidence::default(),
@@ -291,6 +327,69 @@ mod tests {
         fn chat_transcript(&self, _session: &SessionFacts) -> Option<Vec<ChatTurn>> {
             self.chat.clone()
         }
+
+        fn keep_open_reason(&self, _session: &SessionFacts) -> Option<String> {
+            self.keep_open.map(str::to_owned)
+        }
+    }
+
+    #[test]
+    fn keep_open_reason_routes_to_the_matching_strategy_and_the_fallback_closes() {
+        let holding = Arc::new(NamedStrategy {
+            tool: CliTool::new(
+                CliToolId::new("holding").unwrap(),
+                "Holding",
+                CliToolColor::new(0x80, 0x80, 0x80),
+            ),
+            process: "holding",
+            priority: 0,
+            chat: None,
+            keep_open: Some("a remote viewer is attached"),
+            external_id: None,
+        });
+        let strategies: [Arc<dyn CliSessionStrategy>; 2] =
+            [holding, strategy("plain", "Plain", "plain", 1)];
+        let interpreter = CliSessionInterpreter::from_strategies(strategies).unwrap();
+
+        assert_eq!(
+            interpreter
+                .keep_open_reason(&session(&["holding"]))
+                .as_deref(),
+            Some("a remote viewer is attached")
+        );
+        assert_eq!(interpreter.keep_open_reason(&session(&["plain"])), None);
+        assert_eq!(interpreter.keep_open_reason(&session(&["bash"])), None);
+    }
+
+    #[test]
+    fn a_pinned_conversation_keeps_its_terminal_open_until_it_is_unpinned() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pins = crate::pin::PinStore::with_dir(root.path().to_path_buf());
+        let pinnable = Arc::new(NamedStrategy {
+            tool: CliTool::new(
+                CliToolId::new("pinnable").unwrap(),
+                "Pinnable",
+                CliToolColor::new(0x80, 0x80, 0x80),
+            ),
+            process: "pinnable",
+            priority: 0,
+            chat: None,
+            keep_open: None,
+            external_id: Some("conversation-1"),
+        });
+        let interpreter = CliSessionInterpreter::from_strategies([pinnable as _])
+            .unwrap()
+            .with_pins(pins.clone());
+        let facts = session(&["pinnable"]);
+
+        assert_eq!(interpreter.keep_open_reason(&facts), None);
+        pins.set("conversation-1", true).unwrap();
+        assert_eq!(
+            interpreter.keep_open_reason(&facts).as_deref(),
+            Some(crate::pin::PINNED_REASON)
+        );
+        pins.set("conversation-1", false).unwrap();
+        assert_eq!(interpreter.keep_open_reason(&facts), None);
     }
 
     #[test]
@@ -575,6 +674,8 @@ mod tests {
             process,
             priority,
             chat: None,
+            keep_open: None,
+            external_id: None,
         })
     }
 
@@ -601,6 +702,8 @@ mod tests {
                     text: "hello".to_owned(),
                 },
             ]),
+            keep_open: None,
+            external_id: None,
         })
     }
 

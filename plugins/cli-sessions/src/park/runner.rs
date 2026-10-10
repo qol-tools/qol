@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::cli::{ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
+use qol_terminal_sessions::pin::PinStore;
 use qol_terminal_sessions::{
     DeliveryMode, SessionBinding, SessionFacts, TerminalSessionService, TextInput,
 };
@@ -122,7 +123,12 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
                     if state == CallerState::Gone {
                         record.caller_closed = true;
                         let _ = store.record(&record);
-                    } else if gate.observe(&state) {
+                    } else if gate.observe(&state)
+                        && matches!(
+                            interpreter.keep_open_reason_for(&terminals, &caller),
+                            Ok(None)
+                        )
+                    {
                         let _ = terminals.close(&caller);
                         record.caller_closed = true;
                         let _ = store.record(&record);
@@ -190,7 +196,11 @@ fn wake(
         terminals,
         interpreter,
         record,
-        &format!("{prompt}{CLOSE_NOTE}"),
+        &if PinStore::system().is_pinned(&record.external_id) {
+            prompt.to_owned()
+        } else {
+            format!("{prompt}{CLOSE_NOTE}")
+        },
     ) {
         Ok(session) => {
             record.state = ParkState::Resumed;
@@ -284,10 +294,20 @@ fn watch_woken(
             }
             WokenTurn::Engaged => break "engaged",
             WokenTurn::Finished(report) => {
-                let _ = terminals.close(&woken);
-                record.state = ParkState::Finished;
-                record.report = Some(report);
-                break "closed";
+                match interpreter.keep_open_reason_for(terminals, &woken) {
+                    Err(_) => continue,
+                    Ok(Some(_)) => {
+                        record.state = ParkState::Finished;
+                        record.report = Some(report);
+                        break "kept_open";
+                    }
+                    Ok(None) => {
+                        let _ = terminals.close(&woken);
+                        record.state = ParkState::Finished;
+                        record.report = Some(report);
+                        break "closed";
+                    }
+                }
             }
         }
     };

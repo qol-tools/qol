@@ -104,6 +104,13 @@ impl ClaudeMetadataResolver {
             .map(|location| location.transcript_path)
     }
 
+    pub fn remote_controlled(&self, session: &SessionFacts) -> bool {
+        session
+            .foreground_pids
+            .iter()
+            .any(|pid| self.environment.remote_controlled(*pid))
+    }
+
     pub fn subscription_dir(&self, session: &SessionFacts) -> Option<PathBuf> {
         let root = if let Some(root) = &self.projects_root {
             root.clone()
@@ -382,6 +389,15 @@ fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
     let role = match value.get("type").and_then(Value::as_str) {
         Some("user") => ChatRole::User,
         Some("assistant") => ChatRole::Assistant,
+        Some("attachment") => {
+            if let Some(text) = queued_prompt(value) {
+                turns.push(ChatTurn {
+                    role: ChatRole::User,
+                    text: text.to_owned(),
+                });
+            }
+            return;
+        }
         _ => return,
     };
     let Some(content) = value
@@ -406,6 +422,19 @@ fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
         content => text_blocks(content),
     };
     turns.push(ChatTurn { role, text });
+}
+
+fn queued_prompt(value: &Value) -> Option<&str> {
+    let attachment = value.get("attachment")?;
+    if attachment.get("type").and_then(Value::as_str) != Some("queued_command")
+        || attachment.get("commandMode").and_then(Value::as_str) != Some("prompt")
+    {
+        return None;
+    }
+    attachment
+        .get("prompt")
+        .and_then(Value::as_str)
+        .filter(|text| !is_harness_prompt(text))
 }
 
 fn is_harness_prompt(text: &str) -> bool {

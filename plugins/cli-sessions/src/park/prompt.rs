@@ -12,6 +12,10 @@ pub const WAKE_HEADER: &str = "[qol parked session woke]";
 pub const CLOSE_NOTE: &str = " This tab closes when your turn ends, and your final message is shown to the user in a notification they can click to reopen the conversation, so end with what they need to know.";
 pub const PARKED_INSTRUCTION: &str = "Parked. End your turn now with a one-line note of what you are waiting for. This terminal closes once your turn ends, and CLI Sessions resumes this conversation in a new tab with the command's exit code and output when it exits.";
 
+pub fn kept_open_instruction(reason: &str) -> String {
+    format!("Parked. End your turn now with a one-line note of what you are waiting for. This terminal stays open because {reason}, and the command's exit code and output are submitted here when it exits.")
+}
+
 pub fn read_tail(path: &Path) -> String {
     let Ok(mut file) = File::open(path) else {
         return String::new();

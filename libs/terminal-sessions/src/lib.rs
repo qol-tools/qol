@@ -6,6 +6,7 @@ pub mod kitty;
 pub mod marker;
 mod model;
 pub mod park;
+pub mod pin;
 mod platform;
 mod service;
 mod spawn;

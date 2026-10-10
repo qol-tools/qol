@@ -155,7 +155,7 @@ where
                     "{PLUGIN_ID} park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]"
                 ))
                 .detail("Parks the calling harness session on a long wait such as a pull request watcher.")
-                .detail("A detached CLI Sessions process runs the command, closes the calling terminal once its turn ends, resumes the conversation in a new tab when the command exits, and closes that tab once its turn ends.")
+                .detail("A detached CLI Sessions process runs the command, closes the calling terminal once its turn ends unless its harness reports it must stay open, resumes the conversation in a new tab when the command exits, and closes that tab once its turn ends.")
                 .detail("Everything after `--` is the command, passed through verbatim.")
                 .output("Park JSON on stdout; diagnostics on stderr.")
                 .exit_behavior("Exits non-zero when the calling session cannot be resolved or resumed, or the runner cannot start.")
@@ -190,6 +190,16 @@ where
                     };
                     Ok(PlainTextOutput::text(crate::park::unpark(park)?))
                 }),
+        )
+        .command(
+            Command::new("pin")
+                .about("Pin a conversation so CLI Sessions never closes its terminal.")
+                .usage(crate::pin::USAGE)
+                .detail("A pinned conversation still parks and waits in the background, but its result is submitted into the same terminal, and no park, lane or session close shuts it.")
+                .detail("The pin follows the conversation id, so it survives a resume. With no argument it toggles; --id defaults to the calling terminal's conversation.")
+                .output("`pinned` or `unpinned` on stdout; diagnostics on stderr.")
+                .exit_behavior("Exits non-zero when the conversation cannot be resolved or the pin cannot be written.")
+                .run_plain_text(|context| Ok(PlainTextOutput::text(crate::pin::run(context.args())?))),
         )
         .command(
             Command::new("snapshot")

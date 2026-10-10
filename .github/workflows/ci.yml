@@ -408,6 +408,29 @@ jobs:
             *" failure "*|*" cancelled "*) exit 1 ;;
           esac
 
+  # Any failure on a pull request means a fix and a new push that runs every
+  # job again, so the first failed job cancels this run and the review of the
+  # same commit. The queue keeps running to the end: its failure report and the
+  # review that diagnoses it need a failed run, not a cancelled one.
+  stop-on-failure:
+    name: Stop on first failure
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Watch the jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/stop_on_failure.py
+
   # GitHub only marks a queue removal on the pull request timeline, so a failed
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:

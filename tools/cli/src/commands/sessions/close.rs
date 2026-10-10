@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_headless::OutputFormat;
+use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionInventory, TerminalSessionService,
 };
@@ -21,6 +22,7 @@ pub(super) enum TerminalCloseState {
     Closed,
     AlreadyGone,
     CloseFailed,
+    KeptOpen,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +99,17 @@ pub(super) fn close_spawned_terminal(
             "`{binding}` was not spawned by the session workflow; only spawned implementation sessions can be closed"
         );
     };
+    if let Some(reason) = CliSessionInterpreter::system().keep_open_reason(&facts) {
+        return Ok(CloseOutcome {
+            session: binding.token(),
+            key: Some(identity.key.to_string()),
+            tool: Some(identity.tool.to_string()),
+            closed: false,
+            terminal_state: TerminalCloseState::KeptOpen,
+            close_detail: Some(format!("`{binding}` stays open because {reason}")),
+            discarded_round: None,
+        });
+    }
     if let Err(error) = terminals.close(binding) {
         return Ok(CloseOutcome {
             session: binding.token(),
