@@ -751,6 +751,22 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn terminate_pid_without_a_listener_waits_the_grace_then_kills() {
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -n 31 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        let grace = Duration::from_millis(700);
+        let started = Instant::now();
+        terminate_pid(child.id(), grace);
+        assert!(!child.wait().unwrap().success());
+        let elapsed = started.elapsed();
+        assert!(elapsed + Duration::from_millis(100) >= grace, "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn group_stops_reach_verified_descendants() {
         struct Case {
             name: &'static str,
@@ -766,6 +782,13 @@ mod tests {
                 stop: |pid| terminate_group(pid, Duration::from_millis(700)),
                 root_exits_cleanly: true,
                 descendant_exits_cleanly: false,
+            },
+            Case {
+                name: "terminate_group lets a listening descendant exit cleanly",
+                descendant: "listen",
+                stop: |pid| terminate_group(pid, Duration::from_secs(10)),
+                root_exits_cleanly: true,
+                descendant_exits_cleanly: true,
             },
             Case {
                 name: "kill_group kills the root and its descendant",

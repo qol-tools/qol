@@ -1,7 +1,8 @@
 use anyhow::Result;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::daemon::EventBus;
+use crate::plugins::PluginManager;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod download;
@@ -28,8 +29,11 @@ use windows as active;
 
 pub(crate) use install_kind::InstallKind;
 
-pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
-    active::download_and_install(events).await
+pub(super) async fn download_and_install(
+    events: Arc<EventBus>,
+    plugin_manager: Arc<Mutex<PluginManager>>,
+) -> Result<()> {
+    active::download_and_install(events, plugin_manager).await
 }
 
 pub(crate) fn detect_install_kind() -> InstallKind {

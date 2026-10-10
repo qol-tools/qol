@@ -1140,13 +1140,10 @@ fn wait_for_members(members: &[Member], deadline: Instant) -> bool {
 }
 
 fn stop_members(mut members: Vec<Member>, grace: Duration, include_descendants: bool) {
-    let mut listening = false;
-    for member in &members {
-        listening |= member.request_stop_or_kill();
+    for member in members.iter().filter(|member| member.running()) {
+        let _ = request_graceful_stop(member.pid);
     }
-    if listening {
-        wait_for_members(&members, Instant::now() + grace);
-    }
+    wait_for_members(&members, Instant::now() + grace);
     if include_descendants {
         let contained = members.first().is_some_and(Member::in_job);
         let _ = extend_with_descendants(&mut members, contained);

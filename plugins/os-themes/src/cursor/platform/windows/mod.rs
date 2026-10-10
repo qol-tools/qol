@@ -5,11 +5,6 @@ mod session;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
-use windows_sys::Win32::Foundation::{BOOL, FALSE, TRUE};
-use windows_sys::Win32::System::Console::{
-    SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT,
-    CTRL_SHUTDOWN_EVENT,
-};
 
 use crate::config::Config;
 use crate::cursor::CursorEffect;
@@ -27,12 +22,6 @@ impl CursorPlatform for Platform {
     }
 
     fn install_signal_handlers(&self) {
-        if unsafe { SetConsoleCtrlHandler(Some(handle_control), TRUE) } == 0 {
-            log::warn!(
-                "console stop handler unavailable: {}",
-                std::io::Error::last_os_error()
-            );
-        }
         let listener = std::thread::Builder::new()
             .name("os-themes-stop".into())
             .spawn(|| match qol_process::wait_for_stop_request() {
@@ -72,20 +61,5 @@ impl ShakeBackend for WindowsBackend {
     fn open_focus(&self) -> Result<focus::GameFocusDetector> {
         qol_windowing::platform::windows::ensure_dpi_awareness();
         Ok(focus::GameFocusDetector)
-    }
-}
-
-unsafe extern "system" fn handle_control(control: u32) -> BOOL {
-    match control {
-        CTRL_C_EVENT | CTRL_BREAK_EVENT => {
-            EXTERNAL_STOP.store(true, Ordering::Relaxed);
-            TRUE
-        }
-        CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
-            EXTERNAL_STOP.store(true, Ordering::Relaxed);
-            session::reload_system_cursors();
-            TRUE
-        }
-        _ => FALSE,
     }
 }

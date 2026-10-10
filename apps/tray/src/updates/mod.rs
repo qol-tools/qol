@@ -397,6 +397,7 @@ fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)
 
 pub(crate) async fn install_host_update(
     events: std::sync::Arc<crate::daemon::EventBus>,
+    plugin_manager: std::sync::Arc<Mutex<crate::plugins::PluginManager>>,
     confirm_after_restart: bool,
     update_plugins: Vec<String>,
 ) -> Result<(), String> {
@@ -405,7 +406,7 @@ pub(crate) async fn install_host_update(
         .flatten();
     record_update_progress(0);
     store_latest_version(newest_version_before_install().await);
-    let Err(error) = platform::download_and_install(events.clone()).await else {
+    let Err(error) = platform::download_and_install(events.clone(), plugin_manager).await else {
         return Ok(());
     };
     log::error!("Self-update failed: {error:#}");

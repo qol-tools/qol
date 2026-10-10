@@ -2,10 +2,11 @@ use anyhow::{Context, Result};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
+use crate::plugins::PluginManager;
 
 use super::super::{latest_version, verify_host_update, GITHUB_REPO};
 use super::InstallKind;
@@ -86,7 +87,10 @@ fn tar_update_blocked(
     })
 }
 
-pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
+pub(super) async fn download_and_install(
+    events: Arc<EventBus>,
+    _plugin_manager: Arc<Mutex<PluginManager>>,
+) -> Result<()> {
     let install_kind = InstallKind::detect();
     log::info!("Install kind: {install_kind:?}");
     let dev_url = download::dev_update_url();

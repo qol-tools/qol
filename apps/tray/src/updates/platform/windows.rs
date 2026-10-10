@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity;
+use crate::plugins::PluginManager;
 
 use super::super::{latest_version, verify_host_update, GITHUB_REPO};
 use super::download;
@@ -82,7 +83,10 @@ fn replace_running_binary(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
+pub(super) async fn download_and_install(
+    events: Arc<EventBus>,
+    plugin_manager: Arc<Mutex<PluginManager>>,
+) -> Result<()> {
     let install_kind = InstallKind::detect();
     log::info!("Install kind: {install_kind:?}");
     let dev_url = download::dev_update_url();
@@ -145,10 +149,24 @@ pub(super) async fn download_and_install(events: Arc<EventBus>) -> Result<()> {
 
     log::info!("Update installed, restarting...");
     crate::window_reopen::capture_before_restart();
+    stop_plugins(plugin_manager).await;
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let error = crate::relaunch::spawn_successor_and_exit(&current_exe, &args);
     crate::window_reopen::discard_reopen_list();
     anyhow::bail!("restart after update failed: {error}")
+}
+
+async fn stop_plugins(plugin_manager: Arc<Mutex<PluginManager>>) {
+    let stopped = tokio::task::spawn_blocking(move || {
+        plugin_manager
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .shutdown();
+    })
+    .await;
+    if let Err(error) = stopped {
+        log::error!("Stopping plugins before the update restart failed: {error}");
+    }
 }
 
 #[cfg(test)]
