@@ -32,6 +32,20 @@ impl ClaudeEnvironment for EmptyEnvironment {
     }
 }
 
+struct RemoteControlledEnvironment {
+    pid: i32,
+}
+
+impl ClaudeEnvironment for RemoteControlledEnvironment {
+    fn session(&self, _pid: i32) -> Option<ClaudeSessionLocation> {
+        None
+    }
+
+    fn remote_controlled(&self, pid: i32) -> bool {
+        pid == self.pid
+    }
+}
+
 #[derive(Default)]
 struct SwitchableEnvironment {
     location: std::sync::Mutex<Option<ClaudeSessionLocation>>,
@@ -326,6 +340,19 @@ fn a_resolved_transcript_hit_stays_cached_without_another_scan() {
         "a hit keeps its full cache window even when the answer changes underneath"
     );
     assert_eq!(environment.scans(), 1);
+}
+
+#[test]
+fn remote_control_on_the_foreground_claude_process_keeps_its_terminal_open() {
+    for (pid, expected) in [(22, true), (23, false)] {
+        let strategy =
+            ClaudeStrategy::with_environment(Arc::new(RemoteControlledEnvironment { pid }));
+        assert_eq!(
+            strategy.keep_open_reason(&session()).is_some(),
+            expected,
+            "pid {pid}"
+        );
+    }
 }
 
 #[test]

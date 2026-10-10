@@ -1852,6 +1852,15 @@ pub(super) fn close_lane_terminal(terminals: &TerminalSessionService, binding: &
         );
         return;
     }
+    if let Some(reason) = CliSessionInterpreter::system().keep_open_reason_for(terminals, binding) {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=autoclose_skipped session={} reason=kept_open detail={}",
+            binding.token(),
+            reason
+        );
+        return;
+    }
     match terminals.close(binding) {
         Ok(()) => {
             qol_runtime::probe!(

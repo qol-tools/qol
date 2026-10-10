@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use crate::SessionFacts;
+use crate::{SessionBinding, SessionFacts, SessionInventory, TerminalSessionService};
 
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
@@ -192,6 +192,22 @@ impl CliSessionInterpreter {
         self.strategy_for(session).permission_mode(session)
     }
 
+    pub fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {
+        self.strategy_for(session).keep_open_reason(session)
+    }
+
+    pub fn keep_open_reason_for(
+        &self,
+        terminals: &TerminalSessionService,
+        binding: &SessionBinding,
+    ) -> Option<String> {
+        let sessions = terminals.discover().ok()?;
+        let facts = sessions
+            .iter()
+            .find(|session| session.binding().as_ref() == Ok(binding))?;
+        self.keep_open_reason(facts)
+    }
+
     pub fn launchable_tools(&self) -> Vec<CliToolId> {
         self.strategies
             .iter()
@@ -259,6 +275,7 @@ mod tests {
         process: &'static str,
         priority: i32,
         chat: Option<Vec<ChatTurn>>,
+        keep_open: Option<&'static str>,
     }
 
     impl CliSessionStrategy for NamedStrategy {
@@ -291,6 +308,37 @@ mod tests {
         fn chat_transcript(&self, _session: &SessionFacts) -> Option<Vec<ChatTurn>> {
             self.chat.clone()
         }
+
+        fn keep_open_reason(&self, _session: &SessionFacts) -> Option<String> {
+            self.keep_open.map(str::to_owned)
+        }
+    }
+
+    #[test]
+    fn keep_open_reason_routes_to_the_matching_strategy_and_the_fallback_closes() {
+        let holding = Arc::new(NamedStrategy {
+            tool: CliTool::new(
+                CliToolId::new("holding").unwrap(),
+                "Holding",
+                CliToolColor::new(0x80, 0x80, 0x80),
+            ),
+            process: "holding",
+            priority: 0,
+            chat: None,
+            keep_open: Some("a remote viewer is attached"),
+        });
+        let strategies: [Arc<dyn CliSessionStrategy>; 2] =
+            [holding, strategy("plain", "Plain", "plain", 1)];
+        let interpreter = CliSessionInterpreter::from_strategies(strategies).unwrap();
+
+        assert_eq!(
+            interpreter
+                .keep_open_reason(&session(&["holding"]))
+                .as_deref(),
+            Some("a remote viewer is attached")
+        );
+        assert_eq!(interpreter.keep_open_reason(&session(&["plain"])), None);
+        assert_eq!(interpreter.keep_open_reason(&session(&["bash"])), None);
     }
 
     #[test]
@@ -575,6 +623,7 @@ mod tests {
             process,
             priority,
             chat: None,
+            keep_open: None,
         })
     }
 
@@ -601,6 +650,7 @@ mod tests {
                     text: "hello".to_owned(),
                 },
             ]),
+            keep_open: None,
         })
     }
 

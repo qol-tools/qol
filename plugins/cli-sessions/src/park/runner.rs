@@ -122,7 +122,11 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
                     if state == CallerState::Gone {
                         record.caller_closed = true;
                         let _ = store.record(&record);
-                    } else if gate.observe(&state) {
+                    } else if gate.observe(&state)
+                        && interpreter
+                            .keep_open_reason_for(&terminals, &caller)
+                            .is_none()
+                    {
                         let _ = terminals.close(&caller);
                         record.caller_closed = true;
                         let _ = store.record(&record);
@@ -283,6 +287,13 @@ fn watch_woken(
                 }
             }
             WokenTurn::Engaged => break "engaged",
+            WokenTurn::Finished(_)
+                if interpreter
+                    .keep_open_reason_for(terminals, &woken)
+                    .is_some() =>
+            {
+                break "kept_open"
+            }
             WokenTurn::Finished(report) => {
                 let _ = terminals.close(&woken);
                 record.state = ParkState::Finished;

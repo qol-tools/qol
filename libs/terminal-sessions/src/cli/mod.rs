@@ -139,4 +139,8 @@ pub trait CliSessionStrategy: Send + Sync {
     fn permission_mode(&self, _session: &SessionFacts) -> Option<String> {
         None
     }
+
+    fn keep_open_reason(&self, _session: &SessionFacts) -> Option<String> {
+        None
+    }
 }
