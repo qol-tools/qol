@@ -11,7 +11,10 @@ use std::time::{Duration, Instant};
 
 use qol_platform::native::wide::wide_nul;
 
-use crate::{PlatformSpawnFailure, PreparedSpawnCleanup, ProcessEntry};
+use crate::{
+    MemberObservation, NodeObservation, Observation, PlatformSpawnFailure, PreparedSpawnCleanup,
+    ProcessEntry, ProcessProvenance, ProcessTreeObservation,
+};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, SetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS,
@@ -54,6 +57,7 @@ const SESSION_END_EXIT_GRACE: Duration = Duration::from_millis(4500);
 const STOP_EVENT_PREFIX: &str = "Local\\qol-stop-";
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const IMAGE_PATH_CAPACITY: usize = 32_768;
+const MEMBER_LIMIT: usize = 64;
 static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static STOP_LISTENER_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
@@ -139,11 +143,62 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn membership_observation_supported(&self) -> bool {
-        false
+        true
     }
 
-    pub(crate) fn observe_residual(&self) -> crate::ProcessTreeObservation {
-        crate::ProcessTreeObservation::unsupported()
+    pub(crate) fn observe_residual(&self) -> ProcessTreeObservation {
+        let started = Instant::now();
+        let mut report = ProcessTreeObservation::unsupported();
+        report.support = "windows_job_object";
+        report.incomplete = false;
+        report.creator = known_provenance(Some(std::process::id()));
+        report.guardian = known_provenance(None);
+        report.leader = known_provenance(
+            self.assigned_process
+                .try_lock()
+                .ok()
+                .and_then(|assigned| assigned.as_ref().map(|process| process.id)),
+        );
+        report.root_populated_before = populated_observation(self.job.0, &mut report);
+        let membership = match job_process_ids(self.job.0) {
+            Ok(mut pids) => {
+                if pids.len() > MEMBER_LIMIT {
+                    pids.truncate(MEMBER_LIMIT);
+                    report.truncated = true;
+                    report.incomplete = true;
+                }
+                let count = pids.len();
+                report
+                    .members
+                    .extend(pids.into_iter().map(|pid| MemberObservation {
+                        node: 0,
+                        pid,
+                        stat: Observation::Unsupported,
+                        identity_check: Observation::Unsupported,
+                        pidfd_alive: Observation::Unsupported,
+                    }));
+                if report.truncated {
+                    Observation::Truncated
+                } else {
+                    Observation::Value(count)
+                }
+            }
+            Err(_) => {
+                report.incomplete = true;
+                Observation::Unavailable
+            }
+        };
+        report.root_populated_after = populated_observation(self.job.0, &mut report);
+        report.nodes.push(NodeObservation {
+            index: 0,
+            parent: None,
+            depth: 0,
+            identity: Observation::Unsupported,
+            populated: report.root_populated_after.clone(),
+            membership,
+        });
+        report.duration = started.elapsed();
+        report
     }
 
     pub(crate) fn prepare_command(&self, command: &mut Command) -> io::Result<PreparedSpawn> {
@@ -748,6 +803,24 @@ fn set_job_limit_flags(handle: HANDLE, flags: u32) -> io::Result<()> {
     Ok(())
 }
 
+fn known_provenance(pid: Option<u32>) -> ProcessProvenance {
+    ProcessProvenance {
+        pid: pid.map_or(Observation::NotCaptured, Observation::Value),
+        start_ticks: Observation::NotCaptured,
+        generation: Observation::NotCaptured,
+    }
+}
+
+fn populated_observation(handle: HANDLE, report: &mut ProcessTreeObservation) -> Observation<bool> {
+    match active_processes(handle) {
+        Ok(count) => Observation::Value(count > 0),
+        Err(_) => {
+            report.incomplete = true;
+            Observation::Unavailable
+        }
+    }
+}
+
 fn active_processes(handle: HANDLE) -> io::Result<u32> {
     let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
     let queried = unsafe {
@@ -1347,4 +1420,49 @@ fn duration_millis(duration: Duration) -> u32 {
 
 fn invalid_pid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "pid must be positive")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn long_running_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "ping -n 31 127.0.0.1 >NUL"]);
+        command
+    }
+
+    #[test]
+    fn residual_observation_reports_the_job_populated_then_empty() {
+        let guard = own_process_tree().unwrap();
+        let mut command = long_running_command();
+        let prepared = guard.prepare_command(&mut command).unwrap();
+        let mut child = guard
+            .spawn_prepared(&mut command, prepared)
+            .map_err(|failure| failure.source)
+            .unwrap();
+        assert!(guard.membership_observation_supported());
+
+        let observation = guard.observe_residual();
+        assert_eq!(observation.support, "windows_job_object");
+        assert!(!observation.incomplete);
+        assert_eq!(observation.root_populated_before, Observation::Value(true));
+        assert_eq!(observation.root_populated_after, Observation::Value(true));
+        assert_eq!(observation.leader.pid, Observation::Value(child.id()));
+        assert!(observation
+            .members
+            .iter()
+            .any(|member| member.pid == child.id()));
+        assert!(observation
+            .members
+            .iter()
+            .all(|member| member.stat == Observation::Unsupported));
+
+        guard.terminate_and_wait(Duration::from_secs(5)).unwrap();
+        child.wait().unwrap();
+        let observation = guard.observe_residual();
+        assert_eq!(observation.root_populated_before, Observation::Value(false));
+        assert_eq!(observation.root_populated_after, Observation::Value(false));
+        assert!(observation.members.is_empty());
+    }
 }
