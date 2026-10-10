@@ -106,8 +106,8 @@ pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {
     }
 }
 
-pub(crate) fn native_scale_for(_window: &gpui::Window) -> f32 {
-    1.0
+pub(crate) fn native_scale_for(window: &gpui::Window) -> f32 {
+    window.scale_factor()
 }
 
 pub(crate) fn native_readback_position(_title: &str) -> Option<(i32, i32)> {

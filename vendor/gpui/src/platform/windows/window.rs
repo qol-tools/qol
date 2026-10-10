@@ -300,9 +300,20 @@ impl WindowsWindowInner {
     }
 
     fn set_window_placement(&self) -> Result<()> {
-        let Some(open_status) = self.state.borrow_mut().initial_placement.take() else {
+        let Some(mut open_status) = self.state.borrow_mut().initial_placement.take() else {
             return Ok(());
         };
+        let mut current = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        let moved_on_screen = unsafe {
+            GetWindowPlacement(self.hwnd, &mut current).is_ok()
+                && !MonitorFromRect(&current.rcNormalPosition, MONITOR_DEFAULTTONULL).is_invalid()
+        };
+        if moved_on_screen {
+            open_status.placement.rcNormalPosition = current.rcNormalPosition;
+        }
         match open_status.state {
             WindowOpenState::Maximized => unsafe {
                 SetWindowPlacement(self.hwnd, &open_status.placement)

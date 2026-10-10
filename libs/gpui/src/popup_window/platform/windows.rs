@@ -2,8 +2,10 @@ use std::ptr::null_mut;
 
 use qol_windowing::platform::windows::{cursor_position, monitors};
 use qol_windowing::WindowRect;
-use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
-use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
+use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE};
+use windows_sys::Win32::Graphics::Gdi::{
+    ClientToScreen, CreateRectRgn, DeleteObject, SetWindowRgn,
+};
 use windows_sys::Win32::System::Threading::{
     AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
 };
@@ -316,6 +318,41 @@ pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool
     };
     let (x, y) = gpui_to_native(hwnd, gpui_x, gpui_y);
     move_window(hwnd, x, y)
+}
+
+pub fn sync_window_layout(
+    title: &str,
+    window: &mut gpui::Window,
+    origin: gpui::Point<gpui::Pixels>,
+    size: gpui::Size<gpui::Pixels>,
+) -> bool {
+    let backing = window_backing_scale(title);
+    crate::window::resize_or_sync_scale(window, size, backing);
+    let scale = window.scale_factor();
+    sync_window_layout_by_title(title, gpui::point(origin.x * scale, origin.y * scale), size)
+}
+
+pub fn sync_window_layout_by_title(
+    title: &str,
+    origin: gpui::Point<gpui::Pixels>,
+    _size: gpui::Size<gpui::Pixels>,
+) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    let (frame_x, frame_y) = client_offset(hwnd).unwrap_or((0, 0));
+    move_window(
+        hwnd,
+        origin.x.to_f64().round() as i32 - frame_x,
+        origin.y.to_f64().round() as i32 - frame_y,
+    )
+}
+
+fn client_offset(hwnd: HWND) -> Option<(i32, i32)> {
+    let frame = window_rect(hwnd)?;
+    let mut client = POINT { x: 0, y: 0 };
+    (unsafe { ClientToScreen(hwnd, &mut client) } != 0)
+        .then_some((client.x - frame.left, client.y - frame.top))
 }
 
 pub fn focus_window_by_title(title: &str) -> bool {
