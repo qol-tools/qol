@@ -29,8 +29,7 @@ jobs:
        github.event.workflow_run.event == 'merge_group' &&
        github.event.workflow_run.conclusion == 'failure' &&
        github.event.workflow_run.head_repository.full_name == github.repository) ||
-      (!github.event.pull_request.draft &&
-       github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.head.repo.full_name == github.repository &&
        !endsWith(github.actor, '[bot]'))
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_branch || github.ref }}
@@ -328,27 +327,20 @@ jobs:
           exit "$status"
 
   # The merge queue ruleset requires this check, so auto-merge queues a pull
-  # request only once its head has a pass verdict. A draft is not reviewed, so
-  # the check is skipped on it, and a skipped check counts as passed. The merge
-  # group run therefore passes only when the queued head has a successful
-  # claude review check, which only a pass verdict produces. Dependabot runs get
-  # no secrets and are not reviewed, so only dependabot's own branch in this
-  # repository, last pushed by dependabot, passes unreviewed; an actor name
-  # alone is not trusted. It waits for publish so the review comment lands first.
+  # request only once its head has a pass verdict. Commits after queueing are not
+  # merged, so the merge group run passes. Dependabot runs get no secrets and are
+  # not reviewed, so only dependabot's own branch in this repository, last pushed
+  # by dependabot, passes unreviewed; an actor name alone is not trusted. It
+  # waits for publish so the review comment lands first.
   verdict:
     name: claude review
     needs: [review, publish]
-    if: ${{ always() && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group') }}
+    if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      checks: read
-      pull-requests: read
     steps:
       - name: Only a pass verdict may queue
         env:
-          GH_TOKEN: ${{ github.token }}
-          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
           EVENT: ${{ github.event_name }}
           BOT: >-
             ${{ github.actor == 'dependabot[bot]' &&
@@ -356,16 +348,5 @@ jobs:
                 github.event.pull_request.head.repo.full_name == github.repository }}
           VERDICT: ${{ needs.review.outputs.verdict }}
         run: |
-          set -euo pipefail
-          if [ "$EVENT" = merge_group ]; then
-            pr="${QUEUE_REF##*/pr-}"
-            pr="${pr%%-*}"
-            head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq .head.sha)"
-            passed="$(gh api "repos/$GITHUB_REPOSITORY/commits/$head/check-runs?check_name=claude%20review&per_page=100" \
-              --jq '[.check_runs[] | select(.app.slug == "github-actions" and .conclusion == "success")] | length')"
-            echo "event: $EVENT, pr: $pr, head: $head, passed reviews: $passed"
-            [ "$passed" -gt 0 ]
-            exit 0
-          fi
           echo "event: $EVENT, bot: $BOT, verdict: ${VERDICT:-none}"
-          [ "$BOT" = true ] || [ "$VERDICT" = pass ]
+          [ "$EVENT" = merge_group ] || [ "$BOT" = true ] || [ "$VERDICT" = pass ]
