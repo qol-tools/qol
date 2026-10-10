@@ -400,7 +400,7 @@ impl DirectWriteState {
             &self.custom_font_collection
         };
         let fontset = unsafe { collection.GetFontSet().log_err()? };
-        let font = unsafe {
+        let matching = |family_name: &str| unsafe {
             fontset
                 .GetMatchingFonts(
                     &HSTRING::from(family_name),
@@ -408,8 +408,18 @@ impl DirectWriteState {
                     DWRITE_FONT_STRETCH_NORMAL,
                     font_style.into(),
                 )
-                .log_err()?
+                .log_err()
         };
+        let mut family_name = family_name.to_owned();
+        let mut font = matching(&family_name)?;
+        if unsafe { font.GetFontCount() } == 0 {
+            if let Some(alias) = unsafe {
+                weight_stretch_style_family(&fontset, &family_name, &self.components.locale)
+            } {
+                font = matching(&alias)?;
+                family_name = alias;
+            }
+        }
         let total_number = unsafe { font.GetFontCount() };
         for index in 0..total_number {
             let Some(font_face_ref) = (unsafe { font.GetFontFaceReference(index).log_err() })
@@ -430,7 +440,7 @@ impl DirectWriteState {
             let fallbacks = font_fallbacks
                 .and_then(|fallbacks| self.generate_font_fallbacks(fallbacks).log_err().flatten());
             let font_info = FontInfo {
-                font_family: family_name.to_owned(),
+                font_family: family_name.clone(),
                 font_face,
                 features: direct_write_features,
                 fallbacks,
@@ -1783,6 +1793,36 @@ const fn make_open_type_tag(tag_name: &str) -> u32 {
 #[inline]
 const fn make_direct_write_tag(tag_name: &str) -> DWRITE_FONT_FEATURE_TAG {
     DWRITE_FONT_FEATURE_TAG(make_open_type_tag(tag_name))
+}
+
+unsafe fn weight_stretch_style_family(
+    fontset: &IDWriteFontSet,
+    typographic_family: &str,
+    locale: &str,
+) -> Option<String> {
+    let value = HSTRING::from(typographic_family);
+    let any_locale = HSTRING::new();
+    let property = DWRITE_FONT_PROPERTY {
+        propertyId: DWRITE_FONT_PROPERTY_ID_TYPOGRAPHIC_FAMILY_NAME,
+        propertyValue: PCWSTR(value.as_ptr()),
+        localeName: PCWSTR(any_locale.as_ptr()),
+    };
+    let matches = unsafe { fontset.GetMatchingFonts2(&[property]) }.log_err()?;
+    if unsafe { matches.GetFontCount() } == 0 {
+        return None;
+    }
+    let mut exists = BOOL(0);
+    let mut names = None;
+    unsafe {
+        matches.GetPropertyValues3(
+            0,
+            DWRITE_FONT_PROPERTY_ID_WEIGHT_STRETCH_STYLE_FAMILY_NAME,
+            &mut exists,
+            &mut names,
+        )
+    }
+    .log_err()?;
+    get_name(names?, locale).log_err()
 }
 
 #[inline]
