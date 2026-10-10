@@ -710,29 +710,31 @@ impl PlatformWindow for WindowsWindow {
                 // so let's just simulate user input as that seems to be the most reliable way
                 // some more info: https://gist.github.com/Aetopia/1581b40f00cc0cadc93a0e8ccb65dc8c
                 // bonus: this bug also doesn't manifest if you have vs attached to the process
-                let inputs = [
-                    INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: VK_MENU,
-                                dwFlags: KEYBD_EVENT_FLAGS(0),
-                                ..Default::default()
+                if unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } >= 0 {
+                    let inputs = [
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VK_MENU,
+                                    dwFlags: KEYBD_EVENT_FLAGS(0),
+                                    ..Default::default()
+                                },
                             },
                         },
-                    },
-                    INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: VK_MENU,
-                                dwFlags: KEYEVENTF_KEYUP,
-                                ..Default::default()
+                        INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: VK_MENU,
+                                    dwFlags: KEYEVENTF_KEYUP,
+                                    ..Default::default()
+                                },
                             },
                         },
-                    },
-                ];
-                unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                    ];
+                    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                }
 
                 // todo(windows)
                 // crate `windows 0.56` reports true as Err
