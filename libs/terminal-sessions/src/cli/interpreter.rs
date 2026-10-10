@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use crate::{SessionBinding, SessionFacts, SessionInventory, TerminalSessionService};
+use crate::{
+    SessionBinding, SessionFacts, SessionInventory, TerminalError, TerminalSessionService,
+};
 
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
@@ -200,12 +202,12 @@ impl CliSessionInterpreter {
         &self,
         terminals: &TerminalSessionService,
         binding: &SessionBinding,
-    ) -> Option<String> {
-        let sessions = terminals.discover().ok()?;
-        let facts = sessions
+    ) -> Result<Option<String>, TerminalError> {
+        let sessions = terminals.discover()?;
+        Ok(sessions
             .iter()
-            .find(|session| session.binding().as_ref() == Ok(binding))?;
-        self.keep_open_reason(facts)
+            .find(|session| session.binding().as_ref() == Ok(binding))
+            .and_then(|facts| self.keep_open_reason(facts)))
     }
 
     pub fn launchable_tools(&self) -> Vec<CliToolId> {
