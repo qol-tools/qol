@@ -217,17 +217,19 @@ pub(super) fn split_command(
             arguments: arguments.trim().to_string(),
         });
     }
-    raw.char_indices()
+    let ends: Vec<usize> = raw
+        .char_indices()
         .filter(|(_, c)| c.is_whitespace())
         .map(|(index, _)| index)
         .chain(std::iter::once(raw.len()))
         .filter(|end| raw[..*end].ends_with(|c: char| !c.is_whitespace()))
-        .find_map(|end| {
-            Some(Launch {
-                program: resolve_program(&raw[..end], system, probe)?,
-                arguments: raw[end..].trim().to_string(),
-            })
+        .collect();
+    ends.into_iter().rev().find_map(|end| {
+        Some(Launch {
+            program: resolve_program(&raw[..end], system, probe)?,
+            arguments: raw[end..].trim().to_string(),
         })
+    })
 }
 
 pub(super) fn resolve_program(
@@ -419,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn split_command_takes_the_first_existing_prefix() {
+    fn split_command_takes_the_longest_existing_prefix() {
         let system = PathBuf::from(r"C:\Windows\System32");
         let disk = FakeDisk::new(
             &[],
@@ -460,7 +462,7 @@ mod tests {
             ),
             (
                 r"C:\Apps\Plain Tool\remove.exe /S",
-                Some((r"C:\Apps\Plain.exe", r"Tool\remove.exe /S")),
+                Some((r"C:\Apps\Plain Tool\remove.exe", "/S")),
             ),
             (r"C:\Program Files\Missing\remove.exe /S", None),
             (r#""C:\Program Files\Missing\remove.exe" /S"#, None),
