@@ -2,7 +2,7 @@ use std::io;
 use std::os::windows::io::AsRawSocket;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, HANDLE};
 use windows_sys::Win32::Networking::WinSock::{
     WSAGetLastError, WSAIoctl, SIO_AF_UNIX_GETPEERPID, WSAEINVAL, WSAEOPNOTSUPP,
 };
@@ -74,7 +74,14 @@ impl Drop for Handle {
 fn same_user(pid: u32) -> io::Result<bool> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if process.is_null() {
-        return Err(denied_or_last_error());
+        let error = denied_or_last_error();
+        if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "local IPC peer exited before authorization",
+            ));
+        }
+        return Err(error);
     }
     let process = Handle(process);
     let peer = token_user(&process)?;
