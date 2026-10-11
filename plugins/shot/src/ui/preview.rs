@@ -598,11 +598,7 @@ fn create_and_show(
         all_titles,
     };
     let opened_at = Instant::now();
-    let provisional = WindowPlacement {
-        target,
-        bounds: Bounds::new(point(px(0.0), px(0.0)), token.logical_size()),
-        display_id: None,
-    };
+    let provisional = provisional_placement(token, cx);
     let Some(handle) = open_ghost_window(cx, content, seq, &title, &provisional) else {
         log::warn!("preview window open failed");
         return false;
@@ -670,6 +666,11 @@ fn create_and_show(
     true
 }
 
+fn provisional_placement(token: &CursorWindowPlacement, cx: &App) -> WindowPlacement {
+    let monitor = ActiveMonitor::from_bounds(token.anchor().native_monitor());
+    centered_window_placement(Some(&monitor), token.logical_size(), cx)
+}
+
 fn open_ghost_window(
     cx: &mut App,
     content: GhostContent,
@@ -714,9 +715,7 @@ fn open_quit_window(
             return false;
         }
     };
-    let provisional = Bounds::new(point(px(0.0), px(0.0)), token.logical_size());
-    let options = PopupWindowOptions::new()
-        .bounds(provisional)
+    let options = PopupWindowOptions::from_placement(&provisional_placement(&token, cx))
         .background(WindowBackgroundAppearance::Opaque)
         .show(false)
         .build();
