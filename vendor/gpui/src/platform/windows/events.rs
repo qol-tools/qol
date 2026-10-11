@@ -710,6 +710,7 @@ impl WindowsWindowInner {
         }
 
         let is_maximized = self.state.borrow().is_maximized();
+        let display = self.state.borrow().display;
         let insets = get_client_area_insets(handle, is_maximized, self.windows_version);
         // wparam is TRUE so lparam points to an NCCALCSIZE_PARAMS structure
         let mut params = lparam.0 as *mut NCCALCSIZE_PARAMS;
@@ -724,8 +725,8 @@ impl WindowsWindowInner {
         // used by Chrome. However, it may result in one row of pixels being obscured
         // in our client area. But as Chrome says, "there seems to be no better solution."
         if is_maximized
-            && let Some(ref taskbar_position) =
-                self.system_settings.borrow().auto_hide_taskbar_position
+            && let Some(taskbar_position) =
+                WindowsSystemSettings::auto_hide_taskbar_position(&self.system_settings, display)
         {
             // For the auto-hide taskbar, adjust in by 1 pixel on taskbar edge,
             // so the window isn't treated as a "fullscreen app", which would cause
@@ -1117,12 +1118,11 @@ impl WindowsWindowInner {
     ) -> Option<isize> {
         if wparam.0 != 0 {
             let mut lock = self.state.borrow_mut();
-            let display = lock.display;
             lock.click_state.system_update(wparam.0);
             lock.border_offset.update(handle).log_err();
             // system settings may emit a window message which wants to take the refcell lock, so drop it
             drop(lock);
-            self.system_settings.borrow_mut().update(display, wparam.0);
+            self.system_settings.borrow_mut().update(wparam.0);
         } else {
             self.handle_system_theme_changed(handle, lparam)?;
         };

@@ -232,7 +232,7 @@ impl WindowsWindowInner {
             validation_number: context.validation_number,
             main_receiver: context.main_receiver.clone(),
             platform_window_handle: context.platform_window_handle,
-            system_settings: RefCell::new(WindowsSystemSettings::new(context.display)),
+            system_settings: RefCell::new(WindowsSystemSettings::new()),
             released: Cell::new(false),
         }))
     }

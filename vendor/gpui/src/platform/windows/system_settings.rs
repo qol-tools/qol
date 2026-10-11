@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::ffi::{c_uint, c_void};
 
 use ::util::ResultExt;
@@ -18,7 +19,7 @@ use super::WindowsDisplay;
 #[derive(Default, Debug, Clone, Copy)]
 pub(crate) struct WindowsSystemSettings {
     pub(crate) mouse_wheel_settings: MouseWheelSettings,
-    pub(crate) auto_hide_taskbar_position: Option<AutoHideTaskbarPosition>,
+    auto_hide_taskbar_position: Option<Option<AutoHideTaskbarPosition>>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -30,21 +31,20 @@ pub(crate) struct MouseWheelSettings {
 }
 
 impl WindowsSystemSettings {
-    pub(crate) fn new(display: WindowsDisplay) -> Self {
+    pub(crate) fn new() -> Self {
         let mut settings = Self::default();
-        settings.init(display);
+        settings.init();
         settings
     }
 
-    fn init(&mut self, display: WindowsDisplay) {
+    fn init(&mut self) {
         self.mouse_wheel_settings.update();
-        self.auto_hide_taskbar_position = AutoHideTaskbarPosition::new(display).log_err().flatten();
     }
 
-    pub(crate) fn update(&mut self, display: WindowsDisplay, wparam: usize) {
+    pub(crate) fn update(&mut self, wparam: usize) {
         match wparam {
             // SPI_SETWORKAREA
-            47 => self.update_taskbar_position(display),
+            47 => self.auto_hide_taskbar_position = None,
             // SPI_GETWHEELSCROLLLINES, SPI_GETWHEELSCROLLCHARS
             104 | 108 => self.update_mouse_wheel_settings(),
             _ => {}
@@ -55,8 +55,16 @@ impl WindowsSystemSettings {
         self.mouse_wheel_settings.update();
     }
 
-    fn update_taskbar_position(&mut self, display: WindowsDisplay) {
-        self.auto_hide_taskbar_position = AutoHideTaskbarPosition::new(display).log_err().flatten();
+    pub(crate) fn auto_hide_taskbar_position(
+        settings: &RefCell<Self>,
+        display: WindowsDisplay,
+    ) -> Option<AutoHideTaskbarPosition> {
+        if let Some(position) = settings.borrow().auto_hide_taskbar_position {
+            return position;
+        }
+        let position = AutoHideTaskbarPosition::new(display).log_err().flatten();
+        settings.borrow_mut().auto_hide_taskbar_position = Some(position);
+        position
     }
 }
 
