@@ -16,8 +16,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::HiDpi::{
-    GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
-    MDT_EFFECTIVE_DPI,
+    GetDpiForMonitor, GetDpiForWindow, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetCursorPos, GetForegroundWindow,
@@ -151,6 +151,15 @@ impl Window {
         if self.is_minimized() || self.is_maximized() {
             unsafe { ShowWindow(self.0, SW_RESTORE) };
         }
+        let dpi = unsafe { GetDpiForWindow(self.0) };
+        self.place(target)?;
+        if unsafe { GetDpiForWindow(self.0) } != dpi {
+            self.place(target)?;
+        }
+        Ok(())
+    }
+
+    fn place(self, target: WindowRect) -> Result<(), String> {
         let outer = self.outer_rect().ok_or("Cannot read window geometry")?;
         let visible = self.visible_rect().ok_or("Cannot read window geometry")?;
         let left = visible.left - outer.left;
