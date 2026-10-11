@@ -734,27 +734,21 @@ impl PlatformWindow for WindowsWindow {
                 // some more info: https://gist.github.com/Aetopia/1581b40f00cc0cadc93a0e8ccb65dc8c
                 // bonus: this bug also doesn't manifest if you have vs attached to the process
                 if unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } >= 0 {
+                    let input = |key: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS| INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: key,
+                                dwFlags: flags,
+                                ..Default::default()
+                            },
+                        },
+                    };
                     let inputs = [
-                        INPUT {
-                            r#type: INPUT_KEYBOARD,
-                            Anonymous: INPUT_0 {
-                                ki: KEYBDINPUT {
-                                    wVk: VK_MENU,
-                                    dwFlags: KEYBD_EVENT_FLAGS(0),
-                                    ..Default::default()
-                                },
-                            },
-                        },
-                        INPUT {
-                            r#type: INPUT_KEYBOARD,
-                            Anonymous: INPUT_0 {
-                                ki: KEYBDINPUT {
-                                    wVk: VK_MENU,
-                                    dwFlags: KEYEVENTF_KEYUP,
-                                    ..Default::default()
-                                },
-                            },
-                        },
+                        input(VK_MENU, KEYBD_EVENT_FLAGS(0)),
+                        input(MENU_MASK_KEY, KEYBD_EVENT_FLAGS(0)),
+                        input(MENU_MASK_KEY, KEYEVENTF_KEYUP),
+                        input(VK_MENU, KEYEVENTF_KEYUP),
                     ];
                     unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
                 }
@@ -1176,6 +1170,7 @@ enum WindowOpenState {
 }
 
 const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
+const MENU_MASK_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
 
 fn register_window_class(icon_handle: HICON) {
     static ONCE: Once = Once::new();
