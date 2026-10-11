@@ -8,11 +8,7 @@ const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstal
 const PUBLISHER: &str = "qol-tools";
 const ABOUT_URL: &str = "https://github.com/qol-tools/qol";
 const ICON_FILE: &str = "qol-tray.ico";
-const ICONS: [(u32, &[u8]); 3] = [
-    (64, include_bytes!("../../../../assets/icons/64.png")),
-    (128, include_bytes!("../../../../assets/icons/128.png")),
-    (256, include_bytes!("../../../../assets/icons/256.png")),
-];
+const ICON: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/qol-tray.ico"));
 
 pub(super) struct Layout {
     pub(super) binary: PathBuf,
@@ -100,11 +96,10 @@ fn write_shortcut(layout: &Layout) -> Result<()> {
 }
 
 fn write_icon(path: &Path) -> Result<()> {
-    let icon = shortcut::ico_from_pngs(&ICONS);
-    if std::fs::read(path).is_ok_and(|existing| existing == icon) {
+    if std::fs::read(path).is_ok_and(|existing| existing == ICON) {
         return Ok(());
     }
-    std::fs::write(path, icon).with_context(|| format!("Failed to write {}", path.display()))
+    std::fs::write(path, ICON).with_context(|| format!("Failed to write {}", path.display()))
 }
 
 fn write_uninstall_entry(layout: &Layout) -> Result<()> {
@@ -197,8 +192,11 @@ mod tests {
 
     #[test]
     fn shipped_icon_sizes_are_png_images() {
-        for (size, png) in ICONS {
-            assert!(png.starts_with(b"\x89PNG"), "{size}");
+        let count = usize::from(u16::from_le_bytes([ICON[4], ICON[5]]));
+        assert!(count > 0);
+        for entry in (0..count).map(|index| 6 + index * 16) {
+            let offset = u32::from_le_bytes(ICON[entry + 12..entry + 16].try_into().unwrap());
+            assert!(ICON[offset as usize..].starts_with(b"\x89PNG"), "{entry}");
         }
     }
 }

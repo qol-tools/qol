@@ -1,6 +1,7 @@
 use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
 use crate::installer::boot_environment::paths_equal_canonicalized;
+use crate::installer::platform::windows::ico::ico_from_pngs;
 use crate::installer::platform::windows::shortcut::{self, Shortcut};
 use crate::shortcuts::model::AppRef;
 use anyhow::{anyhow, Context, Result};
@@ -227,7 +228,7 @@ impl<'a> IconFiles<'a> {
             .iter()
             .map(|(size, png)| (*size, png.as_slice()))
             .collect();
-        let ico = shortcut::ico_from_pngs(&images);
+        let ico = ico_from_pngs(&images);
         let digest: String = Sha256::digest(&ico)[..6]
             .iter()
             .map(|byte| format!("{byte:02x}"))

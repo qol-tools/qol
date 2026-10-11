@@ -1,3 +1,4 @@
+pub(crate) mod ico;
 mod registration;
 mod registry;
 pub(in crate::installer) mod run_key;

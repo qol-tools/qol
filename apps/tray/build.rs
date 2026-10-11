@@ -1,7 +1,13 @@
 use std::process::Command;
 
+#[path = "src/installer/platform/windows/ico.rs"]
+mod ico;
+#[path = "build/platform.rs"]
+mod platform;
+
 fn main() {
     qol_build_identity::emit_build_identity();
+    platform::embed_windows_icon();
     let profile = std::env::var("PROFILE").unwrap_or_default();
     let hash = if profile == "release" {
         Command::new("git")
