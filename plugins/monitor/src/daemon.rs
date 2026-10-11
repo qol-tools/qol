@@ -6986,7 +6986,9 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let runtime = Mutex::new(runtime_with(control.clone(), store.clone()));
+        let mut runtime = runtime_with(control.clone(), store.clone());
+        runtime.stepper = HoldStepper::new(Duration::MAX);
+        let runtime = Mutex::new(runtime);
         runtime
             .lock()
             .unwrap()
