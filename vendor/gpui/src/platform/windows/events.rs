@@ -1438,18 +1438,16 @@ fn parse_normal_key(
     lparam: LPARAM,
     mut modifiers: Modifiers,
 ) -> Option<Keystroke> {
-    let mut key_char = None;
-    let key = parse_immutable(vkey).or_else(|| {
-        let scan_code = lparam.hiword() & 0xFF;
-        key_char = generate_key_char(
-            vkey,
-            scan_code as u32,
-            modifiers.control,
-            modifiers.shift,
-            modifiers.alt,
-        );
-        get_keystroke_key(vkey, scan_code as u32, &mut modifiers)
-    })?;
+    let scan_code = lparam.hiword() & 0xFF;
+    let key_char = generate_key_char(
+        vkey,
+        scan_code as u32,
+        modifiers.control,
+        modifiers.shift,
+        modifiers.alt,
+    );
+    let key = parse_immutable(vkey)
+        .or_else(|| get_keystroke_key(vkey, scan_code as u32, &mut modifiers))?;
     Some(Keystroke {
         modifiers,
         key,

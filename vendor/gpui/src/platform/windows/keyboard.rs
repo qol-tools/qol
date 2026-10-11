@@ -250,7 +250,7 @@ fn need_to_convert_to_shifted_key(vkey: VIRTUAL_KEY) -> bool {
 }
 
 fn get_shifted_key(vkey: VIRTUAL_KEY, scan_code: u32) -> Option<String> {
-    generate_key_char(vkey, scan_code, false, true, false)
+    to_unicode(vkey, scan_code, false, true, false).map(|(key, _)| key)
 }
 
 pub(crate) fn generate_key_char(
@@ -260,6 +260,17 @@ pub(crate) fn generate_key_char(
     shift: bool,
     alt: bool,
 ) -> Option<String> {
+    to_unicode(vkey, scan_code, control, shift, alt)
+        .and_then(|(key_char, dead)| (!dead).then_some(key_char))
+}
+
+fn to_unicode(
+    vkey: VIRTUAL_KEY,
+    scan_code: u32,
+    control: bool,
+    shift: bool,
+    alt: bool,
+) -> Option<(String, bool)> {
     let mut state = [0; 256];
     if control {
         state[VK_CONTROL.0 as usize] = 0x80;
@@ -279,8 +290,11 @@ pub(crate) fn generate_key_char(
             .ok()
             .filter(|candidate| {
                 !candidate.is_empty() && !candidate.chars().next().unwrap().is_control()
-            }),
-        len if len < 0 => String::from_utf16(&buffer[..(-len as usize)]).ok(),
+            })
+            .map(|candidate| (candidate, false)),
+        len if len < 0 => String::from_utf16(&buffer[..(-len as usize)])
+            .ok()
+            .map(|candidate| (candidate, true)),
         _ => None,
     }
 }
