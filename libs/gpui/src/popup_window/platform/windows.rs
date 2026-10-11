@@ -144,6 +144,11 @@ fn apply_tool_window_style(hwnd: HWND) {
     }
 }
 
+fn move_client(hwnd: HWND, x: i32, y: i32) -> bool {
+    let (frame_x, frame_y) = client_offset(hwnd).unwrap_or((0, 0));
+    move_window(hwnd, x - frame_x, y - frame_y)
+}
+
 fn move_window(hwnd: HWND, x: i32, y: i32) -> bool {
     unsafe {
         SetWindowPos(
@@ -196,7 +201,7 @@ impl WindowGeometrySession {
 
     pub fn reposition(&self, x: i32, y: i32) -> bool {
         let (x, y) = gpui_to_native(self.handle(), f64::from(x), f64::from(y));
-        move_window(self.handle(), x, y)
+        move_client(self.handle(), x, y)
     }
 
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
@@ -317,7 +322,7 @@ pub fn reposition_window_by_title(title: &str, gpui_x: f64, gpui_y: f64) -> bool
         return false;
     };
     let (x, y) = gpui_to_native(hwnd, gpui_x, gpui_y);
-    move_window(hwnd, x, y)
+    move_client(hwnd, x, y)
 }
 
 pub fn sync_window_layout(
@@ -340,11 +345,10 @@ pub fn sync_window_layout_by_title(
     let Some(hwnd) = find_window(title) else {
         return false;
     };
-    let (frame_x, frame_y) = client_offset(hwnd).unwrap_or((0, 0));
-    move_window(
+    move_client(
         hwnd,
-        origin.x.to_f64().round() as i32 - frame_x,
-        origin.y.to_f64().round() as i32 - frame_y,
+        origin.x.to_f64().round() as i32,
+        origin.y.to_f64().round() as i32,
     )
 }
 
