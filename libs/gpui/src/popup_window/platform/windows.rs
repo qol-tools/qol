@@ -1,8 +1,10 @@
+use std::ffi::c_void;
 use std::ptr::null_mut;
 
 use qol_windowing::platform::windows::{cursor_position, monitors};
 use qol_windowing::WindowRect;
 use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE};
+use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows_sys::Win32::Graphics::Gdi::{
     ClientToScreen, CreateRectRgn, DeleteObject, SetWindowRgn,
 };
@@ -13,9 +15,9 @@ use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WS_EX_APPWINDOW,
-    WS_EX_TOOLWINDOW,
+    ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WS_EX_APPWINDOW,
+    WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 
 use super::PopupPresentation;
@@ -118,10 +120,23 @@ fn show_window(title: &str, topmost: bool, focus: bool) -> bool {
         HWND_NOTOPMOST
     };
     let placed = place(hwnd, after, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    cloak(hwnd, false);
     if focus {
         raise_foreground(hwnd);
     }
     placed
+}
+
+fn cloak(hwnd: HWND, cloaked: bool) -> bool {
+    let value: BOOL = if cloaked { TRUE } else { FALSE };
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK as u32,
+            (&value as *const BOOL).cast::<c_void>(),
+            std::mem::size_of::<BOOL>() as u32,
+        ) >= 0
+    }
 }
 
 fn apply_tool_window_style(hwnd: HWND) {
@@ -372,11 +387,38 @@ pub fn hide_window_by_title(title: &str) -> bool {
         return false;
     };
     unsafe { ShowWindow(hwnd, SW_HIDE) };
+    cloak(hwnd, false);
     true
 }
 
 pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
+}
+
+pub fn prepare_window_reveal_by_title(title: &str) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    let cloaked = cloak(hwnd, true);
+    place(
+        hwnd,
+        null_mut(),
+        SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOZORDER,
+    );
+    qol_runtime::probe!(
+        "PREPARE_WIN",
+        "title={title} prepared=true cloaked={cloaked} reason={}",
+        crate::popup_window::change_reason()
+    );
+    true
+}
+
+pub fn set_window_fixed_size_by_title(title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
+    let Some(hwnd) = find_window(title) else {
+        return false;
+    };
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    style & WS_THICKFRAME as isize == 0
 }
 
 pub fn park_window_by_title(title: &str) -> bool {
