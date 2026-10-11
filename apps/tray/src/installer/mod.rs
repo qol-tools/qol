@@ -136,5 +136,5 @@ fn is_in_path(dir: &Path) -> bool {
         return false;
     };
 
-    env::split_paths(&path_var).any(|path| path == dir)
+    env::split_paths(&path_var).any(|path| boot_environment::paths_equal_canonicalized(&path, dir))
 }

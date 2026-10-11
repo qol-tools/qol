@@ -153,7 +153,7 @@ fn canonical_boot_binary_inner(probes: &CanonicalProbes, honors_dev: bool) -> Pa
     probes.current_exe.clone()
 }
 
-fn paths_equal_canonicalized(a: &Path, b: &Path) -> bool {
+pub(super) fn paths_equal_canonicalized(a: &Path, b: &Path) -> bool {
     let canon_a = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
     let canon_b = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
     canon_a == canon_b
