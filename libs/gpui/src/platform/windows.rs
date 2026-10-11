@@ -1,7 +1,8 @@
-use std::ffi::{c_int, c_void};
+use std::ffi::c_void;
 
 use qol_platform::native::wide::wide_nul;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use windows_sys::core::{GUID, HRESULT};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
@@ -11,9 +12,45 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN};
 
+const PROPERTY_STORE: GUID = GUID::from_u128(0x886d8eeb_8cf2_4446_8d02_cdba1dbdcf99);
+const APP_USER_MODEL: GUID = GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3);
+const RELAUNCH_COMMAND: u32 = 2;
+const RELAUNCH_ICON_RESOURCE: u32 = 3;
+const RELAUNCH_DISPLAY_NAME_RESOURCE: u32 = 4;
+const APP_ID: u32 = 5;
+const VT_LPWSTR: u16 = 31;
+
+#[repr(C)]
+struct PropertyKey {
+    fmtid: GUID,
+    pid: u32,
+}
+
+#[repr(C)]
+struct StringVariant {
+    vt: u16,
+    reserved: [u16; 3],
+    value: *const u16,
+    padding: usize,
+}
+
+#[repr(C)]
+struct PropertyStoreVtbl {
+    before_release: [usize; 2],
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    before_set_value: [usize; 3],
+    set_value:
+        unsafe extern "system" fn(*mut c_void, *const PropertyKey, *const StringVariant) -> HRESULT,
+    commit: unsafe extern "system" fn(*mut c_void) -> HRESULT,
+}
+
 #[link(name = "shell32")]
 extern "system" {
-    fn SetCurrentProcessExplicitAppUserModelID(appid: *const u16) -> c_int;
+    fn SHGetPropertyStoreForWindow(
+        hwnd: HWND,
+        riid: *const GUID,
+        store: *mut *mut c_void,
+    ) -> HRESULT;
 }
 
 pub fn is_modifier_held() -> bool {
@@ -99,10 +136,48 @@ pub fn settings_surface_taskbar_identity() -> super::SettingsSurfaceTaskbarIdent
     }
 }
 
-pub fn apply_settings_surface_identity(_window: &mut gpui::Window) {
-    let app_id = wide_nul(qol_conventions::SETTINGS_SURFACE_APP_ID);
+pub fn apply_settings_surface_identity(window: &mut gpui::Window) {
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let exe = exe.display();
+    let properties = [
+        (RELAUNCH_COMMAND, format!("\"{exe}\"")),
+        (RELAUNCH_ICON_RESOURCE, format!("{exe},-1")),
+        (
+            RELAUNCH_DISPLAY_NAME_RESOURCE,
+            qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME.to_owned(),
+        ),
+        (APP_ID, qol_conventions::SETTINGS_SURFACE_APP_ID.to_owned()),
+    ];
+    let mut store: *mut c_void = std::ptr::null_mut();
     unsafe {
-        let _ = SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
+        if SHGetPropertyStoreForWindow(handle.hwnd.get() as HWND, &PROPERTY_STORE, &mut store) < 0 {
+            return;
+        }
+        let vtbl = &**store.cast::<*const PropertyStoreVtbl>();
+        for (pid, value) in properties {
+            let value = wide_nul(value);
+            let key = PropertyKey {
+                fmtid: APP_USER_MODEL,
+                pid,
+            };
+            let variant = StringVariant {
+                vt: VT_LPWSTR,
+                reserved: [0; 3],
+                value: value.as_ptr(),
+                padding: 0,
+            };
+            (vtbl.set_value)(store, &key, &variant);
+        }
+        (vtbl.commit)(store);
+        (vtbl.release)(store);
     }
 }
 
