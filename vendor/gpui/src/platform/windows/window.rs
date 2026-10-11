@@ -497,6 +497,18 @@ impl WindowsWindow {
             }
             unsafe { SetWindowPlacement(hwnd, &placement)? };
         } else {
+            let rect = placement.rcNormalPosition;
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                )?
+            };
             this.state.borrow_mut().initial_placement = Some(WindowOpenStatus {
                 placement,
                 state: WindowOpenState::Windowed,
