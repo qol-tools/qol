@@ -41,6 +41,7 @@ pub struct Monitor {
     pub connector: String,
     pub bounds: MonitorBounds,
     pub work_area: MonitorBounds,
+    pub scale: f32,
     pub primary: bool,
 }
 
@@ -54,11 +55,18 @@ impl Monitor {
     }
 }
 
-pub fn locate(window: WindowRect, monitors: &[Monitor]) -> Option<(MonitorRef, WindowRect)> {
+pub fn locate(
+    window: WindowRect,
+    scale: f32,
+    monitors: &[Monitor],
+) -> Option<(MonitorRef, WindowRect)> {
     let centre = centre_of(window);
-    let monitor = monitors
-        .iter()
-        .min_by(|a, b| distance(a.bounds, centre).total_cmp(&distance(b.bounds, centre)))?;
+    let scale_gap = |monitor: &Monitor| (monitor.scale - scale).abs();
+    let monitor = monitors.iter().min_by(|a, b| {
+        distance(a.bounds, centre)
+            .total_cmp(&distance(b.bounds, centre))
+            .then_with(|| scale_gap(a).total_cmp(&scale_gap(b)))
+    })?;
     let on_monitor = WindowRect {
         x: window.x - f64::from(monitor.bounds.x),
         y: window.y - f64::from(monitor.bounds.y),
@@ -67,7 +75,10 @@ pub fn locate(window: WindowRect, monitors: &[Monitor]) -> Option<(MonitorRef, W
     Some((monitor.reference(), on_monitor))
 }
 
-pub fn resolve(saved: &WindowState, monitors: &[Monitor]) -> Option<WindowRect> {
+pub fn resolve<'a>(
+    saved: &WindowState,
+    monitors: &'a [Monitor],
+) -> Option<(&'a Monitor, WindowRect)> {
     let monitor = monitors
         .iter()
         .find(|monitor| monitor.id == saved.monitor.id)
@@ -82,7 +93,7 @@ pub fn resolve(saved: &WindowState, monitors: &[Monitor]) -> Option<WindowRect> 
         y: f64::from(monitor.bounds.y) + saved.bounds_on_monitor.y,
         ..saved.bounds_on_monitor
     };
-    Some(clamp_into(window, monitor.work_area))
+    Some((monitor, clamp_into(window, monitor.work_area)))
 }
 
 fn nearest_to_saved<'a>(saved: &WindowState, monitors: &'a [Monitor]) -> Option<&'a Monitor> {

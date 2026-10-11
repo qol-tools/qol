@@ -143,6 +143,11 @@ impl ActiveMonitor {
         self.logical(self.bounds())
     }
 
+    pub fn logical_work_area(&self) -> Bounds<Pixels> {
+        let native = self.bounds();
+        self.logical(crate::popup_window::work_area_within(native).unwrap_or(native))
+    }
+
     pub fn logical(&self, native: Bounds<Pixels>) -> Bounds<Pixels> {
         divided(native, self.scale())
     }
