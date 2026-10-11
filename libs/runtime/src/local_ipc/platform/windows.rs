@@ -4,9 +4,7 @@ use std::path::Path;
 
 use qol_platform::native::security::TokenSid;
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, HANDLE};
-use windows_sys::Win32::Networking::WinSock::{
-    WSAGetLastError, WSAIoctl, SIO_AF_UNIX_GETPEERPID, WSAEINVAL, WSAEOPNOTSUPP,
-};
+use windows_sys::Win32::Networking::WinSock::{WSAGetLastError, WSAIoctl, SIO_AF_UNIX_GETPEERPID};
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
 pub type LocalListener = uds_windows::UnixListener;
@@ -20,9 +18,7 @@ pub(super) fn bind_listener(path: &Path) -> io::Result<LocalListener> {
 }
 
 pub(super) fn authorize_peer(stream: &LocalStream) -> io::Result<()> {
-    let Some(pid) = peer_pid(stream)? else {
-        return Ok(());
-    };
+    let pid = peer_pid(stream)?;
     if same_user(pid)? {
         Ok(())
     } else {
@@ -33,7 +29,7 @@ pub(super) fn authorize_peer(stream: &LocalStream) -> io::Result<()> {
     }
 }
 
-fn peer_pid(stream: &LocalStream) -> io::Result<Option<u32>> {
+fn peer_pid(stream: &LocalStream) -> io::Result<u32> {
     let mut pid = 0u32;
     let mut returned = 0u32;
     let status = unsafe {
@@ -50,12 +46,9 @@ fn peer_pid(stream: &LocalStream) -> io::Result<Option<u32>> {
         )
     };
     if status == 0 {
-        return Ok(Some(pid));
+        return Ok(pid);
     }
     let code = unsafe { WSAGetLastError() };
-    if code == WSAEOPNOTSUPP || code == WSAEINVAL {
-        return Ok(None);
-    }
     Err(io::Error::from_raw_os_error(code))
 }
 
