@@ -278,7 +278,10 @@ mod tests {
         let (value, problems) = prune_value(&prune_args).expect("json");
 
         assert_eq!(problems, 1);
-        assert!(prune_json(&prune_args).is_err(), "a failed dir exits non-zero");
+        assert!(
+            prune_json(&prune_args).is_err(),
+            "a failed dir exits non-zero"
+        );
 
         assert_eq!(value["dry_run"], true);
         assert_eq!(value["freed_bytes"], 0);

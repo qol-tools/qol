@@ -85,9 +85,7 @@ fn still_unused(
         Guard::Session { crate_dir, started } => {
             newest_finalized(&session_names(crate_dir)).is_some_and(|newest| newest > *started)
         }
-        Guard::CrateCache { crate_dir } => {
-            idle_since(crate_dir, &session_names(crate_dir), cutoff)
-        }
+        Guard::CrateCache { crate_dir } => idle_since(crate_dir, &session_names(crate_dir), cutoff),
         Guard::Root => true,
     }
 }

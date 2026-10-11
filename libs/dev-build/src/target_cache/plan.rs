@@ -151,17 +151,11 @@ fn ensure_cargo_cache(dir: &Path, entries: &[fs::DirEntry]) -> Result<(), String
     let marked = entries
         .iter()
         .any(|entry| CACHE_MARKERS.contains(&entry.file_name().to_string_lossy().as_ref()));
-    let has_profile = || {
-        entries.iter().any(|entry| {
-            let path = entry.path();
-            is_profile_dir(&path) || !child_profile_dirs(&path).is_empty()
-        })
-    };
-    if marked || has_profile() {
+    if marked {
         return Ok(());
     }
     Err(format!(
-        "{} does not look like a cargo cache dir (no CACHEDIR.TAG, .rustc_info.json or profile dir); nothing pruned",
+        "{} is not a cargo cache dir (no CACHEDIR.TAG or .rustc_info.json); nothing pruned",
         dir.display()
     ))
 }

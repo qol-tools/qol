@@ -367,6 +367,7 @@ mod tests {
         }
 
         fn sweep(&self, dir: &Path, mode: SweepMode, access_times: bool) -> SweepReport {
+            write_at(&dir.join(".rustc_info.json"), b"{}", self.old());
             sweep(dir, mode, self.now, KEEP_UNUSED_FOR, Some(access_times)).expect("sweep")
         }
     }
@@ -874,7 +875,11 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let work = root.path().join("work");
         let repo = work.join("some-repo");
-        write_at(&repo.join("src").join("main.rs"), b"fn main() {}", clock.old());
+        write_at(
+            &repo.join("src").join("main.rs"),
+            b"fn main() {}",
+            clock.old(),
+        );
         let profile = root.path().join("target").join("debug");
         unit(&profile, "syn", "cccccccccccccccc", 3, &[], clock.old());
 
@@ -886,6 +891,35 @@ mod tests {
 
         assert!(repo.join("src").join("main.rs").exists());
         assert!(profile.join("deps").exists());
+    }
+
+    #[test]
+    fn a_dir_that_only_holds_a_cargo_cache_is_refused_untouched() {
+        let clock = Clock::new();
+        let git = tempfile::tempdir().expect("tempdir");
+        let repo = git.path().join("old-repo");
+        write_at(
+            &repo.join("src").join("main.rs"),
+            b"fn main() {}",
+            clock.old(),
+        );
+        let shared = git.path().join(".cargo-build");
+        write_at(&shared.join("CACHEDIR.TAG"), b"x", clock.old());
+        unit(
+            &shared.join("debug"),
+            "syn",
+            "cccccccccccccccc",
+            3,
+            &[],
+            clock.old(),
+        );
+
+        for mode in [SweepMode::DryRun, SweepMode::Apply] {
+            sweep(git.path(), mode, clock.now, KEEP_UNUSED_FOR, Some(true)).expect_err("refused");
+        }
+
+        assert!(repo.join("src").join("main.rs").exists());
+        assert!(shared.join("debug").join("deps").exists());
     }
 
     #[test]

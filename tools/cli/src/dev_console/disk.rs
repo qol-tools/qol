@@ -911,6 +911,7 @@ mod tests {
     fn write_orphan_output(target: &Path, name: &str, bytes: usize) -> PathBuf {
         let profile = target.join("debug");
         std::fs::create_dir_all(profile.join(".fingerprint")).expect("fingerprint dir");
+        std::fs::write(target.join(".rustc_info.json"), b"{}").expect("cargo marker");
         let output = profile
             .join("deps")
             .join(format!("lib{name}-0123456789abcdef.rlib"));
