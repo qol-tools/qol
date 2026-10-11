@@ -13,8 +13,8 @@ pub(super) struct NativeDisplay {
 impl NativeDisplay {
     pub(super) fn logical(self) -> Rect {
         Rect {
-            x: scale_down(self.physical.x, self.scale),
-            y: scale_down(self.physical.y, self.scale),
+            x: self.physical.x,
+            y: self.physical.y,
             w: scale_down(self.physical.w, self.scale),
             h: scale_down(self.physical.h, self.scale),
         }
@@ -162,13 +162,13 @@ mod tests {
     }
 
     #[test]
-    fn logical_bounds_divide_the_physical_rect_by_the_display_scale() {
+    fn logical_bounds_keep_the_physical_origin_and_divide_the_size_by_the_display_scale() {
         let cases = [
             (display(rect(0, 0, 1920, 1080), 1.0), rect(0, 0, 1920, 1080)),
             (display(rect(0, 0, 3840, 2160), 2.0), rect(0, 0, 1920, 1080)),
             (
                 display(rect(1920, 0, 1920, 1080), 1.25),
-                rect(1536, 0, 1536, 864),
+                rect(1920, 0, 1536, 864),
             ),
             (
                 display(rect(-2560, -200, 2560, 1440), 1.0),
@@ -242,7 +242,7 @@ mod tests {
         ];
         let window_cases = [
             (rect(100, 100, 400, 300), Some(rect(100, 100, 400, 300))),
-            (rect(2120, 200, 800, 600), Some(rect(1060, 100, 400, 300))),
+            (rect(2120, 200, 800, 600), Some(rect(2020, 100, 400, 300))),
             (rect(9000, 9000, 10, 10), None),
         ];
         for (window, expected) in window_cases {
@@ -250,12 +250,37 @@ mod tests {
         }
         let point_cases = [
             ((50, 60), Some((50.0, 60.0))),
-            ((1920, 0), Some((960.0, 0.0))),
-            ((2920, 1000), Some((1460.0, 500.0))),
+            ((1920, 0), Some((1920.0, 0.0))),
+            ((2920, 1000), Some((2420.0, 500.0))),
             ((-1, 0), None),
         ];
         for ((x, y), expected) in point_cases {
             assert_eq!(logical_point(x, y, &displays), expected, "{x},{y}");
+        }
+    }
+
+    #[test]
+    fn a_scaled_monitor_never_overlaps_its_neighbour() {
+        let displays = [
+            display(rect(0, 0, 1280, 800), 1.0),
+            display(rect(1280, 0, 1920, 1080), 1.5),
+        ];
+        assert_eq!(displays[1].logical(), rect(1280, 0, 1280, 720));
+        assert_eq!(logical_point(1300, 30, &displays), Some((1293.3334, 20.0)));
+        let cases = [
+            (
+                "inside the scaled monitor",
+                rect(1300, 10, 100, 100),
+                rect(1310, 15, 150, 150),
+            ),
+            (
+                "across both monitors",
+                rect(1180, 100, 200, 100),
+                rect(1180, 100, 250, 200),
+            ),
+        ];
+        for (name, selection, expected) in cases {
+            assert_eq!(physical_rect(selection, &displays), expected, "{name}");
         }
     }
 }

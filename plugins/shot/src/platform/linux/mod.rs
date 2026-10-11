@@ -269,6 +269,7 @@ fn selector_window(
         default_target,
         crate::ui::region_selector::SelectorWindowOptions {
             display_id: None,
+            placement: None,
             kind: WindowKind::PopUp,
             decorations: WindowDecorations::Client,
             focus: true,

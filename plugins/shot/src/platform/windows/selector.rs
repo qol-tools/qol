@@ -21,7 +21,8 @@ use crate::ui::region_selector::{
 use crate::Rect;
 
 use super::display::{
-    full_screen_bounds, logical_cursor, logical_rect, native_displays, NativeDisplay,
+    full_screen_bounds, logical_cursor, logical_rect, monitor_from_rect, native_displays,
+    NativeDisplay,
 };
 
 const MIN_TARGET_PX: i32 = 24;
@@ -55,7 +56,7 @@ fn open_selectors(
     let screens = selector_screens(cx);
     let monitor_bounds = screens
         .iter()
-        .map(|(_, bounds)| *bounds)
+        .map(|screen| screen.bounds)
         .collect::<Vec<_>>();
     let cursor = Rc::new(CursorSource {
         displays: native_displays(),
@@ -75,17 +76,18 @@ fn open_selectors(
     };
     let selectors = screens
         .into_iter()
-        .map(|(display_id, bounds)| {
+        .map(|screen| {
             SelectorWindow::new(
-                bounds,
+                screen.bounds,
                 monitor_bounds.clone(),
                 active,
                 default_target,
                 SelectorWindowOptions {
-                    display_id,
+                    display_id: screen.display_id,
+                    placement: Some(screen.placement),
                     kind: ghost_window_kind(),
                     decorations: ghost_window_decorations(false),
-                    focus: active.is_none_or(|active| active == bounds),
+                    focus: active.is_none_or(|active| active == screen.bounds),
                 },
                 sources.clone(),
             )
@@ -115,11 +117,27 @@ fn open_selectors(
     cx.activate(true);
 }
 
-fn selector_screens(cx: &App) -> Vec<(Option<DisplayId>, Bounds<Pixels>)> {
+struct SelectorScreen {
+    display_id: Option<DisplayId>,
+    bounds: Bounds<Pixels>,
+    placement: Bounds<Pixels>,
+}
+
+fn selector_screens(cx: &App) -> Vec<SelectorScreen> {
+    let displays = native_displays();
     let screens = cx
         .displays()
         .iter()
-        .map(|display| (Some(display.id()), display.bounds()))
+        .filter_map(|screen| {
+            let placement = screen.bounds();
+            let index = u32::from(screen.id()) as usize;
+            let display = display_placed_at(&displays, index, placement)?;
+            Some(SelectorScreen {
+                display_id: Some(screen.id()),
+                bounds: bounds_from_monitor(monitor_from_rect(display.logical())),
+                placement,
+            })
+        })
         .collect::<Vec<_>>();
     if !screens.is_empty() {
         return screens;
@@ -127,7 +145,38 @@ fn selector_screens(cx: &App) -> Vec<(Option<DisplayId>, Bounds<Pixels>)> {
     let bounds = full_screen_bounds()
         .map(bounds_from_monitor)
         .unwrap_or_else(|_| fallback_bounds());
-    vec![(None, bounds)]
+    vec![SelectorScreen {
+        display_id: None,
+        bounds,
+        placement: bounds,
+    }]
+}
+
+fn display_placed_at(
+    displays: &[NativeDisplay],
+    index: usize,
+    placement: Bounds<Pixels>,
+) -> Option<NativeDisplay> {
+    displays
+        .get(index)
+        .into_iter()
+        .chain(displays)
+        .copied()
+        .find(|display| is_placed_at(display, placement))
+}
+
+fn is_placed_at(display: &NativeDisplay, placement: Bounds<Pixels>) -> bool {
+    let physical = display.physical;
+    let scaled = [physical.x, physical.y, physical.w, physical.h]
+        .map(|value| (value as f32 / display.scale).round());
+    let placed = [
+        placement.origin.x,
+        placement.origin.y,
+        placement.size.width,
+        placement.size.height,
+    ]
+    .map(|value| f32::from(value).round());
+    scaled == placed
 }
 
 fn snapshot_targets(
@@ -215,4 +264,73 @@ fn primary_button() -> VIRTUAL_KEY {
 fn key_down(key: VIRTUAL_KEY) -> bool {
     let state = unsafe { GetAsyncKeyState(i32::from(key)) };
     state as u16 & KEY_DOWN_MASK != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{point, px, size, Bounds, Pixels};
+
+    use super::display_placed_at;
+    use crate::platform::windows::display::NativeDisplay;
+    use crate::Rect;
+
+    fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(w), px(h)))
+    }
+
+    fn display(x: i32, w: i32, h: i32, scale: f32) -> NativeDisplay {
+        NativeDisplay {
+            physical: Rect { x, y: 0, w, h },
+            scale,
+        }
+    }
+
+    #[test]
+    fn a_selector_opens_on_the_display_gpui_placed_it_on() {
+        let displays = [
+            display(0, 1920, 1080, 1.0),
+            display(1920, 1920, 1080, 1.0),
+            display(3840, 3840, 2160, 2.0),
+        ];
+        let shared = bounds(1920.0, 0.0, 1920.0, 1080.0);
+        let cases = [
+            (
+                "display at its own index",
+                0,
+                bounds(0.0, 0.0, 1920.0, 1080.0),
+                Some(displays[0]),
+            ),
+            (
+                "bounds shared by two displays",
+                1,
+                shared,
+                Some(displays[1]),
+            ),
+            (
+                "the other display with the same bounds",
+                2,
+                shared,
+                Some(displays[2]),
+            ),
+            (
+                "index out of step with the native list",
+                0,
+                shared,
+                Some(displays[1]),
+            ),
+            (
+                "selector space of a scaled display",
+                2,
+                bounds(3840.0, 0.0, 1920.0, 1080.0),
+                None,
+            ),
+        ];
+        for (name, index, placement, expected) in cases {
+            assert_eq!(
+                display_placed_at(&displays, index, placement),
+                expected,
+                "{name}"
+            );
+        }
+    }
 }

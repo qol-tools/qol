@@ -190,6 +190,7 @@ fn selector_window(
         interaction.default_target,
         crate::ui::region_selector::SelectorWindowOptions {
             display_id,
+            placement: None,
             kind: ghost_window_kind(),
             decorations: ghost_window_decorations(false),
             focus,
