@@ -447,16 +447,22 @@ impl WindowsWindow {
             disable_direct_composition,
             directx_devices,
         };
+        let bounds = if display.check_given_bounds(params.bounds) {
+            params.bounds
+        } else {
+            display.default_bounds()
+        }
+        .to_device_pixels(display.scale_factor);
         let creation_result = unsafe {
             CreateWindowExW(
                 dwexstyle,
                 WINDOW_CLASS_NAME,
                 &window_name,
                 dwstyle,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
+                bounds.origin.x.0,
+                bounds.origin.y.0,
+                bounds.size.width.0,
+                bounds.size.height.0,
                 None,
                 None,
                 Some(hinstance.into()),
@@ -472,13 +478,7 @@ impl WindowsWindow {
         register_drag_drop(&this)?;
         configure_dwm_dark_mode(hwnd, appearance);
         this.state.borrow_mut().border_offset.update(hwnd)?;
-        let placement = retrieve_window_placement(
-            hwnd,
-            display,
-            params.bounds,
-            this.state.borrow().scale_factor,
-            this.state.borrow().border_offset,
-        )?;
+        let placement = retrieve_window_placement(hwnd, bounds, this.state.borrow().border_offset)?;
         if params.show {
             unsafe { SetWindowPlacement(hwnd, &placement)? };
         } else {
@@ -1308,9 +1308,7 @@ fn calculate_client_rect(
 
 fn retrieve_window_placement(
     hwnd: HWND,
-    display: WindowsDisplay,
-    initial_bounds: Bounds<Pixels>,
-    scale_factor: f32,
+    bounds: Bounds<DevicePixels>,
     border_offset: WindowBorderOffset,
 ) -> Result<WINDOWPLACEMENT> {
     let mut placement = WINDOWPLACEMENT {
@@ -1318,13 +1316,6 @@ fn retrieve_window_placement(
         ..Default::default()
     };
     unsafe { GetWindowPlacement(hwnd, &mut placement)? };
-    // the bounds may be not inside the display
-    let bounds = if display.check_given_bounds(initial_bounds) {
-        initial_bounds
-    } else {
-        display.default_bounds()
-    };
-    let bounds = bounds.to_device_pixels(scale_factor);
     placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
     Ok(placement)
 }
