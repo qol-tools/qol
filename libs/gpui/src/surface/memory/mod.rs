@@ -240,7 +240,9 @@ fn install_flush_hooks(cx: &mut App) {
 fn resolved(saved: &WindowState, cx: &App) -> Option<(ActiveMonitor, WindowRect)> {
     let (monitors, natives): (Vec<_>, Vec<_>) = current_monitors(cx).into_iter().unzip();
     let (monitor, window) = qol_window_state::resolve(saved, &monitors)?;
-    let index = monitors.iter().position(|known| known.id == monitor.id)?;
+    let index = monitors
+        .iter()
+        .position(|known| std::ptr::eq(known, monitor))?;
     natives
         .into_iter()
         .nth(index)
