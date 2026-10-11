@@ -419,6 +419,10 @@ pub fn configure_overlay_window(title: &str) -> bool {
     place(hwnd, HWND_TOPMOST, SWP_NOACTIVATE)
 }
 
+pub fn configure_pinned_window(title: &str) -> bool {
+    configure_overlay_window(title)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

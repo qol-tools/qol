@@ -52,7 +52,9 @@ pub fn pin_cache_enabled() -> bool {
     false
 }
 
-pub fn after_pin_open(_title: &str) {}
+pub fn after_pin_open(title: &str) {
+    qol_gpui::popup_window::configure_pinned_window(title);
+}
 
 pub fn run_internal_mode() -> Option<std::process::ExitCode> {
     qol_windowing::platform::windows::ensure_dpi_awareness();
