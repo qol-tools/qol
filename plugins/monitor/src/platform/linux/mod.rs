@@ -12,7 +12,8 @@ use super::platform_control::PlatformControl;
 use super::{Control, DisplayServer, PlatformSupport};
 use crate::monitor::backends::i2c_ddc::I2cDdcBackend;
 use crate::monitor::backends::shared_display::SharedDisplay;
-use crate::monitor::{GammaBackend, PolicyControl};
+use crate::monitor::night::Tint;
+use crate::monitor::{GammaBackend, GammaTable, PolicyControl};
 use i2c_dev::LinuxI2cTransport;
 use x11_randr::X11GammaTransport;
 
@@ -40,6 +41,10 @@ pub(crate) fn control() -> Control {
 
 pub(crate) fn native_desktop() -> bool {
     false
+}
+
+pub(crate) fn fit_tint(_dimmed: &GammaTable, tint: Tint) -> Tint {
+    tint
 }
 
 fn mode_writes_supported() -> bool {

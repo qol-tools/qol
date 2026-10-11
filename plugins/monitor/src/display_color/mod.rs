@@ -23,8 +23,14 @@ pub(crate) fn composed_target(
     if foreign_base && tint.is_neutral() {
         original.dimmed(value).tinted(tint)
     } else {
-        base.dimmed(value).tinted(tint)
+        let dimmed = base.dimmed(value);
+        let tint = crate::platform::fit_tint(&dimmed, tint);
+        dimmed.tinted(tint)
     }
+}
+
+pub(crate) fn tint_capped(base: &GammaTable, value: u8, tint: Tint) -> bool {
+    crate::platform::fit_tint(&base.dimmed(value), tint) != tint
 }
 
 fn neutral_gamma_table(table: &GammaTable) -> GammaTable {

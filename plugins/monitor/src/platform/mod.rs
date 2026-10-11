@@ -21,14 +21,22 @@ mod unix_signals;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(crate) use fallback::{control, current_support, install_signal_handlers, native_desktop};
+pub(crate) use fallback::{
+    control, current_support, fit_tint, install_signal_handlers, native_desktop,
+};
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{control, current_support, install_signal_handlers, native_desktop};
+pub(crate) use linux::{
+    control, current_support, fit_tint, install_signal_handlers, native_desktop,
+};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{control, current_support, install_signal_handlers, native_desktop};
+pub(crate) use macos::{
+    control, current_support, fit_tint, install_signal_handlers, native_desktop,
+};
 pub(crate) use support::PlatformSupport;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{control, current_support, install_signal_handlers, native_desktop};
+pub(crate) use windows::{
+    control, current_support, fit_tint, install_signal_handlers, native_desktop,
+};
 
 pub(crate) trait MonitorControl: DisplayControl + GammaStateControl {
     fn select(&self, display_id: &str, policy: BrightnessPolicy);

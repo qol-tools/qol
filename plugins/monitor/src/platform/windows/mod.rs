@@ -14,6 +14,7 @@ use display::WindowsDisplay;
 use dxva2::Dxva2Transport;
 use gamma::GdiGammaTransport;
 
+pub(crate) use gamma::fit_tint;
 pub(crate) use signals::install_signal_handlers;
 
 pub(crate) fn current_support() -> PlatformSupport {

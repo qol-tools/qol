@@ -255,6 +255,10 @@ impl<D: Send + Sync, G: GammaStateControl> GammaStateControl for PolicyControl<D
     fn restore(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
         self.gamma.restore(handle)
     }
+
+    fn tint_capped(&self, handle: &DisplayHandle) -> bool {
+        self.gamma.tint_capped(handle)
+    }
 }
 
 #[cfg(test)]

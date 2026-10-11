@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use super::{Control, PlatformSupport};
 use crate::daemon::Command;
-use crate::monitor::StubControl;
+use crate::monitor::night::Tint;
+use crate::monitor::{GammaTable, StubControl};
 
 pub(crate) struct SignalGuard;
 
@@ -20,6 +21,10 @@ pub(crate) fn control() -> Control {
 
 pub(crate) fn native_desktop() -> bool {
     false
+}
+
+pub(crate) fn fit_tint(_dimmed: &GammaTable, tint: Tint) -> Tint {
+    tint
 }
 
 pub(crate) fn install_signal_handlers(_tx: Sender<Command>) -> SignalGuard {

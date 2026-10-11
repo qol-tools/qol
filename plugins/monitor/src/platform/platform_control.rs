@@ -141,6 +141,10 @@ where
     fn restore(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
         self.brightness.restore(handle)
     }
+
+    fn tint_capped(&self, handle: &DisplayHandle) -> bool {
+        self.brightness.tint_capped(handle)
+    }
 }
 
 impl<D, G, P> MonitorControl for PlatformControl<D, G, P>

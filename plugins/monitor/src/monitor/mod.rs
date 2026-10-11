@@ -213,6 +213,9 @@ pub trait GammaStateControl: Send + Sync {
     fn mismatch_count(&self, handle: &DisplayHandle) -> usize;
     fn warned(&self, handle: &DisplayHandle) -> bool;
     fn restore(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError>;
+    fn tint_capped(&self, _handle: &DisplayHandle) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

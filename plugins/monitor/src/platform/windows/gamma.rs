@@ -1,16 +1,41 @@
 use std::ptr::null;
+use std::sync::OnceLock;
 
+use qol_platform::native::registry::{self, Hive};
 use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::Graphics::Gdi::{CreateDCW, DeleteDC, HDC};
 use windows_sys::Win32::UI::ColorSystem::{GetDeviceGammaRamp, SetDeviceGammaRamp};
 
 use super::display::attached_adapters;
 use crate::monitor::backends::gdi_display::connector_from_device;
-use crate::monitor::backends::gdi_gamma::{ramp_from_table, table_from_ramp, GammaRamp, RAMP_SIZE};
+use crate::monitor::backends::gdi_gamma::{
+    self, ramp_from_table, table_from_ramp, GammaRamp, DEFAULT_GAMMA_RANGE, RAMP_SIZE,
+};
 use crate::monitor::backends::x11_randr_gamma::{GammaBus, GammaTransport};
+use crate::monitor::night::Tint;
 use crate::monitor::{GammaError, GammaTable};
 
+const ICM_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM";
+const GAMMA_RANGE_VALUE: &str = "GdiIcmGammaRange";
+const WIDEST_GAMMA_RANGE: u32 = 256;
+
 pub(super) struct GdiGammaTransport;
+
+pub(crate) fn fit_tint(dimmed: &GammaTable, tint: Tint) -> Tint {
+    gdi_gamma::fit_tint(dimmed, tint, gamma_range())
+}
+
+fn gamma_range() -> u16 {
+    static RANGE: OnceLock<u16> = OnceLock::new();
+    *RANGE.get_or_init(|| {
+        registry::read_dword(Hive::LocalMachine, ICM_KEY, GAMMA_RANGE_VALUE)
+            .ok()
+            .flatten()
+            .map_or(DEFAULT_GAMMA_RANGE, |range| {
+                range.min(WIDEST_GAMMA_RANGE) as u16
+            })
+    })
+}
 
 pub(super) struct GdiGammaBus {
     devices: Vec<String>,
@@ -97,8 +122,7 @@ impl GammaBus for GdiGammaBus {
         if unsafe { SetDeviceGammaRamp(context.0, ramp.as_ptr().cast()) } == 0 {
             return Err(GammaError::Refused {
                 reason: format!(
-                    "Windows refused the gamma ramp on {}; GDI rejects ramps far from identity \
-                     unless GdiIcmGammaRange is raised",
+                    "Windows refused the gamma ramp on {}; GDI rejects ramps far from identity",
                     connector_from_device(device)
                 ),
             });

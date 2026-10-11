@@ -29,8 +29,8 @@ label = "Night mode status"
 section = "night"
 query = "night_mode"
 value_from = "state"
-label_map = { active = "Night mode on", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "OS night light could not be taken over", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid", controlled = "Under qol control", limited = "Another program keeps taking it", uncontrolled = "Warm calibration blocks the tint" }
-tone_map = { active = "success", inactive = "neutral", unsupported = "warning", conflict = "danger", failed = "danger", invalid_schedule = "danger" }
+label_map = { active = "Night mode on", capped = "Night mode on, as warm as the system allows", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "OS night light could not be taken over", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid", controlled = "Under qol control", limited = "Another program keeps taking it", uncontrolled = "Warm calibration blocks the tint" }
+tone_map = { active = "success", capped = "warning", inactive = "neutral", unsupported = "warning", conflict = "danger", failed = "danger", invalid_schedule = "danger" }
 
 [field.night_toggle]
 type = "action"

@@ -1156,6 +1156,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     "connector": handle.connector(),
                     "state": state.label(),
                     "reason": reason,
+                    "tint_capped": self.session.control().tint_capped(handle),
                 })
             })
             .collect()
@@ -1581,6 +1582,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             "failed"
         } else if decision.active && display_conflict {
             "conflict"
+        } else if decision.active && displays.iter().any(|row| row["tint_capped"] == true) {
+            "capped"
         } else if decision.active {
             "active"
         } else {
@@ -2740,6 +2743,7 @@ mod tests {
         events: StdMutex<Vec<String>>,
         snapshot_gate: StdMutex<Option<Arc<SnapshotGate>>>,
         guarded_drift: Arc<StdMutex<bool>>,
+        tint_capped: AtomicBool,
     }
 
     impl FakeControl {
@@ -2775,6 +2779,7 @@ mod tests {
                 events: StdMutex::new(Vec::new()),
                 snapshot_gate: StdMutex::new(None),
                 guarded_drift: Arc::new(StdMutex::new(false)),
+                tint_capped: AtomicBool::new(false),
             }
         }
 
@@ -2926,6 +2931,10 @@ mod tests {
             _handle: &DisplayHandle,
         ) -> Result<crate::monitor::RestoreOutcome, MonitorError> {
             Ok(RestoreOutcome::NothingToRestore)
+        }
+
+        fn tint_capped(&self, _handle: &DisplayHandle) -> bool {
+            self.tint_capped.load(Ordering::SeqCst)
         }
     }
 
@@ -3428,6 +3437,29 @@ mod tests {
             applet_claim: None,
             checksum: String::new(),
         }
+    }
+
+    #[test]
+    fn a_tint_the_system_caps_reports_night_mode_as_capped() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let displays = vec![handle("id-1", "card0-DP-1")];
+        let control = Arc::new(FakeControl::new(displays, 70, BrightnessSource::Ddc));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root, clock);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::Toggle));
+        assert_eq!(runtime.night_payload()["state"], "active");
+        control.tint_capped.store(true, Ordering::SeqCst);
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "capped");
+        assert_eq!(payload["active"], true);
+        assert_eq!(payload["displays"][0]["tint_capped"], true);
+        runtime.handle(Command::Night(NightRequest::Toggle));
+        assert_eq!(runtime.night_payload()["state"], "inactive");
     }
 
     #[test]
