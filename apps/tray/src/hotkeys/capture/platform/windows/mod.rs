@@ -8,7 +8,7 @@ use qol_hotkeys::grammar::{Key, Modifier as Mod};
 use qol_hotkeys::windows_keycode;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -28,6 +28,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
 
+mod recorder;
+
 pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = true;
 
 const MENU_MASK_KEY: VIRTUAL_KEY = 0xE8;
@@ -43,17 +45,20 @@ struct HookState {
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
 static LAST_HOOK_TICK: AtomicU32 = AtomicU32::new(0);
+static HOOK_ARMED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static HISTORY: RefCell<KeyHistory> = RefCell::new(KeyHistory::default());
     static LAYOUT: Cell<usize> = const { Cell::new(0) };
 }
 
-pub(crate) fn start_recording(_session_id: u64, _events: Arc<crate::daemon::EventBus>) -> bool {
-    false
+pub(crate) fn start_recording(session_id: u64, events: Arc<crate::daemon::EventBus>) -> bool {
+    recorder::global().start(session_id, events)
 }
 
-pub(crate) fn cancel_recording(_session_id: u64) {}
+pub(crate) fn cancel_recording(session_id: u64) {
+    recorder::global().cancel(session_id);
+}
 
 /// No capture backend re-emits events on Windows; nothing to flush.
 pub(crate) fn release_held_keys() {}
@@ -115,6 +120,7 @@ fn run_hook(ready_tx: Sender<Result<(), String>>, arm_state: Arc<AtomicU8>) {
         qol_runtime::probe!("HOTKEY_HOOK", "phase=arm outcome=cancelled-after-timeout");
         return;
     }
+    HOOK_ARMED.store(true, Ordering::SeqCst);
     if let Some(state) = HOOK_STATE.get() {
         log::info!(
             "Windows keyboard hook armed with {} bindings",
@@ -219,7 +225,7 @@ fn handle_key(state: &HookState, message: u32, event: &KBDLLHOOKSTRUCT) -> bool 
     if down {
         refresh_layout(&state.matcher);
     }
-    let swallowed = is_swallowing(&state.matcher, key);
+    let swallowed = recorder::claimed(key) || is_swallowing(&state.matcher, key);
     let async_down = key_is_down(key);
     let observed_transition = HISTORY.with(|history| {
         let mut history = history.borrow_mut();
@@ -238,6 +244,9 @@ fn handle_key(state: &HookState, message: u32, event: &KBDLLHOOKSTRUCT) -> bool 
         mods: hook_rules::held_mods(key_is_down, synthetic_ctrl),
         key,
     };
+    if recorder::record(transition, &observed) {
+        return true;
+    }
     let outcome = key_matcher::match_under_lock(&state.matcher, transition, &observed);
     if hook_rules::needs_menu_mask(transition, outcome.swallow, &observed.mods) {
         send_menu_mask();

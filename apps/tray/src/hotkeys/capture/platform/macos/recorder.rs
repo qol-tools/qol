@@ -1,11 +1,10 @@
 use super::super::key_matcher::KeyCombo;
+use super::super::recorder_hub::{Decision, RecorderHub};
 use super::layout::LayoutSymbols;
-use crate::daemon::{DaemonEvent, EventBus};
 use core_graphics::event::CGEventType;
 use qol_hotkeys::grammar::{self, Hotkey, Key};
 use qol_hotkeys::macos_keycode;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 const KEY_RIGHT_COMMAND: u16 = 0x36;
 const KEY_COMMAND: u16 = 0x37;
@@ -18,79 +17,8 @@ const KEY_RIGHT_OPTION: u16 = 0x3D;
 const KEY_RIGHT_CONTROL: u16 = 0x3E;
 const KEY_FUNCTION: u16 = 0x3F;
 
-struct ActiveRecording {
-    session_id: u64,
-    events: Arc<EventBus>,
-}
-
-#[derive(Default)]
-pub(super) struct RecorderHub {
-    active: Mutex<Option<ActiveRecording>>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Decision {
-    Ignore,
-    Cancel,
-    Complete(String),
-}
-
-impl RecorderHub {
-    pub(super) fn start(&self, session_id: u64, events: Arc<EventBus>) -> bool {
-        if !tap_alive() {
-            return false;
-        }
-        *self.lock() = Some(ActiveRecording { session_id, events });
-        qol_runtime::probe!("HOTKEY_RECORD_ARM", "session={session_id} backend=cgtap");
-        true
-    }
-
-    pub(super) fn cancel(&self, session_id: u64) {
-        let mut active = self.lock();
-        if active
-            .as_ref()
-            .is_none_or(|recording| recording.session_id != session_id)
-        {
-            return;
-        }
-        *active = None;
-        qol_runtime::probe!("HOTKEY_RECORD_CANCEL", "session={session_id}");
-    }
-
-    pub(super) fn recording(&self) -> bool {
-        self.lock().is_some()
-    }
-
-    pub(super) fn handle_event(&self, event_type: CGEventType, observed: &KeyCombo) {
-        let mut active = self.lock();
-        let Some(recording) = active.as_ref() else {
-            return;
-        };
-        match decide(event_type, observed, LayoutSymbols::current()) {
-            Decision::Ignore => {}
-            Decision::Cancel => {
-                let (session_id, events) = (recording.session_id, recording.events.clone());
-                *active = None;
-                events.send(DaemonEvent::HotkeyRecordingCanceled { session_id });
-                qol_runtime::probe!("HOTKEY_RECORD_CANCEL", "session={session_id} source=escape");
-            }
-            Decision::Complete(key) => {
-                let (session_id, events) = (recording.session_id, recording.events.clone());
-                *active = None;
-                qol_runtime::probe!(
-                    "HOTKEY_RECORD_COMPLETE",
-                    "session={session_id} key={key} backend=cgtap"
-                );
-                events.send(DaemonEvent::HotkeyRecorded { session_id, key });
-            }
-        }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Option<ActiveRecording>> {
-        self.active
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+pub(super) fn handle_event(event_type: CGEventType, observed: &KeyCombo) {
+    global().settle(decide(event_type, observed, LayoutSymbols::current()));
 }
 
 fn tap_alive() -> bool {
@@ -143,8 +71,8 @@ fn is_modifier_keycode(code: u16) -> bool {
 }
 
 pub(super) fn global() -> &'static RecorderHub {
-    static RECORDER: OnceLock<RecorderHub> = OnceLock::new();
-    RECORDER.get_or_init(RecorderHub::default)
+    static RECORDER: RecorderHub = RecorderHub::new("cgtap", tap_alive);
+    &RECORDER
 }
 
 #[cfg(test)]

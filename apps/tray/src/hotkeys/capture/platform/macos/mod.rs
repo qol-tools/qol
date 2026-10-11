@@ -154,10 +154,9 @@ fn run_tap(
             if !matches!(event_type, CGEventType::KeyDown | CGEventType::KeyUp) {
                 return CallbackResult::Keep;
             }
-            let recorder = recorder::global();
-            if recorder.recording() {
+            if recorder::global().recording() {
                 if matches!(event_type, CGEventType::KeyDown) && !is_auto_repeat(event) {
-                    recorder.handle_event(event_type, &observed_combo(event));
+                    recorder::handle_event(event_type, &observed_combo(event));
                 }
                 return CallbackResult::Drop;
             }

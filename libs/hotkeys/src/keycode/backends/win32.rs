@@ -18,8 +18,11 @@ const VK_SNAPSHOT: u16 = 0x2C;
 const VK_INSERT: u16 = 0x2D;
 const VK_DELETE: u16 = 0x2E;
 const VK_0: u16 = 0x30;
+const VK_9: u16 = 0x39;
 const VK_A: u16 = 0x41;
+const VK_Z: u16 = 0x5A;
 const VK_F1: u16 = 0x70;
+const VK_F12: u16 = 0x7B;
 
 pub fn key_to_vk(key: Key) -> Option<u16> {
     Some(match key {
@@ -28,6 +31,38 @@ pub fn key_to_vk(key: Key) -> Option<u16> {
         Key::Function(number @ 1..=12) => VK_F1 + u16::from(number - 1),
         Key::Named(named) => named_to_vk(named),
         Key::Letter(_) | Key::Digit(_) | Key::Function(_) | Key::Symbol(_) => return None,
+    })
+}
+
+pub fn vk_to_key(vk: u16) -> Option<Key> {
+    Some(match vk {
+        VK_A..=VK_Z => Key::Letter((vk - VK_A) as u8),
+        VK_0..=VK_9 => Key::Digit((vk - VK_0) as u8),
+        VK_F1..=VK_F12 => Key::Function((vk - VK_F1 + 1) as u8),
+        _ => Key::Named(vk_to_named(vk)?),
+    })
+}
+
+fn vk_to_named(vk: u16) -> Option<NamedKey> {
+    Some(match vk {
+        VK_SPACE => NamedKey::Space,
+        VK_RETURN => NamedKey::Enter,
+        VK_ESCAPE => NamedKey::Escape,
+        VK_TAB => NamedKey::Tab,
+        VK_BACK => NamedKey::Backspace,
+        VK_DELETE => NamedKey::Delete,
+        VK_INSERT => NamedKey::Insert,
+        VK_HOME => NamedKey::Home,
+        VK_END => NamedKey::End,
+        VK_PRIOR => NamedKey::PageUp,
+        VK_NEXT => NamedKey::PageDown,
+        VK_UP => NamedKey::Up,
+        VK_DOWN => NamedKey::Down,
+        VK_LEFT => NamedKey::Left,
+        VK_RIGHT => NamedKey::Right,
+        VK_SNAPSHOT => NamedKey::PrintScreen,
+        VK_PAUSE => NamedKey::Pause,
+        _ => return None,
     })
 }
 
@@ -73,6 +108,45 @@ mod tests {
         assert_eq!(vk("backspace"), Some(VK_BACK));
         assert_eq!(vk("delete"), Some(VK_DELETE));
         assert_eq!(vk("printscreen"), Some(VK_SNAPSHOT));
+    }
+
+    #[test]
+    fn virtual_keys_map_back_to_the_keys_that_bind_them() {
+        let named = [
+            NamedKey::Space,
+            NamedKey::Enter,
+            NamedKey::Escape,
+            NamedKey::Tab,
+            NamedKey::Backspace,
+            NamedKey::Delete,
+            NamedKey::Insert,
+            NamedKey::Home,
+            NamedKey::End,
+            NamedKey::PageUp,
+            NamedKey::PageDown,
+            NamedKey::Up,
+            NamedKey::Down,
+            NamedKey::Left,
+            NamedKey::Right,
+            NamedKey::PrintScreen,
+            NamedKey::Pause,
+        ];
+        let keys = (0u8..26)
+            .map(Key::Letter)
+            .chain((0u8..10).map(Key::Digit))
+            .chain((1u8..=12).map(Key::Function))
+            .chain(named.into_iter().map(Key::Named));
+        for key in keys {
+            let vk = key_to_vk(key).unwrap();
+            assert_eq!(vk_to_key(vk), Some(key), "vk: {vk:#x}");
+        }
+    }
+
+    #[test]
+    fn layout_dependent_and_modifier_virtual_keys_have_no_fixed_key() {
+        for vk in [0xBB, 0xBD, 0xBC, 0xDE, 0x10, 0xA0, 0x5B, 0x14, 0x60, 0x7C] {
+            assert_eq!(vk_to_key(vk), None, "vk: {vk:#x}");
+        }
     }
 
     #[test]
