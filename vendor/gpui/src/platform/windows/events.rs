@@ -38,6 +38,9 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if self.released.get() && !matches!(msg, WM_DESTROY | WM_NCCALCSIZE) {
+            return unsafe { DefWindowProcW(handle, msg, wparam, lparam) };
+        }
         let handled = match msg {
             WM_ACTIVATE => self.handle_activate_msg(wparam),
             WM_CREATE => self.handle_create_msg(handle),
@@ -751,6 +754,9 @@ impl WindowsWindowInner {
         let this = self.clone();
         self.executor
             .spawn(async move {
+                if this.released.get() {
+                    return;
+                }
                 let mut lock = this.state.borrow_mut();
                 if let Some(mut func) = lock.callbacks.active_status_change.take() {
                     drop(lock);

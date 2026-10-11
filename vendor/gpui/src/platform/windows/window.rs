@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     num::NonZeroIsize,
     path::PathBuf,
     rc::{Rc, Weak},
@@ -74,6 +74,7 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) validation_number: usize,
     pub(crate) main_receiver: flume::Receiver<Runnable>,
     pub(crate) platform_window_handle: HWND,
+    pub(crate) released: Cell<bool>,
 }
 
 impl WindowsWindowState {
@@ -232,6 +233,7 @@ impl WindowsWindowInner {
             main_receiver: context.main_receiver.clone(),
             platform_window_handle: context.platform_window_handle,
             system_settings: RefCell::new(WindowsSystemSettings::new(context.display)),
+            released: Cell::new(false),
         }))
     }
 
@@ -511,6 +513,7 @@ impl rwh::HasDisplayHandle for WindowsWindow {
 
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
+        self.0.released.set(true);
         // clone this `Rc` to prevent early release of the pointer
         let this = self.0.clone();
         self.0
@@ -712,8 +715,13 @@ impl PlatformWindow for WindowsWindow {
                         ShowWindowAsync(hwnd, SW_RESTORE).ok().log_err();
                     }
 
-                    SetActiveWindow(hwnd).log_err();
-                    SetFocus(Some(hwnd)).log_err();
+                    for previous in [SetActiveWindow(hwnd), SetFocus(Some(hwnd))] {
+                        if let Err(error) = previous
+                            && error.code().is_err()
+                        {
+                            log::error!("{error}");
+                        }
+                    }
                 }
 
                 // premium ragebait by windows, this is needed because the window
