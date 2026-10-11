@@ -141,5 +141,12 @@ pub(crate) fn monitor_scale(monitor: &gpui::Bounds<gpui::Pixels>) -> f32 {
             let bounds = candidate.bounds;
             [bounds.x, bounds.y, bounds.width, bounds.height].map(f64::round) == wanted
         })
+        .or_else(|| {
+            let center = monitor.center();
+            qol_windowing::platform::windows::monitor_at(
+                center.x.to_f64().round() as i32,
+                center.y.to_f64().round() as i32,
+            )
+        })
         .map_or(1.0, |candidate| candidate.scale)
 }
