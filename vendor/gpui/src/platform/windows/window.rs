@@ -43,6 +43,7 @@ pub struct WindowsWindowState {
     pub callbacks: Callbacks,
     pub input_handler: Option<PlatformInputHandler>,
     pub pending_surrogate: Option<u16>,
+    pub pending_packet: bool,
     pub last_reported_modifiers: Option<Modifiers>,
     pub last_reported_capslock: Option<Capslock>,
     pub system_key_handled: bool,
@@ -111,6 +112,7 @@ impl WindowsWindowState {
         let callbacks = Callbacks::default();
         let input_handler = None;
         let pending_surrogate = None;
+        let pending_packet = false;
         let last_reported_modifiers = None;
         let last_reported_capslock = None;
         let system_key_handled = false;
@@ -132,6 +134,7 @@ impl WindowsWindowState {
             callbacks,
             input_handler,
             pending_surrogate,
+            pending_packet,
             last_reported_modifiers,
             last_reported_capslock,
             system_key_handled,

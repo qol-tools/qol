@@ -374,6 +374,7 @@ impl WindowsWindowInner {
     // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
     fn handle_keydown_msg(&self, handle: HWND, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
         let mut lock = self.state.borrow_mut();
+        lock.pending_packet = VIRTUAL_KEY(wparam.loword()) == VK_PACKET;
         let Some(input) = handle_key_event(handle, wparam, lparam, &mut lock, |keystroke| {
             PlatformInput::KeyDown(KeyDownEvent {
                 keystroke,
@@ -429,12 +430,34 @@ impl WindowsWindowInner {
     }
 
     fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
+        let packet = std::mem::take(&mut self.state.borrow_mut().pending_packet);
         let input = self.parse_char_message(wparam)?;
-        self.with_input_handler(|input_handler| {
+        let inserted = self.with_input_handler(|input_handler| {
             input_handler.replace_text_in_range(None, &input);
         });
+        if inserted.is_none() && packet {
+            self.handle_packet_text(input);
+        }
 
         Some(0)
+    }
+
+    fn handle_packet_text(&self, text: String) {
+        let Some(mut func) = self.state.borrow_mut().callbacks.input.take() else {
+            return;
+        };
+        func(PlatformInput::KeyDown(KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers: current_modifiers(),
+                key: match text.as_str() {
+                    " " => "space".to_string(),
+                    _ => text.to_lowercase(),
+                },
+                key_char: Some(text),
+            },
+            is_held: false,
+        }));
+        self.state.borrow_mut().callbacks.input = Some(func);
     }
 
     fn handle_dead_char_msg(&self, wparam: WPARAM) -> Option<isize> {
