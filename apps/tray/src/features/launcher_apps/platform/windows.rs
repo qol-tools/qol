@@ -1,10 +1,10 @@
 use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
+use crate::installer::boot_environment::paths_equal_canonicalized;
 use crate::installer::platform::windows::shortcut::{self, Shortcut};
 use crate::shortcuts::model::AppRef;
 use anyhow::{anyhow, Context, Result};
 use qol_apps::shell_link::{LinkTarget, ShellLink};
-use qol_platform::windows_path::same_path;
 use qol_theme::Mark;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -129,12 +129,12 @@ fn link_matches(link: &Path, wanted: &Shortcut<'_>) -> bool {
     let LinkTarget::Path(target) = existing.target(link, |name| std::env::var(name).ok()) else {
         return false;
     };
-    same_path(&target, wanted.target)
+    paths_equal_canonicalized(&target, wanted.target)
         && existing.arguments.as_deref().unwrap_or_default() == wanted.arguments
         && existing.description.as_deref().unwrap_or_default() == wanted.description
         && existing
             .icon_location
-            .is_some_and(|icon| same_path(Path::new(&icon), wanted.icon))
+            .is_some_and(|icon| paths_equal_canonicalized(Path::new(&icon), wanted.icon))
 }
 
 fn remove_stale<'a>(dir: &Path, extension: &str, keep: impl IntoIterator<Item = &'a str>) {
