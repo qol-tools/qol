@@ -109,12 +109,16 @@ impl ActiveMonitor {
         Self { inner: b }
     }
 
-    pub fn from_gpui_bounds(bounds: Bounds<Pixels>) -> Self {
+    pub fn from_display(display: &dyn PlatformDisplay) -> Self {
+        let native = multiplied(
+            display.bounds(),
+            crate::platform::display_scale_factor(display.id()),
+        );
         Self::from_bounds(MonitorBounds {
-            x: bounds.origin.x.to_f64() as f32,
-            y: bounds.origin.y.to_f64() as f32,
-            width: bounds.size.width.to_f64() as f32,
-            height: bounds.size.height.to_f64() as f32,
+            x: native.origin.x.to_f64() as f32,
+            y: native.origin.y.to_f64() as f32,
+            width: native.size.width.to_f64() as f32,
+            height: native.size.height.to_f64() as f32,
         })
     }
 
@@ -180,6 +184,13 @@ fn divided(bounds: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
     Bounds::new(
         point(bounds.origin.x / scale, bounds.origin.y / scale),
         size(bounds.size.width / scale, bounds.size.height / scale),
+    )
+}
+
+pub(crate) fn multiplied(bounds: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
+    Bounds::new(
+        point(bounds.origin.x * scale, bounds.origin.y * scale),
+        size(bounds.size.width * scale, bounds.size.height * scale),
     )
 }
 

@@ -495,24 +495,12 @@ pub fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Opti
     cx.displays()
         .into_iter()
         .find(|display| {
-            let scale = crate::platform::display_scale_factor(display.id());
-            display_matches_monitor(&display.bounds(), scale, &target_bounds)
+            bounds_match(
+                &ActiveMonitor::from_display(display.as_ref()).bounds(),
+                &target_bounds,
+            )
         })
         .map(|display| display.id())
-}
-
-fn display_matches_monitor(display: &Bounds<Pixels>, scale: f32, monitor: &Bounds<Pixels>) -> bool {
-    let scaled = Bounds::new(
-        point(
-            px(display.origin.x.to_f64() as f32 * scale),
-            px(display.origin.y.to_f64() as f32 * scale),
-        ),
-        size(
-            px(display.size.width.to_f64() as f32 * scale),
-            px(display.size.height.to_f64() as f32 * scale),
-        ),
-    );
-    bounds_match(&scaled, monitor)
 }
 
 fn bounds_match(a: &Bounds<Pixels>, b: &Bounds<Pixels>) -> bool {
@@ -531,9 +519,10 @@ fn coord_diff(a: i32, b: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_adjacent_bounds, display_matches_monitor, non_target_keys, resolve_cursor_geometry,
+        bounds_match, cursor_adjacent_bounds, non_target_keys, resolve_cursor_geometry,
         CursorAnchorError, MonitorKey, ResolvedCursorPlacement,
     };
+    use crate::monitor::multiplied;
     use gpui::{point, px, size, Bounds};
     use proptest::prelude::*;
     use qol_runtime::{CursorPos, MonitorBounds};
@@ -758,10 +747,10 @@ mod tests {
         let monitor = Bounds::new(point(px(1920.0), px(0.0)), size(px(2880.0), px(1620.0)));
         let display = Bounds::new(point(px(1280.0), px(0.0)), size(px(1920.0), px(1080.0)));
         let other = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
-        assert!(display_matches_monitor(&display, 1.5, &monitor));
-        assert!(!display_matches_monitor(&display, 1.0, &monitor));
-        assert!(!display_matches_monitor(&other, 1.5, &monitor));
-        assert!(display_matches_monitor(&other, 1.0, &other));
+        assert!(bounds_match(&multiplied(display, 1.5), &monitor));
+        assert!(!bounds_match(&multiplied(display, 1.0), &monitor));
+        assert!(!bounds_match(&multiplied(other, 1.5), &monitor));
+        assert!(bounds_match(&multiplied(other, 1.0), &other));
     }
 
     #[test]

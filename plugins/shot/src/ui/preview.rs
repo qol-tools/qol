@@ -1104,7 +1104,7 @@ impl PreviewView {
         let tracker = MonitorTracker::start(cx);
         let fallback_monitor = window
             .display(cx)
-            .map(|display| ActiveMonitor::from_gpui_bounds(display.bounds()));
+            .map(|display| ActiveMonitor::from_display(display.as_ref()));
         qol_runtime::probe!("SHOT_EDIT", "phase=request seq={seq}");
         cx.spawn(async move |_view, cx| {
             let opened = crate::ui::editor::open_from(

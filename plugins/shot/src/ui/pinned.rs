@@ -1003,7 +1003,7 @@ impl PinnedView {
         let tracker = MonitorTracker::start(cx);
         let fallback_monitor = window
             .display(cx)
-            .map(|display| ActiveMonitor::from_gpui_bounds(display.bounds()));
+            .map(|display| ActiveMonitor::from_display(display.as_ref()));
         let reveal_generation = self.reveal_generation;
         qol_runtime::probe!("SHOT_EDIT", "phase=request surface=pinned");
         cx.spawn(async move |_view, cx| {
