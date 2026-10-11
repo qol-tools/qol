@@ -4,8 +4,7 @@ use super::cargo_target::workspace_root;
 use super::doctor_sizes::{self, StoredSize};
 use super::ttl_cell::TtlCell;
 use qol_dev_build::target_cache::{
-    cargo_cache_dirs, dir_size, format_bytes, prunable_target_bytes, INCREMENTAL_CACHE_CEILING,
-    SWEPT_CACHE_CEILING,
+    cargo_cache_dirs, dir_size, format_bytes, prunable_target_bytes, KEEP_UNUSED_FOR,
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -118,11 +117,10 @@ fn report_for(size: TargetSize, prunable: u64, targets: Vec<PathBuf>) -> CheckRe
         )),
         TargetSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo target directory is {} with {} prunable; removing stale secondary target roots, debug artifacts over the {} ceiling and incremental caches over the {} ceiling, oldest first",
+                "cargo target directory is {} with {} prunable; removing build outputs no build used in {} days and incremental sessions rustc replaced",
                 format_bytes(bytes),
                 format_bytes(prunable),
-                format_bytes(SWEPT_CACHE_CEILING),
-                format_bytes(INCREMENTAL_CACHE_CEILING)
+                KEEP_UNUSED_FOR.as_secs() / (24 * 60 * 60)
             ),
             ID,
             vec![FixAction::PruneCargoTargetDir { targets }],
@@ -173,9 +171,7 @@ mod tests {
             vec![FixAction::PruneCargoTargetDir { targets }],
             "the prune must never be cargo clean: live dev caches stay protected"
         );
-        assert!(report
-            .summary
-            .contains("incremental caches over the 48.0 GiB ceiling, oldest first"));
+        assert!(report.summary.contains("no build used in 3 days"));
     }
 
     #[test]

@@ -6586,6 +6586,7 @@ dependencies = [
 name = "qol-dev-build"
 version = "1.0.0"
 dependencies = [
+ "libc",
  "log",
  "proptest",
  "qol-artifact",

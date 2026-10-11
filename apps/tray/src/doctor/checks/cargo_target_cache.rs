@@ -2,14 +2,12 @@ use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck
 use super::cargo_target::workspace_root;
 use super::doctor_sizes::{self, StoredSize};
 use super::ttl_cell::TtlCell;
-use qol_dev_build::target_cache::{
-    cargo_cache_dirs, dir_size, format_bytes, INCREMENTAL_CACHE_CEILING,
-};
+use qol_dev_build::target_cache::{cargo_cache_dirs, dir_size, format_bytes, KEEP_UNUSED_FOR};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const ID: &str = "cargo_target_cache";
-const WARN_BYTES: u64 = INCREMENTAL_CACHE_CEILING;
+const WARN_BYTES: u64 = 48 * 1024 * 1024 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
 pub(super) struct CargoTargetCacheCheck {
@@ -111,9 +109,10 @@ fn report_for(size: CacheSize) -> CheckReport {
         )),
         CacheSize::Bytes(bytes) => CheckReport::warn(
             format!(
-                "cargo incremental cache is {} over the {} ceiling; the cargo_target_total prune evicts the least recently compiled crate caches",
+                "cargo incremental cache is {} over {}; the cargo_target_total prune removes crate caches no build used in {} days",
                 format_bytes(bytes),
-                format_bytes(WARN_BYTES)
+                format_bytes(WARN_BYTES),
+                KEEP_UNUSED_FOR.as_secs() / (24 * 60 * 60)
             ),
             ID,
             vec![],
@@ -148,9 +147,9 @@ mod tests {
         let report = report_for(CacheSize::Bytes(WARN_BYTES + 1));
         assert_eq!(report.issues.len(), 1);
         assert!(report.fixes.is_empty());
-        assert!(report.summary.contains(
-            "the cargo_target_total prune evicts the least recently compiled crate caches"
-        ));
+        assert!(report
+            .summary
+            .contains("the cargo_target_total prune removes crate caches no build used in 3 days"));
     }
 
     #[test]

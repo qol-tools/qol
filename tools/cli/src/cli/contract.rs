@@ -168,14 +168,19 @@ fn app() -> HeadlessApp {
             .detail("Publication is recorded in the run-directory report and starts as pending until the external rename succeeds, and a failed publication never leaves a verified report behind.")
             .detail("Full checks fingerprint the source before and after, and a mismatch marks the run stale instead of passing."),
         )
-        .command(command(
-            "clean",
-            "Clean workspace or named build artifacts.",
-            "qol clean [name]",
-            "Use -v to show child command output.",
-            "Cleanup progress on stdout; diagnostics on stderr.",
-            "Exits non-zero when cleanup fails.",
-        ))
+        .command(
+            command(
+                "clean",
+                "Clean workspace or named build artifacts, or prune cargo caches no build still uses.",
+                crate::commands::clean::USAGE,
+                "Use -v to show child command output. --prune keeps every cache a build used in the last 3 days, and what those builds depend on, and removes the rest; --dry-run only reports what it would free. Without dirs it prunes the workspace target dir and its cargo build dir.",
+                "Cleanup progress on stdout, or with --prune --json the per-directory sweep reports; diagnostics on stderr.",
+                "Exits non-zero when cleanup fails or a pruned cache entry cannot be removed.",
+            )
+            .detail("A prune skips a profile while cargo builds in it and never touches the qol-check, qol-env, qol-dev, qol-lint, and sherpa-onnx-prebuilt roots.")
+            .detail("On a disk that does not record file reads, a prune removes only caches cargo can no longer use: replaced incremental sessions and outputs without a fingerprint.")
+            .run_json(|context| crate::commands::clean::prune_json(context.args())),
+        )
         .command(command(
             "install",
             "Install built qol applications and plugins. --dev builds with the dev feature and installs a dev-mode runtime.",

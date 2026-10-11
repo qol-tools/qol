@@ -24,6 +24,14 @@ pub(crate) trait BuildPlatform {
     fn tray_dev_features(&self) -> &'static str;
     fn executable_suffix(&self) -> &'static str;
 
+    fn file_identity(&self, _metadata: &std::fs::Metadata) -> Option<FileIdentity> {
+        None
+    }
+
+    fn read_preserving_access_time(&self, path: &std::path::Path) -> Option<String> {
+        read_restoring_access_time(path)
+    }
+
     fn executable_name(&self, name: &str) -> String {
         let suffix = self.executable_suffix();
         if suffix.is_empty() || name.ends_with(suffix) {
@@ -50,6 +58,26 @@ pub(crate) trait BuildPlatform {
             reason: format!("Not supported on {} (requires {})", self.name(), declared),
         }
     }
+}
+
+pub(crate) fn read_restoring_access_time(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let accessed = std::fs::symlink_metadata(path).ok()?.accessed().ok()?;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .ok()?;
+    let mut content = String::new();
+    (&mut file).take(64).read_to_string(&mut content).ok()?;
+    let _ = file.set_times(std::fs::FileTimes::new().set_accessed(accessed));
+    Some(content)
+}
+
+pub(crate) struct FileIdentity {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+    pub(crate) links: u64,
 }
 
 pub(crate) struct PluginSupport {
