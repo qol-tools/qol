@@ -14,10 +14,10 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WS_EX_APPWINDOW,
-    WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 
 use super::PopupPresentation;
@@ -386,6 +386,10 @@ pub fn hide_window_by_title(title: &str) -> bool {
     let Some(hwnd) = find_window(title) else {
         return false;
     };
+    if unsafe { IsIconic(hwnd) } != 0 {
+        cloak(hwnd, true);
+        unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+    }
     unsafe { ShowWindow(hwnd, SW_HIDE) };
     cloak(hwnd, false);
     true
