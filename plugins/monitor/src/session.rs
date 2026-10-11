@@ -911,6 +911,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .ok_or_else(|| {
                 MonitorError::refused("brightness", "the brightness snapshot vanished")
             })?;
+        let applied = snapshot.last_value;
         let updated = Snapshot {
             mutations: snapshot.mutations + 1,
             last_value: value,
@@ -919,8 +920,18 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         self.store
             .write_snapshot(&updated)
             .map_err(|error| MonitorError::refused("brightness", format!("{error:#}")))?;
-        self.control
-            .set_brightness_with_tint(handle, value, updated.last_tint)?;
+        if let Err(error) = self
+            .control
+            .set_brightness_with_tint(handle, value, updated.last_tint)
+        {
+            if updated.source_kind() == Some(BrightnessSource::Gamma) {
+                let _ = self.store.write_snapshot(&Snapshot {
+                    last_value: applied,
+                    ..updated
+                });
+            }
+            return Err(error);
+        }
         if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
             state.brightness.value = value;
         }
@@ -943,6 +954,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .load_snapshot(handle.id())
             .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?
             .ok_or_else(|| MonitorError::refused("tint", "the display snapshot vanished"))?;
+        let applied = snapshot.last_tint;
         let updated = Snapshot {
             mutations: snapshot.mutations + 1,
             last_tint: tint,
@@ -952,8 +964,16 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .write_snapshot(&updated)
             .map_err(|error| MonitorError::refused("tint", format!("{error:#}")))?;
         before_write();
-        self.control
-            .set_gamma_adjustment(handle, updated.lut_percent(), tint)?;
+        if let Err(error) = self
+            .control
+            .set_gamma_adjustment(handle, updated.lut_percent(), tint)
+        {
+            let _ = self.store.write_snapshot(&Snapshot {
+                last_tint: applied,
+                ..updated
+            });
+            return Err(error);
+        }
         self.track_tint(handle, tint);
         Ok(())
     }
@@ -1578,6 +1598,7 @@ mod tests {
         displays: Vec<DisplayHandle>,
         current: StdMutex<u8>,
         source: BrightnessSource,
+        floor: u8,
         sets: AtomicUsize,
         calls: StdMutex<Vec<(String, u8)>>,
         tints: StdMutex<Vec<(String, Tint)>>,
@@ -1589,6 +1610,7 @@ mod tests {
                 displays,
                 current: StdMutex::new(current),
                 source: BrightnessSource::Ddc,
+                floor: 0,
                 sets: AtomicUsize::new(0),
                 calls: StdMutex::new(Vec::new()),
                 tints: StdMutex::new(Vec::new()),
@@ -1597,6 +1619,11 @@ mod tests {
 
         fn with_source(mut self, source: BrightnessSource) -> Self {
             self.source = source;
+            self
+        }
+
+        fn with_floor(mut self, floor: u8) -> Self {
+            self.floor = floor;
             self
         }
 
@@ -1623,11 +1650,14 @@ mod tests {
 
         fn set_brightness(&self, _handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
             self.sets.fetch_add(1, Ordering::SeqCst);
-            *self.current.lock().unwrap() = value;
             self.calls
                 .lock()
                 .unwrap()
                 .push((_handle.id().to_string(), value));
+            if value < self.floor {
+                return Err(MonitorError::refused("gamma", "below the accepted floor"));
+            }
+            *self.current.lock().unwrap() = value;
             Ok(())
         }
 
@@ -1643,8 +1673,11 @@ mod tests {
             &self,
             handle: &DisplayHandle,
             value: u8,
-            _tint: Tint,
+            tint: Tint,
         ) -> Result<(), MonitorError> {
+            if u32::from(value) * u32::from(tint.blue) < u32::from(self.floor) * 1000 {
+                return Err(MonitorError::refused("gamma", "below the accepted floor"));
+            }
             if self.source == BrightnessSource::Gamma {
                 self.set_brightness(handle, value)?;
             }
@@ -2776,6 +2809,84 @@ mod tests {
         );
         assert!(store.dir().join("id-3.json").exists());
         assert!(store.load_snapshot("id-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_refused_gamma_write_leaves_the_applied_ramp_recoverable() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let baseline = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(baseline.clone()));
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100)
+                .with_source(BrightnessSource::Gamma)
+                .with_floor(50),
+        );
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let session = Session::new(control.clone(), store.clone(), lut);
+        session.mutate(&display, 60).unwrap();
+        *current.lock().unwrap() = baseline.dimmed(60);
+
+        assert!(session.mutate(&display, 30).is_err());
+        assert_eq!(
+            store.load_snapshot("id-1").unwrap().unwrap().last_value,
+            60,
+            "the refused value is not recorded as applied"
+        );
+        session.mutate_tint(&display, Tint::NEUTRAL).unwrap();
+        assert_eq!(
+            control.calls().last(),
+            Some(&("id-1".to_string(), 60)),
+            "a later write composes with the applied value"
+        );
+
+        drop(session);
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let recovery = Session::new(control.clone(), store.clone(), lut);
+        let report = recovery.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(*current.lock().unwrap(), baseline);
+    }
+
+    #[test]
+    fn a_refused_tint_leaves_the_applied_ramp_recoverable() {
+        let (_dir, store) = fake_store();
+        let display = handle("id-1", "card0-DP-1");
+        let baseline = gamma_table(1000);
+        let current = Arc::new(StdMutex::new(baseline.clone()));
+        let control = Arc::new(
+            RecordingControl::new(vec![display.clone()], 100)
+                .with_source(BrightnessSource::Gamma)
+                .with_floor(50),
+        );
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let session = Session::new(control.clone(), store.clone(), lut);
+        let warm = Tint {
+            red: 1000,
+            green: 800,
+            blue: 600,
+        };
+        session.mutate_tint(&display, warm).unwrap();
+        *current.lock().unwrap() = baseline.tinted(warm);
+
+        let warmer = Tint {
+            red: 1000,
+            green: 600,
+            blue: 300,
+        };
+        assert!(session.mutate_tint(&display, warmer).is_err());
+        assert_eq!(
+            store.load_snapshot("id-1").unwrap().unwrap().last_tint,
+            warm,
+            "the refused tint is not recorded as applied"
+        );
+
+        drop(session);
+        let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
+        let recovery = Session::new(control.clone(), store.clone(), lut);
+        let report = recovery.restore_all(RestoreMode::Recovery);
+        assert_eq!(report.restored, 1);
+        assert_eq!(*current.lock().unwrap(), baseline);
     }
 
     #[test]
