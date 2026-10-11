@@ -83,6 +83,10 @@ impl PopupPlacement {
         self.monitor.as_ref().map(ActiveMonitor::size)
     }
 
+    pub fn scale(&self) -> Option<f32> {
+        self.monitor.as_ref().map(ActiveMonitor::scale)
+    }
+
     pub fn origin(&self) -> Point<Pixels> {
         self.monitor
             .as_ref()

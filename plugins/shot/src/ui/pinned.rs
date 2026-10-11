@@ -956,6 +956,7 @@ impl PinnedView {
             window,
             origin,
             size(px(PIN_CACHE_SIZE.0), px(PIN_CACHE_SIZE.1)),
+            None,
         );
         if !platform::prepare_pin_window(&self.title, (-100.0, -100.0)) {
             window.remove_window();

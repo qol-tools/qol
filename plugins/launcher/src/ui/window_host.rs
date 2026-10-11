@@ -185,6 +185,7 @@ fn show_ghost(
                 window,
                 placement.bounds.origin,
                 full_window_size(),
+                monitor_snapshot.map(monitor::ActiveMonitor::scale),
             );
             super::platform::show_topmost_window(&title, &all_titles);
             window.activate_window();

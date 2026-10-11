@@ -325,36 +325,11 @@ pub fn sync_window_layout(
     window: &mut gpui::Window,
     origin: gpui::Point<gpui::Pixels>,
     size: gpui::Size<gpui::Pixels>,
+    scale: Option<f32>,
 ) -> bool {
-    let monitors = monitors()
-        .into_iter()
-        .map(|monitor| (monitor.bounds, monitor.scale));
-    let scale = scale_at(origin, window.scale_factor(), monitors);
+    let scale = scale.unwrap_or_else(|| window.scale_factor());
     crate::window::resize_or_sync_scale(window, size, Some(scale));
     sync_window_layout_by_title(title, gpui::point(origin.x * scale, origin.y * scale), size)
-}
-
-fn scale_at(
-    origin: gpui::Point<gpui::Pixels>,
-    current: f32,
-    monitors: impl Iterator<Item = (WindowRect, f32)>,
-) -> f32 {
-    let (x, y) = (origin.x.to_f64(), origin.y.to_f64());
-    let containing: Vec<f32> = monitors
-        .filter(|(bounds, scale)| {
-            let scale = f64::from(*scale);
-            (bounds.x / scale..(bounds.x + bounds.width) / scale).contains(&x)
-                && (bounds.y / scale..(bounds.y + bounds.height) / scale).contains(&y)
-        })
-        .map(|(_, scale)| scale)
-        .collect();
-    if containing
-        .iter()
-        .any(|scale| (scale - current).abs() < 0.01)
-    {
-        return current;
-    }
-    containing.first().copied().unwrap_or(current)
 }
 
 pub fn sync_window_layout_by_title(
@@ -450,49 +425,6 @@ mod tests {
             y: f64::from(top),
             width: f64::from(right - left),
             height: f64::from(bottom - top),
-        }
-    }
-
-    #[test]
-    fn a_logical_origin_takes_the_scale_of_the_monitor_holding_it() {
-        let monitors = [
-            (rect(0, 0, 1920, 1080), 1.0),
-            (rect(1920, 0, 4800, 1620), 1.5),
-        ];
-        let cases = [
-            (
-                "only the scaled monitor holds it",
-                (2000.0, 100.0),
-                1.0,
-                1.5,
-            ),
-            (
-                "only the unscaled monitor holds it",
-                (100.0, 100.0),
-                1.5,
-                1.0,
-            ),
-            (
-                "both hold it, the window is on the scaled one",
-                (1500.0, 100.0),
-                1.5,
-                1.5,
-            ),
-            (
-                "both hold it, the window is on the unscaled one",
-                (1500.0, 100.0),
-                1.0,
-                1.0,
-            ),
-            ("none holds it", (-100.0, -100.0), 1.25, 1.25),
-        ];
-        for (name, (x, y), current, expected) in cases {
-            let origin = gpui::point(gpui::px(x), gpui::px(y));
-            assert_eq!(
-                scale_at(origin, current, monitors.into_iter()),
-                expected,
-                "{name}"
-            );
         }
     }
 

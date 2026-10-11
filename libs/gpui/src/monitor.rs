@@ -144,7 +144,11 @@ impl ActiveMonitor {
     }
 
     pub fn logical(&self, native: Bounds<Pixels>) -> Bounds<Pixels> {
-        divided(native, crate::platform::monitor_scale(&self.bounds()))
+        divided(native, self.scale())
+    }
+
+    pub fn scale(&self) -> f32 {
+        crate::platform::monitor_scale(&self.bounds())
     }
 
     pub fn from_key(key: MonitorKey) -> Option<Self> {

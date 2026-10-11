@@ -376,7 +376,7 @@ pub(crate) fn apply_default_copy_action(
 }
 
 fn park_ghost(title: &str, window: &mut Window, origin: Point<Pixels>) {
-    sync_window_layout(title, window, origin, size(px(1.0), px(1.0)));
+    sync_window_layout(title, window, origin, size(px(1.0), px(1.0)), None);
     hide_invisible(title);
     qol_gpui::popup_window::restore_composite(title);
 }

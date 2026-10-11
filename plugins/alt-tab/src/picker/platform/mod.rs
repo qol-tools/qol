@@ -37,8 +37,9 @@ pub fn sync_picker_window_layout(
     window: &mut gpui::Window,
     origin: gpui::Point<gpui::Pixels>,
     size: gpui::Size<gpui::Pixels>,
+    scale: Option<f32>,
 ) -> bool {
-    qol_gpui::ghost::sync_window_layout(title, window, origin, size)
+    qol_gpui::ghost::sync_window_layout(title, window, origin, size, scale)
 }
 pub fn adjust_picker_bounds(bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
     qol_gpui::platform::adjust_ghost_bounds(bounds)
