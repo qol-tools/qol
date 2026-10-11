@@ -252,6 +252,7 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
             qol_conventions::ENV_STATE_SOCKET,
             crate::dev_generation::state_socket_path(),
         );
+    qol_process::hide_console_window(&mut command);
     crate::features::theme::apply_accent_env(&mut command);
     crate::features::theme::apply_theme_name_env(&mut command);
     if let Some(socket_path) = &resolved.daemon_socket {
