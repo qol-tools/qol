@@ -1,6 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 trait InstallerOps {
     fn binary_filename(&self) -> String;
@@ -92,14 +91,4 @@ pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
         .parent()
         .map(|dir| vec![dir.join(binary_filename())])
         .unwrap_or_default()
-}
-
-pub(super) fn spawn_detached(binary_path: &Path) -> Result<()> {
-    Command::new(binary_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("Failed to start {}", binary_path.display()))?;
-    Ok(())
 }

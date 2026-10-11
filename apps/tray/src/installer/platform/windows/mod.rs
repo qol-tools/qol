@@ -10,6 +10,12 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::{
+    SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::System::Console::{
+    GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+};
 
 use self::registration::Layout;
 use super::windows_rules::uninstall::{plan, UninstallPlan};
@@ -31,7 +37,9 @@ impl InstallerOps for Platform {
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
-        super::spawn_detached(binary_path)
+        keep_std_handles_from_children();
+        qol_process::spawn_detached(&mut Command::new(binary_path))
+            .with_context(|| format!("Failed to start {}", binary_path.display()))
     }
 
     fn stop_running(&self, binary_path: &Path) -> Result<()> {
@@ -99,6 +107,15 @@ impl InstallerOps for Platform {
         run_key::remove()?;
         registration::remove(&layout)?;
         remove_install_files(binary_path)
+    }
+}
+
+fn keep_std_handles_from_children() {
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        let handle = unsafe { GetStdHandle(id) };
+        if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+        }
     }
 }
 
