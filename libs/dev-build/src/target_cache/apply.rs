@@ -60,10 +60,10 @@ pub(super) fn apply(plan: Plan) -> SweepReport {
             removed.push(removal);
         }
     }
-    if let Err(failure) = trash.empty() {
-        report.failures.push(failure);
+    match trash.empty() {
+        Ok(()) => tally_into(&mut report, &removed),
+        Err(failure) => report.failures.push(failure),
     }
-    tally_into(&mut report, &removed);
     report
 }
 
@@ -85,7 +85,9 @@ fn still_unused(
         Guard::Session { crate_dir, started } => {
             newest_finalized(&session_names(crate_dir)).is_some_and(|newest| newest > *started)
         }
-        Guard::CrateCache { crate_dir } => idle_since(&session_names(crate_dir), cutoff),
+        Guard::CrateCache { crate_dir } => {
+            idle_since(crate_dir, &session_names(crate_dir), cutoff)
+        }
         Guard::Root => true,
     }
 }

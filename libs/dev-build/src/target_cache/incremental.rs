@@ -1,6 +1,7 @@
 use super::files::{collect_files, read_entries, FileStat};
 use super::Pacer;
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -57,7 +58,8 @@ impl CrateCache {
     }
 
     pub(super) fn idle_since(&self, cutoff: SystemTime, live_files: &HashSet<(u64, u64)>) -> bool {
-        if !idle_since(self.sessions.iter().map(|session| &session.name), cutoff) {
+        let names = self.sessions.iter().map(|session| &session.name);
+        if !idle_since(&self.path, names, cutoff) {
             return false;
         }
         let newest = newest_finalized(self.sessions.iter().map(|session| &session.name));
@@ -124,12 +126,21 @@ pub(super) fn newest_finalized<'a>(
 }
 
 pub(super) fn idle_since<'a>(
+    crate_dir: &Path,
     names: impl IntoIterator<Item = &'a SessionName>,
     cutoff: SystemTime,
 ) -> bool {
-    names
-        .into_iter()
-        .all(|name| name.finalized && name.started < cutoff)
+    names.into_iter().all(|name| {
+        let abandoned = name.finalized || !lock_is_held(&crate_dir.join(&name.lock_file));
+        name.started < cutoff && abandoned
+    })
+}
+
+fn lock_is_held(lock: &Path) -> bool {
+    match fs::File::open(lock) {
+        Ok(file) => !matches!(file.try_lock(), Ok(())),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 #[cfg(test)]
@@ -160,24 +171,41 @@ mod tests {
     }
 
     #[test]
-    fn idle_needs_every_session_finalized_and_older_than_the_cutoff() {
+    fn idle_needs_every_session_older_than_the_cutoff_and_none_still_working() {
+        let crate_dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate_dir.path();
         let cutoff = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
         let session = |secs: u64, finalized: bool| SessionName {
             started: SystemTime::UNIX_EPOCH + Duration::from_secs(secs),
-            lock_file: String::new(),
+            lock_file: format!("s-{secs}.lock"),
             finalized,
         };
-        assert!(idle_since(&[session(10, true), session(50, true)], cutoff));
+        assert!(idle_since(
+            dir,
+            &[session(10, true), session(50, true)],
+            cutoff
+        ));
         assert!(!idle_since(
+            dir,
             &[session(10, true), session(150, true)],
             cutoff
         ));
-        assert!(!idle_since(
-            &[session(10, true), session(20, false)],
-            cutoff
-        ));
         assert!(
-            idle_since(&[], cutoff),
+            idle_since(dir, &[session(10, true), session(20, false)], cutoff),
+            "a working session whose lock file is gone was abandoned"
+        );
+        let lock = fs::File::create(dir.join("s-20.lock")).expect("lock file");
+        assert!(
+            idle_since(dir, &[session(10, true), session(20, false)], cutoff),
+            "a working session whose lock nobody holds was abandoned"
+        );
+        lock.lock().expect("hold lock");
+        assert!(
+            !idle_since(dir, &[session(10, true), session(20, false)], cutoff),
+            "a working session whose lock is held is live"
+        );
+        assert!(
+            idle_since(dir, &[], cutoff),
             "a crate dir with no sessions holds nothing"
         );
     }

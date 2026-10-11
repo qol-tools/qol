@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+const CACHE_MARKERS: [&str; 2] = ["CACHEDIR.TAG", ".rustc_info.json"];
 
 pub(super) struct Plan {
     pub(super) dir: PathBuf,
@@ -94,6 +95,7 @@ pub(super) fn plan(
         .flatten()
         .collect();
     entries.sort_by_key(fs::DirEntry::file_name);
+    ensure_cargo_cache(dir, &entries)?;
     let cutoff = now.checked_sub(keep_for).unwrap_or(SystemTime::UNIX_EPOCH);
     let unit_cutoff = access_times.then_some(cutoff);
     let mut pacer = Pacer::new();
@@ -137,6 +139,31 @@ pub(super) fn plan(
         }
     }
     Ok(plan)
+}
+
+fn ensure_cargo_cache(dir: &Path, entries: &[fs::DirEntry]) -> Result<(), String> {
+    if is_profile_dir(dir) {
+        return Err(format!(
+            "{} is a cargo profile dir, not a cargo cache dir; pass its parent",
+            dir.display()
+        ));
+    }
+    let marked = entries
+        .iter()
+        .any(|entry| CACHE_MARKERS.contains(&entry.file_name().to_string_lossy().as_ref()));
+    let has_profile = || {
+        entries.iter().any(|entry| {
+            let path = entry.path();
+            is_profile_dir(&path) || !child_profile_dirs(&path).is_empty()
+        })
+    };
+    if marked || has_profile() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} does not look like a cargo cache dir (no CACHEDIR.TAG, .rustc_info.json or profile dir); nothing pruned",
+        dir.display()
+    ))
 }
 
 pub(super) fn records_access_times(dir: &Path, now: SystemTime) -> bool {

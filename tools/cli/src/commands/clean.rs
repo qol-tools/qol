@@ -41,9 +41,21 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
 }
 
 pub(crate) fn prune_json(args: &[String]) -> Result<Value> {
+    let (value, problems) = prune_value(args)?;
+    if problems > 0 {
+        bail!("qol clean --prune could not remove {problems} cache entries: {value}");
+    }
+    Ok(value)
+}
+
+fn prune_value(args: &[String]) -> Result<(Value, usize)> {
     let prune =
         PruneArgs::parse(args)?.ok_or_else(|| anyhow!("usage: {USAGE} (--json needs --prune)"))?;
     let outcomes = sweep_all(&prune)?;
+    let problems: usize = outcomes
+        .iter()
+        .map(|(_, outcome)| outcome.as_ref().map_or(1, |report| report.failures.len()))
+        .sum();
     let freed_bytes: u64 = outcomes
         .iter()
         .filter_map(|(_, outcome)| outcome.as_ref().ok())
@@ -56,11 +68,12 @@ pub(crate) fn prune_json(args: &[String]) -> Result<Value> {
             Err(error) => json!({ "dir": dir, "error": error }),
         })
         .collect();
-    Ok(json!({
+    let value = json!({
         "dry_run": prune.mode == SweepMode::DryRun,
         "freed_bytes": freed_bytes,
         "dirs": dirs,
-    }))
+    });
+    Ok((value, problems))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -254,14 +267,18 @@ mod tests {
     fn json_prune_reports_every_directory_with_its_own_outcome() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing");
+        std::fs::write(dir.path().join("CACHEDIR.TAG"), b"").expect("marker");
 
-        let value = prune_json(&args(&[
+        let prune_args = args(&[
             "--prune",
             "--dry-run",
             dir.path().to_str().expect("utf8"),
             missing.to_str().expect("utf8"),
-        ]))
-        .expect("json");
+        ]);
+        let (value, problems) = prune_value(&prune_args).expect("json");
+
+        assert_eq!(problems, 1);
+        assert!(prune_json(&prune_args).is_err(), "a failed dir exits non-zero");
 
         assert_eq!(value["dry_run"], true);
         assert_eq!(value["freed_bytes"], 0);

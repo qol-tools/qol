@@ -643,7 +643,12 @@ mod tests {
         session(&idle, clock.old(), "svh3");
         let busy = incremental.join("busy-3c");
         let busy_finalized = session(&busy, clock.old(), "svh4");
-        session(&busy, clock.old(), "working");
+        let working = session(&busy, clock.old(), "working");
+        let working_lock = fs::File::open(&working.lock).expect("working lock");
+        working_lock.lock().expect("rustc holds the lock");
+        let abandoned = incremental.join("crashed-4d");
+        let abandoned_finalized = session(&abandoned, clock.old(), "svh6");
+        session(&abandoned, clock.old(), "working");
 
         let report = clock.sweep(root.path(), SweepMode::Apply, true);
 
@@ -658,8 +663,12 @@ mod tests {
             busy_finalized.dir.exists(),
             "a crate cache with a working session is left to rustc"
         );
+        assert!(
+            !abandoned_finalized.dir.exists(),
+            "a working session nobody holds a lock on is a crash leftover"
+        );
         assert_eq!(report.superseded_sessions.count, 1);
-        assert_eq!(report.idle_crate_caches.count, 1);
+        assert_eq!(report.idle_crate_caches.count, 2);
     }
 
     #[cfg(unix)]
@@ -842,6 +851,7 @@ mod tests {
     fn a_leftover_trash_dir_is_emptied_before_the_next_sweep() {
         let clock = Clock::new();
         let root = tempfile::tempdir().expect("tempdir");
+        write_at(&root.path().join("CACHEDIR.TAG"), b"x", clock.old());
         write_at(
             &root
                 .path()
@@ -856,6 +866,26 @@ mod tests {
 
         assert!(report.failures.is_empty(), "{:?}", report.failures);
         assert!(!root.path().join(".qol-sweep-trash").exists());
+    }
+
+    #[test]
+    fn a_dir_that_is_not_a_cargo_cache_is_refused_untouched() {
+        let clock = Clock::new();
+        let root = tempfile::tempdir().expect("tempdir");
+        let work = root.path().join("work");
+        let repo = work.join("some-repo");
+        write_at(&repo.join("src").join("main.rs"), b"fn main() {}", clock.old());
+        let profile = root.path().join("target").join("debug");
+        unit(&profile, "syn", "cccccccccccccccc", 3, &[], clock.old());
+
+        for dir in [&work, &profile] {
+            for mode in [SweepMode::DryRun, SweepMode::Apply] {
+                sweep(dir, mode, clock.now, KEEP_UNUSED_FOR, Some(true)).expect_err("refused");
+            }
+        }
+
+        assert!(repo.join("src").join("main.rs").exists());
+        assert!(profile.join("deps").exists());
     }
 
     #[test]
@@ -875,6 +905,7 @@ mod tests {
         let clock = Clock::new();
         let root = tempfile::tempdir().expect("tempdir");
         let target = root.path();
+        write_at(&target.join("CACHEDIR.TAG"), b"x", clock.old());
         let locked = target.join("cargo-timings");
         write_at(&locked.join("held.rlib"), b"x", clock.old());
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).expect("lock perms");
