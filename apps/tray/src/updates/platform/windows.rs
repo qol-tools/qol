@@ -159,10 +159,11 @@ pub(super) async fn download_and_install(
 
 async fn stop_plugins(plugin_manager: Arc<Mutex<PluginManager>>) {
     let stopping = tokio::task::spawn_blocking(move || {
-        plugin_manager
+        let mut manager = plugin_manager
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .shutdown();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        manager.hand_off_running_daemons();
+        manager.shutdown();
     });
     match tokio::time::timeout(crate::relaunch::PREDECESSOR_CLEANUP_BUDGET, stopping).await {
         Ok(Err(error)) => {
