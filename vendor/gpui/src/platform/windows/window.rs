@@ -567,7 +567,7 @@ impl PlatformWindow for WindowsWindow {
                         bounds.origin.y.0,
                         rect.right - rect.left,
                         rect.bottom - rect.top,
-                        SWP_NOMOVE,
+                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
                     )
                     .context("unable to set window content size")
                     .log_err();
