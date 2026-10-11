@@ -745,8 +745,6 @@ items = []
         use std::io::Write;
 
         let _env_lock = crate::test_support::env_lock().blocking_lock();
-        let root = tempfile::tempdir().unwrap();
-        let _guard = crate::paths::push_test_path_root(root.path());
         let socket = crate::dev_generation::daemon_socket_path("plugin-handoff.sock");
         std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
         let listener = qol_runtime::local_ipc::bind_listener(&socket).unwrap();
