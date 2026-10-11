@@ -60,6 +60,12 @@ pub fn locate(
     scale: f32,
     monitors: &[Monitor],
 ) -> Option<(MonitorRef, WindowRect)> {
+    if !monitors
+        .iter()
+        .any(|monitor| overlaps(monitor.bounds, window))
+    {
+        return None;
+    }
     let centre = centre_of(window);
     let scale_gap = |monitor: &Monitor| (monitor.scale - scale).abs();
     let monitor = monitors.iter().min_by(|a, b| {
@@ -124,6 +130,15 @@ fn distance(bounds: MonitorBounds, (x, y): (f64, f64)) -> f64 {
         .max(x - (left + f64::from(bounds.width)));
     let dy = (top - y).max(0.0).max(y - (top + f64::from(bounds.height)));
     dx.hypot(dy)
+}
+
+fn overlaps(bounds: MonitorBounds, window: WindowRect) -> bool {
+    let left = f64::from(bounds.x);
+    let top = f64::from(bounds.y);
+    window.x < left + f64::from(bounds.width)
+        && left < window.x + window.width
+        && window.y < top + f64::from(bounds.height)
+        && top < window.y + window.height
 }
 
 pub fn clamp_into(window: WindowRect, area: MonitorBounds) -> WindowRect {

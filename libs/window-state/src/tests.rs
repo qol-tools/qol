@@ -104,6 +104,16 @@ fn locate_picks_the_monitor_holding_the_centre_and_stores_relative_bounds() {
 }
 
 #[test]
+fn locate_keeps_a_partly_visible_window_and_ignores_one_on_no_monitor() {
+    let (on, relative) = locate(rect(-300.0, 100.0, 400.0, 300.0), 1.0, &layout()).unwrap();
+    assert_eq!(on.id, "left");
+    assert_eq!(relative, rect(-300.0, 100.0, 400.0, 300.0));
+    let minimized_on_windows = rect(-31992.0, -31999.0, 1056.0, 704.0);
+    assert!(locate(minimized_on_windows, 1.0, &layout()).is_none());
+    assert!(locate(rect(4480.0, 0.0, 400.0, 300.0), 1.0, &layout()).is_none());
+}
+
+#[test]
 fn locate_tells_overlapping_scaled_monitors_apart_by_the_window_scale() {
     let scaled = Monitor {
         scale: 1.5,
