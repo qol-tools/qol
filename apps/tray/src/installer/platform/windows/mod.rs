@@ -1,7 +1,7 @@
 mod registration;
 mod registry;
 pub(in crate::installer) mod run_key;
-mod shortcut;
+pub(crate) mod shortcut;
 
 use anyhow::{Context, Result};
 use qol_platform::windows_path::same_path;

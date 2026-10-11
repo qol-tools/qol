@@ -168,6 +168,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 windows = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell"] }
+resvg = { version = "0.45", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -20,7 +20,7 @@ static LAUNCH_ENV: Mutex<()> = Mutex::new(());
 
 pub fn shell_execute(target: &OsStr, args: &[String]) -> io::Result<()> {
     let file = wide_nul(target);
-    let parameters = (!args.is_empty()).then(|| wide_nul(join_args(args)));
+    let parameters = (!args.is_empty()).then(|| wide_nul(super::super::join_args(args)));
     let directory = qol_platform::launch_working_dir().map(wide_nul);
     let (sender, receiver) = mpsc::channel();
     std::thread::Builder::new()
@@ -77,39 +77,6 @@ fn shell_execute_now(
         )
     } as usize;
     shell_execute_result(result)
-}
-
-fn join_args(args: &[String]) -> String {
-    args.iter()
-        .map(|arg| quote_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn quote_arg(arg: &str) -> String {
-    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
-        return arg.to_string();
-    }
-    let mut quoted = String::from('"');
-    let mut backslashes = 0;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => backslashes += 1,
-            '"' => {
-                quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
-                quoted.push('"');
-                backslashes = 0;
-            }
-            _ => {
-                quoted.extend(std::iter::repeat_n('\\', backslashes));
-                quoted.push(ch);
-                backslashes = 0;
-            }
-        }
-    }
-    quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
-    quoted.push('"');
-    quoted
 }
 
 fn shell_execute_result(code: usize) -> io::Result<()> {

@@ -25,7 +25,7 @@ pub(crate) mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_common;
 #[cfg(target_os = "windows")]
-pub(in crate::installer) mod windows;
+pub(crate) mod windows;
 #[cfg(any(target_os = "windows", test))]
 pub(in crate::installer) mod windows_rules;
 

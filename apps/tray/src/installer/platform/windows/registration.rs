@@ -19,6 +19,7 @@ pub(super) struct Layout {
     pub(super) uninstaller: PathBuf,
     pub(super) icon: PathBuf,
     pub(super) shortcut: PathBuf,
+    pub(super) launcher_entries: PathBuf,
 }
 
 impl Layout {
@@ -26,12 +27,13 @@ impl Layout {
         let dir = binary
             .parent()
             .context("Installed binary has no parent directory")?;
+        let programs = shortcut::programs_dir()?;
         Ok(Self {
             binary: binary.to_path_buf(),
             uninstaller: dir.join(uninstaller_filename()),
             icon: dir.join(ICON_FILE),
-            shortcut: shortcut::programs_dir()?
-                .join(format!("{}.lnk", qol_conventions::TRAY_DISPLAY_NAME)),
+            shortcut: programs.join(format!("{}.lnk", qol_conventions::TRAY_DISPLAY_NAME)),
+            launcher_entries: programs.join(shortcut::LAUNCHER_FOLDER),
         })
     }
 
@@ -65,11 +67,19 @@ pub(super) fn refresh(layout: &Layout) -> Result<()> {
 pub(super) fn remove(layout: &Layout) -> Result<()> {
     registry::delete_key(UNINSTALL_KEY)?;
     remove_file_if_present(&layout.shortcut)?;
+    unless_missing(
+        std::fs::remove_dir_all(&layout.launcher_entries),
+        &layout.launcher_entries,
+    )?;
     remove_file_if_present(&layout.icon)
 }
 
 pub(super) fn remove_file_if_present(path: &Path) -> Result<()> {
-    match std::fs::remove_file(path) {
+    unless_missing(std::fs::remove_file(path), path)
+}
+
+fn unless_missing(removed: std::io::Result<()>, path: &Path) -> Result<()> {
+    match removed {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             Err(error).with_context(|| format!("Failed to remove {}", path.display()))
         }
@@ -82,6 +92,7 @@ fn write_shortcut(layout: &Layout) -> Result<()> {
         &layout.shortcut,
         &Shortcut {
             target: &layout.binary,
+            arguments: "",
             icon: &layout.icon,
             description: qol_conventions::TRAY_DISPLAY_NAME,
         },
@@ -89,7 +100,7 @@ fn write_shortcut(layout: &Layout) -> Result<()> {
 }
 
 fn write_icon(path: &Path) -> Result<()> {
-    let icon = ico_from_pngs(&ICONS);
+    let icon = shortcut::ico_from_pngs(&ICONS);
     if std::fs::read(path).is_ok_and(|existing| existing == icon) {
         return Ok(());
     }
@@ -135,29 +146,6 @@ fn uninstall_entry(layout: &Layout, version: &str) -> Vec<(&'static str, Value)>
     ]
 }
 
-fn ico_from_pngs(images: &[(u32, &[u8])]) -> Vec<u8> {
-    const HEADER: usize = 6;
-    const ENTRY: usize = 16;
-    let mut icon = Vec::new();
-    icon.extend(0u16.to_le_bytes());
-    icon.extend(1u16.to_le_bytes());
-    icon.extend((images.len() as u16).to_le_bytes());
-    let mut offset = HEADER + ENTRY * images.len();
-    for (size, png) in images {
-        let dimension = if *size >= 256 { 0 } else { *size as u8 };
-        icon.extend([dimension, dimension, 0, 0]);
-        icon.extend(1u16.to_le_bytes());
-        icon.extend(32u16.to_le_bytes());
-        icon.extend((png.len() as u32).to_le_bytes());
-        icon.extend((offset as u32).to_le_bytes());
-        offset += png.len();
-    }
-    for (_, png) in images {
-        icon.extend_from_slice(png);
-    }
-    icon
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +157,7 @@ mod tests {
             uninstaller: bin.join("qol-tray-install.exe"),
             icon: bin.join(ICON_FILE),
             shortcut: PathBuf::from(r"C:\Start Menu\Programs\QoL Tray.lnk"),
+            launcher_entries: PathBuf::from(r"C:\Start Menu\Programs\QoL"),
         }
     }
 
@@ -203,23 +192,6 @@ mod tests {
         }
         for name in ["NoModify", "NoRepair"] {
             assert!(entry.contains(&(name, Value::Number(1))), "{name}");
-        }
-    }
-
-    #[test]
-    fn icon_directory_points_at_each_embedded_png() {
-        let images: [(u32, &[u8]); 2] = [(64, b"first"), (256, b"second!")];
-        let icon = ico_from_pngs(&images);
-        let u16_at = |at: usize| u16::from_le_bytes([icon[at], icon[at + 1]]);
-        let u32_at = |at: usize| u32::from_le_bytes(icon[at..at + 4].try_into().unwrap());
-        assert_eq!((u16_at(0), u16_at(2), u16_at(4)), (0, 1, 2));
-        for (index, (size, png)) in images.iter().enumerate() {
-            let entry = 6 + index * 16;
-            let expected_dimension = if *size >= 256 { 0 } else { *size as u8 };
-            assert_eq!(icon[entry], expected_dimension);
-            assert_eq!(u32_at(entry + 8) as usize, png.len());
-            let offset = u32_at(entry + 12) as usize;
-            assert_eq!(&icon[offset..offset + png.len()], *png);
         }
     }
 
