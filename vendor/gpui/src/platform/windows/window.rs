@@ -419,6 +419,12 @@ impl WindowsWindow {
 
             (WS_EX_APPWINDOW, dwstyle)
         };
+        let owner = (params.kind == WindowKind::Floating)
+            .then(|| unsafe { GetActiveWindow() })
+            .filter(|owner| !owner.is_invalid());
+        if owner.is_some() {
+            dwexstyle &= !WS_EX_APPWINDOW;
+        }
         if !disable_direct_composition {
             dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
         }
@@ -465,7 +471,7 @@ impl WindowsWindow {
                 bounds.origin.y.0,
                 bounds.size.width.0,
                 bounds.size.height.0,
-                None,
+                owner,
                 None,
                 Some(hinstance.into()),
                 Some(&context as *const _ as *const _),
