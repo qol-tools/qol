@@ -157,6 +157,9 @@ pub trait DisplayControl: Send + Sync {
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError>;
     fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError>;
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError>;
+    fn brightness_floor(&self, _handle: &DisplayHandle) -> u8 {
+        BRIGHTNESS_MIN
+    }
     fn set_brightness_with_tint(
         &self,
         handle: &DisplayHandle,

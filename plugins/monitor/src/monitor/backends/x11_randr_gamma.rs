@@ -10,7 +10,7 @@ use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
     DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome,
-    GAMMA_CHANGED_UNDER_WRITE_REASON, HDR_REASON, MODES_REASON,
+    BRIGHTNESS_MIN, GAMMA_CHANGED_UNDER_WRITE_REASON, HDR_REASON, MODES_REASON,
 };
 use crate::session::{LutProvider, LutRestoreOutcome};
 
@@ -178,6 +178,32 @@ impl<T: GammaTransport> GammaBackend<T> {
             .get(handle.id())
             .map(|entry| entry.tint_allowed)
             .unwrap_or(true)
+    }
+
+    fn floor_inner(&self, handle: &DisplayHandle) -> Result<u8, GammaError> {
+        let known = self.session().get(handle.id()).and_then(|entry| {
+            Some(display_color::brightness_floor(
+                entry.original.as_ref()?,
+                entry.compose_base.as_ref()?,
+                entry.foreign_base,
+                entry.tint,
+            ))
+        });
+        if let Some(floor) = known {
+            return Ok(floor);
+        }
+        let mut bus = self.transport.open()?;
+        let Some(crtc) = bus.crtc_for_connector(handle.connector())? else {
+            return Ok(BRIGHTNESS_MIN);
+        };
+        let current = bus.read_gamma(crtc)?;
+        let (base, verdict) = display_color::compose_base(&current);
+        Ok(display_color::brightness_floor(
+            &current,
+            &base,
+            verdict.base == classifier::BaseChoice::Neutral,
+            Tint::NEUTRAL,
+        ))
     }
 
     fn get_inner(&self, handle: &DisplayHandle) -> Result<u8, GammaError> {
@@ -438,6 +464,10 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
     fn set_brightness(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
         self.set_inner(handle, Some(value), None, None)
             .map_err(|error| error.into_monitor("brightness"))
+    }
+
+    fn brightness_floor(&self, handle: &DisplayHandle) -> u8 {
+        self.floor_inner(handle).unwrap_or(BRIGHTNESS_MIN)
     }
 
     fn set_brightness_with_tint(

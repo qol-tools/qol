@@ -902,7 +902,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         }
     }
 
-    pub fn mutate(&self, handle: &DisplayHandle, value: u8) -> Result<(), MonitorError> {
+    pub fn mutate(&self, handle: &DisplayHandle, value: u8) -> Result<u8, MonitorError> {
         self.ensure_snapshot(handle, false)?;
         let snapshot = self
             .store
@@ -911,6 +911,11 @@ impl<C: DisplayControl + ?Sized> Session<C> {
             .ok_or_else(|| {
                 MonitorError::refused("brightness", "the brightness snapshot vanished")
             })?;
+        let value = if snapshot.source_kind() == Some(BrightnessSource::Gamma) {
+            value.max(self.control.brightness_floor(handle))
+        } else {
+            value
+        };
         let applied = snapshot.last_value;
         let updated = Snapshot {
             mutations: snapshot.mutations + 1,
@@ -935,7 +940,7 @@ impl<C: DisplayControl + ?Sized> Session<C> {
         if let Some(state) = self.adjustments.lock().unwrap().get_mut(handle.id()) {
             state.brightness.value = value;
         }
-        Ok(())
+        Ok(value)
     }
 
     pub fn mutate_tint(&self, handle: &DisplayHandle, tint: Tint) -> Result<(), MonitorError> {
@@ -1598,7 +1603,8 @@ mod tests {
         displays: Vec<DisplayHandle>,
         current: StdMutex<u8>,
         source: BrightnessSource,
-        floor: u8,
+        refuse_below: u8,
+        reported_floor: u8,
         sets: AtomicUsize,
         calls: StdMutex<Vec<(String, u8)>>,
         tints: StdMutex<Vec<(String, Tint)>>,
@@ -1610,7 +1616,8 @@ mod tests {
                 displays,
                 current: StdMutex::new(current),
                 source: BrightnessSource::Ddc,
-                floor: 0,
+                refuse_below: 0,
+                reported_floor: 0,
                 sets: AtomicUsize::new(0),
                 calls: StdMutex::new(Vec::new()),
                 tints: StdMutex::new(Vec::new()),
@@ -1622,8 +1629,13 @@ mod tests {
             self
         }
 
-        fn with_floor(mut self, floor: u8) -> Self {
-            self.floor = floor;
+        fn refusing_below(mut self, floor: u8) -> Self {
+            self.refuse_below = floor;
+            self
+        }
+
+        fn reporting_floor(mut self, floor: u8) -> Self {
+            self.reported_floor = floor;
             self
         }
 
@@ -1635,6 +1647,10 @@ mod tests {
     impl DisplayControl for RecordingControl {
         fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
             Ok(self.displays.clone())
+        }
+
+        fn brightness_floor(&self, _handle: &DisplayHandle) -> u8 {
+            self.reported_floor
         }
 
         fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
@@ -1654,7 +1670,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((_handle.id().to_string(), value));
-            if value < self.floor {
+            if value < self.refuse_below {
                 return Err(MonitorError::refused("gamma", "below the accepted floor"));
             }
             *self.current.lock().unwrap() = value;
@@ -1675,7 +1691,7 @@ mod tests {
             value: u8,
             tint: Tint,
         ) -> Result<(), MonitorError> {
-            if u32::from(value) * u32::from(tint.blue) < u32::from(self.floor) * 1000 {
+            if u32::from(value) * u32::from(tint.blue) < u32::from(self.refuse_below) * 1000 {
                 return Err(MonitorError::refused("gamma", "below the accepted floor"));
             }
             if self.source == BrightnessSource::Gamma {
@@ -2820,7 +2836,7 @@ mod tests {
         let control = Arc::new(
             RecordingControl::new(vec![display.clone()], 100)
                 .with_source(BrightnessSource::Gamma)
-                .with_floor(50),
+                .refusing_below(50),
         );
         let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
         let session = Session::new(control.clone(), store.clone(), lut);
@@ -2849,6 +2865,37 @@ mod tests {
     }
 
     #[test]
+    fn gamma_brightness_below_the_reported_floor_lands_on_the_floor() {
+        for (source, expected) in [(BrightnessSource::Gamma, 50), (BrightnessSource::Ddc, 30)] {
+            let (_dir, store) = fake_store();
+            let display = handle("id-1", "card0-DP-1");
+            let current = Arc::new(StdMutex::new(gamma_table(1000)));
+            let control = Arc::new(
+                RecordingControl::new(vec![display.clone()], 100)
+                    .with_source(source)
+                    .reporting_floor(50),
+            );
+            let lut = Arc::new(FakeLut::new(current));
+            let session = Session::new(control.clone(), store.clone(), lut);
+            assert_eq!(
+                session.mutate(&display, 30).unwrap(),
+                expected,
+                "{source:?}"
+            );
+            assert_eq!(
+                store.load_snapshot("id-1").unwrap().unwrap().last_value,
+                expected,
+                "{source:?}"
+            );
+            assert_eq!(
+                control.calls().last(),
+                Some(&("id-1".to_string(), expected)),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_refused_tint_leaves_the_applied_ramp_recoverable() {
         let (_dir, store) = fake_store();
         let display = handle("id-1", "card0-DP-1");
@@ -2857,7 +2904,7 @@ mod tests {
         let control = Arc::new(
             RecordingControl::new(vec![display.clone()], 100)
                 .with_source(BrightnessSource::Gamma)
-                .with_floor(50),
+                .refusing_below(50),
         );
         let lut = Arc::new(FakeLut::new(Arc::clone(&current)));
         let session = Session::new(control.clone(), store.clone(), lut);

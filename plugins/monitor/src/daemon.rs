@@ -43,6 +43,7 @@ const UNCONTROLLED_REASON: &str = "a foreign warm calibration forbids the night 
 const REASSERT_FAILED_REASON: &str = "the gamma re-assert did not verify";
 const FOREIGN_WRITER_REASON: &str = "a foreign writer keeps changing the gamma table";
 const DETECT_FOREIGN_OWNER_REASON: &str = "detect mode leaves the foreign warm table alone";
+const FLOOR_NOTICE: &str = "as dim as this display allows";
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -2042,16 +2043,23 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     );
                     return true;
                 }
-                for id in &applied {
-                    self.preferred.insert(id.clone(), value);
+                for (id, set) in &applied {
+                    self.preferred.insert(id.clone(), *set);
                 }
                 if let Err(error) = (self.preferred_save)(&self.preferred) {
                     log::warn!("failed to persist preferred brightness: {error:#}");
                 }
-                if self.config().notify_on_change {
+                let floor = applied
+                    .iter()
+                    .map(|(_, set)| *set)
+                    .filter(|set| *set != value)
+                    .max();
+                if let Some(floor) = floor {
+                    (self.notify)("Monitor", &format!("Brightness {floor}%, {FLOOR_NOTICE}"));
+                } else if self.config().notify_on_change {
                     (self.notify)("Monitor", &format!("Brightness {value}%"));
                 }
-                self.reset_gamma_reclaims(applied.iter().cloned());
+                self.reset_gamma_reclaims(applied.into_iter().map(|(id, _)| id));
                 true
             }
             Command::SetMode {
@@ -2211,7 +2219,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         }
     }
 
-    fn set_brightness(&mut self, display: &str, value: u8) -> Vec<String> {
+    fn set_brightness(&mut self, display: &str, value: u8) -> Vec<(String, u8)> {
         let handles = self.session.control().enumerate().unwrap_or_default();
         if display != "all" && !handles.iter().any(|handle| handle.id() == display) {
             return Vec::new();
@@ -2227,8 +2235,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             };
         let mut applied = Vec::new();
         for handle in targets {
-            if self.session.mutate(handle, value).is_ok() {
-                applied.push(handle.id().to_string());
+            if let Ok(set) = self.session.mutate(handle, value) {
+                applied.push((handle.id().to_string(), set));
             }
         }
         applied
@@ -2246,6 +2254,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             None
         };
         let mut stepped: Vec<(u8, &'static str)> = Vec::new();
+        let mut floor = None;
         for handle in &handles {
             let Some(current) = self.cached_brightness(handle) else {
                 continue;
@@ -2261,10 +2270,17 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             if current.value == next {
                 continue;
             }
-            if self.session.mutate(handle, next).is_err() {
+            let Ok(set) = self.session.mutate(handle, next) else {
                 continue;
+            };
+            if set != next {
+                floor = floor.max(Some(set));
             }
-            stepped.push((next, current.source.label()));
+            stepped.push((set, current.source.label()));
+        }
+        if let Some(floor) = floor {
+            (self.notify)("Monitor", &format!("Brightness {floor}%, {FLOOR_NOTICE}"));
+            return;
         }
         let message = match stepped.as_slice() {
             [] => return,
@@ -2744,6 +2760,7 @@ mod tests {
         snapshot_gate: StdMutex<Option<Arc<SnapshotGate>>>,
         guarded_drift: Arc<StdMutex<bool>>,
         tint_capped: AtomicBool,
+        floor: u8,
     }
 
     impl FakeControl {
@@ -2780,7 +2797,13 @@ mod tests {
                 snapshot_gate: StdMutex::new(None),
                 guarded_drift: Arc::new(StdMutex::new(false)),
                 tint_capped: AtomicBool::new(false),
+                floor: 0,
             }
+        }
+
+        fn with_floor(mut self, floor: u8) -> Self {
+            self.floor = floor;
+            self
         }
 
         fn calls(&self) -> Vec<(String, u8)> {
@@ -2941,6 +2964,10 @@ mod tests {
     impl DisplayControl for FakeControl {
         fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
             Ok(self.displays.clone())
+        }
+
+        fn brightness_floor(&self, _handle: &DisplayHandle) -> u8 {
+            self.floor
         }
 
         fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
@@ -5614,6 +5641,42 @@ mod tests {
             BTreeMap::from([("id-1".to_string(), 80), ("id-2".to_string(), 80)])
         );
         assert_eq!(saves.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn brightness_below_the_display_floor_lands_on_it_and_says_so() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                80,
+                BrightnessSource::Gamma,
+            )
+            .with_floor(50),
+        );
+        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 30,
+        });
+        runtime.handle(Command::Brightness {
+            direction: -1,
+            phase: Phase::Start,
+        });
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 50), ("id-1".to_string(), 50)]
+        );
+        assert_eq!(
+            runtime.preferred,
+            BTreeMap::from([("id-1".to_string(), 50)]),
+            "preferred records the brightness the display shows"
+        );
+        assert_eq!(
+            *toasts.lock().unwrap(),
+            vec!["Brightness 50%, as dim as this display allows"; 2],
+            "a request below the floor and a step at the floor both say why"
+        );
     }
 
     #[test]

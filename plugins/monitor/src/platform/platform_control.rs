@@ -61,6 +61,10 @@ where
         self.brightness.set_brightness(handle, value)
     }
 
+    fn brightness_floor(&self, handle: &DisplayHandle) -> u8 {
+        self.brightness.brightness_floor(handle)
+    }
+
     fn set_brightness_with_tint(
         &self,
         handle: &DisplayHandle,

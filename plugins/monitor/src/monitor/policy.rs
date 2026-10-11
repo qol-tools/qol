@@ -181,6 +181,13 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for Policy
         }
     }
 
+    fn brightness_floor(&self, handle: &DisplayHandle) -> u8 {
+        match self.selection(handle.id()) {
+            BrightnessPolicy::Gamma | BrightnessPolicy::Auto => self.gamma.brightness_floor(handle),
+            BrightnessPolicy::Ddc | BrightnessPolicy::Off => self.ddc.brightness_floor(handle),
+        }
+    }
+
     fn set_brightness_with_tint(
         &self,
         handle: &DisplayHandle,

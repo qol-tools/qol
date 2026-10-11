@@ -25,6 +25,10 @@ pub(crate) fn fit_tint(dimmed: &GammaTable, tint: Tint) -> Tint {
     gdi_gamma::fit_tint(dimmed, tint, gamma_range())
 }
 
+pub(crate) fn brightness_floor(base: &GammaTable) -> u8 {
+    gdi_gamma::brightness_floor(base, gamma_range())
+}
+
 fn gamma_range() -> u16 {
     static RANGE: OnceLock<u16> = OnceLock::new();
     *RANGE.get_or_init(|| {

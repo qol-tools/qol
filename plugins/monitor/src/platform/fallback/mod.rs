@@ -27,6 +27,10 @@ pub(crate) fn fit_tint(_dimmed: &GammaTable, tint: Tint) -> Tint {
     tint
 }
 
+pub(crate) fn brightness_floor(_base: &GammaTable) -> u8 {
+    crate::monitor::BRIGHTNESS_MIN
+}
+
 pub(crate) fn install_signal_handlers(_tx: Sender<Command>) -> SignalGuard {
     SignalGuard
 }

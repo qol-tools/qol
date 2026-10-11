@@ -75,6 +75,23 @@ pub fn fit_tint(dimmed: &GammaTable, tint: Tint, range: u16) -> Tint {
     }
 }
 
+pub fn brightness_floor(base: &GammaTable, range: u16) -> u8 {
+    let accepted = |percent: u8| within_range(&base.dimmed(percent), range);
+    if base.size() != RAMP_SIZE || !accepted(100) {
+        return 0;
+    }
+    (0..100u8)
+        .rev()
+        .find(|percent| !accepted(*percent))
+        .map_or(0, |refused| refused + 1)
+}
+
+fn within_range(table: &GammaTable, range: u16) -> bool {
+    [&table.red, &table.green, &table.blue]
+        .into_iter()
+        .all(|entries| channel_floor(entries, range).is_some())
+}
+
 fn channel_floor(entries: &[u16], range: u16) -> Option<u32> {
     let mut floor = 0;
     for (index, entry) in entries.iter().enumerate() {
@@ -216,6 +233,27 @@ mod tests {
         assert!(!accepted(&dimmed, DEFAULT_GAMMA_RANGE));
         let warm = Tint::from_kelvin(2500);
         assert_eq!(fit_tint(&dimmed, warm, DEFAULT_GAMMA_RANGE), warm);
+    }
+
+    #[test]
+    fn brightness_stops_at_the_dimmest_ramp_windows_accepts() {
+        let identity = table_from_ramp(&identity());
+        let floor = brightness_floor(&identity, DEFAULT_GAMMA_RANGE);
+        assert_eq!(floor, 50);
+        assert!(accepted(&identity.dimmed(floor), DEFAULT_GAMMA_RANGE));
+        assert!(!accepted(&identity.dimmed(floor - 1), DEFAULT_GAMMA_RANGE));
+        assert_eq!(brightness_floor(&identity, 256), 0);
+        assert_eq!(
+            brightness_floor(&identity.dimmed(30), DEFAULT_GAMMA_RANGE),
+            0,
+            "a base Windows already refuses keeps its refusal visible"
+        );
+        let short = GammaTable {
+            red: vec![0, 65535],
+            green: vec![0, 65535],
+            blue: vec![0, 65535],
+        };
+        assert_eq!(brightness_floor(&short, DEFAULT_GAMMA_RANGE), 0);
     }
 
     #[test]
