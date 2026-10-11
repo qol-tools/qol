@@ -446,6 +446,7 @@ impl Surface {
             if applies_settings_identity {
                 crate::platform::apply_settings_surface_identity(window);
             }
+            dismiss_on_close_request(window, build_dismisser.clone(), cx);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
                 let bounds_subscription = cx.observe_window_bounds(window, move |_, window, cx| {
@@ -1357,6 +1358,13 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
     .detach();
 }
 
+fn dismiss_on_close_request(window: &Window, dismisser: SurfaceDismisser, cx: &App) {
+    window.on_window_should_close(cx, move |_, cx| {
+        dismisser.dismiss(cx);
+        false
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::platform::SurfacePlatform;
@@ -1643,5 +1651,35 @@ mod tests {
 
         super::release_surface_title(&first);
         super::release_surface_title(&second);
+    }
+
+    #[gpui::test]
+    fn an_os_close_request_runs_the_surface_dismiss(cx: &mut gpui::TestAppContext) {
+        let dismisser = SurfaceDismisser::new(
+            false,
+            "Close Request Panel".into(),
+            size(px(100.0), px(100.0)),
+            false,
+            Rc::new(Cell::new(true)),
+            Rc::new(Cell::new(false)),
+            None,
+        );
+        let closes = Rc::new(Cell::new(0));
+        let counted = closes.clone();
+        dismisser
+            .state
+            .close
+            .replace(Some(Box::new(move |_| counted.set(counted.get() + 1))));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            super::dismiss_on_close_request(window, dismisser.clone(), cx);
+            gpui::EmptyView
+        });
+
+        assert!(
+            !window.simulate_close(),
+            "the platform must leave the window to the surface's dismiss"
+        );
+        window.run_until_parked();
+        assert_eq!(closes.get(), 1);
     }
 }
