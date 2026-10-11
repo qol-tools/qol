@@ -482,6 +482,10 @@ impl WindowsWindow {
         this.state.borrow_mut().border_offset.update(hwnd)?;
         let placement = retrieve_window_placement(hwnd, bounds, this.state.borrow().border_offset)?;
         if params.show {
+            let mut placement = placement;
+            if !params.focus {
+                placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+            }
             unsafe { SetWindowPlacement(hwnd, &placement)? };
         } else {
             this.state.borrow_mut().initial_placement = Some(WindowOpenStatus {
