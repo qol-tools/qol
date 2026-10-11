@@ -9,6 +9,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::ConnectionExt as XfixesExt;
 use x11rb::rust_connection::RustConnection;
 
+use crate::capture::geometry::even_dimensions;
 use crate::platform::{CaptureProcess, CaptureSession, SavedRecording};
 use crate::{Config, Rect};
 
@@ -42,6 +43,7 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
 }
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
+    let rect = &even_dimensions(*rect);
     if cinnamon_desktop_session() {
         match start_cinnamon_capture(rect, config, output_file) {
             Ok(session) => {

@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::capture::geometry::even_dimensions;
 use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession, SavedRecording};
 use crate::{Config, Rect};
 
@@ -29,6 +30,7 @@ struct DisplayCaptureSegment {
 }
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
+    let rect = &even_dimensions(*rect);
     let capture_file = native_capture_file_path(output_file);
     ensure_capture_work_dir()?;
     let segments = capture_segments(rect)?;

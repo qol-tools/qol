@@ -229,7 +229,7 @@ fn prepare_recording_rect(selected: Rect) -> Result<Rect> {
         rect_label(rect),
         rect_label(even)
     );
-    Ok(even)
+    Ok(rect)
 }
 
 fn stop_capture_processes(state: &platform::CaptureSession, config: &Config) -> Result<()> {
