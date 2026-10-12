@@ -131,6 +131,8 @@ fn xml_escape(input: &str) -> String {
             '>' => escaped.push_str("&gt;"),
             '"' => escaped.push_str("&quot;"),
             '\'' => escaped.push_str("&apos;"),
+            '\t' | '\n' | '\r' => escaped.push(character),
+            '\u{0}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}' => {}
             other => escaped.push(other),
         }
     }
@@ -217,6 +219,30 @@ mod tests {
         ];
         for (title, body, fragment) in cases {
             assert!(toast_xml(title, body).contains(fragment), "{title} {body}");
+        }
+    }
+
+    #[test]
+    fn toast_xml_drops_the_characters_xml_forbids_and_still_loads() {
+        let cases = [
+            (
+                "Pad\u{1}",
+                "tab\tline\nreturn\r",
+                "<text>Pad</text><text>tab\tline\nreturn\r</text>",
+            ),
+            (
+                "\u{0}\u{b}\u{c}\u{1f}",
+                "a\u{fffe}b\u{ffff}c\u{7f}",
+                "<text></text><text>abc\u{7f}</text>",
+            ),
+        ];
+        for (title, body, fragment) in cases {
+            let xml = toast_xml(title, body);
+            assert!(xml.contains(fragment), "{xml:?}");
+            let document = XmlDocument::new().unwrap();
+            document
+                .LoadXml(&HSTRING::from(xml.as_str()))
+                .unwrap_or_else(|error| panic!("{xml:?}: {error}"));
         }
     }
 }
