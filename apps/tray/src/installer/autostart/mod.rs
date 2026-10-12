@@ -1,5 +1,7 @@
 mod platform;
 
+pub use platform::read_state;
+
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -25,10 +27,6 @@ impl AutostartState {
 
 pub fn read_target() -> Result<Option<PathBuf>> {
     platform::read_state().map(AutostartState::into_target)
-}
-
-pub fn read_state() -> Result<AutostartState> {
-    platform::read_state()
 }
 
 pub fn write_target(binary: &Path) -> Result<()> {

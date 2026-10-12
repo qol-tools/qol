@@ -161,7 +161,26 @@ impl UninstallSteps for WindowsUninstall<'_> {
     }
 
     fn remove_files(&mut self) -> Result<FileRemoval> {
-        remove_install_files(self.binary)
+        let install_dir = qol_apps::tray_install::install_dir()?;
+        let current =
+            std::env::current_exe().context("Failed to determine the uninstaller path")?;
+        match plan(self.binary, &install_dir, &current)? {
+            UninstallPlan::RemoveRoot(root) => fs::remove_dir_all(&root)
+                .or_else(|error| match error.kind() {
+                    std::io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(error),
+                })
+                .with_context(|| format!("Failed to remove {}", root.display()))
+                .map(|()| FileRemoval::Done),
+            UninstallPlan::RemoveAfterExit(root) => {
+                registration::remove_file_if_present(self.binary)?;
+                if let Some(marker) = crate::paths::install_marker::marker_path(self.binary) {
+                    registration::remove_file_if_present(&marker)?;
+                }
+                remove_after_exit(&root)?;
+                Ok(FileRemoval::Deferred)
+            }
+        }
     }
 
     fn remove_uninstall_entry(&mut self) -> Result<()> {
@@ -205,28 +224,6 @@ fn copy_uninstaller(source: &Path, destination: &Path) -> Result<()> {
             destination.display()
         )
     })
-}
-
-fn remove_install_files(binary_path: &Path) -> Result<FileRemoval> {
-    let install_dir = qol_apps::tray_install::install_dir()?;
-    let current = std::env::current_exe().context("Failed to determine the uninstaller path")?;
-    match plan(binary_path, &install_dir, &current)? {
-        UninstallPlan::RemoveRoot(root) => fs::remove_dir_all(&root)
-            .or_else(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => Ok(()),
-                _ => Err(error),
-            })
-            .with_context(|| format!("Failed to remove {}", root.display()))
-            .map(|()| FileRemoval::Done),
-        UninstallPlan::RemoveAfterExit(root) => {
-            registration::remove_file_if_present(binary_path)?;
-            if let Some(marker) = crate::paths::install_marker::marker_path(binary_path) {
-                registration::remove_file_if_present(&marker)?;
-            }
-            remove_after_exit(&root)?;
-            Ok(FileRemoval::Deferred)
-        }
-    }
 }
 
 fn remove_after_exit(root: &Path) -> Result<()> {

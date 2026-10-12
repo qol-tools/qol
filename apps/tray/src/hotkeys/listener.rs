@@ -30,11 +30,7 @@ pub fn start_hotkey_listener(plugin_manager: Arc<Mutex<PluginManager>>) -> Resul
     Ok(())
 }
 
-pub(super) fn start_one_shot_backup_listener(plugin_manager: Arc<Mutex<PluginManager>>) {
-    start_listener(plugin_manager, RegistrationScope::OneShotBackup);
-}
-
-fn start_listener(plugin_manager: Arc<Mutex<PluginManager>>, scope: RegistrationScope) {
+pub(super) fn start_listener(plugin_manager: Arc<Mutex<PluginManager>>, scope: RegistrationScope) {
     let reload_rx = reload::subscribe();
     std::thread::spawn(move || {
         run_supervised(

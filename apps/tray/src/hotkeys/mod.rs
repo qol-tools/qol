@@ -157,7 +157,7 @@ pub fn start_capture_with_fallback(
             log::info!("Hotkey capture: native");
             qol_runtime::probe!("HOTKEY_BACKEND", "backend=native result=ready");
             if capture::KEEP_REGISTERED_ONE_SHOTS {
-                listener::start_one_shot_backup_listener(plugin_manager);
+                listener::start_listener(plugin_manager, manager::RegistrationScope::OneShotBackup);
                 qol_runtime::probe!(
                     "HOTKEY_BACKEND",
                     "backend=global-hotkey result=one-shot-backup"

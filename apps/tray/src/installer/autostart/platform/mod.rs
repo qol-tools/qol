@@ -27,7 +27,7 @@ use macos::Platform;
 #[cfg(target_os = "windows")]
 use windows::Platform;
 
-pub(super) fn read_state() -> Result<AutostartState> {
+pub fn read_state() -> Result<AutostartState> {
     Platform.read_state()
 }
 
