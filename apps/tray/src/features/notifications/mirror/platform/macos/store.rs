@@ -19,17 +19,24 @@ pub(super) struct Row {
     pub(super) data: Vec<u8>,
 }
 
+// `delivered_date` is selected as `printf('%.17g', ..)` text: the sqlite3 shell prints a
+// REAL with 15 significant digits, which does not round-trip the stored value.
 #[derive(Deserialize)]
 struct RawCursor {
     rec_id: i64,
-    delivered_date: f64,
+    delivered_date: String,
 }
 
 #[derive(Deserialize)]
 struct RawRow {
     rec_id: i64,
-    delivered_date: f64,
+    delivered_date: String,
     data: String,
+}
+
+fn parse_delivered(text: &str) -> Result<f64> {
+    text.parse()
+        .with_context(|| format!("bad delivered_date {text:?}"))
 }
 
 pub(super) fn db_path() -> Option<PathBuf> {
@@ -39,29 +46,48 @@ pub(super) fn db_path() -> Option<PathBuf> {
 pub(super) fn latest(db: &Path) -> Result<Cursor> {
     let rows: Vec<RawCursor> = query(
         db,
-        "select rec_id, delivered_date from record where delivered_date is not null \
+        "select rec_id, printf('%.17g', delivered_date) as delivered_date from record \
+         where delivered_date is not null \
          order by delivered_date desc, rec_id desc limit 1",
     )?;
-    Ok(rows.first().map_or(
-        Cursor {
+    match rows.first() {
+        Some(row) => Ok(Cursor {
+            delivered: parse_delivered(&row.delivered_date)?,
+            rec_id: row.rec_id,
+        }),
+        None => Ok(Cursor {
             delivered: 0.0,
             rec_id: 0,
-        },
-        |row| Cursor {
-            delivered: row.delivered_date,
-            rec_id: row.rec_id,
-        },
-    ))
+        }),
+    }
 }
 
+/// Rows with undecodable data are logged and returned with empty data, so the caller still
+/// advances its cursor past them.
 pub(super) fn since(db: &Path, cursor: Cursor) -> Result<Vec<Row>> {
     let rows: Vec<RawRow> = query(db, &since_sql(cursor))?;
-    rows.into_iter().map(Row::try_from).collect()
+    rows.into_iter()
+        .map(|raw| {
+            let cursor = Cursor {
+                delivered: parse_delivered(&raw.delivered_date)?,
+                rec_id: raw.rec_id,
+            };
+            let data = decode_hex(&raw.data).unwrap_or_else(|error| {
+                log::warn!(
+                    "notification mirror: skipping record {} with malformed hex data: {error:#}",
+                    raw.rec_id
+                );
+                Vec::new()
+            });
+            Ok(Row { cursor, data })
+        })
+        .collect()
 }
 
 fn since_sql(cursor: Cursor) -> String {
     format!(
-        "select rec_id, delivered_date, hex(data) as data from record \
+        "select rec_id, printf('%.17g', delivered_date) as delivered_date, \
+         hex(data) as data from record \
          where delivered_date > {d} or (delivered_date = {d} and rec_id > {id}) \
          order by delivered_date, rec_id",
         d = cursor.delivered,
@@ -93,21 +119,6 @@ fn parse_json<T: serde::de::DeserializeOwned>(stdout: &str) -> Result<Vec<T>> {
         return Ok(Vec::new());
     }
     serde_json::from_str(stdout).context("sqlite3 printed malformed JSON")
-}
-
-impl TryFrom<RawRow> for Row {
-    type Error = anyhow::Error;
-
-    fn try_from(raw: RawRow) -> Result<Self> {
-        Ok(Self {
-            cursor: Cursor {
-                delivered: raw.delivered_date,
-                rec_id: raw.rec_id,
-            },
-            data: decode_hex(&raw.data)
-                .with_context(|| format!("record {} has malformed hex data", raw.rec_id))?,
-        })
-    }
 }
 
 fn decode_hex(text: &str) -> Result<Vec<u8>> {
@@ -145,33 +156,25 @@ mod tests {
 
     #[test]
     fn rows_parse_from_sqlite_json() {
-        let stdout = r#"[{"rec_id":7,"delivered_date":813503659.25,"data":"62706C"},
-{"rec_id":8,"delivered_date":813503938.5,"data":""}]"#;
-        let rows = parse_json::<RawRow>(stdout)
-            .unwrap()
-            .into_iter()
-            .map(Row::try_from)
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        let stdout = r#"[{"rec_id":7,"delivered_date":"813503659.25","data":"62706C"},
+{"rec_id":8,"delivered_date":"813503938.50824404","data":"zz"}]"#;
+        let rows = parse_json::<RawRow>(stdout).unwrap();
+        assert_eq!(rows.len(), 2);
         assert_eq!(
-            rows,
-            vec![
-                Row {
-                    cursor: Cursor {
-                        delivered: 813_503_659.25,
-                        rec_id: 7
-                    },
-                    data: b"bpl".to_vec(),
-                },
-                Row {
-                    cursor: Cursor {
-                        delivered: 813_503_938.5,
-                        rec_id: 8
-                    },
-                    data: Vec::new(),
-                },
-            ]
+            parse_delivered(&rows[1].delivered_date).unwrap(),
+            813_503_938.508_244_04
         );
+        assert_eq!(decode_hex(&rows[0].data).unwrap(), b"bpl");
+        assert!(decode_hex(&rows[1].data).is_err());
+    }
+
+    #[test]
+    fn queries_print_the_date_with_full_precision() {
+        let sql = since_sql(Cursor {
+            delivered: 1.0,
+            rec_id: 1,
+        });
+        assert!(sql.contains("printf('%.17g', delivered_date) as delivered_date"));
     }
 
     #[test]

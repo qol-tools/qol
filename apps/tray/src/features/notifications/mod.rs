@@ -132,7 +132,12 @@ pub fn sync_notification_inhibit() {
 }
 
 pub fn mirror_access() -> MirrorAccess {
-    mirror::access()
+    let access = mirror::access();
+    if matches!(access, MirrorAccess::Readable) {
+        // Full Disk Access may have just been granted after an earlier failed start.
+        sync_notification_inhibit();
+    }
+    access
 }
 
 fn settings() -> Result<NotificationSettings> {
