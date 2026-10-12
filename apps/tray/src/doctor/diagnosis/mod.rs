@@ -96,6 +96,7 @@ pub(super) enum FixApplicability {
     #[default]
     SafeAutomatic,
     ReversibleHostMutation,
+    IrreversibleHostMutation,
 }
 
 impl FixAction {
@@ -107,9 +108,10 @@ impl FixAction {
             | FixAction::EnsurePluginsDir { .. }
             | FixAction::KillPluginProcessLeaks { .. }
             | FixAction::DrainOrphanPluginConfigs => FixApplicability::SafeAutomatic,
-            FixAction::UnshadowDeBinding { .. }
-            | FixAction::DisableSymbolicHotkey { .. }
-            | FixAction::ClearWindowsAppKey { .. } => FixApplicability::ReversibleHostMutation,
+            FixAction::UnshadowDeBinding { .. } | FixAction::DisableSymbolicHotkey { .. } => {
+                FixApplicability::ReversibleHostMutation
+            }
+            FixAction::ClearWindowsAppKey { .. } => FixApplicability::IrreversibleHostMutation,
             #[cfg(feature = "dev")]
             FixAction::RelocateDevLink { .. }
             | FixAction::PruneReservedPlugins { .. }
@@ -526,8 +528,11 @@ mod tests {
     }
 
     #[test]
-    fn safe_automatic_orders_below_reversible_host_mutation() {
+    fn fix_applicability_orders_by_how_hard_the_fix_is_to_undo() {
         assert!(FixApplicability::SafeAutomatic < FixApplicability::ReversibleHostMutation);
+        assert!(
+            FixApplicability::ReversibleHostMutation < FixApplicability::IrreversibleHostMutation
+        );
     }
 
     #[cfg(feature = "dev")]
@@ -624,7 +629,7 @@ mod tests {
                     app_key: "17".into(),
                     qol_combo: "Win+E".into(),
                 },
-                FixApplicability::ReversibleHostMutation,
+                FixApplicability::IrreversibleHostMutation,
             ),
         ];
         for (action, expected) in cases {

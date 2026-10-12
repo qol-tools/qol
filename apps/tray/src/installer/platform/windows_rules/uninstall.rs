@@ -65,6 +65,8 @@ pub(in crate::installer) fn run_uninstall(steps: &mut impl UninstallSteps) -> Re
     plugins.context("QoL Tray was removed but a plugin kept a host change")
 }
 
+const REMOVAL_ATTEMPTS: u32 = 30;
+
 pub(in crate::installer) fn deferred_removal_script(
     root: &str,
     log: &str,
@@ -78,7 +80,7 @@ pub(in crate::installer) fn deferred_removal_script(
         return None;
     }
     Some(format!(
-        "/d /v:off /c ping -n 3 127.0.0.1 >nul & echo removing \"{root}\">\"{log}\" & rmdir /s /q \"{root}\" >>\"{log}\" 2>&1 & if not exist \"{root}\\\" \"{reg}\" delete \"HKCU\\{uninstall_key}\" /f >>\"{log}\" 2>&1"
+        "/d /v:off /c echo removing \"{root}\">\"{log}\" & (for /l %i in (1,1,{REMOVAL_ATTEMPTS}) do if exist \"{root}\\\" (ping -n 2 127.0.0.1 >nul & rmdir /s /q \"{root}\" >>\"{log}\" 2>&1)) & if not exist \"{root}\\\" \"{reg}\" delete \"HKCU\\{uninstall_key}\" /f >>\"{log}\" 2>&1"
     ))
 }
 
@@ -201,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn deferred_removal_logs_and_drops_the_apps_entry_only_once_the_root_is_gone() {
+    fn deferred_removal_retries_until_the_uninstaller_exits_then_drops_the_apps_entry() {
         let script = deferred_removal_script(
             r"C:\Users\x y\AppData\Local\Programs\qol-tray",
             r"C:\Users\x y\AppData\Local\Temp\qol-tray-uninstall.log",
@@ -213,9 +215,9 @@ mod tests {
         assert_eq!(
             script,
             concat!(
-                r#"/d /v:off /c ping -n 3 127.0.0.1 >nul"#,
-                r#" & echo removing "C:\Users\x y\AppData\Local\Programs\qol-tray">"C:\Users\x y\AppData\Local\Temp\qol-tray-uninstall.log""#,
-                r#" & rmdir /s /q "C:\Users\x y\AppData\Local\Programs\qol-tray" >>"C:\Users\x y\AppData\Local\Temp\qol-tray-uninstall.log" 2>&1"#,
+                r#"/d /v:off /c echo removing "C:\Users\x y\AppData\Local\Programs\qol-tray">"C:\Users\x y\AppData\Local\Temp\qol-tray-uninstall.log""#,
+                r#" & (for /l %i in (1,1,30) do if exist "C:\Users\x y\AppData\Local\Programs\qol-tray\""#,
+                r#" (ping -n 2 127.0.0.1 >nul & rmdir /s /q "C:\Users\x y\AppData\Local\Programs\qol-tray" >>"C:\Users\x y\AppData\Local\Temp\qol-tray-uninstall.log" 2>&1))"#,
                 r#" & if not exist "C:\Users\x y\AppData\Local\Programs\qol-tray\" "C:\Windows\System32\reg.exe" delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\qol-tray" /f >>"C:\Users\x y\AppData\Local\Temp\qol-tray-uninstall.log" 2>&1"#,
             )
         );

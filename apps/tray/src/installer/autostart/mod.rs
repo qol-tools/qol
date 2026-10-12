@@ -14,13 +14,17 @@ impl AutostartState {
     pub(crate) fn from_target(target: Option<PathBuf>) -> Self {
         target.map_or(Self::Missing, Self::Enabled)
     }
+
+    pub fn into_target(self) -> Option<PathBuf> {
+        match self {
+            Self::Enabled(target) => Some(target),
+            Self::DisabledByUser | Self::Missing => None,
+        }
+    }
 }
 
 pub fn read_target() -> Result<Option<PathBuf>> {
-    Ok(match platform::read_state()? {
-        AutostartState::Enabled(target) => Some(target),
-        AutostartState::DisabledByUser | AutostartState::Missing => None,
-    })
+    platform::read_state().map(AutostartState::into_target)
 }
 
 pub fn read_state() -> Result<AutostartState> {

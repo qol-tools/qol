@@ -40,14 +40,16 @@ fn check_dev(autostart_path: std::path::PathBuf) -> CheckReport {
             Ok(resolved) => resolved,
             Err(error) => return CheckReport::error(error.to_string(), ID),
         };
-    let actual = env.read_autostart_target().ok().flatten();
+    let actual = env.read_autostart_state().ok();
     let expected = file_io::canonical_or_original(target.binary());
     match actual {
-        Some(p) if file_io::canonical_or_original(&p) == expected => CheckReport::ok(format!(
-            "autostart target matches selected boot target ({})",
-            expected.display()
-        )),
-        Some(p) => warn_with_fix(
+        Some(AutostartState::Enabled(p)) if file_io::canonical_or_original(&p) == expected => {
+            CheckReport::ok(format!(
+                "autostart target matches selected boot target ({})",
+                expected.display()
+            ))
+        }
+        Some(AutostartState::Enabled(p)) => warn_with_fix(
             format!(
                 "autostart target points to {} instead of {}",
                 p.display(),
@@ -55,20 +57,12 @@ fn check_dev(autostart_path: std::path::PathBuf) -> CheckReport {
             ),
             target.binary().to_path_buf(),
         ),
-        None if disabled_by_user() => disabled_by_user_report(),
-        None => warn_with_fix(
+        Some(AutostartState::DisabledByUser) => disabled_by_user_report(),
+        Some(AutostartState::Missing) | None => warn_with_fix(
             format!("autostart entry missing at {}", autostart_path.display()),
             target.binary().to_path_buf(),
         ),
     }
-}
-
-#[cfg(feature = "dev")]
-fn disabled_by_user() -> bool {
-    matches!(
-        crate::installer::autostart::read_state(),
-        Ok(AutostartState::DisabledByUser)
-    )
 }
 
 #[cfg(not(feature = "dev"))]

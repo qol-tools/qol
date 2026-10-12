@@ -56,9 +56,6 @@ pub(super) fn register(layout: &Layout) -> Result<()> {
 
 pub(super) fn refresh(layout: &Layout) -> Result<()> {
     write_icon(&layout.icon)?;
-    if !layout.shortcut.exists() {
-        write_shortcut(layout)?;
-    }
     write_toast_identity()?;
     write_uninstall_entry(layout)
 }
@@ -94,7 +91,7 @@ fn write_toast_identity() -> Result<()> {
         .context("Failed to register the QoL Tray notification identity")
 }
 
-fn write_shortcut(layout: &Layout) -> Result<()> {
+pub(super) fn write_shortcut(layout: &Layout) -> Result<()> {
     shortcut::write(
         &layout.shortcut,
         &Shortcut {

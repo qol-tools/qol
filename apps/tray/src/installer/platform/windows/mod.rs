@@ -93,14 +93,10 @@ impl InstallerOps for Platform {
         let Ok(current_exe) = std::env::current_exe() else {
             return Ok(());
         };
-        let installed = qol_apps::tray_install::installed_binary()?;
-        if !same_path(&current_exe, &installed)
-            || !crate::installer::has_install_marker(&installed)
-            || !crate::installer::mode::is_production_mode()
-        {
+        let Some(layout) = installed_layout(&current_exe)? else {
             return Ok(());
-        }
-        registration::refresh(&Layout::for_binary(&installed)?)
+        };
+        registration::refresh(&layout)
     }
 
     fn warn_system_install_conflict(&self) {}
@@ -115,6 +111,30 @@ impl InstallerOps for Platform {
             layout: &layout,
         })
     }
+}
+
+pub(crate) fn refresh_after_update(binary: &Path, installer: Option<&Path>) -> Result<()> {
+    let Some(layout) = installed_layout(binary)? else {
+        return Ok(());
+    };
+    if let Some(installer) = installer {
+        copy_uninstaller(installer, &layout.uninstaller)?;
+    }
+    if !layout.shortcut.exists() {
+        return Ok(());
+    }
+    registration::write_shortcut(&layout)
+}
+
+fn installed_layout(binary: &Path) -> Result<Option<Layout>> {
+    let installed = qol_apps::tray_install::installed_binary()?;
+    if !same_path(binary, &installed)
+        || !crate::installer::has_install_marker(&installed)
+        || !crate::installer::mode::is_production_mode()
+    {
+        return Ok(None);
+    }
+    Layout::for_binary(&installed).map(Some)
 }
 
 struct WindowsUninstall<'a> {
@@ -179,11 +199,15 @@ fn install_uninstaller(destination: &Path) -> Result<()> {
     if !is_installer || same_path(&current, destination) {
         return Ok(());
     }
+    copy_uninstaller(&current, destination)
+}
+
+fn copy_uninstaller(source: &Path, destination: &Path) -> Result<()> {
     let staged = destination.with_extension("new");
-    fs::copy(&current, &staged).with_context(|| {
+    fs::copy(source, &staged).with_context(|| {
         format!(
             "Failed to copy the uninstaller {} to {}",
-            current.display(),
+            source.display(),
             staged.display()
         )
     })?;

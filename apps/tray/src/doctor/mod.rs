@@ -44,7 +44,7 @@ impl FixPolicy {
 
     pub fn with_host_fixes() -> Self {
         Self {
-            max_applicability: FixApplicability::ReversibleHostMutation,
+            max_applicability: FixApplicability::IrreversibleHostMutation,
             allow_workspace_fixes: true,
         }
     }
@@ -637,6 +637,14 @@ mod tests {
                     qol_combo: "Win+E".into(),
                 },
                 FixPolicy::startup(),
+                false,
+            ),
+            (
+                FixAction::ClearWindowsAppKey {
+                    app_key: "17".into(),
+                    qol_combo: "Win+E".into(),
+                },
+                FixPolicy::with_host_fixes(),
                 true,
             ),
             #[cfg(feature = "dev")]

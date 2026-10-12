@@ -2,12 +2,8 @@ use anyhow::{anyhow, Context, Result};
 use qol_platform::native::com::{Apartment, ComApartment};
 use std::path::{Path, PathBuf};
 use windows::core::{Interface, HSTRING};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoTaskMemFree, IPersistFile, CLSCTX_INPROC_SERVER,
-};
-use windows::Win32::UI::Shell::{
-    FOLDERID_Programs, IShellLinkW, SHGetKnownFolderPath, ShellLink, KF_FLAG_DEFAULT,
-};
+use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER};
+use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
 pub(crate) const LAUNCHER_FOLDER: &str = "QoL";
 
@@ -19,15 +15,8 @@ pub(crate) struct Shortcut<'a> {
 }
 
 pub(crate) fn programs_dir() -> Result<PathBuf> {
-    on_com_thread(|| {
-        let raw = unsafe { SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None) }
-            .context("Failed to resolve the Start menu Programs folder")?;
-        let path = unsafe { raw.to_string() };
-        unsafe { CoTaskMemFree(Some(raw.0.cast_const().cast())) };
-        Ok(PathBuf::from(path.context(
-            "Start menu Programs folder is not valid UTF-16",
-        )?))
-    })
+    qol_apps::known_folder::programs_dir()
+        .ok_or_else(|| anyhow!("Failed to resolve the Start menu Programs folder"))
 }
 
 pub(crate) fn write(link: &Path, shortcut: &Shortcut<'_>) -> Result<()> {
@@ -107,10 +96,5 @@ mod tests {
         let icon_location = parsed.icon_location.expect("icon location");
         assert_eq!(canonical(Path::new(&icon_location)), canonical(&icon));
         assert_eq!(parsed.arguments.as_deref(), Some("exec core settings"));
-    }
-
-    #[test]
-    fn programs_folder_resolves() {
-        assert!(programs_dir().unwrap().is_absolute());
     }
 }

@@ -52,15 +52,17 @@ fn release(resolved: &ResolvedPlugin) -> Result<()> {
 }
 
 fn run_release(program: &Path, plugin_dir: &Path, plugin_id: &str) -> Result<()> {
-    let mut child = Command::new(program)
-        .arg(RELEASE_COMMAND)
-        .current_dir(plugin_dir)
-        .env(qol_conventions::ENV_PLUGIN_ID, plugin_id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("could not start {}", program.display()))?;
+    let mut child = qol_process::hide_console_window(
+        Command::new(program)
+            .arg(RELEASE_COMMAND)
+            .current_dir(plugin_dir)
+            .env(qol_conventions::ENV_PLUGIN_ID, plugin_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped()),
+    )
+    .spawn()
+    .with_context(|| format!("could not start {}", program.display()))?;
     let status = qol_process::wait_for_exit_or_terminate(&mut child, RELEASE_TIMEOUT)
         .with_context(|| format!("{RELEASE_COMMAND} did not finish"))?;
     let mut stderr = String::new();

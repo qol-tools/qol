@@ -2,9 +2,11 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::installer::autostart::AutostartState;
+
 pub trait BootEnvironment: Send + Sync {
     fn canonical_binary(&self) -> Result<PathBuf>;
-    fn read_autostart_target(&self) -> Result<Option<PathBuf>>;
+    fn read_autostart_state(&self) -> Result<AutostartState>;
     fn write_autostart_target(&self, binary: &Path) -> Result<()>;
     fn honors_dev_selection(&self) -> bool;
 }
@@ -14,6 +16,7 @@ pub(crate) struct InMemoryBootEnvironment {
     pub canonical: PathBuf,
     pub honors_dev: bool,
     pub autostart: std::sync::Mutex<Option<PathBuf>>,
+    pub disabled_by_user: bool,
     pub fail_write: bool,
 }
 
@@ -24,12 +27,19 @@ impl InMemoryBootEnvironment {
             canonical,
             honors_dev,
             autostart: std::sync::Mutex::new(None),
+            disabled_by_user: false,
             fail_write: false,
         }
     }
 
     pub(crate) fn with_autostart(self, target: PathBuf) -> Self {
         *self.autostart.lock().unwrap() = Some(target);
+        self
+    }
+
+    #[cfg(feature = "dev")]
+    pub(crate) fn with_autostart_disabled_by_user(mut self) -> Self {
+        self.disabled_by_user = true;
         self
     }
 }
@@ -39,8 +49,13 @@ impl BootEnvironment for InMemoryBootEnvironment {
     fn canonical_binary(&self) -> Result<PathBuf> {
         Ok(self.canonical.clone())
     }
-    fn read_autostart_target(&self) -> Result<Option<PathBuf>> {
-        Ok(self.autostart.lock().unwrap().clone())
+    fn read_autostart_state(&self) -> Result<AutostartState> {
+        if self.disabled_by_user {
+            return Ok(AutostartState::DisabledByUser);
+        }
+        Ok(AutostartState::from_target(
+            self.autostart.lock().unwrap().clone(),
+        ))
     }
     fn write_autostart_target(&self, binary: &Path) -> Result<()> {
         if self.fail_write {
@@ -61,10 +76,10 @@ mod tests {
     #[test]
     fn in_memory_round_trip() {
         let env = InMemoryBootEnvironment::new(PathBuf::from("/canonical"), true);
-        assert_eq!(env.read_autostart_target().unwrap(), None);
+        assert_eq!(env.read_autostart_state().unwrap().into_target(), None);
         env.write_autostart_target(Path::new("/x")).unwrap();
         assert_eq!(
-            env.read_autostart_target().unwrap(),
+            env.read_autostart_state().unwrap().into_target(),
             Some(PathBuf::from("/x"))
         );
         assert_eq!(env.canonical_binary().unwrap(), PathBuf::from("/canonical"));
@@ -76,7 +91,7 @@ mod tests {
         let env = InMemoryBootEnvironment::new(PathBuf::from("/c"), false)
             .with_autostart(PathBuf::from("/pre"));
         assert_eq!(
-            env.read_autostart_target().unwrap(),
+            env.read_autostart_state().unwrap().into_target(),
             Some(PathBuf::from("/pre"))
         );
     }
@@ -87,6 +102,7 @@ mod tests {
             canonical: PathBuf::from("/c"),
             honors_dev: false,
             autostart: std::sync::Mutex::new(None),
+            disabled_by_user: false,
             fail_write: true,
         };
         assert!(env.write_autostart_target(Path::new("/x")).is_err());
@@ -300,8 +316,8 @@ impl BootEnvironment for PlatformBootEnvironment {
     fn canonical_binary(&self) -> Result<PathBuf> {
         canonical_boot_binary()
     }
-    fn read_autostart_target(&self) -> Result<Option<PathBuf>> {
-        crate::installer::autostart::read_target()
+    fn read_autostart_state(&self) -> Result<AutostartState> {
+        crate::installer::autostart::read_state()
     }
     fn write_autostart_target(&self, binary: &Path) -> Result<()> {
         crate::installer::autostart::write_target(binary)
@@ -327,8 +343,8 @@ impl BootEnvironment for InstallBootEnvironment {
     fn canonical_binary(&self) -> Result<PathBuf> {
         Ok(self.installed_binary.clone())
     }
-    fn read_autostart_target(&self) -> Result<Option<PathBuf>> {
-        crate::installer::autostart::read_target()
+    fn read_autostart_state(&self) -> Result<AutostartState> {
+        crate::installer::autostart::read_state()
     }
     fn write_autostart_target(&self, binary: &Path) -> Result<()> {
         crate::installer::autostart::write_target(binary)
