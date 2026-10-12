@@ -9,7 +9,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-mod store;
+pub(crate) mod store;
 #[cfg(target_os = "windows")]
 mod windows;
 

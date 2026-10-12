@@ -14,8 +14,6 @@ impl CursorPlatform for Platform {
 
     fn install_signal_handlers(&self) {}
 
-    fn reset_external_stop(&self) {}
-
     fn external_stop_requested(&self) -> bool {
         false
     }

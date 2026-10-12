@@ -23,10 +23,6 @@ impl CursorPlatform for Platform {
         register(libc::SIGINT);
     }
 
-    fn reset_external_stop(&self) {
-        EXTERNAL_STOP.store(false, Ordering::SeqCst);
-    }
-
     fn external_stop_requested(&self) -> bool {
         EXTERNAL_STOP.load(Ordering::Relaxed)
     }
@@ -52,4 +48,21 @@ fn register(signal: libc::c_int) {
 
 extern "C" fn handle_signal(_: libc::c_int) {
     EXTERNAL_STOP.store(true, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cursor::{RunControl, RunState};
+
+    use super::*;
+
+    #[test]
+    fn a_stop_signal_during_a_reload_survives_the_reset() {
+        let control = RunState::new();
+        handle_signal(libc::SIGTERM);
+        control.reset();
+        let stopped = control.should_stop();
+        EXTERNAL_STOP.store(false, Ordering::SeqCst);
+        assert!(stopped);
+    }
 }

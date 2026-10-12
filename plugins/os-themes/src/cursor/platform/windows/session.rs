@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ptr::null_mut;
 
+use qol_host_session::SessionStore;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CopyImage, DestroyCursor, GetCursorInfo, LoadCursorW, SetSystemCursor, SystemParametersInfoW,
     CURSORINFO, CURSOR_SHOWING, HCURSOR, IMAGE_CURSOR, LR_COPYFROMRESOURCE, OCR_APPSTARTING,
@@ -8,6 +9,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     OCR_SIZENS, OCR_SIZENWSE, OCR_SIZEWE, OCR_UP, OCR_WAIT, SPI_SETCURSORS, SYSTEM_CURSOR_ID,
 };
 
+use crate::cursor::platform::scale_journal::{self, ScaleJournal};
 use crate::cursor::platform::shake;
 
 use super::raster::{self, Raster};
@@ -41,6 +43,7 @@ pub(super) struct CursorSession {
     sources: HashMap<SYSTEM_CURSOR_ID, Source>,
     applied: HashMap<SYSTEM_CURSOR_ID, f32>,
     scale: f32,
+    journal: ScaleJournal,
 }
 
 impl CursorSession {
@@ -51,6 +54,7 @@ impl CursorSession {
             sources: HashMap::new(),
             applied: HashMap::new(),
             scale: 1.0,
+            journal: ScaleJournal::new(journal_store()),
         }
     }
 
@@ -90,6 +94,10 @@ impl CursorSession {
         else {
             return false;
         };
+        if !self.journal.before_scale() {
+            unsafe { DestroyCursor(cursor) };
+            return false;
+        }
         if unsafe { SetSystemCursor(cursor, id) } == 0 {
             log::warn!(
                 "could not replace system cursor {id}: {}",
@@ -151,9 +159,11 @@ impl shake::CursorSession for CursorSession {
 
     fn restore(&mut self) {
         if self.applied.is_empty() {
+            self.journal.after_restore();
             return;
         }
         reload_system_cursors();
+        self.journal.after_restore();
         self.applied.clear();
         self.sources.clear();
         self.scale = 1.0;
@@ -169,6 +179,12 @@ impl Drop for CursorSession {
     fn drop(&mut self) {
         shake::CursorSession::restore(self);
     }
+}
+
+pub(super) fn journal_store() -> SessionStore {
+    SessionStore::new(crate::session::platform::store::session_subdir(
+        scale_journal::SUBDIR,
+    ))
 }
 
 pub(super) fn reload_system_cursors() {

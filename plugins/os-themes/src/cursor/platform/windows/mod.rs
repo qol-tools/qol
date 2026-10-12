@@ -9,6 +9,7 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::cursor::CursorEffect;
 
+use super::scale_journal;
 use super::shake::{self, ShakeBackend};
 use super::CursorPlatform;
 
@@ -33,16 +34,12 @@ impl CursorPlatform for Platform {
         }
     }
 
-    fn reset_external_stop(&self) {
-        EXTERNAL_STOP.store(false, Ordering::SeqCst);
-    }
-
     fn external_stop_requested(&self) -> bool {
         EXTERNAL_STOP.load(Ordering::Relaxed)
     }
 
     fn recover(&self) {
-        session::reload_system_cursors();
+        scale_journal::recover(&session::journal_store(), session::reload_system_cursors);
     }
 }
 
@@ -61,5 +58,22 @@ impl ShakeBackend for WindowsBackend {
     fn open_focus(&self) -> Result<focus::GameFocusDetector> {
         qol_windowing::platform::windows::ensure_dpi_awareness();
         Ok(focus::GameFocusDetector)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cursor::{RunControl, RunState};
+
+    use super::*;
+
+    #[test]
+    fn a_stop_request_during_a_reload_survives_the_reset() {
+        let control = RunState::new();
+        EXTERNAL_STOP.store(true, Ordering::SeqCst);
+        control.reset();
+        let stopped = control.should_stop();
+        EXTERNAL_STOP.store(false, Ordering::SeqCst);
+        assert!(stopped);
     }
 }
