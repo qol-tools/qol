@@ -1,17 +1,17 @@
 mod app_name;
 mod record;
+mod signal;
 mod store;
 
-use std::path::{Path, PathBuf};
+use std::io::{PipeReader, PipeWriter};
+use std::path::Path;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use super::super::MirrorAccess;
-use store::Cursor;
+use signal::{Signal, Wake};
+use store::{Cursor, Session};
 
-const SETTLE: Duration = Duration::from_millis(150);
-
-static MIRROR: Mutex<Option<qol_watch::Watch>> = Mutex::new(None);
+static MIRROR: Mutex<Option<PipeWriter>> = Mutex::new(None);
 
 pub(in super::super) fn sync(enabled: bool) {
     let mut running = MIRROR
@@ -27,9 +27,9 @@ pub(in super::super) fn sync(enabled: bool) {
         return;
     }
     match start() {
-        Ok(watch) => {
+        Ok(stop) => {
             log::info!("notification mirror: watching macOS notifications");
-            *running = Some(watch);
+            *running = Some(stop);
         }
         Err(error) => log::warn!("notification mirror: not started: {error:#}"),
     }
@@ -45,34 +45,44 @@ pub(in super::super) fn access() -> MirrorAccess {
     }
 }
 
-fn start() -> anyhow::Result<qol_watch::Watch> {
+fn start() -> anyhow::Result<PipeWriter> {
     let db = store::db_path().ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
     let cursor = store::latest(&db)?;
-    let dir = db
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("{} has no parent", db.display()))?
-        .to_path_buf();
-    let (watch, batches) = qol_watch::settled(&[qol_watch::WatchRoot::shallow(dir)], SETTLE)?;
+    let (stopped, stop) = std::io::pipe()?;
+    let signal = Signal::open(&db, &stopped)?;
     std::thread::Builder::new()
         .name("qol-notification-mirror".to_string())
-        .spawn(move || run(&db, cursor, &batches))?;
-    Ok(watch)
+        .spawn(move || run(&db, cursor, signal, stopped))?;
+    Ok(stop)
 }
 
-fn run(db: &Path, mut cursor: Cursor, batches: &std::sync::mpsc::Receiver<Vec<PathBuf>>) {
-    while batches.recv().is_ok() {
-        let rows = match store::since(db, cursor) {
-            Ok(rows) => rows,
+fn run(db: &Path, mut cursor: Cursor, mut signal: Signal, _stopped: PipeReader) {
+    let mut session = None;
+    while let Wake::Changed = signal.wait() {
+        if session.is_none() {
+            session = Session::open(db)
+                .inspect_err(|error| log::warn!("notification mirror: {error:#}"))
+                .ok();
+        }
+        let Some(open) = session.as_mut() else {
+            continue;
+        };
+        match open.since(cursor) {
+            Ok(rows) => cursor = show_rows(rows, cursor),
             Err(error) => {
                 log::warn!("notification mirror: read failed: {error:#}");
-                continue;
-            }
-        };
-        for row in rows {
-            cursor = row.cursor;
-            if let Some(notification) = record::decode(&row.data) {
-                super::super::show(&app_name::display_name(&notification.app_id), &notification);
+                session = None;
             }
         }
     }
+}
+
+fn show_rows(rows: Vec<store::Row>, mut cursor: Cursor) -> Cursor {
+    for row in rows {
+        cursor = row.cursor;
+        if let Some(notification) = record::decode(&row.data) {
+            super::super::show(&app_name::display_name(&notification.app_id), &notification);
+        }
+    }
+    cursor
 }

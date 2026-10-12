@@ -36,7 +36,10 @@ fn show(app_name: &str, notification: &Mirrored) {
         "info",
         None,
         None,
-        None,
+        Some(qol_runtime::protocol::NotificationLayout {
+            style: Some("compact".to_string()),
+            ..Default::default()
+        }),
         None,
     );
     match shown {

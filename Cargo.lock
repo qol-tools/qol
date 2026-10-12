@@ -7364,6 +7364,7 @@ dependencies = [
  "global-hotkey",
  "gpui",
  "gtk",
+ "kqueue",
  "libc",
  "log",
  "mach2 0.6.0",

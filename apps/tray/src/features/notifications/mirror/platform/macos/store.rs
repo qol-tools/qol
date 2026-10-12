@@ -1,11 +1,14 @@
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 const SQLITE: &str = "/usr/bin/sqlite3";
 const DB_RELATIVE: &str = "Library/Group Containers/group.com.apple.usernoted/db2/db";
+const END_QUERY: &str = "select 'qol-end' as qol_end;";
+const END_LINE: &str = r#"[{"qol_end":"qol-end"}]"#;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Cursor {
@@ -19,8 +22,6 @@ pub(super) struct Row {
     pub(super) data: Vec<u8>,
 }
 
-// `delivered_date` is selected as `printf('%.17g', ..)` text: the sqlite3 shell prints a
-// REAL with 15 significant digits, which does not round-trip the stored value.
 #[derive(Deserialize)]
 struct RawCursor {
     rec_id: i64,
@@ -62,16 +63,73 @@ pub(super) fn latest(db: &Path) -> Result<Cursor> {
     }
 }
 
-/// Rows with undecodable data are logged and returned with empty data, so the caller still
-/// advances its cursor past them.
-pub(super) fn since(db: &Path, cursor: Cursor) -> Result<Vec<Row>> {
-    let rows: Vec<RawRow> = query(db, &since_sql(cursor))?;
+pub(super) struct Session {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl Session {
+    pub(super) fn open(db: &Path) -> Result<Self> {
+        let mut child = Command::new(SQLITE)
+            .arg("-readonly")
+            .arg("-json")
+            .arg(db)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to start {SQLITE}"))?;
+        let stdin = child.stdin.take().context("sqlite3 stdin missing")?;
+        let stdout = child.stdout.take().context("sqlite3 stdout missing")?;
+        Ok(Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        })
+    }
+
+    pub(super) fn since(&mut self, cursor: Cursor) -> Result<Vec<Row>> {
+        writeln!(self.stdin, "{}\n{END_QUERY}", since_sql(cursor))
+            .and_then(|()| self.stdin.flush())
+            .context("sqlite3 stopped accepting queries")?;
+        let rows: Vec<RawRow> = parse_json(&read_reply(&mut self.stdout)?)?;
+        Ok(rows_from(rows))
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn read_reply(reader: &mut impl BufRead) -> Result<String> {
+    let mut reply = String::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader
+            .read_line(&mut line)
+            .context("sqlite3 output unreadable")?
+            == 0
+        {
+            bail!("sqlite3 exited mid-reply");
+        }
+        if line.trim_end() == END_LINE {
+            return Ok(reply);
+        }
+        reply.push_str(&line);
+    }
+}
+
+fn rows_from(rows: Vec<RawRow>) -> Vec<Row> {
     rows.into_iter()
-        .map(|raw| {
-            let cursor = Cursor {
-                delivered: parse_delivered(&raw.delivered_date)?,
-                rec_id: raw.rec_id,
-            };
+        .filter_map(|raw| {
+            let delivered = parse_delivered(&raw.delivered_date)
+                .inspect_err(|error| log::warn!("notification mirror: {error:#}"))
+                .ok()?;
             let data = decode_hex(&raw.data).unwrap_or_else(|error| {
                 log::warn!(
                     "notification mirror: skipping record {} with malformed hex data: {error:#}",
@@ -79,7 +137,13 @@ pub(super) fn since(db: &Path, cursor: Cursor) -> Result<Vec<Row>> {
                 );
                 Vec::new()
             });
-            Ok(Row { cursor, data })
+            Some(Row {
+                cursor: Cursor {
+                    delivered,
+                    rec_id: raw.rec_id,
+                },
+                data,
+            })
         })
         .collect()
 }
@@ -89,7 +153,7 @@ fn since_sql(cursor: Cursor) -> String {
         "select rec_id, printf('%.17g', delivered_date) as delivered_date, \
          hex(data) as data from record \
          where delivered_date > {d} or (delivered_date = {d} and rec_id > {id}) \
-         order by delivered_date, rec_id",
+         order by delivered_date, rec_id;",
         d = cursor.delivered,
         id = cursor.rec_id,
     )
@@ -155,17 +219,30 @@ mod tests {
     }
 
     #[test]
-    fn rows_parse_from_sqlite_json() {
+    fn rows_parse_from_sqlite_json_and_skip_bad_data() {
         let stdout = r#"[{"rec_id":7,"delivered_date":"813503659.25","data":"62706C"},
-{"rec_id":8,"delivered_date":"813503938.50824404","data":"zz"}]"#;
-        let rows = parse_json::<RawRow>(stdout).unwrap();
-        assert_eq!(rows.len(), 2);
+{"rec_id":8,"delivered_date":"813503938.5","data":"zz"},
+{"rec_id":9,"delivered_date":"not a date","data":""}]"#;
+        let rows = rows_from(parse_json::<RawRow>(stdout).unwrap());
         assert_eq!(
-            parse_delivered(&rows[1].delivered_date).unwrap(),
-            813_503_938.508_244_04
+            rows,
+            vec![
+                Row {
+                    cursor: Cursor {
+                        delivered: 813_503_659.25,
+                        rec_id: 7
+                    },
+                    data: b"bpl".to_vec(),
+                },
+                Row {
+                    cursor: Cursor {
+                        delivered: 813_503_938.5,
+                        rec_id: 8
+                    },
+                    data: Vec::new(),
+                },
+            ]
         );
-        assert_eq!(decode_hex(&rows[0].data).unwrap(), b"bpl");
-        assert!(decode_hex(&rows[1].data).is_err());
     }
 
     #[test]
@@ -175,6 +252,57 @@ mod tests {
             rec_id: 1,
         });
         assert!(sql.contains("printf('%.17g', delivered_date) as delivered_date"));
+    }
+
+    #[test]
+    fn read_reply_stops_at_the_end_marker() {
+        let output = format!("[{{\"rec_id\":7}},\n{{\"rec_id\":8}}]\n{END_LINE}\n{END_LINE}\n");
+        let mut reader = std::io::Cursor::new(output);
+        assert_eq!(
+            read_reply(&mut reader).unwrap(),
+            "[{\"rec_id\":7},\n{\"rec_id\":8}]\n"
+        );
+        assert_eq!(read_reply(&mut reader).unwrap(), "");
+        assert!(read_reply(&mut reader).is_err());
+    }
+
+    #[test]
+    fn session_reads_the_end_marker_sqlite_prints() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db");
+        let created = Command::new(SQLITE)
+            .arg(&db)
+            .arg(
+                "create table record (rec_id integer primary key, delivered_date real, data blob); \
+                 insert into record values (1, 10.5, x'0102'), (2, 11.25, x'ff');",
+            )
+            .status()
+            .unwrap();
+        assert!(created.success());
+        let mut session = Session::open(&db).unwrap();
+        let first = session
+            .since(Cursor {
+                delivered: 10.5,
+                rec_id: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            first,
+            vec![Row {
+                cursor: Cursor {
+                    delivered: 11.25,
+                    rec_id: 2
+                },
+                data: vec![0xff],
+            }]
+        );
+        let none = session
+            .since(Cursor {
+                delivered: 11.25,
+                rec_id: 2,
+            })
+            .unwrap();
+        assert!(none.is_empty());
     }
 
     #[test]
