@@ -1,5 +1,7 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
+#[cfg(any(target_os = "windows", test))]
+mod link_names;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

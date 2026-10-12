@@ -1,5 +1,6 @@
 use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
+use super::link_names::{link_names, link_path, LINK_EXTENSION};
 use crate::installer::boot_environment::paths_equal_canonicalized;
 use crate::installer::platform::windows::ico::ico_from_pngs;
 use crate::installer::platform::windows::shortcut::{self, Shortcut};
@@ -14,9 +15,7 @@ use std::path::{Path, PathBuf};
 const ICONS_DIR: &str = "start-menu-icons";
 const MARK_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 256];
 const APP_ICON_PIXELS: usize = 256;
-const LINK_EXTENSION: &str = "lnk";
 const ICON_EXTENSION: &str = "ico";
-const INVALID_NAME_CHARS: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
 pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) -> Result<()> {
     let icons = crate::paths::base_data_dir()?.join(ICONS_DIR);
@@ -53,7 +52,13 @@ fn sync_into(
         super::verify_target(entry, target)?;
         let icon = icons.location(&entry.icon, marks)?;
         let arguments = qol_apps::shell_execute::join_args(&entry.exec_args);
-        let link = dir.join(name);
+        let Some(link) = link_path(dir, name) else {
+            log::warn!(
+                "launcher_apps: refusing link {name:?} outside {}",
+                dir.display()
+            );
+            continue;
+        };
         let wanted = Shortcut {
             target,
             arguments: &arguments,
@@ -71,56 +76,6 @@ fn sync_into(
         icons.kept.iter().map(String::as_str),
     );
     Ok(())
-}
-
-fn link_names(entries: &[LauncherEntry]) -> Vec<String> {
-    let bases: Vec<String> = entries.iter().map(link_base).collect();
-    let mut counts = HashMap::new();
-    for base in &bases {
-        *counts.entry(base.to_lowercase()).or_insert(0usize) += 1;
-    }
-    entries
-        .iter()
-        .zip(&bases)
-        .map(|(entry, base)| match counts[&base.to_lowercase()] {
-            1 => format!("{base}.{LINK_EXTENSION}"),
-            _ => format!("{base} ({}).{LINK_EXTENSION}", entry.file_stem),
-        })
-        .collect()
-}
-
-fn link_base(entry: &LauncherEntry) -> String {
-    let cleaned: String = entry
-        .display_name
-        .chars()
-        .map(|ch| {
-            if ch.is_control() || INVALID_NAME_CHARS.contains(&ch) {
-                ' '
-            } else {
-                ch
-            }
-        })
-        .collect();
-    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let name = collapsed.trim_end_matches(['.', ' ']);
-    if name.is_empty() || is_reserved_device_name(name) {
-        return entry.file_stem.clone();
-    }
-    name.to_string()
-}
-
-fn is_reserved_device_name(name: &str) -> bool {
-    let stem = name
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .trim_end()
-        .to_ascii_uppercase();
-    match stem.as_bytes() {
-        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
-        [b'C', b'O', b'M', digit] | [b'L', b'P', b'T', digit] => digit.is_ascii_digit(),
-        _ => false,
-    }
 }
 
 fn link_matches(link: &Path, wanted: &Shortcut<'_>) -> bool {
@@ -262,36 +217,6 @@ mod tests {
 
     fn mark(file_stem: &str, display_name: &str) -> LauncherEntry {
         entry(file_stem, display_name, LauncherIcon::Mark(Mark::Shortcuts))
-    }
-
-    #[test]
-    fn link_names_are_valid_windows_file_names() {
-        let entries = [
-            mark("command-add", "QoL \u{203a} Add Shortcut"),
-            mark("shortcut-a", "Docs: a/b \\ c?"),
-            mark("shortcut-b", "  Trailing dots...  "),
-            mark("shortcut-c", "Aux"),
-            mark("shortcut-d", "com1.backup"),
-            mark("shortcut-e", "Same"),
-            mark("shortcut-f", "same"),
-            mark("shortcut-g", "<>|*"),
-            mark("shortcut-h", "Line\nbreak"),
-        ];
-
-        assert_eq!(
-            link_names(&entries),
-            [
-                "QoL \u{203a} Add Shortcut.lnk",
-                "Docs a b c.lnk",
-                "Trailing dots.lnk",
-                "shortcut-c.lnk",
-                "shortcut-d.lnk",
-                "Same (shortcut-e).lnk",
-                "same (shortcut-f).lnk",
-                "shortcut-g.lnk",
-                "Line break.lnk",
-            ]
-        );
     }
 
     #[test]
