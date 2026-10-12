@@ -1,10 +1,16 @@
 use std::io;
+use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle};
 use std::path::Path;
 
 use qol_platform::native::security::TokenSid;
 use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Networking::WinSock::{WSAGetLastError, WSAIoctl, SIO_AF_UNIX_GETPEERPID};
+use windows_sys::Win32::Storage::FileSystem::{
+    FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+};
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
 pub type LocalListener = uds_windows::UnixListener;
@@ -12,9 +18,36 @@ pub type LocalStream = uds_windows::UnixStream;
 
 /// `sun_path` is 108 bytes on Windows as on Linux, minus the NUL.
 pub(super) const MAX_SOCKET_PATH_BYTES: usize = 107;
+const IO_REPARSE_TAG_AF_UNIX: u32 = 0x8000_0023;
 
 pub(super) fn bind_listener(path: &Path) -> io::Result<LocalListener> {
     LocalListener::bind(path)
+}
+
+pub fn is_socket_file(path: &Path) -> bool {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+    else {
+        return false;
+    };
+    let mut information = FILE_ATTRIBUTE_TAG_INFO {
+        FileAttributes: 0,
+        ReparseTag: 0,
+    };
+    let read = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
+            std::ptr::from_mut(&mut information).cast(),
+            std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    };
+    read != 0
+        && information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        && information.ReparseTag == IO_REPARSE_TAG_AF_UNIX
 }
 
 pub(super) fn authorize_peer(stream: &LocalStream) -> io::Result<()> {

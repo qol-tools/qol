@@ -14,6 +14,10 @@ pub struct LocalStream(Infallible);
 
 pub(super) const MAX_SOCKET_PATH_BYTES: usize = usize::MAX;
 
+pub fn is_socket_file(_: &Path) -> bool {
+    false
+}
+
 fn unsupported() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,

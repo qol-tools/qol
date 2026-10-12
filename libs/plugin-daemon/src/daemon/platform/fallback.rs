@@ -2,16 +2,12 @@
 //! target): a daemon always binds its own socket path.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use qol_runtime::local_ipc::LocalListener;
 
 pub(in crate::daemon) fn fallback_socket_dir(_use_tmpdir_env: bool) -> PathBuf {
     std::env::temp_dir()
-}
-
-pub(in crate::daemon) fn remove_socket_file(path: impl AsRef<Path>) {
-    let _ = std::fs::remove_file(path);
 }
 
 pub(in crate::daemon) fn inherited_listener() -> Option<LocalListener> {

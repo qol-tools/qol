@@ -3,7 +3,7 @@
 
 use std::io::{self, BufReader, ErrorKind, Write};
 use std::net::Shutdown;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +14,7 @@ mod platform;
 #[cfg(test)]
 mod tests;
 
-use platform::{fallback_socket_dir, inherited_listener, remove_socket_file};
+use platform::{fallback_socket_dir, inherited_listener};
 pub use platform::{inherited_port_fd, inherited_primary_port_fd, restore_cloexec};
 
 const ACK_TIMEOUT_MS: u64 = 80;
@@ -235,6 +235,13 @@ pub fn cleanup(config: &DaemonConfig) {
     }
     if let Some(path) = socket_path(config) {
         remove_socket_file(path);
+    }
+}
+
+fn remove_socket_file(path: impl AsRef<Path>) {
+    let path = path.as_ref();
+    if local_ipc::is_socket_file(path) {
+        let _ = std::fs::remove_file(path);
     }
 }
 

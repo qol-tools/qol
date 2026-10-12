@@ -1,11 +1,9 @@
 //! Unix-domain transport adapter for resident plugin daemons: fd handoff from
 //! qol-tray and the socket-file conventions of Unix hosts.
 
-use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::fd::{FromRawFd, RawFd};
-use std::os::unix::fs::FileTypeExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use qol_runtime::local_ipc::LocalListener;
 
@@ -20,16 +18,6 @@ pub(in crate::daemon) fn fallback_socket_dir(use_tmpdir_env: bool) -> PathBuf {
             .unwrap_or_else(|_| PathBuf::from("/tmp"))
     } else {
         PathBuf::from("/tmp")
-    }
-}
-
-pub(in crate::daemon) fn remove_socket_file(path: impl AsRef<Path>) {
-    let path = path.as_ref();
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return;
-    };
-    if meta.file_type().is_socket() {
-        let _ = fs::remove_file(path);
     }
 }
 
@@ -156,6 +144,7 @@ mod tests {
     use super::*;
     use crate::daemon::tests::{daemon_listener_fd_env_lock, fallback_config, temp_socket_name};
     use crate::daemon::*;
+    use std::fs;
     use std::os::unix::net::{UnixListener, UnixStream};
 
     #[test]

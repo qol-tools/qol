@@ -5,7 +5,7 @@ mod platform;
 mod secret;
 pub use secret::{encode_secret_json, read_secret_line, SecretMessageError, SecretReader};
 
-pub use platform::{peer_pid, LocalListener, LocalStream};
+pub use platform::{is_socket_file, peer_pid, LocalListener, LocalStream};
 
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
@@ -64,6 +64,21 @@ mod tests {
 
             assert_eq!(result.is_ok(), accepted, "size={size}");
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn only_a_bound_socket_counts_as_a_socket_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("s");
+        let _listener = bind_listener(&socket).unwrap();
+        let plain = dir.path().join("plain");
+        std::fs::write(&plain, "x").unwrap();
+
+        assert!(is_socket_file(&socket));
+        assert!(!is_socket_file(&plain));
+        assert!(!is_socket_file(dir.path()));
+        assert!(!is_socket_file(&dir.path().join("missing")));
     }
 
     #[test]
