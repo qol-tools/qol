@@ -3,19 +3,14 @@ use std::time::Duration;
 
 use qol_headless::DoctorCheckResult;
 use qol_platform::native::com::{Apartment, ComApartment};
-use windows::core::{BSTR, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{CloseHandle, VARIANT_FALSE, WAIT_OBJECT_0};
+use windows::core::BSTR;
+use windows::Win32::Foundation::VARIANT_FALSE;
 use windows::Win32::NetworkManagement::WindowsFirewall::{
     INetFwPolicy2, INetFwRule, NetFwPolicy2, NET_FW_ACTION_ALLOW, NET_FW_IP_PROTOCOL_UDP,
     NET_FW_PROFILE2_DOMAIN, NET_FW_PROFILE2_PRIVATE, NET_FW_PROFILE2_PUBLIC, NET_FW_PROFILE_TYPE2,
     NET_FW_RULE_DIR_IN,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
-use windows::Win32::UI::Shell::{
-    ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-};
-use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 use super::super::{details, ports_label};
 use super::rule::{self, AllowPlan, Ownership, RemovePlan, RULE_NAME};
@@ -238,37 +233,18 @@ fn rule_profiles(active: i32) -> String {
 }
 
 fn run_elevated(program: &Path, arguments: &str) -> Result<(), String> {
-    let verb = HSTRING::from("runas");
-    let file = HSTRING::from(program);
-    let parameters = HSTRING::from(arguments);
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
-        lpVerb: PCWSTR(verb.as_ptr()),
-        lpFile: PCWSTR(file.as_ptr()),
-        lpParameters: PCWSTR(parameters.as_ptr()),
-        nShow: SW_HIDE.0,
-        ..Default::default()
+    let hidden = qol_platform::native::shell::ShellSpawn {
+        elevate: true,
+        visible: false,
     };
-    unsafe { ShellExecuteExW(&mut info) }
+    let process = qol_platform::native::shell::shell_spawn(program, arguments, hidden)
         .map_err(|error| format!("The administrator prompt was refused or failed: {error}"))?;
-    if info.hProcess.is_invalid() {
-        return Err("Windows did not start netsh".into());
+    match process.wait_timeout(ELEVATED_WAIT) {
+        Ok(Some(0)) => Ok(()),
+        Ok(Some(code)) => Err(format!("netsh exited with code {code}")),
+        Ok(None) => Err("netsh did not finish in time".into()),
+        Err(error) => Err(format!("could not read the netsh exit code: {error}")),
     }
-    let waited = unsafe { WaitForSingleObject(info.hProcess, ELEVATED_WAIT.as_millis() as u32) };
-    let mut code = 1u32;
-    let read = unsafe { GetExitCodeProcess(info.hProcess, &mut code) };
-    unsafe {
-        let _ = CloseHandle(info.hProcess);
-    }
-    if waited != WAIT_OBJECT_0 {
-        return Err("netsh did not finish in time".into());
-    }
-    read.map_err(|error| error.to_string())?;
-    if code != 0 {
-        return Err(format!("netsh exited with code {code}"));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
