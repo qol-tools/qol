@@ -243,6 +243,7 @@ pub(super) struct CatalogApp {
     pub(super) source: Source,
     pub(super) install_dir: Option<(PathBuf, MatchKind)>,
     pub(super) known_dir: Option<PathBuf>,
+    pub(super) anchors: Vec<PathBuf>,
     pub(super) shortcuts: Vec<PathBuf>,
     pub(super) keys: BTreeSet<String>,
     pub(super) publisher_keys: BTreeSet<String>,
@@ -308,7 +309,8 @@ pub(super) fn build_catalog(
     entries.sort_by(|left, right| left.location.cmp(&right.location));
     for entry in entries {
         let keys = entry_keys(&entry);
-        let install_dir = install_dir(&entry, &keys, roots, probe);
+        let anchors = entry_anchors(&entry, roots, probe);
+        let install_dir = install_dir(&entry, &anchors, &keys, roots, probe);
         let path = install_dir
             .as_ref()
             .map(|(dir, _)| dir.clone())
@@ -324,6 +326,7 @@ pub(super) fn build_catalog(
             publisher_keys: publisher_keys(entry.publisher.as_deref()),
             known_dir: install_dir.as_ref().map(|(dir, _)| dir.clone()),
             install_dir,
+            anchors,
             shortcuts: Vec::new(),
             keys,
             source: Source::Registry(entry),
@@ -373,7 +376,10 @@ pub(super) fn build_catalog(
             .position(installed_in)
             .or_else(|| apps.iter().position(named));
         match owner {
-            Some(owner) => apps[owner].shortcuts.push(shortcut.path),
+            Some(owner) => {
+                apps[owner].shortcuts.push(shortcut.path);
+                apps[owner].anchors.extend(target);
+            }
             None if !claimed_paths.contains(&path_key(&shortcut.path)) => {
                 let keys = usable_keys([shortcut.name.as_str()]);
                 let install_dir = target
@@ -397,6 +403,7 @@ pub(super) fn build_catalog(
                     source: Source::Shortcut,
                     known_dir: install_dir.as_ref().map(|(dir, _)| dir.clone()),
                     install_dir,
+                    anchors: target.into_iter().collect(),
                     shortcuts: vec![shortcut.path],
                     keys,
                     publisher_keys: BTreeSet::new(),
@@ -456,6 +463,7 @@ pub(super) fn with_store(mut apps: Vec<CatalogApp>, packages: &[StorePackage]) -
             source: Source::Store(package.clone()),
             install_dir: None,
             known_dir: None,
+            anchors: vec![package.install_dir.clone()],
             shortcuts: Vec::new(),
             keys: BTreeSet::new(),
             publisher_keys: BTreeSet::new(),
@@ -475,21 +483,25 @@ fn sort_by_name(apps: &mut [CatalogApp]) {
     });
 }
 
-fn install_dir(
-    entry: &UninstallEntry,
-    keys: &BTreeSet<String>,
-    roots: &Roots,
-    probe: &impl PathProbe,
-) -> Option<(PathBuf, MatchKind)> {
+fn entry_anchors(entry: &UninstallEntry, roots: &Roots, probe: &impl PathProbe) -> Vec<PathBuf> {
     let system = roots.system32();
     let uninstaller = split_command(&entry.uninstall, system.as_deref(), probe)
         .map(|launch| PathBuf::from(launch.program));
-    let anchors: Vec<PathBuf> = [entry.display_icon.clone(), uninstaller]
+    [entry.display_icon.clone(), uninstaller]
         .into_iter()
         .flatten()
         .filter(|file| !has_parent_dir(file))
         .filter_map(|file| probe.canonical(&file))
-        .collect();
+        .collect()
+}
+
+fn install_dir(
+    entry: &UninstallEntry,
+    anchors: &[PathBuf],
+    keys: &BTreeSet<String>,
+    roots: &Roots,
+    probe: &impl PathProbe,
+) -> Option<(PathBuf, MatchKind)> {
     let exact = entry
         .install_location
         .as_ref()
@@ -787,7 +799,8 @@ mod tests {
                     .collect(),
                 files: vec![PathBuf::from(uninstaller)],
             };
-            let found = install_dir(&entry, &keys, &roots(), &disk);
+            let anchors = entry_anchors(&entry, &roots(), &disk);
+            let found = install_dir(&entry, &anchors, &keys, &roots(), &disk);
             assert_eq!(
                 found,
                 expected.map(|dir| (PathBuf::from(dir), MatchKind::Fuzzy)),
@@ -1265,8 +1278,9 @@ mod tests {
                 ..entry("Bar", "Bar", uninstall)
             };
             let keys = entry_keys(&entry);
+            let anchors = entry_anchors(&entry, &roots(), &disk);
             assert_eq!(
-                install_dir(&entry, &keys, &roots(), &disk),
+                install_dir(&entry, &anchors, &keys, &roots(), &disk),
                 expected,
                 "{label}"
             );

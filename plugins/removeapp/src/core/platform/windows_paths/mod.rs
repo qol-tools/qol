@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use qol_apps::shell_link::LinkTarget;
@@ -214,6 +215,53 @@ pub(super) fn resolve_program(
         .find(|candidate| probe.is_file(Path::new(candidate)))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SweepEntry {
+    pub(super) path: PathBuf,
+    pub(super) name: String,
+}
+
+pub(super) struct Sweep<'a> {
+    pub(super) keys: &'a BTreeSet<String>,
+    pub(super) publisher_keys: &'a BTreeSet<String>,
+    pub(super) foreign_anchors: &'a [PathBuf],
+    pub(super) foreign_publishers: &'a BTreeSet<String>,
+}
+
+impl Sweep<'_> {
+    pub(super) fn candidates(
+        &self,
+        entries: Vec<SweepEntry>,
+        children: impl Fn(&Path) -> Vec<SweepEntry>,
+    ) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in entries {
+            let candidates = if self.keys.contains(&entry.name) {
+                if self.foreign_publishers.contains(&entry.name) {
+                    Vec::new()
+                } else {
+                    vec![entry.path]
+                }
+            } else if self.publisher_keys.contains(&entry.name) {
+                children(&entry.path)
+                    .into_iter()
+                    .filter(|child| self.keys.contains(&child.name))
+                    .map(|child| child.path)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            found.extend(candidates.into_iter().filter(|candidate| {
+                !self
+                    .foreign_anchors
+                    .iter()
+                    .any(|anchor| within(anchor, candidate))
+            }));
+        }
+        found
+    }
+}
+
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub(super) struct FakeDisk {
@@ -407,5 +455,110 @@ mod tests {
             );
         }
         assert_eq!(split_command("RunDll32 x", None, &disk), None);
+    }
+
+    fn keys(values: &[&str]) -> BTreeSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn entries(root: &str, names: &[&str]) -> Vec<SweepEntry> {
+        names
+            .iter()
+            .map(|name| SweepEntry {
+                path: Path::new(root).join(name),
+                name: name.to_lowercase(),
+            })
+            .collect()
+    }
+
+    fn sweep(
+        target: (&[&str], &[&str]),
+        foreign: (&[&str], &[&str]),
+        root: &str,
+        names: &[&str],
+        children: &[(&str, &[&str])],
+    ) -> Vec<String> {
+        let (target_keys, target_publishers) = (keys(target.0), keys(target.1));
+        let anchors: Vec<PathBuf> = foreign.0.iter().map(PathBuf::from).collect();
+        let foreign_publishers = keys(foreign.1);
+        let sweep = Sweep {
+            keys: &target_keys,
+            publisher_keys: &target_publishers,
+            foreign_anchors: &anchors,
+            foreign_publishers: &foreign_publishers,
+        };
+        sweep
+            .candidates(entries(root, names), |dir| {
+                children
+                    .iter()
+                    .find(|(parent, _)| same_path(dir, &Path::new(root).join(parent)))
+                    .map_or_else(Vec::new, |(parent, names)| {
+                        entries(&Path::new(root).join(parent).to_string_lossy(), names)
+                    })
+            })
+            .iter()
+            .map(|path| path_key(path))
+            .collect()
+    }
+
+    #[test]
+    fn a_sweep_claims_owned_keys_and_publisher_children_outside_foreign_anchors() {
+        let found = sweep(
+            (&["widget", "gizmo"], &["acme"]),
+            (&[r"C:\Data\Gizmo\gizmo.exe"], &[]),
+            r"C:\Data",
+            &["Widget", "Gizmo", "Acme", "Other"],
+            &[("Acme", &["Widget", "Other"])],
+        );
+        assert_eq!(found, [r"c:\data\widget", r"c:\data\acme\widget"]);
+    }
+
+    #[test]
+    fn unity_hub_keeps_the_shared_unity_folders_from_an_editor_sweep() {
+        let editor = (
+            &["unity 2022.3.1f1", "unity"][..],
+            &["unity technologies", "unity"][..],
+        );
+        let hub = (
+            &[r"C:\Program Files\Unity Hub\Unity Hub.exe"][..],
+            &["unity technologies", "unity"][..],
+        );
+        let cases = [
+            (r"C:\Users\me\AppData\Roaming", &["Unity", "UnityHub"][..]),
+            (r"C:\Users\me\AppData\Local", &["Unity", "Unity Hub"][..]),
+        ];
+        for (root, names) in cases {
+            assert!(sweep(editor, hub, root, names, &[]).is_empty(), "{root}");
+        }
+        let alone = sweep(
+            editor,
+            (&[], &[]),
+            r"C:\Users\me\AppData\Local",
+            &["Unity"],
+            &[],
+        );
+        assert_eq!(alone, [r"c:\users\me\appdata\local\unity"]);
+    }
+
+    #[test]
+    fn the_python_launcher_keeps_the_shared_python_folder() {
+        let python = (
+            &["python 3.12.0 (64-bit)", "python"][..],
+            &["python software foundation", "python"][..],
+        );
+        let root = r"C:\Users\me\AppData\Local\Programs";
+        let launcher_icon = r"C:\Users\me\AppData\Local\Programs\Python\Launcher\py.exe";
+        let cases = [
+            ("launcher by publisher", (&[][..], &["python"][..])),
+            ("launcher by display icon", (&[launcher_icon][..], &[][..])),
+        ];
+        for (label, launcher) in cases {
+            assert!(
+                sweep(python, launcher, root, &["Python"], &[]).is_empty(),
+                "{label}"
+            );
+        }
+        let alone = sweep(python, (&[], &[]), root, &["Python"], &[]);
+        assert_eq!(alone, [r"c:\users\me\appdata\local\programs\python"]);
     }
 }

@@ -8,7 +8,7 @@ use std::fs;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use qol_apps::shell_link::{LinkTarget, ShellLink};
@@ -31,13 +31,17 @@ use self::catalog::{
     build_catalog, normalize, owned_keys, uninstall_launch, with_store, CatalogApp, Shortcut,
 };
 use self::store::StorePackage;
+use super::uninstall_wait::Limits;
 use super::windows_paths::{
-    has_parent_dir, path_key, same_path, strip_verbatim, within, PathProbe, Roots,
+    has_parent_dir, path_key, same_path, strip_verbatim, within, PathProbe, Roots, Sweep,
+    SweepEntry,
 };
 
-const REMOVE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const UNREGISTER_TIMEOUT: Duration = Duration::from_secs(15);
-const UNREGISTER_POLL: Duration = Duration::from_millis(250);
+const UNINSTALL_LIMITS: Limits = Limits {
+    overall: Duration::from_secs(10 * 60),
+    unregister: Duration::from_secs(15),
+    settle: Duration::from_secs(5),
+};
 const SELF_PREFIX: &str = "qol";
 const STORE_DATA_DIR: &str = "Packages";
 const PROTECTED_ENV_ROOTS: &[&str] = &[
@@ -102,37 +106,34 @@ impl Platform {
 
     fn leftovers(&self, target: &CatalogApp, catalog: &[CatalogApp]) -> Vec<Leftover> {
         let keys = owned_keys(target, catalog);
-        let other_installs: Vec<&PathBuf> = catalog
+        let others: Vec<&CatalogApp> = catalog
             .iter()
             .filter(|other| !same_path(&other.app.path, &target.app.path))
-            .filter_map(|other| other.known_dir.as_ref())
             .collect();
+        let foreign_anchors: Vec<PathBuf> = others
+            .iter()
+            .flat_map(|other| other.known_dir.iter().chain(&other.anchors))
+            .cloned()
+            .collect();
+        let foreign_publishers: BTreeSet<String> = others
+            .iter()
+            .flat_map(|other| other.publisher_keys.iter().cloned())
+            .collect();
+        let sweep = Sweep {
+            keys: &keys,
+            publisher_keys: &target.publisher_keys,
+            foreign_anchors: &foreign_anchors,
+            foreign_publishers: &foreign_publishers,
+        };
         let mut found = Vec::new();
         for (kind, root) in self.roots.data_roots() {
-            let Ok(entries) = fs::read_dir(&root) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let name = normalize(&entry.file_name().to_string_lossy());
-                let path = entry.path();
-                let candidates = if keys.contains(&name) {
-                    vec![path]
-                } else if target.publisher_keys.contains(&name) && path.is_dir() {
-                    matching_children(&path, &keys)
-                } else {
-                    Vec::new()
-                };
-                for candidate in candidates {
-                    if other_installs.iter().any(|dir| within(dir, &candidate)) {
-                        continue;
-                    }
-                    found.push(Leftover {
-                        size_bytes: dir_size(&candidate),
-                        path: candidate,
-                        kind,
-                        match_kind: MatchKind::Exact,
-                    });
-                }
+            for candidate in sweep.candidates(sweep_entries(&root), sweep_entries) {
+                found.push(Leftover {
+                    size_bytes: dir_size(&candidate),
+                    path: candidate,
+                    kind,
+                    match_kind: MatchKind::Fuzzy,
+                });
             }
         }
         found
@@ -207,14 +208,16 @@ fn find(catalog: &[CatalogApp], app: &InstalledApp) -> Option<CatalogApp> {
         .cloned()
 }
 
-fn matching_children(dir: &Path, keys: &BTreeSet<String>) -> Vec<PathBuf> {
+fn sweep_entries(dir: &Path) -> Vec<SweepEntry> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     entries
         .flatten()
-        .filter(|entry| keys.contains(&normalize(&entry.file_name().to_string_lossy())))
-        .map(|entry| entry.path())
+        .map(|entry| SweepEntry {
+            name: normalize(&entry.file_name().to_string_lossy()),
+            path: entry.path(),
+        })
         .collect()
 }
 
@@ -496,20 +499,17 @@ impl AppPlatform for Platform {
             package.id(),
             package.scope()
         );
-        launch::run_and_wait(
+        let unregistered = launch::run_and_wait(
             &launch,
             entry.location.scope() == PackageScope::System,
-            REMOVE_TIMEOUT,
+            &UNINSTALL_LIMITS,
+            || registry::is_registered(&entry.location),
         )?;
-        let deadline = Instant::now() + UNREGISTER_TIMEOUT;
-        while registry::is_registered(&entry.location) {
-            if Instant::now() >= deadline {
-                bail!(
-                    "{PLUGIN_ID}: {} is still installed after its uninstaller finished",
-                    app.name
-                );
-            }
-            std::thread::sleep(UNREGISTER_POLL);
+        if !unregistered {
+            bail!(
+                "{PLUGIN_ID}: {} is still installed after its uninstaller finished",
+                app.name
+            );
         }
         Ok(())
     }
@@ -564,6 +564,7 @@ mod tests {
             source: Source::Shortcut,
             install_dir: None,
             known_dir,
+            anchors: Vec::new(),
             shortcuts: Vec::new(),
             keys: keys.iter().map(|key| key.to_string()).collect(),
             publisher_keys: publishers.iter().map(|key| key.to_string()).collect(),
@@ -619,8 +620,11 @@ mod tests {
         );
         let sharer = catalog_app("Sharer", root.join("Sharer"), &["shared"], &[], None);
         let catalog = vec![target.clone(), gizmo, sharer];
-        let mut found: Vec<(String, LeftoverKind)> = platform
-            .leftovers(&target, &catalog)
+        let leftovers = platform.leftovers(&target, &catalog);
+        assert!(leftovers
+            .iter()
+            .all(|leftover| leftover.match_kind == MatchKind::Fuzzy));
+        let mut found: Vec<(String, LeftoverKind)> = leftovers
             .into_iter()
             .map(|leftover| (path_key(&leftover.path), leftover.kind))
             .collect();

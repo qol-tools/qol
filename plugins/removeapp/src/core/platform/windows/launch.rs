@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::cli::PLUGIN_ID;
 
-use crate::core::platform::windows_paths::Launch;
+use crate::core::platform::uninstall_wait::{step, Limits, Observation, Step};
+use crate::core::platform::windows_paths::{same_path, Launch};
 
 const POLL: Duration = Duration::from_millis(250);
 const SUCCESS_CODES: &[u32] = &[0, 1605, 1614, 1641, 3010];
@@ -40,7 +42,12 @@ impl Process {
     }
 }
 
-pub(super) fn run_and_wait(launch: &Launch, elevate: bool, timeout: Duration) -> Result<()> {
+pub(super) fn run_and_wait(
+    launch: &Launch,
+    elevate: bool,
+    limits: &Limits,
+    registered: impl Fn() -> bool,
+) -> Result<bool> {
     let process = start(launch, elevate)?;
     let root = unsafe { GetProcessId(process.0) };
     let root = i32::try_from(root).unwrap_or(0);
@@ -49,10 +56,12 @@ pub(super) fn run_and_wait(launch: &Launch, elevate: bool, timeout: Duration) ->
     if let Some(start) = qol_app_icon::process_start_time_us(root) {
         tracked.insert(root, start);
     }
+    let mut exited_at: Option<Instant> = None;
+    let mut unregistered_at: Option<Instant> = None;
     loop {
-        let table: Vec<ProcessRow> = qol_process::processes()
-            .unwrap_or_default()
-            .into_iter()
+        let entries = qol_process::processes().unwrap_or_default();
+        let table: Vec<ProcessRow> = entries
+            .iter()
             .filter_map(|entry| {
                 let pid = i32::try_from(entry.pid).ok()?;
                 Some(ProcessRow {
@@ -66,19 +75,56 @@ pub(super) fn run_and_wait(launch: &Launch, elevate: bool, timeout: Duration) ->
         let descendants_alive = tracked
             .iter()
             .any(|(pid, start)| *pid != root && is_alive(&table, *pid, *start));
-        if process.exited() && !descendants_alive {
-            break;
+        let uninstaller_running = !process.exited() || descendants_alive;
+        if !uninstaller_running && exited_at.is_none() {
+            check_exit_code(&process)?;
+            exited_at = Some(Instant::now());
         }
-        if started.elapsed() > timeout {
-            bail!("{PLUGIN_ID}: the uninstaller did not finish within {timeout:?}");
+        let still_registered = registered();
+        if still_registered {
+            unregistered_at = None;
+        } else if unregistered_at.is_none() {
+            unregistered_at = Some(Instant::now());
         }
-        std::thread::sleep(POLL);
+        let seen = Observation {
+            elapsed: started.elapsed(),
+            uninstaller_running,
+            handler_running: !uninstaller_running && handler_running(launch, &entries),
+            registered: still_registered,
+            exited_for: exited_at.map(|at| at.elapsed()),
+            unregistered_for: unregistered_at.map(|at| at.elapsed()),
+        };
+        match step(&seen, limits) {
+            Step::Wait => std::thread::sleep(POLL),
+            Step::Finished => return Ok(true),
+            Step::StillInstalled => return Ok(false),
+            Step::TimedOut => bail!(
+                "{PLUGIN_ID}: the uninstaller did not finish within {:?}",
+                limits.overall
+            ),
+        }
     }
+}
+
+fn check_exit_code(process: &Process) -> Result<()> {
     match process.exit_code() {
         Some(code) if SUCCESS_CODES.contains(&code) => Ok(()),
         Some(code) => bail!("{PLUGIN_ID}: the uninstaller exited with code {code}"),
         None => bail!("{PLUGIN_ID}: could not read the uninstaller exit code"),
     }
+}
+
+fn handler_running(launch: &Launch, entries: &[qol_process::ProcessEntry]) -> bool {
+    let program = Path::new(&launch.program);
+    let Some(name) = program.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    entries
+        .iter()
+        .filter(|entry| entry.exe.eq_ignore_ascii_case(name))
+        .any(|entry| {
+            qol_process::process_image_path(entry.pid).is_ok_and(|image| same_path(&image, program))
+        })
 }
 
 fn start(launch: &Launch, elevate: bool) -> Result<Process> {

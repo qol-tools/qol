@@ -22,6 +22,9 @@ pub trait AppPlatform {
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "windows", test))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod uninstall_wait;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
