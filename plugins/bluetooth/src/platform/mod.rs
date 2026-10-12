@@ -2,6 +2,8 @@
 pub(crate) mod audio;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
+#[cfg(any(target_os = "windows", test))]
+mod input_service;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

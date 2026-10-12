@@ -59,6 +59,10 @@ impl PairedStack for MacOs {
         connect_device(address, power_on_adapter)
     }
 
+    fn reconnect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
+        connect_device(address, power_on_adapter)
+    }
+
     fn disconnect_device(address: &str) -> Result<DeviceInfo> {
         disconnect_device(address)
     }
@@ -78,6 +82,8 @@ impl PairedStack for MacOs {
     fn pause(slice: Duration) {
         deliver_pending_iobluetooth_callbacks(slice);
     }
+
+    fn on_stop_request(_stop: impl FnOnce() + Send + 'static) {}
 }
 
 fn deliver_pending_iobluetooth_callbacks(slice: Duration) {

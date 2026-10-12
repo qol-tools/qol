@@ -25,11 +25,13 @@ pub(super) trait PairedStack {
     fn adapter_health() -> Result<AdapterHealth>;
     fn set_adapter_powered(powered: bool) -> Result<AdapterHealth>;
     fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo>;
+    fn reconnect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo>;
     fn disconnect_device(address: &str) -> Result<DeviceInfo>;
     fn pair_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo>;
     fn remove_device(address: &str) -> Result<()>;
     fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>>;
     fn pause(slice: Duration);
+    fn on_stop_request(stop: impl FnOnce() + Send + 'static);
 }
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
@@ -133,7 +135,7 @@ pub(super) fn reconnect_devices<S: PairedStack>(
             report.already_connected.push(device);
             continue;
         }
-        match S::connect_device(&device.address, config.power_on_adapter) {
+        match S::reconnect_device(&device.address, config.power_on_adapter) {
             Ok(connected) => report.connected.push(connected),
             Err(error) => report.failures.push(ReconnectFailure {
                 address: device.address,
@@ -505,7 +507,7 @@ fn run_retry_pass<S: PairedStack>(
         if !state.is_due(now) || crate::handoff::held(&device.address) {
             continue;
         }
-        match S::connect_device(&device.address, config.power_on_adapter) {
+        match S::reconnect_device(&device.address, config.power_on_adapter) {
             Ok(_) => state.connected(),
             Err(error) => {
                 let delay = state.failed(now, policy);
@@ -522,6 +524,8 @@ fn run_retry_pass<S: PairedStack>(
 
 pub(super) fn run_daemon<S: PairedStack>(mut config: ReconnectConfig) -> Result<()> {
     let (tx, rx) = mpsc::channel();
+    let stop = tx.clone();
+    S::on_stop_request(move || std::mem::drop(stop.send(DaemonCommand::Kill)));
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx, parse_daemon_request::<S>) {
         bail!("{} daemon listener failed to start", crate::PLUGIN_ID);
     }
@@ -545,6 +549,8 @@ pub(super) fn run_daemon<S: PairedStack>(mut config: ReconnectConfig) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
 
     const REFUSAL: &str = "this stack pairs and trusts in one step";
@@ -571,6 +577,10 @@ mod tests {
             bail!("no adapter in tests")
         }
 
+        fn reconnect_device(_address: &str, _power_on_adapter: bool) -> Result<DeviceInfo> {
+            bail!("no adapter in tests")
+        }
+
         fn disconnect_device(_address: &str) -> Result<DeviceInfo> {
             bail!("no adapter in tests")
         }
@@ -588,6 +598,8 @@ mod tests {
         }
 
         fn pause(_slice: Duration) {}
+
+        fn on_stop_request(_stop: impl FnOnce() + Send + 'static) {}
     }
 
     fn device(address: &str) -> DeviceInfo {
@@ -687,5 +699,74 @@ mod tests {
                 _ => panic!("{action} must require an address"),
             }
         }
+    }
+
+    thread_local! {
+        static CALLS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    }
+
+    struct Recording;
+
+    impl PairedStack for Recording {
+        const TRUST_REFUSAL: &'static str = REFUSAL;
+        const RETRY_SPACING: Duration = Duration::ZERO;
+
+        fn paired_devices() -> Vec<DeviceInfo> {
+            Fake::paired_devices()
+        }
+
+        fn adapter_health() -> Result<AdapterHealth> {
+            Ok(AdapterHealth {
+                name: "Radio".into(),
+                address: String::new(),
+                powered: true,
+            })
+        }
+
+        fn set_adapter_powered(_powered: bool) -> Result<AdapterHealth> {
+            Self::adapter_health()
+        }
+
+        fn connect_device(_address: &str, _power_on_adapter: bool) -> Result<DeviceInfo> {
+            CALLS.with(|calls| calls.borrow_mut().push("connect"));
+            bail!("no adapter in tests")
+        }
+
+        fn reconnect_device(_address: &str, _power_on_adapter: bool) -> Result<DeviceInfo> {
+            CALLS.with(|calls| calls.borrow_mut().push("reconnect"));
+            bail!("no adapter in tests")
+        }
+
+        fn disconnect_device(_address: &str) -> Result<DeviceInfo> {
+            bail!("no adapter in tests")
+        }
+
+        fn pair_device(_address: &str, _power_on_adapter: bool) -> Result<DeviceInfo> {
+            bail!("no adapter in tests")
+        }
+
+        fn remove_device(_address: &str) -> Result<()> {
+            bail!("no adapter in tests")
+        }
+
+        fn search_devices(_config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
+            bail!("no adapter in tests")
+        }
+
+        fn pause(_slice: Duration) {}
+
+        fn on_stop_request(_stop: impl FnOnce() + Send + 'static) {}
+    }
+
+    #[test]
+    fn automatic_and_bulk_reconnects_never_take_the_user_connect_path() {
+        let config = test_config(&["aa:bb:cc:dd:ee:01"]);
+        run_retry_pass::<Recording>(&config, &mut HashMap::new(), Instant::now());
+        let report = reconnect_devices::<Recording>(&config, ReconnectSelection::Managed).unwrap();
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(
+            CALLS.with(|calls| calls.borrow().clone()),
+            ["reconnect", "reconnect"]
+        );
     }
 }

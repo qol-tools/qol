@@ -4,6 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use qol_audio::bluetooth::BluetoothEndpoint;
 use qol_headless::DoctorCheckResult;
 use qol_platform::native::wide::from_wide;
+use qol_plugin_daemon::notification::send_notification;
 use windows::core::{Owned, GUID, HRESULT};
 use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
 use windows::Win32::Devices::Bluetooth::{
@@ -24,6 +25,7 @@ use crate::bluetooth::{
 };
 use crate::config::ReconnectConfig;
 
+use super::input_service::{self, Journal};
 use super::paired::{self, PairedStack};
 pub use super::paired::{search_status_snapshot, settings_action, settings_query, stop_search};
 
@@ -66,6 +68,10 @@ impl PairedStack for WindowsStack {
         connect_device(address, power_on_adapter)
     }
 
+    fn reconnect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
+        connect(address, power_on_adapter, false)
+    }
+
     fn disconnect_device(address: &str) -> Result<DeviceInfo> {
         disconnect_device(address)
     }
@@ -84,6 +90,18 @@ impl PairedStack for WindowsStack {
 
     fn pause(slice: Duration) {
         std::thread::sleep(slice);
+    }
+
+    fn on_stop_request(stop: impl FnOnce() + Send + 'static) {
+        let listener = std::thread::Builder::new()
+            .name("bluetooth-stop".into())
+            .spawn(move || match qol_process::wait_for_stop_request() {
+                Ok(()) => stop(),
+                Err(error) => log::warn!("stop request listener unavailable: {error}"),
+            });
+        if let Err(error) = listener {
+            log::warn!("stop request listener thread failed: {error}");
+        }
     }
 }
 
@@ -292,33 +310,90 @@ fn radio_info() -> Option<BLUETOOTH_RADIO_INFO> {
     (unsafe { BluetoothGetRadioInfo(*handle, &mut info) } == ERROR_SUCCESS.0).then_some(info)
 }
 
-fn restart_input_service(record: &BLUETOOTH_DEVICE_INFO, alias: &str) -> Result<()> {
-    if !installed_services(record).contains(&HID_SERVICE) {
+fn input_journal() -> Result<Journal> {
+    let data_dir = qol_config::data_dir()
+        .ok_or_else(|| anyhow!("Windows reported no local app data folder for the journal"))?;
+    Ok(Journal::in_data_dir(&data_dir))
+}
+
+fn set_input_service(record: &BLUETOOTH_DEVICE_INFO, state: u32) -> std::result::Result<(), u32> {
+    let status = unsafe { BluetoothSetServiceState(None, record, &HID_SERVICE, state) };
+    if status == ERROR_SUCCESS.0 {
+        Ok(())
+    } else {
+        Err(status)
+    }
+}
+
+fn restart_input_service(record: &BLUETOOTH_DEVICE_INFO, address: &str, alias: &str) -> Result<()> {
+    let journal = input_journal()?;
+    let journaled = journal.contains(address)?;
+    let input_enabled = installed_services(record).contains(&HID_SERVICE);
+    if !input_service::restartable(record.ulClassofDevice, input_enabled, journaled) {
         bail!(
             "Windows has no call that connects {alias}: it has no Bluetooth audio endpoint and no input service, so it has to reconnect itself"
         );
     }
-    let disabled =
-        unsafe { BluetoothSetServiceState(None, record, &HID_SERVICE, BLUETOOTH_SERVICE_DISABLE) };
-    let enabled =
-        unsafe { BluetoothSetServiceState(None, record, &HID_SERVICE, BLUETOOTH_SERVICE_ENABLE) };
-    service_restart(alias, disabled, enabled)
+    let cycle = input_service::restart(
+        &journal,
+        address,
+        journaled,
+        || set_input_service(record, BLUETOOTH_SERVICE_DISABLE),
+        || set_input_service(record, BLUETOOTH_SERVICE_ENABLE),
+    )
+    .with_context(|| format!("qol did not touch the input service of {alias}"))?;
+    service_restart(alias, cycle)
 }
 
-fn service_restart(alias: &str, disabled: u32, enabled: u32) -> Result<()> {
-    if enabled != ERROR_SUCCESS.0 {
+fn service_restart(alias: &str, cycle: input_service::Cycle<u32>) -> Result<()> {
+    if let Err(enabled) = cycle.enabled {
         bail!(
             "Windows did not turn the input service of {alias} back on ({}); run connect again to retry",
             win32_reason(enabled)
         );
     }
-    if disabled != ERROR_SUCCESS.0 {
+    if let Some(Err(disabled)) = cycle.disabled {
         bail!(
             "Windows refused to restart the input service of {alias} ({})",
             win32_reason(disabled)
         );
     }
     Ok(())
+}
+
+fn enable_journaled_input_service(address: &str) -> Result<()> {
+    let record = record(address)?;
+    set_input_service(&record, BLUETOOTH_SERVICE_ENABLE)
+        .map_err(|status| anyhow!(win32_reason(status)))
+}
+
+fn restore_input_services() {
+    let journal = match input_journal() {
+        Ok(journal) => journal,
+        Err(error) => {
+            log::warn!("Bluetooth input service journal unavailable: {error:#}");
+            return;
+        }
+    };
+    let paired = adapter_health()
+        .and_then(|_| list_devices())
+        .map(|devices| {
+            devices
+                .into_iter()
+                .filter(|device| device.paired)
+                .map(|device| device.address)
+                .collect::<Vec<_>>()
+        })
+        .ok();
+    let still_paired = |address: &str| {
+        paired
+            .as_ref()
+            .is_none_or(|paired| paired.iter().any(|known| known == address))
+    };
+    for failure in input_service::restore(&journal, still_paired, enable_journaled_input_service) {
+        log::warn!("{failure}");
+        send_notification("Bluetooth", &failure);
+    }
 }
 
 pub fn required_binaries_check() -> DoctorCheckResult {
@@ -427,6 +502,10 @@ pub fn set_adapter_powered(powered: bool) -> Result<AdapterHealth> {
 }
 
 pub fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
+    connect(address, power_on_adapter, true)
+}
+
+fn connect(address: &str, power_on_adapter: bool, restart_input: bool) -> Result<DeviceInfo> {
     paired::ensure_powered::<WindowsStack>(power_on_adapter)?;
     let record = record(address)?;
     let current = device_info(&record, &audio_endpoints());
@@ -436,7 +515,13 @@ pub fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInf
     let asked = qol_audio::bluetooth::reconnect(&current.address)
         .with_context(|| format!("Windows could not ask {} to reconnect", current.alias))?;
     if asked == 0 {
-        restart_input_service(&record, &current.alias)?;
+        if !restart_input {
+            bail!(
+                "{} has no Bluetooth audio endpoint, so Windows reconnects it when it wakes up",
+                current.alias
+            );
+        }
+        restart_input_service(&record, &current.address, &current.alias)?;
     }
     if !wait_until(CONNECT_TIMEOUT, || {
         device(address).is_ok_and(|device| connection_ready(&device))
@@ -537,6 +622,7 @@ pub fn devices_snapshot() -> Result<serde_json::Value> {
 }
 
 pub fn run_daemon(config: ReconnectConfig) -> Result<()> {
+    restore_input_services();
     paired::run_daemon::<WindowsStack>(config)
 }
 
@@ -619,15 +705,17 @@ mod tests {
     fn a_service_restart_reports_the_step_that_failed() {
         let denied = ERROR_ACCESS_DENIED.0;
         let cases = [
-            (ERROR_SUCCESS.0, ERROR_SUCCESS.0, None),
-            (denied, ERROR_SUCCESS.0, Some("refused to restart")),
-            (ERROR_SUCCESS.0, 87, Some("back on")),
-            (denied, denied, Some("administrator")),
+            (Some(Ok(())), Ok(()), None),
+            (None, Ok(()), None),
+            (Some(Err(denied)), Ok(()), Some("refused to restart")),
+            (Some(Ok(())), Err(87), Some("back on")),
+            (None, Err(87), Some("back on")),
+            (Some(Err(denied)), Err(denied), Some("administrator")),
         ];
         for (disabled, enabled, expected) in cases {
-            let outcome = service_restart("Pad", disabled, enabled);
+            let outcome = service_restart("Pad", input_service::Cycle { disabled, enabled });
             match expected {
-                None => assert!(outcome.is_ok(), "{disabled} {enabled}"),
+                None => assert!(outcome.is_ok(), "{disabled:?} {enabled:?}"),
                 Some(fragment) => {
                     let message = format!("{:#}", outcome.unwrap_err());
                     assert!(message.contains(fragment), "{message}");
