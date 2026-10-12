@@ -1,5 +1,6 @@
 use super::key_matcher::KeyTransition;
 use qol_hotkeys::grammar::Modifier as Mod;
+use qol_runtime::keyremap_marker::{self, KeyRemapMarker};
 use std::collections::{BTreeSet, HashSet};
 
 const VK_LSHIFT: u16 = 0xA0;
@@ -13,7 +14,6 @@ const VK_RWIN: u16 = 0x5C;
 
 const ALTGR_SCAN_FLAG: u32 = 0x200;
 const REPEAT_WINDOW_MS: u32 = 1_100;
-const REARM_SLACK_MS: u32 = 500;
 const SHIFT_STATE_SHIFT: u16 = 0x01;
 const SHIFT_STATE_CTRL: u16 = 0x02;
 const SHIFT_STATE_ALT: u16 = 0x04;
@@ -64,9 +64,21 @@ pub(crate) fn needs_menu_mask(
         && (mods.contains(&Mod::Super) || mods.contains(&Mod::Alt))
 }
 
-pub(crate) fn needs_rearm(last_input_tick: u32, last_hook_tick: u32) -> bool {
-    let gap = last_input_tick.wrapping_sub(last_hook_tick);
-    gap > REARM_SLACK_MS && gap < u32::MAX / 2
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Origin {
+    Physical,
+    Remapped(KeyRemapMarker),
+    Foreign,
+}
+
+pub(crate) fn origin(injected: bool, extra: usize) -> Origin {
+    if !injected {
+        return Origin::Physical;
+    }
+    match keyremap_marker::decode(extra as i64) {
+        Some(marker) if marker.key != 0 => Origin::Remapped(marker),
+        _ => Origin::Foreign,
+    }
 }
 
 pub(crate) fn held_mods(is_down: impl Fn(u16) -> bool, synthetic_ctrl: bool) -> BTreeSet<Mod> {
@@ -256,20 +268,32 @@ mod tests {
     }
 
     #[test]
-    fn needs_rearm_cases() {
-        let cases: &[(u32, u32, bool)] = &[
-            (10_000, 10_000, false),
-            (10_400, 10_000, false),
-            (11_000, 10_000, true),
-            (9_000, 10_000, false),
-            (200, u32::MAX - 1_000, true),
-            (u32::MAX - 1_000, 200, false),
+    fn only_keyremap_output_with_a_key_survives_the_injected_filter() {
+        let remapped = keyremap_marker::encode(keyremap_marker::MOD_SUPER, 0x20) as usize;
+        let cases = [
+            (false, 0, Origin::Physical),
+            (false, remapped, Origin::Physical),
+            (true, 0, Origin::Foreign),
+            (true, 0x1234, Origin::Foreign),
+            (
+                true,
+                keyremap_marker::encode(0, 0) as usize,
+                Origin::Foreign,
+            ),
+            (
+                true,
+                remapped,
+                Origin::Remapped(KeyRemapMarker {
+                    mods: keyremap_marker::MOD_SUPER,
+                    key: 0x20,
+                }),
+            ),
         ];
-        for (input, hook, expected) in cases {
+        for (injected, extra, expected) in cases {
             assert_eq!(
-                needs_rearm(*input, *hook),
-                *expected,
-                "input={input} hook={hook}"
+                origin(injected, extra),
+                expected,
+                "injected={injected} extra={extra:#x}"
             );
         }
     }

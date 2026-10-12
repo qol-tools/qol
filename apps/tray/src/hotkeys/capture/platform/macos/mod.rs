@@ -1,6 +1,6 @@
 use super::super::binding::{Binding, CaptureEvent};
 use super::super::{OnFire, RebuildBindings};
-use super::key_matcher::{self, KeyCombo, KeyMatcher, KeyTransition};
+use super::key_matcher::{self, marker_mods, KeyCombo, KeyMatcher, KeyTransition};
 use anyhow::{bail, Result};
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPortRef;
@@ -254,23 +254,6 @@ fn event_mods(flags: CGEventFlags) -> BTreeSet<Mod> {
     mods
 }
 
-fn marker_mods(bits: u8) -> BTreeSet<Mod> {
-    let mut mods = BTreeSet::new();
-    if bits & keyremap_marker::MOD_SHIFT != 0 {
-        mods.insert(Mod::Shift);
-    }
-    if bits & keyremap_marker::MOD_CTRL != 0 {
-        mods.insert(Mod::Ctrl);
-    }
-    if bits & keyremap_marker::MOD_ALT != 0 {
-        mods.insert(Mod::Alt);
-    }
-    if bits & keyremap_marker::MOD_SUPER != 0 {
-        mods.insert(Mod::Super);
-    }
-    mods
-}
-
 fn parse_mac_combo(binding: &Binding) -> Option<KeyCombo> {
     let combo = binding.combo.as_ref()?;
     let key = match combo.key {
@@ -346,12 +329,6 @@ mod tests {
                 "key: {key}"
             );
         }
-    }
-
-    #[test]
-    fn marker_mods_round_trip_to_combo_mods() {
-        let bits = keyremap_marker::MOD_CTRL | keyremap_marker::MOD_SUPER;
-        assert_eq!(marker_mods(bits), BTreeSet::from([Mod::Ctrl, Mod::Super]));
     }
 
     #[test]

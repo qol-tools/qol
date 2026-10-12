@@ -1,14 +1,16 @@
 use super::super::binding::{Binding, CaptureEvent};
 use super::super::{OnFire, RebuildBindings};
-use super::hook_rules::{self, KeyEvent, KeyHistory};
-use super::key_matcher::{self, KeyCombo, KeyMatcher};
+use super::hook_rules::{self, KeyEvent, KeyHistory, Origin};
+use super::key_matcher::{self, marker_mods, KeyCombo, KeyMatcher};
 use anyhow::{bail, Result};
 use crossbeam_channel::Receiver;
 use qol_hotkeys::grammar::{Key, Modifier as Mod};
 use qol_hotkeys::windows_keycode;
+use qol_runtime::hook_liveness::SeenInput;
+use qol_runtime::keyremap_marker::KeyRemapMarker;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -25,7 +27,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, SetTimer,
     SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+    MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_TIMER,
 };
 
 mod recorder;
@@ -44,7 +47,7 @@ struct HookState {
 }
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
-static LAST_HOOK_TICK: AtomicU32 = AtomicU32::new(0);
+static SEEN_INPUT: SeenInput = SeenInput::new();
 static HOOK_ARMED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
@@ -103,10 +106,24 @@ pub(crate) fn install(
     }
 }
 
+struct Hooks {
+    keyboard: HHOOK,
+    mouse: HHOOK,
+}
+
+impl Hooks {
+    fn unhook(self) {
+        unsafe { UnhookWindowsHookEx(self.keyboard) };
+        if !self.mouse.is_null() {
+            unsafe { UnhookWindowsHookEx(self.mouse) };
+        }
+    }
+}
+
 fn run_hook(ready_tx: Sender<Result<(), String>>, arm_state: Arc<AtomicU8>) {
     unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) };
-    let mut hook = match arm() {
-        Ok(hook) => hook,
+    let mut hooks = match arm() {
+        Ok(hooks) => hooks,
         Err(message) => {
             let _ = ready_tx.send(Err(message));
             return;
@@ -116,7 +133,7 @@ fn run_hook(ready_tx: Sender<Result<(), String>>, arm_state: Arc<AtomicU8>) {
         .compare_exchange(ARM_PENDING, ARM_DONE, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        unsafe { UnhookWindowsHookEx(hook) };
+        hooks.unhook();
         qol_runtime::probe!("HOTKEY_HOOK", "phase=arm outcome=cancelled-after-timeout");
         return;
     }
@@ -129,41 +146,48 @@ fn run_hook(ready_tx: Sender<Result<(), String>>, arm_state: Arc<AtomicU8>) {
     }
     let _ = ready_tx.send(Ok(()));
     if let Some(tick) = last_input_tick() {
-        LAST_HOOK_TICK.store(tick, Ordering::Relaxed);
+        SEEN_INPUT.rearmed(tick);
     }
     unsafe { SetTimer(std::ptr::null_mut(), 0, LIVENESS_INTERVAL_MS, None) };
     let mut message: MSG = unsafe { std::mem::zeroed() };
     while unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } > 0 {
         if message.message == WM_TIMER {
-            hook = rearm_if_stale(hook);
+            hooks = rearm_if_stale(hooks);
         }
     }
 }
 
-fn arm() -> Result<HHOOK, String> {
+fn arm() -> Result<Hooks, String> {
     let module = unsafe { GetModuleHandleW(std::ptr::null()) };
-    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0) };
-    if hook.is_null() {
+    let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0) };
+    if keyboard.is_null() {
         return Err(format!(
             "failed to install the Windows keyboard hook: {}",
             std::io::Error::last_os_error()
         ));
     }
-    Ok(hook)
+    let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0) };
+    if mouse.is_null() {
+        log::warn!(
+            "failed to install the Windows mouse liveness hook: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(Hooks { keyboard, mouse })
 }
 
-fn rearm_if_stale(hook: HHOOK) -> HHOOK {
+fn rearm_if_stale(hooks: Hooks) -> Hooks {
     let Some(input_tick) = last_input_tick() else {
-        return hook;
+        return hooks;
     };
-    let hook_tick = LAST_HOOK_TICK.load(Ordering::Relaxed);
-    if !hook_rules::needs_rearm(input_tick, hook_tick) {
-        return hook;
+    if !SEEN_INPUT.unseen(input_tick) {
+        return hooks;
     }
+    let hook_tick = SEEN_INPUT.keyboard_tick();
     match arm() {
         Ok(fresh) => {
-            unsafe { UnhookWindowsHookEx(hook) };
-            LAST_HOOK_TICK.store(input_tick, Ordering::Relaxed);
+            hooks.unhook();
+            SEEN_INPUT.rearmed(input_tick);
             qol_runtime::probe!(
                 "HOTKEY_HOOK",
                 "phase=rearm unseen_input_ms={}",
@@ -173,7 +197,7 @@ fn rearm_if_stale(hook: HHOOK) -> HHOOK {
         }
         Err(message) => {
             log::warn!("Windows keyboard hook re-arm failed: {message}");
-            hook
+            hooks
         }
     }
 }
@@ -198,24 +222,39 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 
-fn handle_event(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
-    LAST_HOOK_TICK.store(event.time, Ordering::Relaxed);
-    if event.flags & LLKHF_INJECTED != 0 {
-        return false;
+unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        SEEN_INPUT.mouse(unsafe { &*(lparam as *const MSLLHOOKSTRUCT) }.time);
     }
+    unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
+}
+
+fn handle_event(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
+    SEEN_INPUT.keyboard(event.time);
+    let injected = event.flags & LLKHF_INJECTED != 0;
+    let remapped = match hook_rules::origin(injected, event.dwExtraInfo) {
+        Origin::Physical => None,
+        Origin::Remapped(marker) => Some(marker),
+        Origin::Foreign => return false,
+    };
     let Some(state) = HOOK_STATE.get() else {
         return false;
     };
-    handle_key(state, message, event)
+    handle_key(state, message, event, remapped)
 }
 
-fn handle_key(state: &HookState, message: u32, event: &KBDLLHOOKSTRUCT) -> bool {
+fn handle_key(
+    state: &HookState,
+    message: u32,
+    event: &KBDLLHOOKSTRUCT,
+    remapped: Option<KeyRemapMarker>,
+) -> bool {
     let down = match message {
         WM_KEYDOWN | WM_SYSKEYDOWN => true,
         WM_KEYUP | WM_SYSKEYUP => false,
         _ => return false,
     };
-    let key = event.vkCode as VIRTUAL_KEY;
+    let key = remapped.map_or(event.vkCode as VIRTUAL_KEY, |marker| marker.key);
     let key_event = KeyEvent {
         key,
         scan: event.scanCode,
@@ -241,7 +280,10 @@ fn handle_key(state: &HookState, message: u32, event: &KBDLLHOOKSTRUCT) -> bool 
         return false;
     };
     let observed = KeyCombo {
-        mods: hook_rules::held_mods(key_is_down, synthetic_ctrl),
+        mods: remapped.map_or_else(
+            || hook_rules::held_mods(key_is_down, synthetic_ctrl),
+            |marker| marker_mods(marker.mods),
+        ),
         key,
     };
     if recorder::record(transition, &observed) {

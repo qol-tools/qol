@@ -2,6 +2,7 @@ use super::super::binding::{Binding, CaptureEvent, Phase, HEARTBEAT_INTERVAL};
 use super::super::{OnFire, RebuildBindings};
 use crossbeam_channel::Receiver;
 use qol_hotkeys::grammar::Modifier as Mod;
+use qol_runtime::keyremap_marker;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, RwLock};
@@ -208,10 +209,34 @@ pub(crate) fn match_under_lock(
     }
 }
 
+pub(crate) fn marker_mods(bits: u8) -> BTreeSet<Mod> {
+    let mut mods = BTreeSet::new();
+    if bits & keyremap_marker::MOD_SHIFT != 0 {
+        mods.insert(Mod::Shift);
+    }
+    if bits & keyremap_marker::MOD_CTRL != 0 {
+        mods.insert(Mod::Ctrl);
+    }
+    if bits & keyremap_marker::MOD_ALT != 0 {
+        mods.insert(Mod::Alt);
+    }
+    if bits & keyremap_marker::MOD_SUPER != 0 {
+        mods.insert(Mod::Super);
+    }
+    mods
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hotkeys::capture::parse_combo;
+
+    #[test]
+    fn marker_mods_round_trip_to_combo_mods() {
+        let bits = keyremap_marker::MOD_CTRL | keyremap_marker::MOD_SUPER;
+        assert_eq!(marker_mods(bits), BTreeSet::from([Mod::Ctrl, Mod::Super]));
+        assert!(marker_mods(0).is_empty());
+    }
 
     fn resolve(binding: &Binding) -> Option<KeyCombo> {
         let combo = binding.combo.as_ref()?;
