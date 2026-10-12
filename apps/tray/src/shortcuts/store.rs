@@ -20,6 +20,12 @@ pub fn save(config: &ShortcutsConfig) -> Result<()> {
 }
 
 fn load_from(path: &Path) -> Result<ShortcutsConfig> {
+    let mut config = read_from(path)?;
+    retain_loadable(&mut config, path);
+    Ok(config)
+}
+
+fn read_from(path: &Path) -> Result<ShortcutsConfig> {
     if !path.exists() {
         log::debug!(
             "Shortcuts config missing; using default: {}",
@@ -28,8 +34,7 @@ fn load_from(path: &Path) -> Result<ShortcutsConfig> {
         return Ok(ShortcutsConfig::default());
     }
     match crate::file_io::load_json_or_default::<ShortcutsConfig>(path) {
-        Ok(mut config) => {
-            retain_loadable(&mut config, path);
+        Ok(config) => {
             log::debug!(
                 "Shortcuts config loaded: count={} path={}",
                 config.shortcuts.len(),
@@ -136,9 +141,10 @@ fn mutate_at(
     mutate: impl FnOnce(&mut ShortcutsConfig) -> Result<(), String>,
 ) -> Result<ShortcutsConfig, MutationError> {
     let _guard = mutation_guard()?;
-    let mut config = load_from(path).map_err(MutationError::Load)?;
+    let mut config = read_from(path).map_err(MutationError::Load)?;
     mutate(&mut config).map_err(MutationError::Rejected)?;
     save_to(path, &config).map_err(MutationError::Save)?;
+    retain_loadable(&mut config, path);
     Ok(config)
 }
 
@@ -202,7 +208,7 @@ pub fn reconcile_plugin_shortcuts<'a>(
 ) -> Result<bool> {
     let path = crate::paths::shortcuts_path()?;
     let _guard = mutation_guard()?;
-    let mut config = load_from(&path)?;
+    let mut config = read_from(&path)?;
     let changed = plugin_manifest::reconcile(&mut config, plugins);
     if changed {
         save_to(&path, &config)?;
@@ -402,6 +408,31 @@ mod tests {
             .map(|shortcut| (shortcut.id.as_str(), shortcut.name.as_str()))
             .collect();
         assert_eq!(ids, [("docs", "Docs"), ("kept", "Kept")]);
+    }
+
+    #[test]
+    fn a_mutation_keeps_the_entries_the_loader_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shortcuts.json");
+        let config = ShortcutsConfig {
+            shortcuts: vec![
+                url_shortcut("unnamed", "", "https://x.io"),
+                url_shortcut("docs", "Docs", "https://docs.io"),
+            ],
+        };
+        save_to(&path, &config).unwrap();
+
+        let shown = create_at(&path, url_shortcut("new", "New", "https://new.io")).unwrap();
+
+        let ids = |config: &ShortcutsConfig| {
+            config
+                .shortcuts
+                .iter()
+                .map(|shortcut| shortcut.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&shown), ["docs", "new"]);
+        assert_eq!(ids(&read_from(&path).unwrap()), ["unnamed", "docs", "new"]);
     }
 
     #[test]
