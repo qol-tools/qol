@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::super::super::Mirrored;
+use super::toast::Mirrored;
 
 #[derive(Deserialize)]
 struct Record {

@@ -99,7 +99,6 @@ impl Signal {
             | FilterFlag::NOTE_DELETE
             | FilterFlag::NOTE_RENAME
             | FilterFlag::NOTE_REVOKE;
-        // Drop the previous watch so re-arming does not leak an fd or duplicate wakes.
         let _ = self
             .watcher
             .remove_filename(&self.wal, EventFilter::EVFILT_VNODE);

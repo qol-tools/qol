@@ -2,6 +2,7 @@ mod app_name;
 mod record;
 mod signal;
 mod store;
+mod toast;
 
 use std::io::{PipeReader, PipeWriter};
 use std::path::Path;
@@ -63,7 +64,6 @@ fn run(db: &Path, mut cursor: Cursor, mut signal: Signal, _stopped: PipeReader) 
             Wake::Changed => {}
             Wake::Stop => return,
             Wake::Failed => {
-                // Free the slot so the next `sync(true)` restarts the mirror.
                 MIRROR
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -93,7 +93,7 @@ fn show_rows(rows: Vec<store::Row>, mut cursor: Cursor) -> Cursor {
     for row in rows {
         cursor = row.cursor;
         if let Some(notification) = record::decode(&row.data) {
-            super::super::show(&app_name::display_name(&notification.app_id), &notification);
+            toast::show(&app_name::display_name(&notification.app_id), &notification);
         }
     }
     cursor

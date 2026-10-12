@@ -104,7 +104,6 @@ impl Session {
         }
     }
 
-    /// `-bail` makes sqlite3 exit on a failed statement, so its stderr is complete here.
     fn with_stderr(&mut self, error: anyhow::Error) -> anyhow::Error {
         let _ = self.child.kill();
         let mut message = String::new();
