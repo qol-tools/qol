@@ -32,7 +32,3 @@ pub fn app_display_name(app_id: &str) -> Option<String> {
 pub fn parent_pid(pid: i32) -> Option<i32> {
     platform::parent_pid(pid)
 }
-
-pub fn process_start_time_us(pid: i32) -> Option<u64> {
-    platform::process_start_time_us(pid)
-}

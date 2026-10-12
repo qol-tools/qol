@@ -4,15 +4,11 @@ use std::ptr::null_mut;
 
 use qol_platform::native::com::{Apartment, ComApartment};
 use qol_platform::native::wide::wide_nul;
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
 };
 use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
-use windows_sys::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-};
 use windows_sys::Win32::UI::Shell::{
     SHDefExtractIconW, SHGetFileInfoW, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON, SHGFI_ICONLOCATION,
     SHGFI_LARGEICON,
@@ -22,8 +18,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NO
 use crate::RgbaImage;
 
 use super::AppIconPlatform;
-
-const UNIX_EPOCH_AS_FILETIME_US: u64 = 11_644_473_600_000_000;
 
 pub(super) struct Platform;
 
@@ -66,25 +60,6 @@ impl AppIconPlatform for Platform {
             .parent;
         i32::try_from(parent).ok()
     }
-
-    fn process_start_time_us(&self, pid: i32) -> Option<u64> {
-        let process = open_process(u32::try_from(pid).ok()?)?;
-        let mut times = [empty_filetime(); 4];
-        let [created, exited, kernel, user] = &mut times;
-        let read = unsafe { GetProcessTimes(process, created, exited, kernel, user) };
-        unsafe { CloseHandle(process) };
-        if read == 0 {
-            return None;
-        }
-        let since_1601_us =
-            ((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime)) / 10;
-        since_1601_us.checked_sub(UNIX_EPOCH_AS_FILETIME_US)
-    }
-}
-
-fn open_process(pid: u32) -> Option<HANDLE> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    (!process.is_null()).then_some(process)
 }
 
 fn extract_icon(path: &[u16], index: i32, size: usize) -> Option<HICON> {
@@ -211,13 +186,6 @@ fn rgba_from_bgra(mut pixels: Vec<u8>) -> Vec<u8> {
         }
     }
     pixels
-}
-
-fn empty_filetime() -> FILETIME {
-    FILETIME {
-        dwLowDateTime: 0,
-        dwHighDateTime: 0,
-    }
 }
 
 #[cfg(test)]

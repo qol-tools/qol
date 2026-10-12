@@ -27,7 +27,6 @@ pub(super) trait AppIconPlatform {
     fn icon_for_pid(&self, pid: i32, size: usize) -> Option<RgbaImage>;
     fn app_display_name(&self, app_id: &str) -> Option<String>;
     fn parent_pid(&self, pid: i32) -> Option<i32>;
-    fn process_start_time_us(&self, pid: i32) -> Option<u64>;
 }
 
 pub(super) fn icon_for_bundle_id(bundle_id: &str, size: usize) -> Option<RgbaImage> {
@@ -52,8 +51,4 @@ pub(super) fn app_display_name(app_id: &str) -> Option<String> {
 
 pub(super) fn parent_pid(pid: i32) -> Option<i32> {
     Platform.parent_pid(pid)
-}
-
-pub(super) fn process_start_time_us(pid: i32) -> Option<u64> {
-    Platform.process_start_time_us(pid)
 }
