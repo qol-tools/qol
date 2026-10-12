@@ -7371,6 +7371,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "plist",
  "png 0.17.16",
  "proptest",
  "qol-agent-homes",

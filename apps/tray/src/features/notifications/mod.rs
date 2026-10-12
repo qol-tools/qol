@@ -1,6 +1,10 @@
+mod mirror;
+
 use anyhow::{Context, Result};
 use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
+
+pub use mirror::MirrorAccess;
 
 #[derive(Clone, Debug, Serialize)]
 struct NotificationSettings {
@@ -115,7 +119,9 @@ pub fn sync_notification_inhibit() {
     let mut held = NOTIFICATION_INHIBIT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if native_handler() == NativeHandler::Qol {
+    let qol_only = native_handler() == NativeHandler::Qol;
+    mirror::sync(qol_only);
+    if qol_only {
         qol_plugin_daemon::notification::platform::set_os_banners(false);
         if held.is_none() {
             *held = qol_plugin_daemon::notification::platform::acquire_inhibit();
@@ -123,6 +129,10 @@ pub fn sync_notification_inhibit() {
     } else {
         *held = None;
     }
+}
+
+pub fn mirror_access() -> MirrorAccess {
+    mirror::access()
 }
 
 fn settings() -> Result<NotificationSettings> {
