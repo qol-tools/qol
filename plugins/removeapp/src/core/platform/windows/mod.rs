@@ -217,7 +217,7 @@ fn sweep_entries(dir: &Path) -> Vec<SweepEntry> {
 
 fn start_menu_shortcuts() -> Vec<Shortcut> {
     let mut shortcuts = Vec::new();
-    for root in qol_apps::start_menu::start_menu_roots() {
+    for root in qol_apps::start_menu::program_roots() {
         for entry in qol_apps::start_menu::scan_start_menu_root(&root) {
             let target = ShellLink::read(&entry.path).map_or(LinkTarget::Unknown, |link| {
                 link.target(&entry.path, |name| std::env::var(name).ok())

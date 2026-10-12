@@ -11,7 +11,7 @@ const NOISE_WORDS: &[&str] = &["readme", "read me"];
 
 mod platform;
 
-pub use platform::program_roots as start_menu_roots;
+pub use platform::program_roots;
 
 pub fn scan_start_menu_root(root: &AppRoot) -> Vec<AppEntry> {
     let mut shortcuts = platform::shortcut_paths(root);

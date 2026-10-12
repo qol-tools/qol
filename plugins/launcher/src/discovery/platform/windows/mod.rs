@@ -21,7 +21,7 @@ pub fn cache_dir() -> Option<PathBuf> {
 }
 
 pub fn app_roots() -> Vec<AppRoot> {
-    qol_apps::start_menu::start_menu_roots()
+    qol_apps::start_menu::program_roots()
 }
 
 pub fn scan_root(root: &AppRoot) -> Vec<AppEntry> {

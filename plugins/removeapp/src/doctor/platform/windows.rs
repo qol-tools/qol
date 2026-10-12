@@ -7,7 +7,7 @@ const RECYCLE_BIN: &str = "$Recycle.Bin";
 
 pub(crate) fn inspect() -> PlatformInspection {
     let inventory_roots = inspect_paths(
-        qol_apps::start_menu::start_menu_roots()
+        qol_apps::start_menu::program_roots()
             .into_iter()
             .map(|root| root.path),
     );
