@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -27,7 +28,8 @@ fn load_from(path: &Path) -> Result<ShortcutsConfig> {
         return Ok(ShortcutsConfig::default());
     }
     match crate::file_io::load_json_or_default::<ShortcutsConfig>(path) {
-        Ok(config) => {
+        Ok(mut config) => {
+            retain_loadable(&mut config, path);
             log::debug!(
                 "Shortcuts config loaded: count={} path={}",
                 config.shortcuts.len(),
@@ -44,6 +46,28 @@ fn load_from(path: &Path) -> Result<ShortcutsConfig> {
             Err(error)
         }
     }
+}
+
+fn retain_loadable(config: &mut ShortcutsConfig, path: &Path) {
+    let mut ids = HashSet::new();
+    config.shortcuts.retain(|shortcut| {
+        let verdict = validation::validate_shortcut(shortcut).and_then(|()| {
+            if ids.insert(shortcut.id.clone()) {
+                Ok(())
+            } else {
+                Err(format!("shortcut with id '{}' already exists", shortcut.id))
+            }
+        });
+        if let Err(error) = &verdict {
+            log::warn!(
+                "Shortcuts config entry skipped: id={:?} path={} error={}",
+                shortcut.id,
+                path.display(),
+                error
+            );
+        }
+        verdict.is_ok()
+    });
 }
 
 fn save_to(path: &Path, config: &ShortcutsConfig) -> Result<()> {
@@ -351,6 +375,33 @@ mod tests {
             Some("docs".to_string())
         );
         assert!(find_by_id(&cfg, "missing").is_none());
+    }
+
+    #[test]
+    fn load_skips_entries_add_would_refuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shortcuts.json");
+        let mut escaping = url_shortcut("a/../../Startup/qol-probe", "Dup", "https://x.io");
+        escaping.export_to_launcher = true;
+        let config = ShortcutsConfig {
+            shortcuts: vec![
+                url_shortcut("docs", "Docs", "https://docs.io"),
+                escaping,
+                url_shortcut("unnamed", "", "https://x.io"),
+                url_shortcut("docs", "Twin", "https://twin.io"),
+                url_shortcut("kept", "Kept", "https://kept.io"),
+            ],
+        };
+        save_to(&path, &config).unwrap();
+
+        let loaded = load_from(&path).unwrap();
+
+        let ids: Vec<(&str, &str)> = loaded
+            .shortcuts
+            .iter()
+            .map(|shortcut| (shortcut.id.as_str(), shortcut.name.as_str()))
+            .collect();
+        assert_eq!(ids, [("docs", "Docs"), ("kept", "Kept")]);
     }
 
     #[test]
