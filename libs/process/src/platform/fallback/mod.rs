@@ -50,6 +50,10 @@ pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
     actual == expected
 }
 
+pub(crate) fn process_start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
 pub(crate) fn processes() -> io::Result<Vec<crate::ProcessEntry>> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,

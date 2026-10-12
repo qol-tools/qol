@@ -2164,6 +2164,18 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     let process_directory = open_directory(std::path::Path::new(&format!("/proc/{pid}")))?;
     let (device, inode) = directory_identity(&process_directory)?;
     let stat = read_at(process_directory.as_raw_fd(), "stat")?;
+    let start_ticks = stat_start_ticks(&stat)?;
+    Ok(format!(
+        "linux:{}:{device}:{inode}:{start_ticks}",
+        linux_boot_id()?
+    ))
+}
+pub(crate) fn process_start_time(pid: u32) -> Option<u64> {
+    let pid = pid_t(pid).ok()?;
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat_start_ticks(&stat).ok()
+}
+fn stat_start_ticks(stat: &str) -> io::Result<u64> {
     let fields = stat
         .rsplit_once(") ")
         .map(|(_, fields)| fields)
@@ -2177,11 +2189,7 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
             io::ErrorKind::InvalidData,
             format!("invalid process start time: {error}"),
         )
-    })?;
-    Ok(format!(
-        "linux:{}:{device}:{inode}:{start_ticks}",
-        linux_boot_id()?
-    ))
+    })
 }
 pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
     let exact = actual == expected;
@@ -2236,6 +2244,28 @@ fn canonical_decimal(value: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::platform::unix::{is_pid_alive, terminate_owned};
+    #[test]
+    fn start_ticks_are_the_twenty_second_stat_field() {
+        let fields = "S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 777 19 20";
+        let cases = [
+            (format!("42 (sleep) {fields}"), Some(777)),
+            (format!("43 (a) b c) {fields}"), Some(777)),
+            ("44 (short) S 1 2".to_string(), None),
+            ("45 broken".to_string(), None),
+            (format!("46 (x) {}", fields.replace("777", "soon")), None),
+        ];
+        for (stat, expected) in cases {
+            assert_eq!(stat_start_ticks(&stat).ok(), expected, "{stat}");
+        }
+    }
+    #[test]
+    fn the_identity_ends_with_the_process_start_time() {
+        let pid = std::process::id();
+        let identity = process_identity(pid).unwrap();
+        let start = process_start_time(pid).unwrap();
+        assert!(identity.ends_with(&format!(":{start}")), "{identity}");
+        assert_eq!(process_start_time(0), None);
+    }
     #[test]
     fn reused_root_identity_is_never_signaled() {
         let mut command = Command::new("sleep");

@@ -1,15 +1,18 @@
 use std::ffi::OsString;
 use std::io;
 use std::os::windows::ffi::OsStringExt;
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle};
 use std::os::windows::process::{CommandExt, ExitStatusExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use qol_platform::native::wide::wide_nul;
+use qol_platform::native::wide::{from_wide, wide_nul};
+use qol_platform::windows_path::same_path;
+
+use super::stop_hooks::StopHooks;
 
 use crate::{
     MemberObservation, NodeObservation, Observation, PlatformSpawnFailure, PreparedSpawnCleanup,
@@ -17,7 +20,7 @@ use crate::{
 };
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, SetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS,
+    GetLastError, SetLastError, BOOL, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS,
     ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES, FILETIME,
     HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
@@ -65,45 +68,13 @@ static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static STOP_LISTENER_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static STOP_SIGNAL: Mutex<()> = Mutex::new(());
 static STOP_SIGNALLED: Condvar = Condvar::new();
-static STOP_HOOKS: Mutex<Vec<fn()>> = Mutex::new(Vec::new());
+static STOP_HOOKS: StopHooks = StopHooks::new();
 static STOP_HOOK_LISTENER: OnceLock<Result<(), i32>> = OnceLock::new();
 
-struct JobHandle(HANDLE);
-
-unsafe impl Send for JobHandle {}
-
-impl Drop for JobHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
-struct ThreadHandle(HANDLE);
-
-impl Drop for ThreadHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
-struct SnapshotHandle(HANDLE);
-
-impl Drop for SnapshotHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
 pub(crate) struct ProcessTreeGuard {
-    job: JobHandle,
+    job: OwnedHandle,
     assigned_process: Mutex<Option<AssignedProcess>>,
-    terminating_processes: Mutex<Vec<ProcessHandle>>,
+    terminating_processes: Mutex<Vec<OwnedHandle>>,
     prepared: AtomicBool,
 }
 
@@ -122,11 +93,11 @@ struct FailedChildReaperState {
 
 struct AssignedProcess {
     id: u32,
-    handle: ProcessHandle,
+    handle: OwnedHandle,
 }
 
 pub(crate) struct CurrentProcessTreeGuard {
-    job: Option<JobHandle>,
+    job: Option<OwnedHandle>,
     armed: bool,
 }
 
@@ -163,8 +134,8 @@ impl ProcessTreeGuard {
                 .ok()
                 .and_then(|assigned| assigned.as_ref().map(|process| process.id)),
         );
-        report.root_populated_before = populated_observation(self.job.0, &mut report);
-        let membership = match job_process_ids(self.job.0) {
+        report.root_populated_before = populated_observation(self.job.as_raw_handle(), &mut report);
+        let membership = match job_process_ids(self.job.as_raw_handle()) {
             Ok(mut pids) => {
                 if pids.len() > MEMBER_LIMIT {
                     pids.truncate(MEMBER_LIMIT);
@@ -192,7 +163,7 @@ impl ProcessTreeGuard {
                 Observation::Unavailable
             }
         };
-        report.root_populated_after = populated_observation(self.job.0, &mut report);
+        report.root_populated_after = populated_observation(self.job.as_raw_handle(), &mut report);
         report.nodes.push(NodeObservation {
             index: 0,
             parent: None,
@@ -259,11 +230,11 @@ impl ProcessTreeGuard {
         };
         *assigned_process = Some(owned_process);
         let process = child.as_raw_handle() as HANDLE;
-        if unsafe { AssignProcessToJobObject(self.job.0, process) } == 0 {
+        if unsafe { AssignProcessToJobObject(self.job.as_raw_handle(), process) } == 0 {
             return Err(io::Error::last_os_error());
         }
         let thread = sole_process_thread(child.id())?;
-        let previous = unsafe { ResumeThread(thread.0) };
+        let previous = unsafe { ResumeThread(thread.as_raw_handle()) };
         if previous == u32::MAX {
             return Err(io::Error::last_os_error());
         }
@@ -281,7 +252,7 @@ impl ProcessTreeGuard {
         mut child: Child,
         failed_child_reaper: FailedChildReaper,
     ) -> io::Result<()> {
-        let _ = unsafe { TerminateJobObject(self.job.0, 1) };
+        let _ = unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) };
         let _ = unsafe { TerminateProcess(child.as_raw_handle() as HANDLE, 1) };
         let wait = unsafe {
             WaitForSingleObject(
@@ -327,7 +298,7 @@ impl ProcessTreeGuard {
             )
         })?;
         let processes = self.termination_processes()?;
-        if unsafe { TerminateJobObject(self.job.0, 1) } == 0 {
+        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
         wait_for_process_handles(&processes, deadline, timeout).map_err(|error| {
@@ -336,17 +307,17 @@ impl ProcessTreeGuard {
                 format!("process tree rooted at {process_id} did not exit: {error}"),
             )
         })?;
-        wait_for_job_empty(self.job.0, deadline, timeout)
+        wait_for_job_empty(self.job.as_raw_handle(), deadline, timeout)
     }
 
     pub(crate) fn request_stop(&self) -> io::Result<()> {
         self.assigned_process_id()?;
-        let processes = job_process_handles(self.job.0)?;
+        let processes = job_process_handles(self.job.as_raw_handle())?;
         self.terminating_processes
             .lock()
             .map_err(|_| io::Error::other("process-tree termination state is unavailable"))?
             .extend(processes);
-        if unsafe { TerminateJobObject(self.job.0, 1) } == 0 {
+        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -373,14 +344,14 @@ impl ProcessTreeGuard {
                 "process-tree timeout is too large",
             )
         })?;
-        let processes = job_process_handles(self.job.0)?;
-        let _ = unsafe { TerminateJobObject(self.job.0, 1) };
-        if unsafe { WaitForSingleObject(process.handle.0, 0) } == WAIT_TIMEOUT {
-            let _ = unsafe { TerminateProcess(process.handle.0, 1) };
+        let processes = job_process_handles(self.job.as_raw_handle())?;
+        let _ = unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) };
+        if unsafe { WaitForSingleObject(process.handle.as_raw_handle(), 0) } == WAIT_TIMEOUT {
+            let _ = unsafe { TerminateProcess(process.handle.as_raw_handle(), 1) };
         }
         wait_for_process_handle(process, deadline, timeout)?;
         wait_for_process_handles(&processes, deadline, timeout)?;
-        wait_for_job_empty(self.job.0, deadline, timeout)
+        wait_for_job_empty(self.job.as_raw_handle(), deadline, timeout)
     }
 
     pub(crate) fn terminate_root_and_wait(&self, timeout: Duration) -> io::Result<()> {
@@ -394,17 +365,19 @@ impl ProcessTreeGuard {
                 "process tree has no assigned process",
             )
         })?;
-        let wait = unsafe { WaitForSingleObject(process.handle.0, 0) };
+        let wait = unsafe { WaitForSingleObject(process.handle.as_raw_handle(), 0) };
         if wait == WAIT_OBJECT_0 {
             return Ok(());
         }
         if wait == WAIT_FAILED {
             return Err(io::Error::last_os_error());
         }
-        if unsafe { TerminateProcess(process.handle.0, 1) } == 0 {
+        if unsafe { TerminateProcess(process.handle.as_raw_handle(), 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let wait = unsafe { WaitForSingleObject(process.handle.0, duration_millis(timeout)) };
+        let wait = unsafe {
+            WaitForSingleObject(process.handle.as_raw_handle(), duration_millis(timeout))
+        };
         match wait {
             WAIT_OBJECT_0 => Ok(()),
             WAIT_TIMEOUT => Err(io::Error::new(
@@ -432,7 +405,7 @@ impl ProcessTreeGuard {
                 "process tree has no assigned process",
             )
         })?;
-        match unsafe { WaitForSingleObject(process.handle.0, 0) } {
+        match unsafe { WaitForSingleObject(process.handle.as_raw_handle(), 0) } {
             WAIT_OBJECT_0 => Ok(true),
             WAIT_TIMEOUT => Ok(false),
             WAIT_FAILED => Err(io::Error::last_os_error()),
@@ -443,10 +416,10 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn tree_has_exited(&self) -> io::Result<bool> {
-        if active_processes(self.job.0)? == 0 {
+        if active_processes(self.job.as_raw_handle())? == 0 {
             return Ok(true);
         }
-        Ok(!job_process_ids(self.job.0)?
+        Ok(!job_process_ids(self.job.as_raw_handle())?
             .into_iter()
             .any(holds_tree_open))
     }
@@ -465,8 +438,8 @@ impl ProcessTreeGuard {
             })
     }
 
-    fn termination_processes(&self) -> io::Result<Vec<ProcessHandle>> {
-        let current = job_process_handles(self.job.0)?;
+    fn termination_processes(&self) -> io::Result<Vec<OwnedHandle>> {
+        let current = job_process_handles(self.job.as_raw_handle())?;
         let mut processes = self
             .terminating_processes
             .lock()
@@ -484,7 +457,7 @@ fn wait_for_process_handle(
 ) -> io::Result<()> {
     let wait = unsafe {
         WaitForSingleObject(
-            process.handle.0,
+            process.handle.as_raw_handle(),
             duration_millis(deadline.saturating_duration_since(Instant::now())),
         )
     };
@@ -505,14 +478,14 @@ fn wait_for_process_handle(
 }
 
 fn wait_for_process_handles(
-    processes: &[ProcessHandle],
+    processes: &[OwnedHandle],
     deadline: Instant,
     timeout: Duration,
 ) -> io::Result<()> {
     for process in processes {
         let wait = unsafe {
             WaitForSingleObject(
-                process.0,
+                process.as_raw_handle(),
                 duration_millis(deadline.saturating_duration_since(Instant::now())),
             )
         };
@@ -603,16 +576,16 @@ impl Drop for FailedChildReaper {
     }
 }
 
-fn sole_process_thread(process_id: u32) -> io::Result<ThreadHandle> {
+fn sole_process_thread(process_id: u32) -> io::Result<OwnedHandle> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
-    let snapshot = SnapshotHandle(snapshot);
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
     let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
     entry.dwSize = u32::try_from(std::mem::size_of::<THREADENTRY32>())
         .map_err(|_| io::Error::other("thread entry is too large"))?;
-    if unsafe { Thread32First(snapshot.0, &mut entry) } == 0 {
+    if unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let mut thread_id = None;
@@ -624,7 +597,7 @@ fn sole_process_thread(process_id: u32) -> io::Result<ThreadHandle> {
                 "suspended prepared process unexpectedly has multiple threads",
             ));
         }
-        if unsafe { Thread32Next(snapshot.0, &mut entry) } != 0 {
+        if unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) } != 0 {
             continue;
         }
         let error = unsafe { GetLastError() };
@@ -643,7 +616,7 @@ fn sole_process_thread(process_id: u32) -> io::Result<ThreadHandle> {
     if thread.is_null() {
         return Err(io::Error::last_os_error());
     }
-    Ok(ThreadHandle(thread))
+    Ok(unsafe { OwnedHandle::from_raw_handle(thread) })
 }
 
 fn prepared_spawn_failure(error: io::Error, cleanup: io::Result<()>) -> PlatformSpawnFailure {
@@ -671,7 +644,7 @@ impl CurrentProcessTreeGuard {
             .job
             .as_ref()
             .ok_or_else(|| io::Error::other("current process-tree job is unavailable"))?;
-        configure_kill_on_close(job.0, false)?;
+        configure_kill_on_close(job.as_raw_handle(), false)?;
         self.armed = false;
         Ok(())
     }
@@ -740,7 +713,7 @@ pub(crate) fn isolate_owned_session(command: &mut Command) -> io::Result<()> {
 
 pub(crate) fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard> {
     let job = create_kill_on_close_job()?;
-    if unsafe { AssignProcessToJobObject(job.0, GetCurrentProcess()) } == 0 {
+    if unsafe { AssignProcessToJobObject(job.as_raw_handle(), GetCurrentProcess()) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(CurrentProcessTreeGuard {
@@ -749,12 +722,12 @@ pub(crate) fn guard_current_process_tree() -> io::Result<CurrentProcessTreeGuard
     })
 }
 
-fn create_kill_on_close_job() -> io::Result<JobHandle> {
+fn create_kill_on_close_job() -> io::Result<OwnedHandle> {
     let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
     if handle.is_null() {
         return Err(io::Error::last_os_error());
     }
-    let job = JobHandle(handle);
+    let job = unsafe { OwnedHandle::from_raw_handle(handle) };
     configure_kill_on_close(handle, true)?;
     Ok(job)
 }
@@ -771,7 +744,7 @@ static HOST_LIFETIME_JOB: Mutex<Option<usize>> = Mutex::new(None);
 pub(crate) fn bind_to_host_lifetime(pid: u32) -> io::Result<()> {
     let job = host_lifetime_job()?;
     let process = open_process(pid, PROCESS_SET_QUOTA | PROCESS_TERMINATE)?;
-    if unsafe { AssignProcessToJobObject(job, process.0) } == 0 {
+    if unsafe { AssignProcessToJobObject(job, process.as_raw_handle()) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
@@ -787,6 +760,13 @@ pub(crate) fn release_host_lifetime() -> io::Result<()> {
     }
 }
 
+fn existing_host_lifetime_job() -> Option<HANDLE> {
+    let slot = HOST_LIFETIME_JOB
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    (*slot).map(|job| job as HANDLE)
+}
+
 fn host_lifetime_job() -> io::Result<HANDLE> {
     let mut slot = HOST_LIFETIME_JOB
         .lock()
@@ -796,11 +776,10 @@ fn host_lifetime_job() -> io::Result<HANDLE> {
     }
     let job = create_kill_on_close_job()?;
     set_job_limit_flags(
-        job.0,
+        job.as_raw_handle(),
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
     )?;
-    let handle = job.0;
-    std::mem::forget(job);
+    let handle = job.into_raw_handle();
     *slot = Some(handle as usize);
     Ok(handle)
 }
@@ -857,7 +836,7 @@ fn active_processes(handle: HANDLE) -> io::Result<u32> {
     Ok(accounting.ActiveProcesses)
 }
 
-fn job_process_handles(handle: HANDLE) -> io::Result<Vec<ProcessHandle>> {
+fn job_process_handles(handle: HANDLE) -> io::Result<Vec<OwnedHandle>> {
     let mut processes = Vec::new();
     for pid in job_process_ids(handle)? {
         match open_process(pid, QUERY_AND_WAIT_ACCESS) {
@@ -955,10 +934,7 @@ pub(crate) fn wait_for_stop_request() -> io::Result<()> {
 
 pub(crate) fn on_stop_request(hook: fn()) -> io::Result<()> {
     install_cancellation_handler()?;
-    STOP_HOOKS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(hook);
+    STOP_HOOKS.register(hook);
     match STOP_HOOK_LISTENER.get_or_init(|| start_stop_hook_listener().map_err(raw_error_code)) {
         Ok(()) => Ok(()),
         Err(code) => Err(io::Error::from_raw_os_error(*code)),
@@ -970,14 +946,7 @@ fn start_stop_hook_listener() -> io::Result<()> {
         .name("qol-process-stop-hooks".to_string())
         .spawn(|| {
             if wait_for_stop_request().is_ok() {
-                let hooks = std::mem::take(
-                    &mut *STOP_HOOKS
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
-                );
-                for hook in hooks {
-                    hook();
-                }
+                STOP_HOOKS.run();
                 std::process::exit(0);
             }
         })?;
@@ -1021,24 +990,6 @@ unsafe extern "system" fn cancellation_control_handler(control: u32) -> BOOL {
     1
 }
 
-struct EventHandle(HANDLE);
-
-unsafe impl Send for EventHandle {}
-
-impl EventHandle {
-    fn wait(&self) -> u32 {
-        unsafe { WaitForSingleObject(self.0, INFINITE) }
-    }
-}
-
-impl Drop for EventHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
 fn stop_event_name(pid: u32) -> Vec<u16> {
     wide_nul(format!("{STOP_EVENT_PREFIX}{pid}"))
 }
@@ -1050,14 +1001,16 @@ fn start_stop_listener() -> io::Result<()> {
     if event.is_null() {
         return Err(io::Error::last_os_error());
     }
-    let event = EventHandle(event);
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS && unsafe { ResetEvent(event.0) } == 0 {
+    let event = unsafe { OwnedHandle::from_raw_handle(event) };
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS
+        && unsafe { ResetEvent(event.as_raw_handle()) } == 0
+    {
         return Err(io::Error::last_os_error());
     }
     std::thread::Builder::new()
         .name("qol-process-stop-listener".to_string())
         .spawn(move || loop {
-            if event.wait() != WAIT_OBJECT_0 {
+            if unsafe { WaitForSingleObject(event.as_raw_handle(), INFINITE) } != WAIT_OBJECT_0 {
                 return;
             }
             record_cancellation_signal();
@@ -1075,8 +1028,8 @@ fn request_graceful_stop(pid: u32) -> io::Result<bool> {
         }
         return Err(error);
     }
-    let event = EventHandle(event);
-    if unsafe { SetEvent(event.0) } == 0 {
+    let event = unsafe { OwnedHandle::from_raw_handle(event) };
+    if unsafe { SetEvent(event.as_raw_handle()) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(true)
@@ -1084,18 +1037,6 @@ fn request_graceful_stop(pid: u32) -> io::Result<bool> {
 
 fn raw_error_code(error: io::Error) -> i32 {
     error.raw_os_error().unwrap_or(1)
-}
-
-struct ProcessHandle(HANDLE);
-
-unsafe impl Send for ProcessHandle {}
-
-impl Drop for ProcessHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
 }
 
 pub(crate) fn is_pid_alive(pid: u32) -> bool {
@@ -1108,7 +1049,7 @@ pub(crate) fn is_pid_alive(pid: u32) -> bool {
             return error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32);
         }
     };
-    unsafe { WaitForSingleObject(handle.0, 0) == WAIT_TIMEOUT }
+    unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) == WAIT_TIMEOUT }
 }
 
 pub(crate) fn is_group_alive(pid: u32) -> bool {
@@ -1121,13 +1062,18 @@ pub(crate) fn is_pid_zombie(_pid: u32) -> bool {
 
 pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     let process = open_process(pid, QUERY_AND_WAIT_ACCESS)?;
-    if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } != WAIT_TIMEOUT {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("process {pid} has exited"),
         ));
     }
     Ok(creation_identity(process_creation_time(&process)?))
+}
+
+pub(crate) fn process_start_time(pid: u32) -> Option<u64> {
+    let process = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION).ok()?;
+    process_creation_time(&process).ok()
 }
 
 fn creation_identity(created: u64) -> String {
@@ -1142,7 +1088,7 @@ pub(crate) fn request_stop_if_identity(pid: u32, expected: &str) -> io::Result<b
     let Ok(process) = open_process(pid, QUERY_AND_WAIT_ACCESS) else {
         return Ok(false);
     };
-    if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } != WAIT_TIMEOUT {
         return Ok(false);
     }
     let matches = process_creation_time(&process)
@@ -1176,13 +1122,21 @@ fn system_directory() -> Option<PathBuf> {
         .then(|| PathBuf::from(OsString::from_wide(&buffer[..length])))
 }
 
-fn process_creation_time(process: &ProcessHandle) -> io::Result<u64> {
+fn process_creation_time(process: &OwnedHandle) -> io::Result<u64> {
     let mut creation: FILETIME = unsafe { std::mem::zeroed() };
     let mut exit: FILETIME = unsafe { std::mem::zeroed() };
     let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
     let mut user: FILETIME = unsafe { std::mem::zeroed() };
-    if unsafe { GetProcessTimes(process.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0
-    {
+    let read = unsafe {
+        GetProcessTimes(
+            process.as_raw_handle(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    if read == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
@@ -1191,7 +1145,7 @@ fn process_creation_time(process: &ProcessHandle) -> io::Result<u64> {
 struct Member {
     pid: u32,
     created: u64,
-    handle: ProcessHandle,
+    handle: OwnedHandle,
 }
 
 impl Member {
@@ -1206,14 +1160,15 @@ impl Member {
     }
 
     fn running(&self) -> bool {
-        unsafe { WaitForSingleObject(self.handle.0, 0) == WAIT_TIMEOUT }
+        unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) == WAIT_TIMEOUT }
     }
 
     fn in_job(&self) -> bool {
+        let Some(job) = existing_host_lifetime_job() else {
+            return false;
+        };
         let mut result: BOOL = 0;
-        unsafe {
-            IsProcessInJob(self.handle.0, std::ptr::null_mut(), &mut result) != 0 && result != 0
-        }
+        unsafe { IsProcessInJob(self.handle.as_raw_handle(), job, &mut result) != 0 && result != 0 }
     }
 
     fn request_stop_or_kill(&self) -> bool {
@@ -1228,7 +1183,7 @@ impl Member {
     }
 
     fn kill(&self) -> bool {
-        unsafe { TerminateProcess(self.handle.0, 1) != 0 }
+        unsafe { TerminateProcess(self.handle.as_raw_handle(), 1) != 0 }
     }
 }
 
@@ -1245,26 +1200,21 @@ pub(crate) fn processes() -> io::Result<Vec<ProcessEntry>> {
     if snapshot == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
     }
-    let snapshot = SnapshotHandle(snapshot);
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>())
         .map_err(|_| io::Error::other("process entry is too large"))?;
-    if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
+    if unsafe { Process32FirstW(snapshot.as_raw_handle(), &mut entry) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let mut entries = Vec::new();
     loop {
-        let name = &entry.szExeFile;
-        let end = name
-            .iter()
-            .position(|unit| *unit == 0)
-            .unwrap_or(name.len());
         entries.push(ProcessEntry {
             pid: entry.th32ProcessID,
             parent: entry.th32ParentProcessID,
-            exe: String::from_utf16_lossy(&name[..end]),
+            exe: from_wide(&entry.szExeFile),
         });
-        if unsafe { Process32NextW(snapshot.0, &mut entry) } != 0 {
+        if unsafe { Process32NextW(snapshot.as_raw_handle(), &mut entry) } != 0 {
             continue;
         }
         let error = unsafe { GetLastError() };
@@ -1281,7 +1231,7 @@ pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
     let mut length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
     let read = unsafe {
         QueryFullProcessImageNameW(
-            process.0,
+            process.as_raw_handle(),
             PROCESS_NAME_WIN32,
             buffer.as_mut_ptr(),
             &mut length,
@@ -1299,11 +1249,13 @@ fn holds_tree_open(pid: u32) -> bool {
         Ok(process) => process,
         Err(error) => return error.raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32),
     };
-    let console_host = process_image_path(pid).is_ok_and(|path| {
-        path.file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case(CONSOLE_HOST_IMAGE))
-    });
-    !console_host && unsafe { WaitForSingleObject(process.0, 0) } != WAIT_OBJECT_0
+    let console_host =
+        process_image_path(pid).is_ok_and(|path| is_console_host(&path, system_directory()));
+    !console_host && unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } != WAIT_OBJECT_0
+}
+
+fn is_console_host(image: &Path, system_directory: Option<PathBuf>) -> bool {
+    same_path(image, &program_in(system_directory, CONSOLE_HOST_IMAGE))
 }
 
 pub(crate) fn hide_console_window(command: &mut Command) -> &mut Command {
@@ -1355,7 +1307,10 @@ fn process_group(pid: u32) -> io::Result<Vec<Member>> {
 fn wait_for_members(members: &[Member], deadline: Instant) -> bool {
     members.iter().all(|member| {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        unsafe { WaitForSingleObject(member.handle.0, duration_millis(remaining)) == WAIT_OBJECT_0 }
+        unsafe {
+            WaitForSingleObject(member.handle.as_raw_handle(), duration_millis(remaining))
+                == WAIT_OBJECT_0
+        }
     })
 }
 
@@ -1401,7 +1356,7 @@ pub(crate) fn signal_term_group(pid: u32) -> io::Result<()> {
 
 pub(crate) fn kill_pid(pid: u32) -> io::Result<()> {
     let handle = open_process(pid, TERMINATE_AND_WAIT_ACCESS)?;
-    if unsafe { TerminateProcess(handle.0, 1) } != 0 {
+    if unsafe { TerminateProcess(handle.as_raw_handle(), 1) } != 0 {
         return Ok(());
     }
     Err(io::Error::last_os_error())
@@ -1430,7 +1385,7 @@ pub(crate) fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
         }
         Err(error) => return Err(error),
     };
-    let wait = unsafe { WaitForSingleObject(handle.0, 0) };
+    let wait = unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) };
     if wait == WAIT_TIMEOUT {
         return Ok(None);
     }
@@ -1443,7 +1398,7 @@ pub(crate) fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
         )));
     }
     let mut exit_code = 0;
-    if unsafe { GetExitCodeProcess(handle.0, &mut exit_code) } == 0 {
+    if unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut exit_code) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(Some(ExitStatus::from_raw(exit_code)))
@@ -1507,7 +1462,7 @@ pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<()> {
     Ok(())
 }
 
-fn open_process(pid: u32, access: u32) -> io::Result<ProcessHandle> {
+fn open_process(pid: u32, access: u32) -> io::Result<OwnedHandle> {
     if pid == 0 {
         return Err(invalid_pid());
     }
@@ -1515,7 +1470,7 @@ fn open_process(pid: u32, access: u32) -> io::Result<ProcessHandle> {
     if handle.is_null() {
         return Err(io::Error::last_os_error());
     }
-    Ok(ProcessHandle(handle))
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
 fn duration_millis(duration: Duration) -> u32 {
@@ -1557,6 +1512,41 @@ mod tests {
         for (directory, program, expected) in cases {
             assert_eq!(program_in(directory, program), expected, "{program}");
         }
+    }
+
+    #[test]
+    fn only_the_system_console_host_is_a_console_host() {
+        let system = || Some(PathBuf::from(r"C:\Windows\System32"));
+        let cases = [
+            (r"C:\Windows\System32\conhost.exe", system(), true),
+            (r"c:\windows\system32\CONHOST.EXE", system(), true),
+            (r"C:\Users\me\Downloads\conhost.exe", system(), false),
+            (r"C:\Windows\System32\cmd.exe", system(), false),
+            (r"C:\Windows\System32\conhost.exe", None, false),
+        ];
+        for (image, directory, expected) in cases {
+            assert_eq!(
+                is_console_host(Path::new(image), directory),
+                expected,
+                "{image}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_processes_in_the_host_lifetime_job_count_as_contained() {
+        let mut bound = long_running_command().spawn().unwrap();
+        let mut free = long_running_command().spawn().unwrap();
+        bind_to_host_lifetime(bound.id()).unwrap();
+
+        let bound_contained = Member::open(bound.id()).unwrap().in_job();
+        let free_contained = Member::open(free.id()).unwrap().in_job();
+        for child in [&mut bound, &mut free] {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        assert!(bound_contained);
+        assert!(!free_contained);
     }
 
     #[test]

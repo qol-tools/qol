@@ -60,6 +60,20 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
     ))
 }
 
+pub(crate) fn process_start_time(pid: u32) -> Option<u64> {
+    let info = bsd_info(pid).ok()?;
+    Some(start_microseconds(
+        info.pbi_start_tvsec,
+        info.pbi_start_tvusec,
+    ))
+}
+
+fn start_microseconds(seconds: u64, microseconds: u64) -> u64 {
+    seconds
+        .saturating_mul(1_000_000)
+        .saturating_add(microseconds)
+}
+
 fn bsd_info(pid: u32) -> io::Result<libc::proc_bsdinfo> {
     let pid = pid_t(pid)?;
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
@@ -146,5 +160,22 @@ mod tests {
         assert_eq!(fields[0], "macos");
         assert!(fields[1].parse::<u64>().is_ok());
         assert!(fields[2].parse::<u64>().is_ok());
+    }
+
+    #[test]
+    fn start_time_is_the_identity_generation_in_microseconds() {
+        let pid = std::process::id();
+        let identity = process_identity(pid).unwrap();
+        let fields = identity.split(':').collect::<Vec<_>>();
+        let seconds = fields[1].parse::<u64>().unwrap();
+        let microseconds = fields[2].parse::<u64>().unwrap();
+
+        assert_eq!(
+            process_start_time(pid),
+            Some(start_microseconds(seconds, microseconds))
+        );
+        assert_eq!(start_microseconds(2, 500_000), 2_500_000);
+        assert_eq!(start_microseconds(u64::MAX, 1), u64::MAX);
+        assert_eq!(process_start_time(0), None);
     }
 }

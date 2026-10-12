@@ -153,6 +153,10 @@ pub(crate) fn process_identity_matches(_actual: &str, _expected: &str) -> bool {
     false
 }
 
+pub(crate) fn process_start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
 pub(crate) fn request_stop_if_identity(_pid: u32, _expected: &str) -> io::Result<bool> {
     Err(unsupported())
 }

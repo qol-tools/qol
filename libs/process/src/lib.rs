@@ -356,6 +356,10 @@ pub fn process_identity_matches(pid: u32, expected: &str) -> bool {
     process_identity(pid).is_ok_and(|actual| platform::process_identity_matches(&actual, expected))
 }
 
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    platform::process_start_time(pid)
+}
+
 pub fn request_stop_if_identity(pid: u32, expected: &str) -> io::Result<bool> {
     platform::request_stop_if_identity(pid, expected)
 }
@@ -503,6 +507,32 @@ mod tests {
         assert!(process_identity_matches(pid, &identity));
         assert!(!process_identity_matches(pid, "stale-process-identity"));
         assert!(process_identity(0).is_err());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn process_start_time_is_stable_and_later_for_a_later_process() {
+        let own = process_start_time(std::process::id()).unwrap();
+        assert_eq!(process_start_time(std::process::id()), Some(own));
+        assert_eq!(process_start_time(0), None);
+
+        let (program, args): (&str, &[&str]) = if cfg!(windows) {
+            ("ping.exe", &["-n", "31", "127.0.0.1"])
+        } else {
+            ("sleep", &["30"])
+        };
+        let mut child = system_command(program)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = process_start_time(child.id());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(
+            started.is_some_and(|started| started >= own),
+            "{started:?} {own}"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -670,6 +700,7 @@ mod tests {
             std::fs::write(root.join("ready"), "ready").unwrap();
             return;
         }
+        CancellationToken::install().unwrap();
         std::fs::write(root.join("ready"), "ready").unwrap();
         wait_for_stop_request().unwrap();
         std::fs::write(root.join("stopped"), "stopped").unwrap();

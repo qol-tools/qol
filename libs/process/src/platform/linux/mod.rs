@@ -16,8 +16,8 @@ pub(crate) use super::unix::{
 };
 pub(crate) use containment::{
     is_pid_zombie, isolate_owned_session, own_current_process_tree_with_guardian, process_identity,
-    process_identity_matches, process_tree_containment_support, run_process_tree_guardian_entry,
-    PreparedSpawn, ProcessTreeGuard,
+    process_identity_matches, process_start_time, process_tree_containment_support,
+    run_process_tree_guardian_entry, PreparedSpawn, ProcessTreeGuard,
 };
 
 pub(crate) fn processes() -> io::Result<Vec<ProcessEntry>> {
