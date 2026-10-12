@@ -1,15 +1,12 @@
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
-use qol_platform::native::wide::from_wide;
+use qol_windowing::platform::windows::monitor_handle;
 use windows_sys::Win32::Devices::Display::{
     DestroyPhysicalMonitors, GetNumberOfPhysicalMonitorsFromHMONITOR,
     GetPhysicalMonitorsFromHMONITOR, GetVCPFeatureAndVCPFeatureReply, SetVCPFeature,
     PHYSICAL_MONITOR,
 };
-use windows_sys::Win32::Foundation::{BOOL, LPARAM, RECT, TRUE};
-use windows_sys::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
-};
+use windows_sys::Win32::Graphics::Gdi::HMONITOR;
 
 use crate::monitor::backends::gdi_display::connector_from_device;
 use crate::monitor::backends::vcp_ddc::{VcpReading, VcpTransport};
@@ -78,46 +75,11 @@ fn physical_monitors(connector: &str) -> Result<PhysicalMonitors, I2cError> {
 }
 
 fn monitor_for(connector: &str) -> Result<HMONITOR, I2cError> {
-    let mut monitors: Vec<HMONITOR> = Vec::new();
-    unsafe {
-        EnumDisplayMonitors(
-            null_mut(),
-            null(),
-            Some(collect_monitor),
-            &mut monitors as *mut Vec<HMONITOR> as LPARAM,
-        );
-    }
-    monitors
-        .into_iter()
-        .find(|monitor| {
-            device_of(*monitor).is_some_and(|device| connector_from_device(&device) == connector)
-        })
-        .ok_or_else(|| I2cError::UnsupportedTransport {
+    monitor_handle(|monitor| connector_from_device(&monitor.device_name) == connector).ok_or_else(
+        || I2cError::UnsupportedTransport {
             detail: format!("no active monitor matches {connector}"),
-        })
-}
-
-fn device_of(monitor: HMONITOR) -> Option<String> {
-    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
-    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-    let read = unsafe {
-        GetMonitorInfoW(
-            monitor,
-            &mut info as *mut MONITORINFOEXW as *mut MONITORINFO,
-        )
-    };
-    (read != 0).then(|| from_wide(&info.szDevice))
-}
-
-unsafe extern "system" fn collect_monitor(
-    monitor: HMONITOR,
-    _hdc: HDC,
-    _rect: *mut RECT,
-    data: LPARAM,
-) -> BOOL {
-    let monitors = unsafe { &mut *(data as *mut Vec<HMONITOR>) };
-    monitors.push(monitor);
-    TRUE
+        },
+    )
 }
 
 fn vcp_failed(connector: &str, operation: &str, code: u8) -> I2cError {

@@ -1,17 +1,19 @@
 use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 use crate::{WindowId, WindowOps, WindowRect};
+use qol_platform::native::wide::from_wide;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    EnumDisplayMonitors, GetDC, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, ReleaseDC,
-    SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, HMONITOR,
-    MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, SRCCOPY,
+    EnumDisplayMonitors, GetDC, GetMonitorInfoW, GetWindowRgnBox, MonitorFromPoint,
+    MonitorFromWindow, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT,
+    DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, RGN_ERROR, SRCCOPY,
 };
 use windows_sys::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
@@ -22,12 +24,15 @@ use windows_sys::Win32::UI::HiDpi::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetCursorPos, GetForegroundWindow,
     GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SetForegroundWindow, SetWindowPos,
-    ShowWindow, ShowWindowAsync, GWL_EXSTYLE, GW_OWNER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW,
+    SetForegroundWindow, SetWindowPos, ShowWindow, ShowWindowAsync, GWL_EXSTYLE, GW_OWNER,
+    HWND_TOP, SHOW_WINDOW_CMD, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW,
 };
 
 const BASE_DPI: f32 = 96.0;
+const FOREIGN_WAIT: Duration = Duration::from_millis(300);
+const FOREIGN_POLL: Duration = Duration::from_millis(5);
 const SHELL_CLASSES: [&str; 4] = [
     "Progman",
     "WorkerW",
@@ -147,27 +152,52 @@ impl Window {
         (unsafe { GetWindowRect(self.0, &mut rect) } != 0).then_some(rect)
     }
 
-    pub fn set_frame(self, target: WindowRect) -> Result<(), String> {
-        if self.is_minimized() || self.is_maximized() {
-            unsafe { ShowWindow(self.0, SW_RESTORE) };
+    pub fn region(self) -> Option<WindowRect> {
+        let outer = self.outer_rect()?;
+        let mut region = empty_rect();
+        if unsafe { GetWindowRgnBox(self.0, &mut region) } == RGN_ERROR {
+            return None;
         }
+        Some(to_frame(offset_rect(region, outer.left, outer.top)))
+    }
+
+    pub fn is_hung(self) -> bool {
+        unsafe { IsHungAppWindow(self.0) != 0 }
+    }
+
+    fn is_foreign(self) -> bool {
+        let owner = unsafe { GetWindowThreadProcessId(self.0, null_mut()) };
+        placement_is_async(owner, unsafe { GetCurrentThreadId() })
+    }
+
+    fn show(self, command: SHOW_WINDOW_CMD, foreign: bool) {
+        if foreign {
+            unsafe { ShowWindowAsync(self.0, command) };
+        } else {
+            unsafe { ShowWindow(self.0, command) };
+        }
+    }
+
+    pub fn set_frame(self, target: WindowRect) -> Result<(), String> {
+        let foreign = self.is_foreign();
         let dpi = unsafe { GetDpiForWindow(self.0) };
-        self.place(target, SWP_NOZORDER | SWP_NOACTIVATE)?;
+        let before = self.frame();
+        self.set_frame_nonblocking(target)?;
+        if foreign {
+            wait_until(FOREIGN_WAIT, || {
+                placement_landed(before, self.frame(), target)
+            });
+        }
         if unsafe { GetDpiForWindow(self.0) } != dpi {
-            self.place(target, SWP_NOZORDER | SWP_NOACTIVATE)?;
+            self.set_frame_nonblocking(target)?;
         }
         Ok(())
     }
 
     pub fn set_frame_nonblocking(self, target: WindowRect) -> Result<(), String> {
-        let owner = unsafe { GetWindowThreadProcessId(self.0, null_mut()) };
-        let foreign = placement_is_async(owner, unsafe { GetCurrentThreadId() });
+        let foreign = self.is_foreign();
         if self.is_minimized() || self.is_maximized() {
-            if foreign {
-                unsafe { ShowWindowAsync(self.0, SW_RESTORE) };
-            } else {
-                unsafe { ShowWindow(self.0, SW_RESTORE) };
-            }
+            self.show(SW_RESTORE, foreign);
         }
         let flags = if foreign { SWP_ASYNCWINDOWPOS } else { 0 };
         self.place(target, SWP_NOZORDER | SWP_NOACTIVATE | flags)
@@ -198,17 +228,25 @@ impl Window {
     }
 
     pub fn maximize(self) {
-        unsafe { ShowWindow(self.0, SW_MAXIMIZE) };
+        self.show(SW_MAXIMIZE, self.is_foreign());
     }
 
     pub fn minimize(self) -> bool {
-        unsafe { ShowWindow(self.0, SW_MINIMIZE) };
+        let foreign = self.is_foreign();
+        self.show(SW_MINIMIZE, foreign);
+        if foreign {
+            wait_until(FOREIGN_WAIT, || self.is_minimized());
+        }
         self.is_minimized()
     }
 
     pub fn activate(self) -> bool {
+        let foreign = self.is_foreign();
         if self.is_minimized() {
-            unsafe { ShowWindow(self.0, SW_RESTORE) };
+            self.show(SW_RESTORE, foreign);
+            if foreign {
+                wait_until(FOREIGN_WAIT, || !self.is_minimized());
+            }
         }
         unsafe {
             let this_thread = GetCurrentThreadId();
@@ -216,7 +254,12 @@ impl Window {
             let attached = foreground_thread != 0
                 && foreground_thread != this_thread
                 && AttachThreadInput(this_thread, foreground_thread, TRUE) != 0;
-            BringWindowToTop(self.0);
+            if foreign {
+                let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS;
+                SetWindowPos(self.0, HWND_TOP, 0, 0, 0, 0, flags);
+            } else {
+                BringWindowToTop(self.0);
+            }
             let activated = SetForegroundWindow(self.0) != 0;
             if attached {
                 AttachThreadInput(this_thread, foreground_thread, 0);
@@ -267,6 +310,41 @@ impl Window {
 
 fn placement_is_async(owner_thread: u32, this_thread: u32) -> bool {
     owner_thread != 0 && owner_thread != this_thread
+}
+
+fn placement_landed(
+    before: Option<WindowRect>,
+    now: Option<WindowRect>,
+    target: WindowRect,
+) -> bool {
+    let Some(now) = now else {
+        return true;
+    };
+    before != Some(now) || same_frame(now, target)
+}
+
+fn same_frame(a: WindowRect, b: WindowRect) -> bool {
+    [
+        (a.x, b.x),
+        (a.y, b.y),
+        (a.width, b.width),
+        (a.height, b.height),
+    ]
+    .iter()
+    .all(|(left, right)| (left - right).abs() < 1.0)
+}
+
+fn wait_until(wait: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + wait;
+    loop {
+        if done() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(FOREIGN_POLL);
+    }
 }
 
 pub struct Win32Windows;
@@ -335,6 +413,19 @@ pub struct Monitor {
 }
 
 pub fn monitors() -> Vec<Monitor> {
+    monitor_handles()
+        .into_iter()
+        .filter_map(monitor_info)
+        .collect()
+}
+
+pub fn monitor_handle(matches: impl Fn(&Monitor) -> bool) -> Option<HMONITOR> {
+    monitor_handles()
+        .into_iter()
+        .find(|handle| monitor_info(*handle).is_some_and(|found| matches(&found)))
+}
+
+fn monitor_handles() -> Vec<HMONITOR> {
     let mut handles: Vec<HMONITOR> = Vec::new();
     unsafe {
         EnumDisplayMonitors(
@@ -344,7 +435,7 @@ pub fn monitors() -> Vec<Monitor> {
             &mut handles as *mut Vec<HMONITOR> as LPARAM,
         );
     }
-    handles.into_iter().filter_map(monitor_info).collect()
+    handles
 }
 
 pub fn monitor_at(x: i32, y: i32) -> Option<Monitor> {
@@ -386,15 +477,10 @@ fn monitor_info(monitor: HMONITOR) -> Option<Monitor> {
     if read == 0 {
         return None;
     }
-    let device = &info.szDevice;
-    let end = device
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(device.len());
     Some(Monitor {
         bounds: to_frame(info.monitorInfo.rcMonitor),
         work_area: to_frame(info.monitorInfo.rcWork),
-        device_name: String::from_utf16_lossy(&device[..end]),
+        device_name: from_wide(&info.szDevice),
         scale: monitor_scale(monitor),
     })
 }
@@ -511,6 +597,15 @@ fn to_frame(rect: RECT) -> WindowRect {
     }
 }
 
+fn offset_rect(rect: RECT, x: i32, y: i32) -> RECT {
+    RECT {
+        left: rect.left + x,
+        top: rect.top + y,
+        right: rect.right + x,
+        bottom: rect.bottom + y,
+    }
+}
+
 fn empty_rect() -> RECT {
     RECT {
         left: 0,
@@ -581,6 +676,59 @@ mod tests {
                 "owner={owner} this={this}"
             );
         }
+    }
+
+    #[test]
+    fn a_placement_lands_when_the_frame_moves_reaches_the_target_or_the_window_goes() {
+        let before = rect(0.0, 0.0, 100.0, 100.0);
+        let target = rect(50.0, 0.0, 100.0, 100.0);
+        let cases = [
+            ("unchanged", Some(before), Some(before), false),
+            (
+                "moved",
+                Some(before),
+                Some(rect(20.0, 0.0, 100.0, 100.0)),
+                true,
+            ),
+            ("already there", Some(target), Some(target), true),
+            ("unreadable before", None, Some(before), true),
+            ("gone", Some(before), None, true),
+        ];
+        for (name, earlier, now, landed) in cases {
+            assert_eq!(placement_landed(earlier, now, target), landed, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_window_region_moves_with_the_window() {
+        let region = RECT {
+            left: 10,
+            top: 0,
+            right: 110,
+            bottom: 40,
+        };
+        assert_eq!(
+            to_frame(offset_rect(region, -1920, 200)),
+            rect(-1910.0, 200.0, 100.0, 40.0)
+        );
+        assert_eq!(
+            to_frame(offset_rect(empty_rect(), 5, 5)),
+            rect(5.0, 5.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn waiting_stops_as_soon_as_the_condition_holds_or_the_bound_passes() {
+        let mut checks = 0;
+        assert!(wait_until(Duration::from_secs(5), || {
+            checks += 1;
+            checks == 3
+        }));
+        assert_eq!(checks, 3);
+
+        let started = Instant::now();
+        assert!(!wait_until(Duration::from_millis(20), || false));
+        assert!(started.elapsed() >= Duration::from_millis(20));
     }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> WindowRect {
