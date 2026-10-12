@@ -4,8 +4,11 @@ use super::super::interpolation::{interpolate_shell, template_parts, TemplatePar
 
 const CMD_METACHARACTERS: &[char] = &['^', '&', '|', '<', '>', '(', ')', '"', '!'];
 const REPARSED_METACHARACTERS: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"', '(', ')'];
-const REPARSED_REFUSAL: &str = "cmd parses a pipeline, call or for /f command twice, so this parameter cannot contain & | < > ^ % ! \" ( )";
+const REPARSED_REFUSAL: &str = "cmd parses a pipeline, call, for /f or inner cmd command twice, so this parameter cannot contain & | < > ^ % ! \" ( )";
 const QUOTED_REFUSAL: &str = "a parameter inside double quotes cannot contain a double quote";
+const REPARSING_COMMANDS: &[&str] = &["call", "cmd", "cmd.exe"];
+const PREFIX_COMMANDS: &[&str] = &["if", "for", "start"];
+const ARGUMENT_SEPARATORS: &[char] = &[' ', '\t', '"', ',', ';', '=', '\u{b}', '\u{c}'];
 
 #[derive(Clone, Copy)]
 struct Slot {
@@ -127,20 +130,40 @@ fn reparsing_command(command: &[char]) -> bool {
     let command: String = command.iter().collect();
     let command =
         command.trim_start_matches(|character: char| character.is_whitespace() || character == '@');
-    let mut words = command.split(|character: char| {
-        character.is_whitespace() || CMD_METACHARACTERS.contains(&character)
-    });
-    match words.next() {
-        Some(word) if word.eq_ignore_ascii_case("call") => true,
-        Some(word) if word.eq_ignore_ascii_case("for") => words
-            .find(|word| !word.is_empty())
-            .is_some_and(|word| word.eq_ignore_ascii_case("/f")),
-        _ => false,
+    let mut words = command
+        .split(|character: char| {
+            character.is_whitespace() || CMD_METACHARACTERS.contains(&character)
+        })
+        .filter(|word| !word.is_empty())
+        .peekable();
+    let Some(first) = words.next() else {
+        return false;
+    };
+    if names_one_of(first, REPARSING_COMMANDS) {
+        return true;
     }
+    if !names_one_of(first, PREFIX_COMMANDS) {
+        return false;
+    }
+    if first.eq_ignore_ascii_case("for")
+        && words
+            .peek()
+            .is_some_and(|word| word.eq_ignore_ascii_case("/f"))
+    {
+        return true;
+    }
+    words.any(|word| names_one_of(word, REPARSING_COMMANDS))
+}
+
+fn names_one_of(word: &str, commands: &[&str]) -> bool {
+    let name = word.rsplit(['\\', '/']).next().unwrap_or(word);
+    commands
+        .iter()
+        .any(|command| name.eq_ignore_ascii_case(command))
 }
 
 fn quote_for_argv(value: &str) -> String {
-    if !value.is_empty() && !value.contains([' ', '\t', '"']) {
+    if !value.is_empty() && !value.contains(ARGUMENT_SEPARATORS) {
         return value.to_string();
     }
     let mut quoted = String::from("\"");
@@ -235,15 +258,19 @@ mod tests {
             ("hello world", "^\"hello world^\""),
             (
                 "https://example.com?q=1&x=2",
-                "https://example.com?q=1^&x=2",
+                "^\"https://example.com?q=1^&x=2^\"",
             ),
+            ("old,src", "^\"old,src^\""),
+            ("a;b", "^\"a;b^\""),
+            ("key=value", "^\"key=value^\""),
+            ("a\u{b}b\u{c}c", "^\"a\u{b}b\u{c}c^\""),
             ("x & echo INJECTED &", "^\"x ^& echo INJECTED ^&^\""),
             ("say \"hi\"", "^\"say \\^\"hi\\^\"^\""),
             (r"C:\my dir\", r#"^"C:\my dir\\^""#),
             (r"C:\dir\", r"C:\dir\"),
             ("100%", "100%"),
             ("%PATH%", "%^PATH%"),
-            ("%PATH:~0,1%", "%^PATH:~0,1%"),
+            ("%PATH:~0,1%", "^\"%^PATH:~0,1%^\""),
             ("%%", "%^%"),
             ("%&", "%^&"),
             ("a^b", "a^^b"),
@@ -300,6 +327,13 @@ mod tests {
             "for /f %i in ('echo {{q}}') do @echo %i",
             "FOR  /F %i in ('echo x') do @echo {{q}}",
             "type f | findstr \"{{q}}\"",
+            "cmd /c echo {{q}}",
+            "CMD.EXE /k echo {{q}}",
+            "echo a & cmd /c echo {{q}}",
+            "\"C:\\Windows\\System32\\cmd.exe\" /c echo {{q}}",
+            "if exist x call echo {{q}}",
+            "for %i in (a) do call echo {{q}}",
+            "start cmd /c echo {{q}}",
         ];
 
         for template in templates {
@@ -340,6 +374,8 @@ mod tests {
                 "for %i in (a) do echo x^&calc",
             ),
             ("recall {{q}}", "recall x^&calc"),
+            ("start \"\" {{q}}", "start \"\" x^&calc"),
+            ("if exist x echo {{q}}", "if exist x echo x^&calc"),
         ];
 
         for (template, expected) in cases {
@@ -404,6 +440,26 @@ mod tests {
             .output()
             .expect("cmd must run");
         assert_eq!(String::from_utf8_lossy(&output.stdout), "x%PATH%\r\n");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn render_keeps_a_comma_value_one_argument_for_cmd_builtins() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["old", "src", "old,src"] {
+            std::fs::create_dir(root.path().join(name)).unwrap();
+        }
+        let script = render_with("rd /s /q {{dir}}", &[("dir", "old,src")]).expect("renderable");
+        let mut command = super::super::shell_command(&script).expect("cmd command");
+        let status = command
+            .current_dir(root.path())
+            .status()
+            .expect("cmd must run");
+
+        assert!(status.success(), "script={script:?}");
+        assert!(!root.path().join("old,src").exists());
+        assert!(root.path().join("old").exists());
+        assert!(root.path().join("src").exists());
     }
 
     #[cfg(target_os = "windows")]
