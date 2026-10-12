@@ -207,7 +207,7 @@ fn capture_session(
         output_file: Some(output_file.to_path_buf()),
         capture_file: Some(capture_file.to_path_buf()),
         canvas: Some(rect),
-        processes: vec![CaptureProcess { pid }],
+        processes: vec![CaptureProcess::spawned(pid)],
         segments: Vec::new(),
     }
 }

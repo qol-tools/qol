@@ -98,10 +98,7 @@ fn wait_for_recording_file(session: &CaptureSession, output_file: &Path) -> Resu
     let mut previous_len = None;
     let mut stable_samples = 0;
     while Instant::now() < deadline {
-        let recording = session
-            .processes
-            .iter()
-            .any(|process| super::process_alive(process.pid));
+        let recording = super::session_alive(session);
         let len = output_file.metadata().ok().map(|metadata| metadata.len());
         if !recording && len.is_some_and(|len| len > 0) {
             if len == previous_len {

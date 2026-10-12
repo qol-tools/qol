@@ -50,6 +50,24 @@ pub struct SavedRecording {
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CaptureProcess {
     pub pid: u32,
+    #[serde(default)]
+    pub identity: Option<String>,
+}
+
+impl CaptureProcess {
+    pub fn spawned(pid: u32) -> Self {
+        Self {
+            pid,
+            identity: qol_process::process_identity(pid).ok(),
+        }
+    }
+
+    pub fn alive(&self) -> bool {
+        self.identity
+            .as_deref()
+            .is_some_and(|identity| qol_process::process_identity_matches(self.pid, identity))
+            && process_alive(self.pid)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,7 +94,10 @@ impl CaptureSession {
             output_file,
             capture_file,
             canvas: None,
-            processes: vec![CaptureProcess { pid }],
+            processes: vec![CaptureProcess {
+                pid,
+                identity: None,
+            }],
             segments: Vec::new(),
         }
     }
@@ -91,16 +112,9 @@ impl CaptureSession {
 }
 
 pub fn session_alive(session: &CaptureSession) -> bool {
-    session
-        .processes
-        .iter()
-        .any(|process| process_alive(process.pid))
+    session.processes.iter().any(CaptureProcess::alive)
 }
 
 pub fn session_started(session: &CaptureSession) -> bool {
-    !session.processes.is_empty()
-        && session
-            .processes
-            .iter()
-            .all(|process| process_alive(process.pid))
+    !session.processes.is_empty() && session.processes.iter().all(CaptureProcess::alive)
 }

@@ -1,30 +1,39 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use qol_audio::capture::{Capture, CaptureStop, Pcm16Format};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::mixer::{self, Clock};
+use super::peer;
 use super::plan::{AudioSource, CHANNELS, SAMPLE_RATE};
 
 const TICK: Duration = Duration::from_millis(10);
 const READ_BUFFER_BYTES: usize = 8 * 1024;
 const MAX_BACKLOG: Duration = Duration::from_millis(250);
+const ADMIT_TIMEOUT: Duration = Duration::from_secs(5);
+const ADMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const NO_READER: u32 = 0;
 
 type Track = Arc<Mutex<VecDeque<i16>>>;
 
 pub(super) struct AudioFeed {
     url: String,
     stop: Arc<AtomicBool>,
+    reader: Arc<AtomicU32>,
     captures: Vec<CaptureStop>,
 }
 
 impl AudioFeed {
     pub(super) fn url(&self) -> &str {
         &self.url
+    }
+
+    pub(super) fn admit(&self, pid: u32) {
+        self.reader.store(pid, Ordering::Release);
     }
 
     pub(super) fn stop(&self) {
@@ -75,11 +84,13 @@ pub(super) fn start(sources: &[AudioSource]) -> Result<Option<AudioFeed>> {
         .into_iter()
         .map(spawn_reader)
         .collect::<Result<Vec<_>>>()?;
+    let reader = Arc::new(AtomicU32::new(NO_READER));
     let mixer_stop = Arc::clone(&stop);
+    let mixer_reader = Arc::clone(&reader);
     std::thread::Builder::new()
         .name("qol-shot-audio-mixer".to_string())
         .spawn(move || {
-            if let Err(error) = serve(&listener, &tracks, &mixer_stop) {
+            if let Err(error) = serve(&listener, &tracks, &mixer_stop, &mixer_reader) {
                 log::warn!("recording audio feed ended: {error:#}");
             }
         })
@@ -87,6 +98,7 @@ pub(super) fn start(sources: &[AudioSource]) -> Result<Option<AudioFeed>> {
     Ok(Some(AudioFeed {
         url,
         stop,
+        reader,
         captures: stoppers,
     }))
 }
@@ -142,10 +154,13 @@ fn spawn_reader(mut capture: Capture) -> Result<Track> {
     Ok(track)
 }
 
-fn serve(listener: &TcpListener, tracks: &[Track], stop: &AtomicBool) -> Result<()> {
-    let (mut stream, _) = listener
-        .accept()
-        .context("ffmpeg did not connect to the audio feed")?;
+fn serve(
+    listener: &TcpListener,
+    tracks: &[Track],
+    stop: &AtomicBool,
+    reader: &AtomicU32,
+) -> Result<()> {
+    let mut stream = accept_reader(listener, stop, reader)?;
     let _ = stream.set_nodelay(true);
     for track in tracks {
         lock(track).clear();
@@ -158,6 +173,50 @@ fn serve(listener: &TcpListener, tracks: &[Track], stop: &AtomicBool) -> Result<
         write_tick(&mut stream, tracks, samples)?;
     }
     Ok(())
+}
+
+fn accept_reader(
+    listener: &TcpListener,
+    stop: &AtomicBool,
+    reader: &AtomicU32,
+) -> Result<TcpStream> {
+    loop {
+        let (stream, peer) = listener
+            .accept()
+            .context("ffmpeg did not connect to the audio feed")?;
+        let owner = stream
+            .local_addr()
+            .ok()
+            .and_then(|local| peer::peer_process(peer, local));
+        let expected = admitted_reader(reader, stop);
+        if admitted(owner, expected) {
+            qol_runtime::probe!("SHOT_RECORD_AUDIO", "feed=connected pid={expected}");
+            return Ok(stream);
+        }
+        log::warn!("refused an audio feed connection from {peer} owned by {owner:?}");
+        qol_runtime::probe!(
+            "SHOT_RECORD_AUDIO",
+            "feed=refused owner={owner:?} expected={expected}"
+        );
+        if stop.load(Ordering::Acquire) {
+            return Err(anyhow!("recording stopped before ffmpeg connected"));
+        }
+    }
+}
+
+fn admitted_reader(reader: &AtomicU32, stop: &AtomicBool) -> u32 {
+    let deadline = Instant::now() + ADMIT_TIMEOUT;
+    loop {
+        let pid = reader.load(Ordering::Acquire);
+        if pid != NO_READER || stop.load(Ordering::Acquire) || Instant::now() >= deadline {
+            return pid;
+        }
+        std::thread::sleep(ADMIT_POLL_INTERVAL);
+    }
+}
+
+fn admitted(owner: Option<u32>, reader: u32) -> bool {
+    reader != NO_READER && owner == Some(reader)
 }
 
 fn write_tick(stream: &mut TcpStream, tracks: &[Track], samples: usize) -> Result<()> {
@@ -180,4 +239,35 @@ fn lock(track: &Track) -> std::sync::MutexGuard<'_, VecDeque<i16>> {
 fn backlog_samples() -> usize {
     let frames = u128::from(SAMPLE_RATE) * MAX_BACKLOG.as_millis() / 1_000;
     usize::try_from(frames).unwrap_or(usize::MAX) * usize::from(CHANNELS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{admitted, admitted_reader, NO_READER};
+    use std::sync::atomic::{AtomicBool, AtomicU32};
+
+    #[test]
+    fn only_the_admitted_ffmpeg_process_may_read_the_audio_feed() {
+        let cases = [
+            (Some(40), 40, true),
+            (Some(41), 40, false),
+            (None, 40, false),
+            (Some(40), NO_READER, false),
+            (Some(NO_READER), NO_READER, false),
+            (None, NO_READER, false),
+        ];
+        for (owner, reader, expected) in cases {
+            assert_eq!(admitted(owner, reader), expected, "{owner:?} {reader}");
+        }
+    }
+
+    #[test]
+    fn the_admitted_reader_is_read_without_waiting_once_known_or_stopped() {
+        let cases = [(40, false, 40), (NO_READER, true, NO_READER)];
+        for (pid, stopped, expected) in cases {
+            let reader = AtomicU32::new(pid);
+            let stop = AtomicBool::new(stopped);
+            assert_eq!(admitted_reader(&reader, &stop), expected, "{pid} {stopped}");
+        }
+    }
 }

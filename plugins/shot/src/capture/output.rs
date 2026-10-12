@@ -4,8 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn recording_output_file_path(format: &str) -> Result<PathBuf> {
-    let mut videos = dirs::home_dir().context("home directory is not known")?;
-    videos.push("Videos");
+    let mut videos = qol_apps::known_folder::videos_dir().context("Videos folder is not known")?;
     fs::create_dir_all(&videos).context("failed to create output directory")?;
     let timestamp = Local::now().format("%F_%H-%M-%S").to_string();
     videos.push(format!("recording-{}.{}", timestamp, format));
@@ -37,8 +36,7 @@ pub(crate) fn latest_screenshot() -> Result<PathBuf> {
 }
 
 fn screenshot_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("home directory is not known")?;
-    Ok(home.join("Pictures"))
+    qol_apps::known_folder::pictures_dir().context("Pictures folder is not known")
 }
 
 fn is_screenshot_file(path: &Path) -> bool {

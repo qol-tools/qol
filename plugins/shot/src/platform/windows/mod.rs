@@ -11,7 +11,7 @@ pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use recording::{
     capture_log_path, recording_format, recording_started, recording_stopped, start_capture,
-    stop_capture,
+    stop_capture, watch_daemon_stop,
 };
 pub use selector::{select_region, select_region_in_app};
 pub use system::{

@@ -17,7 +17,7 @@ use super::swift::{
 };
 use super::system::{
     capture_work_dir, ensure_capture_work_dir, move_file, open_path, output_format_label,
-    path_extension_is, paths_match, signal_process, videos_dir, wait_for_process_exit,
+    path_extension_is, paths_match, signal_process, wait_for_process_exit,
 };
 use qol_plugin_daemon::notification::send_notification;
 
@@ -157,7 +157,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Sa
     let videos_dir = config
         .capture
         .open_folder_after_save
-        .then(videos_dir)
+        .then(qol_apps::known_folder::videos_dir)
         .flatten();
     if let Some(videos_dir) = videos_dir {
         open_path(&videos_dir);
@@ -334,7 +334,7 @@ fn start_multi_display_capture(
             }
         };
 
-        processes.push(CaptureProcess { pid });
+        processes.push(CaptureProcess::spawned(pid));
         capture_segments.push(CaptureSegment {
             file: segment_file,
             rect: segment.rect,

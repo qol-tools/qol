@@ -6,6 +6,8 @@ pub fn directory_is_read_only(metadata: &std::fs::Metadata) -> bool {
     metadata.permissions().readonly()
 }
 
+pub fn watch_daemon_stop(_on_stop: fn()) {}
+
 pub(super) fn process_alive(pid: u32) -> bool {
     if matches!(qol_process::try_wait_pid(pid), Ok(Some(_))) {
         return false;

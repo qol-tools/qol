@@ -344,11 +344,6 @@ pub(super) fn open_path(path: &Path) -> bool {
     qol_apps::desktop_integration::open_with_default_app(path).is_ok()
 }
 
-pub(super) fn videos_dir() -> Option<PathBuf> {
-    let home = env::var_os("HOME")?;
-    Some(PathBuf::from(home).join("Videos"))
-}
-
 pub(super) fn capture_work_dir() -> PathBuf {
     env::temp_dir().join("qol-shot")
 }
