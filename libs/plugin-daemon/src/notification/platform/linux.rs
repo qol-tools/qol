@@ -40,6 +40,18 @@ impl NotificationPlatform for Platform {
         });
         receiver.recv().ok().flatten()
     }
+
+    fn release_toast_identity(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn install_toast_identity(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn uninstall_toast_identity(&self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub struct NotificationInhibit {

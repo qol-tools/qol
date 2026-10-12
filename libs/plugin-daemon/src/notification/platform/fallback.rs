@@ -16,6 +16,18 @@ impl NotificationPlatform for Platform {
     fn acquire_inhibit(&self) -> Option<NotificationInhibit> {
         None
     }
+
+    fn release_toast_identity(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn install_toast_identity(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn uninstall_toast_identity(&self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub struct NotificationInhibit;

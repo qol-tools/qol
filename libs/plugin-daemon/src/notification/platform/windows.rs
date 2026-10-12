@@ -1,7 +1,7 @@
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::path::PathBuf;
 
-use qol_platform::native::registry::{self, Hive};
+use qol_platform::native::registry::{self, Hive, Key, View};
 use windows::core::HSTRING;
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
@@ -9,6 +9,7 @@ use windows_sys::Win32::UI::Shell::{
     SHQueryUserNotificationState, QUERY_USER_NOTIFICATION_STATE, QUNS_ACCEPTS_NOTIFICATIONS,
 };
 
+use super::toast_identity::{self, IdentityKey, RECORD_FILE};
 use super::NotificationPlatform;
 
 const TOAST_APP_ID: &str = "QolTools.QolTray";
@@ -32,7 +33,7 @@ pub(super) struct Platform;
 
 impl NotificationPlatform for Platform {
     fn send_notification(&self, title: &str, message: &str) -> bool {
-        if !app_id_registered() {
+        if !register_app_id() {
             log::warn!("[notifications] could not register the {TOAST_APP_ID} toast identity");
         }
         match show_toast(title, message) {
@@ -53,23 +54,57 @@ impl NotificationPlatform for Platform {
     fn acquire_inhibit(&self) -> Option<NotificationInhibit> {
         None
     }
+
+    fn release_toast_identity(&self) -> std::io::Result<()> {
+        toast_identity::release(&RegistryIdentity, &identity_record()?)
+    }
+
+    fn install_toast_identity(&self) -> std::io::Result<()> {
+        toast_identity::install(&RegistryIdentity, &identity_record()?)
+    }
+
+    fn uninstall_toast_identity(&self) -> std::io::Result<()> {
+        toast_identity::uninstall(&RegistryIdentity, &identity_record()?)
+    }
 }
 
 pub struct NotificationInhibit;
 
-fn app_id_registered() -> bool {
-    static REGISTERED: OnceLock<bool> = OnceLock::new();
-    *REGISTERED.get_or_init(register_app_id)
+fn register_app_id() -> bool {
+    identity_record()
+        .and_then(|record| toast_identity::claim(&RegistryIdentity, &record))
+        .is_ok()
 }
 
-fn register_app_id() -> bool {
-    registry::write_string(
-        Hive::CurrentUser,
-        &format!("{APP_ID_REGISTRY_KEY}{TOAST_APP_ID}"),
-        "DisplayName",
-        qol_conventions::TRAY_DISPLAY_NAME,
-    )
-    .is_ok()
+struct RegistryIdentity;
+
+impl IdentityKey for RegistryIdentity {
+    fn exists(&self) -> std::io::Result<bool> {
+        Ok(Key::open(Hive::CurrentUser, &app_id_key(), View::Default)?.is_some())
+    }
+
+    fn create(&self) -> std::io::Result<()> {
+        registry::write_string(
+            Hive::CurrentUser,
+            &app_id_key(),
+            "DisplayName",
+            qol_conventions::TRAY_DISPLAY_NAME,
+        )
+    }
+
+    fn delete(&self) -> std::io::Result<()> {
+        registry::delete_key(Hive::CurrentUser, &app_id_key())
+    }
+}
+
+fn app_id_key() -> String {
+    format!("{APP_ID_REGISTRY_KEY}{TOAST_APP_ID}")
+}
+
+fn identity_record() -> std::io::Result<PathBuf> {
+    qol_config::data_dir()
+        .map(|dir| dir.join(RECORD_FILE))
+        .ok_or_else(|| std::io::Error::other("no data directory to record the toast identity in"))
 }
 
 fn show_toast(title: &str, message: &str) -> windows::core::Result<()> {

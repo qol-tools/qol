@@ -4,6 +4,8 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "windows", test))]
+mod toast_identity;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -30,6 +32,9 @@ pub(super) trait NotificationPlatform {
     fn os_do_not_disturb(&self) -> Option<bool>;
     fn set_os_banners(&self, showing: bool);
     fn acquire_inhibit(&self) -> Option<NotificationInhibit>;
+    fn release_toast_identity(&self) -> std::io::Result<()>;
+    fn install_toast_identity(&self) -> std::io::Result<()>;
+    fn uninstall_toast_identity(&self) -> std::io::Result<()>;
 }
 
 pub fn send_notification(title: &str, message: &str) -> bool {
@@ -46,4 +51,16 @@ pub fn set_os_banners(showing: bool) {
 
 pub fn acquire_inhibit() -> Option<NotificationInhibit> {
     imp::Platform.acquire_inhibit()
+}
+
+pub fn release_toast_identity() -> std::io::Result<()> {
+    imp::Platform.release_toast_identity()
+}
+
+pub fn install_toast_identity() -> std::io::Result<()> {
+    imp::Platform.install_toast_identity()
+}
+
+pub fn uninstall_toast_identity() -> std::io::Result<()> {
+    imp::Platform.uninstall_toast_identity()
 }
