@@ -1,4 +1,5 @@
 use std::mem::{offset_of, size_of, size_of_val, zeroed};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,7 @@ use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetHidGuid, HidD_GetPreparsedData,
     HidD_GetProductString, HidP_GetCaps, HIDD_ATTRIBUTES, HIDP_CAPS, HIDP_STATUS_SUCCESS,
 };
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{ERROR_SUCCESS, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
@@ -278,7 +279,7 @@ impl Drop for DeviceInfoSet {
     }
 }
 
-struct DeviceHandle(HANDLE);
+struct DeviceHandle(OwnedHandle);
 
 impl DeviceHandle {
     fn open(path: &str) -> Option<Self> {
@@ -294,12 +295,13 @@ impl DeviceHandle {
                 null_mut(),
             )
         };
-        (handle != INVALID_HANDLE_VALUE && !handle.is_null()).then_some(Self(handle))
+        (handle != INVALID_HANDLE_VALUE && !handle.is_null())
+            .then(|| Self(unsafe { OwnedHandle::from_raw_handle(handle) }))
     }
 
     fn top_level_usage(&self) -> Option<(u16, u16)> {
         let mut preparsed = 0;
-        if unsafe { HidD_GetPreparsedData(self.0, &mut preparsed) } == 0 {
+        if unsafe { HidD_GetPreparsedData(self.0.as_raw_handle(), &mut preparsed) } == 0 {
             return None;
         }
         let mut caps: HIDP_CAPS = unsafe { zeroed() };
@@ -311,14 +313,15 @@ impl DeviceHandle {
     fn attributes(&self) -> Option<HIDD_ATTRIBUTES> {
         let mut attributes: HIDD_ATTRIBUTES = unsafe { zeroed() };
         attributes.Size = size_of::<HIDD_ATTRIBUTES>() as u32;
-        (unsafe { HidD_GetAttributes(self.0, &mut attributes) } != 0).then_some(attributes)
+        (unsafe { HidD_GetAttributes(self.0.as_raw_handle(), &mut attributes) } != 0)
+            .then_some(attributes)
     }
 
     fn product_string(&self) -> Option<String> {
         let mut buffer = [0u16; PRODUCT_STRING_UNITS];
         let read = unsafe {
             HidD_GetProductString(
-                self.0,
+                self.0.as_raw_handle(),
                 buffer.as_mut_ptr().cast(),
                 size_of_val(&buffer) as u32,
             )
@@ -328,12 +331,6 @@ impl DeviceHandle {
         }
         let name = from_wide(&buffer).trim().to_string();
         (!name.is_empty()).then_some(name)
-    }
-}
-
-impl Drop for DeviceHandle {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
     }
 }
 
