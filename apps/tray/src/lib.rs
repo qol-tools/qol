@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod settings_surface;
 pub mod shortcuts;
 pub(crate) mod signal;
+pub mod single_instance;
 pub mod surfaces;
 pub mod sync;
 #[cfg(test)]
