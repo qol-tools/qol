@@ -273,9 +273,30 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
-    #[cfg(windows)]
-    use std::os::windows::fs::symlink_dir as symlink;
     use std::sync::Arc;
+
+    #[cfg(windows)]
+    fn symlink(target: String, link: std::path::PathBuf) -> std::io::Result<()> {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                let parent = link.parent().expect("a link lives in a directory");
+                let junction = std::path::absolute(parent.join(&target))?;
+                let status = std::process::Command::new("cmd")
+                    .args(["/d", "/c", "mklink", "/j"])
+                    .arg(&link)
+                    .arg(&junction)
+                    .stdout(std::process::Stdio::null())
+                    .status()?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+            result => result,
+        }
+    }
 
     fn handle(id: &str, connector: &str) -> DisplayHandle {
         DisplayHandle::new(id.into(), connector.into(), None, false)

@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::ffi::c_void;
 use std::fmt;
 use std::sync::Mutex;
@@ -7,9 +6,8 @@ use std::time::Duration;
 
 use qol_windowing::DisplayEnumerator;
 
-use crate::monitor::backends::i2c_ddc::{
-    parse_get_vcp_reply, percent_from_raw, xor_checksum, I2cError, REPLY_LEN,
-};
+use crate::monitor::backends::ddc_brightness::{percent_from_raw, DdcWrites};
+use crate::monitor::backends::i2c_ddc::{parse_get_vcp_reply, xor_checksum, I2cError, REPLY_LEN};
 use crate::monitor::policy::DdcStatus;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
@@ -234,7 +232,7 @@ pub struct MacAvServiceBackend<T: AvTransport> {
     read_delay: Duration,
     retry_delay: Duration,
     identity_for: IdentityResolver,
-    dropped_writes: Mutex<HashSet<String>>,
+    writes: DdcWrites,
 }
 
 impl<T: AvTransport> MacAvServiceBackend<T> {
@@ -256,12 +254,8 @@ impl<T: AvTransport> MacAvServiceBackend<T> {
             read_delay,
             retry_delay,
             identity_for: Box::new(|_| Ok(None)),
-            dropped_writes: Mutex::new(HashSet::new()),
+            writes: DdcWrites::default(),
         }
-    }
-
-    fn writes_dropped(&self, connector: &str) -> bool {
-        self.dropped_writes.lock().unwrap().contains(connector)
     }
 
     fn service_for<'a>(
@@ -300,63 +294,37 @@ impl<T: AvTransport> MacAvServiceBackend<T> {
         parse_get_vcp_reply(FEATURE_BRIGHTNESS, &frame).map_err(AvError::from)
     }
 
-    fn read_back_matches(
-        &self,
-        service: &AvService,
-        expected_percent: u8,
-    ) -> Result<bool, AvError> {
-        let (current, max) = self.read_current_max(service)?;
-        Ok(percent_from_raw(current, max).map_err(AvError::from)? == expected_percent)
-    }
-
     fn get_brightness_inner(&self, handle: &DisplayHandle) -> Result<u8, AvError> {
         let services = self.transport.list_external_services()?;
         let service = self.service_for(handle, &services)?;
         let (current, max) = self.read_current_max(&service.service)?;
-        percent_from_raw(current, max).map_err(AvError::from)
+        percent_from_raw(u32::from(current), u32::from(max)).map_err(AvError::from)
     }
 
     fn set_brightness_inner(&self, handle: &DisplayHandle, value: u8) -> Result<(), AvError> {
         let connector = handle.connector();
-        if self.writes_dropped(connector) {
-            return Err(AvError::Unsupported {
-                detail: format!(
-                    "DDC/CI writes were dropped on {connector}; set the display policy to gamma \
-                     to keep brightness control"
-                ),
-            });
-        }
+        self.writes.refuse_dropped(connector)?;
         let services = self.transport.list_external_services()?;
         let service = self.service_for(handle, &services)?;
         if service.transport_class == TransportClass::ConverterRouted {
             return Err(AvError::ConverterRoutedWritesDisabled);
         }
         let (_, max) = self.read_current_max(&service.service)?;
-        if max == 0 {
-            return Err(AvError::Protocol {
-                detail: format!("{connector} reports a maximum brightness of 0"),
-            });
-        }
-        let target = (u32::from(value) * u32::from(max) / 100) as u16;
-        let mut verified = false;
-        for attempt in 0..WRITE_ATTEMPTS {
-            let payload = set_vcp_payload(FEATURE_BRIGHTNESS, target);
-            self.write_payload(&service.service, &payload)?;
-            if self.read_back_matches(&service.service, value)? {
-                verified = true;
-                break;
-            }
-            if attempt + 1 < WRITE_ATTEMPTS {
-                thread::sleep(self.retry_delay);
-            }
-        }
-        if !verified {
-            self.dropped_writes
-                .lock()
-                .unwrap()
-                .insert(connector.to_string());
-        }
-        Ok(())
+        self.writes.write_verified(
+            connector,
+            value,
+            u32::from(max),
+            WRITE_ATTEMPTS,
+            |attempt, target| {
+                if attempt > 0 {
+                    thread::sleep(self.retry_delay);
+                }
+                let payload = set_vcp_payload(FEATURE_BRIGHTNESS, target as u16);
+                self.write_payload(&service.service, &payload)?;
+                let (current, _) = self.read_current_max(&service.service)?;
+                Ok(u32::from(current))
+            },
+        )
     }
 }
 
@@ -367,7 +335,7 @@ impl<T: AvTransport> DisplayControl for MacAvServiceBackend<T> {
 
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
         let connector = handle.connector();
-        if self.writes_dropped(connector) {
+        if self.writes.dropped(connector) {
             return Ok(DisplayCapabilities {
                 brightness_ddc: false,
                 ..DisplayCapabilities::none()
@@ -398,7 +366,7 @@ impl<T: AvTransport> DisplayControl for MacAvServiceBackend<T> {
 
     fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
         let value = self.get_brightness_inner(handle)?;
-        let source = if self.writes_dropped(handle.connector()) {
+        let source = if self.writes.dropped(handle.connector()) {
             BrightnessSource::Gamma
         } else {
             BrightnessSource::Ddc
@@ -438,7 +406,7 @@ impl<T: AvTransport> DisplayControl for MacAvServiceBackend<T> {
 
 impl<T: AvTransport> DdcStatus for MacAvServiceBackend<T> {
     fn writes_dropped(&self, connector: &str) -> bool {
-        self.writes_dropped(connector)
+        self.writes.dropped(connector)
     }
 }
 

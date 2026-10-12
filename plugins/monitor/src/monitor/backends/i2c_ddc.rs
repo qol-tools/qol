@@ -1,15 +1,14 @@
-use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use qol_windowing::DisplayEnumerator;
 
 use crate::hotkeys::PLUGIN_ID;
+use crate::monitor::backends::ddc_brightness::{percent_from_raw, DdcWrites};
 use crate::monitor::policy::DdcStatus;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
@@ -27,7 +26,7 @@ const LENGTH_SET: u8 = 0x84;
 const LENGTH_REPLY: u8 = 0x88;
 const REPLY_VIRTUAL_HOST: u8 = 0x50;
 pub(crate) const REPLY_LEN: usize = 11;
-pub(crate) const WRITE_RETRIES: usize = 1;
+const WRITE_ATTEMPTS: usize = 2;
 pub(crate) const READ_ATTEMPTS: usize = 20;
 pub(crate) const SETTLE_DELAY: Duration = Duration::from_millis(50);
 pub(crate) const READ_POLL_DELAY: Duration = Duration::from_millis(10);
@@ -87,7 +86,7 @@ pub struct I2cDdcBackend<T: I2cTransport> {
     settle: Duration,
     poll_delay: Duration,
     response_delay: Duration,
-    dropped_writes: Mutex<HashSet<String>>,
+    writes: DdcWrites,
 }
 
 impl<T: I2cTransport> I2cDdcBackend<T> {
@@ -114,12 +113,8 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
             settle,
             poll_delay,
             response_delay,
-            dropped_writes: Mutex::new(HashSet::new()),
+            writes: DdcWrites::default(),
         }
-    }
-
-    fn writes_dropped(&self, connector: &str) -> bool {
-        self.dropped_writes.lock().unwrap().contains(connector)
     }
 
     fn resolve_i2c_dev(&self, connector: &str) -> Result<PathBuf, I2cError> {
@@ -193,49 +188,27 @@ impl<T: I2cTransport> I2cDdcBackend<T> {
         let dev = self.resolve_i2c_dev(handle.connector())?;
         let mut bus = self.transport.open(&dev)?;
         let (current, max) = self.read_current_max(&mut bus)?;
-        percent_from_raw(current, max)
+        percent_from_raw(u32::from(current), u32::from(max))
     }
 
     fn set_brightness_inner(&self, handle: &DisplayHandle, value: u8) -> Result<(), I2cError> {
         let connector = handle.connector();
-        if self.writes_dropped(connector) {
-            return Err(I2cError::UnsupportedTransport {
-                detail: format!(
-                    "DDC/CI writes were dropped on {connector}; set the display policy to gamma \
-                     to keep brightness control"
-                ),
-            });
-        }
+        self.writes.refuse_dropped(connector)?;
         let dev = self.resolve_i2c_dev(connector)?;
         let mut bus = self.transport.open(&dev)?;
         let (_, max) = self.read_current_max(&mut bus)?;
-        if max == 0 {
-            return Err(I2cError::Protocol {
-                detail: format!("{connector} reports a maximum brightness of 0"),
-            });
-        }
-        let target = (u32::from(value) * u32::from(max) / 100) as u16;
-        let mut verified = false;
-        for _ in 0..=WRITE_RETRIES {
-            write_set_vcp(&mut bus, target)?;
-            thread::sleep(self.settle);
-            if self.read_back_matches(&mut bus, value)? {
-                verified = true;
-                break;
-            }
-        }
-        if !verified {
-            self.dropped_writes
-                .lock()
-                .unwrap()
-                .insert(connector.to_string());
-        }
-        Ok(())
-    }
-
-    fn read_back_matches(&self, bus: &mut T::Bus, expected_percent: u8) -> Result<bool, I2cError> {
-        let (current, max) = self.read_current_max(bus)?;
-        Ok(percent_from_raw(current, max)? == expected_percent)
+        self.writes.write_verified(
+            connector,
+            value,
+            u32::from(max),
+            WRITE_ATTEMPTS,
+            |_, target| {
+                write_set_vcp(&mut bus, target as u16)?;
+                thread::sleep(self.settle);
+                let (current, _) = self.read_current_max(&mut bus)?;
+                Ok(u32::from(current))
+            },
+        )
     }
 
     fn read_current_max(&self, bus: &mut T::Bus) -> Result<(u16, u16), I2cError> {
@@ -280,7 +253,7 @@ impl<T: I2cTransport> DisplayControl for I2cDdcBackend<T> {
 
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
         let connector = handle.connector();
-        if self.writes_dropped(connector) {
+        if self.writes.dropped(connector) {
             return Ok(DisplayCapabilities {
                 brightness_ddc: false,
                 ..DisplayCapabilities::none()
@@ -302,7 +275,7 @@ impl<T: I2cTransport> DisplayControl for I2cDdcBackend<T> {
 
     fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
         let value = self.get_brightness_inner(handle)?;
-        let source = if self.writes_dropped(handle.connector()) {
+        let source = if self.writes.dropped(handle.connector()) {
             BrightnessSource::Gamma
         } else {
             BrightnessSource::Ddc
@@ -425,19 +398,9 @@ pub(crate) fn parse_get_vcp_reply(
     ))
 }
 
-pub(crate) fn percent_from_raw(current: u16, max: u16) -> Result<u8, I2cError> {
-    if max == 0 {
-        return Err(I2cError::Protocol {
-            detail: "the display reports a maximum brightness of 0".into(),
-        });
-    }
-    let percent = u32::from(current) * 100 / u32::from(max);
-    Ok(percent.min(100) as u8)
-}
-
 impl<T: I2cTransport> DdcStatus for I2cDdcBackend<T> {
     fn writes_dropped(&self, connector: &str) -> bool {
-        self.writes_dropped(connector)
+        self.writes.dropped(connector)
     }
 }
 
@@ -446,11 +409,32 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
-    #[cfg(windows)]
-    use std::os::windows::fs::symlink_dir as symlink;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use crate::monitor::{BrightnessSource, DisplayCapabilities};
+
+    #[cfg(windows)]
+    fn symlink(target: String, link: std::path::PathBuf) -> std::io::Result<()> {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                let parent = link.parent().expect("a link lives in a directory");
+                let junction = std::path::absolute(parent.join(&target))?;
+                let status = std::process::Command::new("cmd")
+                    .args(["/d", "/c", "mklink", "/j"])
+                    .arg(&link)
+                    .arg(&junction)
+                    .stdout(std::process::Stdio::null())
+                    .status()?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+            result => result,
+        }
+    }
 
     #[derive(Clone)]
     enum FakeFailure {
@@ -705,23 +689,6 @@ mod tests {
         unsupported_feature[10] = xor_checksum(REPLY_VIRTUAL_HOST, &unsupported_feature[..10]);
         assert!(matches!(
             parse_get_vcp_reply(FEATURE_BRIGHTNESS, &unsupported_feature),
-            Err(I2cError::Protocol { .. })
-        ));
-    }
-
-    #[test]
-    fn percent_from_raw_converts_within_the_reported_range() {
-        assert_eq!(percent_from_raw(0, 1000).unwrap(), 0);
-        assert_eq!(percent_from_raw(250, 1000).unwrap(), 25);
-        assert_eq!(percent_from_raw(999, 1000).unwrap(), 99);
-        assert_eq!(percent_from_raw(1000, 1000).unwrap(), 100);
-        assert_eq!(percent_from_raw(1000, 500).unwrap(), 100);
-    }
-
-    #[test]
-    fn percent_from_raw_rejects_a_zero_maximum() {
-        assert!(matches!(
-            percent_from_raw(0, 0),
             Err(I2cError::Protocol { .. })
         ));
     }

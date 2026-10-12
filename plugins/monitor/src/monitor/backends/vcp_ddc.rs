@@ -1,10 +1,9 @@
-use std::collections::HashSet;
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use qol_windowing::DisplayEnumerator;
 
+use crate::monitor::backends::ddc_brightness::{percent_from_raw, DdcWrites};
 use crate::monitor::backends::i2c_ddc::I2cError;
 use crate::monitor::policy::DdcStatus;
 use crate::monitor::{
@@ -31,7 +30,7 @@ pub struct VcpDdcBackend<T: VcpTransport, E: DisplayEnumerator> {
     transport: T,
     displays: E,
     settle: Duration,
-    dropped_writes: Mutex<HashSet<String>>,
+    writes: DdcWrites,
 }
 
 impl<T: VcpTransport, E: DisplayEnumerator> VcpDdcBackend<T, E> {
@@ -44,70 +43,34 @@ impl<T: VcpTransport, E: DisplayEnumerator> VcpDdcBackend<T, E> {
             transport,
             displays,
             settle,
-            dropped_writes: Mutex::new(HashSet::new()),
+            writes: DdcWrites::default(),
         }
     }
 
-    fn writes_dropped(&self, connector: &str) -> bool {
-        self.dropped_writes.lock().unwrap().contains(connector)
-    }
-
     fn get_brightness_inner(&self, handle: &DisplayHandle) -> Result<u8, I2cError> {
-        percent_from_reading(
-            self.transport
-                .read(handle.connector(), FEATURE_BRIGHTNESS)?,
-        )
+        let reading = self
+            .transport
+            .read(handle.connector(), FEATURE_BRIGHTNESS)?;
+        percent_from_raw(reading.current, reading.max)
     }
 
     fn set_brightness_inner(&self, handle: &DisplayHandle, value: u8) -> Result<(), I2cError> {
         let connector = handle.connector();
-        if self.writes_dropped(connector) {
-            return Err(I2cError::UnsupportedTransport {
-                detail: format!(
-                    "DDC/CI writes were dropped on {connector}; set the display policy to gamma \
-                     to keep brightness control"
-                ),
-            });
-        }
+        self.writes.refuse_dropped(connector)?;
         let reading = self.transport.read(connector, FEATURE_BRIGHTNESS)?;
-        if reading.max == 0 {
-            return Err(I2cError::Protocol {
-                detail: format!("{connector} reports a maximum brightness of 0"),
-            });
-        }
-        let target = raw_from_percent(value, reading.max);
-        let mut verified = false;
-        for _ in 0..WRITE_ATTEMPTS {
-            self.transport
-                .write(connector, FEATURE_BRIGHTNESS, target)?;
-            thread::sleep(self.settle);
-            if self.transport.read(connector, FEATURE_BRIGHTNESS)?.current == target {
-                verified = true;
-                break;
-            }
-        }
-        if !verified {
-            self.dropped_writes
-                .lock()
-                .unwrap()
-                .insert(connector.to_string());
-        }
-        Ok(())
+        self.writes.write_verified(
+            connector,
+            value,
+            reading.max,
+            WRITE_ATTEMPTS,
+            |_, target| {
+                self.transport
+                    .write(connector, FEATURE_BRIGHTNESS, target)?;
+                thread::sleep(self.settle);
+                Ok(self.transport.read(connector, FEATURE_BRIGHTNESS)?.current)
+            },
+        )
     }
-}
-
-pub fn percent_from_reading(reading: VcpReading) -> Result<u8, I2cError> {
-    if reading.max == 0 {
-        return Err(I2cError::Protocol {
-            detail: "the display reports a maximum brightness of 0".into(),
-        });
-    }
-    let percent = u64::from(reading.current) * 100 / u64::from(reading.max);
-    Ok(percent.min(100) as u8)
-}
-
-pub fn raw_from_percent(value: u8, max: u32) -> u32 {
-    (u64::from(value.min(100)) * u64::from(max) / 100) as u32
 }
 
 impl<T: VcpTransport, E: DisplayEnumerator + Send + Sync> DisplayControl for VcpDdcBackend<T, E> {
@@ -116,7 +79,7 @@ impl<T: VcpTransport, E: DisplayEnumerator + Send + Sync> DisplayControl for Vcp
     }
 
     fn probe(&self, handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
-        if self.writes_dropped(handle.connector()) {
+        if self.writes.dropped(handle.connector()) {
             return Ok(DisplayCapabilities::none());
         }
         Ok(DisplayCapabilities {
@@ -127,7 +90,7 @@ impl<T: VcpTransport, E: DisplayEnumerator + Send + Sync> DisplayControl for Vcp
 
     fn get_brightness(&self, handle: &DisplayHandle) -> Result<BrightnessState, MonitorError> {
         let value = self.get_brightness_inner(handle)?;
-        let source = if self.writes_dropped(handle.connector()) {
+        let source = if self.writes.dropped(handle.connector()) {
             BrightnessSource::Gamma
         } else {
             BrightnessSource::Ddc
@@ -167,14 +130,14 @@ impl<T: VcpTransport, E: DisplayEnumerator + Send + Sync> DisplayControl for Vcp
 
 impl<T: VcpTransport, E: DisplayEnumerator> DdcStatus for VcpDdcBackend<T, E> {
     fn writes_dropped(&self, connector: &str) -> bool {
-        self.writes_dropped(connector)
+        self.writes.dropped(connector)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use qol_windowing::display::{DisplayError, DisplaySnapshot};
 
@@ -236,45 +199,6 @@ mod tests {
         let transport = FakeTransport(Arc::new(Mutex::new(monitor)));
         let backend = VcpDdcBackend::with_settle(transport.clone(), FakeDisplays, Duration::ZERO);
         (backend, transport)
-    }
-
-    #[test]
-    fn percent_from_reading_scales_and_clamps() {
-        let cases = [
-            (0, 100, Some(0)),
-            (50, 100, Some(50)),
-            (100, 100, Some(100)),
-            (127, 255, Some(49)),
-            (255, 255, Some(100)),
-            (500, 1000, Some(50)),
-            (120, 100, Some(100)),
-            (10, 0, None),
-        ];
-        for (current, max, expected) in cases {
-            let actual = percent_from_reading(VcpReading { current, max }).ok();
-            assert_eq!(actual, expected, "current {current} max {max}");
-        }
-    }
-
-    #[test]
-    fn raw_from_percent_scales_into_the_monitor_range() {
-        let cases = [
-            (0, 100, 0),
-            (50, 100, 50),
-            (100, 100, 100),
-            (50, 255, 127),
-            (100, 255, 255),
-            (35, 1000, 350),
-            (150, 100, 100),
-            (70, u32::MAX, 3_006_477_106),
-        ];
-        for (value, max, expected) in cases {
-            assert_eq!(
-                raw_from_percent(value, max),
-                expected,
-                "value {value} max {max}"
-            );
-        }
     }
 
     #[test]

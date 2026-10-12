@@ -1,5 +1,6 @@
 pub mod avservice;
 pub mod cg_gamma;
+pub mod ddc_brightness;
 pub mod gdi_display;
 pub mod gdi_gamma;
 pub mod i2c_ddc;
