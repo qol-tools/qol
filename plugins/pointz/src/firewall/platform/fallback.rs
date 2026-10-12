@@ -21,6 +21,13 @@ pub(crate) fn allow() -> Result<String, String> {
     ))
 }
 
+pub(crate) fn remove() -> Result<String, String> {
+    Ok(format!(
+        "PointZ adds no {} firewall rule, so it removed nothing",
+        std::env::consts::OS
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use qol_headless::DoctorStatus;
@@ -34,5 +41,6 @@ mod tests {
         assert!(result.fix.is_none());
         assert_eq!(result.details.unwrap()["rule_changed"], false);
         assert!(allow().is_err());
+        assert!(remove().is_ok());
     }
 }

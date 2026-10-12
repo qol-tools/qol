@@ -20,6 +20,7 @@ args = ["--action", "settings"]
 [capabilities]
 gpui = true
 doctor = true
+release_host = true
 permissions = ["input-capture"]
 peer_trust = "pointz-v1"
 

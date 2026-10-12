@@ -27,6 +27,7 @@ trait Operations: Clone + Send + Sync + 'static {
     fn send_kill(&self) -> bool;
     fn open_settings(&self);
     fn allow_firewall(&self) -> Result<String, String>;
+    fn remove_firewall(&self) -> Result<String, String>;
 }
 
 #[derive(Clone, Copy)]
@@ -53,6 +54,10 @@ impl Operations for ProductionOperations {
     fn allow_firewall(&self) -> Result<String, String> {
         crate::firewall::allow()
     }
+
+    fn remove_firewall(&self) -> Result<String, String> {
+        crate::firewall::remove()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -77,6 +82,7 @@ where
         .default_command(["server"])
         .command(server_command(operations.clone(), Arc::clone(&args)))
         .command(firewall_command(operations.clone()))
+        .command(release_host_command(operations.clone()))
         .command(action_group(operations.clone(), Arc::clone(&args)))
         .command(legacy_command(
             "kill",
@@ -126,16 +132,33 @@ where
         .detail("Where PointZ does not manage the firewall, it says so and changes nothing.")
         .output("A confirmation on stdout, or the reason on stderr.")
         .exit_behavior("Exits non-zero if the rule could not be added.")
-        .run_result(move |_| {
-            Ok(match operations.allow_firewall() {
-                Ok(message) => CommandResult::success(format!("{message}\n")),
-                Err(error) => CommandResult::new(
-                    "",
-                    format!("[pointz] {error}\n"),
-                    qol_headless::EXIT_RUNTIME_ERROR,
-                ),
-            })
-        })
+        .run_result(move |_| Ok(firewall_result(operations.allow_firewall())))
+}
+
+fn release_host_command<O>(operations: O) -> Command
+where
+    O: Operations,
+{
+    Command::new("release-host")
+        .about("Undo the host changes PointZ made: the firewall rule it created.")
+        .usage(format!("{PLUGIN_ID} release-host"))
+        .detail("QoL Tray runs this when it is uninstalled.")
+        .detail("Asks for administrator approval, then deletes only the rule PointZ recorded.")
+        .detail("A same-named rule PointZ did not create is left alone.")
+        .output("A confirmation on stdout, or the reason on stderr.")
+        .exit_behavior("Exits non-zero if the rule could not be removed.")
+        .run_result(move |_| Ok(firewall_result(operations.remove_firewall())))
+}
+
+fn firewall_result(outcome: Result<String, String>) -> CommandResult {
+    match outcome {
+        Ok(message) => CommandResult::success(format!("{message}\n")),
+        Err(error) => CommandResult::new(
+            "",
+            format!("[pointz] {error}\n"),
+            qol_headless::EXIT_RUNTIME_ERROR,
+        ),
+    }
 }
 
 fn action_group<O>(operations: O, args: Arc<Vec<String>>) -> Command
@@ -257,6 +280,7 @@ mod tests {
         input_initialized: AtomicUsize,
         udp_bound: AtomicUsize,
         firewall: AtomicUsize,
+        remove_firewall: AtomicUsize,
     }
 
     #[derive(Clone)]
@@ -302,6 +326,15 @@ mod tests {
                 Err("refused".into())
             }
         }
+
+        fn remove_firewall(&self) -> Result<String, String> {
+            self.calls.remove_firewall.fetch_add(1, Ordering::SeqCst);
+            if self.daemon_available.load(Ordering::SeqCst) {
+                Ok("removed".into())
+            } else {
+                Err("refused".into())
+            }
+        }
     }
 
     fn sentinel() -> (SentinelOperations, Arc<OperationCalls>, Arc<AtomicBool>) {
@@ -341,6 +374,7 @@ mod tests {
         );
         assert_eq!(calls.udp_bound.load(Ordering::SeqCst), 0, "{args:?}");
         assert_eq!(calls.firewall.load(Ordering::SeqCst), 0, "{args:?}");
+        assert_eq!(calls.remove_firewall.load(Ordering::SeqCst), 0, "{args:?}");
         assert!(
             calls
                 .daemon_actions
@@ -365,6 +399,26 @@ mod tests {
             assert_eq!(result.stdout, stdout, "succeeds={succeeds}");
             assert_eq!(result.stderr, stderr, "succeeds={succeeds}");
             assert_eq!(calls.firewall.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.server.load(Ordering::SeqCst), 0);
+            assert!(calls.daemon_actions.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn release_host_removes_only_the_firewall_rule_and_reports_failure() {
+        let cases = [
+            (true, EXIT_SUCCESS, "removed\n", ""),
+            (false, 1, "", "[pointz] refused\n"),
+        ];
+        for (succeeds, exit_code, stdout, stderr) in cases {
+            let (operations, calls, available) = sentinel();
+            available.store(succeeds, Ordering::SeqCst);
+            let result = execute(operations, &["release-host"]);
+            assert_eq!(result.exit_code, exit_code, "succeeds={succeeds}");
+            assert_eq!(result.stdout, stdout, "succeeds={succeeds}");
+            assert_eq!(result.stderr, stderr, "succeeds={succeeds}");
+            assert_eq!(calls.remove_firewall.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.firewall.load(Ordering::SeqCst), 0);
             assert_eq!(calls.server.load(Ordering::SeqCst), 0);
             assert!(calls.daemon_actions.lock().unwrap().is_empty());
         }

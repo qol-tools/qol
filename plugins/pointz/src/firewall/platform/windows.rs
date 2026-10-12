@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use qol_headless::DoctorCheckResult;
@@ -17,10 +18,9 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 use super::super::{details, ports_label};
+use super::rule::{self, AllowPlan, Ownership, RemovePlan, RULE_NAME};
 use crate::config::ServerConfig;
 
-const RULE_NAME: &str = "qol PointZ";
-const RULE_DESCRIPTION: &str = "Lets phones find and control this PC through qol PointZ";
 const ELEVATED_WAIT: Duration = Duration::from_secs(120);
 const PROFILES: [(NET_FW_PROFILE_TYPE2, &str); 3] = [
     (NET_FW_PROFILE2_DOMAIN, "domain"),
@@ -44,6 +44,7 @@ struct RuleFacts {
     udp: bool,
     profiles: i32,
     ports: String,
+    program: String,
 }
 
 pub(crate) fn check(id: &str) -> DoctorCheckResult {
@@ -93,11 +94,22 @@ pub(crate) fn allow() -> Result<String, String> {
     let _com = ComApartment::enter(Apartment::SingleThreaded);
     let policy = policy().map_err(|error| error.to_string())?;
     let active = unsafe { policy.CurrentProfileTypes() }.map_err(|error| error.to_string())?;
-    let exists = unsafe { policy.Rules() }
-        .and_then(|rules| unsafe { rules.Item(&BSTR::from(RULE_NAME)) })
-        .is_ok();
-    let arguments = netsh_arguments(exists, rule_profiles(active));
-    run_elevated("netsh.exe", &arguments)?;
+    let ownership = ownership()?;
+    let recorded = ownership.program()?;
+    let program = pointz_program()?;
+    let profiles = rule_profiles(active);
+    let existing = existing_program(&policy);
+    let arguments = match rule::allow_plan(recorded.as_deref(), existing.as_deref()) {
+        AllowPlan::Add => rule::add_arguments(&program, &profiles),
+        AllowPlan::Repair { recorded } => rule::repair_arguments(&recorded, &program, &profiles),
+        AllowPlan::Refuse => {
+            return Err(format!(
+                "A firewall rule named \"{RULE_NAME}\" exists that PointZ did not create, so PointZ leaves it alone; remove or rename it, then run allow-firewall again"
+            ))
+        }
+    };
+    run_elevated(&netsh(), &arguments)?;
+    ownership.record(&program)?;
     match read_state() {
         Ok(FirewallState::Allowed | FirewallState::Disabled) => Ok(format!(
             "Windows Firewall now admits PointZ on {}",
@@ -106,6 +118,57 @@ pub(crate) fn allow() -> Result<String, String> {
         Ok(_) => Err("The firewall rule was not applied".into()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+pub(crate) fn remove() -> Result<String, String> {
+    let _com = ComApartment::enter(Apartment::SingleThreaded);
+    let policy = policy().map_err(|error| error.to_string())?;
+    let ownership = ownership()?;
+    let recorded = ownership.program()?;
+    match rule::remove_plan(recorded.as_deref(), existing_program(&policy).as_deref()) {
+        RemovePlan::Nothing => Ok("PointZ created no firewall rule, so it removed nothing".into()),
+        RemovePlan::Forget => {
+            ownership.forget()?;
+            Ok("The firewall rule PointZ created is already gone".into())
+        }
+        RemovePlan::Delete { recorded } => {
+            run_elevated(&netsh(), &rule::delete_arguments(&recorded))?;
+            ownership.forget()?;
+            Ok(format!(
+                "Removed the \"{RULE_NAME}\" firewall rule PointZ created"
+            ))
+        }
+    }
+}
+
+fn ownership() -> Result<Ownership, String> {
+    qol_config::data_dir()
+        .map(|data_dir| Ownership::in_data_dir(&data_dir))
+        .ok_or_else(|| "Windows reported no local app data folder for the firewall record".into())
+}
+
+fn pointz_program() -> Result<String, String> {
+    let program = std::env::current_exe()
+        .map_err(|error| format!("Windows did not report the PointZ program path: {error}"))?;
+    program
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("{} is not a path netsh accepts", program.display()))
+}
+
+fn netsh() -> PathBuf {
+    qol_process::system_program_path("netsh.exe")
+}
+
+fn existing_program(policy: &INetFwPolicy2) -> Option<String> {
+    let rule = unsafe { policy.Rules() }
+        .and_then(|rules| unsafe { rules.Item(&BSTR::from(RULE_NAME)) })
+        .ok()?;
+    Some(
+        unsafe { rule.ApplicationName() }
+            .map(|program| program.to_string())
+            .unwrap_or_default(),
+    )
 }
 
 fn read_state() -> windows::core::Result<FirewallState> {
@@ -123,8 +186,9 @@ fn read_state() -> windows::core::Result<FirewallState> {
         return Ok(FirewallState::Disabled);
     }
     let rule = unsafe { policy.Rules()?.Item(&BSTR::from(RULE_NAME)) };
+    let program = pointz_program().unwrap_or_default();
     Ok(match rule.ok().and_then(|rule| rule_facts(&rule).ok()) {
-        Some(facts) if covers(&facts, active) => FirewallState::Allowed,
+        Some(facts) if covers(&facts, active, &program) => FirewallState::Allowed,
         _ => FirewallState::Missing,
     })
 }
@@ -142,11 +206,15 @@ fn rule_facts(rule: &INetFwRule) -> windows::core::Result<RuleFacts> {
             udp: rule.Protocol()? == NET_FW_IP_PROTOCOL_UDP.0,
             profiles: rule.Profiles()?,
             ports: rule.LocalPorts()?.to_string(),
+            program: rule
+                .ApplicationName()
+                .map(|program| program.to_string())
+                .unwrap_or_default(),
         })
     }
 }
 
-fn covers(rule: &RuleFacts, active_profiles: i32) -> bool {
+fn covers(rule: &RuleFacts, active_profiles: i32, program: &str) -> bool {
     let listed: Vec<&str> = rule.ports.split(',').map(str::trim).collect();
     let has_port = |port: u16| listed.contains(&port.to_string().as_str());
     rule.enabled
@@ -154,6 +222,7 @@ fn covers(rule: &RuleFacts, active_profiles: i32) -> bool {
         && rule.allows
         && rule.udp
         && rule.profiles & active_profiles == active_profiles
+        && (rule.program.is_empty() || rule::same_program(&rule.program, program))
         && has_port(ServerConfig::DISCOVERY_PORT)
         && has_port(ServerConfig::COMMAND_PORT)
 }
@@ -168,29 +237,7 @@ fn rule_profiles(active: i32) -> String {
         .join(",")
 }
 
-fn ports() -> String {
-    format!(
-        "{},{}",
-        ServerConfig::DISCOVERY_PORT,
-        ServerConfig::COMMAND_PORT
-    )
-}
-
-fn netsh_arguments(exists: bool, profiles: String) -> String {
-    let settings = format!(
-        "dir=in action=allow protocol=UDP localport={} profile={profiles}",
-        ports()
-    );
-    if exists {
-        format!(r#"advfirewall firewall set rule name="{RULE_NAME}" new enable=yes {settings}"#)
-    } else {
-        format!(
-            r#"advfirewall firewall add rule name="{RULE_NAME}" {settings} enable=yes description="{RULE_DESCRIPTION}""#
-        )
-    }
-}
-
-fn run_elevated(program: &str, arguments: &str) -> Result<(), String> {
+fn run_elevated(program: &Path, arguments: &str) -> Result<(), String> {
     let verb = HSTRING::from("runas");
     let file = HSTRING::from(program);
     let parameters = HSTRING::from(arguments);
@@ -228,6 +275,8 @@ fn run_elevated(program: &str, arguments: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const PROGRAM: &str = r"C:\Users\Ada\AppData\Local\qol\qol-pointz.exe";
+
     fn allowing_rule() -> RuleFacts {
         RuleFacts {
             enabled: true,
@@ -235,7 +284,8 @@ mod tests {
             allows: true,
             udp: true,
             profiles: NET_FW_PROFILE2_PRIVATE.0 | NET_FW_PROFILE2_DOMAIN.0,
-            ports: ports(),
+            ports: rule::ports(),
+            program: PROGRAM.into(),
         }
     }
 
@@ -300,14 +350,41 @@ mod tests {
                 "outbound",
                 RuleFacts {
                     inbound: false,
-                    ..rule
+                    ..rule.clone()
                 },
                 private,
                 false,
             ),
+            (
+                "another program",
+                RuleFacts {
+                    program: r"C:\Tools\other.exe".into(),
+                    ..rule.clone()
+                },
+                private,
+                false,
+            ),
+            (
+                "program in another case",
+                RuleFacts {
+                    program: PROGRAM.to_uppercase(),
+                    ..rule.clone()
+                },
+                private,
+                true,
+            ),
+            (
+                "any program",
+                RuleFacts {
+                    program: String::new(),
+                    ..rule
+                },
+                private,
+                true,
+            ),
         ];
         for (label, facts, active, expected) in cases {
-            assert_eq!(covers(&facts, active), expected, "{label}");
+            assert_eq!(covers(&facts, active, PROGRAM), expected, "{label}");
         }
     }
 
@@ -346,18 +423,5 @@ mod tests {
         }
         let missing = check_result("firewall", FirewallState::Missing);
         assert!(missing.fix.unwrap().contains("allow-firewall"));
-    }
-
-    #[test]
-    fn netsh_adds_a_missing_rule_and_repairs_an_existing_one() {
-        let add = netsh_arguments(false, "private".into());
-        assert!(add.starts_with(r#"advfirewall firewall add rule name="qol PointZ" dir=in"#));
-        assert!(add.contains(&format!("localport={}", ports())));
-        assert!(add.contains("protocol=UDP"));
-        let repair = netsh_arguments(true, "private".into());
-        assert!(
-            repair.starts_with(r#"advfirewall firewall set rule name="qol PointZ" new enable=yes"#)
-        );
-        assert!(!repair.contains("description="));
     }
 }

@@ -1,6 +1,6 @@
 mod platform;
 
-pub(crate) use platform::{allow, check};
+pub(crate) use platform::{allow, check, remove};
 
 use crate::config::ServerConfig;
 

@@ -7188,6 +7188,7 @@ dependencies = [
  "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
+ "qol-process",
  "qol-runtime",
  "qol-windowing",
  "rdev",
