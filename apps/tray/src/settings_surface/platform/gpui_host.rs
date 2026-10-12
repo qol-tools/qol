@@ -77,11 +77,7 @@ fn validated_activation(value: &serde_json::Value) -> Option<ToastActivation> {
 
 fn config() -> DaemonConfig {
     DaemonConfig {
-        socket: SocketSource::Path(
-            crate::paths::runtime_dir()
-                .join("sockets")
-                .join(qol_conventions::SETTINGS_SURFACE_SOCKET_FILE),
-        ),
+        socket: SocketSource::Path(crate::settings_surface::socket_path()),
         support_replace_existing: false,
     }
 }
@@ -1177,10 +1173,27 @@ mod tests {
         let path = qol_plugin_daemon::daemon::socket_path(&config()).unwrap();
 
         assert_eq!(
-            path,
-            crate::paths::runtime_dir()
-                .join("sockets")
-                .join(qol_conventions::SETTINGS_SURFACE_SOCKET_FILE)
+            path.parent(),
+            Some(crate::paths::runtime_dir().join("sockets").as_path())
+        );
+    }
+
+    #[test]
+    fn a_long_runtime_dir_shortens_the_settings_socket_name() {
+        let root = tempfile::tempdir().unwrap();
+        let _guard = crate::paths::push_test_path_root(&root.path().join("r".repeat(120)));
+
+        let path = qol_plugin_daemon::daemon::socket_path(&config()).unwrap();
+
+        assert_eq!(
+            path.parent(),
+            Some(crate::paths::runtime_dir().join("sockets").as_path())
+        );
+        assert_ne!(
+            path.file_name(),
+            Some(std::ffi::OsStr::new(
+                qol_conventions::SETTINGS_SURFACE_SOCKET_FILE
+            ))
         );
     }
 

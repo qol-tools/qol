@@ -14,10 +14,16 @@ impl DoctorCheck for SocketPathsCheck {
     }
 
     fn run(&self, ctx: &DoctorContext) -> CheckReport {
-        let mut sockets = vec![(
-            "qol-tray".to_string(),
-            crate::dev_generation::state_socket_path(),
-        )];
+        let mut sockets = vec![
+            (
+                "qol-tray".to_string(),
+                crate::dev_generation::state_socket_path(),
+            ),
+            (
+                "settings surface".to_string(),
+                crate::settings_surface::socket_path(),
+            ),
+        ];
         if let Ok(registry) = ctx.registry() {
             sockets.extend(registry.entries.iter().filter_map(|entry| {
                 let manifest = PluginManifest::read_from_dir(&entry.active.path).ok()?;
