@@ -96,6 +96,18 @@ impl IdentitySnapshot {
     pub fn matches(&self, path: &std::path::Path) -> bool {
         *self == IdentitySnapshot::capture(path)
     }
+
+    fn same_object_as(&self, current: &IdentitySnapshot) -> bool {
+        if self.dev.is_none() || self.ino.is_none() {
+            return self == current;
+        }
+        let stable = |snapshot: &IdentitySnapshot| IdentitySnapshot {
+            len: None,
+            modified_ns: None,
+            ..snapshot.clone()
+        };
+        stable(self) == stable(current)
+    }
 }
 
 fn ancestor_has_symlink(path: &Path) -> bool {
@@ -235,13 +247,22 @@ fn remove_after_package_with(
     ensure_snapshot_alignment(plan)?;
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
+    let mut replaced = Vec::new();
     for (item, snapshot) in plan.items.iter().zip(&plan.snapshots) {
         if snapshot.exists && !item.path.exists() {
             continue;
         }
         if !is_primary(item.kind) {
+            let current = IdentitySnapshot::capture(&item.path);
+            if !snapshot.same_object_as(&current) {
+                replaced.push((
+                    item.path.clone(),
+                    "replaced on disk by the uninstaller; left in place".to_string(),
+                ));
+                continue;
+            }
             items.push(item.clone());
-            snapshots.push(snapshot.clone());
+            snapshots.push(current);
         } else if item.kind == LeftoverKind::AppBundle
             && plat.trashes_install_remnant()
             && item.path.exists()
@@ -260,7 +281,9 @@ fn remove_after_package_with(
         total_bytes,
         snapshots,
     };
-    remove_with(plat, &sub, Disposal::Trash, package)
+    let mut outcome = remove_with(plat, &sub, Disposal::Trash, package)?;
+    outcome.failed.extend(replaced);
+    Ok(outcome)
 }
 
 pub fn app_sizes(apps: &[InstalledApp]) -> std::collections::HashMap<PathBuf, u64> {
@@ -705,6 +728,51 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.removed, vec![kept]);
+    }
+
+    #[test]
+    fn remove_after_package_removes_leftovers_the_uninstaller_rewrote_and_reports_replaced_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rewritten = tmp.path().join("settings.ini");
+        let replaced = tmp.path().join("cache");
+        std::fs::write(&rewritten, "before").unwrap();
+        std::fs::create_dir_all(&replaced).unwrap();
+        let p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![
+                leftover(
+                    rewritten.to_str().unwrap(),
+                    LeftoverKind::Preferences,
+                    MatchKind::Exact,
+                ),
+                leftover(
+                    replaced.to_str().unwrap(),
+                    LeftoverKind::Caches,
+                    MatchKind::Exact,
+                ),
+            ],
+        );
+        std::fs::write(&rewritten, "rewritten by the uninstaller").unwrap();
+        let replacement = tmp.path().join("replacement");
+        std::fs::create_dir_all(&replacement).unwrap();
+        std::fs::remove_dir_all(&replaced).unwrap();
+        std::fs::rename(&replacement, &replaced).unwrap();
+        let package =
+            ManagedPackage::parse(PackageManager::Windows, "Foo", PackageScope::User).unwrap();
+        let fake = FakePlat::default();
+
+        let outcome = remove_after_package_with(
+            &fake,
+            &p,
+            Disposal::Trash,
+            &PackageStatus::Managed(package),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.removed, vec![rewritten]);
+        assert_eq!(outcome.failed.len(), 1);
+        assert_eq!(outcome.failed[0].0, replaced);
     }
 
     #[test]
