@@ -1,7 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, Read, Write};
 use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::ptr;
 use std::rc::Rc;
@@ -18,7 +18,7 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE, CR_SUCCESS, HCMNOTIFICATION,
 };
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    GetLastError, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile, FILE_FLAG_OVERLAPPED};
 use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
@@ -145,7 +145,7 @@ impl VirtioPort {
             }
         }
         loop {
-            match unsafe { WaitForSingleObject(event.0, TRANSFER_POLL_MS) } {
+            match unsafe { WaitForSingleObject(event.0.as_raw_handle(), TRANSFER_POLL_MS) } {
                 WAIT_OBJECT_0 => return self.overlapped_result(overlapped).map(|n| n as usize),
                 WAIT_TIMEOUT if self.session_open() => {}
                 _ => {
@@ -255,7 +255,7 @@ unsafe extern "system" fn on_port_event(
     CR_SUCCESS
 }
 
-struct Event(HANDLE);
+struct Event(OwnedHandle);
 
 impl Event {
     fn new() -> io::Result<Self> {
@@ -263,18 +263,12 @@ impl Event {
         if handle.is_null() {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self(handle))
+        Ok(Self(unsafe { OwnedHandle::from_raw_handle(handle) }))
     }
 
     fn overlapped(&self) -> OVERLAPPED {
         let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-        overlapped.hEvent = self.0;
+        overlapped.hEvent = self.0.as_raw_handle();
         overlapped
-    }
-}
-
-impl Drop for Event {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
     }
 }
