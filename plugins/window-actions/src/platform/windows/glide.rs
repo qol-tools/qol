@@ -10,6 +10,8 @@ use crate::glide::{Direction, Phase};
 
 const WATCHDOG: Duration = Duration::from_millis(1000);
 const TICK: Duration = Duration::from_millis(16);
+const WORKER_STOP_WAIT: Duration = Duration::from_millis(500);
+const JOIN_POLL: Duration = Duration::from_millis(5);
 const MAX_STEP_SECONDS: f64 = 0.05;
 const FIRST_STEP_SECONDS: f64 = 1.0 / 60.0;
 const MIN_SPEED: f64 = 100.0;
@@ -41,7 +43,7 @@ impl Mover for Win32Mover {
             frame,
             &qol_windowing::platform::windows::work_areas_left_to_right(),
         );
-        Window::from_id(id).is_some_and(|window| window.set_frame(frame).is_ok())
+        Window::from_id(id).is_some_and(|window| window.set_frame_nonblocking(frame).is_ok())
     }
 }
 
@@ -119,9 +121,58 @@ impl Motion {
 
 struct Target {
     id: WindowId,
+    generation: u64,
     x: f64,
     y: f64,
+    goal: Option<(f64, f64)>,
     last_tick: Instant,
+}
+
+struct Step {
+    id: WindowId,
+    generation: u64,
+    x: f64,
+    y: f64,
+    goal: Option<(f64, f64)>,
+    dx: f64,
+    dy: f64,
+}
+
+struct Placed {
+    x: f64,
+    y: f64,
+    goal: (f64, f64),
+}
+
+enum Plan {
+    Stop,
+    Hold,
+    Move(Step),
+}
+
+impl Step {
+    fn apply(&self, mover: &impl Mover) -> Option<Placed> {
+        let frame = mover.frame(&self.id)?;
+        let (x, y) = match self.goal {
+            Some((goal_x, goal_y)) => (
+                if frame.x == goal_x { self.x } else { frame.x },
+                if frame.y == goal_y { self.y } else { frame.y },
+            ),
+            None => (self.x, self.y),
+        };
+        let next_x = x + self.dx;
+        let next_y = y + self.dy;
+        let goal = WindowRect {
+            x: next_x.round(),
+            y: next_y.round(),
+            ..frame
+        };
+        mover.place(&self.id, goal).then_some(Placed {
+            x: next_x,
+            y: next_y,
+            goal: (goal.x, goal.y),
+        })
+    }
 }
 
 struct State {
@@ -129,6 +180,7 @@ struct State {
     target: Option<Target>,
     speed: f64,
     expires_at: Instant,
+    generation: u64,
 }
 
 impl State {
@@ -138,39 +190,54 @@ impl State {
             target: None,
             speed: MIN_SPEED,
             expires_at: Instant::now(),
+            generation: 0,
         }
     }
 
-    fn step(&mut self, now: Instant, elapsed: f64, mover: &impl Mover) -> bool {
+    fn plan(&mut self, now: Instant, elapsed: f64) -> Plan {
         if self.motion.is_empty() || now > self.expires_at {
-            return false;
+            return Plan::Stop;
         }
         let (dx, dy) = self.motion.vector();
         let speed = self.speed;
         let Some(target) = self.target.as_mut() else {
-            return false;
+            return Plan::Stop;
         };
         target.last_tick = now;
         if dx == 0.0 && dy == 0.0 {
+            return Plan::Hold;
+        }
+        Plan::Move(Step {
+            id: target.id.clone(),
+            generation: target.generation,
+            x: target.x,
+            y: target.y,
+            goal: target.goal,
+            dx: dx * speed * elapsed,
+            dy: dy * speed * elapsed,
+        })
+    }
+
+    fn settle(&mut self, generation: u64, placed: Option<Placed>) -> bool {
+        if !self.is_current(generation) {
             return true;
         }
-        let Some(frame) = mover.frame(&target.id) else {
+        let Some(placed) = placed else {
+            self.reset();
             return false;
         };
-        let next_x = target.x + dx * speed * elapsed;
-        let next_y = target.y + dy * speed * elapsed;
-        let goal = WindowRect {
-            x: next_x.round(),
-            y: next_y.round(),
-            ..frame
-        };
-        if !mover.place(&target.id, goal) {
-            return false;
+        if let Some(target) = self.target.as_mut() {
+            target.x = placed.x;
+            target.y = placed.y;
+            target.goal = Some(placed.goal);
         }
-        let actual = mover.frame(&target.id).unwrap_or(goal);
-        target.x = if actual.x == goal.x { next_x } else { actual.x };
-        target.y = if actual.y == goal.y { next_y } else { actual.y };
         true
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.target
+            .as_ref()
+            .is_some_and(|target| target.generation == generation)
     }
 
     fn reset(&mut self) {
@@ -192,6 +259,17 @@ impl State {
             "active={} vector={dx},{dy} position={position} target={target}",
             self.motion.active()
         )
+    }
+}
+
+fn advance(state: &Mutex<State>, plan: Plan, mover: &impl Mover) -> bool {
+    match plan {
+        Plan::Stop => false,
+        Plan::Hold => true,
+        Plan::Move(step) => {
+            let placed = step.apply(mover);
+            lock(state).settle(step.generation, placed)
+        }
     }
 }
 
@@ -241,30 +319,38 @@ impl GlideController {
     }
 
     fn start(&mut self, direction: Direction, speed: f64) -> Result<String, String> {
-        let mut state = self.lock();
-        if state.target.is_none() {
-            let window = Window::foreground().ok_or("No focused window")?;
-            if !window.is_switchable() {
-                return Err("Focused surface is not an app window".into());
+        let plan = {
+            let mut state = self.lock();
+            let fresh = state.target.is_none();
+            if fresh {
+                let window = Window::foreground().ok_or("No focused window")?;
+                if !window.is_switchable() {
+                    return Err("Focused surface is not an app window".into());
+                }
+                let frame = window.frame().ok_or("Cannot read window geometry")?;
+                state.generation += 1;
+                state.target = Some(Target {
+                    id: window.id(),
+                    generation: state.generation,
+                    x: frame.x,
+                    y: frame.y,
+                    goal: None,
+                    last_tick: Instant::now(),
+                });
             }
-            let frame = window.frame().ok_or("Cannot read window geometry")?;
-            state.target = Some(Target {
-                id: window.id(),
-                x: frame.x,
-                y: frame.y,
-                last_tick: Instant::now(),
-            });
+            let now = Instant::now();
+            state.motion.press(direction);
+            state.speed = speed.clamp(MIN_SPEED, MAX_SPEED);
+            state.expires_at = now + WATCHDOG;
+            fresh.then(|| state.plan(now, FIRST_STEP_SECONDS))
+        };
+        if let Some(plan) = plan {
+            if !advance(&self.state, plan, &Win32Mover) {
+                self.lock().reset();
+                return Err("The focused window can no longer be moved".into());
+            }
         }
-        let now = Instant::now();
-        state.motion.press(direction);
-        state.speed = speed.clamp(MIN_SPEED, MAX_SPEED);
-        state.expires_at = now + WATCHDOG;
-        if !state.step(now, FIRST_STEP_SECONDS, &Win32Mover) {
-            state.reset();
-            return Err("The focused window can no longer be moved".into());
-        }
-        let observation = state.observation();
-        drop(state);
+        let observation = self.lock().observation();
         self.ensure_worker();
         Ok(observation)
     }
@@ -303,16 +389,19 @@ impl GlideController {
             return;
         }
         self.join_worker();
+        let Some(generation) = self.lock().target.as_ref().map(|target| target.generation) else {
+            return;
+        };
         let state = Arc::clone(&self.state);
         self.worker = std::thread::Builder::new()
             .name("window-actions-glide".into())
-            .spawn(move || run(&state))
+            .spawn(move || run(&state, generation))
             .ok();
     }
 
     fn join_worker(&mut self) {
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            join_within(worker, WORKER_STOP_WAIT);
         }
     }
 
@@ -333,18 +422,40 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn run(state: &Mutex<State>) {
+fn join_within(worker: JoinHandle<()>, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while !worker.is_finished() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(JOIN_POLL);
+    }
+    let _ = worker.join();
+    true
+}
+
+fn run(state: &Mutex<State>, generation: u64) {
     loop {
         std::thread::sleep(TICK);
-        let mut state = lock(state);
-        let now = Instant::now();
-        let elapsed = state.target.as_ref().map_or(0.0, |target| {
-            now.duration_since(target.last_tick)
-                .as_secs_f64()
-                .min(MAX_STEP_SECONDS)
-        });
-        if !state.step(now, elapsed, &Win32Mover) {
-            state.reset();
+        let plan = {
+            let mut state = lock(state);
+            if !state.is_current(generation) {
+                return;
+            }
+            let now = Instant::now();
+            let elapsed = state.target.as_ref().map_or(0.0, |target| {
+                now.duration_since(target.last_tick)
+                    .as_secs_f64()
+                    .min(MAX_STEP_SECONDS)
+            });
+            let plan = state.plan(now, elapsed);
+            if matches!(plan, Plan::Stop) {
+                state.reset();
+                return;
+            }
+            plan
+        };
+        if !advance(state, plan, &Win32Mover) {
             return;
         }
     }
@@ -359,6 +470,16 @@ mod tests {
     struct FakeMover {
         frame: RefCell<WindowRect>,
         clamp_x: Option<f64>,
+        pending: RefCell<Option<WindowRect>>,
+        lagging: bool,
+    }
+
+    impl FakeMover {
+        fn land(&self) {
+            if let Some(frame) = self.pending.borrow_mut().take() {
+                *self.frame.borrow_mut() = frame;
+            }
+        }
     }
 
     impl Mover for FakeMover {
@@ -368,7 +489,12 @@ mod tests {
 
         fn place(&self, _id: &WindowId, frame: WindowRect) -> bool {
             let x = self.clamp_x.map_or(frame.x, |limit| frame.x.min(limit));
-            *self.frame.borrow_mut() = WindowRect { x, ..frame };
+            let placed = WindowRect { x, ..frame };
+            if self.lagging {
+                *self.pending.borrow_mut() = Some(placed);
+            } else {
+                *self.frame.borrow_mut() = placed;
+            }
             true
         }
     }
@@ -382,6 +508,19 @@ mod tests {
                 height: 600.0,
             }),
             clamp_x,
+            pending: RefCell::new(None),
+            lagging: false,
+        }
+    }
+
+    fn step(state: &mut State, now: Instant, elapsed: f64, mover: &FakeMover) -> bool {
+        match state.plan(now, elapsed) {
+            Plan::Stop => false,
+            Plan::Hold => true,
+            Plan::Move(step) => {
+                let placed = step.apply(mover);
+                state.settle(step.generation, placed)
+            }
         }
     }
 
@@ -393,10 +532,13 @@ mod tests {
         }
         state.speed = speed;
         state.expires_at = now + WATCHDOG;
+        state.generation = 1;
         state.target = Some(Target {
             id: WindowId::from_u32(1),
+            generation: 1,
             x: 100.0,
             y: 200.0,
+            goal: None,
             last_tick: now,
         });
         state
@@ -426,7 +568,7 @@ mod tests {
     fn a_step_moves_by_speed_times_elapsed_and_keeps_the_size() {
         let fake = mover(None);
         let mut state = gliding(&[Direction::Right], 1200.0);
-        assert!(state.step(Instant::now(), 0.05, &fake));
+        assert!(step(&mut state, Instant::now(), 0.05, &fake));
         let frame = *fake.frame.borrow();
         assert_eq!((frame.x, frame.y), (160.0, 200.0));
         assert_eq!((frame.width, frame.height), (800.0, 600.0));
@@ -436,8 +578,109 @@ mod tests {
     fn a_constrained_move_resynchronizes_to_the_real_position() {
         let fake = mover(Some(120.0));
         let mut state = gliding(&[Direction::Right], 1200.0);
-        assert!(state.step(Instant::now(), 0.05, &fake));
-        assert_eq!(state.target.as_ref().map(|target| target.x), Some(120.0));
+        assert!(step(&mut state, Instant::now(), 0.05, &fake));
+        assert!(step(&mut state, Instant::now(), 0.05, &fake));
+        assert_eq!(state.target.as_ref().map(|target| target.x), Some(180.0));
+        assert_eq!(fake.frame.borrow().x, 120.0);
+    }
+
+    #[test]
+    fn a_placement_that_lands_after_the_readback_keeps_full_speed() {
+        let fake = FakeMover {
+            lagging: true,
+            ..mover(None)
+        };
+        let mut state = gliding(&[Direction::Right], 1200.0);
+        for _ in 0..3 {
+            assert!(step(&mut state, Instant::now(), 0.05, &fake));
+            fake.land();
+        }
+        assert_eq!(fake.frame.borrow().x, 280.0);
+        assert_eq!(state.target.as_ref().map(|target| target.x), Some(280.0));
+    }
+
+    #[test]
+    fn a_failed_placement_ends_the_glide() {
+        struct Gone;
+        impl Mover for Gone {
+            fn frame(&self, _id: &WindowId) -> Option<WindowRect> {
+                None
+            }
+
+            fn place(&self, _id: &WindowId, _frame: WindowRect) -> bool {
+                false
+            }
+        }
+        let mut state = gliding(&[Direction::Left], 1200.0);
+        let Plan::Move(step) = state.plan(Instant::now(), 0.016) else {
+            panic!("a held direction plans a move");
+        };
+        assert!(!state.settle(step.generation, step.apply(&Gone)));
+        assert!(state.target.is_none());
+        assert!(state.motion.is_empty());
+    }
+
+    #[test]
+    fn a_move_that_returns_after_its_glide_ended_changes_nothing() {
+        let fake = mover(None);
+        let mut state = gliding(&[Direction::Right], 1200.0);
+        let Plan::Move(stale) = state.plan(Instant::now(), 0.05) else {
+            panic!("a held direction plans a move");
+        };
+        state.reset();
+        state.generation = 2;
+        state.motion.press(Direction::Down);
+        state.target = Some(Target {
+            id: WindowId::from_u32(1),
+            generation: 2,
+            x: 500.0,
+            y: 500.0,
+            goal: None,
+            last_tick: Instant::now(),
+        });
+        assert!(state.settle(stale.generation, stale.apply(&fake)));
+        assert_eq!(
+            state.target.as_ref().map(|target| (target.x, target.y)),
+            Some((500.0, 500.0))
+        );
+        assert!(!state.is_current(stale.generation));
+    }
+
+    #[test]
+    fn the_lock_is_free_while_a_move_is_applied() {
+        struct Probe<'a>(&'a Mutex<State>);
+        impl Mover for Probe<'_> {
+            fn frame(&self, _id: &WindowId) -> Option<WindowRect> {
+                Some(WindowRect {
+                    x: 100.0,
+                    y: 200.0,
+                    width: 800.0,
+                    height: 600.0,
+                })
+            }
+
+            fn place(&self, _id: &WindowId, _frame: WindowRect) -> bool {
+                self.0.try_lock().is_ok()
+            }
+        }
+        let state = Mutex::new(gliding(&[Direction::Right], 1200.0));
+        let plan = lock(&state).plan(Instant::now(), 0.016);
+        assert!(advance(&state, plan, &Probe(&state)));
+    }
+
+    #[test]
+    fn stopping_waits_a_bounded_time_for_a_stuck_worker() {
+        let finished = std::thread::spawn(|| {});
+        assert!(join_within(finished, Duration::from_secs(5)));
+
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        let stuck = std::thread::spawn(move || {
+            let _ = blocked.recv();
+        });
+        let started = Instant::now();
+        assert!(!join_within(stuck, Duration::from_millis(50)));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        drop(release);
     }
 
     #[test]
@@ -473,11 +716,11 @@ mod tests {
         let fake = mover(None);
         let mut released = gliding(&[Direction::Left], 1200.0);
         released.motion.release(Direction::Left);
-        assert!(!released.step(Instant::now(), 0.016, &fake));
+        assert!(!step(&mut released, Instant::now(), 0.016, &fake));
 
         let mut expired = gliding(&[Direction::Left], 1200.0);
         let later = Instant::now() + WATCHDOG + Duration::from_millis(1);
-        assert!(!expired.step(later, 0.016, &fake));
+        assert!(!step(&mut expired, later, 0.016, &fake));
     }
 
     #[test]
