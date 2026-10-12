@@ -5,29 +5,27 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use qol_platform::native::hooks::{self, LowLevelHooks, MouseHook};
 use qol_platform::native::input::key_held;
+use qol_platform::native::security::process_elevated;
 use qol_runtime::hook_liveness::SeenInput;
 use qol_runtime::keyremap_marker;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetLastInputInfo, MapVirtualKeyW, SendInput, ToUnicodeEx, HKL, INPUT, INPUT_0,
-    INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, LASTINPUTINFO, MAPVK_VK_TO_VSC, MOUSEEVENTF_HWHEEL,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_MENU,
-    VK_PACKET, VK_SHIFT,
+    GetKeyState, MapVirtualKeyW, SendInput, ToUnicodeEx, HKL, INPUT, INPUT_0, INPUT_KEYBOARD,
+    INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+    MOUSE_EVENT_FLAGS, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_MENU, VK_PACKET, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetTimer, SetWindowsHookExW,
-    UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE,
-    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER,
+    CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetTimer, HC_ACTION,
+    KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
 
-use super::elevation;
 use super::foreground::Foreground;
 use super::keys;
 use super::machine::{Decision, Event, Machine, Output};
@@ -123,41 +121,6 @@ impl Remapper for Hooks {
     }
 }
 
-struct Installed {
-    keyboard: HHOOK,
-    mouse: HHOOK,
-}
-
-impl Installed {
-    fn arm() -> Result<Self, String> {
-        let module = unsafe { GetModuleHandleW(std::ptr::null()) };
-        let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), module, 0) };
-        if keyboard.is_null() {
-            return Err(format!(
-                "failed to install the Windows keyboard hook: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0) };
-        if mouse.is_null() {
-            let error = format!(
-                "failed to install the Windows mouse hook: {}",
-                std::io::Error::last_os_error()
-            );
-            unsafe { UnhookWindowsHookEx(keyboard) };
-            return Err(error);
-        }
-        Ok(Self { keyboard, mouse })
-    }
-
-    fn unhook(self) {
-        unsafe {
-            UnhookWindowsHookEx(self.mouse);
-            UnhookWindowsHookEx(self.keyboard);
-        }
-    }
-}
-
 fn watch_stop_request(thread_id: u32) {
     let watcher = std::thread::Builder::new()
         .name("keyremap-stop".into())
@@ -197,7 +160,7 @@ fn end_hook_thread(thread_id: u32) -> bool {
 fn run(ready: Sender<Result<u32, String>>) {
     let mut message: MSG = unsafe { std::mem::zeroed() };
     unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_NOREMOVE) };
-    let mut hooks = match Installed::arm() {
+    let mut hooks = match LowLevelHooks::arm(keyboard_hook, mouse_hook, MouseHook::Required) {
         Ok(hooks) => hooks,
         Err(error) => {
             status::write(&HookStatus::failed(std::process::id(), error.clone()));
@@ -205,10 +168,11 @@ fn run(ready: Sender<Result<u32, String>>) {
             return;
         }
     };
-    STATE.with(|state| state.borrow_mut().foreground = Foreground::new(elevation::current()));
+    let own = process_elevated(std::process::id());
+    STATE.with(|state| state.borrow_mut().foreground = Foreground::new(own));
     let mut hook_status = HookStatus::installed(std::process::id());
     status::write(&hook_status);
-    if let Some(tick) = last_input_tick() {
+    if let Some(tick) = hooks::last_input_tick() {
         SEEN_INPUT.rearmed(tick);
     }
     let mut last_arm = Instant::now();
@@ -227,8 +191,8 @@ fn run(ready: Sender<Result<u32, String>>) {
     status::write(&hook_status.stopped());
 }
 
-fn check_liveness(hooks: &mut Installed, since_arm: Duration) -> bool {
-    let Some(input_tick) = last_input_tick() else {
+fn check_liveness(hooks: &mut LowLevelHooks, since_arm: Duration) -> bool {
+    let Some(input_tick) = hooks::last_input_tick() else {
         return false;
     };
     let injectable = STATE.with(|state| {
@@ -253,7 +217,7 @@ fn check_liveness(hooks: &mut Installed, since_arm: Duration) -> bool {
     if verdict != Liveness::Rearm {
         return false;
     }
-    match Installed::arm() {
+    match LowLevelHooks::arm(keyboard_hook, mouse_hook, MouseHook::Required) {
         Ok(fresh) => {
             std::mem::replace(hooks, fresh).unhook();
             SEEN_INPUT.rearmed(input_tick);
@@ -275,14 +239,6 @@ fn liveness(unseen: bool, injectable: bool, since_arm: Duration) -> Liveness {
     } else {
         Liveness::Gap
     }
-}
-
-fn last_input_tick() -> Option<u32> {
-    let mut info = LASTINPUTINFO {
-        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
-        dwTime: 0,
-    };
-    (unsafe { GetLastInputInfo(&mut info) } != 0).then_some(info.dwTime)
 }
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

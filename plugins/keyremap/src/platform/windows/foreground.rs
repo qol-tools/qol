@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, HKL};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
-use super::elevation;
+use qol_platform::native::security::{process_elevated, uipi_allows};
 
 const EXECUTABLE_SUFFIX: &str = ".exe";
 
@@ -40,8 +40,7 @@ impl Foreground {
         if process != self.process {
             self.process = process;
             self.executable = image_name(pid).unwrap_or_default();
-            self.injectable =
-                pid == 0 || elevation::can_inject(self.own, elevation::of_process(pid));
+            self.injectable = pid == 0 || uipi_allows(self.own, process_elevated(pid));
         }
     }
 

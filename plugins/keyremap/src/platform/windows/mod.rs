@@ -1,5 +1,4 @@
 mod doctor;
-mod elevation;
 mod foreground;
 mod hook;
 mod keys;

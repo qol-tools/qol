@@ -1,7 +1,7 @@
 use qol_headless::DoctorCheckResult;
+use qol_platform::native::security::process_elevated;
 use serde_json::json;
 
-use super::elevation;
 use super::status::{self, HookStatus};
 
 const NEVER_REARMED: &str =
@@ -28,7 +28,7 @@ pub(super) fn helper() -> DoctorCheckResult {
 }
 
 pub(super) fn secure_input() -> DoctorCheckResult {
-    elevation_result(elevation::current())
+    elevation_result(process_elevated(std::process::id()))
 }
 
 pub(super) fn layout(targets: &[(String, String)]) -> DoctorCheckResult {
