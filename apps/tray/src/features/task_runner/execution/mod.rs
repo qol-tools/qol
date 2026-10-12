@@ -43,22 +43,26 @@ struct ExecutionSpec {
 }
 
 pub(super) async fn execute(request: ExecutionRequest<'_>) -> Result<ExecutionResult, String> {
-    let spec = execution_spec(&request);
+    let spec = execution_spec(&request)?;
     log::info!("[task-runner] {}: {}", request.action_id, spec.command);
     let output = command_output(&spec).await?;
     Ok(execution_result(output))
 }
 
-fn execution_spec(request: &ExecutionRequest<'_>) -> ExecutionSpec {
-    ExecutionSpec {
-        command: interpolate_shell(&request.action.command, request.params),
+fn execution_spec(request: &ExecutionRequest<'_>) -> Result<ExecutionSpec, String> {
+    Ok(ExecutionSpec {
+        command: interpolate_shell(
+            &request.action.command,
+            request.params,
+            platform::quote_param,
+        )?,
         cwd: request
             .action
             .cwd
             .as_ref()
             .map(|cwd| interpolate(cwd, request.params)),
         timeout: request.action.timeout,
-    }
+    })
 }
 
 async fn command_output(spec: &ExecutionSpec) -> Result<Output, String> {
@@ -128,7 +132,7 @@ mod tests {
         params.insert("dir".to_string(), "sub".to_string());
         let request = ExecutionRequest::new("a", &cfg, &params);
 
-        let spec = execution_spec(&request);
+        let spec = execution_spec(&request).unwrap();
 
         assert_eq!(spec.command, "echo world");
         assert_eq!(spec.cwd.as_deref(), Some("/tmp/sub"));
@@ -140,7 +144,7 @@ mod tests {
         let cfg = action("ls", 10, None);
         let params = no_params();
         let request = ExecutionRequest::new("a", &cfg, &params);
-        let spec = execution_spec(&request);
+        let spec = execution_spec(&request).unwrap();
         assert!(spec.cwd.is_none());
     }
 

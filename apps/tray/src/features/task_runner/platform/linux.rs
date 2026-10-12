@@ -12,6 +12,10 @@ impl TaskRunnerPlatform for Platform {
         Ok(command)
     }
 
+    fn quote_param(&self, value: &str) -> Result<String, String> {
+        Ok(super::unix::quote(value))
+    }
+
     fn guardian_executable(&self) -> std::io::Result<PathBuf> {
         Ok(PathBuf::from("/proc/self/exe"))
     }

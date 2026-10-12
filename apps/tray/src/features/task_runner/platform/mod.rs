@@ -9,10 +9,14 @@ mod linux;
 mod macos;
 #[cfg(target_os = "macos")]
 mod macos_command_tree;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix;
 #[cfg(not(target_os = "macos"))]
 mod verified_command_tree;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod windows_quote;
 
 #[cfg(target_os = "macos")]
 pub(super) use macos_command_tree::CommandTree;
@@ -30,11 +34,16 @@ pub(super) use windows::Platform;
 
 trait TaskRunnerPlatform {
     fn shell_command(&self, script: &str) -> Result<Command, String>;
+    fn quote_param(&self, value: &str) -> Result<String, String>;
     fn guardian_executable(&self) -> std::io::Result<PathBuf>;
 }
 
 pub(super) fn shell_command(script: &str) -> Result<Command, String> {
     Platform.shell_command(script)
+}
+
+pub(super) fn quote_param(value: &str) -> Result<String, String> {
+    Platform.quote_param(value)
 }
 
 pub(super) fn verified_process_tree() -> std::io::Result<qol_process::ProcessTreeGuard> {
