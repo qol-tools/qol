@@ -36,10 +36,6 @@ impl InstallerOps for Platform {
         super::unix_common::set_executable_permissions(path)
     }
 
-    fn prepare_atomic_replace(&self, _installed_binary: &Path) -> Result<()> {
-        Ok(())
-    }
-
     fn should_bootstrap_current_install(&self, binary_path: &Path) -> Result<bool> {
         let bundle_root = match bundle_root_from_binary(binary_path) {
             Ok(path) => path,

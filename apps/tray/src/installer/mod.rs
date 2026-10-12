@@ -87,7 +87,6 @@ fn install_binary_atomically(source_binary: &Path, installed_binary: &Path) -> R
         )
     })?;
     platform::set_executable_permissions(&staged_binary)?;
-    platform::prepare_atomic_replace(installed_binary)?;
     fs::rename(&staged_binary, installed_binary).with_context(|| {
         format!(
             "Failed to finalize install by moving {} to {}",
@@ -137,4 +136,23 @@ fn is_in_path(dir: &Path) -> bool {
     };
 
     env::split_paths(&path_var).any(|path| boot_environment::paths_equal_canonicalized(&path, dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installing_over_an_existing_binary_replaces_it_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let installed = dir.path().join("installed");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&installed, b"old").unwrap();
+
+        install_binary_atomically(&source, &installed).unwrap();
+
+        assert_eq!(fs::read(&installed).unwrap(), b"new");
+        assert!(!installed.with_extension("new").exists());
+    }
 }

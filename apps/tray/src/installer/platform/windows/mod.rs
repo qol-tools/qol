@@ -67,18 +67,6 @@ impl InstallerOps for Platform {
         Ok(())
     }
 
-    fn prepare_atomic_replace(&self, installed_binary: &Path) -> Result<()> {
-        if !installed_binary.exists() {
-            return Ok(());
-        }
-        fs::remove_file(installed_binary).with_context(|| {
-            format!(
-                "Failed to remove existing installed binary {}",
-                installed_binary.display()
-            )
-        })
-    }
-
     fn should_bootstrap_current_install(&self, _binary_path: &Path) -> Result<bool> {
         Ok(false)
     }

@@ -30,10 +30,6 @@ impl InstallerOps for Platform {
         unavailable()
     }
 
-    fn prepare_atomic_replace(&self, _installed_binary: &Path) -> Result<()> {
-        unavailable()
-    }
-
     fn should_bootstrap_current_install(&self, _binary_path: &Path) -> Result<bool> {
         Ok(false)
     }

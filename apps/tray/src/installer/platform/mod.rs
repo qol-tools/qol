@@ -7,7 +7,6 @@ trait InstallerOps {
     fn start_now(&self, binary_path: &Path) -> Result<()>;
     fn stop_running(&self, binary_path: &Path) -> Result<()>;
     fn set_executable_permissions(&self, path: &Path) -> Result<()>;
-    fn prepare_atomic_replace(&self, installed_binary: &Path) -> Result<()>;
     fn should_bootstrap_current_install(&self, binary_path: &Path) -> Result<bool>;
     fn register_application(&self, binary_path: &Path) -> Result<()>;
     fn ensure_desktop_registration(&self) -> Result<()>;
@@ -56,10 +55,6 @@ pub(super) fn stop_running(binary_path: &Path) -> Result<()> {
 
 pub(super) fn set_executable_permissions(path: &Path) -> Result<()> {
     Platform.set_executable_permissions(path)
-}
-
-pub(super) fn prepare_atomic_replace(installed_binary: &Path) -> Result<()> {
-    Platform.prepare_atomic_replace(installed_binary)
 }
 
 pub(super) fn should_bootstrap_current_install(binary_path: &Path) -> Result<bool> {
