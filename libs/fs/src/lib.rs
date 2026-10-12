@@ -1,9 +1,18 @@
 mod platform;
 
+pub use platform::file_identity;
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use tempfile::Builder;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileIdentity {
+    pub device: u64,
+    pub index: u64,
+    pub links: u64,
+}
 
 pub fn is_lowercase_sha256_digest(value: &str) -> bool {
     value.len() == 64
@@ -198,6 +207,26 @@ mod tests {
             let refused = copy_dir_all(&source, &temp.path().join("again")).unwrap_err();
             assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
         }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn hard_links_share_one_identity_and_count_every_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = temp.path().join("original");
+        let link = temp.path().join("link");
+        let other = temp.path().join("other");
+        fs::write(&original, "x").unwrap();
+        fs::hard_link(&original, &link).unwrap();
+        fs::write(&other, "x").unwrap();
+        let identity = |path: &Path| {
+            file_identity(path, &fs::symlink_metadata(path).unwrap()).expect("identity")
+        };
+
+        assert_eq!(identity(&original), identity(&link));
+        assert_eq!(identity(&original).links, 2);
+        assert_ne!(identity(&original).index, identity(&other).index);
+        assert_eq!(identity(&other).links, 1);
     }
 
     #[test]

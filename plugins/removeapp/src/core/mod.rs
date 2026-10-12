@@ -64,7 +64,7 @@ impl IdentitySnapshot {
         let ancestor_symlink = ancestor_has_symlink(path);
         match std::fs::symlink_metadata(path) {
             Ok(m) => {
-                let (dev, ino) = platform::metadata_identity(path, &m);
+                let identity = qol_fs::file_identity(path, &m);
                 let modified_ns = m
                     .modified()
                     .ok()
@@ -77,8 +77,8 @@ impl IdentitySnapshot {
                     is_file: m.is_file(),
                     len: Some(m.len()),
                     modified_ns,
-                    dev,
-                    ino,
+                    dev: identity.map(|identity| identity.device),
+                    ino: identity.map(|identity| identity.index),
                     file_name,
                     canonical_parent,
                     ancestor_symlink,

@@ -19,13 +19,6 @@ const UNSUPPORTED: &str = concat!(
     ": not implemented on this platform yet"
 );
 
-pub(crate) fn metadata_identity(
-    _path: &std::path::Path,
-    _meta: &std::fs::Metadata,
-) -> (Option<u64>, Option<u64>) {
-    (None, None)
-}
-
 impl AppPlatform for Platform {
     fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
         Err(anyhow!(UNSUPPORTED))

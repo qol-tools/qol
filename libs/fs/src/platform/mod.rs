@@ -8,6 +8,15 @@ mod macos;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub use fallback::file_identity;
+#[cfg(target_os = "linux")]
+pub use linux::file_identity;
+#[cfg(target_os = "macos")]
+pub use macos::file_identity;
+#[cfg(target_os = "windows")]
+pub use windows::file_identity;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(crate) use fallback::{
     prepare_file_removal, set_mode, set_private, set_private_dir, sync_parent,
 };

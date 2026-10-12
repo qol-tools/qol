@@ -5,18 +5,12 @@ mod store;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::AsRawHandle;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use qol_apps::shell_link::{LinkTarget, ShellLink};
 use qol_windowing::platform::windows::top_level_windows;
-use windows_sys::Win32::Storage::FileSystem::{
-    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-};
 
 use crate::cli::PLUGIN_ID;
 use crate::core::guards::{
@@ -283,28 +277,6 @@ fn matching_processes(install_dir: &Path) -> Vec<MatchedProcess> {
                 .map(|identity| MatchedProcess { pid, identity })
         })
         .collect()
-}
-
-pub(crate) fn metadata_identity(
-    path: &Path,
-    _meta: &std::fs::Metadata,
-) -> (Option<u64>, Option<u64>) {
-    file_identity(path).map_or((None, None), |(volume, index)| (Some(volume), Some(index)))
-}
-
-fn file_identity(path: &Path) -> Option<(u64, u64)> {
-    let file = fs::OpenOptions::new()
-        .access_mode(0)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .ok()?;
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-        return None;
-    }
-    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-    Some((u64::from(info.dwVolumeSerialNumber), index))
 }
 
 impl AppPlatform for Platform {

@@ -43,7 +43,7 @@ pub(super) fn scan(profile: &Path, access_times: bool, pacer: &mut Pacer) -> Uni
                 collect_files(&file_path, &mut unit.files, pacer);
                 continue;
             }
-            unit.files.push(FileStat::of(&metadata));
+            unit.files.push(FileStat::of(&file_path, &metadata));
             let name = file.file_name().to_string_lossy().into_owned();
             if name.ends_with(".json") {
                 if let Ok(bytes) = fs::read(&file_path) {

@@ -1,5 +1,4 @@
 use super::Pacer;
-use crate::platform::{BuildPlatform, Platform};
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
@@ -12,10 +11,10 @@ pub(super) struct FileStat {
 }
 
 impl FileStat {
-    pub(super) fn of(metadata: &fs::Metadata) -> Self {
-        match Platform.file_identity(metadata) {
+    pub(super) fn of(path: &Path, metadata: &fs::Metadata) -> Self {
+        match qol_fs::file_identity(path, metadata) {
             Some(identity) => Self {
-                identity: Some((identity.device, identity.inode)),
+                identity: Some((identity.device, identity.index)),
                 links: identity.links,
                 bytes: metadata.len(),
             },
@@ -38,7 +37,7 @@ pub(super) fn collect_files(path: &Path, files: &mut Vec<FileStat>, pacer: &mut 
         return;
     };
     if !metadata.is_dir() {
-        files.push(FileStat::of(&metadata));
+        files.push(FileStat::of(path, &metadata));
         return;
     }
     for entry in read_entries(path) {

@@ -356,14 +356,6 @@ impl Platform {
     }
 }
 
-pub(crate) fn metadata_identity(
-    _path: &std::path::Path,
-    meta: &std::fs::Metadata,
-) -> (Option<u64>, Option<u64>) {
-    use std::os::unix::fs::MetadataExt;
-    (Some(meta.dev()), Some(meta.ino()))
-}
-
 impl AppPlatform for Platform {
     fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
         let mut by_identity = BTreeMap::new();
