@@ -55,6 +55,7 @@ where
     F: FnOnce() -> Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
 {
     init_process();
+    release_toast_identity();
     let (tray, plugin_manager) = init()?;
     let _signal_listener = crate::signal::install_signal_handler(tray.shutdown_sender())?;
     let _tray = tray;
@@ -63,6 +64,7 @@ where
 
     shutdown_plugins(&plugin_manager);
     drop(plugin_manager);
+    release_toast_identity();
     log::info!("Shutdown signal received, exiting...");
     Ok(())
 }
@@ -86,6 +88,12 @@ fn spawn_tray(
     spawn_menu_event_handler(shutdown_tx, router, signal_quit);
 
     Ok(tray_icon)
+}
+
+fn release_toast_identity() {
+    if let Err(error) = qol_plugin_daemon::notification::platform::release_toast_identity() {
+        log::warn!("failed to remove the toast identity qol registered: {error}");
+    }
 }
 
 fn init_process() {
