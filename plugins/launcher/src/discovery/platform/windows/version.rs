@@ -3,6 +3,7 @@ use std::path::Path;
 use std::ptr::null_mut;
 
 use qol_platform::native::wide::wide_nul;
+use qol_platform::utf16::from_le_bytes;
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
@@ -92,19 +93,8 @@ fn translations(block: &[u8]) -> Vec<(u16, u16)> {
 }
 
 fn query_string(block: &[u8], sub_block: &str) -> Option<String> {
-    let text = utf16_text(query(block, sub_block, 2)?);
+    let text = from_le_bytes(query(block, sub_block, 2)?).trim().to_owned();
     (!text.is_empty()).then_some(text)
-}
-
-fn utf16_text(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .take_while(|unit| *unit != 0)
-        .collect();
-    String::from_utf16_lossy(&units).trim().to_owned()
 }
 
 #[cfg(test)]
@@ -117,18 +107,5 @@ mod tests {
             string_path((0x0409, 0x04b0), "CompanyName"),
             r"\StringFileInfo\040904b0\CompanyName"
         );
-    }
-
-    #[test]
-    fn utf16_values_stop_at_nul_and_trim() {
-        let cases = [
-            ("Microsoft Corporation\0\0", "Microsoft Corporation"),
-            (" 1.2.3 ", "1.2.3"),
-            ("", ""),
-        ];
-        for (raw, expected) in cases {
-            let bytes: Vec<u8> = raw.encode_utf16().flat_map(u16::to_le_bytes).collect();
-            assert_eq!(utf16_text(&bytes), expected, "{raw:?}");
-        }
     }
 }

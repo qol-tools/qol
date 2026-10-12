@@ -11,7 +11,8 @@ use windows_sys::Win32::System::Registry::{
     RRF_RT_REG_SZ, RRF_SUBKEY_WOW6432KEY, RRF_SUBKEY_WOW6464KEY,
 };
 
-use super::wide::{from_wide, wide_nul};
+use super::wide::wide_nul;
+use crate::utf16::from_le_bytes;
 
 const KEY_NAME_CAPACITY: usize = 256;
 
@@ -72,7 +73,7 @@ impl Key {
     }
 
     pub fn string(&self, name: &str) -> io::Result<Option<String>> {
-        Ok(get_value(self.0, None, name, RRF_RT_REG_SZ)?.map(|bytes| text(&bytes)))
+        Ok(get_value(self.0, None, name, RRF_RT_REG_SZ)?.map(|bytes| from_le_bytes(&bytes)))
     }
 
     pub fn dword(&self, name: &str) -> io::Result<Option<u32>> {
@@ -84,7 +85,7 @@ impl Key {
 
 pub fn read_string(hive: Hive, path: &str, name: &str, view: View) -> io::Result<Option<String>> {
     let flags = RRF_RT_REG_SZ | view_value_flag(view);
-    Ok(get_value(hive_handle(hive), Some(path), name, flags)?.map(|bytes| text(&bytes)))
+    Ok(get_value(hive_handle(hive), Some(path), name, flags)?.map(|bytes| from_le_bytes(&bytes)))
 }
 
 pub fn read_dword(hive: Hive, path: &str, name: &str) -> io::Result<Option<u32>> {
@@ -218,16 +219,6 @@ fn os_error(status: WIN32_ERROR) -> io::Error {
 
 fn data_bytes(units: &[u16]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(units.as_ptr().cast(), std::mem::size_of_val(units)) }
-}
-
-fn text(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| u16::from_le_bytes(*pair))
-        .collect();
-    from_wide(&units)
 }
 
 fn number(bytes: &[u8]) -> io::Result<u32> {

@@ -1,16 +1,10 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
+pub use crate::utf16::from_wide;
+
 pub fn wide_nul(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain(Some(0)).collect()
-}
-
-pub fn from_wide(units: &[u16]) -> String {
-    let end = units
-        .iter()
-        .position(|unit| *unit == 0)
-        .unwrap_or(units.len());
-    String::from_utf16_lossy(&units[..end])
 }
 
 #[cfg(test)]
@@ -26,20 +20,6 @@ mod tests {
         ];
         for (text, expected) in cases {
             assert_eq!(wide_nul(text), expected, "{text:?}");
-        }
-    }
-
-    #[test]
-    fn from_wide_stops_at_the_first_nul() {
-        let cases = [
-            ("Luna 2\0garbage", "Luna 2"),
-            ("no terminator", "no terminator"),
-            ("\0", ""),
-            ("", ""),
-        ];
-        for (raw, expected) in cases {
-            let units: Vec<u16> = raw.encode_utf16().collect();
-            assert_eq!(from_wide(&units), expected, "{raw:?}");
         }
     }
 

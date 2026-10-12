@@ -10,10 +10,10 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     AddAccessAllowedAceEx, EqualSid, GetAce, GetLengthSid, GetTokenInformation, InitializeAcl,
-    TokenOwner, TokenUser, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION,
+    TokenElevation, TokenOwner, TokenUser, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_REVISION,
     CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
     OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
+    TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
@@ -47,11 +47,7 @@ impl TokenSid {
     }
 
     fn query(process: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<TokenSid> {
-        let mut raw = null_mut();
-        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut raw) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let token = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let token = open_token(process)?;
         let mut needed = 0u32;
         unsafe { GetTokenInformation(token.as_raw_handle(), class, null_mut(), 0, &mut needed) };
         let mut buffer = vec![0u64; (needed as usize).div_ceil(8).max(1)];
@@ -69,6 +65,30 @@ impl TokenSid {
         }
         Ok(TokenSid(buffer))
     }
+}
+
+pub fn token_elevated(process: HANDLE) -> Option<bool> {
+    let token = open_token(process).ok()?;
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut length = 0u32;
+    let read = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenElevation,
+            std::ptr::from_mut(&mut elevation).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut length,
+        )
+    };
+    (read != 0).then_some(elevation.TokenIsElevated != 0)
+}
+
+fn open_token(process: HANDLE) -> io::Result<OwnedHandle> {
+    let mut raw = null_mut();
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut raw) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 
 pub fn is_owner_only(file: &File) -> io::Result<bool> {
@@ -196,6 +216,13 @@ mod tests {
         let user = TokenSid::current_user().unwrap();
         let again = TokenSid::user_of(unsafe { GetCurrentProcess() }).unwrap();
         assert!(user.same_as(&again));
+    }
+
+    #[test]
+    fn the_current_process_reports_its_token_elevation() {
+        let own = token_elevated(unsafe { GetCurrentProcess() });
+        assert!(own.is_some());
+        assert_eq!(token_elevated(null_mut()), None);
     }
 
     #[test]

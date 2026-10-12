@@ -6,6 +6,7 @@ use anyhow::{bail, Result};
 use crossbeam_channel::Receiver;
 use qol_hotkeys::grammar::{Key, Modifier as Mod};
 use qol_hotkeys::windows_keycode;
+use qol_platform::native::input::key_held;
 use qol_runtime::hook_liveness::SeenInput;
 use qol_runtime::keyremap_marker::KeyRemapMarker;
 use std::cell::{Cell, RefCell};
@@ -20,9 +21,8 @@ use windows_sys::Win32::System::Threading::{
     GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetKeyboardLayout, GetLastInputInfo, SendInput, VkKeyScanExW, HKL, INPUT,
-    INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, LASTINPUTINFO,
-    VIRTUAL_KEY,
+    GetKeyboardLayout, GetLastInputInfo, SendInput, VkKeyScanExW, HKL, INPUT, INPUT_0,
+    INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, LASTINPUTINFO, VIRTUAL_KEY,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, SetTimer,
@@ -63,7 +63,6 @@ pub(crate) fn cancel_recording(session_id: u64) {
     recorder::global().cancel(session_id);
 }
 
-/// No capture backend re-emits events on Windows; nothing to flush.
 pub(crate) fn release_held_keys() {}
 
 pub(crate) fn install(
@@ -265,7 +264,7 @@ fn handle_key(
         refresh_layout(&state.matcher);
     }
     let swallowed = recorder::claimed(key) || is_swallowing(&state.matcher, key);
-    let async_down = key_is_down(key);
+    let async_down = key_held(key);
     let observed_transition = HISTORY.with(|history| {
         let mut history = history.borrow_mut();
         if history.note_altgr(key_event) {
@@ -281,7 +280,7 @@ fn handle_key(
     };
     let observed = KeyCombo {
         mods: remapped.map_or_else(
-            || hook_rules::held_mods(key_is_down, synthetic_ctrl),
+            || hook_rules::held_mods(key_held, synthetic_ctrl),
             |marker| marker_mods(marker.mods),
         ),
         key,
@@ -315,10 +314,6 @@ fn foreground_layout() -> HKL {
     let window = unsafe { GetForegroundWindow() };
     let thread = unsafe { GetWindowThreadProcessId(window, std::ptr::null_mut()) };
     unsafe { GetKeyboardLayout(thread) }
-}
-
-fn key_is_down(key: u16) -> bool {
-    (unsafe { GetAsyncKeyState(i32::from(key)) }) < 0
 }
 
 fn is_swallowing(matcher: &RwLock<KeyMatcher>, key: VIRTUAL_KEY) -> bool {

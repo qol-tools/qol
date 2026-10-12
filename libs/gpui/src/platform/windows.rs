@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+use qol_platform::native::input::key_held;
 use qol_platform::native::wide::wide_nul;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::core::{GUID, HRESULT};
@@ -8,7 +9,7 @@ use windows_sys::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, VIRTUAL_KEY, VK_ESCAPE, VK_MENU, VK_SHIFT,
+    ReleaseCapture, VK_ESCAPE, VK_MENU, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN};
 
@@ -63,11 +64,6 @@ pub fn is_shift_held() -> bool {
 
 pub fn is_escape_held() -> bool {
     key_held(VK_ESCAPE)
-}
-
-fn key_held(key: VIRTUAL_KEY) -> bool {
-    let state = unsafe { GetAsyncKeyState(i32::from(key)) };
-    state as u16 & 0x8000 != 0
 }
 
 pub fn set_accessory_policy() {}

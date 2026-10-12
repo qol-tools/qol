@@ -3,12 +3,11 @@ use gpui::{point, px, App, Bounds, DisplayId, Pixels, Point};
 use qol_gpui::monitor::ActiveMonitor;
 use qol_gpui::placement::monitor_at_point;
 use qol_gpui::platform::{ghost_window_decorations, ghost_window_kind, is_escape_held};
+use qol_platform::native::input::key_held;
 use qol_windowing::WindowRect;
 use std::rc::Rc;
 use std::sync::mpsc;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VIRTUAL_KEY, VK_LBUTTON, VK_RBUTTON,
-};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_LBUTTON, VK_RBUTTON};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
 
 use crate::capture::frozen_frame::FrozenFrame;
@@ -26,7 +25,6 @@ use super::display::{
 };
 
 const MIN_TARGET_PX: i32 = 24;
-const KEY_DOWN_MASK: u16 = 0x8000;
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
     select_region_blocking_with(move |tx, cx| {
@@ -243,7 +241,7 @@ impl GlobalPointer for CursorSource {
     }
 
     fn primary_button_down(&self) -> bool {
-        key_down(primary_button())
+        key_held(primary_button())
     }
 }
 
@@ -259,11 +257,6 @@ fn primary_button() -> VIRTUAL_KEY {
         return VK_RBUTTON;
     }
     VK_LBUTTON
-}
-
-fn key_down(key: VIRTUAL_KEY) -> bool {
-    let state = unsafe { GetAsyncKeyState(i32::from(key)) };
-    state as u16 & KEY_DOWN_MASK != 0
 }
 
 #[cfg(test)]
