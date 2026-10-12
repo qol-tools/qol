@@ -25,10 +25,14 @@ fn describe(
     processes: &[ProcessEntry],
 ) -> String {
     let port = address.port();
-    let holder = listeners.iter().find(|entry| {
-        entry.port == port
-            && (entry.address.is_unspecified() || entry.address == IpAddr::V4(*address.ip()))
-    });
+    let ip = IpAddr::V4(*address.ip());
+    let holder = listeners
+        .iter()
+        .filter(|entry| {
+            let bound = entry.address.to_canonical();
+            entry.port == port && (bound.is_unspecified() || bound == ip)
+        })
+        .min_by_key(|entry| entry.address.to_canonical().is_ipv6());
     match holder.map(|entry| (entry.pid, entry.uid)) {
         Some((Some(pid), _)) => match processes.iter().find(|process| process.pid == pid) {
             Some(process) => format!(
@@ -48,7 +52,7 @@ fn describe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn loopback(port: u16) -> SocketAddrV4 {
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)
@@ -183,5 +187,42 @@ mod tests {
             ),
             "port 43210 is already in use by any.exe (pid 8)"
         );
+    }
+
+    #[test]
+    fn an_ipv4_holder_is_named_before_an_ipv6_one() {
+        let at = |address: IpAddr, pid| TcpListenerEntry {
+            address,
+            port: 43210,
+            pid: Some(pid),
+            uid: None,
+        };
+        let wildcard = || at(Ipv6Addr::UNSPECIFIED.into(), 6);
+        let processes = [
+            process(6, "dual.exe"),
+            process(7, "mapped.exe"),
+            process(8, "any.exe"),
+        ];
+        let cases = [
+            (vec![wildcard()], "dual.exe (pid 6)"),
+            (
+                vec![wildcard(), at(Ipv4Addr::UNSPECIFIED.into(), 8)],
+                "any.exe (pid 8)",
+            ),
+            (
+                vec![
+                    wildcard(),
+                    at(Ipv4Addr::LOCALHOST.to_ipv6_mapped().into(), 7),
+                ],
+                "mapped.exe (pid 7)",
+            ),
+            (vec![at(Ipv6Addr::LOCALHOST.into(), 6)], "another program"),
+        ];
+        for (listeners, holder) in cases {
+            assert_eq!(
+                describe(loopback(43210), true, &listeners, &processes),
+                format!("port 43210 is already in use by {holder}")
+            );
+        }
     }
 }
