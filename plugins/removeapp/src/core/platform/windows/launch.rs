@@ -1,20 +1,10 @@
 use std::collections::BTreeMap;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
-use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
-use qol_platform::native::wide::wide_nul;
-use windows_sys::Win32::Foundation::{ERROR_CANCELLED, WAIT_OBJECT_0};
-use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessId, WaitForSingleObject,
-};
-use windows_sys::Win32::UI::Shell::{
-    ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
-    SHELLEXECUTEINFOW,
-};
-use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use anyhow::{anyhow, bail, Result};
+use qol_platform::native::shell::{ShellProcess, ShellSpawn};
+use windows_sys::Win32::Foundation::ERROR_CANCELLED;
 
 use crate::cli::PLUGIN_ID;
 
@@ -24,19 +14,6 @@ use crate::core::platform::windows_paths::{same_path, Launch};
 const POLL: Duration = Duration::from_millis(250);
 const SUCCESS_CODES: &[u32] = &[0, 1605, 1614, 1641, 3010];
 
-struct Process(OwnedHandle);
-
-impl Process {
-    fn exited(&self) -> bool {
-        unsafe { WaitForSingleObject(self.0.as_raw_handle(), 0) == WAIT_OBJECT_0 }
-    }
-
-    fn exit_code(&self) -> Option<u32> {
-        let mut code = 0u32;
-        (unsafe { GetExitCodeProcess(self.0.as_raw_handle(), &mut code) } != 0).then_some(code)
-    }
-}
-
 pub(super) fn run_and_wait(
     launch: &Launch,
     elevate: bool,
@@ -44,7 +21,7 @@ pub(super) fn run_and_wait(
     registered: impl Fn() -> bool,
 ) -> Result<bool> {
     let process = start(launch, elevate)?;
-    let root_pid = unsafe { GetProcessId(process.0.as_raw_handle()) };
+    let root_pid = process.id();
     let root = i32::try_from(root_pid).unwrap_or(0);
     let started = Instant::now();
     let mut tracked = BTreeMap::new();
@@ -70,9 +47,12 @@ pub(super) fn run_and_wait(
         let descendants_alive = tracked
             .iter()
             .any(|(pid, start)| *pid != root && is_alive(&table, *pid, *start));
-        let uninstaller_running = !process.exited() || descendants_alive;
-        if !uninstaller_running && exited_at.is_none() {
-            check_exit_code(&process)?;
+        let exit_code = process.wait_timeout(Duration::ZERO).map_err(|error| {
+            anyhow!("{PLUGIN_ID}: could not read the uninstaller exit code: {error}")
+        })?;
+        let uninstaller_running = exit_code.is_none() || descendants_alive;
+        if let Some(code) = exit_code.filter(|_| !descendants_alive && exited_at.is_none()) {
+            check_exit_code(code)?;
             exited_at = Some(Instant::now());
         }
         let still_registered = registered();
@@ -101,12 +81,11 @@ pub(super) fn run_and_wait(
     }
 }
 
-fn check_exit_code(process: &Process) -> Result<()> {
-    match process.exit_code() {
-        Some(code) if SUCCESS_CODES.contains(&code) => Ok(()),
-        Some(code) => bail!("{PLUGIN_ID}: the uninstaller exited with code {code}"),
-        None => bail!("{PLUGIN_ID}: could not read the uninstaller exit code"),
+fn check_exit_code(code: u32) -> Result<()> {
+    if SUCCESS_CODES.contains(&code) {
+        return Ok(());
     }
+    bail!("{PLUGIN_ID}: the uninstaller exited with code {code}")
 }
 
 fn handler_running(launch: &Launch, entries: &[qol_process::ProcessEntry]) -> bool {
@@ -122,35 +101,19 @@ fn handler_running(launch: &Launch, entries: &[qol_process::ProcessEntry]) -> bo
         })
 }
 
-fn start(launch: &Launch, elevate: bool) -> Result<Process> {
-    let verb = wide_nul("runas");
-    let file = wide_nul(&launch.program);
-    let parameters = wide_nul(&launch.arguments);
-    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    info.hwnd = null_mut();
-    info.lpVerb = if elevate {
-        verb.as_ptr()
-    } else {
-        std::ptr::null()
+fn start(launch: &Launch, elevate: bool) -> Result<ShellProcess> {
+    let shown = ShellSpawn {
+        elevate,
+        visible: true,
     };
-    info.lpFile = file.as_ptr();
-    info.lpParameters = parameters.as_ptr();
-    info.nShow = SW_SHOWNORMAL;
-    if unsafe { ShellExecuteExW(&mut info) } == 0 {
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(ERROR_CANCELLED as i32) {
-            bail!("{PLUGIN_ID}: the administrator prompt was declined");
-        }
-        bail!("{PLUGIN_ID}: could not start {}: {error}", launch.program);
-    }
-    if info.hProcess.is_null() {
-        bail!("{PLUGIN_ID}: {} did not start a process", launch.program);
-    }
-    Ok(Process(unsafe {
-        OwnedHandle::from_raw_handle(info.hProcess)
-    }))
+    qol_platform::native::shell::shell_spawn(&launch.program, &launch.arguments, shown).map_err(
+        |error| {
+            if error.raw_os_error() == Some(ERROR_CANCELLED as i32) {
+                return anyhow!("{PLUGIN_ID}: the administrator prompt was declined");
+            }
+            anyhow!("{PLUGIN_ID}: could not start {}: {error}", launch.program)
+        },
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
