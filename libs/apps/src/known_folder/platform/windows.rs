@@ -42,6 +42,14 @@ pub fn user_content_folders() -> Vec<PathBuf> {
     .collect()
 }
 
+pub fn pictures_dir() -> Option<PathBuf> {
+    known_folder(&FOLDERID_Pictures)
+}
+
+pub fn videos_dir() -> Option<PathBuf> {
+    known_folder(&FOLDERID_Videos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +64,14 @@ mod tests {
         };
         assert!(named("Documents"));
         assert!(named("Downloads"));
+    }
+
+    #[test]
+    fn pictures_and_videos_resolve_to_absolute_known_folders() {
+        for (name, folder) in [("pictures", pictures_dir()), ("videos", videos_dir())] {
+            let folder = folder.unwrap_or_else(|| panic!("{name} folder is not known"));
+            assert!(folder.is_absolute(), "{name}: {}", folder.display());
+        }
+        assert_ne!(pictures_dir(), videos_dir());
     }
 }

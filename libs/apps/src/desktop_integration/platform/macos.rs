@@ -3,6 +3,8 @@ use std::process::Command;
 
 use super::RevealPlan;
 
+pub(super) use super::commands::{open, open_checked};
+
 pub(super) fn reveal_plan(path: &Path) -> RevealPlan {
     let mut command = Command::new("/usr/bin/open");
     command.arg("-R").arg(path);
