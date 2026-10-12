@@ -57,6 +57,7 @@ const SESSION_END_EXIT_GRACE: Duration = Duration::from_millis(4500);
 const STOP_EVENT_PREFIX: &str = "Local\\qol-stop-";
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const IMAGE_PATH_CAPACITY: usize = 32_768;
+const CONSOLE_HOST_IMAGE: &str = "conhost.exe";
 const MEMBER_LIMIT: usize = 64;
 static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
@@ -209,7 +210,7 @@ impl ProcessTreeGuard {
             ));
         }
         let failed_child_reaper = FailedChildReaper::start()?;
-        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED | CREATE_NO_WINDOW);
         Ok(PreparedSpawn {
             failed_child_reaper,
         })
@@ -439,7 +440,12 @@ impl ProcessTreeGuard {
     }
 
     pub(crate) fn tree_has_exited(&self) -> io::Result<bool> {
-        active_processes(self.job.0).map(|count| count == 0)
+        if active_processes(self.job.0)? == 0 {
+            return Ok(true);
+        }
+        Ok(!job_process_ids(self.job.0)?
+            .into_iter()
+            .any(holds_tree_open))
     }
 
     fn assigned_process_id(&self) -> io::Result<u32> {
@@ -1200,6 +1206,18 @@ pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
     }
     buffer.truncate(length as usize);
     Ok(PathBuf::from(OsString::from_wide(&buffer)))
+}
+
+fn holds_tree_open(pid: u32) -> bool {
+    let process = match open_process(pid, QUERY_AND_WAIT_ACCESS) {
+        Ok(process) => process,
+        Err(error) => return error.raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32),
+    };
+    let console_host = process_image_path(pid).is_ok_and(|path| {
+        path.file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(CONSOLE_HOST_IMAGE))
+    });
+    !console_host && unsafe { WaitForSingleObject(process.0, 0) } != WAIT_OBJECT_0
 }
 
 pub(crate) fn hide_console_window(command: &mut Command) -> &mut Command {
