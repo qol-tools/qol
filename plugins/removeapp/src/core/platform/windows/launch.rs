@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use qol_platform::native::wide::wide_nul;
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{ERROR_CANCELLED, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessId, WaitForSingleObject,
 };
@@ -23,22 +24,16 @@ use crate::core::platform::windows_paths::{same_path, Launch};
 const POLL: Duration = Duration::from_millis(250);
 const SUCCESS_CODES: &[u32] = &[0, 1605, 1614, 1641, 3010];
 
-struct Process(HANDLE);
-
-impl Drop for Process {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
-    }
-}
+struct Process(OwnedHandle);
 
 impl Process {
     fn exited(&self) -> bool {
-        unsafe { WaitForSingleObject(self.0, 0) == WAIT_OBJECT_0 }
+        unsafe { WaitForSingleObject(self.0.as_raw_handle(), 0) == WAIT_OBJECT_0 }
     }
 
     fn exit_code(&self) -> Option<u32> {
         let mut code = 0u32;
-        (unsafe { GetExitCodeProcess(self.0, &mut code) } != 0).then_some(code)
+        (unsafe { GetExitCodeProcess(self.0.as_raw_handle(), &mut code) } != 0).then_some(code)
     }
 }
 
@@ -49,11 +44,11 @@ pub(super) fn run_and_wait(
     registered: impl Fn() -> bool,
 ) -> Result<bool> {
     let process = start(launch, elevate)?;
-    let root = unsafe { GetProcessId(process.0) };
-    let root = i32::try_from(root).unwrap_or(0);
+    let root_pid = unsafe { GetProcessId(process.0.as_raw_handle()) };
+    let root = i32::try_from(root_pid).unwrap_or(0);
     let started = Instant::now();
     let mut tracked = BTreeMap::new();
-    if let Some(start) = qol_app_icon::process_start_time_us(root) {
+    if let Some(start) = qol_process::process_start_time(root_pid) {
         tracked.insert(root, start);
     }
     let mut exited_at: Option<Instant> = None;
@@ -67,7 +62,7 @@ pub(super) fn run_and_wait(
                 Some(ProcessRow {
                     pid,
                     parent_pid: i32::try_from(entry.parent).ok()?,
-                    start: qol_app_icon::process_start_time_us(pid),
+                    start: qol_process::process_start_time(entry.pid),
                 })
             })
             .collect();
@@ -153,7 +148,9 @@ fn start(launch: &Launch, elevate: bool) -> Result<Process> {
     if info.hProcess.is_null() {
         bail!("{PLUGIN_ID}: {} did not start a process", launch.program);
     }
-    Ok(Process(info.hProcess))
+    Ok(Process(unsafe {
+        OwnedHandle::from_raw_handle(info.hProcess)
+    }))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

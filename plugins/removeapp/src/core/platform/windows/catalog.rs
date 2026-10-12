@@ -540,7 +540,7 @@ fn owns_dir(dir: &Path, keys: &BTreeSet<String>, roots: &Roots, probe: &impl Pat
 
 fn name_matches(dir_name: &str, key: &str) -> bool {
     let dir = alnum(dir_name);
-    dir.len() >= 3 && !is_generic(&normalize(dir_name)) && alnum(key).starts_with(&dir)
+    dir.len() >= 3 && !is_generic(&normalize(dir_name)) && alnum(key) == dir
 }
 
 fn alnum(value: &str) -> String {
@@ -894,6 +894,22 @@ mod tests {
         ];
         for (location, expected) in cases {
             assert_eq!(location.registry_path(), PathBuf::from(expected));
+        }
+    }
+
+    #[test]
+    fn a_folder_matches_only_a_whole_app_name() {
+        let cases = [
+            ("Steam", "steam app 570", false),
+            ("Steam", "steam", true),
+            ("7-Zip", "7-zip", true),
+            ("OneDrive", "onedrive", true),
+            ("Pro", "program x", false),
+            ("Common Files", "common files", false),
+            ("Go", "go", false),
+        ];
+        for (dir, key, expected) in cases {
+            assert_eq!(name_matches(dir, key), expected, "{dir} {key}");
         }
     }
 
