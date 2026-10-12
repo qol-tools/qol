@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4};
 use std::path::Path;
 
 use super::super::{TcpConnectionEntry, TcpListenerEntry};
@@ -11,6 +11,7 @@ const TABLES: [&str; 2] = [IPV4_TABLE, "/proc/net/tcp6"];
 const LISTEN_STATE: &str = "0A";
 
 struct Socket {
+    address: IpAddr,
     port: u16,
     uid: u32,
     inode: u64,
@@ -33,6 +34,7 @@ pub fn tcp_listeners() -> io::Result<Vec<TcpListenerEntry>> {
     Ok(sockets
         .into_iter()
         .map(|socket| TcpListenerEntry {
+            address: socket.address,
             port: socket.port,
             pid: owners.get(&socket.inode).copied(),
             uid: Some(socket.uid),
@@ -85,12 +87,34 @@ fn connected_sockets(table: &str) -> impl Iterator<Item = Connection> + '_ {
 
 fn ipv4_endpoint(field: &str) -> Option<SocketAddrV4> {
     let (address, port) = field.split_once(':')?;
-    let address = u32::from_str_radix(address, 16).ok()?;
     let port = u16::from_str_radix(port, 16).ok()?;
-    Some(SocketAddrV4::new(
-        Ipv4Addr::from(address.to_ne_bytes()),
-        port,
-    ))
+    Some(SocketAddrV4::new(ipv4_address(address)?, port))
+}
+
+fn ipv4_address(hex: &str) -> Option<Ipv4Addr> {
+    let word = u32::from_str_radix(hex, 16).ok()?;
+    Some(Ipv4Addr::from(word.to_ne_bytes()))
+}
+
+fn table_address(hex: &str) -> Option<IpAddr> {
+    if hex.len() == 8 {
+        return ipv4_address(hex).map(IpAddr::V4);
+    }
+    if hex.len() != 32 {
+        return None;
+    }
+    let bytes: Vec<u8> = (0..4)
+        .map(|index| {
+            hex.get(index * 8..index * 8 + 8)
+                .and_then(|word| u32::from_str_radix(word, 16).ok())
+        })
+        .collect::<Option<Vec<u32>>>()?
+        .into_iter()
+        .flat_map(u32::to_ne_bytes)
+        .collect();
+    Some(IpAddr::V6(Ipv6Addr::from(
+        <[u8; 16]>::try_from(bytes).ok()?,
+    )))
 }
 
 fn listening_sockets(table: &str) -> impl Iterator<Item = Socket> + '_ {
@@ -99,8 +123,9 @@ fn listening_sockets(table: &str) -> impl Iterator<Item = Socket> + '_ {
         if *fields.get(3)? != LISTEN_STATE {
             return None;
         }
-        let (_, port) = fields.get(1)?.rsplit_once(':')?;
+        let (address, port) = fields.get(1)?.rsplit_once(':')?;
         Some(Socket {
+            address: table_address(address)?,
             port: u16::from_str_radix(port, 16).ok()?,
             uid: fields.get(7)?.parse().ok()?,
             inode: fields.get(9)?.parse().ok()?,
@@ -161,11 +186,17 @@ mod tests {
 ";
 
     #[test]
-    fn only_listening_rows_are_read_with_their_port_owner_and_inode() {
-        let sockets: Vec<(u16, u32, u64)> = listening_sockets(TABLE)
-            .map(|socket| (socket.port, socket.uid, socket.inode))
+    fn only_listening_rows_are_read_with_their_address_port_owner_and_inode() {
+        let sockets: Vec<(IpAddr, u16, u32, u64)> = listening_sockets(TABLE)
+            .map(|socket| (socket.address, socket.port, socket.uid, socket.inode))
             .collect();
-        assert_eq!(sockets, [(42732, 1001, 4242), (8080, 1000, 4444)]);
+        assert_eq!(
+            sockets,
+            [
+                (Ipv4Addr::LOCALHOST.into(), 42732, 1001, 4242),
+                (Ipv6Addr::LOCALHOST.into(), 8080, 1000, 4444)
+            ]
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::io;
 use std::mem::offset_of;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4};
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
@@ -18,14 +18,21 @@ const TABLE_READ_ATTEMPTS: usize = 3;
 pub fn tcp_listeners() -> io::Result<Vec<TcpListenerEntry>> {
     let ipv4 = ipv4_rows(TCP_TABLE_OWNER_PID_LISTENER)?
         .into_iter()
-        .map(|row| listener(row.dwLocalPort, row.dwOwningPid));
+        .map(|row| {
+            let address = Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes());
+            listener(address.into(), row.dwLocalPort, row.dwOwningPid)
+        });
     let ipv6 = owner_pid_rows::<MIB_TCP6ROW_OWNER_PID>(
         AF_INET6,
         TCP_TABLE_OWNER_PID_LISTENER,
         offset_of!(MIB_TCP6TABLE_OWNER_PID, table),
-    )?
+    )
+    .unwrap_or_default()
     .into_iter()
-    .map(|row| listener(row.dwLocalPort, row.dwOwningPid));
+    .map(|row| {
+        let address = Ipv6Addr::from(row.ucLocalAddr);
+        listener(address.into(), row.dwLocalPort, row.dwOwningPid)
+    });
     Ok(ipv4.chain(ipv6).collect())
 }
 
@@ -40,8 +47,9 @@ pub fn tcp_connections() -> io::Result<Vec<TcpConnectionEntry>> {
         .collect())
 }
 
-fn listener(local_port: u32, pid: u32) -> TcpListenerEntry {
+fn listener(address: IpAddr, local_port: u32, pid: u32) -> TcpListenerEntry {
     TcpListenerEntry {
+        address,
         port: table_port(local_port),
         pid: Some(pid),
         uid: None,

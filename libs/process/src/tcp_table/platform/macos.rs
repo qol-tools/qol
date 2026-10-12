@@ -1,4 +1,5 @@
 use std::io;
+use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 
 use super::super::{TcpConnectionEntry, TcpListenerEntry};
@@ -38,14 +39,27 @@ fn named_sockets(text: &str) -> impl Iterator<Item = (Option<u32>, &str)> {
 fn parse_listeners(text: &str) -> Vec<TcpListenerEntry> {
     named_sockets(text)
         .filter_map(|(pid, name)| {
-            let (_, port) = name.rsplit_once(':')?;
+            let (host, port) = name.rsplit_once(':')?;
             Some(TcpListenerEntry {
+                address: listener_address(host)?,
                 port: port.parse().ok()?,
                 pid,
                 uid: None,
             })
         })
         .collect()
+}
+
+fn listener_address(host: &str) -> Option<IpAddr> {
+    if host == "*" {
+        return Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    }
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    let host = host.split_once('%').map_or(host, |(address, _)| address);
+    host.parse().ok()
 }
 
 fn parse_connections(text: &str) -> Vec<TcpConnectionEntry> {
@@ -64,17 +78,29 @@ fn parse_connections(text: &str) -> Vec<TcpConnectionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::net::{Ipv6Addr, SocketAddrV4};
 
     #[test]
     fn each_listening_name_is_read_under_the_process_above_it() {
-        let parsed =
-            parse_listeners("p501\nf7\nn127.0.0.1:43210\nf9\nn[::1]:43210\np88\nf4\nn*:8080\n");
-        let rows: Vec<(u16, Option<u32>)> =
-            parsed.iter().map(|entry| (entry.port, entry.pid)).collect();
+        let parsed = parse_listeners(
+            "p501\nf7\nn127.0.0.1:43210\nf9\nn[::1]:43210\np88\nf4\nn*:8080\nf5\nn[fe80::1%lo0]:5353\n",
+        );
+        let rows: Vec<(IpAddr, u16, Option<u32>)> = parsed
+            .iter()
+            .map(|entry| (entry.address, entry.port, entry.pid))
+            .collect();
         assert_eq!(
             rows,
-            [(43210, Some(501)), (43210, Some(501)), (8080, Some(88))]
+            [
+                (Ipv4Addr::LOCALHOST.into(), 43210, Some(501)),
+                (Ipv6Addr::LOCALHOST.into(), 43210, Some(501)),
+                (Ipv4Addr::UNSPECIFIED.into(), 8080, Some(88)),
+                (
+                    Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1).into(),
+                    5353,
+                    Some(88)
+                ),
+            ]
         );
     }
 

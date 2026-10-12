@@ -1,4 +1,4 @@
-use std::net::SocketAddrV4;
+use std::net::{IpAddr, SocketAddrV4};
 
 mod platform;
 
@@ -6,6 +6,7 @@ pub use platform::{tcp_connections, tcp_listeners};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TcpListenerEntry {
+    pub address: IpAddr,
     pub port: u16,
     pub pid: Option<u32>,
     pub uid: Option<u32>,
@@ -33,7 +34,9 @@ mod tests {
         assert!(
             listed
                 .iter()
-                .any(|entry| entry.port == port && entry.pid == Some(std::process::id())),
+                .any(|entry| entry.address == std::net::Ipv4Addr::LOCALHOST
+                    && entry.port == port
+                    && entry.pid == Some(std::process::id())),
             "port {port} missing from {listed:?}"
         );
     }
