@@ -8,6 +8,8 @@ pub(crate) mod jobs;
 pub(crate) mod platform;
 pub mod version;
 
+pub use platform::recover_interrupted_update;
+
 static LATEST_VERSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static UPDATE_STATE: OnceLock<Mutex<UpdateState>> = OnceLock::new();
@@ -410,6 +412,7 @@ pub(crate) async fn install_host_update(
         return Ok(());
     };
     log::error!("Self-update failed: {error:#}");
+    platform::recover_interrupted_update();
     if let Some(record) = record {
         let _ = std::fs::remove_file(record);
     }
@@ -504,10 +507,31 @@ pub(super) fn verify_host_update(
         &str,
     ) -> qol_artifact::ArtifactExpectation,
 ) -> Result<()> {
+    verify_release_binary(
+        path,
+        qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+        expected_version,
+        target_expectation,
+    )
+}
+
+pub(super) fn verify_release_binary(
+    path: &Path,
+    binary: &str,
+    expected_version: Option<&str>,
+    target_expectation: fn(
+        qol_artifact::ArtifactExpectation,
+        &str,
+    ) -> qol_artifact::ArtifactExpectation,
+) -> Result<()> {
     let running = qol_conventions::artifact::current()
         .ok_or_else(|| anyhow::anyhow!("running build identity is unavailable"))?;
-    let expectation =
-        host_update_expectation(&running.target, expected_version, target_expectation);
+    let expectation = release_expectation(
+        binary,
+        &running.target,
+        expected_version,
+        target_expectation,
+    )?;
     let inspected = qol_artifact::verify_path(path, &expectation)?;
     log::info!(
         "[artifact-identity] verified self-update binary path={} version={} slices={}",
@@ -518,24 +542,27 @@ pub(super) fn verify_host_update(
     Ok(())
 }
 
-fn host_update_expectation(
+fn release_expectation(
+    binary: &str,
     running_target: &str,
     expected_version: Option<&str>,
     target_expectation: fn(
         qol_artifact::ArtifactExpectation,
         &str,
     ) -> qol_artifact::ArtifactExpectation,
-) -> qol_artifact::ArtifactExpectation {
+) -> Result<qol_artifact::ArtifactExpectation> {
+    let role = qol_conventions::artifact::tray_binary_role(binary)
+        .ok_or_else(|| anyhow::anyhow!("{binary} is not a qol-tray release binary"))?;
     let mut expectation = qol_artifact::ArtifactExpectation::production(
-        qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
+        binary,
         qol_conventions::artifact::TRAY_PACKAGE_NAME,
-        qol_conventions::artifact::BuildRole::Host,
+        role,
     );
     expectation = target_expectation(expectation, running_target);
     if let Some(version) = expected_version {
         expectation = expectation.with_version(version);
     }
-    expectation
+    Ok(expectation)
 }
 
 #[cfg(test)]
@@ -625,11 +652,13 @@ mod tests {
     #[test]
     fn self_update_policy_rejects_wrong_version_target_and_intent() {
         let target = "x86_64-unknown-linux-gnu";
-        let expectation = host_update_expectation(
+        let expectation = release_expectation(
+            qol_conventions::artifact::TRAY_HOST_BINARY_NAME,
             target,
             Some("3.41.0"),
             qol_artifact::ArtifactExpectation::with_exact_target,
-        );
+        )
+        .unwrap();
         qol_artifact::verify_identity(&update_identity("3.41.0", target), &expectation).unwrap();
 
         let wrong_version = update_identity("3.40.6", target);
@@ -641,6 +670,33 @@ mod tests {
         let mut development = update_identity("3.41.0", target);
         development.intent = BuildIntent::Development;
         assert!(qol_artifact::verify_identity(&development, &expectation).is_err());
+    }
+
+    #[test]
+    fn installer_updates_are_checked_against_the_installer_identity() {
+        let target = "x86_64-pc-windows-msvc";
+        let expectation = release_expectation(
+            qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
+            target,
+            Some("3.41.0"),
+            qol_artifact::ArtifactExpectation::with_exact_target,
+        )
+        .unwrap();
+        let mut installer = update_identity("3.41.0", target);
+        installer.binary = qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME.to_string();
+        installer.role = BuildRole::Installer;
+        qol_artifact::verify_identity(&installer, &expectation).unwrap();
+
+        let host = update_identity("3.41.0", target);
+        assert!(qol_artifact::verify_identity(&host, &expectation).is_err());
+
+        assert!(release_expectation(
+            "qol-tray-unknown",
+            target,
+            None,
+            qol_artifact::ArtifactExpectation::with_exact_target,
+        )
+        .is_err());
     }
 
     #[test]

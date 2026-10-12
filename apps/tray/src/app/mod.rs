@@ -16,8 +16,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
-use qol_conventions::DEFAULT_PORT;
-
 pub(crate) fn run() -> Result<()> {
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
@@ -58,7 +56,18 @@ pub(crate) fn run() -> Result<()> {
 
     let generation = qol_tray::dev_generation::current();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
+    let _instance = if generation.is_shadow() || rolling_restart {
+        None
+    } else {
+        let Some(instance) = qol_tray::single_instance::claim() else {
+            log::warn!("qol-tray is already running");
+            qol_tray::surfaces::native_notifications::show_already_running();
+            return Ok(());
+        };
+        Some(instance)
+    };
     let mut owns_host_surface = false;
+    updates::recover_interrupted_update();
     qol_tray::installer::ensure_installed_desktop_registration();
     if generation.is_shadow() {
         log::info!("Starting shadow dev generation");
@@ -67,12 +76,6 @@ pub(crate) fn run() -> Result<()> {
     } else {
         if let Err(e) = qol_tray::installer::bootstrap_current_install() {
             log::error!("Failed to bootstrap current install: {}", e);
-        }
-
-        if is_already_running() {
-            log::warn!("qol-tray is already running on port {}", DEFAULT_PORT);
-            qol_tray::surfaces::native_notifications::show_already_running();
-            return Ok(());
         }
 
         if let Err(e) = qol_tray::paths::init_runtime_dirs() {
@@ -216,12 +219,6 @@ fn qol_tray_version() -> String {
 fn run_startup_doctor() {
     let report = qol_tray::doctor::auto_fix_startup();
     log::info!("{}", qol_tray::doctor::startup_doctor_summary(&report));
-}
-
-fn is_already_running() -> bool {
-    use std::net::{SocketAddr, TcpStream};
-    let addr: SocketAddr = ([127, 0, 0, 1], DEFAULT_PORT).into();
-    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 
 struct InitResult {

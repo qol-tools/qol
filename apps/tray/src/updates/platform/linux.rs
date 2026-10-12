@@ -12,6 +12,8 @@ use super::super::{latest_version, verify_host_update, GITHUB_REPO};
 use super::InstallKind;
 use super::{download, unix};
 
+pub(super) fn recover_interrupted_update() {}
+
 pub(super) fn detect_install_kind() -> InstallKind {
     let executable = std::env::current_exe()
         .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))

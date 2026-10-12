@@ -16,6 +16,18 @@ pub(super) fn dev_update_url() -> Option<String> {
 }
 
 pub(super) async fn download_asset(url: &str, dest: &Path, events: &EventBus) -> Result<()> {
+    download_to(url, dest, |percent| {
+        events.send(DaemonEvent::UpdateProgress { percent });
+        super::super::record_update_progress(percent);
+    })
+    .await
+}
+
+pub(super) async fn download_to(
+    url: &str,
+    dest: &Path,
+    mut on_percent: impl FnMut(u8),
+) -> Result<()> {
     let request = crate::features::plugin_store::github::build_github_request(
         &crate::features::plugin_store::blob_client(),
         url,
@@ -35,8 +47,7 @@ pub(super) async fn download_asset(url: &str, dest: &Path, events: &EventBus) ->
             .map(|t| ((downloaded * 100) / t).min(100) as u8)
             .unwrap_or(0);
         if percent != last_percent {
-            events.send(DaemonEvent::UpdateProgress { percent });
-            super::super::record_update_progress(percent);
+            on_percent(percent);
             last_percent = percent;
         }
     }

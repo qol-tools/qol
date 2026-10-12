@@ -41,3 +41,7 @@ pub(super) async fn download_and_install(
 pub(crate) fn detect_install_kind() -> InstallKind {
     active::detect_install_kind()
 }
+
+pub fn recover_interrupted_update() {
+    active::recover_interrupted_update();
+}
