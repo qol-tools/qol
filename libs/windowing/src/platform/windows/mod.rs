@@ -70,6 +70,10 @@ impl Window {
         WindowId::from_u32(self.0 as usize as u32)
     }
 
+    pub fn handle(self) -> HWND {
+        self.0
+    }
+
     pub fn exists(self) -> bool {
         unsafe { IsWindow(self.0) != 0 }
     }
