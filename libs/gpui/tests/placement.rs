@@ -12,8 +12,12 @@ fn mon(x: f32, y: f32, w: f32, h: f32) -> MonitorBounds {
     }
 }
 
-fn center_x(bounds: Bounds<Pixels>) -> f64 {
-    bounds.origin.x.to_f64() + bounds.size.width.to_f64() / 2.0
+fn native(value: Pixels, monitor: &ActiveMonitor) -> f64 {
+    (value.to_f64() * f64::from(monitor.scale())).round()
+}
+
+fn native_center_x(bounds: Bounds<Pixels>, monitor: &ActiveMonitor) -> f64 {
+    native(bounds.origin.x + bounds.size.width / 2.0, monitor)
 }
 
 #[test]
@@ -55,7 +59,12 @@ fn from_event_resolves_monitor_only_for_carrying_events() {
         let resolved = ActiveMonitor::from_event(&event);
         assert_eq!(resolved.is_some(), expects_monitor, "event: {event:?}");
         if let Some(monitor) = resolved {
-            assert_eq!(monitor.size(), (2560.0, 1440.0), "event: {event:?}");
+            let scale = monitor.scale();
+            assert_eq!(
+                monitor.size(),
+                (2560.0 / scale, 1440.0 / scale),
+                "event: {event:?}"
+            );
         }
     }
 }
@@ -63,14 +72,16 @@ fn from_event_resolves_monitor_only_for_carrying_events() {
 #[test]
 fn centered_bounds_matches_known_placements() {
     let middle = ActiveMonitor::from_bounds(mon(1920.0, 0.0, 2560.0, 1440.0));
+    let scale = middle.scale();
     let cases = [
-        (size(px(500.0), px(42.0)), 2950.0, 466.0),
-        (size(px(1000.0), px(144.0)), 2700.0, 432.0),
+        ((500.0, 42.0), 2950.0, 466.0),
+        ((1000.0, 144.0), 2700.0, 432.0),
     ];
-    for (win, expected_x, expected_y) in cases {
+    for ((width, height), expected_x, expected_y) in cases {
+        let win = size(px(width / scale), px(height / scale));
         let bounds = middle.centered_bounds(win);
-        assert_eq!(bounds.origin.x.to_f64(), expected_x, "win: {win:?}");
-        assert_eq!(bounds.origin.y.to_f64(), expected_y, "win: {win:?}");
+        assert_eq!(native(bounds.origin.x, &middle), expected_x, "win: {win:?}");
+        assert_eq!(native(bounds.origin.y, &middle), expected_y, "win: {win:?}");
     }
 }
 
@@ -85,8 +96,8 @@ fn different_window_sizes_share_one_monitor_center() {
     let launcher = size(px(500.0), px(42.0));
     for m in monitors {
         let monitor = ActiveMonitor::from_bounds(m);
-        let picker_center = center_x(monitor.centered_bounds(picker));
-        let launcher_center = center_x(monitor.centered_bounds(launcher));
+        let picker_center = native_center_x(monitor.centered_bounds(picker), &monitor);
+        let launcher_center = native_center_x(monitor.centered_bounds(launcher), &monitor);
         assert_eq!(
             picker_center, launcher_center,
             "two ghost sizes must center on the same monitor: {m:?}"
