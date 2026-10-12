@@ -24,6 +24,7 @@ use windows_sys::Win32::Foundation::{
     ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES, FILETIME,
     HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
+use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
 use windows_sys::Win32::System::Console::{
     SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT,
     CTRL_SHUTDOWN_EVENT,
@@ -43,9 +44,9 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, GetExitCodeProcess, GetProcessId, GetProcessTimes, OpenEventW,
     OpenProcess, QueryFullProcessImageNameW, SetEvent, TerminateProcess, WaitForSingleObject,
-    CREATE_SUSPENDED, EVENT_MODIFY_STATE, INFINITE, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    THREAD_SUSPEND_RESUME,
+    CREATE_SUSPENDED, EVENT_MODIFY_STATE, INFINITE, PROCESS_NAME_FORMAT, PROCESS_NAME_NATIVE,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE,
+    PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread};
 
@@ -61,6 +62,7 @@ const STOP_EVENT_PREFIX: &str = "Local\\qol-stop-";
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const IMAGE_PATH_CAPACITY: usize = 32_768;
 const SYSTEM_DIRECTORY_CAPACITY: usize = 260;
+const DOS_DEVICE_CAPACITY: usize = 260;
 const CONSOLE_HOST_IMAGE: &str = "conhost.exe";
 const MEMBER_LIMIT: usize = 64;
 static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1228,12 +1230,16 @@ pub(crate) fn processes() -> io::Result<Vec<ProcessEntry>> {
 
 pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
     let process = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    image_path(&process, PROCESS_NAME_WIN32)
+}
+
+fn image_path(process: &OwnedHandle, format: PROCESS_NAME_FORMAT) -> io::Result<PathBuf> {
     let mut buffer = vec![0u16; IMAGE_PATH_CAPACITY];
     let mut length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
     let read = unsafe {
         QueryFullProcessImageNameW(
             process.as_raw_handle(),
-            PROCESS_NAME_WIN32,
+            format,
             buffer.as_mut_ptr(),
             &mut length,
         )
@@ -1250,9 +1256,25 @@ fn holds_tree_open(pid: u32) -> bool {
         Ok(process) => process,
         Err(error) => return error.raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32),
     };
-    let console_host =
-        process_image_path(pid).is_ok_and(|path| is_console_host(&path, system_directory()));
+    let console_host = image_path(&process, PROCESS_NAME_NATIVE)
+        .is_ok_and(|path| is_console_host(&path, native_system_directory()));
     !console_host && unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } != WAIT_OBJECT_0
+}
+
+fn native_system_directory() -> Option<PathBuf> {
+    let directory = system_directory()?;
+    let directory = directory.to_str()?;
+    let drive = directory.get(..2).filter(|drive| drive.ends_with(':'))?;
+    let mut device = [0u16; DOS_DEVICE_CAPACITY];
+    let length = unsafe {
+        QueryDosDeviceW(
+            wide_nul(drive).as_ptr(),
+            device.as_mut_ptr(),
+            device.len() as u32,
+        )
+    } as usize;
+    let device = from_wide(device.get(..length)?);
+    (!device.is_empty()).then(|| PathBuf::from(device + &directory[drive.len()..]))
 }
 
 fn is_console_host(image: &Path, system_directory: Option<PathBuf>) -> bool {
@@ -1533,6 +1555,16 @@ mod tests {
             (r"C:\Users\me\Downloads\conhost.exe", system(), false),
             (r"C:\Windows\System32\cmd.exe", system(), false),
             (r"C:\Windows\System32\conhost.exe", None, false),
+            (
+                r"\Device\HarddiskVolume3\Windows\System32\conhost.exe",
+                Some(PathBuf::from(r"\Device\HarddiskVolume3\Windows\System32")),
+                true,
+            ),
+            (
+                r"\Device\HarddiskVolume4\Windows\System32\conhost.exe",
+                Some(PathBuf::from(r"\Device\HarddiskVolume3\Windows\System32")),
+                false,
+            ),
         ];
         for (image, directory, expected) in cases {
             assert_eq!(
@@ -1540,6 +1572,44 @@ mod tests {
                 expected,
                 "{image}"
             );
+        }
+    }
+
+    fn console_host_of(leader: u32) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let host = processes().unwrap().into_iter().find(|entry| {
+                entry.parent == leader
+                    && process_image_path(entry.pid)
+                        .is_ok_and(|path| is_console_host(&path, system_directory()))
+            });
+            if let Some(host) = host {
+                return host.pid;
+            }
+            assert!(Instant::now() < deadline, "no console host started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn an_exiting_console_host_never_holds_the_tree_open() {
+        for _ in 0..5 {
+            let mut leader = Command::new("cmd")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .unwrap();
+            let host = console_host_of(leader.id());
+            let process = open_process(host, QUERY_AND_WAIT_ACCESS).unwrap();
+            drop(leader.stdin.take());
+            leader.wait().unwrap();
+
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
+                assert!(!holds_tree_open(host));
+                assert!(Instant::now() < deadline, "console host never exited");
+            }
         }
     }
 
