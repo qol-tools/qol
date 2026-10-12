@@ -1,10 +1,12 @@
 pub(crate) mod ico;
+mod plugin_release;
 mod registration;
 mod registry;
 pub(in crate::installer) mod run_key;
 pub(crate) mod shortcut;
 
 use anyhow::{Context, Result};
+use qol_host_fixes::residency::HostResidency;
 use qol_platform::windows_path::same_path;
 use std::fs;
 use std::os::windows::process::CommandExt;
@@ -19,12 +21,15 @@ use windows_sys::Win32::System::Console::{
 };
 
 use self::registration::Layout;
-use super::windows_rules::uninstall::{plan, UninstallPlan};
+use super::windows_rules::uninstall::{
+    deferred_removal_script, plan, run_uninstall, FileRemoval, UninstallPlan, UninstallSteps,
+};
 use super::InstallerOps;
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const SHUTDOWN_POLL: Duration = Duration::from_millis(100);
 const TERMINATE_GRACE: Duration = Duration::from_secs(5);
+const DEFERRED_REMOVAL_LOG: &str = "qol-tray-uninstall.log";
 
 pub(super) struct Platform;
 
@@ -104,10 +109,55 @@ impl InstallerOps for Platform {
 
     fn uninstall(&self, binary_path: &Path) -> Result<()> {
         let layout = Layout::for_binary(binary_path)?;
-        self.stop_running(binary_path)?;
-        run_key::remove()?;
-        registration::remove(&layout)?;
-        remove_install_files(binary_path)
+        run_uninstall(&mut WindowsUninstall {
+            platform: self,
+            binary: binary_path,
+            layout: &layout,
+        })
+    }
+}
+
+struct WindowsUninstall<'a> {
+    platform: &'a Platform,
+    binary: &'a Path,
+    layout: &'a Layout,
+}
+
+impl UninstallSteps for WindowsUninstall<'_> {
+    fn end_residency(&mut self) -> Result<()> {
+        if !HostResidency::current().is_resident() {
+            return Ok(());
+        }
+        crate::features::resident_policy::apply_residency(HostResidency::Portable)
+    }
+
+    fn release_plugins(&mut self) -> Result<()> {
+        plugin_release::release_all()
+    }
+
+    fn stop_running(&mut self) -> Result<()> {
+        self.platform.stop_running(self.binary)
+    }
+
+    fn remove_autostart(&mut self) -> Result<()> {
+        run_key::remove()
+    }
+
+    fn remove_shell_entries(&mut self) -> Result<()> {
+        registration::remove_shell_entries(self.layout)
+    }
+
+    fn remove_toast_identity(&mut self) -> Result<()> {
+        qol_plugin_daemon::notification::platform::uninstall_toast_identity()
+            .context("Failed to remove the QoL Tray notification identity")
+    }
+
+    fn remove_files(&mut self) -> Result<FileRemoval> {
+        remove_install_files(self.binary)
+    }
+
+    fn remove_uninstall_entry(&mut self) -> Result<()> {
+        registration::remove_uninstall_entry()
     }
 }
 
@@ -145,7 +195,7 @@ fn install_uninstaller(destination: &Path) -> Result<()> {
     })
 }
 
-fn remove_install_files(binary_path: &Path) -> Result<()> {
+fn remove_install_files(binary_path: &Path) -> Result<FileRemoval> {
     let install_dir = qol_apps::tray_install::install_dir()?;
     let current = std::env::current_exe().context("Failed to determine the uninstaller path")?;
     match plan(binary_path, &install_dir, &current)? {
@@ -154,33 +204,46 @@ fn remove_install_files(binary_path: &Path) -> Result<()> {
                 std::io::ErrorKind::NotFound => Ok(()),
                 _ => Err(error),
             })
-            .with_context(|| format!("Failed to remove {}", root.display())),
+            .with_context(|| format!("Failed to remove {}", root.display()))
+            .map(|()| FileRemoval::Done),
         UninstallPlan::RemoveAfterExit(root) => {
             registration::remove_file_if_present(binary_path)?;
             if let Some(marker) = crate::paths::install_marker::marker_path(binary_path) {
                 registration::remove_file_if_present(&marker)?;
             }
-            remove_after_exit(&root)
+            remove_after_exit(&root)?;
+            Ok(FileRemoval::Deferred)
         }
     }
 }
 
 fn remove_after_exit(root: &Path) -> Result<()> {
-    let root = root.display().to_string();
-    if root.contains(['"', '%', '!']) {
-        log::warn!("leaving {root} in place: its path cannot be quoted for cmd.exe");
-        return Ok(());
-    }
-    let mut command = Command::new("cmd.exe");
+    let log = std::env::temp_dir().join(DEFERRED_REMOVAL_LOG);
+    let reg = qol_process::system_program_path("reg.exe");
+    let Some(script) = deferred_removal_script(
+        &root.display().to_string(),
+        &log.display().to_string(),
+        &reg.display().to_string(),
+        registration::UNINSTALL_KEY,
+    ) else {
+        anyhow::bail!(
+            "{} was left in place: its path cannot be quoted for cmd.exe",
+            root.display()
+        );
+    };
+    let mut command = qol_process::system_command("cmd.exe");
     qol_process::hide_console_window(&mut command)
-        .raw_arg(format!(
-            "/d /v:off /c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{root}\""
-        ))
+        .raw_arg(script)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .with_context(|| format!("Failed to schedule removal of {root}"))?;
+        .with_context(|| format!("Failed to schedule removal of {}", root.display()))?;
+    log::warn!(
+        "{} is removed after this uninstaller exits; the result is written to {}",
+        root.display(),
+        log.display()
+    );
     Ok(())
 }
 

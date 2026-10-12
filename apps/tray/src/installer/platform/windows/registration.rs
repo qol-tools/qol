@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use super::registry::{self, Value};
 use super::shortcut::{self, Shortcut};
 
-const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\qol-tray";
+pub(super) const UNINSTALL_KEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\qol-tray";
 const PUBLISHER: &str = "qol-tools";
 const ABOUT_URL: &str = "https://github.com/qol-tools/qol";
 const ICON_FILE: &str = "qol-tray.ico";
@@ -49,6 +50,7 @@ pub(super) fn uninstaller_filename() -> String {
 pub(super) fn register(layout: &Layout) -> Result<()> {
     write_icon(&layout.icon)?;
     write_shortcut(layout)?;
+    write_toast_identity()?;
     write_uninstall_entry(layout)
 }
 
@@ -57,11 +59,15 @@ pub(super) fn refresh(layout: &Layout) -> Result<()> {
     if !layout.shortcut.exists() {
         write_shortcut(layout)?;
     }
+    write_toast_identity()?;
     write_uninstall_entry(layout)
 }
 
-pub(super) fn remove(layout: &Layout) -> Result<()> {
-    registry::delete_key(UNINSTALL_KEY)?;
+pub(super) fn remove_uninstall_entry() -> Result<()> {
+    registry::delete_key(UNINSTALL_KEY)
+}
+
+pub(super) fn remove_shell_entries(layout: &Layout) -> Result<()> {
     remove_file_if_present(&layout.shortcut)?;
     unless_missing(
         std::fs::remove_dir_all(&layout.launcher_entries),
@@ -81,6 +87,11 @@ fn unless_missing(removed: std::io::Result<()>, path: &Path) -> Result<()> {
         }
         _ => Ok(()),
     }
+}
+
+fn write_toast_identity() -> Result<()> {
+    qol_plugin_daemon::notification::platform::install_toast_identity()
+        .context("Failed to register the QoL Tray notification identity")
 }
 
 fn write_shortcut(layout: &Layout) -> Result<()> {
