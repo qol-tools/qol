@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use qol_platform::utf16::from_le_bytes;
 
+mod platform;
+
 const HEADER_SIZE: usize = 0x4C;
 const LINK_CLSID: [u8; 16] = [
     0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
@@ -162,11 +164,11 @@ fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
 }
 
 fn ansi(bytes: &[u8]) -> String {
-    bytes
+    let end = bytes
         .iter()
-        .take_while(|byte| **byte != 0)
-        .map(|byte| char::from(*byte))
-        .collect()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    platform::decode_ansi(&bytes[..end])
 }
 
 fn non_empty(value: String) -> Option<String> {
