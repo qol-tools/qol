@@ -1,5 +1,4 @@
 use std::io;
-use std::net::SocketAddrV4;
 use std::process::Command;
 
 use super::super::{TcpConnectionEntry, TcpListenerEntry};
@@ -65,7 +64,7 @@ fn parse_connections(text: &str) -> Vec<TcpConnectionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     #[test]
     fn each_listening_name_is_read_under_the_process_above_it() {
