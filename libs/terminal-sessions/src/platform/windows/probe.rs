@@ -8,7 +8,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindow, IsWindowVisible, GW
 
 use super::attach::{ConsoleFile, Detached};
 use super::peb::process_strings;
-use super::report::{live_rows, ConsoleReport, ProcessDetail};
+use super::report::{live_rows, without_helpers, ConsoleReport, ProcessDetail};
 
 const MAX_ATTACHED: usize = 256;
 const TITLE_CAPACITY: usize = 1024;
@@ -41,11 +41,14 @@ fn read_attached(root: u32) -> Option<ConsoleReport> {
     let own = std::process::id();
     let mut list = [0u32; MAX_ATTACHED];
     let count = unsafe { GetConsoleProcessList(list.as_mut_ptr(), list.len() as u32) } as usize;
-    let attached: Vec<i32> = list[..count.min(list.len())]
+    let processes: Vec<ProcessDetail> = list[..count.min(list.len())]
         .iter()
         .filter(|pid| **pid != own)
         .filter_map(|pid| i32::try_from(*pid).ok())
+        .map(process_detail)
         .collect();
+    let processes = without_helpers(processes, image_path);
+    let attached: Vec<i32> = processes.iter().map(|detail| detail.pid).collect();
     let mut title = [0u16; TITLE_CAPACITY];
     let title_length = unsafe { GetConsoleTitleW(title.as_mut_ptr(), title.len() as u32) } as usize;
     let window = unsafe { GetConsoleWindow() };
@@ -58,17 +61,6 @@ fn read_attached(root: u32) -> Option<ConsoleReport> {
     let width = u32::try_from(i32::from(view.Right) - i32::from(view.Left) + 1).ok()?;
     let live_screen = live_rows(view.Top, view.Bottom, info.dwCursorPosition.Y)
         .map(|(top, bottom)| rows(&output, view.Left, top, bottom, width));
-    let processes = attached
-        .iter()
-        .map(|pid| {
-            let strings = process_strings(*pid);
-            ProcessDetail {
-                pid: *pid,
-                cwd: strings.cwd,
-                command_line: strings.command_line,
-            }
-        })
-        .collect();
     Some(ConsoleReport {
         root: i32::try_from(root).ok()?,
         attached,
@@ -80,6 +72,20 @@ fn read_attached(root: u32) -> Option<ConsoleReport> {
         live_screen,
         processes,
     })
+}
+
+fn process_detail(pid: i32) -> ProcessDetail {
+    let strings = process_strings(pid);
+    ProcessDetail {
+        pid,
+        cwd: strings.cwd,
+        command_line: strings.command_line,
+    }
+}
+
+fn image_path(pid: i32) -> Option<String> {
+    let path = qol_process::process_image_path(u32::try_from(pid).ok()?).ok()?;
+    path.to_str().map(str::to_owned)
 }
 
 fn rows(output: &ConsoleFile, left: i16, top: i16, bottom: i16, width: u32) -> String {

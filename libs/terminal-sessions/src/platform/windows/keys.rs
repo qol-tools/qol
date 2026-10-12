@@ -1,5 +1,10 @@
+use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
+
 const SYNTHESIZED_KEY: u16 = 0;
 const LEFT_CTRL_PRESSED: u32 = 0x0008;
+const LINE_BREAK: char = '\n';
+const PASTE_START: &str = "\u{1b}[200~";
+const PASTE_END: &str = "\u{1b}[201~";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct KeyStroke {
@@ -55,79 +60,150 @@ impl Key {
     }
 }
 
-fn flatten(text: &str) -> String {
-    let mut flat = String::with_capacity(text.len());
-    let mut in_break = false;
-    for character in text.chars() {
-        if !character.is_control() {
-            flat.push(character);
-            in_break = false;
-        } else if character.is_whitespace() && !in_break {
-            flat.push(' ');
-            in_break = true;
-        }
-    }
-    flat
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Delivery {
+    Paste,
+    Typed,
 }
 
-pub(super) fn text_strokes(text: &str) -> Vec<KeyStroke> {
-    flatten(text)
+impl Delivery {
+    pub(super) fn for_console_mode(mode: Option<u32>) -> Delivery {
+        match mode {
+            Some(mode) if mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0 => Delivery::Paste,
+            _ => Delivery::Typed,
+        }
+    }
+}
+
+fn sanitize(text: &str) -> String {
+    let mut clean = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\r' => {
+                characters.next_if_eq(&'\n');
+                clean.push(LINE_BREAK);
+            }
+            LINE_BREAK => clean.push(LINE_BREAK),
+            _ if !character.is_control() => clean.push(character),
+            _ if character.is_whitespace() => clean.push(' '),
+            _ => {}
+        }
+    }
+    clean
+}
+
+fn typed(unit: u16) -> [KeyStroke; 2] {
+    [true, false].map(|down| KeyStroke {
+        down,
+        virtual_key: SYNTHESIZED_KEY,
+        scan_code: 0,
+        unit,
+        control: 0,
+    })
+}
+
+pub(super) fn text_strokes(text: &str, delivery: Delivery) -> Vec<KeyStroke> {
+    let clean = sanitize(text);
+    if clean.is_empty() {
+        return Vec::new();
+    }
+    match delivery {
+        Delivery::Paste => [
+            PASTE_START,
+            clean.replace(LINE_BREAK, "\r").as_str(),
+            PASTE_END,
+        ]
+        .concat()
         .encode_utf16()
-        .flat_map(|unit| {
-            [true, false].map(|down| KeyStroke {
-                down,
-                virtual_key: SYNTHESIZED_KEY,
-                scan_code: 0,
-                unit,
-                control: 0,
+        .flat_map(typed)
+        .collect(),
+        Delivery::Typed => clean
+            .split(LINE_BREAK)
+            .enumerate()
+            .flat_map(|(index, line)| {
+                let enter = (index > 0).then(|| Key::Enter.strokes());
+                enter
+                    .into_iter()
+                    .flatten()
+                    .chain(line.encode_utf16().flat_map(typed))
             })
-        })
-        .collect()
+            .collect(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn typed(unit: u16) -> [KeyStroke; 2] {
-        [true, false].map(|down| KeyStroke {
-            down,
-            virtual_key: 0,
-            scan_code: 0,
-            unit,
-            control: 0,
-        })
+    fn units(text: &str) -> Vec<KeyStroke> {
+        text.encode_utf16().flat_map(typed).collect()
     }
 
     #[test]
-    fn line_breaks_and_tabs_collapse_to_one_space_and_other_controls_drop() {
+    fn line_breaks_survive_whitespace_controls_become_spaces_and_other_controls_drop() {
         let cases = [
             ("", ""),
             ("cargo test", "cargo test"),
-            ("one\ntwo", "one two"),
-            ("one\r\ntwo", "one two"),
-            ("one\n\n\ttwo\n", "one two "),
+            ("one\ntwo", "one\ntwo"),
+            ("one\r\ntwo", "one\ntwo"),
+            ("one\rtwo", "one\ntwo"),
+            ("one\n\n\ttwo\n", "one\n\n two\n"),
+            ("a\t\tb", "a  b"),
             ("bell\u{7}less", "bellless"),
-            ("esc\u{1b}[200~x", "esc[200~x"),
+            ("esc\u{1b}[201~x", "esc[201~x"),
             ("caf\u{e9} \u{1f600}", "caf\u{e9} \u{1f600}"),
         ];
         for (text, expected) in cases {
-            assert_eq!(flatten(text), expected, "{text:?}");
+            assert_eq!(sanitize(text), expected, "{text:?}");
         }
     }
 
     #[test]
-    fn every_utf16_unit_is_a_synthesized_key_down_then_up() {
-        let cases: [(&str, Vec<u16>); 5] = [
+    fn typed_text_sends_each_line_break_as_enter_and_every_unit_as_a_key() {
+        let enter = Key::Enter.strokes().to_vec();
+        let cases = [
             ("", vec![]),
-            ("ab", vec![0x61, 0x62]),
-            ("a\nb", vec![0x61, 0x20, 0x62]),
-            ("\u{e9}", vec![0xE9]),
-            ("\u{1f600}", vec![0xD83D, 0xDE00]),
+            ("ab", units("ab")),
+            ("\u{e9}", units("\u{e9}")),
+            ("\u{1f600}", [typed(0xD83D), typed(0xDE00)].concat()),
+            ("a\nb", [units("a"), enter.clone(), units("b")].concat()),
+            (
+                "a\r\n\r\nb\n",
+                [units("a"), enter.repeat(2), units("b"), enter.clone()].concat(),
+            ),
+            ("a\u{1b}b", units("ab")),
         ];
-        for (text, units) in cases {
-            let expected: Vec<KeyStroke> = units.into_iter().flat_map(typed).collect();
-            assert_eq!(text_strokes(text), expected, "{text:?}");
+        for (text, expected) in cases {
+            assert_eq!(text_strokes(text, Delivery::Typed), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn pasted_text_is_one_bracketed_paste_that_user_text_cannot_close() {
+        let cases = [
+            ("", vec![]),
+            ("ab", units("\u{1b}[200~ab\u{1b}[201~")),
+            ("a\r\nb\n", units("\u{1b}[200~a\rb\r\u{1b}[201~")),
+            ("a\u{1b}[201~b", units("\u{1b}[200~a[201~b\u{1b}[201~")),
+            ("\u{7}", vec![]),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(text_strokes(text, Delivery::Paste), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn only_consoles_reading_virtual_terminal_input_get_a_bracketed_paste() {
+        let cases = [
+            (None, Delivery::Typed),
+            (Some(0), Delivery::Typed),
+            (Some(0x01F7), Delivery::Typed),
+            (Some(ENABLE_VIRTUAL_TERMINAL_INPUT), Delivery::Paste),
+            (Some(0x0200 | 0x0001), Delivery::Paste),
+        ];
+        for (mode, expected) in cases {
+            assert_eq!(Delivery::for_console_mode(mode), expected, "{mode:?}");
         }
     }
 

@@ -8,7 +8,7 @@ use windows_sys::Win32::System::Console::{
 };
 
 use super::attach::{ConsoleFile, Detached};
-use super::keys::{text_strokes, Key, KeyStroke};
+use super::keys::{text_strokes, Delivery, Key, KeyStroke};
 
 pub(super) const INSERT: &str = "insert";
 pub(super) const SUBMIT: &str = "submit";
@@ -63,7 +63,8 @@ pub(super) fn run(args: &[String]) -> io::Result<String> {
     let input = ConsoleFile::open("CONIN$")?;
     let written = match request {
         Request::Text { submit, .. } => {
-            let mut written = write(&input, &text_strokes(&text))?;
+            let delivery = Delivery::for_console_mode(console_mode(&input));
+            let mut written = write(&input, &text_strokes(&text, delivery))?;
             if submit {
                 std::thread::sleep(SUBMIT_DELAY);
                 written += write(&input, &Key::Enter.strokes())?;
@@ -84,9 +85,13 @@ pub(super) fn run(args: &[String]) -> io::Result<String> {
 }
 
 fn processed_input(input: &ConsoleFile) -> bool {
+    console_mode(input).is_some_and(|mode| mode & ENABLE_PROCESSED_INPUT != 0)
+}
+
+fn console_mode(input: &ConsoleFile) -> Option<u32> {
     let mut mode = 0u32;
     let read = unsafe { GetConsoleMode(input.0, &mut mode) };
-    read != 0 && mode & ENABLE_PROCESSED_INPUT != 0
+    (read != 0).then_some(mode)
 }
 
 fn record(stroke: &KeyStroke) -> INPUT_RECORD {
@@ -179,7 +184,8 @@ mod tests {
 
     #[test]
     fn records_are_key_events_with_one_repeat() {
-        for stroke in text_strokes("a").into_iter().chain(Key::CtrlC.strokes()) {
+        let strokes = text_strokes("a\nb", Delivery::Typed);
+        for stroke in strokes.into_iter().chain(Key::CtrlC.strokes()) {
             let record = record(&stroke);
             assert_eq!(u32::from(record.EventType), KEY_EVENT);
             let key = unsafe { record.Event.KeyEvent };

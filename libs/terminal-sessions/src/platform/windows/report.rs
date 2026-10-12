@@ -3,6 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use serde::{Deserialize, Serialize};
 
 use super::launch::{tag_in_command_line, LaunchTag};
+use crate::console::{PROBE_COMMAND, SEND_COMMAND, TITLE_COMMAND};
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
 
 const TERMINAL_HOSTS: &[&str] = &["alacritty", "wezterm-gui", "windowsterminal"];
@@ -22,6 +23,8 @@ const SCRIPT_TOOLS: &[(&str, &str)] = &[
     ("@anthropic-ai/claude-code/", "claude"),
     ("@openai/codex/", "codex"),
 ];
+const HELPER_IMAGE_PREFIX: &str = "qol";
+const HELPER_COMMANDS: &[&str] = &[PROBE_COMMAND, SEND_COMMAND, TITLE_COMMAND];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ProcessDetail {
@@ -75,6 +78,43 @@ pub(super) fn process_table() -> Vec<ProcessEntry> {
 pub(super) fn image_stem(name: &str) -> String {
     let lower = name.to_lowercase();
     lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
+}
+
+pub(super) fn without_helpers(
+    processes: Vec<ProcessDetail>,
+    image_of: impl Fn(i32) -> Option<String>,
+) -> Vec<ProcessDetail> {
+    processes
+        .into_iter()
+        .filter(|detail| {
+            let image = image_of(detail.pid);
+            !console_helper(image.as_deref(), detail.command_line.as_deref())
+        })
+        .collect()
+}
+
+fn console_helper(image: Option<&str>, command_line: Option<&str>) -> bool {
+    let Some(command_line) = command_line else {
+        return false;
+    };
+    let (program, rest) = split_argument(command_line);
+    let (command, _) = split_argument(rest);
+    let name = image.unwrap_or(program);
+    let file_name = name.rsplit(['\\', '/']).next().unwrap_or(name);
+    image_stem(file_name).starts_with(HELPER_IMAGE_PREFIX) && HELPER_COMMANDS.contains(&command)
+}
+
+fn split_argument(command_line: &str) -> (&str, &str) {
+    let trimmed = command_line.trim_start();
+    if let Some(quoted) = trimmed.strip_prefix('"') {
+        return match quoted.split_once('"') {
+            Some((argument, rest)) => (argument, rest),
+            None => (quoted, ""),
+        };
+    }
+    trimmed
+        .split_once(char::is_whitespace)
+        .unwrap_or((trimmed, ""))
 }
 
 pub(super) fn candidate_roots(table: &[ProcessEntry], own_pid: i32) -> Vec<Root> {
@@ -363,6 +403,62 @@ mod tests {
     fn foreground_starts_at_the_root_and_follows_the_attached_tree() {
         let order = foreground_order(&report(202, &[204, 202, 203, 999]), &table());
         assert_eq!(order, vec![202, 203, 204, 999]);
+    }
+
+    #[test]
+    fn console_helpers_are_known_by_their_image_and_helper_command() {
+        let qol = Some(r"C:\qol\qol.exe");
+        let cases = [
+            (qol, Some("qol.exe console-probe 202"), true),
+            (qol, Some("qol console-title 202"), true),
+            (qol, Some("qol.exe console-launch 41-1"), false),
+            (qol, Some("qol.exe sessions list"), false),
+            (qol, None, false),
+            (None, Some("qol.exe   console-send 7 key esc"), true),
+            (None, Some(r#""C:\a b\qol.exe" console-probe 2"#), true),
+            (Some(r"C:\a\QOL-Tray.EXE"), Some("x console-send 2"), true),
+            (
+                Some(r"C:\t\probe.exe"),
+                Some("probe console-probe 2"),
+                false,
+            ),
+            (Some(r"C:\cmd.exe"), Some("cmd /c qol console-send"), false),
+            (None, None, false),
+        ];
+        for (image, line, expected) in cases {
+            assert_eq!(console_helper(image, line), expected, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_concurrent_console_helper_keeps_an_idle_shell_at_its_prompt() {
+        let helper = ProcessDetail {
+            pid: 500,
+            cwd: None,
+            command_line: Some("qol.exe console-send 202 insert".into()),
+        };
+        let shell = ProcessDetail {
+            pid: 202,
+            cwd: Some(r"C:\work\shell\".into()),
+            command_line: Some("pwsh.exe".into()),
+        };
+        let image_of = |pid: i32| (pid == 500).then(|| r"C:\qol\qol.exe".to_string());
+        let processes = without_helpers(vec![shell.clone(), helper], image_of);
+        assert_eq!(processes, vec![shell]);
+
+        let report = ConsoleReport {
+            root: 202,
+            attached: processes.iter().map(|detail| detail.pid).collect(),
+            processes,
+            ..ConsoleReport::default()
+        };
+        let backend = BackendId::new("console").unwrap();
+        let mut table = table();
+        table.push(process(500, 202, "qol.exe"));
+        let facts = session_facts(&backend, "202-1", &report, &table).unwrap();
+        assert!(facts.at_prompt);
+        assert_eq!(facts.reported_cmd, None);
+        assert_eq!(facts.foreground_pids, vec![202]);
     }
 
     #[test]
