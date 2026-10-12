@@ -9,6 +9,7 @@ const EXECUTABLE_SUFFIX: &str = ".exe";
 
 #[derive(Debug)]
 pub(super) struct Foreground {
+    own: Option<bool>,
     pid: u32,
     thread: u32,
     executable: String,
@@ -17,29 +18,29 @@ pub(super) struct Foreground {
 
 impl Default for Foreground {
     fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl Foreground {
+    pub(super) fn new(own: Option<bool>) -> Self {
         Self {
+            own,
             pid: 0,
             thread: 0,
             executable: String::new(),
             injectable: true,
         }
     }
-}
 
-impl Foreground {
     pub(super) fn refresh(&mut self) {
-        let window = unsafe { GetForegroundWindow() };
-        let mut pid = 0u32;
-        self.thread = if window.is_null() {
-            0
-        } else {
-            unsafe { GetWindowThreadProcessId(window, &mut pid) }
-        };
+        let (pid, thread) = foreground_ids();
+        self.thread = thread;
         if pid != self.pid {
             self.pid = pid;
-            self.executable = executable_name(pid).unwrap_or_default();
+            self.executable = image_name(pid).unwrap_or_default();
             self.injectable =
-                pid == 0 || elevation::can_inject(elevation::current(), elevation::of_process(pid));
+                pid == 0 || elevation::can_inject(self.own, elevation::of_process(pid));
         }
     }
 
@@ -56,15 +57,22 @@ impl Foreground {
     }
 }
 
-fn executable_name(pid: u32) -> Option<String> {
+fn foreground_ids() -> (u32, u32) {
+    let window = unsafe { GetForegroundWindow() };
+    if window.is_null() {
+        return (0, 0);
+    }
+    let mut pid = 0u32;
+    let thread = unsafe { GetWindowThreadProcessId(window, &mut pid) };
+    (pid, thread)
+}
+
+fn image_name(pid: u32) -> Option<String> {
     if pid == 0 {
         return None;
     }
-    qol_process::processes()
-        .ok()?
-        .into_iter()
-        .find(|entry| entry.pid == pid)
-        .map(|entry| entry.exe)
+    let path = qol_process::process_image_path(pid).ok()?;
+    Some(path.file_name()?.to_string_lossy().into_owned())
 }
 
 pub(super) fn app_id(executable: &str, excluded: &HashSet<String>) -> String {
@@ -92,6 +100,14 @@ fn strip_suffix(name: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_image_name_is_the_executable_file_name() {
+        let name = image_name(std::process::id()).expect("own image name");
+        assert!(name.to_ascii_lowercase().ends_with(".exe"), "{name}");
+        assert!(!name.contains('\\'), "{name}");
+        assert_eq!(image_name(0), None);
+    }
 
     #[test]
     fn excluded_apps_match_the_executable_loosely() {

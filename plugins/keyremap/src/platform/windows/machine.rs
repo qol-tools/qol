@@ -71,6 +71,7 @@ pub(super) struct Machine {
     emitted_bits: u8,
     held: Vec<(Source, Held)>,
     substituted: Vec<(u16, Option<u16>)>,
+    gap: bool,
 }
 
 impl Machine {
@@ -86,7 +87,34 @@ impl Machine {
         self.emitted_bits &= down_bits;
     }
 
+    pub(super) fn gap(&mut self) {
+        self.gap = true;
+    }
+
     pub(super) fn key(&mut self, vk: u16, down: bool, event: &Event<'_>) -> Decision {
+        let released = self.take_gap();
+        let decision = self.key_event(vk, down, event);
+        reconciled(released, decision, Output::Key { vk, down })
+    }
+
+    pub(super) fn button(
+        &mut self,
+        button: MouseButton,
+        down: bool,
+        event: &Event<'_>,
+    ) -> Decision {
+        let released = self.take_gap();
+        let decision = self.button_event(button, down, event);
+        reconciled(released, decision, Output::Button { button, down })
+    }
+
+    pub(super) fn wheel(&mut self, horizontal: bool, delta: i32, event: &Event<'_>) -> Decision {
+        let released = self.take_gap();
+        let decision = self.wheel_event(horizontal, delta, event);
+        reconciled(released, decision, Output::Wheel { horizontal, delta })
+    }
+
+    fn key_event(&mut self, vk: u16, down: bool, event: &Event<'_>) -> Decision {
         if !event.injectable && self.idle() {
             self.observe(vk, down);
             return Decision::pass();
@@ -102,12 +130,7 @@ impl Machine {
         }
     }
 
-    pub(super) fn button(
-        &mut self,
-        button: MouseButton,
-        down: bool,
-        event: &Event<'_>,
-    ) -> Decision {
+    fn button_event(&mut self, button: MouseButton, down: bool, event: &Event<'_>) -> Decision {
         if !down {
             let Some(index) = self.position(Source::Button(button)) else {
                 return Decision::pass();
@@ -138,7 +161,7 @@ impl Machine {
         }
     }
 
-    pub(super) fn wheel(&mut self, horizontal: bool, delta: i32, event: &Event<'_>) -> Decision {
+    fn wheel_event(&mut self, horizontal: bool, delta: i32, event: &Event<'_>) -> Decision {
         if !event.config.enabled || (!event.injectable && self.idle()) {
             return Decision::pass();
         }
@@ -176,6 +199,13 @@ impl Machine {
         self.move_mods_to(0, true, &mut outputs);
         self.physical_bits = 0;
         outputs
+    }
+
+    pub(super) fn take_gap(&mut self) -> Vec<Output> {
+        if !std::mem::take(&mut self.gap) || self.idle() {
+            return Vec::new();
+        }
+        self.release_all()
     }
 
     fn idle(&self) -> bool {
@@ -344,6 +374,18 @@ impl Machine {
     }
 }
 
+fn reconciled(mut released: Vec<Output>, decision: Decision, original: Output) -> Decision {
+    if released.is_empty() {
+        return decision;
+    }
+    if decision.swallow {
+        released.extend(decision.outputs);
+    } else {
+        released.push(original);
+    }
+    Decision::swallow(released)
+}
+
 fn repeat(vk: u16, held: &Held, physical: bool) -> Decision {
     match held {
         Held::Pass => passthrough(vk, true, physical),
@@ -380,6 +422,7 @@ mod tests {
         Typed(u16, &'static str),
         Button(bool),
         Wheel(i32),
+        Gap,
     }
 
     fn key(vk: u16, down: bool) -> Output {
@@ -408,6 +451,10 @@ mod tests {
             Input::Typed(vk, text) => machine.key(vk, true, &event(Some(text))),
             Input::Button(down) => machine.button(MouseButton::Left, down, &event(None)),
             Input::Wheel(delta) => machine.wheel(false, delta, &event(None)),
+            Input::Gap => {
+                machine.gap();
+                Decision::pass()
+            }
         }
     }
 
@@ -816,5 +863,59 @@ mod tests {
             vec![key(VK_C, false), key(VK_LWIN, false)]
         );
         assert_eq!(machine.physical_bits(), 0);
+    }
+
+    #[test]
+    fn a_gap_releases_what_a_lost_key_up_left_held() {
+        let cases = vec![
+            (
+                "caps lock held as control loses its key-up",
+                json!({ "modifier_keys": { "caps_lock": "control" } }),
+                vec![
+                    (
+                        Input::Key(VK_CAPITAL, true),
+                        true,
+                        vec![key(VK_LCONTROL, true)],
+                    ),
+                    (Input::Gap, false, vec![]),
+                    (
+                        Input::Key(VK_A, true),
+                        true,
+                        vec![key(VK_LCONTROL, false), key(VK_A, true)],
+                    ),
+                    (Input::Key(VK_A, false), false, vec![]),
+                ],
+            ),
+            (
+                "ctrl+c held as win+c loses both key-ups",
+                ctrl_to_cmd(),
+                vec![
+                    (Input::Key(VK_LCONTROL, true), false, vec![]),
+                    (
+                        Input::Key(VK_C, true),
+                        true,
+                        vec![key(VK_LCONTROL, false), key(VK_LWIN, true), key(VK_C, true)],
+                    ),
+                    (Input::Gap, false, vec![]),
+                    (
+                        Input::Key(VK_A, true),
+                        true,
+                        vec![key(VK_C, false), key(VK_LWIN, false), key(VK_A, true)],
+                    ),
+                ],
+            ),
+            (
+                "a gap while nothing is held changes nothing",
+                ctrl_to_cmd(),
+                vec![
+                    (Input::Gap, false, vec![]),
+                    (Input::Key(VK_A, true), false, vec![]),
+                    (Input::Key(VK_A, false), false, vec![]),
+                ],
+            ),
+        ];
+        for (name, raw, steps) in cases {
+            check(name, raw, "notepad.exe", steps);
+        }
     }
 }

@@ -6,6 +6,7 @@ mod keys;
 mod machine;
 mod profile;
 mod service;
+mod status;
 
 use anyhow::Result;
 use qol_headless::{CommandResult, DoctorCheckResult};
