@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use kqueue::{EventData, EventFilter, FilterFlag, Ident, Vnode, Watcher};
 
+const MAX_POLL_FAILURES: u32 = 3;
+
 pub(super) enum Wake {
     Changed,
     Stop,
+    Failed,
 }
 
 pub(super) struct Signal {
@@ -52,11 +55,19 @@ impl Signal {
     }
 
     pub(super) fn wait(&mut self) -> Wake {
+        let mut failures = 0;
         loop {
             let Some(event) = self.watcher.poll_forever(None) else {
-                log::warn!("notification mirror: kqueue wait failed");
-                return Wake::Stop;
+                failures += 1;
+                log::warn!(
+                    "notification mirror: kqueue wait failed ({failures}/{MAX_POLL_FAILURES})"
+                );
+                if failures >= MAX_POLL_FAILURES {
+                    return Wake::Failed;
+                }
+                continue;
             };
+            failures = 0;
             match (event.ident, event.data) {
                 (Ident::Fd(fd), _) if fd == self.stop => return Wake::Stop,
                 (_, EventData::Error(error)) => {
@@ -88,6 +99,10 @@ impl Signal {
             | FilterFlag::NOTE_DELETE
             | FilterFlag::NOTE_RENAME
             | FilterFlag::NOTE_REVOKE;
+        // Drop the previous watch so re-arming does not leak an fd or duplicate wakes.
+        let _ = self
+            .watcher
+            .remove_filename(&self.wal, EventFilter::EVFILT_VNODE);
         if let Err(error) = self
             .watcher
             .add_filename(&self.wal, EventFilter::EVFILT_VNODE, flags)

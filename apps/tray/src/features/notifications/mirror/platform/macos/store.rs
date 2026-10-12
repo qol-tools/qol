@@ -1,6 +1,6 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -67,34 +67,52 @@ pub(super) struct Session {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    stderr: ChildStderr,
 }
 
 impl Session {
     pub(super) fn open(db: &Path) -> Result<Self> {
         let mut child = Command::new(SQLITE)
             .arg("-readonly")
+            .arg("-bail")
             .arg("-json")
             .arg(db)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("failed to start {SQLITE}"))?;
         let stdin = child.stdin.take().context("sqlite3 stdin missing")?;
         let stdout = child.stdout.take().context("sqlite3 stdout missing")?;
+        let stderr = child.stderr.take().context("sqlite3 stderr missing")?;
         Ok(Self {
             child,
             stdin,
             stdout: BufReader::new(stdout),
+            stderr,
         })
     }
 
     pub(super) fn since(&mut self, cursor: Cursor) -> Result<Vec<Row>> {
-        writeln!(self.stdin, "{}\n{END_QUERY}", since_sql(cursor))
+        let reply = writeln!(self.stdin, "{}\n{END_QUERY}", since_sql(cursor))
             .and_then(|()| self.stdin.flush())
-            .context("sqlite3 stopped accepting queries")?;
-        let rows: Vec<RawRow> = parse_json(&read_reply(&mut self.stdout)?)?;
-        Ok(rows_from(rows))
+            .context("sqlite3 stopped accepting queries")
+            .and_then(|()| read_reply(&mut self.stdout));
+        match reply {
+            Ok(reply) => Ok(rows_from(parse_json(&reply)?)),
+            Err(error) => Err(self.with_stderr(error)),
+        }
+    }
+
+    /// `-bail` makes sqlite3 exit on a failed statement, so its stderr is complete here.
+    fn with_stderr(&mut self, error: anyhow::Error) -> anyhow::Error {
+        let _ = self.child.kill();
+        let mut message = String::new();
+        let _ = self.stderr.read_to_string(&mut message);
+        match message.trim() {
+            "" => error,
+            message => error.context(message.to_string()),
+        }
     }
 }
 

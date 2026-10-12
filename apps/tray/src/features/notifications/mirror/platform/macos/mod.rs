@@ -58,7 +58,19 @@ fn start() -> anyhow::Result<PipeWriter> {
 
 fn run(db: &Path, mut cursor: Cursor, mut signal: Signal, _stopped: PipeReader) {
     let mut session = None;
-    while let Wake::Changed = signal.wait() {
+    loop {
+        match signal.wait() {
+            Wake::Changed => {}
+            Wake::Stop => return,
+            Wake::Failed => {
+                // Free the slot so the next `sync(true)` restarts the mirror.
+                MIRROR
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                return;
+            }
+        }
         if session.is_none() {
             session = Session::open(db)
                 .inspect_err(|error| log::warn!("notification mirror: {error:#}"))
