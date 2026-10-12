@@ -8,11 +8,12 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(super) use listener::DaemonListener;
 
-const DAEMON_STOP_GRACE: Duration = Duration::from_secs(2);
+const DAEMON_STOP_GRACE: Duration = Duration::from_secs(3);
+const SESSION_END_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Default)]
 struct Incarnation {
@@ -20,6 +21,18 @@ struct Incarnation {
     token: Option<String>,
     endpoint: Option<std::path::PathBuf>,
     artifact: Option<qol_artifact::InspectedArtifact>,
+    process: Option<DaemonProcess>,
+}
+
+#[derive(Clone)]
+struct DaemonProcess {
+    pid: u32,
+    identity: String,
+}
+
+pub(super) struct StoppingDaemon {
+    plugin_id: String,
+    child: Child,
 }
 
 static DAEMON_INCARNATIONS: OnceLock<Mutex<HashMap<String, Incarnation>>> = OnceLock::new();
@@ -37,6 +50,7 @@ fn bump_daemon_incarnation(plugin_id: &str) -> u64 {
     entry.token = None;
     entry.endpoint = None;
     entry.artifact = None;
+    entry.process = None;
     entry.generation
 }
 
@@ -176,6 +190,11 @@ fn reaped_elsewhere(error: &std::io::Error) -> bool {
 }
 
 pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
+    finish_stops(begin_stop(plugin).into_iter().collect());
+    Ok(())
+}
+
+pub(super) fn begin_stop(plugin: &mut Plugin) -> Option<StoppingDaemon> {
     // qol-tray keeps its own copy of a pre-bound listener open so a crashed
     // daemon can respawn onto the same fd without re-binding (see
     // listener::bind_for_plugin). An explicit stop has no respawn coming, so
@@ -186,9 +205,7 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
     // reaped by the time the stop arrives.
     plugin.daemon_listener = None;
 
-    let Some(mut child) = plugin.daemon_process.take() else {
-        return Ok(());
-    };
+    let child = plugin.daemon_process.take()?;
     plugin.daemon_spawn_fingerprint = None;
     bump_daemon_incarnation(plugin.id.as_str());
 
@@ -198,10 +215,74 @@ pub(super) fn stop_daemon(plugin: &mut Plugin) -> Result<()> {
         plugin.id.as_str(),
         child.id(),
     );
-    if let Err(error) = crate::process_utils::terminate_owned(&mut child, DAEMON_STOP_GRACE) {
-        log::warn!("Error reaping daemon for {}: {}", plugin.id, error);
+    Some(StoppingDaemon {
+        plugin_id: plugin.id.to_string(),
+        child,
+    })
+}
+
+pub(super) fn finish_stops(daemons: Vec<StoppingDaemon>) {
+    finish_stops_by(daemons, Instant::now() + DAEMON_STOP_GRACE);
+}
+
+fn finish_stops_by(daemons: Vec<StoppingDaemon>, deadline: Instant) {
+    std::thread::scope(|scope| {
+        for mut daemon in daemons {
+            scope.spawn(move || finish_stop(&mut daemon, deadline));
+        }
+    });
+}
+
+fn finish_stop(daemon: &mut StoppingDaemon, deadline: Instant) {
+    let grace = deadline.saturating_duration_since(Instant::now());
+    if let Err(error) = crate::process_utils::terminate_owned(&mut daemon.child, grace) {
+        log::warn!("Error reaping daemon for {}: {}", daemon.plugin_id, error);
     }
-    Ok(())
+}
+
+pub(crate) fn stop_daemons_for_session_end(deadline: Instant) {
+    let signaled = live_daemon_processes()
+        .into_iter()
+        .filter(|(plugin_id, process)| request_session_end_stop(plugin_id, process))
+        .map(|(_, process)| process.pid)
+        .collect();
+    let running = wait_until_gone(signaled, deadline, qol_process::is_pid_gone);
+    if !running.is_empty() {
+        log::warn!("Daemons still running when the session ends: {running:?}");
+    }
+}
+
+fn live_daemon_processes() -> Vec<(String, DaemonProcess)> {
+    daemon_incarnations()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .filter_map(|(plugin_id, entry)| Some((plugin_id.clone(), entry.process.clone()?)))
+        .collect()
+}
+
+fn request_session_end_stop(plugin_id: &str, process: &DaemonProcess) -> bool {
+    match qol_process::request_stop_if_identity(process.pid, &process.identity) {
+        Ok(requested) => requested,
+        Err(error) => {
+            log::warn!(
+                "Failed to stop daemon {} for plugin {plugin_id} at session end: {error}",
+                process.pid
+            );
+            false
+        }
+    }
+}
+
+fn wait_until_gone(mut pids: Vec<u32>, deadline: Instant, gone: impl Fn(u32) -> bool) -> Vec<u32> {
+    loop {
+        pids.retain(|pid| !gone(*pid));
+        let now = Instant::now();
+        if pids.is_empty() || now >= deadline {
+            return pids;
+        }
+        std::thread::sleep(SESSION_END_POLL.min(deadline - now));
+    }
 }
 
 fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<String>) {
@@ -218,29 +299,28 @@ fn register_daemon(plugin: &mut Plugin, child: Child, spawn_fingerprint: Option<
     plugin.daemon_process = Some(child);
     plugin.daemon_spawn_fingerprint = spawn_fingerprint;
     bump_daemon_incarnation(plugin.id.as_str());
-    daemon_incarnations()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .entry(plugin.id.to_string())
-        .or_default()
-        .endpoint = super::action_executor::daemon_socket(plugin);
+    let identity = qol_process::process_identity(pid).ok();
+    {
+        let mut incarnations = daemon_incarnations()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let incarnation = incarnations.entry(plugin.id.to_string()).or_default();
+        incarnation.endpoint = super::action_executor::daemon_socket(plugin);
+        incarnation.process = identity.map(|identity| DaemonProcess { pid, identity });
+    }
     if let Err(error) = qol_process::bind_to_host_lifetime(pid) {
         log::warn!(
             "plugin {} daemon {pid} is not bound to the tray lifetime: {error}",
             plugin.id
         );
     }
-    track_desktop_state_pid(pid);
+    crate::desktop_state::add_ignore_pid(pid);
     super::daemon_tracker::registry::register(
         &crate::paths::runtime_pids_dir(),
         plugin.id.as_str(),
         pid,
     );
     log::info!("Registered ignore pid {} for plugin {}", pid, plugin.id);
-}
-
-pub(super) fn track_desktop_state_pid(pid: u32) {
-    platform::track_desktop_state_pid(pid);
 }
 
 pub(crate) fn current_daemon_token(plugin_id: &str) -> Option<String> {
@@ -454,6 +534,55 @@ items = []
             "daemon pid {} reaped by waitpid(-1) elsewhere must still be cleared",
             pid
         );
+    }
+
+    #[test]
+    fn waiting_for_stopped_daemons_ends_when_all_exit_or_the_deadline_passes() {
+        let polls = std::cell::Cell::new(0);
+        let gone = |pid: u32| {
+            polls.set(polls.get() + 1);
+            pid == 1 || polls.get() > 6
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        assert!(wait_until_gone(vec![1, 2, 3], deadline, gone).is_empty());
+
+        let past = Instant::now();
+        assert_eq!(
+            wait_until_gone(vec![1, 2, 3], past, |pid| pid == 2),
+            vec![1, 3]
+        );
+        assert!(wait_until_gone(Vec::new(), past, |_| false).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stopping_several_daemons_shares_one_grace_deadline() {
+        let ignore_term = ["-c", "trap '' TERM; exec sleep 30"];
+        let daemons: Vec<_> = (0..3)
+            .map(|index| StoppingDaemon {
+                plugin_id: format!("plugin-stop-{index}"),
+                child: spawn_quiet(Command::new("sh").args(ignore_term)),
+            })
+            .collect();
+        let pids: Vec<_> = daemons.iter().map(|daemon| daemon.child.id()).collect();
+        std::thread::sleep(Duration::from_millis(100));
+        let grace = Duration::from_secs(2);
+        let started = Instant::now();
+
+        finish_stops_by(daemons, started + grace);
+
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= grace,
+            "a daemon ignoring the stop gets its grace"
+        );
+        assert!(
+            elapsed < grace * 3,
+            "graces must overlap, not add up: took {elapsed:?}"
+        );
+        for pid in pids {
+            assert!(!crate::process_utils::is_pid_alive(pid as i32));
+        }
     }
 
     #[test]

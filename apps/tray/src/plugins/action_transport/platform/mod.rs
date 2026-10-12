@@ -6,7 +6,7 @@ pub(super) trait ActionTransportPlatform {
     fn default_io_timeout() -> Duration;
     fn connect(endpoint: &Path, timeout: Duration) -> Result<LocalStream, ()>;
     /// Runs right before an action is forwarded to a daemon.
-    fn before_forward() {}
+    fn before_forward(_stream: &LocalStream) {}
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
@@ -41,6 +41,6 @@ pub(super) fn connect(endpoint: &Path, timeout: Duration) -> Result<LocalStream,
     Platform::connect(endpoint, timeout)
 }
 
-pub(super) fn before_forward() {
-    Platform::before_forward();
+pub(super) fn before_forward(stream: &LocalStream) {
+    Platform::before_forward(stream);
 }

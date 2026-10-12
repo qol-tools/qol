@@ -120,10 +120,10 @@ fn dispatch_payload(endpoint: &Path, payload: &[u8], timeout: Duration) -> Daemo
         return DaemonActionDispatch::NotSent;
     }
     let deadline = Instant::now() + timeout;
-    platform::before_forward();
     let Ok(mut stream) = connect_stream(endpoint, timeout) else {
         return DaemonActionDispatch::NotSent;
     };
+    platform::before_forward(&stream);
     if write_payload(&mut stream, payload, deadline).is_err() {
         return DaemonActionDispatch::OutcomeUnknown;
     }

@@ -9,10 +9,6 @@ impl DaemonLifecyclePlatform for Platform {
         error.raw_os_error() == Some(libc::ECHILD)
     }
 
-    fn track_desktop_state_pid(pid: u32) {
-        crate::desktop_state::add_ignore_pid(pid);
-    }
-
     fn configure_process_group(command: &mut Command) {
         unsafe {
             command.pre_exec(|| {

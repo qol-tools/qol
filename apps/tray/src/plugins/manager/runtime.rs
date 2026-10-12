@@ -110,7 +110,7 @@ pub(super) fn sync_ignore_pids(manager: &PluginManager) {
             continue;
         };
         log::info!("Ignoring daemon pid {} for plugin {}", pid, plugin.id);
-        super::super::daemon_lifecycle::track_desktop_state_pid(pid);
+        crate::desktop_state::add_ignore_pid(pid);
     }
 }
 
@@ -123,16 +123,15 @@ fn stop_all_plugins(manager: &mut PluginManager) {
 }
 
 fn stop_plugin_daemons(manager: &mut PluginManager) {
-    for plugin in manager.plugins.values_mut() {
-        stop_plugin_daemon(plugin);
+    let stopping = manager
+        .plugins
+        .values_mut()
+        .filter_map(super::super::daemon_lifecycle::begin_stop)
+        .collect();
+    super::super::daemon_lifecycle::finish_stops(stopping);
+    for plugin in manager.plugins.values() {
+        crate::runtime::PluginStatusRegistry::shared().clear(plugin.id.as_str());
     }
-}
-
-fn stop_plugin_daemon(plugin: &mut Plugin) {
-    if let Err(error) = plugin.stop_daemon() {
-        log::error!("Failed to stop daemon for plugin {}: {}", plugin.id, error);
-    }
-    crate::runtime::PluginStatusRegistry::shared().clear(plugin.id.as_str());
 }
 
 fn start_plugin_daemon_if_needed(manager: &mut PluginManager, plugin_id: &str) -> Result<()> {

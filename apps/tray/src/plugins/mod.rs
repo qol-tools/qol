@@ -22,6 +22,7 @@ pub use config::PluginConfigManager;
 pub use daemon_lifecycle::lifeline_handoff;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use daemon_lifecycle::register_operation_fixture;
+pub(crate) use daemon_lifecycle::stop_daemons_for_session_end;
 pub use identity_index::{PluginDisplay, PluginIdentityIndex};
 pub use loader::PluginLoader;
 pub use manager::PluginManager;

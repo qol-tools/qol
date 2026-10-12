@@ -8,7 +8,5 @@ impl DaemonLifecyclePlatform for Platform {
         false
     }
 
-    fn track_desktop_state_pid(_pid: u32) {}
-
     fn configure_process_group(_command: &mut Command) {}
 }

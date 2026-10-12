@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::broadcast;
 use windows_sys::core::w;
@@ -18,9 +18,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 const EXIT_GRACE: Duration = Duration::from_millis(4500);
+const DAEMON_STOP_BUDGET: Duration = Duration::from_secs(3);
 const SESSION_WINDOW_CLASS: windows_sys::core::PCWSTR = w!("qol-tray-session");
 
 static SHUTDOWN_TX: Mutex<Option<broadcast::Sender<()>>> = Mutex::new(None);
+static SESSION_END: Mutex<Option<fn(Instant)>> = Mutex::new(None);
 static FINISHED: Mutex<bool> = Mutex::new(false);
 static FINISHED_CHANGED: Condvar = Condvar::new();
 static SESSION_THREAD: AtomicU32 = AtomicU32::new(0);
@@ -35,6 +37,9 @@ impl Drop for SignalListener {
         if session_thread != 0 {
             unsafe { PostThreadMessageW(session_thread, WM_QUIT, 0, 0) };
         }
+        *SESSION_END
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         *SHUTDOWN_TX
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
@@ -43,7 +48,11 @@ impl Drop for SignalListener {
 
 pub(super) fn install_signal_handler(
     shutdown_tx: broadcast::Sender<()>,
+    session_end: fn(Instant),
 ) -> std::io::Result<SignalListener> {
+    *SESSION_END
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session_end);
     *SHUTDOWN_TX
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shutdown_tx);
@@ -72,7 +81,7 @@ unsafe extern "system" fn console_ctrl_handler(event: u32) -> BOOL {
         return FALSE;
     }
     if ends_process_on_return(event) {
-        wait_until_finished(EXIT_GRACE);
+        finish_session_end();
     }
     TRUE
 }
@@ -158,7 +167,7 @@ unsafe extern "system" fn session_window_proc(
         }
         SessionAction::ShutdownAndWait(name) => {
             if request_shutdown("window message", name) {
-                wait_until_finished(EXIT_GRACE);
+                finish_session_end();
             }
             0
         }
@@ -204,6 +213,17 @@ fn ends_process_on_return(event: u32) -> bool {
     )
 }
 
+fn finish_session_end() {
+    let started = Instant::now();
+    let session_end = *SESSION_END
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(session_end) = session_end {
+        session_end(started + DAEMON_STOP_BUDGET);
+    }
+    wait_until_finished(EXIT_GRACE.saturating_sub(started.elapsed()));
+}
+
 fn set_finished(value: bool) {
     *FINISHED
         .lock()
@@ -221,6 +241,26 @@ fn wait_until_finished(timeout: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static SEEN_DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
+
+    fn record_deadline(deadline: Instant) {
+        *SEEN_DEADLINE.lock().unwrap() = Some(deadline);
+    }
+
+    #[test]
+    fn session_end_stops_daemons_by_a_deadline_inside_the_exit_grace() {
+        *SESSION_END.lock().unwrap() = Some(record_deadline);
+        set_finished(true);
+        let started = Instant::now();
+
+        finish_session_end();
+
+        let deadline = SEEN_DEADLINE.lock().unwrap().expect("session end hook ran");
+        assert!(deadline <= Instant::now() + DAEMON_STOP_BUDGET);
+        assert!(deadline + Duration::from_secs(1) < started + EXIT_GRACE);
+        *SESSION_END.lock().unwrap() = None;
+    }
 
     #[test]
     fn session_messages_map_to_shutdown_actions() {

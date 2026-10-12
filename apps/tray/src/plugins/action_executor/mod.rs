@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod execution;
-mod platform;
 mod resolution;
 mod tracking;
 

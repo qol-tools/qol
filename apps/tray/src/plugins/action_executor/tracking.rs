@@ -79,18 +79,18 @@ impl ProcessTracker {
     pub(super) fn track_action_process(&self, plugin_id: &str, action_id: &str, pid: u32) {
         self.push_action_process(plugin_id, pid);
         self.remember_running_action(plugin_id, action_id, pid);
-        super::platform::track_desktop_state_pid(pid);
+        crate::desktop_state::add_ignore_pid(pid);
     }
 
     pub(super) fn track_unreserved_action_process(&self, plugin_id: &str, pid: u32) {
         self.push_action_process(plugin_id, pid);
-        super::platform::track_desktop_state_pid(pid);
+        crate::desktop_state::add_ignore_pid(pid);
     }
 
     pub(super) fn untrack_action_process(&self, plugin_id: &str, action_id: &str, pid: u32) {
         self.remove_action_process(plugin_id, pid);
         self.forget_running_action(plugin_id, action_id, pid);
-        super::platform::untrack_desktop_state_pid(pid);
+        crate::desktop_state::remove_ignore_pid(pid);
     }
 
     fn clear_running_actions(&self) {

@@ -16,6 +16,7 @@ pub(crate) use active::SignalListener;
 
 pub(super) fn install_signal_handler(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    session_end: fn(std::time::Instant),
 ) -> std::io::Result<SignalListener> {
-    active::install_signal_handler(shutdown_tx)
+    active::install_signal_handler(shutdown_tx, session_end)
 }

@@ -54,8 +54,7 @@ pub(super) fn stale_lockfile(path: &Path, max_age: Duration) -> bool {
 }
 
 fn owner_replaced(pid: u32, expected: &str) -> bool {
-    qol_process::process_identity(pid).is_ok()
-        && !qol_process::process_identity_matches(pid, expected)
+    !qol_process::process_identity_matches(pid, expected)
 }
 
 fn owner_line_complete(content: &str) -> bool {
@@ -70,4 +69,23 @@ fn lockfile_too_old(path: &Path, max_age: Duration) -> bool {
         return false;
     };
     modified.elapsed().is_ok_and(|age| age > max_age)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_owner_whose_identity_cannot_be_read_is_replaced() {
+        assert!(owner_replaced(u32::MAX - 1, "recorded-identity"));
+    }
+
+    #[test]
+    fn an_owner_is_replaced_only_when_its_identity_differs() {
+        let pid = std::process::id();
+        let identity = owner_identity().expect("own identity");
+
+        assert!(!owner_replaced(pid, identity));
+        assert!(owner_replaced(pid, "another-process"));
+    }
 }

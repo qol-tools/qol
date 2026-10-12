@@ -575,7 +575,6 @@ items = []
         .unwrap()
     }
 
-    #[cfg(unix)]
     fn plugin_with_daemon(id: &str, gpui: bool, daemon: std::process::Child) -> Plugin {
         let mut plugin = Plugin::new(
             PluginId::new(id),
@@ -739,7 +738,6 @@ items = []
         manager.shutdown();
     }
 
-    #[cfg(unix)]
     #[test]
     fn hand_off_tells_each_running_daemon_its_successor_is_coming() {
         use std::io::Write;
@@ -759,11 +757,14 @@ items = []
                 serde_json::from_str(&line).unwrap();
             let _ = sent.send(request.action);
         });
-        let mut running = plugin_with_daemon(
-            "plugin-handoff",
-            false,
-            std::process::Command::new("true").spawn().unwrap(),
-        );
+        let mut exiting = if cfg!(unix) {
+            std::process::Command::new("true")
+        } else {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "exit", "0"]);
+            command
+        };
+        let mut running = plugin_with_daemon("plugin-handoff", false, exiting.spawn().unwrap());
         running.manifest.daemon.as_mut().unwrap().socket = Some("plugin-handoff.sock".into());
         let mut manager = PluginManager::new();
         manager
