@@ -121,6 +121,10 @@ pub(crate) fn wait_for_stop_request() -> io::Result<()> {
     Err(unsupported())
 }
 
+pub(crate) fn on_stop_request(_hook: fn()) -> io::Result<()> {
+    Err(unsupported())
+}
+
 pub(crate) fn cancellation_requested() -> bool {
     false
 }
@@ -147,6 +151,14 @@ pub(crate) fn process_identity(_pid: u32) -> io::Result<String> {
 
 pub(crate) fn process_identity_matches(_actual: &str, _expected: &str) -> bool {
     false
+}
+
+pub(crate) fn request_stop_if_identity(_pid: u32, _expected: &str) -> io::Result<bool> {
+    Err(unsupported())
+}
+
+pub(crate) fn system_program_path(program: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(program)
 }
 
 pub(crate) fn signal_term_pid(_pid: u32) -> io::Result<()> {
@@ -184,6 +196,10 @@ pub(crate) fn terminate_owned(_child: &mut Child, _grace: Duration) -> io::Resul
 }
 
 pub(crate) fn bind_to_host_lifetime(_pid: u32) -> io::Result<()> {
+    Err(unsupported())
+}
+
+pub(crate) fn release_host_lifetime() -> io::Result<()> {
     Err(unsupported())
 }
 

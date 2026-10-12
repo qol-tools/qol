@@ -5,9 +5,10 @@ use std::process::{Child, Command};
 pub(crate) use super::unix::{
     bind_to_host_lifetime, cancellation_requested, cancellation_signal_count,
     guard_current_process_tree, hide_console_window, install_cancellation_handler, is_group_alive,
-    is_pid_alive, isolate_owned_command, kill_group, kill_pid, reload_group, signal_term_group,
-    signal_term_pid, spawn_detached, terminate_group, terminate_owned, terminate_pid, try_wait_pid,
-    wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
+    is_pid_alive, isolate_owned_command, kill_group, kill_pid, on_stop_request,
+    release_host_lifetime, reload_group, request_stop_if_identity, signal_term_group,
+    signal_term_pid, spawn_detached, system_program_path, terminate_group, terminate_owned,
+    terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
 };
 pub(crate) use super::unix_containment::{
     own_current_process_tree_with_guardian, process_tree_containment_support,

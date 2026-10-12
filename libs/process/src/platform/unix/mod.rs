@@ -40,10 +40,18 @@ pub(crate) fn install_cancellation_handler() -> io::Result<()> {
 }
 
 pub(crate) fn wait_for_stop_request() -> io::Result<()> {
-    Err(io::Error::new(
+    Err(stop_requests_arrive_as_signals())
+}
+
+pub(crate) fn on_stop_request(_hook: fn()) -> io::Result<()> {
+    Err(stop_requests_arrive_as_signals())
+}
+
+fn stop_requests_arrive_as_signals() -> io::Error {
+    io::Error::new(
         io::ErrorKind::Unsupported,
         "Unix stop requests arrive as SIGTERM, which callers observe with their own signal handling",
-    ))
+    )
 }
 
 pub(crate) fn cancellation_requested() -> bool {
@@ -98,6 +106,18 @@ pub(super) fn signal_target_alive(target: libc::pid_t) -> bool {
 
 pub(crate) fn signal_term_pid(pid: u32) -> io::Result<()> {
     signal(pid_t(pid)?, libc::SIGTERM)
+}
+
+pub(crate) fn request_stop_if_identity(pid: u32, expected: &str) -> io::Result<bool> {
+    if !crate::process_identity_matches(pid, expected) {
+        return Ok(false);
+    }
+    signal_term_pid(pid)?;
+    Ok(true)
+}
+
+pub(crate) fn system_program_path(program: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(program)
 }
 
 pub(crate) fn signal_term_group(pid: u32) -> io::Result<()> {
@@ -228,6 +248,10 @@ pub(crate) fn terminate_owned(child: &mut Child, grace: Duration) -> io::Result<
 }
 
 pub(crate) fn bind_to_host_lifetime(_pid: u32) -> io::Result<()> {
+    Ok(())
+}
+
+pub(crate) fn release_host_lifetime() -> io::Result<()> {
     Ok(())
 }
 

@@ -57,6 +57,7 @@ const SESSION_END_EXIT_GRACE: Duration = Duration::from_millis(4500);
 const STOP_EVENT_PREFIX: &str = "Local\\qol-stop-";
 const FILETIME_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 const IMAGE_PATH_CAPACITY: usize = 32_768;
+const SYSTEM_DIRECTORY_CAPACITY: usize = 260;
 const CONSOLE_HOST_IMAGE: &str = "conhost.exe";
 const MEMBER_LIMIT: usize = 64;
 static CANCELLATION_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -64,6 +65,8 @@ static CANCELLATION_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static STOP_LISTENER_INSTALL: OnceLock<Result<(), i32>> = OnceLock::new();
 static STOP_SIGNAL: Mutex<()> = Mutex::new(());
 static STOP_SIGNALLED: Condvar = Condvar::new();
+static STOP_HOOKS: Mutex<Vec<fn()>> = Mutex::new(Vec::new());
+static STOP_HOOK_LISTENER: OnceLock<Result<(), i32>> = OnceLock::new();
 
 struct JobHandle(HANDLE);
 
@@ -774,6 +777,16 @@ pub(crate) fn bind_to_host_lifetime(pid: u32) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn release_host_lifetime() -> io::Result<()> {
+    let slot = HOST_LIFETIME_JOB
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match *slot {
+        Some(job) => set_job_limit_flags(job as HANDLE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK),
+        None => Ok(()),
+    }
+}
+
 fn host_lifetime_job() -> io::Result<HANDLE> {
     let mut slot = HOST_LIFETIME_JOB
         .lock()
@@ -940,6 +953,37 @@ pub(crate) fn wait_for_stop_request() -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn on_stop_request(hook: fn()) -> io::Result<()> {
+    install_cancellation_handler()?;
+    STOP_HOOKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(hook);
+    match STOP_HOOK_LISTENER.get_or_init(|| start_stop_hook_listener().map_err(raw_error_code)) {
+        Ok(()) => Ok(()),
+        Err(code) => Err(io::Error::from_raw_os_error(*code)),
+    }
+}
+
+fn start_stop_hook_listener() -> io::Result<()> {
+    std::thread::Builder::new()
+        .name("qol-process-stop-hooks".to_string())
+        .spawn(|| {
+            if wait_for_stop_request().is_ok() {
+                let hooks = std::mem::take(
+                    &mut *STOP_HOOKS
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                );
+                for hook in hooks {
+                    hook();
+                }
+                std::process::exit(0);
+            }
+        })?;
+    Ok(())
+}
+
 pub(crate) fn cancellation_requested() -> bool {
     cancellation_signal_count() > 0
 }
@@ -1083,11 +1127,53 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<String> {
             format!("process {pid} has exited"),
         ));
     }
-    Ok(format!("windows:{}", process_creation_time(&process)?))
+    Ok(creation_identity(process_creation_time(&process)?))
+}
+
+fn creation_identity(created: u64) -> String {
+    format!("windows:{created}")
 }
 
 pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
     actual == expected
+}
+
+pub(crate) fn request_stop_if_identity(pid: u32, expected: &str) -> io::Result<bool> {
+    let Ok(process) = open_process(pid, QUERY_AND_WAIT_ACCESS) else {
+        return Ok(false);
+    };
+    if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_TIMEOUT {
+        return Ok(false);
+    }
+    let matches = process_creation_time(&process)
+        .is_ok_and(|created| process_identity_matches(&creation_identity(created), expected));
+    if !matches {
+        return Ok(false);
+    }
+    request_graceful_stop(pid)
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+}
+
+pub(crate) fn system_program_path(program: &str) -> PathBuf {
+    program_in(system_directory(), program)
+}
+
+fn program_in(directory: Option<PathBuf>, program: &str) -> PathBuf {
+    directory.map_or_else(
+        || PathBuf::from(program),
+        |directory| directory.join(program),
+    )
+}
+
+fn system_directory() -> Option<PathBuf> {
+    let mut buffer = [0u16; SYSTEM_DIRECTORY_CAPACITY];
+    let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    (length > 0 && length < buffer.len())
+        .then(|| PathBuf::from(OsString::from_wide(&buffer[..length])))
 }
 
 fn process_creation_time(process: &ProcessHandle) -> io::Result<u64> {
@@ -1448,6 +1534,29 @@ mod tests {
         let mut command = Command::new("cmd");
         command.args(["/C", "ping -n 31 127.0.0.1 >NUL"]);
         command
+    }
+
+    #[test]
+    fn system_programs_resolve_inside_the_system_directory() {
+        let directory = system_directory().unwrap();
+        assert!(directory.is_absolute(), "{}", directory.display());
+        assert!(
+            directory.join("cmd.exe").is_file(),
+            "{}",
+            directory.display()
+        );
+        assert_eq!(system_program_path("cmd.exe"), directory.join("cmd.exe"));
+        let cases = [
+            (
+                Some(PathBuf::from(r"C:\Windows\System32")),
+                "reg.exe",
+                PathBuf::from(r"C:\Windows\System32\reg.exe"),
+            ),
+            (None, "reg.exe", PathBuf::from("reg.exe")),
+        ];
+        for (directory, program, expected) in cases {
+            assert_eq!(program_in(directory, program), expected, "{program}");
+        }
     }
 
     #[test]

@@ -356,6 +356,18 @@ pub fn process_identity_matches(pid: u32, expected: &str) -> bool {
     process_identity(pid).is_ok_and(|actual| platform::process_identity_matches(&actual, expected))
 }
 
+pub fn request_stop_if_identity(pid: u32, expected: &str) -> io::Result<bool> {
+    platform::request_stop_if_identity(pid, expected)
+}
+
+pub fn system_command(program: &str) -> Command {
+    Command::new(system_program_path(program))
+}
+
+pub fn system_program_path(program: &str) -> PathBuf {
+    platform::system_program_path(program)
+}
+
 pub fn signal_term_pid(pid: u32) -> io::Result<()> {
     platform::signal_term_pid(pid)
 }
@@ -374,6 +386,10 @@ pub fn kill_group(pid: u32) -> io::Result<()> {
 
 pub fn wait_for_stop_request() -> io::Result<()> {
     platform::wait_for_stop_request()
+}
+
+pub fn on_stop_request(hook: fn()) -> io::Result<()> {
+    platform::on_stop_request(hook)
 }
 
 pub fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
@@ -446,6 +462,10 @@ where
 /// watch their host themselves, so this is a no-op there.
 pub fn bind_to_host_lifetime(pid: u32) -> io::Result<()> {
     platform::bind_to_host_lifetime(pid)
+}
+
+pub fn release_host_lifetime() -> io::Result<()> {
+    platform::release_host_lifetime()
 }
 
 /// Spawns a command without inherited standard streams or a parent-owned child
@@ -628,9 +648,53 @@ mod tests {
             std::thread::sleep(Duration::from_secs(30));
             return;
         }
+        if std::env::var_os("QOL_PROCESS_STOP_TEST_HOOKS").is_some() {
+            on_stop_request(first_stop_hook).unwrap();
+            on_stop_request(second_stop_hook).unwrap();
+            std::fs::write(root.join("ready"), "ready").unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        if let Some(lifetime) = std::env::var_os("QOL_PROCESS_LIFETIME_TEST") {
+            let bound = system_command("PING.EXE")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            bind_to_host_lifetime(bound.id()).unwrap();
+            if lifetime == "release" {
+                release_host_lifetime().unwrap();
+            }
+            let identity = process_identity(bound.id()).unwrap();
+            std::fs::write(root.join("bound"), format!("{}\n{identity}", bound.id())).unwrap();
+            std::fs::write(root.join("ready"), "ready").unwrap();
+            return;
+        }
         std::fs::write(root.join("ready"), "ready").unwrap();
         wait_for_stop_request().unwrap();
         std::fs::write(root.join("stopped"), "stopped").unwrap();
+    }
+
+    #[cfg(windows)]
+    fn record_stop_hook(name: &str) {
+        use std::io::Write;
+        let root = std::env::var_os("QOL_PROCESS_STOP_TEST_ROOT").unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&root).join("hooks"))
+            .unwrap();
+        writeln!(file, "{name}").unwrap();
+    }
+
+    #[cfg(windows)]
+    fn first_stop_hook() {
+        record_stop_hook("first");
+    }
+
+    #[cfg(windows)]
+    fn second_stop_hook() {
+        record_stop_hook("second");
     }
 
     #[cfg(windows)]
@@ -737,6 +801,98 @@ mod tests {
                     case.name
                 );
             }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn identity_guarded_stop_reaches_only_the_recorded_process() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = spawn_stop_helper(temp.path(), &[]);
+        let identity = process_identity(child.id()).unwrap();
+        assert!(!request_stop_if_identity(child.id(), "windows:1").unwrap());
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(request_stop_if_identity(child.id(), &identity).unwrap());
+        assert!(child.wait().unwrap().success());
+        assert!(temp.path().join("stopped").exists());
+        assert!(!request_stop_if_identity(child.id(), &identity).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_hooks_run_in_registration_order_before_the_process_exits() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = spawn_stop_helper(temp.path(), &[("QOL_PROCESS_STOP_TEST_HOOKS", "1")]);
+        signal_term_pid(child.id()).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("hooks")).unwrap(),
+            "first\nsecond\n"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_released_host_lifetime_lets_bound_processes_outlive_their_host() {
+        for (lifetime, survives) in [("keep", false), ("release", true)] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut child =
+                spawn_stop_helper(temp.path(), &[("QOL_PROCESS_LIFETIME_TEST", lifetime)]);
+            assert!(child.wait().unwrap().success(), "{lifetime}");
+            let bound = std::fs::read_to_string(temp.path().join("bound")).unwrap();
+            let (pid, identity) = bound.split_once('\n').unwrap();
+            let pid: u32 = pid.parse().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while process_identity_matches(pid, identity) && !survives && Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            let alive = process_identity_matches(pid, identity);
+            if alive {
+                kill_pid(pid).unwrap();
+            }
+            assert_eq!(alive, survives, "{lifetime}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn identity_guarded_stop_never_terminates_a_process_without_a_stop_event() {
+        let mut child = system_command("cmd.exe")
+            .args(["/C", "ping -n 31 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        let identity = process_identity(child.id()).unwrap();
+        assert!(!request_stop_if_identity(child.id(), &identity).unwrap());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn identity_guarded_stop_signals_only_the_recorded_process() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let identity = process_identity(child.id()).unwrap();
+        assert!(!request_stop_if_identity(child.id(), "stale-process-identity").unwrap());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(request_stop_if_identity(child.id(), &identity).unwrap());
+        assert!(!child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn system_command_runs_the_resolved_system_program() {
+        let program = if cfg!(windows) { "cmd.exe" } else { "sh" };
+        let path = system_program_path(program);
+        assert_eq!(system_command(program).get_program(), path.as_os_str());
+        if cfg!(windows) {
+            assert!(path.is_absolute(), "{}", path.display());
+            assert!(path.is_file(), "{}", path.display());
+        } else {
+            assert_eq!(path, PathBuf::from(program));
         }
     }
 
