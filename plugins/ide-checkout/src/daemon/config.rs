@@ -27,7 +27,7 @@ impl Config {
     }
 
     pub fn checkout_root(&self) -> PathBuf {
-        checkout_root_in(&self.temp_dir, &std::env::temp_dir())
+        checkout_root_in(&self.temp_dir, &super::platform::system_temp_dir())
     }
 
     #[cfg(test)]
@@ -61,7 +61,7 @@ mod tests {
         assert_eq!(config.temp_dir, PathBuf::new());
         assert_eq!(
             config.checkout_root(),
-            std::env::temp_dir().join("qol-ide-checkout")
+            crate::daemon::platform::system_temp_dir().join("qol-ide-checkout")
         );
     }
 

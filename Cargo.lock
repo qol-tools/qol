@@ -6807,6 +6807,7 @@ dependencies = [
  "qol-conventions",
  "qol-headless",
  "qol-log",
+ "qol-platform",
  "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",

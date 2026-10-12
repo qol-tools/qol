@@ -16,11 +16,15 @@ pub(in crate::daemon) fn executable_candidates(directory: &Path, program: &str) 
 }
 
 pub(in crate::daemon) fn launch_path(path: &Path) -> std::io::Result<PathBuf> {
-    std::fs::canonicalize(path).map(|resolved| without_verbatim_prefix(&resolved))
+    std::fs::canonicalize(path).map(qol_platform::windows_path::strip_verbatim)
 }
 
 pub(in crate::daemon) fn inherited_listener() -> std::io::Result<Option<TcpListener>> {
     Ok(None)
+}
+
+pub(in crate::daemon) fn system_temp_dir() -> PathBuf {
+    std::env::temp_dir()
 }
 
 fn program_file_names(program: &str, pathext: &str) -> Vec<String> {
@@ -33,24 +37,6 @@ fn program_file_names(program: &str, pathext: &str) -> Vec<String> {
         .filter(|extension| extension.len() > 1 && extension.starts_with('.'))
         .map(|extension| format!("{program}{}", extension.to_ascii_lowercase()))
         .collect()
-}
-
-fn without_verbatim_prefix(path: &Path) -> PathBuf {
-    let Some(text) = path.to_str() else {
-        return path.to_path_buf();
-    };
-    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
-        return PathBuf::from(format!(r"\\{share}"));
-    }
-    match text.strip_prefix(r"\\?\") {
-        Some(local) if is_drive_path(local) => PathBuf::from(local),
-        _ => path.to_path_buf(),
-    }
-}
-
-fn is_drive_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 #[cfg(test)]
@@ -77,23 +63,6 @@ mod tests {
                     .map(|name| name.to_string())
                     .collect::<Vec<_>>(),
                 "program={program:?} pathext={pathext:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn verbatim_prefixes_are_removed_for_launchers() {
-        let cases = [
-            (r"\\?\C:\work\repo", r"C:\work\repo"),
-            (r"\\?\UNC\server\share\repo", r"\\server\share\repo"),
-            (r"\\?\Volume{1234}\repo", r"\\?\Volume{1234}\repo"),
-            (r"C:\work\repo", r"C:\work\repo"),
-        ];
-        for (input, expected) in cases {
-            assert_eq!(
-                without_verbatim_prefix(Path::new(input)),
-                PathBuf::from(expected),
-                "input={input:?}"
             );
         }
     }

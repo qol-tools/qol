@@ -13,7 +13,9 @@ pub fn path_key(path: &Path) -> String {
 }
 
 pub fn strip_verbatim(path: PathBuf) -> PathBuf {
-    let raw = path.to_string_lossy();
+    let Some(raw) = path.to_str() else {
+        return path;
+    };
     let unc = raw
         .get(..VERBATIM_UNC_PREFIX.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(VERBATIM_UNC_PREFIX));
@@ -21,9 +23,14 @@ pub fn strip_verbatim(path: PathBuf) -> PathBuf {
         return PathBuf::from(format!(r"\\{}", &raw[VERBATIM_UNC_PREFIX.len()..]));
     }
     match raw.strip_prefix(VERBATIM_PREFIX) {
-        Some(rest) => PathBuf::from(rest),
-        None => path.clone(),
+        Some(rest) if is_drive_path(rest) => PathBuf::from(rest),
+        _ => path.clone(),
     }
+}
+
+fn is_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 pub fn same_path(left: &Path, right: &Path) -> bool {
@@ -65,6 +72,7 @@ mod tests {
         let cases = [
             (r"\\?\C:\Program Files\Foo", r"C:\Program Files\Foo"),
             (r"\\?\UNC\Server\Share\Foo", r"\\Server\Share\Foo"),
+            (r"\\?\Volume{1234}\repo", r"\\?\Volume{1234}\repo"),
             (r"C:\Plain", r"C:\Plain"),
         ];
         for (path, expected) in cases {

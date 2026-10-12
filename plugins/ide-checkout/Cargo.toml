@@ -18,6 +18,9 @@ serde.workspace = true
 serde_json.workspace = true
 workspace-hack.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+qol-platform.workspace = true
+
 [build-dependencies]
 qol-conventions.workspace = true
 

@@ -16,10 +16,25 @@ pub(in crate::daemon) fn launch_path(path: &Path) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path)
 }
 
+pub(in crate::daemon) fn system_temp_dir() -> PathBuf {
+    PathBuf::from("/tmp")
+}
+
 pub(in crate::daemon) fn inherited_listener() -> std::io::Result<Option<TcpListener>> {
     let Some(fd) = qol_plugin_daemon::daemon::inherited_primary_port_fd() else {
         return Ok(None);
     };
     qol_plugin_daemon::daemon::restore_cloexec(fd)?;
     Ok(Some(unsafe { TcpListener::from_raw_fd(fd) }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn the_default_checkout_root_is_the_folder_earlier_releases_used() {
+        let config = crate::daemon::config::Config::defaults();
+        assert_eq!(config.checkout_root(), Path::new("/tmp/qol-ide-checkout"));
+    }
 }

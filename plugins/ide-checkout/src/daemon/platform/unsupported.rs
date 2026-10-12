@@ -13,6 +13,10 @@ pub(in crate::daemon) fn launch_path(path: &Path) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path)
 }
 
+pub(in crate::daemon) fn system_temp_dir() -> PathBuf {
+    std::env::temp_dir()
+}
+
 pub(in crate::daemon) fn inherited_listener() -> std::io::Result<Option<TcpListener>> {
     Ok(None)
 }
