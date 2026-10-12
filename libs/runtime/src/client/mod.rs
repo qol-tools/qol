@@ -33,8 +33,10 @@ impl PlatformStateClient {
             .map(PathBuf::from)
             .or_else(|| {
                 qol_config::runtime_dir().map(|path| {
-                    path.join("sockets")
-                        .join(qol_conventions::STATE_SOCKET_FILE)
+                    crate::local_ipc::socket_path(
+                        &path.join("sockets"),
+                        std::ffi::OsStr::new(qol_conventions::STATE_SOCKET_FILE),
+                    )
                 })
             })
             .or_else(platform::fallback_state_socket);

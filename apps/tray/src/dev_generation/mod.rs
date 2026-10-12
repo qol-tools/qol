@@ -71,9 +71,10 @@ impl GenerationContext {
     }
 
     pub fn state_socket_path(&self) -> PathBuf {
-        let path = crate::paths::runtime_dir()
-            .join("sockets")
-            .join(STATE_SOCKET_FILE);
+        let path = qol_runtime::local_ipc::socket_path(
+            &crate::paths::runtime_dir().join("sockets"),
+            std::ffi::OsStr::new(STATE_SOCKET_FILE),
+        );
         if !self.is_shadow() {
             return path;
         }
@@ -85,7 +86,10 @@ impl GenerationContext {
             .file_name()
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| std::ffi::OsStr::new("qol-plugin.sock"));
-        let path = crate::paths::runtime_dir().join("sockets").join(file_name);
+        let path = qol_runtime::local_ipc::socket_path(
+            &crate::paths::runtime_dir().join("sockets"),
+            file_name,
+        );
         if !self.is_shadow() {
             return path;
         }

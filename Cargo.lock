@@ -7277,6 +7277,7 @@ dependencies = [
  "qol-windowing",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "uds_windows",
  "windows-sys 0.59.0",
