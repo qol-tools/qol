@@ -23,8 +23,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetCursorPos, GetForegroundWindow,
     GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
     IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SetForegroundWindow, SetWindowPos,
-    ShowWindow, GWL_EXSTYLE, GW_OWNER, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE,
-    SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW,
+    ShowWindow, ShowWindowAsync, GWL_EXSTYLE, GW_OWNER, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW,
 };
 
 const BASE_DPI: f32 = 96.0;
@@ -152,14 +152,28 @@ impl Window {
             unsafe { ShowWindow(self.0, SW_RESTORE) };
         }
         let dpi = unsafe { GetDpiForWindow(self.0) };
-        self.place(target)?;
+        self.place(target, SWP_NOZORDER | SWP_NOACTIVATE)?;
         if unsafe { GetDpiForWindow(self.0) } != dpi {
-            self.place(target)?;
+            self.place(target, SWP_NOZORDER | SWP_NOACTIVATE)?;
         }
         Ok(())
     }
 
-    fn place(self, target: WindowRect) -> Result<(), String> {
+    pub fn set_frame_nonblocking(self, target: WindowRect) -> Result<(), String> {
+        let owner = unsafe { GetWindowThreadProcessId(self.0, null_mut()) };
+        let foreign = placement_is_async(owner, unsafe { GetCurrentThreadId() });
+        if self.is_minimized() || self.is_maximized() {
+            if foreign {
+                unsafe { ShowWindowAsync(self.0, SW_RESTORE) };
+            } else {
+                unsafe { ShowWindow(self.0, SW_RESTORE) };
+            }
+        }
+        let flags = if foreign { SWP_ASYNCWINDOWPOS } else { 0 };
+        self.place(target, SWP_NOZORDER | SWP_NOACTIVATE | flags)
+    }
+
+    fn place(self, target: WindowRect, flags: u32) -> Result<(), String> {
         let outer = self.outer_rect().ok_or("Cannot read window geometry")?;
         let visible = self.visible_rect().ok_or("Cannot read window geometry")?;
         let left = visible.left - outer.left;
@@ -174,7 +188,7 @@ impl Window {
                 target.y.round() as i32 - top,
                 target.width.round() as i32 + left + right,
                 target.height.round() as i32 + top + bottom,
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                flags,
             )
         };
         if placed == 0 {
@@ -249,6 +263,10 @@ impl Window {
         unsafe { GetWindowThreadProcessId(self.0, &mut pid) };
         (pid != 0).then_some(pid)
     }
+}
+
+fn placement_is_async(owner_thread: u32, this_thread: u32) -> bool {
+    owner_thread != 0 && owner_thread != this_thread
 }
 
 pub struct Win32Windows;
@@ -550,6 +568,18 @@ mod tests {
         for (mut bgra, expected) in cases {
             make_opaque(&mut bgra);
             assert_eq!(bgra, expected);
+        }
+    }
+
+    #[test]
+    fn only_windows_of_other_threads_are_placed_asynchronously() {
+        let cases = [(7, 7, false), (8, 7, true), (0, 7, false)];
+        for (owner, this, expected) in cases {
+            assert_eq!(
+                placement_is_async(owner, this),
+                expected,
+                "owner={owner} this={this}"
+            );
         }
     }
 
