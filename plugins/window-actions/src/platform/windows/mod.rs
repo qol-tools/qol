@@ -43,7 +43,28 @@ pub(crate) fn state_file_path() -> PathBuf {
 }
 
 fn foreground() -> Result<Window, String> {
-    Window::foreground().ok_or_else(|| "No foreground window".to_string())
+    Window::foreground()
+        .ok_or_else(|| "No foreground window".to_string())
+        .and_then(responsive)
+}
+
+fn responsive(window: Window) -> Result<Window, String> {
+    if !window.is_hung() {
+        return Ok(window);
+    }
+    let message = hung_refusal(&window.title());
+    qol_plugin_daemon::notification::send_notification("Window Actions", &message);
+    Err(message)
+}
+
+fn hung_refusal(title: &str) -> String {
+    let title = title.trim();
+    let window = if title.is_empty() {
+        "This window".to_string()
+    } else {
+        format!("\"{title}\"")
+    };
+    format!("{window} is not responding, so Window Actions left it alone.")
 }
 
 fn place_foreground(target: impl FnOnce(WindowRect) -> WindowRect) -> Result<(), String> {
@@ -92,6 +113,32 @@ impl WindowSystem for Win32Windows {
     }
 
     fn process_start_ticks(&self, pid: u32) -> Option<u64> {
-        qol_app_icon::process_start_time_us(i32::try_from(pid).ok()?)
+        qol_process::process_start_time(pid)
+    }
+
+    fn ensure_responsive(&self, window_id: &WindowId) -> Result<(), String> {
+        responsive(Window::try_from_id(window_id)?).map(drop)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hung_window_is_refused_by_name() {
+        let cases = [
+            (
+                "Untitled - Notepad",
+                "\"Untitled - Notepad\" is not responding, so Window Actions left it alone.",
+            ),
+            (
+                "  ",
+                "This window is not responding, so Window Actions left it alone.",
+            ),
+        ];
+        for (title, message) in cases {
+            assert_eq!(hung_refusal(title), message, "{title:?}");
+        }
     }
 }

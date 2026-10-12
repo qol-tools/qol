@@ -119,6 +119,10 @@ impl WindowSystem for X11WindowSystem {
     fn process_start_ticks(&self, pid: u32) -> Option<u64> {
         process_start_ticks(pid)
     }
+
+    fn ensure_responsive(&self, _window_id: &WindowId) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 fn wait_for_window_state(

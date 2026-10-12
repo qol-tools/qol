@@ -191,6 +191,10 @@ impl WindowSystem for MacWindowSystem {
             Some(fnv1a(trimmed.as_bytes()))
         })
     }
+
+    fn ensure_responsive(&self, _window_id: &WindowId) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 fn parse_pid(window_id: &str) -> Option<i64> {
