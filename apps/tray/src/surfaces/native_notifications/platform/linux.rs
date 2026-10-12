@@ -16,6 +16,20 @@ pub(crate) fn show_first_run() {
         .status();
 }
 
+pub(crate) fn show_startup_failed(title: &str, body: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .args([
+            "--icon=qol-tray",
+            "-a",
+            "QoL Tray",
+            "-u",
+            "critical",
+            title,
+            body,
+        ])
+        .status();
+}
+
 pub(crate) fn show_plugin_notification(
     title: &str,
     body: &str,

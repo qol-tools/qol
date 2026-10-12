@@ -56,7 +56,7 @@ pub(crate) fn run() -> Result<()> {
 
     let generation = qol_tray::dev_generation::current();
     let rolling_restart = qol_tray::dev_generation::is_rolling_restart();
-    let _instance = if generation.is_shadow() || rolling_restart {
+    let mut instance = if generation.is_shadow() || rolling_restart {
         None
     } else {
         let Some(instance) = qol_tray::single_instance::claim() else {
@@ -162,6 +162,11 @@ pub(crate) fn run() -> Result<()> {
     hotkeys::release_held_keys();
     if owns_host_surface {
         log_binding_restore("shutdown", hotkeys::restore_desktop_bindings_on_exit());
+    }
+    if let Err(error) = &outcome {
+        log::error!("qol-tray could not start: {error:#}");
+        instance.take();
+        qol_tray::surfaces::native_notifications::show_startup_failed(&format!("{error:#}"));
     }
     outcome.and(peer_shutdown)
 }

@@ -28,6 +28,7 @@ mod logs_handlers;
 mod meta_handlers;
 mod plugin_handlers;
 mod plugin_services;
+mod port_holder;
 #[cfg(feature = "dev")]
 mod restart;
 pub(crate) mod security;
@@ -446,7 +447,9 @@ async fn bind_listener() -> Result<(tokio::net::TcpListener, u16)> {
 
 async fn bind_listener_at(port: u16) -> Result<(tokio::net::TcpListener, u16)> {
     let address = format!("127.0.0.1:{port}");
-    let listener = tokio::net::TcpListener::bind(&address).await?;
+    let listener = tokio::net::TcpListener::bind(&address)
+        .await
+        .map_err(|error| port_holder::explain_bind_error(port, error))?;
     let port = listener.local_addr()?.port();
     Ok((listener, port))
 }
