@@ -1,23 +1,17 @@
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, TerminateProcess, WaitForSingleObject,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
 
-const UNIX_EPOCH_AS_FILETIME_US: u64 = 11_644_473_600_000_000;
 const FORCED_EXIT: u32 = 1;
 
 pub(super) struct Member {
-    handle: HANDLE,
+    handle: OwnedHandle,
     start: u64,
-}
-
-impl Drop for Member {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.handle) };
-    }
 }
 
 impl Member {
@@ -28,32 +22,9 @@ impl Member {
         if handle.is_null() {
             return None;
         }
-        let mut member = Member { handle, start: 0 };
-        member.start = member.read_start()?;
-        Some(member)
-    }
-
-    fn read_start(&self) -> Option<u64> {
-        let empty = FILETIME {
-            dwLowDateTime: 0,
-            dwHighDateTime: 0,
-        };
-        let [mut created, mut exited, mut kernel, mut user] = [empty; 4];
-        let read = unsafe {
-            GetProcessTimes(
-                self.handle,
-                &mut created,
-                &mut exited,
-                &mut kernel,
-                &mut user,
-            )
-        };
-        if read == 0 {
-            return None;
-        }
-        let since_1601_us =
-            ((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime)) / 10;
-        since_1601_us.checked_sub(UNIX_EPOCH_AS_FILETIME_US)
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let start = qol_process::process_start_time(pid)?;
+        Some(Member { handle, start })
     }
 
     pub(super) fn start(&self) -> u64 {
@@ -61,13 +32,13 @@ impl Member {
     }
 
     pub(super) fn terminate(&self, code: u32) -> bool {
-        unsafe { TerminateProcess(self.handle, code) != 0 }
+        unsafe { TerminateProcess(self.handle.as_raw_handle(), code) != 0 }
     }
 
     fn exited_by(&self, deadline: Instant) -> bool {
         let wait = deadline.saturating_duration_since(Instant::now());
         let millis = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
-        unsafe { WaitForSingleObject(self.handle, millis) == WAIT_OBJECT_0 }
+        unsafe { WaitForSingleObject(self.handle.as_raw_handle(), millis) == WAIT_OBJECT_0 }
     }
 }
 
@@ -126,12 +97,9 @@ mod tests {
 
     #[test]
     fn the_current_process_opens_with_its_own_start_time() {
-        let own = i32::try_from(std::process::id()).unwrap();
-        let member = Member::open(own).expect("own process must open");
-        assert_eq!(
-            Some(member.start()),
-            qol_app_icon::process_start_time_us(own)
-        );
+        let own = std::process::id();
+        let member = Member::open(i32::try_from(own).unwrap()).expect("own process must open");
+        assert_eq!(Some(member.start()), qol_process::process_start_time(own));
         assert!(Member::open(0).is_none());
     }
 }

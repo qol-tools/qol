@@ -1,9 +1,9 @@
 use std::io;
-use std::os::windows::io::AsRawSocket;
+use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle};
 use std::path::Path;
 
 use qol_platform::native::security::TokenSid;
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, HANDLE};
+use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Networking::WinSock::{WSAGetLastError, WSAIoctl, SIO_AF_UNIX_GETPEERPID};
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
@@ -29,7 +29,7 @@ pub(super) fn authorize_peer(stream: &LocalStream) -> io::Result<()> {
     }
 }
 
-fn peer_pid(stream: &LocalStream) -> io::Result<u32> {
+pub fn peer_pid(stream: &LocalStream) -> io::Result<u32> {
     let mut pid = 0u32;
     let mut returned = 0u32;
     let status = unsafe {
@@ -52,14 +52,6 @@ fn peer_pid(stream: &LocalStream) -> io::Result<u32> {
     Err(io::Error::from_raw_os_error(code))
 }
 
-struct Handle(HANDLE);
-
-impl Drop for Handle {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
-    }
-}
-
 fn same_user(pid: u32) -> io::Result<bool> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if process.is_null() {
@@ -72,8 +64,8 @@ fn same_user(pid: u32) -> io::Result<bool> {
         }
         return Err(error);
     }
-    let process = Handle(process);
-    let peer = TokenSid::user_of(process.0).map_err(denied)?;
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    let peer = TokenSid::user_of(process.as_raw_handle()).map_err(denied)?;
     Ok(peer.same_as(&TokenSid::current_user().map_err(denied)?))
 }
 
@@ -100,5 +92,15 @@ mod tests {
         let _client = LocalStream::connect(&path).unwrap();
         let (accepted, _) = listener.accept().unwrap();
         assert!(authorize_peer(&accepted).is_ok());
+    }
+
+    #[test]
+    fn the_peer_pid_is_the_process_across_the_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("peer.sock");
+        let listener = bind_listener(&path).unwrap();
+        let client = LocalStream::connect(&path).unwrap();
+        let _accepted = listener.accept().unwrap();
+        assert_eq!(peer_pid(&client).unwrap(), std::process::id());
     }
 }

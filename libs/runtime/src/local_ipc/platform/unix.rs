@@ -33,6 +33,15 @@ pub(super) fn authorize_peer(stream: &LocalStream) -> io::Result<()> {
     ))
 }
 
+pub fn peer_pid(stream: &LocalStream) -> io::Result<u32> {
+    peer_cred(stream)?.pid.ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::Unsupported,
+            "the local IPC peer's process id is unavailable",
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

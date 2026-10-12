@@ -1,10 +1,11 @@
 use std::io;
 use std::marker::PhantomData;
+use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
 
 use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, TRUE,
+    GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, TRUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -54,13 +55,7 @@ impl Drop for Attached<'_> {
     }
 }
 
-pub(super) struct ConsoleFile(pub(super) HANDLE);
-
-impl Drop for ConsoleFile {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
-    }
-}
+pub(super) struct ConsoleFile(pub(super) OwnedHandle);
 
 impl ConsoleFile {
     pub(super) fn open(name: &str) -> io::Result<ConsoleFile> {
@@ -79,6 +74,6 @@ impl ConsoleFile {
         if handle == INVALID_HANDLE_VALUE || handle.is_null() {
             return Err(io::Error::last_os_error());
         }
-        Ok(ConsoleFile(handle))
+        Ok(ConsoleFile(unsafe { OwnedHandle::from_raw_handle(handle) }))
     }
 }

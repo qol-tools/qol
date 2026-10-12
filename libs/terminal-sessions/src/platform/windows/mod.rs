@@ -359,7 +359,10 @@ fn verify(target: &SessionBinding) -> Result<(), TerminalError> {
 }
 
 fn native_id(root: i32) -> String {
-    match qol_app_icon::process_start_time_us(root) {
+    match u32::try_from(root)
+        .ok()
+        .and_then(qol_process::process_start_time)
+    {
         Some(start) => format!("{root}-{start}"),
         None => root.to_string(),
     }

@@ -5,7 +5,7 @@ mod platform;
 mod secret;
 pub use secret::{encode_secret_json, read_secret_line, SecretMessageError, SecretReader};
 
-pub use platform::{LocalListener, LocalStream};
+pub use platform::{peer_pid, LocalListener, LocalStream};
 
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 

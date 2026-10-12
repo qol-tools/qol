@@ -1,7 +1,7 @@
 use std::ffi::c_void;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
 use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
@@ -17,18 +17,12 @@ pub(super) struct ProcessStrings {
     pub(super) command_line: Option<String>,
 }
 
-struct Process(HANDLE);
-
-impl Drop for Process {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
-    }
-}
+struct Process(OwnedHandle);
 
 impl Process {
     fn open(pid: u32) -> Option<Process> {
         let handle = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid) };
-        (!handle.is_null()).then_some(Process(handle))
+        (!handle.is_null()).then(|| Process(unsafe { OwnedHandle::from_raw_handle(handle) }))
     }
 
     fn read<const N: usize>(&self, address: usize) -> Option<[u8; N]> {
@@ -40,7 +34,7 @@ impl Process {
         let mut read = 0usize;
         let ok = unsafe {
             ReadProcessMemory(
-                self.0,
+                self.0.as_raw_handle(),
                 address as *const c_void,
                 buffer.as_mut_ptr().cast(),
                 buffer.len(),
@@ -55,7 +49,7 @@ impl Process {
         let mut length = 0u32;
         let status = unsafe {
             NtQueryInformationProcess(
-                self.0,
+                self.0.as_raw_handle(),
                 ProcessBasicInformation,
                 (&mut info as *mut PROCESS_BASIC_INFORMATION).cast(),
                 std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,

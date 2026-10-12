@@ -1,4 +1,5 @@
 use std::io;
+use std::os::windows::io::AsRawHandle;
 
 use windows_sys::Win32::System::Console::{
     GetConsoleProcessList, GetConsoleScreenBufferInfo, GetConsoleTitleW, GetConsoleWindow,
@@ -54,7 +55,7 @@ fn read_attached(root: u32) -> Option<ConsoleReport> {
     let window = unsafe { GetConsoleWindow() };
     let output = ConsoleFile::open("CONOUT$").ok()?;
     let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { std::mem::zeroed() };
-    if unsafe { GetConsoleScreenBufferInfo(output.0, &mut info) } == 0 {
+    if unsafe { GetConsoleScreenBufferInfo(output.0.as_raw_handle(), &mut info) } == 0 {
         return None;
     }
     let view = info.srWindow;
@@ -102,7 +103,7 @@ fn read_row(output: &ConsoleFile, left: i16, row: i16, width: u32) -> String {
     let mut read = 0u32;
     let ok = unsafe {
         ReadConsoleOutputCharacterW(
-            output.0,
+            output.0.as_raw_handle(),
             buffer.as_mut_ptr(),
             width,
             COORD { X: left, Y: row },

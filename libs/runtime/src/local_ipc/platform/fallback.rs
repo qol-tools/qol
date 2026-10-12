@@ -88,3 +88,7 @@ pub(super) fn bind_listener(_path: &Path) -> io::Result<LocalListener> {
 pub(super) fn authorize_peer(_stream: &LocalStream) -> io::Result<()> {
     Err(unsupported())
 }
+
+pub fn peer_pid(_stream: &LocalStream) -> io::Result<u32> {
+    Err(unsupported())
+}

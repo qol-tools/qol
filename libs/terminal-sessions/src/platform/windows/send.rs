@@ -1,4 +1,5 @@
 use std::io::{self, Read};
+use std::os::windows::io::AsRawHandle;
 use std::time::Duration;
 
 use windows_sys::Win32::System::Console::{
@@ -90,7 +91,7 @@ fn processed_input(input: &ConsoleFile) -> bool {
 
 fn console_mode(input: &ConsoleFile) -> Option<u32> {
     let mut mode = 0u32;
-    let read = unsafe { GetConsoleMode(input.0, &mut mode) };
+    let read = unsafe { GetConsoleMode(input.0.as_raw_handle(), &mut mode) };
     (read != 0).then_some(mode)
 }
 
@@ -119,7 +120,12 @@ fn write(input: &ConsoleFile, strokes: &[KeyStroke]) -> io::Result<usize> {
         let batch = &records[offset..records.len().min(offset + WRITE_BATCH)];
         let mut written = 0u32;
         let ok = unsafe {
-            WriteConsoleInputW(input.0, batch.as_ptr(), batch.len() as u32, &mut written)
+            WriteConsoleInputW(
+                input.0.as_raw_handle(),
+                batch.as_ptr(),
+                batch.len() as u32,
+                &mut written,
+            )
         };
         if ok == 0 {
             return Err(io::Error::last_os_error());

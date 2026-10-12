@@ -1,15 +1,13 @@
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ACCESS_DENIED, FILETIME, HANDLE, WAIT_OBJECT_0,
-};
+use windows_sys::Win32::Foundation::{GetLastError, ERROR_ACCESS_DENIED, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessTimes, OpenProcess, WaitForSingleObject,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 
 enum Parent {
-    Watched(isize),
+    Watched(OwnedHandle),
     Gone,
     Unknown,
 }
@@ -24,7 +22,7 @@ pub(super) fn is_supported() -> bool {
 pub(super) fn is_orphaned() -> bool {
     match PARENT.get_or_init(open_parent) {
         Parent::Watched(handle) => unsafe {
-            WaitForSingleObject(*handle as HANDLE, 0) == WAIT_OBJECT_0
+            WaitForSingleObject(handle.as_raw_handle(), 0) == WAIT_OBJECT_0
         },
         Parent::Gone => true,
         Parent::Unknown => false,
@@ -48,18 +46,18 @@ fn open_parent() -> Parent {
         }
         return Parent::Gone;
     }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
     let started_before_us = match (
-        creation_time(handle),
-        creation_time(unsafe { GetCurrentProcess() }),
+        qol_process::process_start_time(parent_pid),
+        qol_process::process_start_time(std::process::id()),
     ) {
         (Some(parent), Some(own)) => parent <= own,
         _ => true,
     };
     if !started_before_us {
-        unsafe { CloseHandle(handle) };
         return Parent::Gone;
     }
-    Parent::Watched(handle as isize)
+    Parent::Watched(handle)
 }
 
 fn parent_pid() -> Option<u32> {
@@ -70,17 +68,6 @@ fn parent_pid() -> Option<u32> {
         .find(|entry| entry.pid == own_pid)
         .map(|entry| entry.parent)
         .filter(|pid| *pid != 0)
-}
-
-fn creation_time(process: HANDLE) -> Option<u64> {
-    let mut creation: FILETIME = unsafe { std::mem::zeroed() };
-    let mut exit: FILETIME = unsafe { std::mem::zeroed() };
-    let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
-    let mut user: FILETIME = unsafe { std::mem::zeroed() };
-    let read =
-        unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) };
-    (read != 0)
-        .then(|| (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
 
 #[cfg(test)]
