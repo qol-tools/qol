@@ -17,7 +17,9 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE};
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 pub struct TokenSid(Vec<u64>);
 
@@ -89,6 +91,19 @@ fn open_token(process: HANDLE) -> io::Result<OwnedHandle> {
         return Err(io::Error::last_os_error());
     }
     Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+pub fn process_elevated(pid: u32) -> Option<bool> {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    token_elevated(process.as_raw_handle())
+}
+
+pub fn uipi_allows(own: Option<bool>, target: Option<bool>) -> bool {
+    own == Some(true) || target == Some(false)
 }
 
 pub fn is_owner_only(file: &File) -> io::Result<bool> {
@@ -223,6 +238,23 @@ mod tests {
         let own = token_elevated(unsafe { GetCurrentProcess() });
         assert!(own.is_some());
         assert_eq!(token_elevated(null_mut()), None);
+        assert_eq!(process_elevated(std::process::id()), own);
+    }
+
+    #[test]
+    fn input_reaches_a_target_only_from_an_elevated_self_or_into_a_known_unelevated_one() {
+        let cases = [
+            (Some(true), Some(true), true),
+            (Some(true), None, true),
+            (Some(false), Some(false), true),
+            (None, Some(false), true),
+            (Some(false), Some(true), false),
+            (Some(false), None, false),
+            (None, None, false),
+        ];
+        for (own, target, expected) in cases {
+            assert_eq!(uipi_allows(own, target), expected, "{own:?} {target:?}");
+        }
     }
 
     #[test]

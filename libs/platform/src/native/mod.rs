@@ -2,4 +2,4 @@
 mod platform;
 
 #[cfg(windows)]
-pub use platform::windows::{com, input, registry, security, session, wide};
+pub use platform::windows::{com, hooks, input, registry, security, session, shell, wide};
