@@ -18,9 +18,9 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::UI::WindowsAndMessaging::EDD_GET_DEVICE_INTERFACE_NAME;
 
 use crate::monitor::backends::gdi_display::{
-    connector_from_device, device_instance_from_interface, display_change_reason, distinct_modes,
-    edid_registry_key, identity_from, mode_from_setting, pick_setting, primary_anchored,
-    DisplaySetting,
+    apply_staged_layout, connector_from_device, device_instance_from_interface,
+    display_change_reason, distinct_modes, edid_registry_key, identity_from, mode_from_setting,
+    pick_setting, primary_anchored, DisplaySetting, StagedPlacement,
 };
 
 pub(super) struct WindowsDisplay;
@@ -139,40 +139,46 @@ impl DisplayOps for WindowsDisplay {
                     capability: "layout",
                     selector: placed.connector.clone(),
                 })?;
-            let original = current_settings(&adapter.device)?;
+            let mut original = current_settings(&adapter.device)?;
+            original.dmFields = DM_POSITION;
             let mut target = original;
-            target.dmFields = DM_POSITION;
             let mut position = unsafe { target.Anonymous1.Anonymous2 };
             position.dmPosition = POINTL {
                 x: placed.x,
                 y: placed.y,
             };
             target.Anonymous1.Anonymous2 = position;
-            staged.push((adapter.device.as_str(), original, target, placed.primary));
-        }
-        for (index, (device, _, target, primary)) in staged.iter().enumerate() {
-            let flags =
-                CDS_UPDATEREGISTRY | CDS_NORESET | if *primary { CDS_SET_PRIMARY } else { 0 };
-            if let Err(error) = change(device, target, flags) {
-                for (device, original, _, _) in &staged[..index] {
-                    let mut original = *original;
-                    original.dmFields = DM_POSITION;
-                    let _ = change(device, &original, CDS_UPDATEREGISTRY | CDS_NORESET);
-                }
-                return Err(error);
-            }
-        }
-        let code = unsafe { ChangeDisplaySettingsExW(null(), null(), null_mut(), 0, null()) };
-        if code != DISP_CHANGE_SUCCESSFUL {
-            return Err(DisplayError::LayoutInvalid {
-                reason: format!(
-                    "applying the display layout failed: {}",
-                    display_change_reason(code)
-                ),
+            staged.push(StagedPlacement {
+                device: adapter.device.as_str(),
+                original,
+                target,
+                primary: placed.primary,
+                was_primary: adapter.primary,
             });
         }
-        Ok(())
+        apply_staged_layout(
+            &staged,
+            |device, devmode, primary| {
+                let flags =
+                    CDS_UPDATEREGISTRY | CDS_NORESET | if primary { CDS_SET_PRIMARY } else { 0 };
+                change(device, devmode, flags)
+            },
+            apply_registry_layout,
+        )
     }
+}
+
+fn apply_registry_layout() -> Result<(), DisplayError> {
+    let code = unsafe { ChangeDisplaySettingsExW(null(), null(), null_mut(), 0, null()) };
+    if code != DISP_CHANGE_SUCCESSFUL {
+        return Err(DisplayError::LayoutInvalid {
+            reason: format!(
+                "applying the display layout failed: {}",
+                display_change_reason(code)
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn attached_adapters() -> Vec<Adapter> {

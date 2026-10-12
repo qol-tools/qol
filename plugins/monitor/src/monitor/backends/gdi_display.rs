@@ -85,6 +85,32 @@ pub fn primary_anchored(placements: &[DisplayPlacement]) -> Vec<AnchoredPlacemen
         .collect()
 }
 
+pub struct StagedPlacement<'a, T> {
+    pub device: &'a str,
+    pub original: T,
+    pub target: T,
+    pub primary: bool,
+    pub was_primary: bool,
+}
+
+pub fn apply_staged_layout<T, E>(
+    staged: &[StagedPlacement<'_, T>],
+    mut change: impl FnMut(&str, &T, bool) -> Result<(), E>,
+    apply: impl Fn() -> Result<(), E>,
+) -> Result<(), E> {
+    let outcome = staged
+        .iter()
+        .try_for_each(|placed| change(placed.device, &placed.target, placed.primary))
+        .and_then(|()| apply());
+    if outcome.is_err() {
+        for placed in staged {
+            let _ = change(placed.device, &placed.original, placed.was_primary);
+        }
+        let _ = apply();
+    }
+    outcome
+}
+
 pub fn connector_from_device(device: &str) -> &str {
     device.strip_prefix(DEVICE_PREFIX).unwrap_or(device)
 }
@@ -429,5 +455,100 @@ mod tests {
         for (code, expected) in cases {
             assert_eq!(display_change_reason(code), expected, "code {code}");
         }
+    }
+
+    fn staged() -> Vec<StagedPlacement<'static, i32>> {
+        vec![
+            StagedPlacement {
+                device: "DISPLAY1",
+                original: 0,
+                target: 1920,
+                primary: false,
+                was_primary: true,
+            },
+            StagedPlacement {
+                device: "DISPLAY2",
+                original: 1920,
+                target: 0,
+                primary: true,
+                was_primary: false,
+            },
+        ]
+    }
+
+    fn run_layout(
+        fail_change: Option<(&str, i32)>,
+        fail_applies: usize,
+    ) -> (Result<(), String>, Vec<String>) {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let applies = std::cell::Cell::new(0);
+        let outcome = apply_staged_layout(
+            &staged(),
+            |device, value, primary| {
+                calls
+                    .borrow_mut()
+                    .push(format!("{device}={value} primary={primary}"));
+                if fail_change == Some((device, *value)) {
+                    return Err(format!("{device} refused"));
+                }
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("apply".to_string());
+                applies.set(applies.get() + 1);
+                if applies.get() <= fail_applies {
+                    return Err("apply refused".to_string());
+                }
+                Ok(())
+            },
+        );
+        (outcome, calls.into_inner())
+    }
+
+    #[test]
+    fn a_layout_that_stages_and_applies_is_not_rolled_back() {
+        let (outcome, calls) = run_layout(None, 0);
+        assert_eq!(outcome, Ok(()));
+        assert_eq!(
+            calls,
+            [
+                "DISPLAY1=1920 primary=false",
+                "DISPLAY2=0 primary=true",
+                "apply",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_second_entry_restages_every_original_with_its_primary_flag() {
+        let (outcome, calls) = run_layout(Some(("DISPLAY2", 0)), 0);
+        assert_eq!(outcome, Err("DISPLAY2 refused".to_string()));
+        assert_eq!(
+            calls,
+            [
+                "DISPLAY1=1920 primary=false",
+                "DISPLAY2=0 primary=true",
+                "DISPLAY1=0 primary=true",
+                "DISPLAY2=1920 primary=false",
+                "apply",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_final_apply_restages_the_originals_and_applies_them() {
+        let (outcome, calls) = run_layout(None, 1);
+        assert_eq!(outcome, Err("apply refused".to_string()));
+        assert_eq!(
+            calls,
+            [
+                "DISPLAY1=1920 primary=false",
+                "DISPLAY2=0 primary=true",
+                "apply",
+                "DISPLAY1=0 primary=true",
+                "DISPLAY2=1920 primary=false",
+                "apply",
+            ]
+        );
     }
 }
