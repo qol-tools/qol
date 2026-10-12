@@ -21,8 +21,9 @@ impl AppKeyWriter for Platform {
         }
         let key_path =
             format!(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{app_key}");
-        let output = Command::new("reg")
-            .args(["delete", &key_path, "/v", "ShortcutKeys", "/f"])
+        let mut command = Command::new("reg");
+        command.args(["delete", &key_path, "/v", "ShortcutKeys", "/f"]);
+        let output = qol_process::hide_console_window(&mut command)
             .output()
             .with_context(|| format!("failed to invoke reg delete for AppKey {app_key}"))?;
         if !output.status.success() {

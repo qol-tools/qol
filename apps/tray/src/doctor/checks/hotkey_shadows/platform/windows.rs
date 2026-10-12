@@ -56,14 +56,13 @@ struct RegCli;
 
 impl RegistryReader for RegCli {
     fn read_app_keys(&mut self) -> Vec<AppKeyEntry> {
-        let output = Command::new("reg")
-            .args([
-                "query",
-                r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey",
-                "/s",
-            ])
-            .output()
-            .ok();
+        let mut command = Command::new("reg");
+        command.args([
+            "query",
+            r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey",
+            "/s",
+        ]);
+        let output = qol_process::hide_console_window(&mut command).output().ok();
         let Some(output) = output else {
             return Vec::new();
         };
