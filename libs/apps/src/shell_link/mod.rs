@@ -10,6 +10,7 @@ const LINK_CLSID: [u8; 16] = [
     0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
 ];
 const FLAGS_OFFSET: usize = 20;
+const SHOW_COMMAND_OFFSET: usize = 0x3C;
 
 const HAS_ID_LIST: u32 = 1 << 0;
 const HAS_LINK_INFO: u32 = 1 << 1;
@@ -21,6 +22,7 @@ const HAS_ICON_LOCATION: u32 = 1 << 6;
 const IS_UNICODE: u32 = 1 << 7;
 const FORCE_NO_LINK_INFO: u32 = 1 << 8;
 const HAS_DARWIN_ID: u32 = 1 << 12;
+const RUN_AS_USER: u32 = 1 << 13;
 const STRING_DATA: [u32; 5] = [
     HAS_NAME,
     HAS_RELATIVE_PATH,
@@ -28,6 +30,10 @@ const STRING_DATA: [u32; 5] = [
     HAS_ARGUMENTS,
     HAS_ICON_LOCATION,
 ];
+
+const SHOW_NORMAL: u32 = 1;
+const SHOW_MAXIMIZED: u32 = 3;
+const SHOW_MIN_NO_ACTIVE: u32 = 7;
 
 const LOCAL_BASE_PATH_FLAG: u32 = 1;
 const UNICODE_LINK_INFO_HEADER: u32 = 0x24;
@@ -64,10 +70,13 @@ pub struct ShellLink {
     pub local_path: Option<String>,
     pub description: Option<String>,
     pub relative_path: Option<String>,
+    pub working_dir: Option<String>,
     pub arguments: Option<String>,
     pub icon_location: Option<String>,
     pub environment_target: Option<String>,
     pub advertised: bool,
+    pub run_as_user: bool,
+    pub show_command: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +100,8 @@ impl ShellLink {
         let has = |flag: u32| flags & flag != 0;
         let mut link = Self {
             advertised: has(HAS_DARWIN_ID),
+            run_as_user: has(RUN_AS_USER),
+            show_command: show_command(u32_at(bytes, SHOW_COMMAND_OFFSET)?),
             ..Self::default()
         };
         let mut offset = HEADER_SIZE;
@@ -113,6 +124,7 @@ impl ShellLink {
             match flag {
                 HAS_NAME => link.description = non_empty(value),
                 HAS_RELATIVE_PATH => link.relative_path = non_empty(value),
+                HAS_WORKING_DIR => link.working_dir = non_empty(value),
                 HAS_ARGUMENTS => link.arguments = non_empty(value),
                 HAS_ICON_LOCATION => link.icon_location = non_empty(value),
                 _ => {}
@@ -148,6 +160,17 @@ impl ShellLink {
             (None, Some(IdList::ShellFolder)) => LinkTarget::ShellFolder,
             (None, _) => LinkTarget::Unknown,
         }
+    }
+
+    pub fn resolved_working_dir(&self, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+        expand_environment(self.working_dir.as_deref()?, env).map(PathBuf::from)
+    }
+}
+
+fn show_command(raw: u32) -> u32 {
+    match raw {
+        SHOW_MAXIMIZED | SHOW_MIN_NO_ACTIVE => raw,
+        _ => SHOW_NORMAL,
     }
 }
 

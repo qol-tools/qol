@@ -319,6 +319,7 @@ fn string_data_fields_are_read_in_order() {
             Some(r"..\Foo\foo.exe"),
             "{unicode}"
         );
+        assert_eq!(link.working_dir.as_deref(), Some(r"C:\Foo"), "{unicode}");
         assert_eq!(link.arguments.as_deref(), Some("--fast"), "{unicode}");
         assert_eq!(
             link.icon_location.as_deref(),
@@ -326,6 +327,28 @@ fn string_data_fields_are_read_in_order() {
             "{unicode}"
         );
     }
+}
+
+#[test]
+fn launch_details_read_the_run_as_flag_show_command_and_working_dir() {
+    let cases = [(0u32, SHOW_NORMAL), (2, SHOW_NORMAL), (3, 3), (7, 7)];
+    for (raw, expected) in cases {
+        let mut bytes = Fixture::default()
+            .flag(RUN_AS_USER)
+            .string(HAS_WORKING_DIR, r"%windir%\Temp")
+            .bytes();
+        bytes[SHOW_COMMAND_OFFSET..SHOW_COMMAND_OFFSET + 4].copy_from_slice(&raw.to_le_bytes());
+        let link = ShellLink::parse(&bytes).unwrap();
+        assert!(link.run_as_user);
+        assert_eq!(link.show_command, expected, "{raw}");
+        assert_eq!(
+            link.resolved_working_dir(env),
+            Some(PathBuf::from(r"C:\Windows\Temp"))
+        );
+    }
+    let plain = ShellLink::parse(&Fixture::default().bytes()).unwrap();
+    assert!(!plain.run_as_user);
+    assert_eq!(plain.resolved_working_dir(env), None);
 }
 
 #[test]
