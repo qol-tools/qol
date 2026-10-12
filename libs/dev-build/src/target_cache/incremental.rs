@@ -57,7 +57,7 @@ impl CrateCache {
         })
     }
 
-    pub(super) fn idle_since(&self, cutoff: SystemTime, live_files: &HashSet<(u64, u64)>) -> bool {
+    pub(super) fn idle_since(&self, cutoff: SystemTime, live_files: &HashSet<(u64, u128)>) -> bool {
         let names = self.sessions.iter().map(|session| &session.name);
         if !idle_since(&self.path, names, cutoff) {
             return false;

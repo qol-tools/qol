@@ -31,7 +31,7 @@ pub fn file_identity(_: &Path, metadata: &std::fs::Metadata) -> Option<crate::Fi
     use std::os::unix::fs::MetadataExt;
     Some(crate::FileIdentity {
         device: metadata.dev(),
-        index: metadata.ino(),
+        index: u128::from(metadata.ino()),
         links: metadata.nlink(),
     })
 }

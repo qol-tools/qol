@@ -10,7 +10,7 @@ use tempfile::Builder;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileIdentity {
     pub device: u64,
-    pub index: u64,
+    pub index: u128,
     pub links: u64,
 }
 

@@ -11,6 +11,7 @@ const INVALID_FILE_ATTRIBUTES: u32 = u32::MAX;
 const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const FILE_ID_INFO_CLASS: i32 = 18;
 
 #[repr(C)]
 #[derive(Default)]
@@ -23,6 +24,13 @@ struct ByHandleFileInformation {
     file_index_low: u32,
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct FileIdInfo {
+    volume_serial_number: u64,
+    file_id: [u8; 16],
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn GetFileAttributesW(file_name: *const u16) -> u32;
@@ -30,6 +38,12 @@ extern "system" {
     fn GetFileInformationByHandle(
         file: RawHandle,
         information: *mut ByHandleFileInformation,
+    ) -> i32;
+    fn GetFileInformationByHandleEx(
+        file: RawHandle,
+        class: i32,
+        information: *mut FileIdInfo,
+        size: u32,
     ) -> i32;
 }
 
@@ -75,10 +89,27 @@ pub fn file_identity(path: &Path, _: &std::fs::Metadata) -> Option<crate::FileId
     if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
         return None;
     }
+    let mut id = FileIdInfo::default();
+    let read_id = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FILE_ID_INFO_CLASS,
+            &mut id,
+            std::mem::size_of::<FileIdInfo>() as u32,
+        )
+    };
+    let (device, index) = if read_id != 0 {
+        (id.volume_serial_number, u128::from_le_bytes(id.file_id))
+    } else {
+        (
+            u64::from(information.volume_serial_number),
+            (u128::from(information.file_index_high) << 32)
+                | u128::from(information.file_index_low),
+        )
+    };
     Some(crate::FileIdentity {
-        device: u64::from(information.volume_serial_number),
-        index: (u64::from(information.file_index_high) << 32)
-            | u64::from(information.file_index_low),
+        device,
+        index,
         links: u64::from(information.number_of_links),
     })
 }

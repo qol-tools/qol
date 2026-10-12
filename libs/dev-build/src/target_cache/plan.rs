@@ -186,7 +186,7 @@ fn plan_profile(profile: &Path, cutoff: Option<SystemTime>, pacer: &mut Pacer) -
     let scan = units::scan(profile, cutoff.is_some(), pacer);
     let crates = incremental::scan(profile, pacer);
     let live = units::live_units(&scan, &root_units(&scan, &crates), cutoff);
-    let live_files: HashSet<(u64, u64)> = live
+    let live_files: HashSet<(u64, u128)> = live
         .iter()
         .filter_map(|hash| scan.units.get(hash))
         .flat_map(|unit| &unit.files)
@@ -241,7 +241,7 @@ fn plan_profile(profile: &Path, cutoff: Option<SystemTime>, pacer: &mut Pacer) -
 }
 
 fn root_units<'a>(scan: &'a UnitScan, crates: &[CrateCache]) -> HashSet<&'a str> {
-    let mut internal_links: HashMap<(u64, u64), u64> = HashMap::new();
+    let mut internal_links: HashMap<(u64, u128), u64> = HashMap::new();
     let unit_files = scan.units.values().flat_map(|unit| &unit.files);
     for file in unit_files.chain(crates.iter().flat_map(CrateCache::files)) {
         if let Some(identity) = file.identity {
@@ -285,7 +285,7 @@ pub(super) fn tally_into<'a>(
     report: &mut SweepReport,
     removals: impl IntoIterator<Item = &'a Removal>,
 ) {
-    let mut shared: HashMap<(u64, u64), (u64, u64, u64, RemovalKind)> = HashMap::new();
+    let mut shared: HashMap<(u64, u128), (u64, u64, u64, RemovalKind)> = HashMap::new();
     for removal in removals {
         tally_for(report, removal.kind).count += 1;
         for file in &removal.files {

@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FileStat {
-    pub(super) identity: Option<(u64, u64)>,
+    pub(super) identity: Option<(u64, u128)>,
     pub(super) links: u64,
     pub(super) bytes: u64,
 }

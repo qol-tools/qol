@@ -51,7 +51,7 @@ pub struct IdentitySnapshot {
     pub len: Option<u64>,
     pub modified_ns: Option<u128>,
     pub dev: Option<u64>,
-    pub ino: Option<u64>,
+    pub ino: Option<u128>,
     pub file_name: Option<String>,
     pub canonical_parent: Option<PathBuf>,
     pub ancestor_symlink: bool,
