@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::ptr::{null, null_mut};
 use std::sync::{mpsc, Mutex};
@@ -43,10 +43,7 @@ fn shell_execute_scrubbed(
     let _env = LAUNCH_ENV
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut keys = qol_conventions::daemon_handoff_env_keys();
-    keys.push(qol_conventions::ENV_DAEMON_SOCKET.into());
-    keys.push(qol_conventions::ENV_INSTALL_ID.into());
-    let saved: Vec<_> = keys
+    let saved: Vec<_> = scrubbed_keys()
         .into_iter()
         .filter_map(|key| std::env::var_os(&key).map(|value| (key, value)))
         .collect();
@@ -58,6 +55,12 @@ fn shell_execute_scrubbed(
         std::env::set_var(key, value);
     }
     result
+}
+
+fn scrubbed_keys() -> Vec<OsString> {
+    let mut keys = qol_conventions::daemon_handoff_env_keys();
+    keys.push(qol_conventions::ENV_DAEMON_SOCKET.into());
+    keys
 }
 
 fn shell_execute_now(
@@ -87,5 +90,21 @@ fn shell_execute_result(code: usize) -> io::Result<()> {
         _ => Err(io::Error::other(format!(
             "ShellExecute failed with code {code}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_launch_hides_the_daemon_socket_but_not_the_install_id_config_reads() {
+        let keys = scrubbed_keys();
+        assert!(keys
+            .iter()
+            .any(|key| key == qol_conventions::ENV_DAEMON_SOCKET));
+        assert!(!keys
+            .iter()
+            .any(|key| key == qol_conventions::ENV_INSTALL_ID));
     }
 }

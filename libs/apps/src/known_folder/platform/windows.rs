@@ -6,7 +6,7 @@ use windows_sys::core::{GUID, PWSTR};
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures,
-    FOLDERID_Videos, SHGetKnownFolderPath,
+    FOLDERID_Programs, FOLDERID_Videos, SHGetKnownFolderPath,
 };
 
 pub(crate) fn known_folder(id: &GUID) -> Option<PathBuf> {
@@ -50,6 +50,10 @@ pub fn videos_dir() -> Option<PathBuf> {
     known_folder(&FOLDERID_Videos)
 }
 
+pub fn programs_dir() -> Option<PathBuf> {
+    known_folder(&FOLDERID_Programs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +77,16 @@ mod tests {
             assert!(folder.is_absolute(), "{name}: {}", folder.display());
         }
         assert_ne!(pictures_dir(), videos_dir());
+    }
+
+    #[test]
+    fn programs_resolve_to_the_start_menu_programs_folder() {
+        let folder = programs_dir().expect("programs folder");
+        assert!(folder.is_absolute(), "{}", folder.display());
+        assert!(
+            folder.ends_with(r"Start Menu\Programs"),
+            "{}",
+            folder.display()
+        );
     }
 }

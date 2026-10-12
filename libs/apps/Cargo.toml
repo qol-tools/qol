@@ -7,8 +7,6 @@ description = "Shared app inventory and desktop entry helpers for qol-tools"
 
 [dependencies]
 dirs = "6.0"
-log.workspace = true
-open.workspace = true
 qol-conventions.workspace = true
 qol-platform.workspace = true
 qol-plugin-api.workspace = true
@@ -20,7 +18,11 @@ workspace-hack.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1"
 
+[target.'cfg(not(windows))'.dependencies]
+open.workspace = true
+
 [target.'cfg(windows)'.dependencies]
+log.workspace = true
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_System_Com",

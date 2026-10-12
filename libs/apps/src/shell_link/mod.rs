@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use qol_platform::utf16::from_le_bytes;
+
 const HEADER_SIZE: usize = 0x4C;
 const LINK_CLSID: [u8; 16] = [
     0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
@@ -167,17 +169,6 @@ fn ansi(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn utf16(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| u16::from_le_bytes(*pair))
-        .take_while(|unit| *unit != 0)
-        .collect();
-    String::from_utf16_lossy(&units)
-}
-
 fn non_empty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
@@ -205,7 +196,7 @@ fn id_list(mut items: &[u8]) -> Option<IdList> {
             names_file = true;
             let name = item.get(FILE_NAME_OFFSET..).map(|raw| {
                 if kind & UNICODE_FILE_ITEM != 0 {
-                    utf16(raw)
+                    from_le_bytes(raw)
                 } else {
                     ansi(raw)
                 }
@@ -241,7 +232,7 @@ fn local_path(info: &[u8]) -> Option<String> {
             .flatten()
             .filter(|offset| *offset != 0);
         match unicode_offset {
-            Some(offset) => info.get(offset as usize..).map(utf16),
+            Some(offset) => info.get(offset as usize..).map(from_le_bytes),
             None => info.get(u32_at(info, ansi_at)? as usize..).map(ansi),
         }
     };
@@ -261,7 +252,11 @@ fn string_data(bytes: &[u8], offset: usize, unicode: bool) -> Option<(String, us
     let length = if unicode { count * 2 } else { count };
     let start = offset + 2;
     let raw = bytes.get(start..start + length)?;
-    let value = if unicode { utf16(raw) } else { ansi(raw) };
+    let value = if unicode {
+        from_le_bytes(raw)
+    } else {
+        ansi(raw)
+    };
     Some((value, start + length))
 }
 
@@ -270,7 +265,7 @@ fn environment_target(mut extra: &[u8]) -> Option<String> {
         let size = u32_at(extra, 0)? as usize;
         let block = extra.get(..size).filter(|block| block.len() >= 8)?;
         if u32_at(block, 4)? == ENVIRONMENT_BLOCK && size == ENVIRONMENT_BLOCK_SIZE {
-            return non_empty(utf16(&block[ENVIRONMENT_UNICODE]))
+            return non_empty(from_le_bytes(&block[ENVIRONMENT_UNICODE]))
                 .or_else(|| non_empty(ansi(&block[ENVIRONMENT_ANSI])));
         }
         extra = &extra[size..];
