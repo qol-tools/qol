@@ -19,6 +19,7 @@ pub const SETTINGS_SURFACE_DISPLAY_NAME: &str = "QoL Settings";
 pub const TRAY_DISPLAY_NAME: &str = "QoL Tray";
 pub const TRAY_ICON_NAME: &str = "qol-tray";
 pub const HTTP_AUTH_TOKEN_FILE: &str = ".http-token";
+pub const HTTP_AUTH_PROOF_FILE: &str = ".http-token-proof";
 pub const NOTIFICATIONS_SETTINGS_FILE: &str = "notifications.json";
 pub const CODESIGN_IDENTITY_FILE: &str = "codesign-identity";
 pub const CODESIGN_IDENTITY_ENV: &str = "QOL_CODESIGN_IDENTITY";
@@ -26,6 +27,7 @@ pub const HOST_WORKSPACE_BUILD_FILE: &str = "host-workspace-build";
 pub const HTTP_AUTH_HEADER: &str = "x-qol-token";
 pub const HTTP_AGENT_HOME_HEADER: &str = "x-qol-agent-home";
 pub const HTTP_AUTH_FRAGMENT_KEY: &str = "qol_token";
+pub const HTTP_AUTH_PROOF_PATH: &str = "/auth/proof";
 
 pub const ENV_STATE_SOCKET: &str = "QOL_TRAY_STATE_SOCKET";
 pub const ENV_INSTALL_ID: &str = "QOL_TRAY_INSTALL_ID";

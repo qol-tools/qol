@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Request, State},
+    extract::{Query, Request, State},
     http::{header, HeaderMap, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
+    routing::get,
+    Router,
 };
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -20,8 +22,43 @@ impl HttpSecurity {
     pub(super) fn initialize(port: u16) -> Result<Self> {
         let token = load_or_create_token()?;
         std::env::set_var(qol_conventions::ENV_HTTP_TOKEN, token.as_ref());
+        if let Err(error) = announce_token_proof() {
+            log::warn!("qol clients will send the HTTP token without a server proof: {error:#}");
+        }
         Ok(Self { token, port })
     }
+}
+
+pub(super) fn proof_routes(security: HttpSecurity) -> Router {
+    Router::new()
+        .route(qol_conventions::HTTP_AUTH_PROOF_PATH, get(prove_token))
+        .with_state(security)
+}
+
+#[derive(serde::Deserialize)]
+struct ProofQuery {
+    nonce: String,
+}
+
+async fn prove_token(
+    State(security): State<HttpSecurity>,
+    Query(query): Query<ProofQuery>,
+) -> Response {
+    match qol_runtime::local_http::token_proof(&security.token, &query.nonce) {
+        Some(proof) => proof.into_response(),
+        None => (
+            StatusCode::BAD_REQUEST,
+            "the nonce must be 32 to 128 hex digits",
+        )
+            .into_response(),
+    }
+}
+
+fn announce_token_proof() -> Result<()> {
+    let path = qol_config::http_auth_proof_path()
+        .context("Could not determine the HTTP token proof path")?;
+    qol_fs::atomic_write_private(&path, b"1")
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub(crate) fn current_token() -> Option<String> {
@@ -275,6 +312,89 @@ mod tests {
                 "value={value}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_token_proof_needs_a_local_host_and_a_well_formed_nonce_but_no_token() {
+        let port = qol_conventions::DEFAULT_PORT;
+        let security = HttpSecurity {
+            token: Arc::from("secret"),
+            port,
+        };
+        let nonce = "00112233445566778899aabbccddeeff";
+        let expected = qol_runtime::local_http::token_proof("secret", nonce).unwrap();
+        let cases = [
+            (
+                format!("localhost:{port}"),
+                nonce,
+                StatusCode::OK,
+                Some(expected),
+            ),
+            (
+                format!("localhost:{port}"),
+                "0011",
+                StatusCode::BAD_REQUEST,
+                None,
+            ),
+            (
+                format!("evil.localhost:{port}"),
+                nonce,
+                StatusCode::FORBIDDEN,
+                None,
+            ),
+        ];
+
+        for (host, nonce, status, proof) in cases {
+            let app = proof_routes(security.clone()).layer(middleware::from_fn_with_state(
+                security.clone(),
+                require_local_host,
+            ));
+            let request = Request::get(format!(
+                "{}?nonce={nonce}",
+                qol_conventions::HTTP_AUTH_PROOF_PATH
+            ))
+            .header(header::HOST, &host)
+            .body(Body::empty())
+            .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), status, "{host} {nonce}");
+            if let Some(proof) = proof {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                assert_eq!(body, proof.as_bytes());
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_client_that_asks_for_proof_reaches_the_api_of_the_real_server() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let security = HttpSecurity {
+            token: Arc::from("secret"),
+            port,
+        };
+        let app = Router::new()
+            .route("/api/test", get(|| async { "reached" }))
+            .layer(middleware::from_fn_with_state(
+                security.clone(),
+                require_api_access,
+            ))
+            .merge(proof_routes(security.clone()))
+            .layer(middleware::from_fn_with_state(security, require_local_host));
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let response = tokio::task::spawn_blocking(move || {
+            qol_runtime::local_http::Client::new(port, "secret")
+                .with_server_proof(true)
+                .request(qol_runtime::local_http::Method::Get, "/api/test", None)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!((response.status, response.body.as_str()), (200, "reached"));
     }
 
     fn headers_with(key: &str, value: &str) -> HeaderMap {

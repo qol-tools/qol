@@ -323,6 +323,7 @@ fn assemble_app(
         .nest("/api/task-runner", task_runner)
         .nest("/api/mcp", mcp)
         .nest("/plugins", plugin_ui::router(plugins_dir))
+        .merge(security::proof_routes(http_security.clone()))
         .layer(no_cache)
         .layer(middleware::from_fn_with_state(
             http_security,
