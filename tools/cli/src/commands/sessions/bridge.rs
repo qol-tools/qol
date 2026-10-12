@@ -847,7 +847,7 @@ impl PendingBridgeStore {
             }
         };
         let pid_path = self.owner_pid_for(binding);
-        fs::write(&pid_path, process::id().to_string())
+        fs::write(&pid_path, owner_record(process::id()))
             .context("failed to record the bridge owner")?;
         let attach = cancel.map(|cancel| {
             Arc::new(BridgeAttach {
@@ -869,7 +869,7 @@ impl PendingBridgeStore {
 
     fn owner_conflict(&self, binding: &SessionBinding) -> String {
         let owner = fs::read_to_string(self.owner_pid_for(binding)).unwrap_or_default();
-        let owner = owner.trim();
+        let owner = owner.lines().next().unwrap_or_default().trim();
         let owner = if owner.is_empty() { "unknown" } else { owner };
         format!(
             "another bridge process (pid {owner}) is already attached to `{binding}`; never start a second one - run `qol sessions next {}` and follow the command it prints",
@@ -896,12 +896,14 @@ impl PendingBridgeStore {
 
     pub(super) fn owner_pid(&self, binding: &SessionBinding) -> Option<String> {
         let recorded = fs::read_to_string(self.owner_pid_for(binding)).ok()?;
-        let recorded = recorded.trim();
+        let mut lines = recorded.lines().map(str::trim);
+        let recorded = lines.next()?;
         let pid = recorded.parse::<u32>().ok()?;
-        if pid != process::id() && qol_process::is_pid_gone(pid) {
-            return None;
-        }
-        Some(recorded.to_owned())
+        let alive = match lines.next().filter(|identity| !identity.is_empty()) {
+            Some(identity) => qol_process::process_identity_matches(pid, identity),
+            None => pid == process::id() || !qol_process::is_pid_gone(pid),
+        };
+        alive.then(|| recorded.to_owned())
     }
 
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
@@ -2247,6 +2249,13 @@ fn exit_status_reason(status: &std::process::ExitStatus) -> String {
         .unwrap_or_else(|| "terminated by signal".to_owned())
 }
 
+fn owner_record(pid: u32) -> String {
+    match qol_process::process_identity(pid) {
+        Ok(identity) => format!("{pid}\n{identity}"),
+        Err(_) => pid.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3456,6 +3465,30 @@ mod tests {
                 "the newer attach owns the session"
             );
         }
+    }
+
+    #[test]
+    fn a_recorded_owner_counts_only_while_its_process_identity_matches() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:13:1300").unwrap();
+        let path = store.owner_pid_for(&binding);
+        let own = process::id();
+
+        fs::write(&path, owner_record(own)).unwrap();
+        assert_eq!(store.owner_pid(&binding), Some(own.to_string()));
+        fs::write(&path, format!("{own}\nstale:0")).unwrap();
+        assert_eq!(
+            store.owner_pid(&binding),
+            None,
+            "a reused pid is not the recorded owner"
+        );
+        fs::write(&path, own.to_string()).unwrap();
+        assert_eq!(
+            store.owner_pid(&binding),
+            Some(own.to_string()),
+            "a record from an older bridge falls back to the pid"
+        );
     }
 
     #[test]
