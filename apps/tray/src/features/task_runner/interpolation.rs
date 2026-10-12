@@ -7,7 +7,7 @@ pub(super) fn interpolate(template: &str, params: &HashMap<String, String>) -> S
 pub(super) fn interpolate_shell(
     template: &str,
     params: &HashMap<String, String>,
-    quote: impl Fn(&str) -> Result<String, String>,
+    mut quote: impl FnMut(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let mut failure = None;
     let script = replace_template_vars(template, |key| {
@@ -22,33 +22,45 @@ pub(super) fn interpolate_shell(
 
 fn replace_template_vars(template: &str, mut replacer: impl FnMut(&str) -> String) -> String {
     let mut result = String::with_capacity(template.len());
+    for part in template_parts(template) {
+        match part {
+            TemplatePart::Text(text) => result.push_str(text),
+            TemplatePart::Param(key) => result.push_str(&replacer(key)),
+        }
+    }
+    result
+}
+
+pub(super) enum TemplatePart<'a> {
+    Text(&'a str),
+    Param(&'a str),
+}
+
+pub(super) fn template_parts(template: &str) -> Vec<TemplatePart<'_>> {
+    let mut parts = Vec::new();
     let mut rest = template;
 
     while let Some(start) = rest.find("{{") {
-        result.push_str(&rest[..start]);
         let after_open = &rest[start + 2..];
 
         let Some(end) = after_open.find("}}") else {
-            result.push_str(&rest[start..]);
-            rest = "";
             break;
         };
 
         let key = &after_open[..end];
-        rest = &after_open[end + 2..];
+        let placeholder_end = start + 2 + end + 2;
 
-        if !valid_key(key) {
-            result.push_str("{{");
-            result.push_str(key);
-            result.push_str("}}");
-            continue;
+        if valid_key(key) {
+            parts.push(TemplatePart::Text(&rest[..start]));
+            parts.push(TemplatePart::Param(key));
+        } else {
+            parts.push(TemplatePart::Text(&rest[..placeholder_end]));
         }
-
-        result.push_str(&replacer(key));
+        rest = &rest[placeholder_end..];
     }
 
-    result.push_str(rest);
-    result
+    parts.push(TemplatePart::Text(rest));
+    parts
 }
 
 fn valid_key(key: &str) -> bool {

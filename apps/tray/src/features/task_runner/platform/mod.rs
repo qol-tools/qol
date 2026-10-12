@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -34,7 +35,11 @@ pub(super) use windows::Platform;
 
 trait TaskRunnerPlatform {
     fn shell_command(&self, script: &str) -> Result<Command, String>;
-    fn quote_param(&self, value: &str) -> Result<String, String>;
+    fn render_command(
+        &self,
+        template: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<String, String>;
     fn guardian_executable(&self) -> std::io::Result<PathBuf>;
 }
 
@@ -42,8 +47,11 @@ pub(super) fn shell_command(script: &str) -> Result<Command, String> {
     Platform.shell_command(script)
 }
 
-pub(super) fn quote_param(value: &str) -> Result<String, String> {
-    Platform.quote_param(value)
+pub(super) fn render_command(
+    template: &str,
+    params: &HashMap<String, String>,
+) -> Result<String, String> {
+    Platform.render_command(template, params)
 }
 
 pub(super) fn verified_process_tree() -> std::io::Result<qol_process::ProcessTreeGuard> {

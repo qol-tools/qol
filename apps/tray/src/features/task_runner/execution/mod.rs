@@ -1,7 +1,7 @@
 mod command_task;
 
 use super::config::ActionConfig;
-use super::interpolation::{interpolate, interpolate_shell};
+use super::interpolation::interpolate;
 use super::platform;
 use command_task::CommandTask;
 use std::collections::HashMap;
@@ -51,11 +51,7 @@ pub(super) async fn execute(request: ExecutionRequest<'_>) -> Result<ExecutionRe
 
 fn execution_spec(request: &ExecutionRequest<'_>) -> Result<ExecutionSpec, String> {
     Ok(ExecutionSpec {
-        command: interpolate_shell(
-            &request.action.command,
-            request.params,
-            platform::quote_param,
-        )?,
+        command: platform::render_command(&request.action.command, request.params)?,
         cwd: request
             .action
             .cwd
