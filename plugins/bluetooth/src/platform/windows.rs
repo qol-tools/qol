@@ -5,7 +5,7 @@ use qol_audio::bluetooth::BluetoothEndpoint;
 use qol_headless::DoctorCheckResult;
 use qol_platform::native::wide::from_wide;
 use qol_plugin_daemon::notification::send_notification;
-use windows::core::{Owned, GUID, HRESULT};
+use windows::core::{Owned, GUID, HRESULT, PCWSTR};
 use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
 use windows::Win32::Devices::Bluetooth::{
     BluetoothAuthenticateDeviceEx, BluetoothEnumerateInstalledServices, BluetoothFindFirstDevice,
@@ -13,10 +13,19 @@ use windows::Win32::Devices::Bluetooth::{
     BluetoothGetRadioInfo, BluetoothRemoveDevice, BluetoothSetServiceState,
     MITMProtectionNotDefined, BLUETOOTH_ADDRESS, BLUETOOTH_ADDRESS_0, BLUETOOTH_DEVICE_INFO,
     BLUETOOTH_DEVICE_SEARCH_PARAMS, BLUETOOTH_FIND_RADIO_PARAMS, BLUETOOTH_RADIO_INFO,
-    BLUETOOTH_SERVICE_DISABLE, BLUETOOTH_SERVICE_ENABLE,
+    BLUETOOTH_SERVICE_DISABLE, BLUETOOTH_SERVICE_ENABLE, GUID_BLUETOOTHLE_DEVICE_INTERFACE,
+};
+use windows::Win32::Devices::DeviceAndDriverInstallation::{
+    SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDevicePropertyW, DIGCF_DEVICEINTERFACE,
+    DIGCF_PRESENT, HDEVINFO, SP_DEVINFO_DATA,
+};
+use windows::Win32::Devices::Properties::{
+    DEVPKEY_Device_DevNodeStatus, DEVPKEY_Device_FriendlyName, DEVPKEY_Device_InstanceId,
+    DEVPROPTYPE, DEVPROP_TYPE_STRING, DEVPROP_TYPE_UINT32,
 };
 use windows::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HANDLE,
+    DEVPROPKEY, ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS,
+    HANDLE,
 };
 
 use crate::bluetooth::{
@@ -26,6 +35,7 @@ use crate::bluetooth::{
 use crate::config::ReconnectConfig;
 
 use super::input_service::{self, Journal};
+use super::low_energy;
 use super::paired::{self, PairedStack};
 pub use super::paired::{search_status_snapshot, settings_action, settings_query, stop_search};
 
@@ -230,12 +240,104 @@ fn record(address: &str) -> Result<BLUETOOTH_DEVICE_INFO> {
     };
     let status = unsafe { BluetoothGetDeviceInfo(None, &mut record) };
     if status != ERROR_SUCCESS.0 {
-        bail!(
-            "Windows knows no Bluetooth device at {address} ({})",
-            win32_reason(status)
-        );
+        return Err(classic_only(
+            address,
+            format!(
+                "Windows knows no Bluetooth device at {address} ({})",
+                win32_reason(status)
+            ),
+        ));
     }
     Ok(record)
+}
+
+fn device_property(
+    set: HDEVINFO,
+    device: &SP_DEVINFO_DATA,
+    key: &DEVPROPKEY,
+    kind: DEVPROPTYPE,
+) -> Option<Vec<u8>> {
+    let mut found = DEVPROPTYPE::default();
+    let mut size = 0u32;
+    let mut read = |buffer: Option<&mut [u8]>, required: Option<*mut u32>| unsafe {
+        SetupDiGetDevicePropertyW(set, device, key, &mut found, buffer, required, 0)
+    };
+    let _ = read(None, Some(&raw mut size));
+    if size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u8; size as usize];
+    read(Some(&mut buffer), None).ok()?;
+    (found == kind).then_some(buffer)
+}
+
+fn string_property(set: HDEVINFO, device: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<String> {
+    device_property(set, device, key, DEVPROP_TYPE_STRING)
+        .map(|bytes| qol_platform::utf16::from_le_bytes(&bytes))
+}
+
+fn node_status(set: HDEVINFO, device: &SP_DEVINFO_DATA) -> Option<u32> {
+    let key = &DEVPKEY_Device_DevNodeStatus;
+    let bytes = device_property(set, device, key, DEVPROP_TYPE_UINT32)?;
+    Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+}
+
+fn low_energy_records(endpoints: &[BluetoothEndpoint]) -> Result<Vec<DeviceInfo>> {
+    let interface = &GUID_BLUETOOTHLE_DEVICE_INTERFACE as *const GUID;
+    let flags = DIGCF_PRESENT | DIGCF_DEVICEINTERFACE;
+    let set = unsafe { SetupDiGetClassDevsW(Some(interface), PCWSTR::null(), None, flags) }
+        .context("Windows could not list Bluetooth LE devices")?;
+    let set = unsafe { Owned::new(set) };
+    let mut devices = Vec::new();
+    for index in 0.. {
+        let mut data = SP_DEVINFO_DATA {
+            cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
+            ..Default::default()
+        };
+        if unsafe { SetupDiEnumDeviceInfo(*set, index, &mut data) }.is_err() {
+            break;
+        }
+        let Some(raw) = string_property(*set, &data, &DEVPKEY_Device_InstanceId)
+            .and_then(|id| low_energy::address(&id))
+        else {
+            continue;
+        };
+        let address = address_text(raw);
+        let name = string_property(*set, &data, &DEVPKEY_Device_FriendlyName).unwrap_or_default();
+        let connected = low_energy::connected(node_status(*set, &data));
+        let audio = audio_state(&address, endpoints);
+        devices.push(low_energy::device(address, &name, connected, audio));
+    }
+    Ok(devices)
+}
+
+fn low_energy_devices(endpoints: &[BluetoothEndpoint]) -> Vec<DeviceInfo> {
+    low_energy_records(endpoints).unwrap_or_else(|error| {
+        log::warn!("Bluetooth LE devices could not be listed: {error:#}");
+        Vec::new()
+    })
+}
+
+fn low_energy_device(address: &str) -> Option<DeviceInfo> {
+    let address = normalize_address(address).ok()?;
+    low_energy_devices(&audio_endpoints())
+        .into_iter()
+        .find(|device| device.address == address)
+}
+
+fn classic_only(address: &str, error: String) -> anyhow::Error {
+    match low_energy_device(address) {
+        Some(device) => anyhow!(low_energy::refusal(&device.alias)),
+        None => anyhow!(error),
+    }
+}
+
+fn settled_low_energy(
+    address: &str,
+    error: anyhow::Error,
+    settled: impl Fn(&DeviceInfo) -> bool,
+) -> Result<DeviceInfo> {
+    low_energy_device(address).filter(settled).ok_or(error)
 }
 
 fn installed_services(record: &BLUETOOTH_DEVICE_INFO) -> Vec<GUID> {
@@ -423,10 +525,11 @@ pub fn required_binaries_check() -> DoctorCheckResult {
 
 pub fn list_devices() -> Result<Vec<DeviceInfo>> {
     let endpoints = audio_endpoints();
-    Ok(find_records(false)?
+    let classic = find_records(false)?
         .iter()
         .map(|record| device_info(record, &endpoints))
-        .collect())
+        .collect();
+    Ok(low_energy::merge(classic, low_energy_devices(&endpoints)))
 }
 
 pub fn adapter_health() -> Result<AdapterHealth> {
@@ -507,7 +610,10 @@ pub fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInf
 
 fn connect(address: &str, power_on_adapter: bool, restart_input: bool) -> Result<DeviceInfo> {
     paired::ensure_powered::<WindowsStack>(power_on_adapter)?;
-    let record = record(address)?;
+    let record = match record(address) {
+        Ok(record) => record,
+        Err(error) => return settled_low_energy(address, error, |known| known.connected),
+    };
     let current = device_info(&record, &audio_endpoints());
     if connection_ready(&current) {
         return Ok(current);
@@ -532,7 +638,10 @@ fn connect(address: &str, power_on_adapter: bool, restart_input: bool) -> Result
 }
 
 pub fn disconnect_device(address: &str) -> Result<DeviceInfo> {
-    let current = device(address)?;
+    let current = match device(address) {
+        Ok(current) => current,
+        Err(error) => return settled_low_energy(address, error, |known| !known.connected),
+    };
     if !current.connected {
         return Ok(current);
     }
@@ -549,7 +658,10 @@ pub fn disconnect_device(address: &str) -> Result<DeviceInfo> {
 
 pub fn pair_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
     paired::ensure_powered::<WindowsStack>(power_on_adapter)?;
-    let mut record = record(address)?;
+    let mut record = match record(address) {
+        Ok(record) => record,
+        Err(error) => return settled_low_energy(address, error, |_| true),
+    };
     if record.fAuthenticated.as_bool() {
         return Ok(device_info(&record, &audio_endpoints()));
     }
@@ -577,10 +689,13 @@ pub fn remove_device(address: &str) -> Result<()> {
     };
     let status = unsafe { BluetoothRemoveDevice(&target) };
     if status != ERROR_SUCCESS.0 {
-        bail!(
-            "Windows refused to remove {address} ({})",
-            win32_reason(status)
-        );
+        return Err(classic_only(
+            address,
+            format!(
+                "Windows refused to remove {address} ({})",
+                win32_reason(status)
+            ),
+        ));
     }
     Ok(())
 }
@@ -698,6 +813,15 @@ mod tests {
         ];
         for (address, expected) in cases {
             assert_eq!(audio_state(address, &endpoints), expected, "{address}");
+        }
+    }
+
+    #[test]
+    fn low_energy_devices_are_listed_with_a_bluetooth_address() {
+        let devices = low_energy_records(&[]).expect("LE devices");
+        for device in devices {
+            assert!(normalize_address(&device.address).is_ok(), "{device:?}");
+            assert!(device.paired, "{device:?}");
         }
     }
 

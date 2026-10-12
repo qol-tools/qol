@@ -6,6 +6,8 @@ mod fallback;
 mod input_service;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "windows", test))]
+mod low_energy;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
