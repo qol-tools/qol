@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use crate::platform::{Platform, PlatformOps};
 use qol_dev_build::target_cache::{
-    cargo_cache_dirs, format_bytes, path_bytes, prunable_target_bytes, prune_cargo_target_dir,
-    INCREMENTAL_CACHE_CEILING, SWEPT_CACHE_CEILING,
+    cargo_cache_dirs, format_bytes, path_bytes, prunable_target_bytes, sweep_cargo_cache_dir,
+    SweepMode, KEEP_UNUSED_FOR,
 };
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Stylize};
@@ -349,7 +349,7 @@ fn usage_rows(
     rows.extend(bucket_rows);
     set_progress(progress, "stale caches");
     let prunable = if any_target_rescan {
-        let value = prunable_target_bytes(&target);
+        let value = prunable_cache_bytes(running);
         ledger.records.insert(
             PRUNABLE_LEDGER_KEY.to_string(),
             SubtreeRecord {
@@ -365,7 +365,7 @@ fn usage_rows(
             .get(PRUNABLE_LEDGER_KEY)
             .map(|record| record.bytes)
             .unwrap_or_else(|| {
-                let value = prunable_target_bytes(&target);
+                let value = prunable_cache_bytes(running);
                 ledger.records.insert(
                     PRUNABLE_LEDGER_KEY.to_string(),
                     SubtreeRecord {
@@ -380,9 +380,8 @@ fn usage_rows(
     rows.push(DiskRow {
         label: PRUNABLE_LABEL.to_string(),
         detail: format!(
-            "the doctor auto-prunes debug artifacts to {} and incremental caches to {}",
-            format_bytes(SWEPT_CACHE_CEILING),
-            format_bytes(INCREMENTAL_CACHE_CEILING)
+            "cargo caches no build used in {} days; qol clean --prune removes them",
+            KEEP_UNUSED_FOR.as_secs() / (24 * 60 * 60)
         ),
         bytes: Some(prunable),
         cleanable: true,
@@ -487,18 +486,31 @@ fn cleanup_disk_usage_in(
         if !target.exists() {
             continue;
         }
-        let prunable = prunable_target_bytes(&target);
-        match prune_cargo_target_dir(&target) {
-            Ok(()) => freed += prunable,
-            Err(error) => {
-                failures.push(format!("stale caches: {error}"));
-                freed += prunable.saturating_sub(prunable_target_bytes(&target));
+        match sweep_cargo_cache_dir(&target, SweepMode::Apply) {
+            Ok(report) => {
+                freed += report.freed_bytes;
+                failures.extend(
+                    report
+                        .skipped
+                        .into_iter()
+                        .chain(report.failures)
+                        .map(|problem| format!("stale caches: {problem}")),
+                );
             }
+            Err(error) => failures.push(format!("stale caches: {error}")),
         }
     }
     let (mut report, ledger) = scan_disk_usage_in(running, progress, caches)?;
     report.rows.insert(0, cleanup_row(freed, &failures));
     Ok((report, ledger))
+}
+
+fn prunable_cache_bytes(running: &Path) -> u64 {
+    cargo_cache_dirs(running)
+        .iter()
+        .filter(|dir| dir.exists())
+        .map(|dir| prunable_target_bytes(dir))
+        .sum()
 }
 
 fn cleanup_row(freed: u64, failures: &[String]) -> DiskRow {
@@ -896,6 +908,18 @@ mod tests {
         std::fs::write(dir.join("payload.bin"), vec![0; bytes]).expect("file");
     }
 
+    fn write_orphan_output(target: &Path, name: &str, bytes: usize) -> PathBuf {
+        let profile = target.join("debug");
+        std::fs::create_dir_all(profile.join(".fingerprint")).expect("fingerprint dir");
+        std::fs::write(target.join(".rustc_info.json"), b"{}").expect("cargo marker");
+        let output = profile
+            .join("deps")
+            .join(format!("lib{name}-0123456789abcdef.rlib"));
+        std::fs::create_dir_all(output.parent().expect("deps dir")).expect("deps dir");
+        std::fs::write(&output, vec![0; bytes]).expect("orphan output");
+        output
+    }
+
     fn git_worktree(root: &Path, branch: &str) -> PathBuf {
         let dir = root.join("worktrees").join("main").join(branch);
         std::fs::create_dir_all(&dir).expect("worktree dir");
@@ -1199,7 +1223,7 @@ mod tests {
         let root = dir.path();
         let running = git_worktree(root, "feat-running");
         let idle = git_worktree(root, "feat-idle");
-        write_tree(&running.join("target"), 4);
+        write_orphan_output(&running.join("target"), "orphan", 4);
         write_tree(&idle.join("target"), 8);
 
         let (report, ledger) =
@@ -1217,7 +1241,7 @@ mod tests {
         assert_eq!(
             report.cleanable_total(),
             12,
-            "cleanable counts idle worktrees plus the live target's prunable roots"
+            "cleanable counts idle worktrees plus the live target's prunable caches"
         );
     }
 
@@ -1227,7 +1251,7 @@ mod tests {
         let root = dir.path();
         let running = git_worktree(root, "feat-running");
         let idle = git_worktree(root, "feat-idle");
-        write_tree(&running.join("target"), 4);
+        let orphan = write_orphan_output(&running.join("target"), "orphan", 4);
         write_tree(&idle.join("target"), 8);
 
         let (report, _) =
@@ -1242,8 +1266,8 @@ mod tests {
             "idle worktree targets are removed"
         );
         assert!(
-            !running.join("target").join("payload.bin").exists(),
-            "prunable main-target roots are removed"
+            !orphan.exists(),
+            "build outputs cargo can no longer use are pruned from the main target"
         );
         assert_eq!(
             report.cleanable_total(),
@@ -1253,7 +1277,7 @@ mod tests {
         let freed = report.rows[0]
             .bytes
             .expect("cleanup row reports freed bytes");
-        assert_eq!(freed, 12, "freed counts idle targets plus pruned roots");
+        assert_eq!(freed, 12, "freed counts idle targets plus pruned caches");
     }
 
     #[cfg(unix)]
@@ -1264,25 +1288,29 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         let running = git_worktree(root, "feat-running");
-        let cargo_timings = running.join("target").join("cargo-timings");
-        write_tree(&cargo_timings, 16);
-        std::fs::write(cargo_timings.join("held.rlib"), b"x").expect("held file");
-        std::fs::set_permissions(&cargo_timings, std::fs::Permissions::from_mode(0o555))
+        let target = running.join("target");
+        let held = target
+            .join("debug")
+            .join("build")
+            .join("held-fedcba9876543210");
+        write_tree(&held, 16);
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o555))
             .expect("lock perms");
-        write_tree(&running.join("target").join("sandbox"), 8);
+        let sandbox = write_orphan_output(&target, "sandbox", 8);
 
         let (report, _) =
             cleanup_disk_usage_in(&running, &progress(), &no_host_caches()).expect("cleanup");
 
-        std::fs::set_permissions(&cargo_timings, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755))
             .expect("unlock perms");
         assert!(
-            !running.join("target").join("sandbox").exists(),
+            !sandbox.exists(),
             "unlocked entries still prune past the locked one"
         );
         let row = &report.rows[0];
         assert!(
-            row.detail.contains("cargo-timings") && row.detail.contains("Permission denied"),
+            row.detail.contains("held-fedcba9876543210")
+                && row.detail.contains("Permission denied"),
             "the failure reason must be visible: {}",
             row.detail
         );

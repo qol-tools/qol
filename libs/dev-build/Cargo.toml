@@ -23,6 +23,9 @@ toml.workspace = true
 walkdir = "2"
 workspace-hack.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 proptest = "1.6"
 

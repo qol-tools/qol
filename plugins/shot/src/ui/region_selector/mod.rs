@@ -386,6 +386,18 @@ impl SelectionState {
         self.set_active_bounds(bounds)
     }
 
+    fn hover_target_at(&mut self, source: &dyn HoverTarget, position: Point<Pixels>) -> bool {
+        if self.drag_start.is_some() {
+            return false;
+        }
+        let target = source.target_at(position);
+        let changed = self.set_default_target(target);
+        if changed {
+            trace_hover_target(target);
+        }
+        changed
+    }
+
     fn set_default_target(&mut self, target: Option<DetectedTarget>) -> bool {
         if self.default_target == target {
             return false;
@@ -627,17 +639,7 @@ impl RegionSelector {
             }
             return;
         }
-        let hover_changed = match &self.hover_target {
-            Some(source) => {
-                let target = source.target_at(position);
-                let changed = self.state.borrow_mut().set_default_target(target);
-                if changed {
-                    trace_hover_target(target);
-                }
-                changed
-            }
-            None => false,
-        };
+        let hover_changed = self.sync_hover_target(position);
         let active_bounds = self.active_bounds_sample();
         let resynced = self
             .state
@@ -753,10 +755,26 @@ impl RegionSelector {
             qol_runtime::probe!("SHOT_SELECT_CANCEL_INPUT", "source=global-escape");
             return self.finish_from_poll(None);
         }
-        if self.sync_active_bounds_for_render() {
+        let hover_changed = self.sync_hover_target_from_pointer();
+        if self.sync_active_bounds_for_render() || hover_changed {
             self.notify_all(cx);
         }
         SelectorPollResult::Continue
+    }
+
+    fn sync_hover_target_from_pointer(&self) -> bool {
+        self.global_pointer
+            .as_ref()
+            .and_then(|pointer| pointer.position())
+            .is_some_and(|position| self.sync_hover_target(position))
+    }
+
+    fn sync_hover_target(&self, position: Point<Pixels>) -> bool {
+        self.hover_target.as_ref().is_some_and(|source| {
+            self.state
+                .borrow_mut()
+                .hover_target_at(source.as_ref(), position)
+        })
     }
 
     fn apply_global_pointer_sample(
@@ -1501,11 +1519,11 @@ mod tests {
     use super::{
         backdrop_segments, capture_estimate, format_duration, kind_label, local_from_global,
         selected_rect, selection_bounds_in_window, selection_global_rect, shift_rect, ChipModel,
-        DetectedTarget, DetectedTargetRole, SelectionState, CHIP_H, CHIP_TOP, CHIP_W,
+        DetectedTarget, DetectedTargetRole, HoverTarget, SelectionState, CHIP_H, CHIP_TOP, CHIP_W,
     };
     use crate::capture::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
-    use gpui::{point, px, size, Bounds};
+    use gpui::{point, px, size, Bounds, Pixels, Point};
     use qol_gpui::placement::{monitor_at_point, MonitorPlacement};
     use qol_gpui::toast::ToastLayout;
     use std::sync::mpsc;
@@ -1881,6 +1899,51 @@ mod tests {
                 h: 100,
             }),
             "a real drag overrides the detected target"
+        );
+    }
+
+    #[test]
+    fn hover_target_follows_the_pointer_until_a_drag_starts() {
+        struct SplitScreen;
+        impl HoverTarget for SplitScreen {
+            fn target_at(&self, point: Point<Pixels>) -> Option<DetectedTarget> {
+                let x = if f32::from(point.x) < 500.0 { 0 } else { 500 };
+                Some(DetectedTarget {
+                    rect: Rect {
+                        x,
+                        y: 0,
+                        w: 500,
+                        h: 500,
+                    },
+                    role: DetectedTargetRole { is_window: true },
+                })
+            }
+        }
+        let (tx, _rx) = mpsc::channel();
+        let screen = Bounds::new(point(px(0.0), px(0.0)), size(px(1000.0), px(500.0)));
+        let left = SplitScreen.target_at(point(px(100.0), px(100.0)));
+        let mut state = SelectionState::new(
+            tx,
+            Some(screen),
+            left,
+            vec![screen],
+            Vec::new(),
+            CaptureKind::Screenshot,
+        );
+
+        assert!(!state.hover_target_at(&SplitScreen, point(px(200.0), px(100.0))));
+        assert!(
+            state.hover_target_at(&SplitScreen, point(px(700.0), px(100.0))),
+            "a polled pointer sample retargets hover without any mouse-move event"
+        );
+        assert_eq!(state.default_target.map(|t| t.rect.x), Some(500));
+
+        state.drag_start = Some(point(px(700.0), px(100.0)));
+        assert!(!state.hover_target_at(&SplitScreen, point(px(100.0), px(100.0))));
+        assert_eq!(
+            state.default_target.map(|t| t.rect.x),
+            Some(500),
+            "a click-without-area capture keeps the target it pressed on"
         );
     }
 
