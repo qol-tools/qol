@@ -12,6 +12,8 @@ use qol_runtime::PlatformStateClient;
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, watch};
 
+static FIXTURE_DAEMON: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct Mesh(watch::Sender<Vec<Advertisement>>);
 
 impl Mesh {
@@ -212,15 +214,27 @@ peer = {{ replay = "idempotent" }}
         manifest,
         root.into(),
     );
-    let child = std::process::Command::new(&executable)
+    let mut command = std::process::Command::new(&executable);
+    command
         .args(["--exact", "runtime::server::socket::requests::peer_admin::operation_tests::operation_fixture_daemon", "--nocapture"])
         .env_remove(qol_conventions::ENV_STATE_SOCKET)
         .env_remove(qol_conventions::ENV_DAEMON_LISTENER_FD)
         .env_remove(qol_conventions::ENV_DAEMON_PORT_FD)
         .env("QOL_OPERATION_FIXTURE_COUNT", &count)
         .env(qol_conventions::ENV_DAEMON_SOCKET, &socket)
-        .env(qol_conventions::ENV_DAEMON_INSTANCE, token)
-        .spawn().unwrap();
+        .env(qol_conventions::ENV_DAEMON_INSTANCE, token);
+    let copied_writer_gone = std::time::Instant::now() + Duration::from_secs(2);
+    let child = loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && std::time::Instant::now() < copied_writer_gone =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            spawned => break spawned.unwrap(),
+        }
+    };
     let artifact = crate::plugins::action_executor::remote::register_fixture_artifact(executable);
     crate::plugins::register_operation_fixture(&mut plugin, child, token.into(), artifact);
     fixture
@@ -305,6 +319,7 @@ fn operation_fixture_daemon() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon() {
+    let _fixture = FIXTURE_DAEMON.lock().await;
     let temporary = tempfile::tempdir().unwrap();
     let _paths = crate::paths::push_test_path_root(temporary.path());
     let mesh = Arc::new(Mesh::new());
@@ -672,6 +687,7 @@ async fn peer_operation_two_hosts_real_tls_local_api_catalog_executor_and_daemon
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn peer_operation_external_verification_releases_guards_and_refuses_changed_selection() {
+    let _fixture = FIXTURE_DAEMON.lock().await;
     let temporary = tempfile::tempdir().unwrap();
     let _paths = crate::paths::push_test_path_root(temporary.path());
     let mesh = Arc::new(Mesh::new());
