@@ -22,6 +22,10 @@ impl TaskRunnerPlatform for Platform {
         interpolate_shell(template, params, |value| Ok(super::unix::quote(value)))
     }
 
+    fn decode_output(&self, bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
     fn guardian_executable(&self) -> std::io::Result<PathBuf> {
         std::env::current_exe()
     }

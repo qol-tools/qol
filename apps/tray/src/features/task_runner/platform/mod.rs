@@ -17,6 +17,8 @@ mod verified_command_tree;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(any(target_os = "windows", test))]
+mod windows_output;
+#[cfg(any(target_os = "windows", test))]
 mod windows_quote;
 
 #[cfg(target_os = "macos")]
@@ -40,6 +42,7 @@ trait TaskRunnerPlatform {
         template: &str,
         params: &HashMap<String, String>,
     ) -> Result<String, String>;
+    fn decode_output(&self, bytes: &[u8]) -> String;
     fn guardian_executable(&self) -> std::io::Result<PathBuf>;
 }
 
@@ -52,6 +55,10 @@ pub(super) fn render_command(
     params: &HashMap<String, String>,
 ) -> Result<String, String> {
     Platform.render_command(template, params)
+}
+
+pub(super) fn decode_output(bytes: &[u8]) -> String {
+    Platform.decode_output(bytes)
 }
 
 pub(super) fn verified_process_tree() -> std::io::Result<qol_process::ProcessTreeGuard> {

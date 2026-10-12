@@ -95,8 +95,8 @@ fn task_error(error: command_task::TaskError) -> String {
 fn execution_result(output: Output) -> ExecutionResult {
     ExecutionResult {
         success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stdout: platform::decode_output(&output.stdout),
+        stderr: platform::decode_output(&output.stderr),
         exit_code: output.status.code().unwrap_or(-1),
     }
 }
