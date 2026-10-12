@@ -51,7 +51,9 @@ pub(super) fn run_and_wait(
             anyhow!("{PLUGIN_ID}: could not read the uninstaller exit code: {error}")
         })?;
         let uninstaller_running = exit_code.is_none() || descendants_alive;
-        if let Some(code) = exit_code.filter(|_| !descendants_alive && exited_at.is_none()) {
+        if uninstaller_running {
+            exited_at = None;
+        } else if let Some(code) = exit_code.filter(|_| exited_at.is_none()) {
             check_exit_code(code)?;
             exited_at = Some(Instant::now());
         }
