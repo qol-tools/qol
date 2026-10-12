@@ -160,6 +160,7 @@ fn launched_child_inherits(key: &OsStr) -> bool {
     key.to_str().is_none_or(|key| {
         key != qol_conventions::ENV_DAEMON_SOCKET
             && key != qol_conventions::ENV_INSTALL_ID
+            && key != qol_conventions::ENV_HTTP_TOKEN
             && !qol_conventions::is_daemon_handoff_env(key)
     })
 }
@@ -349,6 +350,7 @@ mod tests {
             variable("PATH", r"C:\Windows"),
             variable(qol_conventions::ENV_DAEMON_SOCKET, "socket"),
             variable(qol_conventions::ENV_INSTALL_ID, "install"),
+            variable(qol_conventions::ENV_HTTP_TOKEN, "token"),
             variable(qol_conventions::ENV_DAEMON_LISTENER_FD, "7"),
             variable("=C:", r"C:\Users"),
         ]);
