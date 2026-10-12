@@ -27,6 +27,7 @@ const PROFILES: [(NET_FW_PROFILE_TYPE2, &str); 3] = [
 enum FirewallState {
     Disabled,
     Allowed,
+    PublicLeftOut,
     Missing,
     Unreadable(String),
 }
@@ -62,6 +63,19 @@ fn check_result(id: &str, state: FirewallState) -> DoctorCheckResult {
             ),
             "allowed",
         ),
+        FirewallState::PublicLeftOut => (
+            DoctorCheckResult::warn(
+                id,
+                format!(
+                    "This network is public, and PointZ's firewall rule leaves public networks out, so phones here cannot reach {ports}"
+                ),
+            )
+            .with_fix(format!(
+                "Run `{} allow-firewall --public` to admit phones on public networks too",
+                env!("QOL_PLUGIN_ID")
+            )),
+            "public_left_out",
+        ),
         FirewallState::Missing => (
             DoctorCheckResult::warn(
                 id,
@@ -85,14 +99,13 @@ fn check_result(id: &str, state: FirewallState) -> DoctorCheckResult {
     result.with_details(details(label))
 }
 
-pub(crate) fn allow() -> Result<String, String> {
+pub(crate) fn allow(public: bool) -> Result<String, String> {
     let _com = ComApartment::enter(Apartment::SingleThreaded);
     let policy = policy().map_err(|error| error.to_string())?;
-    let active = unsafe { policy.CurrentProfileTypes() }.map_err(|error| error.to_string())?;
     let ownership = ownership()?;
     let recorded = ownership.program()?;
     let program = pointz_program()?;
-    let profiles = rule_profiles(active);
+    let profiles = rule_profiles(public);
     let existing = existing_program(&policy);
     let arguments = match rule::allow_plan(recorded.as_deref(), existing.as_deref()) {
         AllowPlan::Add => rule::add_arguments(&program, &profiles),
@@ -109,6 +122,11 @@ pub(crate) fn allow() -> Result<String, String> {
         Ok(FirewallState::Allowed | FirewallState::Disabled) => Ok(format!(
             "Windows Firewall now admits PointZ on {}",
             ports_label()
+        )),
+        Ok(FirewallState::PublicLeftOut) => Ok(format!(
+            "Windows Firewall now admits PointZ on {} on private and domain networks; this network is public, so phones on it stay blocked until you run `{} allow-firewall --public`",
+            ports_label(),
+            env!("QOL_PLUGIN_ID")
         )),
         Ok(_) => Err("The firewall rule was not applied".into()),
         Err(error) => Err(error.to_string()),
@@ -182,10 +200,18 @@ fn read_state() -> windows::core::Result<FirewallState> {
     }
     let rule = unsafe { policy.Rules()?.Item(&BSTR::from(RULE_NAME)) };
     let program = pointz_program().unwrap_or_default();
-    Ok(match rule.ok().and_then(|rule| rule_facts(&rule).ok()) {
-        Some(facts) if covers(&facts, active, &program) => FirewallState::Allowed,
+    let facts = rule.ok().and_then(|rule| rule_facts(&rule).ok());
+    Ok(classify(facts.as_ref(), active, &program))
+}
+
+fn classify(facts: Option<&RuleFacts>, active: i32, program: &str) -> FirewallState {
+    match facts {
+        Some(facts) if covers(facts, active, program) => FirewallState::Allowed,
+        Some(facts) if covers(facts, active & !NET_FW_PROFILE2_PUBLIC.0, program) => {
+            FirewallState::PublicLeftOut
+        }
         _ => FirewallState::Missing,
-    })
+    }
 }
 
 fn policy() -> windows::core::Result<INetFwPolicy2> {
@@ -222,11 +248,10 @@ fn covers(rule: &RuleFacts, active_profiles: i32, program: &str) -> bool {
         && has_port(ServerConfig::COMMAND_PORT)
 }
 
-fn rule_profiles(active: i32) -> String {
-    let wanted = active | NET_FW_PROFILE2_PRIVATE.0 | NET_FW_PROFILE2_DOMAIN.0;
+fn rule_profiles(public: bool) -> String {
     PROFILES
         .iter()
-        .filter(|(profile, _)| wanted & profile.0 != 0)
+        .filter(|(profile, _)| public || *profile != NET_FW_PROFILE2_PUBLIC)
         .map(|(_, name)| *name)
         .collect::<Vec<_>>()
         .join(",")
@@ -365,14 +390,59 @@ mod tests {
     }
 
     #[test]
-    fn new_rules_cover_private_networks_and_whatever_network_is_active() {
+    fn new_rules_leave_public_networks_out_unless_asked() {
+        assert_eq!(rule_profiles(false), "domain,private");
+        assert_eq!(rule_profiles(true), "domain,private,public");
+    }
+
+    #[test]
+    fn a_private_rule_on_a_public_network_is_reported_as_public_left_out() {
+        let private = NET_FW_PROFILE2_PRIVATE.0;
+        let public = NET_FW_PROFILE2_PUBLIC.0;
+        let rule = allowing_rule();
+        let everywhere = RuleFacts {
+            profiles: rule.profiles | public,
+            ..rule.clone()
+        };
+        let one_port = RuleFacts {
+            ports: ServerConfig::DISCOVERY_PORT.to_string(),
+            ..rule.clone()
+        };
         let cases = [
-            (NET_FW_PROFILE2_PRIVATE.0, "domain,private"),
-            (NET_FW_PROFILE2_PUBLIC.0, "domain,private,public"),
-            (0, "domain,private"),
+            (
+                "private network",
+                Some(&rule),
+                private,
+                FirewallState::Allowed,
+            ),
+            (
+                "public network",
+                Some(&rule),
+                public,
+                FirewallState::PublicLeftOut,
+            ),
+            (
+                "public and private networks",
+                Some(&rule),
+                public | private,
+                FirewallState::PublicLeftOut,
+            ),
+            (
+                "public rule",
+                Some(&everywhere),
+                public,
+                FirewallState::Allowed,
+            ),
+            (
+                "broken rule",
+                Some(&one_port),
+                public,
+                FirewallState::Missing,
+            ),
+            ("no rule", None, public, FirewallState::Missing),
         ];
-        for (active, expected) in cases {
-            assert_eq!(rule_profiles(active), expected, "active={active}");
+        for (label, facts, active, expected) in cases {
+            assert_eq!(classify(facts, active, PROGRAM), expected, "{label}");
         }
     }
 
@@ -383,6 +453,7 @@ mod tests {
         let cases = [
             (FirewallState::Disabled, DoctorStatus::Ok, false),
             (FirewallState::Allowed, DoctorStatus::Ok, false),
+            (FirewallState::PublicLeftOut, DoctorStatus::Warn, true),
             (FirewallState::Missing, DoctorStatus::Warn, true),
             (
                 FirewallState::Unreadable("service stopped".into()),
@@ -399,5 +470,7 @@ mod tests {
         }
         let missing = check_result("firewall", FirewallState::Missing);
         assert!(missing.fix.unwrap().contains("allow-firewall"));
+        let public = check_result("firewall", FirewallState::PublicLeftOut);
+        assert!(public.fix.unwrap().contains("allow-firewall --public"));
     }
 }

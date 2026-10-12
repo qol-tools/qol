@@ -14,7 +14,7 @@ pub(crate) fn check(id: &str) -> DoctorCheckResult {
     .with_details(details("not_inspected"))
 }
 
-pub(crate) fn allow() -> Result<String, String> {
+pub(crate) fn allow(_public: bool) -> Result<String, String> {
     Err(format!(
         "PointZ manages firewall rules only on Windows, not on {}",
         std::env::consts::OS
@@ -40,7 +40,8 @@ mod tests {
         assert_eq!(result.status, DoctorStatus::Warn);
         assert!(result.fix.is_none());
         assert_eq!(result.details.unwrap()["rule_changed"], false);
-        assert!(allow().is_err());
+        assert!(allow(false).is_err());
+        assert!(allow(true).is_err());
         assert!(remove().is_ok());
     }
 }

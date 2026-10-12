@@ -4,6 +4,7 @@ use std::sync::Arc;
 use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+const PUBLIC_FLAG: &str = "--public";
 const DIRECT_ACTIONS: [(&str, &str); 5] = [
     ("settings", "Open the PointZ settings surface."),
     (
@@ -26,7 +27,7 @@ trait Operations: Clone + Send + Sync + 'static {
     fn send_action(&self, action: &str) -> bool;
     fn send_kill(&self) -> bool;
     fn open_settings(&self);
-    fn allow_firewall(&self) -> Result<String, String>;
+    fn allow_firewall(&self, public: bool) -> Result<String, String>;
     fn remove_firewall(&self) -> Result<String, String>;
 }
 
@@ -51,8 +52,8 @@ impl Operations for ProductionOperations {
         crate::qol::open_settings();
     }
 
-    fn allow_firewall(&self) -> Result<String, String> {
-        crate::firewall::allow()
+    fn allow_firewall(&self, public: bool) -> Result<String, String> {
+        crate::firewall::allow(public)
     }
 
     fn remove_firewall(&self) -> Result<String, String> {
@@ -127,12 +128,24 @@ where
 {
     Command::new("allow-firewall")
         .about("Add a host firewall rule that admits the PointZ UDP ports.")
-        .usage(format!("{PLUGIN_ID} allow-firewall"))
+        .usage(format!("{PLUGIN_ID} allow-firewall [{PUBLIC_FLAG}]"))
         .detail("Asks for administrator approval, then adds or repairs the rule.")
+        .detail(format!(
+            "The rule admits phones on private and domain networks; {PUBLIC_FLAG} adds public networks such as cafe or airport Wi-Fi."
+        ))
         .detail("Where PointZ does not manage the firewall, it says so and changes nothing.")
         .output("A confirmation on stdout, or the reason on stderr.")
         .exit_behavior("Exits non-zero if the rule could not be added.")
-        .run_result(move |_| Ok(firewall_result(operations.allow_firewall())))
+        .run_result(move |context| {
+            Ok(match context.args() {
+                [] => firewall_result(operations.allow_firewall(false)),
+                [flag] if flag == PUBLIC_FLAG => firewall_result(operations.allow_firewall(true)),
+                other => CommandResult::usage(format!(
+                    "[pointz] unexpected arguments: {}; the only option is {PUBLIC_FLAG}",
+                    other.join(" ")
+                )),
+            })
+        })
 }
 
 fn release_host_command<O>(operations: O) -> Command
@@ -280,6 +293,7 @@ mod tests {
         input_initialized: AtomicUsize,
         udp_bound: AtomicUsize,
         firewall: AtomicUsize,
+        firewall_public: AtomicUsize,
         remove_firewall: AtomicUsize,
     }
 
@@ -318,8 +332,11 @@ mod tests {
             self.calls.settings.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn allow_firewall(&self) -> Result<String, String> {
+        fn allow_firewall(&self, public: bool) -> Result<String, String> {
             self.calls.firewall.fetch_add(1, Ordering::SeqCst);
+            self.calls
+                .firewall_public
+                .fetch_add(usize::from(public), Ordering::SeqCst);
             if self.daemon_available.load(Ordering::SeqCst) {
                 Ok("allowed".into())
             } else {
@@ -399,8 +416,37 @@ mod tests {
             assert_eq!(result.stdout, stdout, "succeeds={succeeds}");
             assert_eq!(result.stderr, stderr, "succeeds={succeeds}");
             assert_eq!(calls.firewall.load(Ordering::SeqCst), 1);
+            assert_eq!(calls.firewall_public.load(Ordering::SeqCst), 0);
             assert_eq!(calls.server.load(Ordering::SeqCst), 0);
             assert!(calls.daemon_actions.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn allow_firewall_admits_public_networks_only_when_asked() {
+        let cases: [(&[&str], usize, usize, u8); 3] = [
+            (&["allow-firewall", "--public"], 1, 1, EXIT_SUCCESS),
+            (&["allow-firewall", "--everywhere"], 0, 0, EXIT_USAGE),
+            (
+                &["allow-firewall", "--public", "--public"],
+                0,
+                0,
+                EXIT_USAGE,
+            ),
+        ];
+        for (args, runs, public_runs, exit_code) in cases {
+            let (operations, calls, _) = sentinel();
+            let result = execute(operations, args);
+            assert_eq!(result.exit_code, exit_code, "{args:?}");
+            assert_eq!(calls.firewall.load(Ordering::SeqCst), runs, "{args:?}");
+            assert_eq!(
+                calls.firewall_public.load(Ordering::SeqCst),
+                public_runs,
+                "{args:?}"
+            );
+            if exit_code == EXIT_USAGE {
+                assert!(result.stderr.contains("--public"), "{}", result.stderr);
+            }
         }
     }
 
