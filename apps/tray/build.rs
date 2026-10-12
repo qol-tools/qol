@@ -8,6 +8,7 @@ mod platform;
 fn main() {
     qol_build_identity::emit_build_identity();
     platform::embed_windows_icon();
+    platform::load_dependencies_from_system32();
     let profile = std::env::var("PROFILE").unwrap_or_default();
     let hash = if profile == "release" {
         Command::new("git")

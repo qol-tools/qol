@@ -10,6 +10,14 @@ const RT_GROUP_ICON: u16 = 14;
 const MOVEABLE_DISCARDABLE: u16 = 0x1010;
 const MOVEABLE_PURE_DISCARDABLE: u16 = 0x1030;
 
+pub(crate) fn load_dependencies_from_system32() {
+    let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if windows && msvc {
+        println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
+    }
+}
+
 pub(crate) fn embed_windows_icon() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
