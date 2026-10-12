@@ -1,8 +1,20 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+use crate::installer::autostart::AutostartState;
+
 const LEGACY_STARTUP_FILE: &str = "qol-tray.cmd";
 const LEGACY_START_PREFIX: &str = "start \"\" \"";
+
+pub(in crate::installer) fn run_value_state(
+    command: &str,
+    approval: Option<&[u8]>,
+) -> AutostartState {
+    if approval.is_some_and(approval_disabled) {
+        return AutostartState::DisabledByUser;
+    }
+    AutostartState::from_target(parse_command(command))
+}
 
 pub(in crate::installer) fn approval_disabled(state: &[u8]) -> bool {
     state.first().is_some_and(|flags| flags & 1 == 1)
@@ -113,6 +125,40 @@ mod tests {
         ];
         for (state, disabled) in cases {
             assert_eq!(approval_disabled(state), disabled, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn run_value_reads_as_enabled_disabled_by_the_user_or_missing() {
+        let enabled: &[u8] = &[0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let disabled: &[u8] = &[0x03, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0];
+        let binary = PathBuf::from(r"C:\qol\qol-tray.exe");
+        let cases = [
+            (
+                r#""C:\qol\qol-tray.exe""#,
+                None,
+                AutostartState::Enabled(binary.clone()),
+            ),
+            (
+                r#""C:\qol\qol-tray.exe""#,
+                Some(enabled),
+                AutostartState::Enabled(binary.clone()),
+            ),
+            (
+                r#""C:\qol\qol-tray.exe""#,
+                Some(disabled),
+                AutostartState::DisabledByUser,
+            ),
+            ("", Some(disabled), AutostartState::DisabledByUser),
+            ("", Some(enabled), AutostartState::Missing),
+            ("\"\"", None, AutostartState::Missing),
+        ];
+        for (command, approval, expected) in cases {
+            assert_eq!(
+                run_value_state(command, approval),
+                expected,
+                "{command:?} {approval:?}"
+            );
         }
     }
 

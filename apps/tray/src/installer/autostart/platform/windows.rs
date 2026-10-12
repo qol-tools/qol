@@ -1,14 +1,14 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use super::AutostartOps;
+use super::{AutostartOps, AutostartState};
 use crate::installer::platform::windows::run_key;
 
 pub(super) struct Platform;
 
 impl AutostartOps for Platform {
-    fn read_target(&self) -> Result<Option<PathBuf>> {
-        run_key::read()
+    fn read_state(&self) -> Result<AutostartState> {
+        run_key::read_state()
     }
 
     fn write_target(&self, binary: &Path) -> Result<()> {

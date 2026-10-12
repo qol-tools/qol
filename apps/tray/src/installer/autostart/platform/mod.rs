@@ -1,8 +1,10 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
+use super::AutostartState;
+
 trait AutostartOps {
-    fn read_target(&self) -> Result<Option<PathBuf>>;
+    fn read_state(&self) -> Result<AutostartState>;
     fn write_target(&self, binary: &Path) -> Result<()>;
     fn autostart_path(&self) -> Result<PathBuf>;
 }
@@ -25,8 +27,8 @@ use macos::Platform;
 #[cfg(target_os = "windows")]
 use windows::Platform;
 
-pub(super) fn read_target() -> Result<Option<PathBuf>> {
-    Platform.read_target()
+pub(super) fn read_state() -> Result<AutostartState> {
+    Platform.read_state()
 }
 
 pub(super) fn write_target(binary: &Path) -> Result<()> {

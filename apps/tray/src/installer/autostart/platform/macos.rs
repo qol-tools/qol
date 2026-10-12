@@ -1,16 +1,16 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::AutostartOps;
+use super::{AutostartOps, AutostartState};
 
 const BUNDLE_ID: &str = crate::installer::platform::macos::BUNDLE_ID;
 
 pub(super) struct Platform;
 
 impl AutostartOps for Platform {
-    fn read_target(&self) -> Result<Option<PathBuf>> {
+    fn read_state(&self) -> Result<AutostartState> {
         let path = autostart_path_impl()?;
-        read_plist_at(&path)
+        Ok(AutostartState::from_target(read_plist_at(&path)?))
     }
 
     fn write_target(&self, binary: &Path) -> Result<()> {

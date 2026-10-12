@@ -1,12 +1,12 @@
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
-use super::AutostartOps;
+use super::{AutostartOps, AutostartState};
 
 pub(super) struct Platform;
 
 impl AutostartOps for Platform {
-    fn read_target(&self) -> Result<Option<PathBuf>> {
+    fn read_state(&self) -> Result<AutostartState> {
         bail!("autostart artifact not implemented on this OS")
     }
 
