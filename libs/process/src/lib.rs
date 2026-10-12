@@ -1,6 +1,9 @@
 mod bounded_output;
 mod observation;
 mod platform;
+mod tcp_table;
+
+pub use tcp_table::{tcp_connections, tcp_listeners, TcpConnectionEntry, TcpListenerEntry};
 
 pub use observation::{
     MemberObservation, NodeObservation, Observation, ProcessProvenance, ProcessStat,
