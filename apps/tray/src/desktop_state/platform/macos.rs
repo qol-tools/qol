@@ -1,7 +1,7 @@
 use qol_runtime::MonitorBounds;
 use std::ffi::c_void;
 
-use crate::desktop_state::{FocusedWindow, Platform};
+use crate::desktop_state::{fingerprint_windows, FocusedWindow, Platform};
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -269,19 +269,12 @@ impl Platform for MacQueries {
         let arr = unsafe { CGWindowListCreate(OPTS, 0) };
         let guard = CfGuard::new(arr)?;
         let n = unsafe { CFArrayGetCount(arr) };
-        let mut h: u64 = 0;
-        for i in 0..n {
-            let id = unsafe { CFArrayGetValueAtIndex(arr, i) } as usize as u64;
-            let mut x = id.wrapping_mul(0x9E3779B97F4A7C15);
-            x ^= x >> 32;
-            h ^= x;
-        }
-        let mut count_mix = n as u64;
-        count_mix = count_mix.wrapping_mul(0x9E3779B97F4A7C15);
-        count_mix ^= count_mix >> 32;
-        h ^= count_mix;
+        let fingerprint = fingerprint_windows(
+            (0..n).map(|i| unsafe { CFArrayGetValueAtIndex(arr, i) } as usize as u64),
+            None,
+        );
         drop(guard);
-        Some(h)
+        Some(fingerprint)
     }
 }
 
