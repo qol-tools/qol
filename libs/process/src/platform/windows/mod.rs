@@ -41,8 +41,8 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenEventW, OpenProcess,
-    QueryFullProcessImageNameW, ResetEvent, SetEvent, TerminateProcess, WaitForSingleObject,
+    CreateEventW, GetCurrentProcess, GetExitCodeProcess, GetProcessId, GetProcessTimes, OpenEventW,
+    OpenProcess, QueryFullProcessImageNameW, SetEvent, TerminateProcess, WaitForSingleObject,
     CREATE_SUSPENDED, EVENT_MODIFY_STATE, INFINITE, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     THREAD_SUSPEND_RESUME,
@@ -312,14 +312,17 @@ impl ProcessTreeGuard {
 
     pub(crate) fn request_stop(&self) -> io::Result<()> {
         self.assigned_process_id()?;
-        let processes = job_process_handles(self.job.as_raw_handle())?;
+        let processes = job_process_handles(self.job.as_raw_handle(), TERMINATE_AND_WAIT_ACCESS)?;
+        for process in &processes {
+            let pid = unsafe { GetProcessId(process.as_raw_handle()) };
+            if !request_graceful_stop(pid).unwrap_or(false) {
+                let _ = unsafe { TerminateProcess(process.as_raw_handle(), 1) };
+            }
+        }
         self.terminating_processes
             .lock()
             .map_err(|_| io::Error::other("process-tree termination state is unavailable"))?
             .extend(processes);
-        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
         Ok(())
     }
 
@@ -344,7 +347,7 @@ impl ProcessTreeGuard {
                 "process-tree timeout is too large",
             )
         })?;
-        let processes = job_process_handles(self.job.as_raw_handle())?;
+        let processes = job_process_handles(self.job.as_raw_handle(), QUERY_AND_WAIT_ACCESS)?;
         let _ = unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) };
         if unsafe { WaitForSingleObject(process.handle.as_raw_handle(), 0) } == WAIT_TIMEOUT {
             let _ = unsafe { TerminateProcess(process.handle.as_raw_handle(), 1) };
@@ -439,7 +442,7 @@ impl ProcessTreeGuard {
     }
 
     fn termination_processes(&self) -> io::Result<Vec<OwnedHandle>> {
-        let current = job_process_handles(self.job.as_raw_handle())?;
+        let current = job_process_handles(self.job.as_raw_handle(), QUERY_AND_WAIT_ACCESS)?;
         let mut processes = self
             .terminating_processes
             .lock()
@@ -836,10 +839,10 @@ fn active_processes(handle: HANDLE) -> io::Result<u32> {
     Ok(accounting.ActiveProcesses)
 }
 
-fn job_process_handles(handle: HANDLE) -> io::Result<Vec<OwnedHandle>> {
+fn job_process_handles(handle: HANDLE, access: u32) -> io::Result<Vec<OwnedHandle>> {
     let mut processes = Vec::new();
     for pid in job_process_ids(handle)? {
-        match open_process(pid, QUERY_AND_WAIT_ACCESS) {
+        match open_process(pid, access) {
             Ok(process) => processes.push(process),
             Err(error) if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) => {}
             Err(error) => return Err(error),
@@ -1002,10 +1005,8 @@ fn start_stop_listener() -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     let event = unsafe { OwnedHandle::from_raw_handle(event) };
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS
-        && unsafe { ResetEvent(event.as_raw_handle()) } == 0
-    {
-        return Err(io::Error::last_os_error());
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        return Err(io::Error::from_raw_os_error(ERROR_ALREADY_EXISTS as i32));
     }
     std::thread::Builder::new()
         .name("qol-process-stop-listener".to_string())
@@ -1489,6 +1490,15 @@ mod tests {
         let mut command = Command::new("cmd");
         command.args(["/C", "ping -n 31 127.0.0.1 >NUL"]);
         command
+    }
+
+    #[test]
+    fn a_stop_event_another_process_created_first_is_refused() {
+        install_cancellation_handler().unwrap();
+
+        let error = start_stop_listener().unwrap_err();
+
+        assert_eq!(error.raw_os_error(), Some(ERROR_ALREADY_EXISTS as i32));
     }
 
     #[test]
