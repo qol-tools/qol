@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 
 use qol_windowing::platform::windows::{cursor_position, monitors};
-use qol_windowing::WindowRect;
+use qol_windowing::{WindowId, WindowRect};
 use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE};
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -194,6 +194,10 @@ pub struct WindowGeometrySession {
 impl WindowGeometrySession {
     fn handle(&self) -> HWND {
         self.hwnd as HWND
+    }
+
+    pub fn id(&self) -> WindowId {
+        WindowId::from_u32(self.hwnd as u32)
     }
 
     pub fn set_bounds(&self, x: i32, y: i32, width: u32, height: u32) {

@@ -62,6 +62,7 @@ objc2-app-kit = { workspace = true, features = [
 
 [target.'cfg(windows)'.dependencies]
 qol-app-icon.workspace = true
+qol-windowing.workspace = true
 sha2.workspace = true
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",

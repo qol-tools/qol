@@ -3,6 +3,8 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use qol_gpui::popup_window::WindowGeometrySession;
+use qol_windowing::platform::windows::Window;
+use qol_windowing::WindowRect;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -71,7 +73,10 @@ fn monitor_loop(
 
 fn pointer_over(window: &WindowGeometrySession) -> bool {
     match (window.bounds(), window.pointer_root()) {
-        (Some(bounds), Some(point)) => point_inside(bounds, point),
+        (Some(bounds), Some(point)) => {
+            let region = Window::from_id(&window.id()).and_then(Window::region);
+            point_inside(bounds, point) && in_region(region, point)
+        }
         _ => false,
     }
 }
@@ -80,6 +85,16 @@ fn point_inside((left, top, width, height): (i32, i32, u32, u32), (x, y): (i32, 
     let (x, y) = (i64::from(x), i64::from(y));
     let (left, top) = (i64::from(left), i64::from(top));
     x >= left && x < left + i64::from(width) && y >= top && y < top + i64::from(height)
+}
+
+fn in_region(region: Option<WindowRect>, (x, y): (i32, i32)) -> bool {
+    let (x, y) = (f64::from(x), f64::from(y));
+    region.is_none_or(|region| {
+        x >= region.x
+            && x < region.x + region.width
+            && y >= region.y
+            && y < region.y + region.height
+    })
 }
 
 fn is_button_press(message: u32) -> bool {
@@ -132,6 +147,31 @@ mod tests {
         ];
         for (point, expected) in cases {
             assert_eq!(point_inside(bounds, point), expected, "point={point:?}");
+        }
+    }
+
+    #[test]
+    fn a_window_region_clips_the_hit_test() {
+        let region = WindowRect {
+            x: 200.0,
+            y: 0.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        let cases = [
+            (None, (5, 5), true),
+            (Some(region), (200, 0), true),
+            (Some(region), (599, 299), true),
+            (Some(region), (600, 100), false),
+            (Some(region), (300, 300), false),
+            (Some(region), (5, 5), false),
+        ];
+        for (region, point, expected) in cases {
+            assert_eq!(
+                in_region(region, point),
+                expected,
+                "region={region:?} point={point:?}"
+            );
         }
     }
 
