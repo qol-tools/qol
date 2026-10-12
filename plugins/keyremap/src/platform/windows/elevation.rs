@@ -1,9 +1,8 @@
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
-};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+
+use qol_platform::native::security::token_elevated;
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 pub(super) fn current() -> Option<bool> {
@@ -15,33 +14,12 @@ pub(super) fn of_process(pid: u32) -> Option<bool> {
     if process.is_null() {
         return None;
     }
-    let elevated = token_elevated(process);
-    unsafe { CloseHandle(process) };
-    elevated
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    token_elevated(process.as_raw_handle())
 }
 
 pub(super) fn can_inject(own: Option<bool>, target: Option<bool>) -> bool {
     own == Some(true) || target == Some(false)
-}
-
-fn token_elevated(process: HANDLE) -> Option<bool> {
-    let mut token: HANDLE = std::ptr::null_mut();
-    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
-        return None;
-    }
-    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
-    let mut length = 0u32;
-    let read = unsafe {
-        GetTokenInformation(
-            token,
-            TokenElevation,
-            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
-            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
-            &mut length,
-        )
-    };
-    unsafe { CloseHandle(token) };
-    (read != 0).then_some(elevation.TokenIsElevated != 0)
 }
 
 #[cfg(test)]

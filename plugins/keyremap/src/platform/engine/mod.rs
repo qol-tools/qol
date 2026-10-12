@@ -33,7 +33,7 @@ pub(crate) fn serve<R: Remapper>(
     );
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let Some(started) = start_services_if_singleton(daemon::start_listener(tx), || {
+    let Some(started) = daemon::start_listener(tx).then(|| {
         let current_key_rules = resolved.key_rules.clone();
         start(resolved).map(|remapper| (current_key_rules, remapper))
     }) else {
@@ -102,10 +102,6 @@ pub(crate) fn serve<R: Remapper>(
     Ok(())
 }
 
-fn start_services_if_singleton<T>(is_singleton: bool, start: impl FnOnce() -> T) -> Option<T> {
-    is_singleton.then(start)
-}
-
 pub(crate) fn reload() -> CommandResult {
     action_result(daemon::send_reload(), "reload sent", "no daemon running")
 }
@@ -162,27 +158,4 @@ pub(crate) fn inspection(
 fn action_result(sent: bool, success: &str, missing: &str) -> CommandResult {
     let message = if sent { success } else { missing };
     CommandResult::new("", format!("[keyremap] {message}\n"), 0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn services_start_only_when_singleton() {
-        let mut started = false;
-        let result = start_services_if_singleton(false, || {
-            started = true;
-            0
-        });
-        assert!(result.is_none());
-        assert!(!started);
-
-        let result = start_services_if_singleton(true, || {
-            started = true;
-            42
-        });
-        assert_eq!(result, Some(42));
-        assert!(started);
-    }
 }

@@ -10,7 +10,7 @@ const EXECUTABLE_SUFFIX: &str = ".exe";
 #[derive(Debug)]
 pub(super) struct Foreground {
     own: Option<bool>,
-    pid: u32,
+    process: (u32, Option<u64>),
     thread: u32,
     executable: String,
     injectable: bool,
@@ -26,7 +26,7 @@ impl Foreground {
     pub(super) fn new(own: Option<bool>) -> Self {
         Self {
             own,
-            pid: 0,
+            process: (0, None),
             thread: 0,
             executable: String::new(),
             injectable: true,
@@ -36,8 +36,9 @@ impl Foreground {
     pub(super) fn refresh(&mut self) {
         let (pid, thread) = foreground_ids();
         self.thread = thread;
-        if pid != self.pid {
-            self.pid = pid;
+        let process = process_key(pid);
+        if process != self.process {
+            self.process = process;
             self.executable = image_name(pid).unwrap_or_default();
             self.injectable =
                 pid == 0 || elevation::can_inject(self.own, elevation::of_process(pid));
@@ -65,6 +66,13 @@ fn foreground_ids() -> (u32, u32) {
     let mut pid = 0u32;
     let thread = unsafe { GetWindowThreadProcessId(window, &mut pid) };
     (pid, thread)
+}
+
+fn process_key(pid: u32) -> (u32, Option<u64>) {
+    if pid == 0 {
+        return (0, None);
+    }
+    (pid, qol_process::process_start_time(pid))
 }
 
 fn image_name(pid: u32) -> Option<String> {
@@ -107,6 +115,15 @@ mod tests {
         assert!(name.to_ascii_lowercase().ends_with(".exe"), "{name}");
         assert!(!name.contains('\\'), "{name}");
         assert_eq!(image_name(0), None);
+    }
+
+    #[test]
+    fn a_process_is_keyed_by_its_pid_and_start_time() {
+        let own = process_key(std::process::id());
+        assert_eq!(own.0, std::process::id());
+        assert!(own.1.is_some(), "{own:?}");
+        assert_eq!(process_key(std::process::id()), own);
+        assert_eq!(process_key(0), (0, None));
     }
 
     #[test]

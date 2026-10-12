@@ -72,6 +72,7 @@ pub(super) struct Machine {
     held: Vec<(Source, Held)>,
     substituted: Vec<(u16, Option<u16>)>,
     gap: bool,
+    unsent: Vec<Output>,
 }
 
 impl Machine {
@@ -88,6 +89,17 @@ impl Machine {
     }
 
     pub(super) fn gap(&mut self) {
+        self.gap = true;
+    }
+
+    pub(super) fn undelivered(&mut self, outputs: &[Output]) {
+        let releases = outputs.iter().filter(|output| {
+            matches!(
+                output,
+                Output::Key { down: false, .. } | Output::Button { down: false, .. }
+            )
+        });
+        self.unsent.extend(releases.cloned());
         self.gap = true;
     }
 
@@ -202,10 +214,14 @@ impl Machine {
     }
 
     pub(super) fn take_gap(&mut self) -> Vec<Output> {
-        if !std::mem::take(&mut self.gap) || self.idle() {
+        if !std::mem::take(&mut self.gap) {
             return Vec::new();
         }
-        self.release_all()
+        let mut outputs = std::mem::take(&mut self.unsent);
+        if !self.idle() {
+            outputs.extend(self.release_all());
+        }
+        outputs
     }
 
     fn idle(&self) -> bool {
@@ -916,6 +932,52 @@ mod tests {
         ];
         for (name, raw, steps) in cases {
             check(name, raw, "notepad.exe", steps);
+        }
+    }
+
+    #[test]
+    fn releases_that_did_not_land_are_sent_before_the_next_event() {
+        let config = remap::resolve(&serde_json::from_value::<RemapConfig>(ctrl_to_cmd()).unwrap());
+        let event = Event {
+            config: &config,
+            app: "notepad.exe",
+            typed: None,
+            injectable: true,
+        };
+        let button_up = Output::Button {
+            button: MouseButton::Left,
+            down: false,
+        };
+        let cases = vec![
+            (
+                "a lost key-up",
+                vec![
+                    key(VK_LWIN, false),
+                    key(VK_C, true),
+                    Output::Text("x".into()),
+                ],
+                Decision::swallow(vec![key(VK_LWIN, false), key(VK_A, true)]),
+            ),
+            (
+                "a lost button-up",
+                vec![button_up.clone()],
+                Decision::swallow(vec![button_up.clone(), key(VK_A, true)]),
+            ),
+            (
+                "only a lost key-down",
+                vec![key(VK_C, true)],
+                Decision::pass(),
+            ),
+        ];
+        for (name, missed, expected) in cases {
+            let mut machine = Machine::default();
+            machine.undelivered(&missed);
+            assert_eq!(machine.key(VK_A, true, &event), expected, "{name}");
+            assert_eq!(
+                machine.key(VK_A, false, &event),
+                Decision::pass(),
+                "{name}: once"
+            );
         }
     }
 }

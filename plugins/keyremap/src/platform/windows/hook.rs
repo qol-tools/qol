@@ -5,18 +5,19 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use qol_platform::native::input::key_held;
 use qol_runtime::hook_liveness::SeenInput;
 use qol_runtime::keyremap_marker;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetKeyState, GetLastInputInfo, MapVirtualKeyW, SendInput, ToUnicodeEx, HKL,
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, LASTINPUTINFO, MAPVK_VK_TO_VSC,
-    MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VK_CAPITAL, VK_CONTROL,
-    VK_LCONTROL, VK_MENU, VK_PACKET, VK_SHIFT,
+    GetKeyState, GetLastInputInfo, MapVirtualKeyW, SendInput, ToUnicodeEx, HKL, INPUT, INPUT_0,
+    INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, LASTINPUTINFO, MAPVK_VK_TO_VSC, MOUSEEVENTF_HWHEEL,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+    MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_MENU,
+    VK_PACKET, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetTimer, SetWindowsHookExW,
@@ -441,7 +442,7 @@ fn wheel_delta(data: u32) -> i32 {
 fn held_modifier_bits() -> u8 {
     keys::MODIFIERS
         .iter()
-        .filter(|(vk, _)| unsafe { GetAsyncKeyState(i32::from(*vk)) } < 0)
+        .filter(|(vk, _)| key_held(*vk))
         .fold(0, |bits, (_, bit)| bits | bit)
 }
 
@@ -491,10 +492,11 @@ fn marker_for(bits: u8, vk: u16) -> usize {
 }
 
 fn send(outputs: &[Output], marker: usize) {
-    let inputs: Vec<INPUT> = outputs
+    let batches: Vec<Vec<INPUT>> = outputs
         .iter()
-        .flat_map(|output| inputs_for(output, marker))
+        .map(|output| inputs_for(output, marker))
         .collect();
+    let inputs = batches.concat();
     if inputs.is_empty() {
         return;
     }
@@ -511,7 +513,20 @@ fn send(outputs: &[Output], marker: usize) {
             inputs.len(),
             std::io::Error::last_os_error()
         );
+        let missed = &outputs[delivered_outputs(batches.iter().map(Vec::len), sent as usize)..];
+        STATE.with(|state| state.borrow_mut().machine.undelivered(missed));
     }
+}
+
+fn delivered_outputs(lengths: impl IntoIterator<Item = usize>, sent: usize) -> usize {
+    let mut total = 0;
+    lengths
+        .into_iter()
+        .take_while(|length| {
+            total += length;
+            total <= sent
+        })
+        .count()
 }
 
 fn inputs_for(output: &Output, marker: usize) -> Vec<INPUT> {
@@ -678,6 +693,20 @@ mod tests {
                 expected,
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn only_outputs_whose_every_event_landed_count_as_delivered() {
+        let cases = [
+            ("all sent", vec![1, 2, 1], 4, 3),
+            ("none sent", vec![1, 2, 1], 0, 0),
+            ("text cut in half", vec![1, 4, 1], 3, 1),
+            ("cut at a boundary", vec![1, 4, 1], 5, 2),
+            ("empty text before the cut", vec![1, 0, 2], 1, 2),
+        ];
+        for (name, lengths, sent, delivered) in cases {
+            assert_eq!(delivered_outputs(lengths, sent), delivered, "{name}");
         }
     }
 
