@@ -4,7 +4,6 @@ use super::super::{DetectedShadow, ShadowKind};
 use crate::doctor::de_bindings::normalize_combo;
 use crate::doctor::diagnosis::FixAction;
 use std::collections::BTreeMap;
-use std::process::Command;
 
 pub(in crate::doctor::checks::hotkey_shadows) fn collect_shadows(
     qol_index: &BTreeMap<String, String>,
@@ -56,7 +55,7 @@ struct RegCli;
 
 impl RegistryReader for RegCli {
     fn read_app_keys(&mut self) -> Vec<AppKeyEntry> {
-        let mut command = Command::new("reg");
+        let mut command = qol_process::system_command("reg.exe");
         command.args([
             "query",
             r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey",

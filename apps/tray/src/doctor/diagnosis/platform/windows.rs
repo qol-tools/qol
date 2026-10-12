@@ -1,6 +1,5 @@
 use super::super::{AppKeyWriter, SymbolicHotkeyWriter};
 use anyhow::{anyhow, Context, Result};
-use std::process::Command;
 
 pub(crate) use super::do_not_disturb::native_notifications_diagnosis;
 
@@ -21,7 +20,7 @@ impl AppKeyWriter for Platform {
         }
         let key_path =
             format!(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{app_key}");
-        let mut command = Command::new("reg");
+        let mut command = qol_process::system_command("reg.exe");
         command.args(["delete", &key_path, "/v", "ShortcutKeys", "/f"]);
         let output = qol_process::hide_console_window(&mut command)
             .output()
