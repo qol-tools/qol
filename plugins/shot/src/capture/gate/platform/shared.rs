@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const LOCK_FILE_NAME: &str = "qol-shot-capture.lock";
 
@@ -10,13 +10,16 @@ pub(crate) struct CaptureGuard {
 }
 
 pub(crate) fn try_acquire(action: &'static str) -> Option<CaptureGuard> {
-    let path = lock_path();
+    try_acquire_at(&lock_path(), action)
+}
+
+fn try_acquire_at(path: &Path, action: &'static str) -> Option<CaptureGuard> {
     let mut file = match OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
-        .open(&path)
+        .open(path)
     {
         Ok(file) => file,
         Err(error) => {
@@ -61,14 +64,18 @@ fn lock_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::try_acquire;
+    use super::try_acquire_at;
 
     #[test]
     fn a_held_capture_lock_refuses_a_second_capture_until_released() {
-        let first = try_acquire("test-first").expect("first capture takes the lock");
-        assert!(try_acquire("test-second").is_none());
+        let name = format!("qol-shot-capture-test-{}.lock", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        let first = try_acquire_at(&path, "test-first").expect("first capture takes the lock");
+        assert!(try_acquire_at(&path, "test-second").is_none());
         drop(first);
-        let again = try_acquire("test-again");
+        let again = try_acquire_at(&path, "test-again");
         assert!(again.is_some());
+        drop(again);
+        let _ = std::fs::remove_file(&path);
     }
 }

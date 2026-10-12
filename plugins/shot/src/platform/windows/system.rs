@@ -103,7 +103,7 @@ mod tests {
     fn missing_ffmpeg_fails_with_the_winget_hint() {
         let cases = [
             (
-                Some(PathBuf::from(r"C:fmpeginfmpeg.exe")),
+                Some(PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe")),
                 DoctorStatus::Ok,
                 None,
             ),
