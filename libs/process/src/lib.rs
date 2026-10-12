@@ -890,8 +890,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn identity_guarded_stop_never_terminates_a_process_without_a_stop_event() {
-        let mut child = system_command("cmd.exe")
-            .args(["/C", "ping -n 31 127.0.0.1 >NUL"])
+        let mut child = system_command("PING.EXE")
+            .args(["-n", "31", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
         let identity = process_identity(child.id()).unwrap();
@@ -988,7 +989,7 @@ mod tests {
             Case {
                 name: "terminate_group kills an ignoring descendant after the grace",
                 descendant: "ignore",
-                stop: |pid| terminate_group(pid, Duration::from_millis(700)),
+                stop: |pid| terminate_group(pid, Duration::from_secs(3)),
                 root_exits_cleanly: true,
                 descendant_exits_cleanly: false,
             },
