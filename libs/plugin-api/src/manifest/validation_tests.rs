@@ -288,27 +288,34 @@ mod runtime_rules {
     use super::*;
 
     #[test]
-    fn validate_rejects_doctor_capability_without_runtime() {
-        let toml = r#"
-            [plugin]
-            id = "test-plugin"
-            name = "P"
-            description = ""
-            version = "0.0.1"
+    fn validate_rejects_runtime_capabilities_without_runtime() {
+        for capability in ["doctor", "release_host"] {
+            let toml = format!(
+                r#"
+                [plugin]
+                id = "test-plugin"
+                name = "P"
+                description = ""
+                version = "0.0.1"
 
-            [menu]
-            label = "M"
-            items = []
+                [menu]
+                label = "M"
+                items = []
 
-            [capabilities]
-            doctor = true
-        "#;
+                [capabilities]
+                {capability} = true
+            "#
+            );
 
-        let error = validate_toml(toml).unwrap_err();
+            let error = validate_toml(&toml).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("capabilities.doctor requires a standalone [runtime] command"));
+            assert!(
+                error.to_string().contains(&format!(
+                    "capabilities.{capability} requires a standalone [runtime] command"
+                )),
+                "{error}"
+            );
+        }
     }
 
     #[test]
