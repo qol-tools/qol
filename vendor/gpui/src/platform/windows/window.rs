@@ -761,6 +761,7 @@ impl PlatformWindow for WindowsWindow {
                             ki: KEYBDINPUT {
                                 wVk: key,
                                 dwFlags: flags,
+                                dwExtraInfo: crate::SYNTHETIC_INPUT_TAG as usize,
                                 ..Default::default()
                             },
                         },
