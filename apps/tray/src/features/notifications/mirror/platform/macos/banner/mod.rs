@@ -2,7 +2,6 @@ mod ax;
 mod claims;
 mod tree;
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,9 +24,7 @@ const SEEN_CAPACITY: usize = 32;
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
 
-thread_local! {
-    static SEEN: RefCell<VecDeque<String>> = const { RefCell::new(VecDeque::new()) };
-}
+static SEEN: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
 struct Watch {
     generation: u64,
@@ -96,7 +93,7 @@ fn run(generation: u64) {
         let pid = notification_center_pid();
         if observer.as_ref().map(|observer| observer.pid) != pid {
             observer = None;
-            if let Some(pid) = pid.filter(|pid| failed_pid != Some(*pid)) {
+            if let Some(pid) = pid {
                 match ax::Observer::attach(pid, on_created) {
                     Ok(attached) => {
                         log::info!(
@@ -106,9 +103,11 @@ fn run(generation: u64) {
                         observer = Some(attached);
                     }
                     Err(error) => {
-                        log::warn!(
-                            "notification banners: cannot watch Notification Center: {error:#}"
-                        );
+                        if failed_pid != Some(pid) {
+                            log::warn!(
+                                "notification banners: cannot watch Notification Center: {error:#}"
+                            );
+                        }
                         failed_pid = Some(pid);
                     }
                 }
@@ -174,15 +173,13 @@ extern "C" fn on_created(
 }
 
 fn first_sighting(id: &str) -> bool {
-    SEEN.with(|seen| {
-        let mut seen = seen.borrow_mut();
-        if seen.iter().any(|known| known == id) {
-            return false;
-        }
-        if seen.len() == SEEN_CAPACITY {
-            seen.pop_front();
-        }
-        seen.push_back(id.to_string());
-        true
-    })
+    let mut seen = SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if seen.iter().any(|known| known == id) {
+        return false;
+    }
+    if seen.len() == SEEN_CAPACITY {
+        seen.pop_front();
+    }
+    seen.push_back(id.to_string());
+    true
 }
