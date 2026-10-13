@@ -325,7 +325,11 @@ fn return_focus_if_unheld() {
     let shown_key = app
         .keyWindow()
         .is_some_and(|key| key.isVisible() && key.alphaValue() > 0.0);
-    if !app.isActive() || shown_key {
+    if !should_return_focus(
+        app.isActive(),
+        shown_key,
+        crate::platform::has_process_focus(),
+    ) {
         return;
     }
     let target = frontmost_foreign_pid();
@@ -333,6 +337,10 @@ fn return_focus_if_unheld() {
     if let Some(pid) = target {
         set_app_frontmost(pid);
     }
+}
+
+fn should_return_focus(app_active: bool, shown_key: bool, process_frontmost: bool) -> bool {
+    app_active && process_frontmost && !shown_key
 }
 
 fn frontmost_foreign_pid() -> Option<i32> {
@@ -1392,11 +1400,29 @@ fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
 mod tests {
     use super::{
         cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_inside,
-        primary_anchored_from_screen_relative,
+        primary_anchored_from_screen_relative, should_return_focus,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     const PRIMARY_HEIGHT: f64 = 1080.0;
+
+    #[test]
+    fn focus_returns_only_while_this_process_still_holds_the_front() {
+        let cases = [
+            (true, false, true, true),
+            (true, false, false, false),
+            (true, true, true, false),
+            (false, false, true, false),
+            (false, false, false, false),
+        ];
+        for (app_active, shown_key, process_frontmost, expected) in cases {
+            assert_eq!(
+                should_return_focus(app_active, shown_key, process_frontmost),
+                expected,
+                "active={app_active} shown_key={shown_key} frontmost={process_frontmost}"
+            );
+        }
+    }
 
     fn window() -> NSRect {
         NSRect::new(NSPoint::new(100.0, 200.0), NSSize::new(440.0, 600.0))

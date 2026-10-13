@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod focus_reassert;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -31,6 +33,12 @@ pub fn configure_picker_window(title: &str) {
 }
 pub fn show_picker_window(target_title: &str, all_titles: &[String]) {
     imp::show_picker_window(target_title, all_titles)
+}
+pub fn hold_picker_focus(title: &str) {
+    imp::hold_picker_focus(title)
+}
+pub fn cancel_picker_focus_reassert() {
+    imp::cancel_picker_focus_reassert()
 }
 pub fn sync_picker_window_layout(
     title: &str,
