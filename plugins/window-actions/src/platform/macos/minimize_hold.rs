@@ -2,7 +2,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 const HOLD_POLL: Duration = Duration::from_millis(16);
-const LEAVE_POLLS: usize = 60;
+const LEAVE_POLLS: usize = 6;
 const HOLD_POLLS: usize = 25;
 const HOLD_REAPPLY_LIMIT: u8 = 3;
 
@@ -52,7 +52,6 @@ fn hold_gone_with(
             }
             reapplied += 1;
             let _ = reapply();
-            polls_left = hold_polls;
         }
         pause();
     }
