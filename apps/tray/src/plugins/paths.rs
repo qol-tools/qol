@@ -41,18 +41,6 @@ fn dev_resolved_root(_plugins_dir: &Path, _plugin_id: &str, _active: &Path) -> O
     None
 }
 
-pub(crate) fn canonical_plugin_root(plugins_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
-    let plugin_root = resolve_plugin_root_from_plugins_dir(plugins_dir, plugin_id);
-    let canonical = std::fs::canonicalize(&plugin_root).ok()?;
-    if crate::plugins::registry::current_active_path(plugin_id).is_some() {
-        return Some(canonical);
-    }
-    let canonical_plugins_dir = std::fs::canonicalize(plugins_dir).ok()?;
-    canonical
-        .starts_with(&canonical_plugins_dir)
-        .then_some(canonical)
-}
-
 pub(crate) fn config_path(plugin_root: &Path) -> PathBuf {
     plugin_root.join(CONFIG_FILE_NAME)
 }
@@ -63,18 +51,6 @@ pub(crate) fn config_contract_path(plugin_root: &Path) -> PathBuf {
 
 pub(crate) fn runable_contract_path(plugin_root: &Path) -> PathBuf {
     plugin_root.join(RUNABLE_CONTRACT_FILE_NAME)
-}
-
-pub(crate) fn has_custom_ui(plugin_root: &Path) -> bool {
-    is_real_custom_ui(&plugin_root.join("ui/index.html"))
-}
-
-fn is_real_custom_ui(index_path: &Path) -> bool {
-    let content = match std::fs::read_to_string(index_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    !content.contains("initAutoConfigPage")
 }
 
 pub(crate) fn has_config(plugin_root: &Path) -> bool {
@@ -89,44 +65,6 @@ pub(crate) fn has_manifest(plugin_root: &Path) -> bool {
 mod tests {
     use super::*;
 
-    fn write_plugin_ui(root: &Path, html: &str) {
-        let ui_dir = root.join("ui");
-        std::fs::create_dir_all(&ui_dir).unwrap();
-        std::fs::write(ui_dir.join("index.html"), html).unwrap();
-    }
-
-    #[test]
-    fn has_custom_ui_rejects_auto_config_template() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let auto_config_html = r#"<script type="module">
-import { initAutoConfigPage } from '/auto-config-bootstrap.js';
-initAutoConfigPage();
-</script>"#;
-
-        let real_ui_html = r#"<!DOCTYPE html>
-<html><head><title>My Plugin</title></head>
-<body><script type="module" src="./app.js"></script></body>
-</html>"#;
-
-        let cases = [
-            ("auto-config template", auto_config_html, false),
-            ("real custom UI", real_ui_html, true),
-        ];
-
-        for (label, html, expected) in cases {
-            let plugin_root = dir.path().join(label);
-            write_plugin_ui(&plugin_root, html);
-            assert_eq!(has_custom_ui(&plugin_root), expected, "case: {label}");
-        }
-    }
-
-    #[test]
-    fn has_custom_ui_false_when_no_ui_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!has_custom_ui(dir.path()));
-    }
-
     #[test]
     fn runable_contract_path_joins_filename() {
         let root = Path::new("/tmp/plugin-foo");
@@ -134,22 +72,5 @@ initAutoConfigPage();
             runable_contract_path(root),
             Path::new("/tmp/plugin-foo/qol-runtime.toml")
         );
-    }
-
-    #[test]
-    fn canonical_plugin_root_rejects_ids_escaping_plugins_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let plugins_dir = dir.path().join("plugins");
-        std::fs::create_dir_all(plugins_dir.join("plugin-x")).unwrap();
-        std::fs::create_dir_all(dir.path().join("secret")).unwrap();
-
-        let cases = [("plugin-x", true), ("../secret", false)];
-        for (id, allowed) in cases {
-            assert_eq!(
-                canonical_plugin_root(&plugins_dir, id).is_some(),
-                allowed,
-                "id: {id}"
-            );
-        }
     }
 }

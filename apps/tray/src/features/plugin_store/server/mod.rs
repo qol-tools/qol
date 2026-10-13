@@ -1,4 +1,3 @@
-use super::plugin_ui;
 #[cfg(feature = "dev")]
 mod dev_core_log_handlers;
 #[cfg(feature = "dev")]
@@ -41,7 +40,6 @@ use axum::{
     http::{header, HeaderValue},
     middleware, Router,
 };
-use std::path::PathBuf;
 #[cfg(feature = "dev")]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -62,7 +60,7 @@ pub(crate) async fn start_ui_server(
     #[cfg(feature = "dev")] core_log_controls: crate::logging::CoreControlsHandle,
 ) -> Result<u16> {
     let github_auth_service = Arc::new(crate::features::github_auth::GitHubAuthService::new());
-    let (app_state, plugins_dir) = AppState::new(
+    let app_state = AppState::new(
         plugin_manager,
         daemon,
         shutdown_tx,
@@ -88,7 +86,7 @@ pub(crate) async fn start_ui_server(
     }
     let (listener, port) = bind_listener().await?;
     let http_security = security::HttpSecurity::initialize(port)?;
-    let app = assemble_app(app_state, plugins_dir, http_security);
+    let app = assemble_app(app_state, http_security);
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
             log::error!("UI server error: {}", e);
@@ -114,11 +112,7 @@ async fn promote_shadow_to_stable(app_state: AppState) -> Result<u16> {
     };
     let (listener, port) = listener;
     let http_security = security::HttpSecurity::initialize(port)?;
-    let app = assemble_app(
-        app_state.clone(),
-        app_state.plugins_dir.clone(),
-        http_security,
-    );
+    let app = assemble_app(app_state.clone(), http_security);
     if let Err(error) = crate::dev_generation::drain_predecessor_daemons_for_promotion() {
         app_state.promoted_to_stable.store(false, Ordering::Release);
         return Err(error);
@@ -302,11 +296,7 @@ fn dev_api_router() -> Router<AppState> {
         .route_layer(middleware::from_fn(dev_gate::require_dev_mode))
 }
 
-fn assemble_app(
-    app_state: AppState,
-    plugins_dir: PathBuf,
-    http_security: security::HttpSecurity,
-) -> Router {
+fn assemble_app(app_state: AppState, http_security: security::HttpSecurity) -> Router {
     let mcp = super::super::mcp::router(app_state.plugin_manager.clone()).layer(
         middleware::from_fn_with_state(http_security.clone(), security::require_api_access),
     );
@@ -323,7 +313,6 @@ fn assemble_app(
         .nest("/api", api)
         .nest("/api/task-runner", task_runner)
         .nest("/api/mcp", mcp)
-        .nest("/plugins", plugin_ui::router(plugins_dir))
         .merge(security::proof_routes(http_security.clone()))
         .layer(no_cache)
         .layer(middleware::from_fn_with_state(

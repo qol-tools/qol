@@ -2,16 +2,6 @@
 
 Status: Core peer service, CLI, native/web linked-device settings, the PointZ cutover and earbud handoff are implemented in the linked-devices worktree and exercised in isolated tests. Guest, multi-PC and hardware verification remain unfinished. This is a branch checkpoint; nothing from this implementation is installed or released.
 
-[Open the interactive architecture page](../../apps/tray/diagram/linked-devices.html)
-for the connection model, searchable ownership map, and illustrative Bluetooth
-handoff. The viewer embeds these ownership tables and derives package relationships
-from Cargo metadata; it introduces no separately maintained owner list.
-
-Rebuild with `node apps/tray/diagram/linked-devices/build.mjs`; use `--check` to
-verify the generated page or `--serve` to rebuild and open a local preview server.
-The generated HTML works offline when opened directly. Its source links resolve
-inside this checkout. The walkthrough does not communicate with real devices.
-
 ## Implementation status
 
 This table describes the current worktree. The Bluetooth walkthrough remains an
@@ -418,7 +408,6 @@ whose own registry and sockets are gone, and Bluetooth handoff.
 | [Guest runner](../../tools/guest-runner/src/main.rs) | Executes the shared guest protocol in isolated environments |
 | [Browser settings helpers](../../libs/config/js/package.json) | Render/edit the shared normalized config contract; authoritative writes go through the host config API |
 | [Tray browser UI](../../apps/tray/ui/lib/package.json) and [native settings](../../apps/tray/src/settings_surface/mod.rs) | Presentation, focus and temporary editing state; both use core/domain queries and actions |
-| [Architecture diagrams](../../apps/tray/diagram/package.json) | Explanatory artifacts; source/build inputs produce committed viewers. The linked-devices page derives this document's ownership tables and Cargo relationships |
 | [Environment definitions](../../flows/envs) | Declarative guest/image inputs consumed by development tooling |
 | [CI/release workflows](../../.github/workflows) and [release scripts](../../.github/scripts) | Automation over workspace/plugin/build contracts; source definitions and verified artifacts drive releases |
 | [Git hooks](../../.githooks) and [affected checks](../../tools/cli/src/commands/check/mod.rs) | Existing enforcement and verification entry points; the peer invariants need implementation-specific gates |
