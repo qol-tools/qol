@@ -238,7 +238,7 @@ fn levels_command(handler: PlainHandler) -> Command {
 
 fn settings_command(handler: PlainHandler) -> Command {
     Command::new("settings")
-        .about("Open the Audio settings.")
+        .about("Open the Sound settings.")
         .usage(usage_settings())
         .output("No stdout on success.")
         .exit_behavior("Exits non-zero if the settings cannot be opened.")
@@ -332,7 +332,7 @@ fn settings(context: &CommandContext) -> Result<Execution> {
         return Ok(Execution::usage(message));
     }
     qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
-        .context("failed to open the Audio settings")?;
+        .context("failed to open the Sound settings")?;
     Ok(Execution::success(String::new()))
 }
 

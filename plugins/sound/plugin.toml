@@ -1,7 +1,7 @@
 [plugin]
 id = "qol-sound"
 uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
-name = "Audio"
+name = "Sound"
 icon = "sound"
 description = "Choose where sound plays, which microphone every app hears, and how loud each is"
 version = "0.16.0"
@@ -87,7 +87,7 @@ label = "Unmute Microphone"
 args = ["unmute", "input"]
 
 [action.levels]
-label = "Audio Levels"
+label = "Sound Levels"
 args = ["levels"]
 hotkey = false
 
@@ -113,7 +113,7 @@ output = "device"
 input = "device"
 
 [menu]
-label = "Audio"
+label = "Sound"
 items = []
 
 [[dependencies.binaries]]
