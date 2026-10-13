@@ -1,4 +1,5 @@
 mod app_name;
+mod banner;
 mod record;
 mod signal;
 mod store;
@@ -18,6 +19,7 @@ pub(in super::super) fn sync(enabled: bool) {
     let mut running = MIRROR
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    banner::sync(enabled);
     if !enabled {
         if running.take().is_some() {
             log::info!("notification mirror: stopped");
@@ -93,6 +95,9 @@ fn show_rows(rows: Vec<store::Row>, mut cursor: Cursor) -> Cursor {
     for row in rows {
         cursor = row.cursor;
         if let Some(notification) = record::decode(&row.data) {
+            if banner::claimed(&notification.title, &notification.body) {
+                continue;
+            }
             toast::show(&app_name::display_name(&notification.app_id), &notification);
         }
     }
