@@ -361,6 +361,7 @@ fn installed_plugin_with_uid<'a>(
 }
 
 async fn finalize_install(staging_dir: &Path, target_dir: &Path) -> Result<()> {
+    adopt_config_only_dir(staging_dir, target_dir).await?;
     tokio::fs::rename(staging_dir, target_dir)
         .await
         .with_context(|| {
@@ -371,8 +372,26 @@ async fn finalize_install(staging_dir: &Path, target_dir: &Path) -> Result<()> {
         })
 }
 
+async fn adopt_config_only_dir(staging_dir: &Path, target_dir: &Path) -> Result<()> {
+    if !target_dir.exists() {
+        return Ok(());
+    }
+    if crate::plugins::paths::has_manifest(target_dir) {
+        anyhow::bail!("Plugin directory {:?} already holds a plugin", target_dir);
+    }
+    let config = crate::plugins::paths::config_path(target_dir);
+    if config.is_file() {
+        tokio::fs::rename(&config, crate::plugins::paths::config_path(staging_dir))
+            .await
+            .with_context(|| format!("Failed to keep plugin config {:?}", config))?;
+    }
+    tokio::fs::remove_dir_all(target_dir)
+        .await
+        .with_context(|| format!("Failed to clear plugin directory {:?}", target_dir))
+}
+
 fn ensure_not_installed(plugin_dir: &Path, plugin_id: &str) -> Result<()> {
-    if !plugin_dir.exists() {
+    if !crate::plugins::paths::has_manifest(plugin_dir) {
         return Ok(());
     }
     anyhow::bail!("Plugin already installed: {}", plugin_id)
@@ -389,6 +408,71 @@ fn ensure_installed(plugin_dir: &Path, plugin_id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn config_only_dir_is_not_an_installed_plugin() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("qol-launcher");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("config.json"), "{}").unwrap();
+        ensure_not_installed(&target, "qol-launcher").unwrap();
+
+        std::fs::write(target.join("plugin.toml"), "").unwrap();
+        let err = ensure_not_installed(&target, "qol-launcher").unwrap_err();
+        assert!(format!("{err}").contains("already installed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn finalize_install_keeps_config_from_a_config_only_dir() {
+        let temp = TempDir::new().unwrap();
+        let staging = temp.path().join(".staging");
+        let target = temp.path().join("qol-launcher");
+        tokio::fs::create_dir_all(&staging).await.unwrap();
+        tokio::fs::create_dir_all(&target).await.unwrap();
+        tokio::fs::write(staging.join("plugin.toml"), "manifest")
+            .await
+            .unwrap();
+        tokio::fs::write(target.join("config.json"), r#"{"synced":true}"#)
+            .await
+            .unwrap();
+
+        finalize_install(&staging, &target).await.unwrap();
+
+        assert!(!staging.exists());
+        assert_eq!(
+            tokio::fs::read_to_string(target.join("plugin.toml"))
+                .await
+                .unwrap(),
+            "manifest"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(target.join("config.json"))
+                .await
+                .unwrap(),
+            r#"{"synced":true}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_install_never_clears_an_installed_plugin() {
+        let temp = TempDir::new().unwrap();
+        let staging = temp.path().join(".staging");
+        let target = temp.path().join("qol-launcher");
+        tokio::fs::create_dir_all(&staging).await.unwrap();
+        tokio::fs::create_dir_all(&target).await.unwrap();
+        tokio::fs::write(target.join("plugin.toml"), "installed")
+            .await
+            .unwrap();
+
+        finalize_install(&staging, &target).await.unwrap_err();
+
+        assert_eq!(
+            tokio::fs::read_to_string(target.join("plugin.toml"))
+                .await
+                .unwrap(),
+            "installed"
+        );
+    }
 
     #[tokio::test]
     async fn extract_plugin_subdir_moves_plugin_dir_out_of_clone() {

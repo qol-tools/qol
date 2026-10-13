@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 const CONFIG_FILE_NAME: &str = "config.json";
+const MANIFEST_FILE_NAME: &str = "plugin.toml";
 const CONFIG_CONTRACT_FILE_NAME: &str = "qol-config.toml";
 const RUNABLE_CONTRACT_FILE_NAME: &str = "qol-runtime.toml";
 
@@ -78,6 +79,10 @@ fn is_real_custom_ui(index_path: &Path) -> bool {
 
 pub(crate) fn has_config(plugin_root: &Path) -> bool {
     config_contract_path(plugin_root).exists()
+}
+
+pub(crate) fn has_manifest(plugin_root: &Path) -> bool {
+    plugin_root.join(MANIFEST_FILE_NAME).exists()
 }
 
 #[cfg(test)]
