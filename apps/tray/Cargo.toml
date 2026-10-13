@@ -140,7 +140,7 @@ git2 = { version = "0.20", default-features = false, features = ["https", "vendo
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
 objc2-foundation = { workspace = true, features = ["NSArray", "NSString", "NSURL", "NSObject"] }
-objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder", "NSWorkspace"] }
+objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder", "NSRunningApplication", "NSWorkspace"] }
 plist = "1"
 kqueue = "1"
 mach2 = "0.6"
