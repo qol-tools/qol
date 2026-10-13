@@ -221,7 +221,7 @@ fn mute_status_command(handler: PlainHandler) -> Command {
     Command::new("mute-status")
         .about("Show whether the output and the microphone are muted.")
         .usage(usage_mute_status())
-        .output("One line for the output and one for the microphone.")
+        .output("One line for the output and one for the microphone: muted, unmuted, or missing.")
         .exit_behavior("Exits 64 on a usage error; non-zero if the state cannot be read.")
         .run_result(handler)
 }
@@ -421,7 +421,7 @@ fn set_muted(context: &CommandContext, usage: String, muted: bool) -> Result<Exe
     Ok(Execution::success(newline_terminated(format!(
         "the {} is {}",
         role.noun,
-        muted_word(muted)
+        muted_word(Some(muted))
     ))))
 }
 
@@ -437,11 +437,11 @@ fn mute_status(context: &CommandContext) -> Result<Execution> {
     ))))
 }
 
-fn muted_word(muted: bool) -> &'static str {
-    if muted {
-        "muted"
-    } else {
-        "unmuted"
+fn muted_word(muted: Option<bool>) -> &'static str {
+    match muted {
+        Some(true) => "muted",
+        Some(false) => "unmuted",
+        None => "missing",
     }
 }
 

@@ -281,9 +281,11 @@ pub struct PreparedSettingsPanel {
     sections: Vec<RowSection>,
     sources: Vec<SourceState>,
     query_states: QueryStates,
+    opening_answers: OpeningAnswers,
 }
 
 type QueryStates = std::collections::HashMap<(usize, String), RowQueryState>;
+type OpeningAnswers = Vec<(String, Result<serde_json::Value, String>)>;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct FieldCopy {
@@ -774,21 +776,28 @@ fn prepare_panel(
         }
         sources.push(prepared.state);
     }
-    let query_states = answer_opening_page(panel.focused_index(), &mut rows, &sources);
+    let (query_states, opening_answers) =
+        answer_opening_page(panel.focused_index(), &mut rows, &sources);
     Ok(PreparedSettingsPanel {
         panel,
         rows,
         sections,
         sources,
         query_states,
+        opening_answers,
     })
 }
 
-fn answer_opening_page(focused: usize, rows: &mut [Row], sources: &[SourceState]) -> QueryStates {
+fn answer_opening_page(
+    focused: usize,
+    rows: &mut [Row],
+    sources: &[SourceState],
+) -> (QueryStates, OpeningAnswers) {
     let mut states = QueryStates::new();
+    let mut answers_seen = OpeningAnswers::new();
     let queries = runtime_query_names(rows.iter().filter(|row| row.source == focused));
     let Some(source) = sources.get(focused).filter(|_| !queries.is_empty()) else {
-        return states;
+        return (states, answers_seen);
     };
     let runtime = source.runtime.clone();
     let (sender, answers) = std::sync::mpsc::channel();
@@ -809,9 +818,10 @@ fn answer_opening_page(focused: usize, rows: &mut [Row], sources: &[SourceState]
             Err(message) => RowQueryState::Unavailable(message.clone()),
         };
         states.insert((focused, query.clone()), state);
+        answers_seen.push((query.clone(), result.clone()));
         apply_runtime_query(rows, focused, &query, result, &|_, _| false);
     }
-    states
+    (states, answers_seen)
 }
 
 type PageAnswer = (usize, String, Result<serde_json::Value, String>);
@@ -962,6 +972,7 @@ fn size_prepared_panel(
             sections: prepared.sections,
             sources: prepared.sources,
             query_states: prepared.query_states,
+            opening_answers: prepared.opening_answers,
             height_cap: available,
         },
         size: size(px(width), px(height)),
@@ -1129,10 +1140,17 @@ active_value_from = "active"
                 panic!("page that is not open was asked for {query}")
             })),
         ];
-        let states = super::answer_opening_page(0, &mut rows, &sources);
+        let (states, answers) = super::answer_opening_page(0, &mut rows, &sources);
         assert_eq!(
             states.into_iter().collect::<Vec<_>>(),
             vec![((0, "status".to_string()), RowQueryState::Ready)]
+        );
+        assert_eq!(
+            answers,
+            vec![(
+                "status".to_string(),
+                Ok(serde_json::json!({"active": true}))
+            )]
         );
         let active = |row: &Row| matches!(row.control, RowControl::Action { active: true, .. });
         assert!(active(&rows[0]));
