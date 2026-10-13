@@ -621,18 +621,17 @@ fn trace_minimize_branch(pid: i32, branch: &str, visible: usize, regular: bool, 
 }
 
 fn trace_minimize_hold(pid: i32, branch: &str, outcome: HoldOutcome) {
-    #[cfg(debug_assertions)]
-    qol_runtime::probe!(
-        "WINACT_MINIMIZE_HOLD",
-        "pid={pid} branch={branch} outcome={} reapplied={}",
-        outcome.as_str(),
-        match outcome {
-            HoldOutcome::Reapplied(count) => count,
-            _ => 0,
-        },
-    );
-    #[cfg(not(debug_assertions))]
-    let _ = (pid, branch, outcome);
+    if cfg!(debug_assertions) {
+        qol_runtime::probe!(
+            "WINACT_MINIMIZE_HOLD",
+            "pid={pid} branch={branch} outcome={} reapplied={}",
+            outcome.as_str(),
+            match outcome {
+                HoldOutcome::Reapplied(count) => count,
+                _ => 0,
+            },
+        );
+    }
 }
 
 fn app_is_regular(pid: i32) -> bool {
