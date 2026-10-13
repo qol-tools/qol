@@ -12,11 +12,12 @@ use wait_timeout::ChildExt;
 
 use crate::cli::PLUGIN_ID;
 use crate::core::guards::{
-    sanitize_stderr, ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
+    ManagedPackage, PackageIndex, PackageManager, PackageScope, PackageStatus,
 };
+use crate::core::platform::unix::sanitize_stderr;
 use crate::core::{
-    AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind, MatchKind,
-    RemovalOutcome, RemovalPlan,
+    delete_path, AppPlatform, Disposal, IdentitySnapshot, InstalledApp, Leftover, LeftoverKind,
+    MatchKind, RemovalOutcome, RemovalPlan,
 };
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -355,11 +356,6 @@ impl Platform {
     }
 }
 
-pub(crate) fn metadata_identity(meta: &std::fs::Metadata) -> (Option<u64>, Option<u64>) {
-    use std::os::unix::fs::MetadataExt;
-    (Some(meta.dev()), Some(meta.ino()))
-}
-
 impl AppPlatform for Platform {
     fn installed_apps(&self) -> Result<Vec<InstalledApp>> {
         let mut by_identity = BTreeMap::new();
@@ -531,8 +527,11 @@ impl AppPlatform for Platform {
         match package.manager() {
             PackageManager::Apt => self.uninstall_apt(app, package),
             PackageManager::Flatpak => self.uninstall_flatpak(app, package),
-            PackageManager::Homebrew => {
-                anyhow::bail!("{PLUGIN_ID}: Homebrew packages are not supported on Linux")
+            PackageManager::Homebrew | PackageManager::Windows | PackageManager::MicrosoftStore => {
+                anyhow::bail!(
+                    "{PLUGIN_ID}: {} packages are not supported on Linux",
+                    package.manager().label()
+                )
             }
         }
     }
@@ -1030,16 +1029,6 @@ fn path_size(path: &Path) -> u64 {
                 .sum()
         })
         .unwrap_or(0)
-}
-
-fn delete_path(path: &Path) -> std::result::Result<(), String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-    let result = if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        fs::remove_dir_all(path)
-    } else {
-        fs::remove_file(path)
-    };
-    result.map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

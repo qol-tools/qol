@@ -36,7 +36,7 @@ export function App() {
         <main class="panel">
             <header class="hero">
                 <h1>Key Remap Settings</h1>
-                <p>Configure keyboard, mouse, and scroll remapping rules for a Windows-like experience on macOS.</p>
+                <p>Configure keyboard, mouse, and scroll remapping rules.</p>
             </header>
 
             <${EnableToggle}

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -26,7 +26,7 @@ use crate::monitor::{
     BrightnessState, DisplayControl, DisplayMode, GammaStateControl, MonitorError, BRIGHTNESS_MAX,
     BRIGHTNESS_MIN, BRIGHTNESS_STEP,
 };
-use crate::platform::MonitorControl;
+use crate::platform::{install_signal_handlers, MonitorControl};
 use crate::session::{
     LayoutSnapshot, LutProvider, ModeRecord, OwnedGamma, PlacementRecord, RestoreMode, Session,
     SessionStore, Snapshot,
@@ -43,6 +43,7 @@ const UNCONTROLLED_REASON: &str = "a foreign warm calibration forbids the night 
 const REASSERT_FAILED_REASON: &str = "the gamma re-assert did not verify";
 const FOREIGN_WRITER_REASON: &str = "a foreign writer keeps changing the gamma table";
 const DETECT_FOREIGN_OWNER_REASON: &str = "detect mode leaves the foreign warm table alone";
+const FLOOR_NOTICE: &str = "as dim as this display allows";
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -1156,6 +1157,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     "connector": handle.connector(),
                     "state": state.label(),
                     "reason": reason,
+                    "tint_capped": self.session.control().tint_capped(handle),
                 })
             })
             .collect()
@@ -1581,6 +1583,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             "failed"
         } else if decision.active && display_conflict {
             "conflict"
+        } else if decision.active && displays.iter().any(|row| row["tint_capped"] == true) {
+            "capped"
         } else if decision.active {
             "active"
         } else {
@@ -2039,16 +2043,23 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     );
                     return true;
                 }
-                for id in &applied {
-                    self.preferred.insert(id.clone(), value);
+                for (id, set) in &applied {
+                    self.preferred.insert(id.clone(), *set);
                 }
                 if let Err(error) = (self.preferred_save)(&self.preferred) {
                     log::warn!("failed to persist preferred brightness: {error:#}");
                 }
-                if self.config().notify_on_change {
+                let floor = applied
+                    .iter()
+                    .map(|(_, set)| *set)
+                    .filter(|set| *set != value)
+                    .max();
+                if let Some(floor) = floor {
+                    (self.notify)("Monitor", &format!("Brightness {floor}%, {FLOOR_NOTICE}"));
+                } else if self.config().notify_on_change {
                     (self.notify)("Monitor", &format!("Brightness {value}%"));
                 }
-                self.reset_gamma_reclaims(applied.iter().cloned());
+                self.reset_gamma_reclaims(applied.into_iter().map(|(id, _)| id));
                 true
             }
             Command::SetMode {
@@ -2208,7 +2219,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         }
     }
 
-    fn set_brightness(&mut self, display: &str, value: u8) -> Vec<String> {
+    fn set_brightness(&mut self, display: &str, value: u8) -> Vec<(String, u8)> {
         let handles = self.session.control().enumerate().unwrap_or_default();
         if display != "all" && !handles.iter().any(|handle| handle.id() == display) {
             return Vec::new();
@@ -2224,8 +2235,8 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             };
         let mut applied = Vec::new();
         for handle in targets {
-            if self.session.mutate(handle, value).is_ok() {
-                applied.push(handle.id().to_string());
+            if let Ok(set) = self.session.mutate(handle, value) {
+                applied.push((handle.id().to_string(), set));
             }
         }
         applied
@@ -2243,6 +2254,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             None
         };
         let mut stepped: Vec<(u8, &'static str)> = Vec::new();
+        let mut floor = None;
         for handle in &handles {
             let Some(current) = self.cached_brightness(handle) else {
                 continue;
@@ -2258,10 +2270,17 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             if current.value == next {
                 continue;
             }
-            if self.session.mutate(handle, next).is_err() {
+            let Ok(set) = self.session.mutate(handle, next) else {
                 continue;
+            };
+            if set != next {
+                floor = floor.max(Some(set));
             }
-            stepped.push((next, current.source.label()));
+            stepped.push((set, current.source.label()));
+        }
+        if let Some(floor) = floor {
+            (self.notify)("Monitor", &format!("Brightness {floor}%, {FLOOR_NOTICE}"));
+            return;
         }
         let message = match stepped.as_slice() {
             [] => return,
@@ -2366,32 +2385,6 @@ fn run_loop<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized>(
 
 fn drain_all_queued(rx: &Receiver<Command>) {
     while rx.try_recv().is_ok() {}
-}
-
-fn install_signal_handlers(tx: Sender<Command>) -> signal_hook::iterator::Handle {
-    let mut signals = signal_hook::iterator::Signals::new([
-        signal_hook::consts::SIGTERM,
-        signal_hook::consts::SIGHUP,
-    ])
-    .expect("failed to register the SIGTERM and SIGHUP handlers");
-    let handle = signals.handle();
-    std::thread::Builder::new()
-        .name("monitor-signals".into())
-        .spawn(move || {
-            for signal in signals.forever() {
-                let command = match signal {
-                    signal_hook::consts::SIGTERM => Some(Command::Kill),
-                    signal_hook::consts::SIGHUP => Some(Command::Handoff),
-                    _ => None,
-                };
-                if let Some(command) = command {
-                    let _ = tx.send(command);
-                    return;
-                }
-            }
-        })
-        .expect("failed to spawn the signal forwarder");
-    handle
 }
 
 pub fn run() -> Result<(), String> {
@@ -2544,6 +2537,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Condvar, Mutex as StdMutex};
 
+    #[cfg(unix)]
     static SIGNAL_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn handle(id: &str, connector: &str) -> DisplayHandle {
@@ -2765,6 +2759,8 @@ mod tests {
         events: StdMutex<Vec<String>>,
         snapshot_gate: StdMutex<Option<Arc<SnapshotGate>>>,
         guarded_drift: Arc<StdMutex<bool>>,
+        tint_capped: AtomicBool,
+        floor: u8,
     }
 
     impl FakeControl {
@@ -2800,7 +2796,14 @@ mod tests {
                 events: StdMutex::new(Vec::new()),
                 snapshot_gate: StdMutex::new(None),
                 guarded_drift: Arc::new(StdMutex::new(false)),
+                tint_capped: AtomicBool::new(false),
+                floor: 0,
             }
+        }
+
+        fn with_floor(mut self, floor: u8) -> Self {
+            self.floor = floor;
+            self
         }
 
         fn calls(&self) -> Vec<(String, u8)> {
@@ -2952,11 +2955,19 @@ mod tests {
         ) -> Result<crate::monitor::RestoreOutcome, MonitorError> {
             Ok(RestoreOutcome::NothingToRestore)
         }
+
+        fn tint_capped(&self, _handle: &DisplayHandle) -> bool {
+            self.tint_capped.load(Ordering::SeqCst)
+        }
     }
 
     impl DisplayControl for FakeControl {
         fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
             Ok(self.displays.clone())
+        }
+
+        fn brightness_floor(&self, _handle: &DisplayHandle) -> u8 {
+            self.floor
         }
 
         fn probe(&self, _handle: &DisplayHandle) -> Result<DisplayCapabilities, MonitorError> {
@@ -3453,6 +3464,29 @@ mod tests {
             applet_claim: None,
             checksum: String::new(),
         }
+    }
+
+    #[test]
+    fn a_tint_the_system_caps_reports_night_mode_as_capped() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let displays = vec![handle("id-1", "card0-DP-1")];
+        let control = Arc::new(FakeControl::new(displays, 70, BrightnessSource::Ddc));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root, clock);
+        runtime.start(&DeviceConfig::default());
+        runtime.handle(Command::Night(NightRequest::Toggle));
+        assert_eq!(runtime.night_payload()["state"], "active");
+        control.tint_capped.store(true, Ordering::SeqCst);
+        let payload = runtime.night_payload();
+        assert_eq!(payload["state"], "capped");
+        assert_eq!(payload["active"], true);
+        assert_eq!(payload["displays"][0]["tint_capped"], true);
+        runtime.handle(Command::Night(NightRequest::Toggle));
+        assert_eq!(runtime.night_payload()["state"], "inactive");
     }
 
     #[test]
@@ -5610,6 +5644,42 @@ mod tests {
     }
 
     #[test]
+    fn brightness_below_the_display_floor_lands_on_it_and_says_so() {
+        let (_dir, store) = runtime_store();
+        let control = Arc::new(
+            FakeControl::new(
+                vec![handle("id-1", "card0-DP-1")],
+                80,
+                BrightnessSource::Gamma,
+            )
+            .with_floor(50),
+        );
+        let (mut runtime, toasts) = runtime_with_toasts(control.clone(), store);
+        runtime.handle(Command::SetBrightness {
+            display: "id-1".into(),
+            value: 30,
+        });
+        runtime.handle(Command::Brightness {
+            direction: -1,
+            phase: Phase::Start,
+        });
+        assert_eq!(
+            control.calls(),
+            vec![("id-1".to_string(), 50), ("id-1".to_string(), 50)]
+        );
+        assert_eq!(
+            runtime.preferred,
+            BTreeMap::from([("id-1".to_string(), 50)]),
+            "preferred records the brightness the display shows"
+        );
+        assert_eq!(
+            *toasts.lock().unwrap(),
+            vec!["Brightness 50%, as dim as this display allows"; 2],
+            "a request below the floor and a step at the floor both say why"
+        );
+    }
+
+    #[test]
     fn set_brightness_reports_an_unknown_display_instead_of_failing_silently() {
         let (_dir, store) = runtime_store();
         let (_root, config_root) = preferred_root();
@@ -7011,7 +7081,9 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let runtime = Mutex::new(runtime_with(control.clone(), store.clone()));
+        let mut runtime = runtime_with(control.clone(), store.clone());
+        runtime.stepper = HoldStepper::new(Duration::MAX);
+        let runtime = Mutex::new(runtime);
         runtime
             .lock()
             .unwrap()
@@ -7095,6 +7167,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn sigterm_runs_the_exit_restore_and_marks_clean() {
         let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
@@ -7133,6 +7206,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn sighup_handoff_exits_without_restoring_and_marks_the_snapshot() {
         let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
@@ -7252,6 +7326,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn fallback_session_dir_is_created_private() {
         use std::os::unix::fs::PermissionsExt;

@@ -1,4 +1,5 @@
 mod failures;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod files;
 mod snapshots;
 
@@ -183,4 +184,29 @@ fn revision_overflow_leaves_durable_state_unchanged() {
             .unwrap(),
         before
     );
+}
+
+#[test]
+fn creation_requires_a_new_root_and_open_never_creates_one() {
+    let temporary = tempfile::tempdir().unwrap();
+    let missing = temporary.path().join("missing");
+    assert!(matches!(
+        PeerAuthority::open_persistent(&missing, now()),
+        Err(AuthorityError::MissingStore)
+    ));
+    assert!(!missing.exists());
+    assert!(matches!(
+        PeerAuthority::create_persistent(temporary.path(), "local".into(), now()),
+        Err(AuthorityError::AlreadyExists)
+    ));
+    assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+    let root = temporary.path().join("authority");
+    let authority = PeerAuthority::create_persistent(&root, "local".into(), now()).unwrap();
+    drop(authority);
+    let bytes = fs::read(root.join("state.json")).unwrap();
+    assert!(matches!(
+        PeerAuthority::create_persistent(&root, "replacement".into(), now()),
+        Err(AuthorityError::AlreadyExists)
+    ));
+    assert_eq!(fs::read(root.join("state.json")).unwrap(), bytes);
 }

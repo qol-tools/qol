@@ -118,7 +118,6 @@ fn cwd_string(request: &SpawnRequest) -> Result<String, TerminalError> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     use super::{
         identity_from_user_vars, launch_argv, parse_spawned_window_id, surface_from_tag,
@@ -314,6 +313,7 @@ mod tests {
     fn launch_argv_rejects_a_non_utf8_cwd() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
 
         let mut request = request(SpawnSurface::OsWindow, None);
         request.cwd = PathBuf::from(OsString::from_vec(vec![0xff]));

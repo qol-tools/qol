@@ -1,7 +1,7 @@
 mod command_task;
 
 use super::config::ActionConfig;
-use super::interpolation::{interpolate, interpolate_shell};
+use super::interpolation::interpolate;
 use super::platform;
 use command_task::CommandTask;
 use std::collections::HashMap;
@@ -43,22 +43,22 @@ struct ExecutionSpec {
 }
 
 pub(super) async fn execute(request: ExecutionRequest<'_>) -> Result<ExecutionResult, String> {
-    let spec = execution_spec(&request);
+    let spec = execution_spec(&request)?;
     log::info!("[task-runner] {}: {}", request.action_id, spec.command);
     let output = command_output(&spec).await?;
     Ok(execution_result(output))
 }
 
-fn execution_spec(request: &ExecutionRequest<'_>) -> ExecutionSpec {
-    ExecutionSpec {
-        command: interpolate_shell(&request.action.command, request.params),
+fn execution_spec(request: &ExecutionRequest<'_>) -> Result<ExecutionSpec, String> {
+    Ok(ExecutionSpec {
+        command: platform::render_command(&request.action.command, request.params)?,
         cwd: request
             .action
             .cwd
             .as_ref()
             .map(|cwd| interpolate(cwd, request.params)),
         timeout: request.action.timeout,
-    }
+    })
 }
 
 async fn command_output(spec: &ExecutionSpec) -> Result<Output, String> {
@@ -95,8 +95,8 @@ fn task_error(error: command_task::TaskError) -> String {
 fn execution_result(output: Output) -> ExecutionResult {
     ExecutionResult {
         success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stdout: platform::decode_output(&output.stdout),
+        stderr: platform::decode_output(&output.stderr),
         exit_code: output.status.code().unwrap_or(-1),
     }
 }
@@ -128,7 +128,7 @@ mod tests {
         params.insert("dir".to_string(), "sub".to_string());
         let request = ExecutionRequest::new("a", &cfg, &params);
 
-        let spec = execution_spec(&request);
+        let spec = execution_spec(&request).unwrap();
 
         assert_eq!(spec.command, "echo world");
         assert_eq!(spec.cwd.as_deref(), Some("/tmp/sub"));
@@ -140,7 +140,7 @@ mod tests {
         let cfg = action("ls", 10, None);
         let params = no_params();
         let request = ExecutionRequest::new("a", &cfg, &params);
-        let spec = execution_spec(&request);
+        let spec = execution_spec(&request).unwrap();
         assert!(spec.cwd.is_none());
     }
 

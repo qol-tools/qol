@@ -3,6 +3,7 @@ use std::{
     io,
     os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use zeroize::Zeroizing;
@@ -55,10 +56,7 @@ impl Store {
         same_inode(&metadata, &fs::metadata(&anchored).map_err(io_error)?)?;
         let lock_path = anchored.join("writer.lock");
         let lock = open_regular(&lock_path, create)?;
-        lock.try_lock().map_err(|error| match error {
-            TryLockError::WouldBlock => AuthorityError::WriterBusy,
-            TryLockError::Error(_) => AuthorityError::Storage,
-        })?;
+        lock_writer(&lock)?;
         check_file(&lock_path, &lock)?;
         let snapshot = if create {
             None
@@ -141,6 +139,22 @@ impl Store {
     #[cfg(test)]
     pub fn fail_next(&mut self, fault: super::CommitFault) {
         self.fault = Some(fault);
+    }
+}
+
+const INHERITED_LOCK_GRACE: Duration = Duration::from_millis(250);
+
+fn lock_writer(lock: &File) -> Result<(), AuthorityError> {
+    let deadline = Instant::now() + INHERITED_LOCK_GRACE;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(TryLockError::WouldBlock) => return Err(AuthorityError::WriterBusy),
+            Err(TryLockError::Error(_)) => return Err(AuthorityError::Storage),
+        }
     }
 }
 

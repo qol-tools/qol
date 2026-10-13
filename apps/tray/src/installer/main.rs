@@ -10,6 +10,7 @@ qol_conventions::declare_build_identity!(Installer);
 
 trait InstallerOperations: Clone + Send + Sync + 'static {
     fn apply(&self, args: Vec<String>) -> Result<()>;
+    fn uninstall(&self) -> Result<()>;
     fn inspect_platform_paths(&self) -> Result<DoctorCheckResult>;
 }
 
@@ -19,6 +20,10 @@ struct ProductionOperations;
 impl InstallerOperations for ProductionOperations {
     fn apply(&self, args: Vec<String>) -> Result<()> {
         qol_tray::installer::run(args)
+    }
+
+    fn uninstall(&self) -> Result<()> {
+        qol_tray::installer::uninstall()
     }
 
     fn inspect_platform_paths(&self) -> Result<DoctorCheckResult> {
@@ -61,6 +66,7 @@ where
             install_usage(),
             operations.clone(),
         ))
+        .command(uninstall_command(operations.clone()))
         .fallback_command(
             Command::new("legacy")
                 .about("Compatibility adapter for the historical flag-only interface.")
@@ -104,6 +110,26 @@ where
         })
 }
 
+fn uninstall_command<O>(operations: O) -> Command
+where
+    O: InstallerOperations,
+{
+    Command::new("uninstall")
+        .about("Uninstall QoL Tray.")
+        .usage("qol-tray-install uninstall")
+        .detail("Stops QoL Tray and removes its binary, autostart entry and app registration.")
+        .detail("Settings and plugins are kept.")
+        .output("Progress is written to stdout; diagnostics are written to stderr.")
+        .exit_behavior("Exits non-zero when an uninstall step fails.")
+        .run_plain_text(move |context| {
+            if let Some(extra) = context.args().first() {
+                anyhow::bail!("uninstall takes no arguments, got {extra}");
+            }
+            operations.uninstall()?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
 fn normalize_legacy_argv(args: impl IntoIterator<Item = String>) -> Vec<String> {
     let args = args
         .into_iter()
@@ -119,7 +145,10 @@ fn normalize_legacy_argv(args: impl IntoIterator<Item = String>) -> Vec<String> 
         .iter()
         .find(|arg| arg.as_str() != "--json")
         .map(String::as_str);
-    let explicit_command = matches!(first_command, Some("install" | "doctor" | "help"));
+    let explicit_command = matches!(
+        first_command,
+        Some("install" | "uninstall" | "doctor" | "help")
+    );
     let legacy_tokens = args
         .iter()
         .filter(|arg| arg.as_str() != "--json")
@@ -147,13 +176,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use qol_headless::{DoctorReport, EXIT_SUCCESS, EXIT_USAGE};
+    use qol_headless::{DoctorReport, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE};
 
     use super::*;
 
     #[derive(Default)]
     struct OperationCalls {
         mutations: Mutex<Vec<Vec<String>>>,
+        uninstalls: AtomicUsize,
         doctor: AtomicUsize,
     }
 
@@ -165,6 +195,11 @@ mod tests {
     impl InstallerOperations for SentinelOperations {
         fn apply(&self, args: Vec<String>) -> Result<()> {
             self.calls.mutations.lock().unwrap().push(args);
+            Ok(())
+        }
+
+        fn uninstall(&self) -> Result<()> {
+            self.calls.uninstalls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -210,6 +245,27 @@ mod tests {
                 vec!["--dev".to_string()],
             ]
         );
+    }
+
+    #[test]
+    fn uninstall_reaches_only_its_operation_and_rejects_arguments() {
+        let cases: [(&[&str], u8, usize); 4] = [
+            (&["uninstall"], EXIT_SUCCESS, 1),
+            (&["uninstall", "--help"], EXIT_SUCCESS, 0),
+            (&["help", "uninstall"], EXIT_SUCCESS, 0),
+            (&["uninstall", "--dev"], EXIT_RUNTIME_ERROR, 0),
+        ];
+        for (args, exit_code, uninstalls) in cases {
+            let (app, calls) = sentinel();
+            let execution = execute(&app, args);
+            assert_eq!(execution.exit_code, exit_code, "{args:?}");
+            assert_eq!(
+                calls.uninstalls.load(Ordering::SeqCst),
+                uninstalls,
+                "{args:?}"
+            );
+            assert!(calls.mutations.lock().unwrap().is_empty(), "{args:?}");
+        }
     }
 
     #[test]

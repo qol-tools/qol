@@ -30,8 +30,4 @@ impl AppIconPlatform for Platform {
     fn parent_pid(&self, _pid: i32) -> Option<i32> {
         None
     }
-
-    fn process_start_time_us(&self, _pid: i32) -> Option<u64> {
-        None
-    }
 }

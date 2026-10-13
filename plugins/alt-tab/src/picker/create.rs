@@ -249,7 +249,13 @@ pub(crate) fn pre_create_ghost(
     qol_gpui::ghost::hide_invisible(&title);
     super::platform::configure_picker_window(&title);
     let _ = handle.update(cx, |_view, window, _cx| {
-        super::platform::sync_picker_window_layout(&title, window, bounds.origin, bounds.size)
+        super::platform::sync_picker_window_layout(
+            &title,
+            window,
+            bounds.origin,
+            bounds.size,
+            placement.scale(),
+        )
     });
     super::platform::disable_window_shadow(&title);
     let keys = current.borrow().keys();

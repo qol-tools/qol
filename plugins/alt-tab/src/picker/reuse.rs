@@ -21,6 +21,7 @@ pub(crate) struct ReuseRequest<'a> {
     pub all_titles: &'a [String],
     pub reverse: bool,
     pub monitor_size: Option<(f32, f32)>,
+    pub scale: Option<f32>,
     pub show_id: u64,
     pub rendering: RenderingFlow,
 }
@@ -60,6 +61,7 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
                 window,
                 req.layout.bounds.origin,
                 req.layout.size,
+                req.scale,
             ) {
                 PICKER_VISIBLE.store(was_visible, Ordering::Relaxed);
                 qol_runtime::probe!("REUSE_ABORT", "show_id={} phase=layout_sync", req.show_id);

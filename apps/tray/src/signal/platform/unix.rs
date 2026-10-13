@@ -18,6 +18,7 @@ impl Drop for SignalListener {
 
 pub(super) fn install_signal_handler(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    _session_end: fn(std::time::Instant),
 ) -> std::io::Result<SignalListener> {
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
     let handle = signals.handle();

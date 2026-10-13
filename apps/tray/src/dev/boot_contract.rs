@@ -53,6 +53,7 @@ pub struct SetSelectedReport {
     pub wrote_autostart: bool,
 }
 
+use crate::installer::autostart::AutostartState;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -162,7 +163,7 @@ fn resolve_for_marker(
         !canonical.as_os_str().is_empty(),
         "canonical boot binary is empty"
     );
-    let autostart = env.read_autostart_target().ok().flatten();
+    let autostart = env.read_autostart_state().ok();
     let mut events = Vec::new();
 
     if !env.honors_dev_selection() {
@@ -215,13 +216,14 @@ fn read_marker(config_dir: &Path) -> Option<String> {
 }
 
 fn push_autostart_drift_if_any(
-    actual: &Option<PathBuf>,
+    actual: &Option<AutostartState>,
     expected: &Path,
     events: &mut Vec<DriftEvent>,
 ) {
     let actual_path = match actual {
-        Some(a) => a.clone(),
-        None => {
+        Some(AutostartState::DisabledByUser) => return,
+        Some(AutostartState::Enabled(path)) => path.clone(),
+        Some(AutostartState::Missing) | None => {
             events.push(DriftEvent::AutostartTargetDisagrees {
                 actual: PathBuf::new(),
                 expected: expected.to_path_buf(),
@@ -268,11 +270,15 @@ pub fn set_selected_worktree(
             .map_err(anyhow::Error::msg)?;
     }
 
-    let current = env.read_autostart_target().ok().flatten();
+    let current = env.read_autostart_state().ok();
     let mut wrote_autostart = false;
     let desired = target.binary();
-    let current_matches = current.as_deref().is_some_and(|c| paths_equal(c, desired));
-    if !current_matches {
+    let keep_current = match &current {
+        Some(AutostartState::DisabledByUser) => true,
+        Some(AutostartState::Enabled(path)) => paths_equal(path, desired),
+        Some(AutostartState::Missing) | None => false,
+    };
+    if !keep_current {
         env.write_autostart_target(desired)?;
         wrote_autostart = true;
     }
@@ -686,7 +692,7 @@ mod set_tests {
         assert!(!r.cleared_selection);
         assert!(r.wrote_autostart);
         assert_eq!(
-            env.read_autostart_target().unwrap(),
+            env.read_autostart_state().unwrap().into_target(),
             Some(PathBuf::from("/main"))
         );
     }
@@ -760,7 +766,7 @@ mod set_tests {
         assert!(r.wrote_autostart, "stale autostart must be rewritten");
         assert!(!r.cleared_selection, "repair must never clear the marker");
         assert_eq!(
-            env.read_autostart_target().unwrap(),
+            env.read_autostart_state().unwrap().into_target(),
             Some(PathBuf::from(&binary_path)),
             "autostart must follow the selected worktree binary"
         );
@@ -789,7 +795,7 @@ mod set_tests {
         .unwrap();
         assert!(r.wrote_autostart);
         assert_eq!(
-            env.read_autostart_target().unwrap(),
+            env.read_autostart_state().unwrap().into_target(),
             Some(PathBuf::from("/main")),
             "cleared selection must point autostart back to canonical"
         );
@@ -813,6 +819,33 @@ mod set_tests {
         .unwrap();
         assert!(!r.wrote_autostart, "aligned state must not be rewritten");
         assert!(!r.cleared_selection);
+    }
+
+    #[test]
+    fn selection_changes_leave_an_autostart_the_user_turned_off() {
+        let tmp = TempDir::new().unwrap();
+        let wt = "/wt";
+        let binary_path = binary_in_worktree(wt);
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_autostart(PathBuf::from("/main"))
+            .with_autostart_disabled_by_user();
+        let lister = InMemoryWorktreeLister {
+            map: [("feat-x".to_string(), PathBuf::from(wt))]
+                .into_iter()
+                .collect(),
+        };
+        let probe = InMemoryBinaryProbe {
+            existing: [PathBuf::from(&binary_path)].into_iter().collect(),
+        };
+
+        let selected =
+            set_selected_worktree(&env, tmp.path(), Some("feat-x"), &lister, &probe).unwrap();
+        let repaired = repair_autostart_for_selection(&env, tmp.path(), &lister, &probe).unwrap();
+
+        assert!(!selected.wrote_autostart);
+        assert!(!repaired.wrote_autostart);
+        assert_eq!(read_marker(tmp.path()).as_deref(), Some("feat-x"));
+        assert_eq!(*env.autostart.lock().unwrap(), Some(PathBuf::from("/main")));
     }
 
     #[test]
@@ -878,7 +911,7 @@ mod property_tests {
             let report = heal_drift_on_startup(&env, tmp.path(), &lister, &probe);
 
             if report.failures.is_empty() {
-                if let Some(after) = env.read_autostart_target().unwrap() {
+                if let Some(after) = env.read_autostart_state().unwrap().into_target() {
                     prop_assert!(probe.exists(&after) || after == canonical_pb,
                         "post-heal autostart {} not runnable", after.display());
                 }
@@ -930,8 +963,10 @@ mod heal_tests {
             anyhow::bail!("running build identity is unavailable")
         }
 
-        fn read_autostart_target(&self) -> anyhow::Result<Option<PathBuf>> {
-            Ok(self.autostart.lock().unwrap().clone())
+        fn read_autostart_state(&self) -> anyhow::Result<AutostartState> {
+            Ok(AutostartState::from_target(
+                self.autostart.lock().unwrap().clone(),
+            ))
         }
 
         fn write_autostart_target(&self, _binary: &Path) -> anyhow::Result<()> {
@@ -977,7 +1012,10 @@ mod heal_tests {
             [HealFailure::ResolveBootTargetFailed { error }]
                 if error == "running build identity is unavailable"
         ));
-        assert_eq!(env.read_autostart_target().unwrap(), Some(installed));
+        assert_eq!(
+            env.read_autostart_state().unwrap().into_target(),
+            Some(installed)
+        );
         assert_eq!(
             read_marker(tmp.path()).as_deref(),
             Some("plugin-only-branch")
@@ -1001,8 +1039,24 @@ mod heal_tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(env.read_autostart_target().unwrap(), Some(installed));
+        assert_eq!(
+            env.read_autostart_state().unwrap().into_target(),
+            Some(installed)
+        );
         assert!(read_marker(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn heal_sees_no_drift_in_an_autostart_the_user_turned_off() {
+        let tmp = TempDir::new().unwrap();
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_autostart_disabled_by_user();
+
+        let report = heal_drift_on_startup(&env, tmp.path(), &empty_lister(), &empty_probe());
+
+        assert!(report.events.is_empty(), "{:?}", report.events);
+        assert!(report.actions.is_empty(), "{:?}", report.actions);
+        assert_eq!(*env.autostart.lock().unwrap(), None);
     }
 
     #[test]

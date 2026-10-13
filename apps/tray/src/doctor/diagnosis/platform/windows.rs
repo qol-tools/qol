@@ -1,7 +1,7 @@
 use super::super::{AppKeyWriter, SymbolicHotkeyWriter};
-use crate::doctor::framework::CheckReport;
 use anyhow::{anyhow, Context, Result};
-use std::process::Command;
+
+pub(crate) use super::do_not_disturb::native_notifications_diagnosis;
 
 pub(crate) struct Platform;
 
@@ -20,8 +20,9 @@ impl AppKeyWriter for Platform {
         }
         let key_path =
             format!(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey\{app_key}");
-        let output = Command::new("reg")
-            .args(["delete", &key_path, "/v", "ShortcutKeys", "/f"])
+        let mut command = qol_process::system_command("reg.exe");
+        command.args(["delete", &key_path, "/v", "ShortcutKeys", "/f"]);
+        let output = qol_process::hide_console_window(&mut command)
             .output()
             .with_context(|| format!("failed to invoke reg delete for AppKey {app_key}"))?;
         if !output.status.success() {
@@ -41,8 +42,4 @@ fn is_safe_app_key(app_key: &str) -> bool {
         && app_key
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
-}
-
-pub(crate) fn native_notifications_diagnosis() -> CheckReport {
-    CheckReport::ok("native notifications are not supported on this platform")
 }

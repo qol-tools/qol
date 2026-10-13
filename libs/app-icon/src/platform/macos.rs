@@ -30,10 +30,6 @@ impl AppIconPlatform for Platform {
     fn parent_pid(&self, pid: i32) -> Option<i32> {
         parent_pid(pid)
     }
-
-    fn process_start_time_us(&self, pid: i32) -> Option<u64> {
-        process_start_time_us(pid)
-    }
 }
 
 type CGImageRef = *const c_void;
@@ -135,15 +131,6 @@ fn parent_pid(pid: i32) -> Option<i32> {
         return None;
     }
     Some(read_proc_bsd_info(pid)?.pbi_ppid as i32)
-}
-
-fn process_start_time_us(pid: i32) -> Option<u64> {
-    let info = read_proc_bsd_info(pid)?;
-    Some(
-        info.pbi_start_tvsec
-            .saturating_mul(1_000_000)
-            .saturating_add(info.pbi_start_tvusec),
-    )
 }
 
 fn is_regular_app(pid: i32) -> bool {

@@ -2,7 +2,6 @@ use std::process::Command;
 
 pub(super) trait DaemonLifecyclePlatform {
     fn reaped_elsewhere(error: &std::io::Error) -> bool;
-    fn track_desktop_state_pid(pid: u32);
     fn configure_process_group(command: &mut Command);
 }
 
@@ -30,10 +29,6 @@ use windows::Platform;
 
 pub(super) fn reaped_elsewhere(error: &std::io::Error) -> bool {
     Platform::reaped_elsewhere(error)
-}
-
-pub(super) fn track_desktop_state_pid(pid: u32) {
-    Platform::track_desktop_state_pid(pid);
 }
 
 pub(super) fn configure_process_group(command: &mut Command) {

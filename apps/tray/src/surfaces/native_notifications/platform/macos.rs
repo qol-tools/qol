@@ -18,6 +18,17 @@ pub(crate) fn show_first_run() {
         .status();
 }
 
+pub(crate) fn show_startup_failed(title: &str, body: &str) {
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        escape_applescript(body),
+        escape_applescript(title)
+    );
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .status();
+}
+
 pub(crate) fn show_plugin_notification(
     title: &str,
     body: &str,

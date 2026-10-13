@@ -372,9 +372,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(commands[0].get_current_dir(), Some(root));
+        let target_dir = root.join("target").join("qol-dev-bundle");
+        let target_dir = target_dir.to_string_lossy();
         assert!(core_args
             .windows(2)
-            .any(|pair| pair == ["--target-dir", "/worktrees/qol/target/qol-dev-bundle"]));
+            .any(|pair| pair[0] == "--target-dir" && pair[1] == target_dir));
         assert!(core_args
             .windows(4)
             .any(|pair| pair == ["-p", "qol-tray", "--bin", "qol-tray"]));

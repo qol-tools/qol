@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use gpui::*;
 
-use crate::monitor::MonitorTracker;
+use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind, WindowMemory};
 
 const SETTINGS_WINDOW_KEY: &str = "settings";
@@ -406,7 +406,8 @@ impl SettingsWindowHost {
             return Ok(SettingsActivation::Focused);
         }
 
-        let prepared = size_prepared_panel(prepared, tracker)?;
+        let monitor = panel_monitor(self.active.as_ref(), tracker, cx);
+        let prepared = size_prepared_panel(prepared, monitor)?;
         if (force_replace || decision == ActivationDecision::Replace || !can_focus)
             && self.active_is_open(cx)
         {
@@ -463,7 +464,8 @@ impl SettingsWindowHost {
         if !self.active_is_open(cx) {
             return Ok(false);
         }
-        let prepared = size_prepared_panel(prepared, tracker)?;
+        let monitor = panel_monitor(self.active.as_ref(), tracker, cx);
+        let prepared = size_prepared_panel(prepared, monitor)?;
         let notify = self.notifier();
         let Some(active) = self.active.as_mut() else {
             return Ok(false);
@@ -716,7 +718,7 @@ pub async fn open_from_async(
 ) -> anyhow::Result<()> {
     let prepared = prepare_from_async(panel, runtime, cx).await?;
     cx.update(move |cx| {
-        let prepared = size_prepared_panel(prepared, &tracker)?;
+        let prepared = size_prepared_panel(prepared, panel_monitor(None, &tracker, cx))?;
         open_prepared(prepared, Vec::new(), Rc::new(|_, _, _| {}), &tracker, cx).map(|_| ())
     })?
 }
@@ -912,14 +914,31 @@ fn prepare_source(
     })
 }
 
+fn settings_surface() -> Surface {
+    Surface::new(SurfaceKind::Panel)
+        .app_id(qol_conventions::SETTINGS_SURFACE_APP_ID)
+        .retain_on_dismiss()
+        .remember(WindowMemory::reopened_by_settings(SETTINGS_WINDOW_KEY))
+}
+
+fn panel_monitor(
+    active: Option<&ActivePanel>,
+    tracker: &MonitorTracker,
+    cx: &mut App,
+) -> Option<ActiveMonitor> {
+    active
+        .and_then(|active| active.surface.remembered_monitor(cx))
+        .or_else(|| settings_surface().remembered_monitor(cx))
+        .or_else(|| tracker.snapshot_monitor())
+}
+
 fn size_prepared_panel(
     prepared: PreparedSettingsPanel,
-    tracker: &MonitorTracker,
+    monitor: Option<ActiveMonitor>,
 ) -> anyhow::Result<PreparedPanel> {
-    let monitor = tracker
-        .snapshot_monitor()
+    let monitor = monitor
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
-    let available = (monitor.bounds().size.height.to_f64() as f32
+    let available = (monitor.logical_work_area().size.height.to_f64() as f32
         - 2.0 * crate::placement::CORNER_MARGIN)
         .min(PANEL_MAX_HEIGHT);
     let has_custom_source = prepared.panel.sources.iter().any(|source| source.custom);
@@ -958,12 +977,9 @@ fn open_prepared(
 ) -> anyhow::Result<ActivePanel> {
     let plugin_id = prepared.panel.primary_plugin_id().to_string();
     let title = prepared.panel.heading.clone();
-    let opened = Surface::new(SurfaceKind::Panel)
+    let opened = settings_surface()
         .title(title)
-        .app_id(qol_conventions::SETTINGS_SURFACE_APP_ID)
         .size(prepared.size)
-        .retain_on_dismiss()
-        .remember(WindowMemory::reopened_by_settings(SETTINGS_WINDOW_KEY))
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
             SettingsPanelView::new(
                 prepared.panel,

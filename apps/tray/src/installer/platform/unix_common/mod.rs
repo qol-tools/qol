@@ -15,7 +15,13 @@ pub(super) fn is_running(process_name: &str) -> bool {
 }
 
 pub(super) fn start_now(binary_path: &Path) -> Result<()> {
-    super::spawn_detached(binary_path)
+    Command::new(binary_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("Failed to start {}", binary_path.display()))?;
+    Ok(())
 }
 
 fn pkill_signal(signal: &str, process_name: &str) {

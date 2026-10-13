@@ -1,7 +1,7 @@
 use std::process::Command;
 
 use super::{OWN_DAEMON_LABEL, PQRS_DAEMON_LABEL};
-use crate::platform::{DriverState, ExtensionState, Probe};
+use crate::platform::macos::doctor::{DriverState, ExtensionState, Probe};
 
 const PACKAGE_ID: &str = "org.pqrs.Karabiner-DriverKit-VirtualHIDDevice";
 

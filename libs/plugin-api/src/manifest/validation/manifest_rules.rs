@@ -18,8 +18,8 @@ impl PluginManifest {
             executable_action_ids,
             !self.actions.is_empty(),
         )?;
-        super::runtime_rules::validate_doctor_runtime(
-            self.capabilities.doctor,
+        super::runtime_rules::validate_capability_runtime(
+            &self.capabilities,
             self.runtime.as_ref(),
         )?;
         super::shortcut_rules::validate_shortcuts(&self.shortcuts, executable_action_ids)?;

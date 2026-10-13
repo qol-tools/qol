@@ -1,34 +1,17 @@
 use std::{
     fs,
-    os::unix::fs::{symlink, MetadataExt, PermissionsExt},
+    io::Read,
+    os::{
+        fd::AsRawFd,
+        unix::{
+            fs::{symlink, MetadataExt, PermissionsExt},
+            process::CommandExt,
+        },
+    },
+    time::Duration,
 };
 
 use super::{now, persistent, revision, AuthorityError, PeerAuthority};
-
-#[test]
-fn creation_requires_a_new_root_and_open_never_creates_one() {
-    let temporary = tempfile::tempdir().unwrap();
-    let missing = temporary.path().join("missing");
-    assert!(matches!(
-        PeerAuthority::open_persistent(&missing, now()),
-        Err(AuthorityError::MissingStore)
-    ));
-    assert!(!missing.exists());
-    assert!(matches!(
-        PeerAuthority::create_persistent(temporary.path(), "local".into(), now()),
-        Err(AuthorityError::AlreadyExists)
-    ));
-    assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
-    let root = temporary.path().join("authority");
-    let authority = PeerAuthority::create_persistent(&root, "local".into(), now()).unwrap();
-    drop(authority);
-    let bytes = fs::read(root.join("state.json")).unwrap();
-    assert!(matches!(
-        PeerAuthority::create_persistent(&root, "replacement".into(), now()),
-        Err(AuthorityError::AlreadyExists)
-    ));
-    assert_eq!(fs::read(root.join("state.json")).unwrap(), bytes);
-}
 
 #[test]
 fn private_modes_and_fixed_lock_inode_survive_mutations() {
@@ -49,6 +32,31 @@ fn private_modes_and_fixed_lock_inode_survive_mutations() {
     assert!(root.join("writer.lock").is_file());
     let reopened = PeerAuthority::open_persistent(&root, now()).unwrap();
     assert_eq!(reopened.projection().unwrap().name, "second");
+}
+
+#[test]
+fn reopen_outlasts_the_lock_copy_a_spawning_child_holds_until_exec() {
+    let (_temporary, root, authority) = persistent();
+    let (mut forked, signal) = std::io::pipe().unwrap();
+    let spawner = std::thread::spawn(move || {
+        let fd = signal.as_raw_fd();
+        let mut command = std::process::Command::new("true");
+        unsafe {
+            command.pre_exec(move || {
+                libc::write(fd, [1u8].as_ptr().cast(), 1);
+                std::thread::sleep(Duration::from_millis(50));
+                Ok(())
+            });
+        }
+        let status = command.status().unwrap();
+        drop(signal);
+        status
+    });
+    forked.read_exact(&mut [0]).unwrap();
+    drop(authority);
+    let reopened = PeerAuthority::open_persistent(&root, now()).err();
+    assert!(spawner.join().unwrap().success());
+    assert_eq!(reopened, None);
 }
 
 #[test]

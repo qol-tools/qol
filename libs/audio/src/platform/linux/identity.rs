@@ -48,7 +48,7 @@ pub(crate) fn resolve_audio_device(
     requested: &str,
 ) -> Result<Resolution, AudioError> {
     let devices = list_audio_devices(direction)?;
-    Ok(resolve_in(&devices, requested))
+    Ok(Resolution::among(&devices, requested))
 }
 
 pub(super) fn listed(direction: Direction, device: &Device) -> bool {
@@ -73,7 +73,7 @@ fn audio_device(device: &Device, direction: Direction) -> AudioDevice {
     AudioDevice {
         value: identity.as_str().to_owned(),
         label: device.description.clone(),
-        picture: device_picture(direction, kind).to_owned(),
+        picture: kind.picture(direction).to_owned(),
         kind,
         identity,
     }
@@ -147,44 +147,6 @@ fn is_hdmi(device: &Device) -> bool {
 
 fn mentions_hdmi(value: &str) -> bool {
     value.to_ascii_lowercase().contains("hdmi")
-}
-
-fn device_picture(direction: Direction, kind: Kind) -> &'static str {
-    match (direction, kind) {
-        (Direction::Input, Kind::Bluetooth) => "headset",
-        (Direction::Input, Kind::Usb) => "usb-mic",
-        (Direction::Input, _) => "mic-default",
-        (Direction::Output, Kind::Bluetooth | Kind::Usb) => "headphones",
-        (Direction::Output, Kind::Hdmi) => "hdmi",
-        (Direction::Output, _) => "speaker-default",
-    }
-}
-
-fn resolve_in(devices: &[AudioDevice], requested: &str) -> Resolution {
-    let exact = devices
-        .iter()
-        .filter(|device| device.identity.as_str() == requested)
-        .cloned()
-        .collect::<Vec<_>>();
-    if !exact.is_empty() {
-        return narrow(exact);
-    }
-    let labelled = devices
-        .iter()
-        .filter(|device| device.label.eq_ignore_ascii_case(requested))
-        .cloned()
-        .collect::<Vec<_>>();
-    narrow(labelled)
-}
-
-fn narrow(mut matches: Vec<AudioDevice>) -> Resolution {
-    if matches.len() > 1 {
-        return Resolution::Ambiguous(matches);
-    }
-    match matches.pop() {
-        Some(device) => Resolution::Resolved(device),
-        None => Resolution::NotFound,
-    }
 }
 
 #[cfg(test)]
@@ -462,7 +424,7 @@ mod tests {
 
         let requested = devices[1].identity.as_str();
         assert_eq!(
-            resolve_in(&devices, requested),
+            Resolution::among(&devices, requested),
             Resolution::Resolved(devices[1].clone())
         );
     }
@@ -489,7 +451,7 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_in(&devices, "usb headset"),
+            Resolution::among(&devices, "usb headset"),
             Resolution::Resolved(devices[1].clone())
         );
     }
@@ -524,7 +486,7 @@ mod tests {
             ),
         ];
 
-        match resolve_in(&devices, "usb audio device") {
+        match Resolution::among(&devices, "usb audio device") {
             Resolution::Ambiguous(candidates) => {
                 assert_eq!(candidates.len(), 2);
                 assert_eq!(candidates[0], devices[0]);
@@ -545,6 +507,9 @@ mod tests {
             Some("analog-output"),
         )];
 
-        assert_eq!(resolve_in(&devices, "missing output"), Resolution::NotFound);
+        assert_eq!(
+            Resolution::among(&devices, "missing output"),
+            Resolution::NotFound
+        );
     }
 }

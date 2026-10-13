@@ -7,6 +7,8 @@ pub enum PackageManager {
     Homebrew,
     Apt,
     Flatpak,
+    Windows,
+    MicrosoftStore,
 }
 
 impl PackageManager {
@@ -15,6 +17,8 @@ impl PackageManager {
             PackageManager::Homebrew => "Homebrew",
             PackageManager::Apt => "APT",
             PackageManager::Flatpak => "Flatpak",
+            PackageManager::Windows => "Windows",
+            PackageManager::MicrosoftStore => "Microsoft Store",
         }
     }
 }
@@ -35,13 +39,11 @@ pub struct ManagedPackage {
 
 impl ManagedPackage {
     pub fn parse(manager: PackageManager, id: &str, scope: PackageScope) -> Option<ManagedPackage> {
-        let valid = !id.is_empty()
-            && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
-            && id.chars().all(|c| {
-                c.is_ascii_alphanumeric()
-                    || matches!(c, '+' | '.' | '_' | '-')
-                    || (c == ':' && manager == PackageManager::Apt)
-            });
+        let valid = match manager {
+            PackageManager::Windows => valid_registry_key(id),
+            PackageManager::MicrosoftStore => valid_store_package(id),
+            _ => valid_package_id(manager, id),
+        };
         valid.then(|| ManagedPackage {
             manager,
             id: id.to_string(),
@@ -60,6 +62,31 @@ impl ManagedPackage {
     pub fn scope(&self) -> PackageScope {
         self.scope
     }
+}
+
+fn valid_package_id(manager: PackageManager, id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '+' | '.' | '_' | '-')
+                || (c == ':' && manager == PackageManager::Apt)
+        })
+}
+
+fn valid_store_package(id: &str) -> bool {
+    id.len() <= 255
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '~'))
+}
+
+fn valid_registry_key(id: &str) -> bool {
+    !id.trim().is_empty()
+        && id.len() <= 255
+        && !id.contains('\\')
+        && !id.chars().any(char::is_control)
 }
 
 #[derive(Debug, Clone)]
@@ -114,42 +141,9 @@ pub struct Guards {
     pub package: PackageStatus,
 }
 
-pub(crate) fn sanitize_stderr(raw: &[u8], cap: usize) -> String {
-    let text = String::from_utf8_lossy(raw);
-    let mut out = String::new();
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            for n in chars.by_ref() {
-                if n.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-            continue;
-        }
-        if c == '\n' || c == '\t' || !c.is_control() {
-            out.push(c);
-        }
-    }
-    let end = (0..=cap.min(out.len()))
-        .rev()
-        .find(|&i| out.is_char_boundary(i))
-        .unwrap_or(0);
-    out.truncate(end);
-    out.trim().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sanitize_stderr_strips_control_and_caps() {
-        let raw = b"\x1b[31merror\x1b[0m\x07 happened";
-        let out = sanitize_stderr(raw, 64);
-        assert_eq!(out, "error happened");
-        assert_eq!(sanitize_stderr(b"abcdef", 3), "abc");
-    }
 
     #[test]
     fn managed_package_rejects_option_shaped_and_shell_shaped_ids() {
@@ -177,6 +171,50 @@ mod tests {
             assert!(
                 ManagedPackage::parse(PackageManager::Apt, invalid, PackageScope::System).is_none(),
                 "invalid id accepted: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_package_ids_are_single_registry_key_names() {
+        let cases = [
+            ("{23170F69-40C1-2702-2301-000001000000}", true),
+            ("Mozilla Firefox 128.0 (x64 en-US)", true),
+            ("Steam App 570", true),
+            ("", false),
+            ("   ", false),
+            ("Uninstall\\Other", false),
+            ("bad\nname", false),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(
+                ManagedPackage::parse(PackageManager::Windows, id, PackageScope::System).is_some(),
+                expected,
+                "{id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn store_package_ids_are_package_full_names() {
+        let cases = [
+            (
+                "Microsoft.WindowsCalculator_11.2405.2.0_x64__8wekyb3d8bbwe",
+                true,
+            ),
+            ("Contoso.App_1.0.0.0_neutral_~_abcdefghijklm", true),
+            ("", false),
+            ("-Microsoft.App", false),
+            ("Microsoft App_1.0", false),
+            ("Microsoft.App;calc", false),
+            ("Microsoft\\App", false),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(
+                ManagedPackage::parse(PackageManager::MicrosoftStore, id, PackageScope::User)
+                    .is_some(),
+                expected,
+                "{id:?}"
             );
         }
     }

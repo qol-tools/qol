@@ -8,7 +8,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 mod port_description;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod port_detection;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
@@ -18,23 +18,23 @@ mod windows;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(crate) use fallback::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
-    enumerate_serial_metadata, inspect_serial_access,
+    enumerate_serial_metadata, inspect_serial_access, serial_port_present,
 };
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
-    enumerate_serial_metadata, inspect_serial_access,
+    enumerate_serial_metadata, inspect_serial_access, serial_port_present,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
-    enumerate_serial_metadata, inspect_serial_access,
+    enumerate_serial_metadata, inspect_serial_access, serial_port_present,
 };
 pub(crate) use port_description::describe_port;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{
     candidate_coordinator_ports, detect_coordinator_port, doctor_platform_metadata,
-    enumerate_serial_metadata, inspect_serial_access,
+    enumerate_serial_metadata, inspect_serial_access, serial_port_present,
 };
 
 use crate::config::store::PLUGIN_ID;

@@ -11,7 +11,8 @@ use qol_gpui::theme::TextStyle;
 use qol_gpui::Key;
 
 use crate::core::{
-    self, Disposal, Guards, InstalledApp, PackageIndex, PackageStatus, RemovalOutcome, RemovalPlan,
+    self, Disposal, Guards, InstalledApp, ManagedPackage, PackageIndex, PackageStatus,
+    RemovalOutcome, RemovalPlan,
 };
 use qol_gpui::scroll_list::{wheel_rows, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
@@ -74,6 +75,7 @@ fn hint_buttons(
 enum Mode {
     Picking,
     Confirming,
+    Working { label: &'static str, closable: bool },
     Done,
 }
 
@@ -248,7 +250,7 @@ impl RemoveAppView {
         }
     }
 
-    fn try_package(&mut self) {
+    fn try_package(&mut self, cx: &mut Context<Self>) {
         let Some(plan) = self.plan.clone() else {
             return;
         };
@@ -265,25 +267,38 @@ impl RemoveAppView {
             }
             return;
         }
-        match core::uninstall_package(&plan, &package) {
-            Ok(()) => {
-                let status = PackageStatus::Managed(package);
-                self.finish_result(core::remove_after_package(
-                    &plan,
-                    Disposal::Trash,
-                    &status,
-                    true,
-                ));
-            }
-            Err(error) => {
-                self.error = Some(error.to_string());
-                self.outcome = None;
-                self.mode = Mode::Done;
-            }
-        }
+        self.finish_in_background(
+            Mode::Working {
+                label: "Waiting for the uninstaller",
+                closable: true,
+            },
+            move || uninstall_then_remove(&plan, package),
+            cx,
+        );
     }
 
-    fn execute(&mut self, disposal: Disposal, waive_running: bool) {
+    fn finish_in_background(
+        &mut self,
+        mode: Mode,
+        work: impl FnOnce() -> anyhow::Result<RemovalOutcome> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.mode = mode;
+        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let result = async_cx.background_spawn(async move { work() }).await;
+                this.update(&mut async_cx, |view, cx| {
+                    view.finish_result(result);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn execute(&mut self, disposal: Disposal, waive_running: bool, cx: &mut Context<Self>) {
         let Some(plan) = self.plan.clone() else {
             return;
         };
@@ -298,7 +313,14 @@ impl RemoveAppView {
             .as_ref()
             .map(|g| g.package.clone())
             .unwrap_or(PackageStatus::NotManaged);
-        self.finish_result(core::remove(&plan, disposal, &package));
+        self.finish_in_background(
+            Mode::Working {
+                label: "Removing",
+                closable: false,
+            },
+            move || core::remove(&plan, disposal, &package),
+            cx,
+        );
     }
 
     fn finish_result(&mut self, result: anyhow::Result<RemovalOutcome>) {
@@ -400,6 +422,11 @@ impl RemoveAppView {
                     self.run(command, cx);
                 }
             }
+            Mode::Working { closable, .. } => {
+                if let Some(command) = working_command(key, closable) {
+                    self.run(command, cx);
+                }
+            }
             Mode::Done => {
                 if let Some(command) = done_action(key) {
                     self.run(command, cx);
@@ -418,10 +445,10 @@ impl RemoveAppView {
                 self.error = None;
             }
             Command::QuitApp => self.try_quit(),
-            Command::TrashAnyway => self.execute(Disposal::Trash, true),
+            Command::TrashAnyway => self.execute(Disposal::Trash, true, cx),
             Command::Primary => match primary_action(self.guards.as_ref()) {
-                PrimaryAction::Package => self.try_package(),
-                PrimaryAction::Remove => self.execute(self.disposal, false),
+                PrimaryAction::Package => self.try_package(cx),
+                PrimaryAction::Remove => self.execute(self.disposal, false, cx),
                 PrimaryAction::Blocked => {}
             },
             Command::ToggleDisposal => {
@@ -439,6 +466,7 @@ impl RemoveAppView {
         match self.mode {
             Mode::Picking => self.render_picking(window, cx),
             Mode::Confirming => self.render_confirming(cx),
+            Mode::Working { label, closable } => self.render_working(label, closable, cx),
             Mode::Done => self.render_done(cx),
         }
     }
@@ -677,6 +705,10 @@ impl RemoveAppView {
                         crate::core::PackageManager::Homebrew => "uninstall with Homebrew",
                         crate::core::PackageManager::Apt => "uninstall with APT",
                         crate::core::PackageManager::Flatpak => "uninstall with Flatpak",
+                        crate::core::PackageManager::Windows => "uninstall with Windows",
+                        crate::core::PackageManager::MicrosoftStore => {
+                            "uninstall with Microsoft Store"
+                        }
                     };
                     hints.push((Key::ENTER, label, Command::Primary));
                 }
@@ -743,6 +775,41 @@ impl RemoveAppView {
                     ),
             )
             .child(footer(&hints, None, cx))
+            .into_any_element()
+    }
+
+    fn render_working(
+        &self,
+        label: &'static str,
+        closable: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let kit = qol_gpui::kit::kit();
+        let Some(plan) = &self.plan else {
+            return div().into_any_element();
+        };
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(section_header(&plan.app.name))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .panel_drag_area()
+                    .child(qol_gpui::Busy::new(
+                        "qol-removeapp-working-busy",
+                        label,
+                        rgb(kit.grounds.pane.faint),
+                    )),
+            )
+            .when(closable, |body| {
+                body.child(footer(&[(Key::ESC, "close", Command::Quit)], None, cx))
+            })
             .into_any_element()
     }
 
@@ -864,6 +931,19 @@ impl Render for RemoveAppView {
     }
 }
 
+fn uninstall_then_remove(
+    plan: &RemovalPlan,
+    package: ManagedPackage,
+) -> anyhow::Result<RemovalOutcome> {
+    core::uninstall_package(plan, &package)?;
+    core::remove_after_package(
+        plan,
+        Disposal::Trash,
+        &PackageStatus::Managed(package),
+        true,
+    )
+}
+
 fn is_typed_char(key: &str) -> bool {
     key.chars().count() == 1
         && key
@@ -893,6 +973,10 @@ fn confirm_command(key: &str) -> Option<Command> {
         "d" | "tab" => Some(Command::ToggleDisposal),
         _ => None,
     }
+}
+
+fn working_command(key: &str, closable: bool) -> Option<Command> {
+    (closable && key == "escape").then_some(Command::Quit)
 }
 
 fn done_action(key: &str) -> Option<Command> {
@@ -1024,8 +1108,8 @@ fn banner_busy(color: u32) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        confirm_command, done_action, primary_action, Command, PrimaryAction, FAILBAR_H,
-        MAX_VISIBLE, ROW_H, SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
+        confirm_command, done_action, primary_action, working_command, Command, PrimaryAction,
+        FAILBAR_H, MAX_VISIBLE, ROW_H, SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
     };
     use crate::core::{Guards, ManagedPackage, PackageManager, PackageScope, PackageStatus};
 
@@ -1118,6 +1202,26 @@ mod tests {
 
         for (key, expected) in cases {
             assert_eq!(done_action(key), expected);
+        }
+    }
+
+    #[test]
+    fn only_escape_closes_an_uninstall_wait_and_nothing_stops_a_removal() {
+        let cases = [
+            ("escape", true, Some(Command::Quit)),
+            ("escape", false, None),
+            ("enter", true, None),
+            ("q", true, None),
+            ("t", true, None),
+            ("d", true, None),
+            ("backspace", true, None),
+        ];
+        for (key, closable, expected) in cases {
+            assert_eq!(
+                working_command(key, closable),
+                expected,
+                "key: {key} closable: {closable}"
+            );
         }
     }
 }

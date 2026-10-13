@@ -20,7 +20,6 @@ impl RunState {
     }
 
     pub fn reset(&self) {
-        Platform.reset_external_stop();
         self.running.store(true, Ordering::SeqCst);
         self.reload_requested.store(false, Ordering::SeqCst);
     }

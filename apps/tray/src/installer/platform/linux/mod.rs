@@ -40,10 +40,6 @@ impl InstallerOps for Platform {
         super::unix_common::set_executable_permissions(path)
     }
 
-    fn prepare_atomic_replace(&self, _installed_binary: &Path) -> Result<()> {
-        Ok(())
-    }
-
     fn should_bootstrap_current_install(&self, _binary_path: &Path) -> Result<bool> {
         Ok(false)
     }
@@ -59,7 +55,8 @@ impl InstallerOps for Platform {
         let Ok(current_exe) = std::env::current_exe() else {
             return Ok(());
         };
-        let installed = crate::installer::has_install_marker(&current_exe) && is_production_mode();
+        let installed = crate::installer::has_install_marker(&current_exe)
+            && crate::installer::mode::is_production_mode();
         ensure_linux_desktop_entries(&current_exe, installed)
     }
 
@@ -77,6 +74,13 @@ impl InstallerOps for Platform {
     }
 
     fn remove_legacy_install(&self) {}
+
+    fn uninstall(&self, binary_path: &Path) -> Result<()> {
+        anyhow::bail!(
+            "qol-tray-install uninstall is for Windows; on Linux remove the qol-tray package, or delete {} and its desktop entries",
+            binary_path.display()
+        )
+    }
 }
 
 fn install_icons() -> Result<()> {
@@ -108,12 +112,6 @@ fn install_desktop_entry(binary_path: &Path) -> Result<()> {
 fn desktop_apps_dir() -> Result<PathBuf> {
     let data_dir = dirs::data_dir().context("Could not determine data directory")?;
     Ok(data_dir.join("applications"))
-}
-
-fn is_production_mode() -> bool {
-    crate::installer::mode::ModeConfig::load()
-        .map(|config| !config.is_dev())
-        .unwrap_or(!cfg!(feature = "dev"))
 }
 
 fn ensure_linux_desktop_entries(binary_path: &Path, include_app_entry: bool) -> Result<()> {

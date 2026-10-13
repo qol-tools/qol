@@ -824,6 +824,14 @@ mod tests {
             return;
         }
         println!("{PROBE_CHILD_RAN}");
+        let backend_ignores_isolation = qol_audio::devices::list_outputs().is_ok();
+        assert!(
+            !(cfg!(target_os = "linux") && backend_ignores_isolation),
+            "the Linux audio backend ignored the isolated runtime dir"
+        );
+        if backend_ignores_isolation {
+            return;
+        }
         match dispatch("reload", &serde_json::Value::Null) {
             ReadResult::Command(Command::Reload) => {}
             ReadResult::Error(message) => {

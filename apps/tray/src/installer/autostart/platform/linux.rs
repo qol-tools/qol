@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::AutostartOps;
+use super::{AutostartOps, AutostartState};
 use crate::installer::platform::linux::desktop_entry::{
     format_desktop_exec_command, parse_desktop_exec_program,
 };
@@ -12,9 +12,9 @@ const DESKTOP_TEMPLATE: &str =
 pub(super) struct Platform;
 
 impl AutostartOps for Platform {
-    fn read_target(&self) -> Result<Option<PathBuf>> {
+    fn read_state(&self) -> Result<AutostartState> {
         let path = autostart_path_impl()?;
-        read_desktop_at(&path)
+        Ok(AutostartState::from_target(read_desktop_at(&path)?))
     }
 
     fn write_target(&self, binary: &Path) -> Result<()> {

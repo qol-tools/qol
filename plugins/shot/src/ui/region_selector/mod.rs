@@ -17,6 +17,10 @@ use qol_gpui::theme::runtime_theme;
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
 use qol_gpui::window_options::PopupWindowOptions;
 
+mod targets;
+
+pub(crate) use targets::SnapshotTargets;
+
 const SELECTOR_TITLE: &str = "qol-shot-selector";
 pub(crate) const SELECTOR_TITLE_PREFIX: &str = "qol-shot-selector-";
 const SELECTOR_APP_ID: &str = "qol-tray-shot";
@@ -88,6 +92,7 @@ pub struct SelectorWindowSources {
 
 pub struct SelectorWindowOptions {
     pub display_id: Option<DisplayId>,
+    pub placement: Option<Bounds<Pixels>>,
     pub kind: WindowKind,
     pub decorations: WindowDecorations,
     pub focus: bool,
@@ -96,6 +101,7 @@ pub struct SelectorWindowOptions {
 pub struct SelectorWindow {
     pub(crate) title: String,
     pub(crate) bounds: Bounds<Pixels>,
+    placement: Bounds<Pixels>,
     pub(crate) monitor_bounds: Vec<Bounds<Pixels>>,
     pub(crate) active_bounds: Option<Bounds<Pixels>>,
     pub(crate) default_target: Option<DetectedTarget>,
@@ -118,6 +124,7 @@ impl SelectorWindow {
         Self {
             title: selector_title(),
             bounds,
+            placement: options.placement.unwrap_or(bounds),
             monitor_bounds,
             active_bounds,
             default_target,
@@ -135,7 +142,7 @@ impl SelectorWindow {
 
     fn options(&self) -> WindowOptions {
         PopupWindowOptions::new()
-            .bounds(self.bounds)
+            .bounds(self.placement)
             .decorations(self.decorations)
             .kind(self.kind)
             .focus(self.focus)

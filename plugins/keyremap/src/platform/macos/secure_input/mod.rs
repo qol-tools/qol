@@ -12,7 +12,7 @@ use objc2_app_kit::NSRunningApplication;
 use qol_runtime::protocol::NotificationLevel;
 
 use super::input::InputState;
-use crate::platform::SecureInputHolder;
+use crate::platform::macos::doctor::SecureInputHolder;
 use warning::SecureInputWatch;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);

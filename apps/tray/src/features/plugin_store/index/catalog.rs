@@ -94,7 +94,7 @@ mod tests {
             "linux-aarch64",
             "macos-aarch64",
             "macos-x86_64",
-            "windows-x86_64",
+            "windows-x86_64.exe",
         ] {
             assets.insert(format!("{plugin_id}-{suffix}"), blob("sha256:b", 1));
         }

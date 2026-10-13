@@ -672,7 +672,6 @@ mod tests {
         assert_eq!(report.idle_crate_caches.count, 2);
     }
 
-    #[cfg(unix)]
     #[test]
     fn linked_outputs_root_their_units_and_dependencies() {
         let clock = Clock::new();
@@ -704,7 +703,6 @@ mod tests {
         assert_eq!(report.idle_crate_caches.count, 0);
     }
 
-    #[cfg(unix)]
     #[test]
     fn freed_bytes_count_a_hard_linked_file_once_and_only_when_every_link_goes() {
         let clock = Clock::new();

@@ -339,9 +339,11 @@ fn schedule_panel_bounds(
 
 fn clamp_to_monitor(bounds: Bounds<Pixels>, cx: &mut Context<SessionsView>) -> Bounds<Pixels> {
     match MonitorTracker::start(cx).snapshot_monitor() {
-        Some(monitor) => {
-            qol_gpui::placement::clamp_origin_to_monitor(monitor.bounds(), bounds, CORNER_MARGIN)
-        }
+        Some(monitor) => qol_gpui::placement::clamp_origin_to_monitor(
+            monitor.logical_bounds(),
+            bounds,
+            CORNER_MARGIN,
+        ),
         None => bounds,
     }
 }

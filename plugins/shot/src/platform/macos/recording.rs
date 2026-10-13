@@ -5,7 +5,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession};
+use crate::capture::geometry::even_dimensions;
+use crate::platform::{CaptureProcess, CaptureSegment, CaptureSession, SavedRecording};
 use crate::{Config, Rect};
 
 use super::conversion::{convert_recording, run_conversion_command};
@@ -16,7 +17,7 @@ use super::swift::{
 };
 use super::system::{
     capture_work_dir, ensure_capture_work_dir, move_file, open_path, output_format_label,
-    path_extension_is, paths_match, signal_process, videos_dir, wait_for_process_exit,
+    path_extension_is, paths_match, signal_process, wait_for_process_exit,
 };
 use qol_plugin_daemon::notification::send_notification;
 
@@ -29,6 +30,7 @@ struct DisplayCaptureSegment {
 }
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
+    let rect = &even_dimensions(*rect);
     let capture_file = native_capture_file_path(output_file);
     ensure_capture_work_dir()?;
     let segments = capture_segments(rect)?;
@@ -105,7 +107,7 @@ pub fn recording_started(_session: &CaptureSession) {
     );
 }
 
-pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<PathBuf> {
+pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<SavedRecording> {
     qol_runtime::probe!(
         "SHOT_RECORD_FINALIZE",
         "stage=stopped-entry pids={} segments={}",
@@ -144,13 +146,10 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
                     (reveal_file, message)
                 }
             };
-        crate::capture::completion::background_saved(
-            "Recording saved",
-            &message,
-            &reveal_file,
-            config.capture.open_folder_after_save,
-        );
-        return Some(reveal_file);
+        return Some(SavedRecording {
+            path: reveal_file,
+            message,
+        });
     }
 
     qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=open-videos");
@@ -158,7 +157,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Pa
     let videos_dir = config
         .capture
         .open_folder_after_save
-        .then(videos_dir)
+        .then(qol_apps::known_folder::videos_dir)
         .flatten();
     if let Some(videos_dir) = videos_dir {
         open_path(&videos_dir);
@@ -335,7 +334,7 @@ fn start_multi_display_capture(
             }
         };
 
-        processes.push(CaptureProcess { pid });
+        processes.push(CaptureProcess::spawned(pid));
         capture_segments.push(CaptureSegment {
             file: segment_file,
             rect: segment.rect,

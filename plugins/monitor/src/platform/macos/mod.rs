@@ -8,9 +8,12 @@ use super::{Control, PlatformSupport};
 use crate::monitor::backends::avservice::MacAvServiceBackend;
 use crate::monitor::backends::cg_gamma::CgGammaControl;
 use crate::monitor::backends::shared_display::SharedDisplay;
-use crate::monitor::PolicyControl;
+use crate::monitor::night::Tint;
+use crate::monitor::{GammaTable, PolicyControl};
 use core_graphics::{display_identity, CoreGraphicsSeam};
 use iokit::IokitAvTransport;
+
+pub(crate) use super::unix_signals::install_signal_handlers;
 
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
@@ -28,6 +31,18 @@ pub(crate) fn control() -> Control {
         SharedDisplay::new(),
         mode_writes_supported,
     ))
+}
+
+pub(crate) fn native_desktop() -> bool {
+    false
+}
+
+pub(crate) fn fit_tint(_dimmed: &GammaTable, tint: Tint) -> Tint {
+    tint
+}
+
+pub(crate) fn brightness_floor(_base: &GammaTable) -> u8 {
+    crate::monitor::BRIGHTNESS_MIN
 }
 
 fn mode_writes_supported() -> bool {

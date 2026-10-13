@@ -510,6 +510,7 @@ pub fn sync_window_layout(
     window: &mut gpui::Window,
     origin: gpui::Point<gpui::Pixels>,
     size: gpui::Size<gpui::Pixels>,
+    _scale: Option<f32>,
 ) -> bool {
     let backing = window_backing_scale(title);
     crate::window::resize_or_sync_scale(window, size, backing);

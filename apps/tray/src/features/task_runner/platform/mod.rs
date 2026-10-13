@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -9,10 +10,16 @@ mod linux;
 mod macos;
 #[cfg(target_os = "macos")]
 mod macos_command_tree;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix;
 #[cfg(not(target_os = "macos"))]
 mod verified_command_tree;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(any(target_os = "windows", test))]
+mod windows_output;
+#[cfg(any(target_os = "windows", test))]
+mod windows_quote;
 
 #[cfg(target_os = "macos")]
 pub(super) use macos_command_tree::CommandTree;
@@ -30,11 +37,28 @@ pub(super) use windows::Platform;
 
 trait TaskRunnerPlatform {
     fn shell_command(&self, script: &str) -> Result<Command, String>;
+    fn render_command(
+        &self,
+        template: &str,
+        params: &HashMap<String, String>,
+    ) -> Result<String, String>;
+    fn decode_output(&self, bytes: &[u8]) -> String;
     fn guardian_executable(&self) -> std::io::Result<PathBuf>;
 }
 
 pub(super) fn shell_command(script: &str) -> Result<Command, String> {
     Platform.shell_command(script)
+}
+
+pub(super) fn render_command(
+    template: &str,
+    params: &HashMap<String, String>,
+) -> Result<String, String> {
+    Platform.render_command(template, params)
+}
+
+pub(super) fn decode_output(bytes: &[u8]) -> String {
+    Platform.decode_output(bytes)
 }
 
 pub(super) fn verified_process_tree() -> std::io::Result<qol_process::ProcessTreeGuard> {

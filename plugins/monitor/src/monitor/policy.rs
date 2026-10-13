@@ -181,6 +181,13 @@ impl<D: DisplayControl + DdcStatus, G: DisplayControl> DisplayControl for Policy
         }
     }
 
+    fn brightness_floor(&self, handle: &DisplayHandle) -> u8 {
+        match self.selection(handle.id()) {
+            BrightnessPolicy::Gamma | BrightnessPolicy::Auto => self.gamma.brightness_floor(handle),
+            BrightnessPolicy::Ddc | BrightnessPolicy::Off => self.ddc.brightness_floor(handle),
+        }
+    }
+
     fn set_brightness_with_tint(
         &self,
         handle: &DisplayHandle,
@@ -255,12 +262,41 @@ impl<D: Send + Sync, G: GammaStateControl> GammaStateControl for PolicyControl<D
     fn restore(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
         self.gamma.restore(handle)
     }
+
+    fn tint_capped(&self, handle: &DisplayHandle) -> bool {
+        self.gamma.tint_capped(handle)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::sync::Arc;
+
+    #[cfg(windows)]
+    fn symlink(target: String, link: std::path::PathBuf) -> std::io::Result<()> {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                let parent = link.parent().expect("a link lives in a directory");
+                let junction = std::path::absolute(parent.join(&target))?;
+                let status = std::process::Command::new("cmd")
+                    .args(["/d", "/c", "mklink", "/j"])
+                    .arg(&link)
+                    .arg(&junction)
+                    .stdout(std::process::Stdio::null())
+                    .status()?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+            result => result,
+        }
+    }
 
     fn handle(id: &str, connector: &str) -> DisplayHandle {
         DisplayHandle::new(id.into(), connector.into(), None, false)
@@ -901,8 +937,7 @@ mod tests {
             let adapter = adapters.join(link);
             std::fs::create_dir_all(&adapter).unwrap();
             std::fs::write(adapter.join("name"), name).unwrap();
-            std::os::unix::fs::symlink(format!("../adapters/{link}"), connector_dir.join(link))
-                .unwrap();
+            symlink(format!("../adapters/{link}"), connector_dir.join(link)).unwrap();
         }
         dir
     }

@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod do_not_disturb;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(target_os = "linux")]

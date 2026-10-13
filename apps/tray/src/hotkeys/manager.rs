@@ -5,7 +5,9 @@ use super::registration_status::{self, RegistrationError};
 use super::store::HotkeyLayers;
 use super::{HotkeyAction, HotkeyConfig};
 use anyhow::Result;
-use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager};
+use global_hotkey::hotkey::{HotKey, Modifiers};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
+use qol_hotkeys::grammar::Key;
 use std::collections::HashMap;
 
 pub struct HotkeyManager {
@@ -13,6 +15,25 @@ pub struct HotkeyManager {
     applied: HashMap<String, AppliedHotkey>,
     bindings: HashMap<u32, RegisteredHotkey>,
     layers: HotkeyLayers,
+    scope: RegistrationScope,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RegistrationScope {
+    All,
+    OneShotBackup,
+}
+
+impl RegistrationScope {
+    fn admits(self, registration: &PlannedRegistration) -> bool {
+        let altgr_chord = registration
+            .hotkey
+            .mods
+            .contains(Modifiers::CONTROL | Modifiers::ALT);
+        let layout_symbol = parse_combo(&registration.binding_key)
+            .is_some_and(|combo| matches!(combo.key, Key::Symbol(_)));
+        self == Self::All || !(registration.action.continuous || altgr_chord || layout_symbol)
+    }
 }
 
 struct AppliedHotkey {
@@ -31,6 +52,13 @@ impl HotkeyManager {
         Ok(Self::with_layers(HotkeyLayers::active()?))
     }
 
+    pub(super) fn with_scope(scope: RegistrationScope) -> Result<Self> {
+        Ok(Self {
+            scope,
+            ..Self::new()?
+        })
+    }
+
     pub fn load_config(&self) -> Result<HotkeyConfig> {
         self.layers.load()
     }
@@ -44,7 +72,8 @@ impl HotkeyManager {
         config: &HotkeyConfig,
         available_actions: &AvailableActions,
     ) -> Result<()> {
-        let plan = plan_registrations(config, available_actions);
+        let mut plan = plan_registrations(config, available_actions);
+        plan.retain(|registration| self.scope.admits(registration));
         if self.manager.is_none() {
             return self.apply_cold_start(plan);
         }
@@ -94,7 +123,7 @@ impl HotkeyManager {
                 });
             }
         }
-        registration_status::set_registration_errors(errors);
+        self.publish_errors(errors);
         Ok(())
     }
 
@@ -104,6 +133,22 @@ impl HotkeyManager {
             applied: HashMap::new(),
             bindings: HashMap::new(),
             layers,
+            scope: RegistrationScope::All,
+        }
+    }
+
+    fn publish_errors(&self, errors: Vec<RegistrationError>) {
+        match self.scope {
+            RegistrationScope::All => registration_status::set_registration_errors(errors),
+            RegistrationScope::OneShotBackup => {
+                for error in errors {
+                    log::debug!(
+                        "elevated-window hotkey backup unavailable for {}: {}",
+                        error.key,
+                        error.error
+                    );
+                }
+            }
         }
     }
 
@@ -115,7 +160,7 @@ impl HotkeyManager {
                 errors.push(error);
             }
         }
-        registration_status::set_registration_errors(errors);
+        self.publish_errors(errors);
         self.manager = Some(manager);
         Ok(())
     }
@@ -137,14 +182,18 @@ impl HotkeyManager {
         let mut errors = Vec::new();
         if let Some(manager) = self.manager.as_ref() {
             for (_, registration) in planned_by_key {
-                if let Some(error) =
-                    register_via(manager, registration, &mut self.applied, &mut self.bindings)
-                {
+                if let Some(error) = register_via(
+                    manager,
+                    registration,
+                    self.scope,
+                    &mut self.applied,
+                    &mut self.bindings,
+                ) {
                     errors.push(error);
                 }
             }
         }
-        registration_status::set_registration_errors(errors);
+        self.publish_errors(errors);
     }
 
     fn refresh_action_if_changed(&mut self, key: &str, planned: PlannedRegistration) {
@@ -183,13 +232,20 @@ impl HotkeyManager {
         manager: &GlobalHotKeyManager,
         registration: PlannedRegistration,
     ) -> Option<RegistrationError> {
-        register_via(manager, registration, &mut self.applied, &mut self.bindings)
+        register_via(
+            manager,
+            registration,
+            self.scope,
+            &mut self.applied,
+            &mut self.bindings,
+        )
     }
 }
 
 fn register_via(
     manager: &GlobalHotKeyManager,
     registration: PlannedRegistration,
+    scope: RegistrationScope,
     applied: &mut HashMap<String, AppliedHotkey>,
     bindings: &mut HashMap<u32, RegisteredHotkey>,
 ) -> Option<RegistrationError> {
@@ -200,6 +256,12 @@ fn register_via(
     } = registration;
     if let Err(error) = manager.register(hotkey) {
         let msg = error.to_string();
+        if scope == RegistrationScope::OneShotBackup {
+            return Some(RegistrationError {
+                key: binding_key,
+                error: msg,
+            });
+        }
         log::error!("Failed to register hotkey {}: {}", binding_key, msg);
         qol_runtime::probe!(
             "HOTKEY_REGISTRATION",
@@ -255,4 +317,41 @@ fn log_unregistered_hotkey(binding_key: &str) {
         "result=unregistered key={}",
         qol_runtime::probe::token(binding_key)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn planned(key: &str, continuous: bool) -> PlannedRegistration {
+        PlannedRegistration {
+            binding_key: key.into(),
+            hotkey: super::super::parser::parse_hotkey(key).expect("hotkey"),
+            action: HotkeyAction {
+                plugin_uid: crate::plugins::PluginUid::new("plugin"),
+                action: "open".into(),
+                continuous,
+            },
+        }
+    }
+
+    #[test]
+    fn the_one_shot_backup_admits_only_one_shots_the_hook_resolves_identically() {
+        let cases = [
+            ("Super+R", false, true),
+            ("Shift+Super+J", false, true),
+            ("Super+R", true, false),
+            ("Ctrl+Alt+E", false, false),
+            ("Super+/", false, false),
+        ];
+        for (key, continuous, expected) in cases {
+            let registration = planned(key, continuous);
+            assert_eq!(
+                RegistrationScope::OneShotBackup.admits(&registration),
+                expected,
+                "{key} continuous={continuous}"
+            );
+            assert!(RegistrationScope::All.admits(&registration));
+        }
+    }
 }

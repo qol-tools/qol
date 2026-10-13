@@ -12,7 +12,7 @@ export function ExcludedApps({ apps, allApps, onAdd, onRemove }) {
     return html`
         <section class="card">
             <h2>Excluded Apps</h2>
-            <p>Apps that handle Ctrl natively (terminals, IDEs). Remapping is bypassed for these bundle IDs.</p>
+            <p>Apps that handle Ctrl natively (terminals, IDEs). Remapping is bypassed for these bundle IDs (macOS) or executable names (Windows).</p>
             <div class="item-list">
                 ${apps.length === 0 && html`<div class="empty-state">No excluded apps. All apps will have remapping active.</div>`}
                 ${apps.map((bid, i) => html`

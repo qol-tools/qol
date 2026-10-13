@@ -9,3 +9,5 @@ pub(crate) fn show_plugin_notification(
     _action: Option<(&str, &str)>,
 ) {
 }
+
+pub(crate) fn show_startup_failed(_title: &str, _body: &str) {}

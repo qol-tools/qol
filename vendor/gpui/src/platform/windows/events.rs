@@ -38,6 +38,9 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if self.released.get() && !matches!(msg, WM_DESTROY | WM_NCCALCSIZE) {
+            return unsafe { DefWindowProcW(handle, msg, wparam, lparam) };
+        }
         let handled = match msg {
             WM_ACTIVATE => self.handle_activate_msg(wparam),
             WM_CREATE => self.handle_create_msg(handle),
@@ -371,6 +374,7 @@ impl WindowsWindowInner {
     // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
     fn handle_keydown_msg(&self, handle: HWND, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
         let mut lock = self.state.borrow_mut();
+        lock.pending_packet = VIRTUAL_KEY(wparam.loword()) == VK_PACKET;
         let Some(input) = handle_key_event(handle, wparam, lparam, &mut lock, |keystroke| {
             PlatformInput::KeyDown(KeyDownEvent {
                 keystroke,
@@ -426,12 +430,34 @@ impl WindowsWindowInner {
     }
 
     fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
+        let packet = std::mem::take(&mut self.state.borrow_mut().pending_packet);
         let input = self.parse_char_message(wparam)?;
-        self.with_input_handler(|input_handler| {
+        let inserted = self.with_input_handler(|input_handler| {
             input_handler.replace_text_in_range(None, &input);
         });
+        if inserted.is_none() && packet {
+            self.handle_packet_text(input);
+        }
 
         Some(0)
+    }
+
+    fn handle_packet_text(&self, text: String) {
+        let Some(mut func) = self.state.borrow_mut().callbacks.input.take() else {
+            return;
+        };
+        func(PlatformInput::KeyDown(KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers: current_modifiers(),
+                key: match text.as_str() {
+                    " " => "space".to_string(),
+                    _ => text.to_lowercase(),
+                },
+                key_char: Some(text),
+            },
+            is_held: false,
+        }));
+        self.state.borrow_mut().callbacks.input = Some(func);
     }
 
     fn handle_dead_char_msg(&self, wparam: WPARAM) -> Option<isize> {
@@ -707,6 +733,7 @@ impl WindowsWindowInner {
         }
 
         let is_maximized = self.state.borrow().is_maximized();
+        let display = self.state.borrow().display;
         let insets = get_client_area_insets(handle, is_maximized, self.windows_version);
         // wparam is TRUE so lparam points to an NCCALCSIZE_PARAMS structure
         let mut params = lparam.0 as *mut NCCALCSIZE_PARAMS;
@@ -721,8 +748,8 @@ impl WindowsWindowInner {
         // used by Chrome. However, it may result in one row of pixels being obscured
         // in our client area. But as Chrome says, "there seems to be no better solution."
         if is_maximized
-            && let Some(ref taskbar_position) =
-                self.system_settings.borrow().auto_hide_taskbar_position
+            && let Some(taskbar_position) =
+                WindowsSystemSettings::auto_hide_taskbar_position(&self.system_settings, display)
         {
             // For the auto-hide taskbar, adjust in by 1 pixel on taskbar edge,
             // so the window isn't treated as a "fullscreen app", which would cause
@@ -751,6 +778,9 @@ impl WindowsWindowInner {
         let this = self.clone();
         self.executor
             .spawn(async move {
+                if this.released.get() {
+                    return;
+                }
                 let mut lock = this.state.borrow_mut();
                 if let Some(mut func) = lock.callbacks.active_status_change.take() {
                     drop(lock);
@@ -1111,12 +1141,11 @@ impl WindowsWindowInner {
     ) -> Option<isize> {
         if wparam.0 != 0 {
             let mut lock = self.state.borrow_mut();
-            let display = lock.display;
             lock.click_state.system_update(wparam.0);
             lock.border_offset.update(handle).log_err();
             // system settings may emit a window message which wants to take the refcell lock, so drop it
             drop(lock);
-            self.system_settings.borrow_mut().update(display, wparam.0);
+            self.system_settings.borrow_mut().update(wparam.0);
         } else {
             self.handle_system_theme_changed(handle, lparam)?;
         };
@@ -1409,18 +1438,16 @@ fn parse_normal_key(
     lparam: LPARAM,
     mut modifiers: Modifiers,
 ) -> Option<Keystroke> {
-    let mut key_char = None;
-    let key = parse_immutable(vkey).or_else(|| {
-        let scan_code = lparam.hiword() & 0xFF;
-        key_char = generate_key_char(
-            vkey,
-            scan_code as u32,
-            modifiers.control,
-            modifiers.shift,
-            modifiers.alt,
-        );
-        get_keystroke_key(vkey, scan_code as u32, &mut modifiers)
-    })?;
+    let scan_code = lparam.hiword() & 0xFF;
+    let key_char = generate_key_char(
+        vkey,
+        scan_code as u32,
+        modifiers.control,
+        modifiers.shift,
+        modifiers.alt,
+    );
+    let key = parse_immutable(vkey)
+        .or_else(|| get_keystroke_key(vkey, scan_code as u32, &mut modifiers))?;
     Some(Keystroke {
         modifiers,
         key,

@@ -57,10 +57,11 @@ pub(crate) fn run() -> Result<()> {
     devices::run(shared)
 }
 
-pub(crate) fn query_status() -> crate::platform::Probe<crate::platform::HelperState> {
+pub(crate) fn query_status(
+) -> crate::platform::macos::doctor::Probe<crate::platform::macos::doctor::HelperState> {
     use std::io::{BufRead, BufReader, ErrorKind};
 
-    use crate::platform::{HelperReport, HelperState, Probe};
+    use crate::platform::macos::doctor::{HelperReport, HelperState, Probe};
 
     let stream = match UnixStream::connect(protocol::SOCKET_PATH) {
         Ok(stream) => stream,

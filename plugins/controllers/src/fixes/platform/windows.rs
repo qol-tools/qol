@@ -1,33 +1,37 @@
 use super::super::state::SystemPaths;
-use super::fallback;
 use super::FixPlatform;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
 pub(super) struct Platform;
 
 impl FixPlatform for Platform {
     fn system_paths() -> SystemPaths {
-        fallback::system_paths()
+        SystemPaths {
+            modprobe_dir: None,
+            sys_module_dir: None,
+        }
     }
 
-    fn live_quirk_path(driver: &str) -> Option<String> {
-        fallback::live_quirk_path(driver)
+    fn live_quirk_path(_driver: &str) -> Option<String> {
+        None
     }
 
     fn authorization_available() -> bool {
-        fallback::authorization_available()
+        false
     }
 
-    fn apply(conf: &str, writes: &[(String, String)]) -> Result<()> {
-        fallback::apply(conf, writes)
+    fn apply(_conf: &str, _writes: &[(String, String)]) -> Result<()> {
+        bail!(
+            "controller driver fixes change Linux kernel module options; Windows drives controllers through its own HID and XInput drivers, so no fix applies"
+        )
     }
 
     fn hidraw_guard_path() -> Option<PathBuf> {
-        fallback::hidraw_guard_path()
+        None
     }
 
-    fn install_hidraw_guard(path: &Path, content: &str) -> Result<()> {
-        fallback::install_hidraw_guard(path, content)
+    fn install_hidraw_guard(_path: &Path, _content: &str) -> Result<()> {
+        bail!("the raw HID guard is a Linux udev rule; Windows has no equivalent rule to install")
     }
 }

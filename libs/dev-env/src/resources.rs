@@ -1759,10 +1759,12 @@ mod tests {
         );
 
         let noncanonical_image = fixture
-            .canonical_image_path
-            .parent()
-            .unwrap()
-            .join("../images/guest.qcow2");
+            ._dir
+            .path()
+            .join("images")
+            .join("..")
+            .join("images")
+            .join("guest.qcow2");
         let noncanonical_image_request = ChildCoverageRequest {
             canonical_image_path: &noncanonical_image,
             ..covered

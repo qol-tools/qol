@@ -1,4 +1,4 @@
-use crate::manifest::RuntimeConfig;
+use crate::manifest::{Capabilities, RuntimeConfig};
 use anyhow::{bail, Result};
 use std::collections::{BTreeSet, HashMap};
 
@@ -28,15 +28,21 @@ pub(super) fn validate_optional_runtime_config(
     validate_runtime_action_coverage(runtime.actions.as_ref(), executable_action_ids)
 }
 
-pub(super) fn validate_doctor_runtime(
-    doctor_capability: bool,
+pub(super) fn validate_capability_runtime(
+    capabilities: &Capabilities,
     runtime: Option<&RuntimeConfig>,
 ) -> Result<()> {
-    if !doctor_capability || runtime.is_some() {
+    if runtime.is_some() {
         return Ok(());
     }
-
-    bail!("capabilities.doctor requires a standalone [runtime] command")
+    let declared = [
+        ("doctor", capabilities.doctor),
+        ("release_host", capabilities.release_host),
+    ];
+    match declared.into_iter().find(|(_, declared)| *declared) {
+        Some((name, _)) => bail!("capabilities.{name} requires a standalone [runtime] command"),
+        None => Ok(()),
+    }
 }
 
 fn validate_runtime_actions(actions: Option<&HashMap<String, Vec<String>>>) -> Result<()> {

@@ -109,12 +109,16 @@ impl ActiveMonitor {
         Self { inner: b }
     }
 
-    pub fn from_gpui_bounds(bounds: Bounds<Pixels>) -> Self {
+    pub fn from_display(display: &dyn PlatformDisplay) -> Self {
+        let native = multiplied(
+            display.bounds(),
+            crate::platform::display_scale_factor(display.id()),
+        );
         Self::from_bounds(MonitorBounds {
-            x: bounds.origin.x.to_f64() as f32,
-            y: bounds.origin.y.to_f64() as f32,
-            width: bounds.size.width.to_f64() as f32,
-            height: bounds.size.height.to_f64() as f32,
+            x: native.origin.x.to_f64() as f32,
+            y: native.origin.y.to_f64() as f32,
+            width: native.size.width.to_f64() as f32,
+            height: native.size.height.to_f64() as f32,
         })
     }
 
@@ -131,11 +135,29 @@ impl ActiveMonitor {
     }
 
     pub fn centered_bounds(&self, win_size: Size<Pixels>) -> Bounds<Pixels> {
-        crate::placement::MonitorPlacement::center().bounds(self.bounds(), win_size)
+        crate::placement::MonitorPlacement::center().bounds(self.logical_bounds(), win_size)
     }
 
     pub fn size(&self) -> (f32, f32) {
-        (self.inner.width, self.inner.height)
+        let size = self.logical_bounds().size;
+        (size.width.to_f64() as f32, size.height.to_f64() as f32)
+    }
+
+    pub fn logical_bounds(&self) -> Bounds<Pixels> {
+        self.logical(self.bounds())
+    }
+
+    pub fn logical_work_area(&self) -> Bounds<Pixels> {
+        let native = self.bounds();
+        self.logical(crate::popup_window::work_area_within(native).unwrap_or(native))
+    }
+
+    pub fn logical(&self, native: Bounds<Pixels>) -> Bounds<Pixels> {
+        divided(native, self.scale())
+    }
+
+    pub fn scale(&self) -> f32 {
+        crate::platform::monitor_scale(&self.bounds())
     }
 
     pub fn from_key(key: MonitorKey) -> Option<Self> {
@@ -156,6 +178,20 @@ impl ActiveMonitor {
             size(px(self.inner.width), px(self.inner.height)),
         )
     }
+}
+
+fn divided(bounds: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
+    Bounds::new(
+        point(bounds.origin.x / scale, bounds.origin.y / scale),
+        size(bounds.size.width / scale, bounds.size.height / scale),
+    )
+}
+
+pub(crate) fn multiplied(bounds: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
+    Bounds::new(
+        point(bounds.origin.x * scale, bounds.origin.y * scale),
+        size(bounds.size.width * scale, bounds.size.height * scale),
+    )
 }
 
 static ACTIVE_MONITOR: Mutex<Option<ActiveMonitor>> = Mutex::new(None);
@@ -332,9 +368,10 @@ fn resolve_cursor_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_first_monitor, cached_first_monitor, focus_first_monitor, resolve_cursor_snapshot,
-        validate_cursor_anchor, ActiveMonitor, CursorAnchorError,
+        active_first_monitor, cached_first_monitor, divided, focus_first_monitor,
+        resolve_cursor_snapshot, validate_cursor_anchor, ActiveMonitor, CursorAnchorError,
     };
+    use gpui::{point, px, size, Bounds};
     use qol_runtime::{CursorPos, MonitorBounds, PlatformState};
 
     fn monitor(x: f32) -> MonitorBounds {
@@ -777,6 +814,26 @@ mod tests {
             focus_first_monitor(&policy_state(Vec::new(), Some(0), Some(0), Some(0))),
             None
         );
+    }
+
+    #[test]
+    fn native_bounds_divide_into_logical_pixels() {
+        let native = Bounds::new(point(px(1920.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let cases = [
+            (1.0, (1920.0, 0.0, 2560.0, 1440.0)),
+            (1.25, (1536.0, 0.0, 2048.0, 1152.0)),
+            (2.0, (960.0, 0.0, 1280.0, 720.0)),
+        ];
+        for (scale, expected) in cases {
+            let logical = divided(native, scale);
+            let actual = (
+                logical.origin.x.to_f64(),
+                logical.origin.y.to_f64(),
+                logical.size.width.to_f64(),
+                logical.size.height.to_f64(),
+            );
+            assert_eq!(actual, expected, "scale {scale}");
+        }
     }
 
     #[test]

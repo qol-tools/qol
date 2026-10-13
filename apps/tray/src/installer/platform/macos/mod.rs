@@ -36,10 +36,6 @@ impl InstallerOps for Platform {
         super::unix_common::set_executable_permissions(path)
     }
 
-    fn prepare_atomic_replace(&self, _installed_binary: &Path) -> Result<()> {
-        Ok(())
-    }
-
     fn should_bootstrap_current_install(&self, binary_path: &Path) -> Result<bool> {
         let bundle_root = match bundle_root_from_binary(binary_path) {
             Ok(path) => path,
@@ -79,6 +75,13 @@ impl InstallerOps for Platform {
         if legacy_marker.exists() {
             let _ = std::fs::remove_file(&legacy_marker);
         }
+    }
+
+    fn uninstall(&self, binary_path: &Path) -> Result<()> {
+        Err(anyhow!(
+            "qol-tray-install uninstall is for Windows; on macOS quit QoL Tray and move the app bundle holding {} to the Trash",
+            binary_path.display()
+        ))
     }
 }
 

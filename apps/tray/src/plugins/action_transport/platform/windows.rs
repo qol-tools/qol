@@ -1,7 +1,8 @@
 use super::ActionTransportPlatform;
-use crate::plugins::action_transport::DaemonActionDispatch;
+use qol_runtime::local_ipc::LocalStream;
 use std::path::Path;
 use std::time::Duration;
+use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
 
 pub(super) struct Platform;
 
@@ -10,24 +11,20 @@ impl ActionTransportPlatform for Platform {
         Duration::from_secs(10)
     }
 
-    fn dispatch_action(
-        _endpoint: &Path,
-        _action_id: &str,
-        _input: &serde_json::Value,
-        _timeout: Duration,
-    ) -> DaemonActionDispatch {
-        DaemonActionDispatch::NotSent
+    /// AF_UNIX on Windows has no bounded connect; a path nobody listens on
+    /// fails at once.
+    fn connect(endpoint: &Path, _timeout: Duration) -> Result<LocalStream, ()> {
+        LocalStream::connect(endpoint).map_err(|_| ())
     }
 
-    fn dispatch_payload(
-        _endpoint: &Path,
-        _payload: &[u8],
-        _timeout: Duration,
-    ) -> DaemonActionDispatch {
-        DaemonActionDispatch::NotSent
-    }
-
-    fn can_connect(_endpoint: &Path) -> bool {
-        false
+    /// The daemon takes foreground for the window it opens, and Windows only
+    /// lets it while this process, which holds the user's last input, allows it.
+    fn before_forward(stream: &LocalStream) {
+        match qol_runtime::local_ipc::peer_pid(stream) {
+            Ok(pid) => {
+                let _ = unsafe { AllowSetForegroundWindow(pid) };
+            }
+            Err(error) => log::debug!("daemon peer pid unavailable, no foreground grant: {error}"),
+        }
     }
 }

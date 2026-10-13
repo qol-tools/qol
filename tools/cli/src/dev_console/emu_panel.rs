@@ -2038,6 +2038,7 @@ fn run_status_color(status: &ReportStatus) -> Color {
 mod tests {
     use super::*;
     use crate::dev_console::testkit::*;
+    use crate::platform::test_process::absolute;
     use serde_json::json;
     use std::sync::{mpsc, Arc, Condvar, Mutex};
 
@@ -2280,8 +2281,8 @@ mod tests {
     #[test]
     fn typed_flow_start_uses_the_running_worktree_and_exact_lane_plan() {
         let cases = [
-            ("base", Path::new("/qol/base")),
-            ("named", Path::new("/qol/worktrees/shot-speed")),
+            ("base", Path::new(absolute("/qol/base"))),
+            ("named", Path::new(absolute("/qol/worktrees/shot-speed"))),
         ];
         for (label, worktree) in cases {
             let start =
@@ -2307,15 +2308,17 @@ mod tests {
             "linux/mint",
             "flow-1",
             1,
-            Path::new("/qol/worktree"),
+            Path::new(absolute("/qol/worktree")),
         );
         let ticket = start
-            .ticket(Path::new("/qol/worktree/target/qol-env"))
+            .ticket(Path::new(absolute("/qol/worktree/target/qol-env")))
             .unwrap();
 
         assert_eq!(
             ticket.report_path,
-            Path::new("/qol/worktree/target/qol-env/flows/flow-1/report.json")
+            Path::new(absolute(
+                "/qol/worktree/target/qol-env/flows/flow-1/report.json"
+            ))
         );
     }
 
@@ -2323,14 +2326,20 @@ mod tests {
     fn image_import_start_uses_the_exact_running_worktree_and_neutral_run_id() {
         let start = sandbox_image_import_start(
             "linux/mint-cinnamon",
-            Path::new("/images/linux-mint-cinnamon.qcow2"),
+            Path::new(absolute("/images/linux-mint-cinnamon.qcow2")),
             "image-import-1234",
-            Path::new("/qol/worktrees/shot-speed"),
+            Path::new(absolute("/qol/worktrees/shot-speed")),
         );
 
         assert_eq!(start.environment_id, "linux/mint-cinnamon");
-        assert_eq!(start.source, Path::new("/images/linux-mint-cinnamon.qcow2"));
-        assert_eq!(start.worktree, Path::new("/qol/worktrees/shot-speed"));
+        assert_eq!(
+            start.source,
+            Path::new(absolute("/images/linux-mint-cinnamon.qcow2"))
+        );
+        assert_eq!(
+            start.worktree,
+            Path::new(absolute("/qol/worktrees/shot-speed"))
+        );
         assert_eq!(start.run_id, "image-import-1234");
         assert!(start.validate().is_ok());
     }

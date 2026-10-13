@@ -129,7 +129,7 @@ fn icon_png(icon: &LauncherIcon, marks: &MarkFiles) -> Option<Vec<u8>> {
             None => Mark::App,
         },
     };
-    mark_png(&marks.svg(mark))
+    super::raster::svg_png(&marks.svg(mark), ICON_PIXELS)
 }
 
 fn launcher_icon(icon: &LauncherIcon, marks: &MarkFiles) -> Option<PathBuf> {
@@ -146,20 +146,6 @@ fn target_app_png(app: &AppRef) -> Option<Vec<u8>> {
         AppRef::BundleId { id } => qol_app_icon::icon_png_for_bundle_id(id, size),
         AppRef::Name { .. } => None,
     }
-}
-
-fn mark_png(svg: &str) -> Option<Vec<u8>> {
-    use resvg::{tiny_skia, usvg};
-
-    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
-    let mut pixmap = tiny_skia::Pixmap::new(ICON_PIXELS, ICON_PIXELS)?;
-    let scale = ICON_PIXELS as f32 / tree.size().width();
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
-    pixmap.encode_png().ok()
 }
 
 fn icns(png: &[u8]) -> Vec<u8> {
@@ -517,14 +503,6 @@ mod tests {
         assert_eq!(&icns[8..12], b"ic10");
         assert_eq!(u32::from_be_bytes(icns[12..16].try_into().unwrap()), 11);
         assert_eq!(&icns[16..], b"PNG");
-    }
-
-    #[test]
-    fn every_mark_rasterizes_to_a_png() {
-        for mark in Mark::ALL {
-            let png = mark_png(&mark.svg(0)).unwrap_or_else(|| panic!("{}", mark.name()));
-            assert!(png.starts_with(b"\x89PNG"), "{}", mark.name());
-        }
     }
 
     #[test]

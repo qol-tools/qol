@@ -68,19 +68,6 @@ fn flush_all_drains_every_pending_window() {
 }
 
 #[test]
-fn a_window_belongs_to_the_monitor_holding_its_centre() {
-    let monitor = bounds(1920.0, 0.0, 2560.0, 1440.0);
-    let window = |x| WindowRect {
-        x,
-        y: 100.0,
-        width: 400.0,
-        height: 300.0,
-    };
-    assert!(contains(monitor, window(1800.0)));
-    assert!(!contains(monitor, window(1700.0)));
-}
-
-#[test]
 fn placement_labels_tell_defaults_apart() {
     use crate::placement::{Corner, CORNER_MARGIN};
     let labels = [

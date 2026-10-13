@@ -130,6 +130,25 @@ fn lockfile_with_live_pid_blocks_acquisition() {
 }
 
 #[test]
+fn lockfile_owner_identity_decides_whether_a_live_pid_still_owns_it() {
+    let live_pid = std::os::unix::process::parent_id();
+    let identity = qol_process::process_identity(live_pid).expect("parent process identity");
+    for (recorded, blocks) in [(identity.as_str(), true), ("replaced:0", false)] {
+        let root = plugins_root();
+        let lock_path = lockfile_path(root.path(), PLUGIN_ID);
+        fs::write(
+            &lock_path,
+            format!("{live_pid} {PLUGIN_ID} earlier {recorded}\n"),
+        )
+        .expect("plant lockfile");
+
+        let result = acquire_operation_lock(root.path(), PLUGIN_ID);
+
+        assert_eq!(result.is_err(), blocks, "recorded identity {recorded:?}");
+    }
+}
+
+#[test]
 fn lockfile_left_by_this_pid_before_a_restart_is_reacquired() {
     let root = plugins_root();
     let lock_path = lockfile_path(root.path(), PLUGIN_ID);

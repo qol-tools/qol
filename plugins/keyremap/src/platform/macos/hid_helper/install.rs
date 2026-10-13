@@ -9,13 +9,13 @@ use qol_hotkeys::layout::physical_layout;
 use qol_hotkeys::macos_keycode::PhysicalLayout;
 
 use super::protocol::SOCKET_PATH;
+use crate::platform::macos::doctor::INPUT_MONITORING_FIX;
 use crate::platform::macos::virtual_hid::client::request::{
     VIRTUAL_KEYBOARD_PRODUCT_ID, VIRTUAL_KEYBOARD_VENDOR_ID,
 };
 use crate::platform::macos::virtual_hid::{
     OWN_DAEMON_LABEL, PQRS_DAEMON_BINARY, PQRS_DAEMON_LABEL, PQRS_MANAGER_BINARY,
 };
-use crate::platform::INPUT_MONITORING_FIX;
 
 pub(crate) const HELPER_LABEL: &str = "com.qol-tools.keyremap.hid-helper";
 pub(crate) const HELPER_BINARY: &str =

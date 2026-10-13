@@ -1,8 +1,7 @@
-use std::io::ErrorKind;
-use std::path::Path;
 use std::path::PathBuf;
 
-use super::{DirectoryInspection, DirectoryState, PlatformInspection};
+use super::directory::{inspect_directory, inspect_paths};
+use super::PlatformInspection;
 
 pub(crate) fn inspect() -> PlatformInspection {
     let inventory_roots = inspect_paths(
@@ -42,29 +41,11 @@ fn linux_trash_location(
         .or_else(|| home.map(|home| (home.join(".local/share/Trash"), home.clone())))
 }
 
-fn inspect_directory(path: impl Into<PathBuf>) -> DirectoryInspection {
-    let path = path.into();
-    let state = match std::fs::metadata(&path) {
-        Ok(metadata) if metadata.is_dir() => DirectoryState::Directory,
-        Ok(_) => DirectoryState::WrongType,
-        Err(error) if error.kind() == ErrorKind::NotFound => DirectoryState::Missing,
-        Err(error) => DirectoryState::Unreadable(error.kind()),
-    };
-    DirectoryInspection { path, state }
-}
-
 fn absolute_home() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
         .filter(|home| home.is_absolute())
-}
-
-fn inspect_paths(paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Vec<DirectoryInspection> {
-    paths
-        .into_iter()
-        .map(|path| inspect_directory(path.as_ref().to_path_buf()))
-        .collect()
 }
 
 #[cfg(test)]

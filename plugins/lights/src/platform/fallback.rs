@@ -25,6 +25,10 @@ pub(crate) fn candidate_coordinator_ports(_ports: &[SerialPortInfo]) -> Vec<Stri
     Vec::new()
 }
 
+pub(crate) fn serial_port_present(path: &str) -> bool {
+    std::path::Path::new(path).exists()
+}
+
 pub(crate) fn inspect_serial_access(path: &str) -> SerialAccess {
     SerialAccess {
         path: path.to_string(),

@@ -1,5 +1,5 @@
 use super::ActionTransportPlatform;
-use crate::plugins::action_transport::DaemonActionDispatch;
+use qol_runtime::local_ipc::LocalStream;
 use std::path::Path;
 use std::time::Duration;
 
@@ -10,24 +10,7 @@ impl ActionTransportPlatform for Platform {
         Duration::from_secs(10)
     }
 
-    fn dispatch_action(
-        _endpoint: &Path,
-        _action_id: &str,
-        _input: &serde_json::Value,
-        _timeout: Duration,
-    ) -> DaemonActionDispatch {
-        DaemonActionDispatch::NotSent
-    }
-
-    fn dispatch_payload(
-        _endpoint: &Path,
-        _payload: &[u8],
-        _timeout: Duration,
-    ) -> DaemonActionDispatch {
-        DaemonActionDispatch::NotSent
-    }
-
-    fn can_connect(_endpoint: &Path) -> bool {
-        false
+    fn connect(_endpoint: &Path, _timeout: Duration) -> Result<LocalStream, ()> {
+        Err(())
     }
 }

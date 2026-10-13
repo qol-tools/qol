@@ -33,6 +33,7 @@ pub(crate) trait WindowSystem: WindowOps {
     fn is_launcher_window(&self, window_id: &WindowId) -> bool;
     fn window_pid(&self, window_id: &WindowId) -> Result<Option<u32>, String>;
     fn process_start_ticks(&self, pid: u32) -> Option<u64>;
+    fn ensure_responsive(&self, window_id: &WindowId) -> Result<(), String>;
 }
 
 pub(crate) fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
@@ -49,6 +50,7 @@ pub(crate) fn minimize_window<S: WindowSystem, T: MinimizedStateStore>(
         return Ok(());
     }
 
+    system.ensure_responsive(&window_id)?;
     let saved_rect = system.window_geometry(&window_id).ok().flatten();
 
     if !system.minimize_window(&window_id)? {
@@ -146,6 +148,7 @@ fn try_restore_window<S: WindowSystem>(
     if !query_or(system.is_hidden_window(window_id), false) {
         return Ok(RestoreAttempt::Skipped);
     }
+    system.ensure_responsive(window_id)?;
     if system.focus_window(window_id)? {
         Ok(RestoreAttempt::Restored)
     } else {
@@ -247,6 +250,8 @@ mod tests {
         geometry: Geometry,
         move_resize_ok: bool,
         move_resize_calls: RefCell<Vec<(WindowId, WindowRect)>>,
+        hung: bool,
+        acted: RefCell<usize>,
     }
 
     impl FakeWindowSystem {
@@ -255,6 +260,8 @@ mod tests {
                 geometry,
                 move_resize_ok: true,
                 move_resize_calls: RefCell::new(Vec::new()),
+                hung: false,
+                acted: RefCell::new(0),
             }
         }
     }
@@ -284,10 +291,12 @@ mod tests {
         }
 
         fn focus_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+            *self.acted.borrow_mut() += 1;
             Ok(true)
         }
 
         fn minimize_window(&self, _window_id: &WindowId) -> Result<bool, String> {
+            *self.acted.borrow_mut() += 1;
             Ok(true)
         }
 
@@ -319,6 +328,13 @@ mod tests {
 
         fn process_start_ticks(&self, _pid: u32) -> Option<u64> {
             Some(1)
+        }
+
+        fn ensure_responsive(&self, _window_id: &WindowId) -> Result<(), String> {
+            if self.hung {
+                return Err("not responding".to_string());
+            }
+            Ok(())
         }
     }
 
@@ -382,6 +398,32 @@ mod tests {
                 "restore must pop the record, move_resize_ok={move_resize_ok}"
             );
         }
+    }
+
+    #[test]
+    fn a_window_that_is_not_responding_is_left_alone_and_stays_recorded() {
+        let mut system = FakeWindowSystem::new(Geometry::Gone);
+        system.hung = true;
+        let store = FakeStore::default();
+        assert_eq!(
+            minimize_window(&system, &store),
+            Err("not responding".to_string())
+        );
+        assert!(store.records.borrow().is_empty());
+
+        store.push(&MinimizedWindowRecord {
+            window_id: window_id(),
+            pid: 1,
+            process_start_ticks: 1,
+            saved_at_unix_secs: current_unix_secs(),
+            saved_rect: None,
+        });
+        assert_eq!(
+            restore_window(&system, &store),
+            Err("not responding".to_string())
+        );
+        assert_eq!(*system.acted.borrow(), 0);
+        assert_eq!(store.records.borrow().len(), 1);
     }
 
     #[test]

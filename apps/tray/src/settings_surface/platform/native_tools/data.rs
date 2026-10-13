@@ -158,7 +158,7 @@ pub(in super::super) fn request_text(
 ) -> anyhow::Result<String> {
     let token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
         .context("tray HTTP authentication token is unavailable")?;
-    let response = Client::new(qol_conventions::DEFAULT_PORT, token)
+    let response = Client::tray(token)
         .with_io_timeout(timeout)
         .request(method, route, body)
         .with_context(|| format!("request to {route} failed"))?;

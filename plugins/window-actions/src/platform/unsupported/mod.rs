@@ -113,6 +113,10 @@ impl WindowSystem for UnsupportedWindowSystem {
     fn process_start_ticks(&self, _pid: u32) -> Option<u64> {
         None
     }
+
+    fn ensure_responsive(&self, _window_id: &WindowId) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 fn unsupported(operation: &str) -> String {

@@ -21,6 +21,7 @@ pub(in super::super) async fn run_operation(
         } => {
             crate::updates::install_host_update(
                 state.daemon.events.clone(),
+                state.plugin_manager.clone(),
                 confirm_after_restart,
                 update_plugins,
             )

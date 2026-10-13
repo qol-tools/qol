@@ -1166,7 +1166,7 @@ mod tests {
 
     #[test]
     fn abandon_failed_successor_terminates_and_reaps() {
-        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let child = crate::platform::test_process::sleeping(30).spawn().unwrap();
         let mut next = TrayHandle::Owned(child);
 
         abandon_failed_successor(&mut next);

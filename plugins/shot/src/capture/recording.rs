@@ -3,12 +3,15 @@ use qol_plugin_daemon::notification::send_notification;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::capture::geometry::{self, monitor_label, rect_label};
 use crate::{platform, Config, Rect};
 
 const CAPTURE_STATE_VERSION: u32 = 1;
 const MIN_RECORDING_DIMENSION_PX: i32 = 16;
+const DAEMON_EXIT_RECORDING_GRACE: Duration = Duration::from_millis(1500);
+const DAEMON_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PersistedCaptureState {
@@ -66,7 +69,14 @@ pub struct FinalizeJob {
 
 impl FinalizeJob {
     pub fn run(self) -> Option<PathBuf> {
-        platform::recording_stopped(&self.session, &self.config)
+        let saved = platform::recording_stopped(&self.session, &self.config)?;
+        crate::capture::completion::background_saved(
+            "Recording saved",
+            &saved.message,
+            &saved.path,
+            self.config.capture.open_folder_after_save,
+        );
+        Some(saved.path)
     }
 }
 
@@ -99,6 +109,55 @@ pub fn begin_stop_active_recording(config: &Config) -> Result<StopOutcome> {
     qol_runtime::probe!("SHOT_RECORD_STATE", "pids={} state=stale", state.pid_list());
     remove_state_file();
     Ok(StopOutcome::Idle)
+}
+
+pub fn stop_recording_for_daemon_exit() {
+    let Some(state) = read_capture_state() else {
+        return;
+    };
+    if platform::session_alive(&state) {
+        qol_runtime::probe!(
+            "SHOT_RECORD_STOP",
+            "pids={} state=active source=daemon-exit",
+            state.pid_list()
+        );
+        match platform::stop_capture(&state) {
+            Ok(()) => {
+                if let Err(error) = qol_process::release_host_lifetime() {
+                    log::warn!("the recording may end before it is saved: {error}");
+                }
+            }
+            Err(error) => log::warn!(
+                "failed to stop recording pids {} before exit: {error:#}",
+                state.pid_list()
+            ),
+        }
+        let stopped = wait_until_stopped(
+            || platform::session_alive(&state),
+            DAEMON_EXIT_RECORDING_GRACE,
+            DAEMON_EXIT_POLL_INTERVAL,
+        );
+        qol_runtime::probe!(
+            "SHOT_RECORD_STOPPED",
+            "pids={} source=daemon-exit finalized={stopped}",
+            state.pid_list()
+        );
+    }
+    remove_state_file();
+}
+
+fn wait_until_stopped(mut alive: impl FnMut() -> bool, grace: Duration, poll: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    loop {
+        if !alive() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(poll.min(deadline - now));
+    }
 }
 
 pub fn start_recording_from_selection(selected: Rect, config: &Config) -> Result<()> {
@@ -158,7 +217,7 @@ fn start_recording(selected: Rect, config: &Config, feedback: StartedFeedback) -
         remove_state_file();
         send_notification(
             "Recording failed",
-            &format!("Check {}", platform::CAPTURE_LOG),
+            &format!("Check {}", platform::capture_log_path().display()),
         );
         return Err(anyhow!("capture process exited immediately"));
     }
@@ -222,7 +281,7 @@ fn prepare_recording_rect(selected: Rect) -> Result<Rect> {
         rect_label(rect),
         rect_label(even)
     );
-    Ok(even)
+    Ok(rect)
 }
 
 fn stop_capture_processes(state: &platform::CaptureSession, config: &Config) -> Result<()> {
@@ -344,6 +403,7 @@ fn path_label(path: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn capture_state_reads_output_and_capture_paths() {
@@ -372,7 +432,10 @@ mod tests {
                 w: 300,
                 h: 200,
             }),
-            processes: vec![crate::platform::CaptureProcess { pid: 123 }],
+            processes: vec![crate::platform::CaptureProcess {
+                pid: 123,
+                identity: Some("windows:133".to_string()),
+            }],
             segments: Vec::new(),
         };
         let state = super::PersistedCaptureState {
@@ -382,5 +445,74 @@ mod tests {
         let content = serde_json::to_string(&state).unwrap();
 
         assert_eq!(super::parse_capture_state(&content), Some(session));
+    }
+
+    #[test]
+    fn capture_state_without_a_helper_identity_reads_as_stale() {
+        let pid = std::process::id();
+        let cases = [
+            serde_json::json!({
+                "version": super::CAPTURE_STATE_VERSION,
+                "session": {
+                    "output_file": null,
+                    "capture_file": null,
+                    "canvas": null,
+                    "processes": [{ "pid": pid }],
+                },
+            })
+            .to_string(),
+            format!("{pid}\n/a/final.mov\n"),
+        ];
+        for content in cases {
+            let state = super::parse_capture_state(&content).unwrap();
+            assert_eq!(state.processes[0].identity, None, "{content}");
+            assert!(!crate::platform::session_alive(&state), "{content}");
+            assert!(!crate::platform::session_started(&state), "{content}");
+        }
+    }
+
+    #[test]
+    fn a_recorded_process_is_alive_only_while_its_identity_matches() {
+        let pid = std::process::id();
+        let spawned = crate::platform::CaptureProcess::spawned(pid);
+        assert!(spawned.identity.is_some());
+        let cases = [
+            (spawned.identity.clone(), true),
+            (Some("stale-process-identity".to_string()), false),
+            (None, false),
+        ];
+        for (identity, alive) in cases {
+            let process = crate::platform::CaptureProcess {
+                pid,
+                identity: identity.clone(),
+            };
+            assert_eq!(process.alive(), alive, "{identity:?}");
+        }
+    }
+
+    #[test]
+    fn waiting_for_a_stop_ends_when_the_process_exits_or_the_grace_runs_out() {
+        let mut polls = 0;
+        let started = Instant::now();
+        let stopped = super::wait_until_stopped(
+            || {
+                polls += 1;
+                polls < 3
+            },
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+        );
+        assert!(stopped);
+        assert_eq!(polls, 3);
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        let started = Instant::now();
+        let stopped = super::wait_until_stopped(
+            || true,
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+        );
+        assert!(!stopped);
+        assert!(started.elapsed() >= Duration::from_millis(100));
     }
 }

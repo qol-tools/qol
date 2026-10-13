@@ -75,6 +75,7 @@ pub fn run() {
         qol_runtime::probe!("SHOT_DAEMON_EXIT", "reason=listener-unavailable");
         return;
     }
+    crate::platform::watch_daemon_stop(crate::capture::recording::stop_recording_for_daemon_exit);
 
     Application::new().run(move |cx: &mut App| {
         qol_gpui::fonts::install(cx);

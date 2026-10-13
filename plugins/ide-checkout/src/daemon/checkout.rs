@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -48,7 +49,7 @@ pub fn git_checkout(
 
     let remote = git_remote_url(project_path)?;
     let temp_path = temp_path_for(project_path, branch, config);
-    std::fs::create_dir_all(&config.temp_dir).map_err(|error| {
+    std::fs::create_dir_all(config.checkout_root()).map_err(|error| {
         CheckoutError::ExecutionFailed(format!("Failed to create temp dir: {error}"))
     })?;
 
@@ -86,10 +87,12 @@ fn validate_branch(branch: &str) -> Result<(), CheckoutError> {
 pub fn open_app(app_id: &str, path: &str, config: &Config) -> Result<(), CheckoutError> {
     let executable = find_executable(app_id, config)
         .ok_or_else(|| CheckoutError::ExecutionFailed(format!("App '{app_id}' not found")))?;
-    let launch_path = std::fs::canonicalize(path).map_err(|error| {
+    let launch_path = super::platform::launch_path(Path::new(path)).map_err(|error| {
         CheckoutError::InvalidParams(format!("Could not resolve app path: {error}"))
     })?;
-    Command::new(executable)
+    let mut command = Command::new(executable);
+    qol_process::hide_console_window(&mut command);
+    command
         .arg(launch_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -147,7 +150,7 @@ fn temp_path_for(project_path: &str, branch: &str, config: &Config) -> PathBuf {
             }
         })
         .collect();
-    config.temp_dir.join(format!("{repo}_{safe_branch}"))
+    config.checkout_root().join(format!("{repo}_{safe_branch}"))
 }
 
 fn refresh_existing(temp_path: &Path, branch: &str) -> Result<(), CheckoutError> {
@@ -252,6 +255,7 @@ fn spawn_git(
     stderr: Stdio,
 ) -> Result<Child, CheckoutError> {
     let mut command = Command::new("git");
+    qol_process::hide_console_window(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())
@@ -291,23 +295,75 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Result<(), Checkou
 
 pub(crate) fn find_executable(app_id: &str, config: &Config) -> Option<PathBuf> {
     let app = config.apps.get(app_id)?;
-    app.paths
-        .iter()
-        .map(|path| expand_tilde(path))
-        .find(|path| is_executable(path))
+    app.paths.iter().find_map(|entry| resolve_launcher(entry))
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+pub(crate) fn executable_on_path(program: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    executable_in_directories(program, std::env::split_paths(&paths))
+}
+
+fn executable_in_directories(
+    program: &str,
+    directories: impl IntoIterator<Item = PathBuf>,
+) -> Option<PathBuf> {
+    directories
+        .into_iter()
+        .flat_map(|directory| super::platform::executable_candidates(&directory, program))
+        .find(|candidate| super::platform::is_executable(candidate))
+}
+
+fn resolve_launcher(entry: &str) -> Option<PathBuf> {
+    if is_bare_program(entry) {
+        return executable_on_path(entry);
     }
-    PathBuf::from(path)
+    let path = expand_path(entry);
+    super::platform::is_executable(&path).then_some(path)
 }
 
-fn is_executable(path: &Path) -> bool {
-    super::is_executable(path)
+fn is_bare_program(entry: &str) -> bool {
+    !entry.is_empty() && !entry.starts_with('~') && !entry.contains(['/', '\\', '%', ':'])
+}
+
+fn expand_path(entry: &str) -> PathBuf {
+    expand_path_with(entry, dirs::home_dir().as_deref(), |name| {
+        std::env::var_os(name)
+    })
+}
+
+fn expand_path_with(
+    entry: &str,
+    home: Option<&Path>,
+    variable: impl Fn(&str) -> Option<OsString>,
+) -> PathBuf {
+    let home_relative = entry
+        .strip_prefix("~/")
+        .or_else(|| entry.strip_prefix("~\\"));
+    if let (Some(rest), Some(home)) = (home_relative, home) {
+        return home.join(expand_variables(rest, &variable));
+    }
+    PathBuf::from(expand_variables(entry, &variable))
+}
+
+fn expand_variables(text: &str, variable: &impl Fn(&str) -> Option<OsString>) -> OsString {
+    let mut expanded = OsString::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('%') else {
+            break;
+        };
+        let name = &after[..end];
+        let value = (!name.is_empty()).then(|| variable(name)).flatten();
+        expanded.push(&rest[..start]);
+        match value {
+            Some(value) => expanded.push(value),
+            None => expanded.push(&rest[start..start + end + 2]),
+        }
+        rest = &after[end + 1..];
+    }
+    expanded.push(rest);
+    expanded
 }
 
 #[cfg(test)]
@@ -369,6 +425,75 @@ mod tests {
         );
         let config = config_with(apps, PathBuf::from("/tmp"));
         assert_eq!(find_executable("idea", &config), Some(exe));
+    }
+
+    #[test]
+    fn expand_path_resolves_home_and_environment_tokens() {
+        let home = Path::new("/home/me");
+        let cases: [(&str, Option<&Path>, PathBuf); 7] = [
+            ("~/bin/zed", Some(home), home.join("bin/zed")),
+            ("~\\bin\\zed", Some(home), home.join("bin\\zed")),
+            ("~/bin/zed", None, PathBuf::from("~/bin/zed")),
+            (
+                "%LOCALAPPDATA%\\Programs\\Code.exe",
+                None,
+                PathBuf::from("C:\\Users\\me\\AppData\\Local\\Programs\\Code.exe"),
+            ),
+            (
+                "%MISSING%\\Code.exe",
+                None,
+                PathBuf::from("%MISSING%\\Code.exe"),
+            ),
+            ("100%%done", None, PathBuf::from("100%%done")),
+            ("/usr/bin/code", Some(home), PathBuf::from("/usr/bin/code")),
+        ];
+        for (entry, home, expected) in cases {
+            let expanded = expand_path_with(entry, home, |name| {
+                (name == "LOCALAPPDATA").then(|| OsString::from("C:\\Users\\me\\AppData\\Local"))
+            });
+            assert_eq!(expanded, expected, "entry={entry:?}");
+        }
+    }
+
+    #[test]
+    fn bare_program_names_use_path_lookup() {
+        let cases = [
+            ("code", true),
+            ("idea64", true),
+            ("", false),
+            ("~/bin/zed", false),
+            ("/usr/bin/code", false),
+            ("C:\\Tools\\code.exe", false),
+            ("C:code.exe", false),
+            ("%LOCALAPPDATA%\\Code.exe", false),
+        ];
+        for (entry, expected) in cases {
+            assert_eq!(is_bare_program(entry), expected, "entry={entry:?}");
+        }
+    }
+
+    #[test]
+    fn path_lookup_finds_a_program_without_executing_it() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let executable = root
+            .path()
+            .join(format!("git{}", std::env::consts::EXE_SUFFIX));
+        let marker = root.path().join("launched");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\ntouch \"$(dirname \"$0\")/launched\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let found = executable_in_directories("git", [root.path().to_path_buf()]);
+
+        assert_eq!(found.as_deref(), Some(executable.as_path()));
+        assert!(!marker.exists());
     }
 
     #[test]

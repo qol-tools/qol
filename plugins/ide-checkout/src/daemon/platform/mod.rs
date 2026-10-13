@@ -6,8 +6,14 @@ mod unsupported;
 mod windows;
 
 #[cfg(unix)]
-pub(super) use unix::{inherited_listener, is_executable, spawn_host_death_watchdog};
+pub(super) use unix::{
+    executable_candidates, inherited_listener, is_executable, launch_path, system_temp_dir,
+};
 #[cfg(not(any(unix, windows)))]
-pub(super) use unsupported::{inherited_listener, is_executable, spawn_host_death_watchdog};
+pub(super) use unsupported::{
+    executable_candidates, inherited_listener, is_executable, launch_path, system_temp_dir,
+};
 #[cfg(windows)]
-pub(super) use windows::{inherited_listener, is_executable, spawn_host_death_watchdog};
+pub(super) use windows::{
+    executable_candidates, inherited_listener, is_executable, launch_path, system_temp_dir,
+};

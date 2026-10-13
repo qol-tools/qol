@@ -129,7 +129,7 @@ pub(super) struct BridgeAttach {
 #[derive(Debug)]
 pub(super) struct BridgeOwner {
     file: File,
-    path: PathBuf,
+    pid_path: PathBuf,
     binding: String,
     attaches: Arc<Mutex<HashMap<String, Arc<BridgeAttach>>>>,
     attach: Option<Arc<BridgeAttach>>,
@@ -157,7 +157,7 @@ impl Drop for BridgeOwner {
                 attaches.remove(&self.binding);
             }
         }
-        let _ = fs::write(&self.path, "");
+        let _ = fs::write(&self.pid_path, "");
         let _ = self.file.unlock();
     }
 }
@@ -787,6 +787,7 @@ impl PendingBridgeStore {
                                 let _ = fs::remove_file(self.role_lock_for(&binding));
                                 let _ = fs::remove_file(self.lock_for(&binding));
                                 let _ = fs::remove_file(self.owner_for(&binding));
+                                let _ = fs::remove_file(self.owner_pid_for(&binding));
                             }
                         }
                     }
@@ -827,7 +828,7 @@ impl PendingBridgeStore {
                             "event=owner_conflict target_backend={}",
                             binding.session_id().backend()
                         );
-                        bail!("{}", self.owner_conflict(binding, &path));
+                        bail!("{}", self.owner_conflict(binding));
                     }
                     if Instant::now() >= deadline {
                         qol_runtime::probe!(
@@ -835,7 +836,7 @@ impl PendingBridgeStore {
                             "event=owner_supersede_timeout target_backend={}",
                             binding.session_id().backend()
                         );
-                        bail!("{}", self.owner_conflict(binding, &path));
+                        bail!("{}", self.owner_conflict(binding));
                     }
                     drop(attaches);
                     std::thread::sleep(ATTACH_TAKEOVER_POLL);
@@ -845,7 +846,9 @@ impl PendingBridgeStore {
                 }
             }
         };
-        fs::write(&path, process::id().to_string()).context("failed to record the bridge owner")?;
+        let pid_path = self.owner_pid_for(binding);
+        fs::write(&pid_path, owner_record(process::id()))
+            .context("failed to record the bridge owner")?;
         let attach = cancel.map(|cancel| {
             Arc::new(BridgeAttach {
                 cancel,
@@ -857,16 +860,16 @@ impl PendingBridgeStore {
         }
         Ok(BridgeOwner {
             file,
-            path,
+            pid_path,
             binding: binding.token(),
             attaches: Arc::clone(&self.attaches),
             attach,
         })
     }
 
-    fn owner_conflict(&self, binding: &SessionBinding, path: &Path) -> String {
-        let owner = fs::read_to_string(path).unwrap_or_default();
-        let owner = owner.trim();
+    fn owner_conflict(&self, binding: &SessionBinding) -> String {
+        let owner = fs::read_to_string(self.owner_pid_for(binding)).unwrap_or_default();
+        let owner = owner.lines().next().unwrap_or_default().trim();
         let owner = if owner.is_empty() { "unknown" } else { owner };
         format!(
             "another bridge process (pid {owner}) is already attached to `{binding}`; never start a second one - run `qol sessions next {}` and follow the command it prints",
@@ -892,13 +895,15 @@ impl PendingBridgeStore {
     }
 
     pub(super) fn owner_pid(&self, binding: &SessionBinding) -> Option<String> {
-        let recorded = fs::read_to_string(self.owner_for(binding)).ok()?;
-        let recorded = recorded.trim();
+        let recorded = fs::read_to_string(self.owner_pid_for(binding)).ok()?;
+        let mut lines = recorded.lines().map(str::trim);
+        let recorded = lines.next()?;
         let pid = recorded.parse::<u32>().ok()?;
-        if pid != process::id() && qol_process::is_pid_gone(pid) {
-            return None;
-        }
-        Some(recorded.to_owned())
+        let alive = match lines.next().filter(|identity| !identity.is_empty()) {
+            Some(identity) => qol_process::process_identity_matches(pid, identity),
+            None => pid == process::id() || !qol_process::is_pid_gone(pid),
+        };
+        alive.then(|| recorded.to_owned())
     }
 
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
@@ -948,6 +953,10 @@ impl PendingBridgeStore {
 
     fn owner_for(&self, binding: &SessionBinding) -> PathBuf {
         self.file_for(binding).with_extension("owner")
+    }
+
+    fn owner_pid_for(&self, binding: &SessionBinding) -> PathBuf {
+        self.file_for(binding).with_extension("pid")
     }
 }
 
@@ -2240,6 +2249,13 @@ fn exit_status_reason(status: &std::process::ExitStatus) -> String {
         .unwrap_or_else(|| "terminated by signal".to_owned())
 }
 
+fn owner_record(pid: u32) -> String {
+    match qol_process::process_identity(pid) {
+        Ok(identity) => format!("{pid}\n{identity}"),
+        Err(_) => pid.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2590,7 +2606,9 @@ mod tests {
         );
         let closer = Arc::clone(&backend);
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
+            while closer.calls.lock().unwrap().len() < 2 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
             closer.mark_gone();
         });
         let strategy = Arc::new(PiWaitStrategy {
@@ -3450,6 +3468,30 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_owner_counts_only_while_its_process_identity_matches() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = SessionBinding::from_str("v1:fake:13:1300").unwrap();
+        let path = store.owner_pid_for(&binding);
+        let own = process::id();
+
+        fs::write(&path, owner_record(own)).unwrap();
+        assert_eq!(store.owner_pid(&binding), Some(own.to_string()));
+        fs::write(&path, format!("{own}\nstale:0")).unwrap();
+        assert_eq!(
+            store.owner_pid(&binding),
+            None,
+            "a reused pid is not the recorded owner"
+        );
+        fs::write(&path, own.to_string()).unwrap();
+        assert_eq!(
+            store.owner_pid(&binding),
+            Some(own.to_string()),
+            "a record from an older bridge falls back to the pid"
+        );
+    }
+
+    #[test]
     fn only_one_process_can_own_a_session_bridge_at_a_time() {
         let root = tempfile::TempDir::new().unwrap();
         let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
@@ -4003,7 +4045,7 @@ mod tests {
     }
 
     fn age_file(path: &std::path::Path, age: Duration) {
-        let file = fs::File::open(path).unwrap();
+        let file = fs::File::options().write(true).open(path).unwrap();
         let times = std::fs::FileTimes::new().set_modified(SystemTime::now() - age);
         file.set_times(times).unwrap();
     }

@@ -25,25 +25,10 @@ pub(crate) fn probe_daemon_readiness_with_timeout(
     socket: &Path,
     timeout: Duration,
 ) -> DaemonReadiness {
-    platform_readiness(socket, timeout)
-}
-
-#[cfg(unix)]
-fn platform_readiness(socket: &Path, timeout: Duration) -> DaemonReadiness {
-    unix_readiness(socket, timeout)
-}
-
-#[cfg(not(unix))]
-fn platform_readiness(_socket: &Path, _timeout: Duration) -> DaemonReadiness {
-    DaemonReadiness::Unknown
-}
-
-#[cfg(unix)]
-fn unix_readiness(socket: &Path, timeout: Duration) -> DaemonReadiness {
+    use qol_runtime::local_ipc::LocalStream;
     use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
     use std::io::{BufRead, BufReader, Write};
     use std::net::Shutdown;
-    use std::os::unix::net::UnixStream;
 
     let Ok(mut payload) = serde_json::to_string(&DaemonRequest {
         action: "ping".to_string(),
@@ -52,7 +37,7 @@ fn unix_readiness(socket: &Path, timeout: Duration) -> DaemonReadiness {
         return DaemonReadiness::Unknown;
     };
     payload.push('\n');
-    let Ok(mut stream) = UnixStream::connect(socket) else {
+    let Ok(mut stream) = LocalStream::connect(socket) else {
         return DaemonReadiness::Unknown;
     };
     if qol_runtime::local_ipc::authorize_peer(&stream).is_err() {

@@ -5,6 +5,8 @@ use std::ptr;
 use anyhow::{ensure, Result};
 use x11::xlib;
 
+use crate::cursor::platform::shake::{FocusProbe, GameFocus};
+
 const GAME_ENVIRONMENT_KEYS: &[&str] = &[
     "SteamGameId",
     "SteamAppId",
@@ -21,25 +23,6 @@ pub(super) struct GameFocusDetector {
     window_fullscreen_atom: xlib::Atom,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct GameFocus {
-    pub active: bool,
-    pub window_id: Option<u64>,
-    pub pid: Option<u32>,
-    pub evidence: Option<&'static str>,
-}
-
-impl GameFocus {
-    pub const fn inactive() -> Self {
-        Self {
-            active: false,
-            window_id: None,
-            pid: None,
-            evidence: None,
-        }
-    }
-}
-
 impl GameFocusDetector {
     pub fn open() -> Result<Self> {
         let display = unsafe { xlib::XOpenDisplay(ptr::null()) };
@@ -54,8 +37,10 @@ impl GameFocusDetector {
             window_fullscreen_atom: intern_atom(display, c"_NET_WM_STATE_FULLSCREEN"),
         })
     }
+}
 
-    pub fn active_window_is_fullscreen(&self) -> bool {
+impl FocusProbe for GameFocusDetector {
+    fn active_window_is_fullscreen(&self) -> bool {
         let Some(window_id) = property_ulong(
             self.display,
             self.root,
@@ -69,7 +54,7 @@ impl GameFocusDetector {
         contains_fullscreen(&states, self.window_fullscreen_atom)
     }
 
-    pub fn probe(&self) -> GameFocus {
+    fn probe(&self) -> GameFocus {
         let window_id = property_ulong(
             self.display,
             self.root,

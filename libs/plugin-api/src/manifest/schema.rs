@@ -342,6 +342,8 @@ pub struct Capabilities {
     #[serde(default)]
     pub doctor: bool,
     #[serde(default)]
+    pub release_host: bool,
+    #[serde(default)]
     pub permissions: Vec<Permission>,
     #[serde(default)]
     pub peer_trust: Option<PeerTrust>,

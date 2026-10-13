@@ -20,7 +20,7 @@ pub fn rule_path() -> PathBuf {
 #[cfg(any(test, feature = "sandbox"))]
 fn crash_point(point: &str) -> Result<()> {
     if std::env::var("QOL_RESIDENT_CRASH_POINT").as_deref() == Ok(point) {
-        unsafe { libc::abort() };
+        std::process::abort();
     }
     Ok(())
 }

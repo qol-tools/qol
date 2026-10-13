@@ -1,4 +1,4 @@
-use crate::desktop_state::{FocusedWindow, Platform};
+use crate::desktop_state::{fingerprint_windows, FocusedWindow, Platform};
 use qol_runtime::{display::x11, MonitorBounds};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
@@ -134,18 +134,11 @@ impl Platform for LinuxQueries {
         if ids.is_empty() {
             return None;
         }
-        let active_window =
-            get_active_window_id(conn, self.root, self.active_window_atom).unwrap_or(0);
-        let mut h: u64 = 0;
-        for id in ids {
-            let mut x = (id as u64).wrapping_mul(0x9E3779B97F4A7C15);
-            x ^= x >> 32;
-            h ^= x;
-        }
-        let mut x = (active_window as u64).wrapping_mul(0x9E3779B97F4A7C15);
-        x ^= x >> 32;
-        h ^= x;
-        Some(h)
+        let active_window = get_active_window_id(conn, self.root, self.active_window_atom);
+        Some(fingerprint_windows(
+            ids.into_iter().map(u64::from),
+            active_window.map(u64::from),
+        ))
     }
 }
 

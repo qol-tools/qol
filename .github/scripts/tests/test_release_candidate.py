@@ -140,6 +140,7 @@ class SourceCiTests(unittest.TestCase):
             {"name": "Plan affected crates", "conclusion": "success"},
             {"name": "lint + test (ubuntu-latest)", "conclusion": "success"},
             {"name": "lint + test (macos-latest)", "conclusion": "success"},
+            {"name": "lint + test (windows-latest)", "conclusion": "success"},
             {"name": "sandbox lifecycle (windows)", "conclusion": "skipped"},
         ]
 
@@ -265,11 +266,13 @@ class SourceCiTests(unittest.TestCase):
         skipped = {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"}
         ubuntu = {"name": "release build (ubuntu-latest)", "conclusion": "success"}
         macos = {"name": "release build (macos-latest)", "conclusion": "success"}
+        windows = {"name": "release build (windows-latest)", "conclusion": "success"}
         cases = [
-            ([plan, skipped, ubuntu, macos], None),
-            ([plan, skipped, ubuntu], "release build \\(macos-latest\\)"),
+            ([plan, skipped, ubuntu, macos, windows], None),
+            ([plan, skipped, ubuntu, windows], "release build \\(macos-latest\\)"),
+            ([plan, skipped, ubuntu, macos], "release build \\(windows-latest\\)"),
             (
-                [plan, skipped, ubuntu, {**macos, "conclusion": "failure"}],
+                [plan, skipped, ubuntu, {**macos, "conclusion": "failure"}, windows],
                 "release build \\(macos-latest\\)",
             ),
             ([plan, skipped], "lacks successful jobs"),
@@ -663,6 +666,26 @@ class BuildNodeTests(unittest.TestCase):
                         "x86_64-apple-darwin",
                         "--bin",
                         "qol-tray",
+                    ],
+                    verify,
+                ],
+            ),
+            (
+                "qol-tray-windows",
+                None,
+                None,
+                [
+                    [
+                        "cargo",
+                        "build",
+                        "--release",
+                        "--locked",
+                        "--target",
+                        "x86_64-pc-windows-msvc",
+                        "--bin",
+                        "qol-tray",
+                        "--bin",
+                        "qol-tray-install",
                     ],
                     verify,
                 ],

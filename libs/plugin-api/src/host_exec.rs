@@ -58,7 +58,7 @@ pub fn post_to_daemon_with_timeout(
 }
 
 fn daemon_client(timeout: Duration) -> io::Result<Client> {
-    Ok(Client::new(qol_conventions::DEFAULT_PORT, read_auth_token()?).with_io_timeout(timeout))
+    Ok(Client::tray(read_auth_token()?).with_io_timeout(timeout))
 }
 
 pub fn run_exec(target: &str, action: &str) -> Result<(), String> {

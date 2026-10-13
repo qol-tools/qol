@@ -104,3 +104,45 @@ pub fn companion_input(output: &Identity) -> Result<Option<Identity>, AudioError
 pub fn resolve(direction: Direction, requested: &str) -> Result<Resolution, AudioError> {
     platform::resolve_audio_device(direction, requested)
 }
+
+impl Kind {
+    pub fn picture(self, direction: Direction) -> &'static str {
+        match (direction, self) {
+            (Direction::Input, Kind::Bluetooth) => "headset",
+            (Direction::Input, Kind::Usb) => "usb-mic",
+            (Direction::Input, _) => "mic-default",
+            (Direction::Output, Kind::Bluetooth | Kind::Usb) => "headphones",
+            (Direction::Output, Kind::Hdmi) => "hdmi",
+            (Direction::Output, _) => "speaker-default",
+        }
+    }
+}
+
+impl Resolution {
+    pub fn among(devices: &[AudioDevice], requested: &str) -> Self {
+        let exact = devices
+            .iter()
+            .filter(|device| device.identity.as_str() == requested)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !exact.is_empty() {
+            return Self::narrow(exact);
+        }
+        let labelled = devices
+            .iter()
+            .filter(|device| device.label.eq_ignore_ascii_case(requested))
+            .cloned()
+            .collect::<Vec<_>>();
+        Self::narrow(labelled)
+    }
+
+    fn narrow(mut matches: Vec<AudioDevice>) -> Self {
+        if matches.len() > 1 {
+            return Self::Ambiguous(matches);
+        }
+        match matches.pop() {
+            Some(device) => Self::Resolved(device),
+            None => Self::NotFound,
+        }
+    }
+}

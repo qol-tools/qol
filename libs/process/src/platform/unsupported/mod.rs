@@ -117,6 +117,14 @@ pub(crate) fn install_cancellation_handler() -> io::Result<()> {
     Err(unsupported())
 }
 
+pub(crate) fn wait_for_stop_request() -> io::Result<()> {
+    Err(unsupported())
+}
+
+pub(crate) fn on_stop_request(_hook: fn()) -> io::Result<()> {
+    Err(unsupported())
+}
+
 pub(crate) fn cancellation_requested() -> bool {
     false
 }
@@ -143,6 +151,18 @@ pub(crate) fn process_identity(_pid: u32) -> io::Result<String> {
 
 pub(crate) fn process_identity_matches(_actual: &str, _expected: &str) -> bool {
     false
+}
+
+pub(crate) fn process_start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
+pub(crate) fn request_stop_if_identity(_pid: u32, _expected: &str) -> io::Result<bool> {
+    Err(unsupported())
+}
+
+pub(crate) fn system_program_path(program: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(program)
 }
 
 pub(crate) fn signal_term_pid(_pid: u32) -> io::Result<()> {
@@ -179,6 +199,26 @@ pub(crate) fn terminate_owned(_child: &mut Child, _grace: Duration) -> io::Resul
     Err(unsupported())
 }
 
+pub(crate) fn bind_to_host_lifetime(_pid: u32) -> io::Result<()> {
+    Err(unsupported())
+}
+
+pub(crate) fn release_host_lifetime() -> io::Result<()> {
+    Err(unsupported())
+}
+
 pub(crate) fn spawn_detached(_command: &mut Command) -> io::Result<()> {
+    Err(unsupported())
+}
+
+pub(crate) fn hide_console_window(command: &mut Command) -> &mut Command {
+    command
+}
+
+pub(crate) fn processes() -> io::Result<Vec<crate::ProcessEntry>> {
+    Err(unsupported())
+}
+
+pub(crate) fn process_image_path(_pid: u32) -> io::Result<std::path::PathBuf> {
     Err(unsupported())
 }

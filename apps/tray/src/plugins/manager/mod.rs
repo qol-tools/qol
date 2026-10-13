@@ -15,6 +15,9 @@ use reload_delivery::{
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
+
+const DAEMON_HAND_OFF_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub struct PluginManager {
     plugins: HashMap<PluginId, Plugin>,
@@ -333,14 +336,14 @@ impl PluginManager {
         Some(DaemonInstance { pid, incarnation })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn acknowledged_plugin_generation(&self, plugin_id: &str) -> Option<u64> {
         self.last_reconciled_plugin_generations
             .get(plugin_id)
             .copied()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn has_pending_config_reload(&self, plugin_id: &str) -> bool {
         self.pending_reloads.is_pending(plugin_id)
     }
@@ -475,6 +478,21 @@ impl PluginManager {
             }
         }
         reached
+    }
+
+    pub fn hand_off_running_daemons(&self) {
+        let sockets = self
+            .plugins
+            .values()
+            .filter(|plugin| plugin.daemon_pid().is_some())
+            .filter_map(crate::plugins::action_executor::daemon_socket);
+        for socket in sockets {
+            crate::plugins::action_transport::dispatch_daemon_action_with_timeout(
+                &socket,
+                "kill",
+                DAEMON_HAND_OFF_TIMEOUT,
+            );
+        }
     }
 
     pub fn running_gpui_daemon_ids(&self) -> Vec<PluginId> {
@@ -717,6 +735,48 @@ items = []
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0].as_str(), "plugin-gpui-running");
 
+        manager.shutdown();
+    }
+
+    #[test]
+    fn hand_off_tells_each_running_daemon_its_successor_is_coming() {
+        use std::io::Write;
+
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let socket = crate::dev_generation::daemon_socket_path("plugin-handoff.sock");
+        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = qol_runtime::local_ipc::bind_listener(&socket).unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let line = qol_runtime::local_ipc::read_line(&mut std::io::BufReader::new(&stream))
+                .unwrap()
+                .unwrap();
+            stream.write_all(b"{\"status\":\"handled\"}\n").unwrap();
+            let request: qol_runtime::protocol::DaemonRequest =
+                serde_json::from_str(&line).unwrap();
+            let _ = sent.send(request.action);
+        });
+        let mut exiting = if cfg!(unix) {
+            std::process::Command::new("true")
+        } else {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "exit", "0"]);
+            command
+        };
+        let mut running = plugin_with_daemon("plugin-handoff", false, exiting.spawn().unwrap());
+        running.manifest.daemon.as_mut().unwrap().socket = Some("plugin-handoff.sock".into());
+        let mut manager = PluginManager::new();
+        manager
+            .plugins
+            .insert(PluginId::new("plugin-handoff"), running);
+
+        manager.hand_off_running_daemons();
+
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(5)).as_deref(),
+            Ok("kill")
+        );
         manager.shutdown();
     }
 }

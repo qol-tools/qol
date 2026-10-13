@@ -5,7 +5,7 @@ use foreign_types_shared::ForeignType;
 use qol_hotkeys::macos_keycode as keycode;
 use qol_runtime::event_tap_trace::{TraceSink, QUEUE_DEPTH};
 
-use crate::platform::macos::app::remap::{self, KeyAction, Modifiers, ResolvedConfig};
+use crate::platform::engine::remap::{self, KeyAction, Modifiers, ResolvedConfig};
 use crate::platform::macos::input::{marker_for, MarkerBook};
 
 static TRACE_KEYS: LazyLock<bool> =

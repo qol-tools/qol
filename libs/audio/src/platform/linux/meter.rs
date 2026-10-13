@@ -102,7 +102,7 @@ enum Event {
 
 fn target(connection: &mut Connection, direction: Direction) -> Result<Target, AudioError> {
     let node =
-        default_node(connection, direction)?.ok_or_else(|| super::mute::no_default(direction))?;
+        default_node(connection, direction)?.ok_or_else(|| AudioError::no_default(direction))?;
     let source_index = match direction {
         Direction::Output => node.monitor_source_index.ok_or_else(|| {
             AudioError::Operation(format!(

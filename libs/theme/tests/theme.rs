@@ -883,8 +883,10 @@ fn surface_sources(workspace: &Path) -> Vec<(String, std::path::PathBuf)> {
             let relative = path
                 .strip_prefix(workspace)
                 .unwrap_or(&path)
-                .display()
-                .to_string();
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             found.push((relative, path));
         }
     }

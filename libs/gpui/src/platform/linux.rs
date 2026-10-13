@@ -152,6 +152,14 @@ pub(crate) fn readback_matches(
     }
 }
 
+pub(crate) fn display_scale_factor(_display: gpui::DisplayId) -> f32 {
+    1.0
+}
+
+pub(crate) fn monitor_scale(_monitor: &gpui::Bounds<gpui::Pixels>) -> f32 {
+    1.0
+}
+
 fn owns_window(conn: &RustConnection, mut window: u32, target_pid: u32) -> bool {
     loop {
         if window_pid(conn, window) == Some(target_pid) {

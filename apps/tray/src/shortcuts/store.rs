@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -19,6 +20,12 @@ pub fn save(config: &ShortcutsConfig) -> Result<()> {
 }
 
 fn load_from(path: &Path) -> Result<ShortcutsConfig> {
+    let mut config = read_from(path)?;
+    retain_loadable(&mut config, path);
+    Ok(config)
+}
+
+fn read_from(path: &Path) -> Result<ShortcutsConfig> {
     if !path.exists() {
         log::debug!(
             "Shortcuts config missing; using default: {}",
@@ -44,6 +51,28 @@ fn load_from(path: &Path) -> Result<ShortcutsConfig> {
             Err(error)
         }
     }
+}
+
+fn retain_loadable(config: &mut ShortcutsConfig, path: &Path) {
+    let mut ids = HashSet::new();
+    config.shortcuts.retain(|shortcut| {
+        let verdict = validation::validate_shortcut(shortcut).and_then(|()| {
+            if ids.insert(shortcut.id.clone()) {
+                Ok(())
+            } else {
+                Err(format!("shortcut with id '{}' already exists", shortcut.id))
+            }
+        });
+        if let Err(error) = &verdict {
+            log::warn!(
+                "Shortcuts config entry skipped: id={:?} path={} error={}",
+                shortcut.id,
+                path.display(),
+                error
+            );
+        }
+        verdict.is_ok()
+    });
 }
 
 fn save_to(path: &Path, config: &ShortcutsConfig) -> Result<()> {
@@ -112,9 +141,10 @@ fn mutate_at(
     mutate: impl FnOnce(&mut ShortcutsConfig) -> Result<(), String>,
 ) -> Result<ShortcutsConfig, MutationError> {
     let _guard = mutation_guard()?;
-    let mut config = load_from(path).map_err(MutationError::Load)?;
+    let mut config = read_from(path).map_err(MutationError::Load)?;
     mutate(&mut config).map_err(MutationError::Rejected)?;
     save_to(path, &config).map_err(MutationError::Save)?;
+    retain_loadable(&mut config, path);
     Ok(config)
 }
 
@@ -178,7 +208,7 @@ pub fn reconcile_plugin_shortcuts<'a>(
 ) -> Result<bool> {
     let path = crate::paths::shortcuts_path()?;
     let _guard = mutation_guard()?;
-    let mut config = load_from(&path)?;
+    let mut config = read_from(&path)?;
     let changed = plugin_manifest::reconcile(&mut config, plugins);
     if changed {
         save_to(&path, &config)?;
@@ -351,6 +381,58 @@ mod tests {
             Some("docs".to_string())
         );
         assert!(find_by_id(&cfg, "missing").is_none());
+    }
+
+    #[test]
+    fn load_skips_entries_add_would_refuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shortcuts.json");
+        let mut escaping = url_shortcut("a/../../Startup/qol-probe", "Dup", "https://x.io");
+        escaping.export_to_launcher = true;
+        let config = ShortcutsConfig {
+            shortcuts: vec![
+                url_shortcut("docs", "Docs", "https://docs.io"),
+                escaping,
+                url_shortcut("unnamed", "", "https://x.io"),
+                url_shortcut("docs", "Twin", "https://twin.io"),
+                url_shortcut("kept", "Kept", "https://kept.io"),
+            ],
+        };
+        save_to(&path, &config).unwrap();
+
+        let loaded = load_from(&path).unwrap();
+
+        let ids: Vec<(&str, &str)> = loaded
+            .shortcuts
+            .iter()
+            .map(|shortcut| (shortcut.id.as_str(), shortcut.name.as_str()))
+            .collect();
+        assert_eq!(ids, [("docs", "Docs"), ("kept", "Kept")]);
+    }
+
+    #[test]
+    fn a_mutation_keeps_the_entries_the_loader_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shortcuts.json");
+        let config = ShortcutsConfig {
+            shortcuts: vec![
+                url_shortcut("unnamed", "", "https://x.io"),
+                url_shortcut("docs", "Docs", "https://docs.io"),
+            ],
+        };
+        save_to(&path, &config).unwrap();
+
+        let shown = create_at(&path, url_shortcut("new", "New", "https://new.io")).unwrap();
+
+        let ids = |config: &ShortcutsConfig| {
+            config
+                .shortcuts
+                .iter()
+                .map(|shortcut| shortcut.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&shown), ["docs", "new"]);
+        assert_eq!(ids(&read_from(&path).unwrap()), ["unnamed", "docs", "new"]);
     }
 
     #[test]

@@ -20,7 +20,7 @@ const TIMEOUT: Duration = Duration::from_millis(50);
 
 #[derive(Clone)]
 pub struct PlatformStateClient {
-    socket_path: PathBuf,
+    socket_path: Option<PathBuf>,
 }
 
 pub struct Subscription {
@@ -33,16 +33,20 @@ impl PlatformStateClient {
             .map(PathBuf::from)
             .or_else(|| {
                 qol_config::runtime_dir().map(|path| {
-                    path.join("sockets")
-                        .join(qol_conventions::STATE_SOCKET_FILE)
+                    crate::local_ipc::socket_path(
+                        &path.join("sockets"),
+                        std::ffi::OsStr::new(qol_conventions::STATE_SOCKET_FILE),
+                    )
                 })
             })
-            .unwrap_or_else(|| PathBuf::from(qol_conventions::STATE_SOCKET_PATH));
+            .or_else(platform::fallback_state_socket);
         Self { socket_path: path }
     }
 
     pub fn new(socket_path: PathBuf) -> Self {
-        Self { socket_path }
+        Self {
+            socket_path: Some(socket_path),
+        }
     }
 
     pub fn get_state(&self) -> Option<PlatformState> {
@@ -58,7 +62,7 @@ impl PlatformStateClient {
         request: &impl Serialize,
         read_timeout: Option<Duration>,
     ) -> Option<BufReader<Box<dyn platform::Connection>>> {
-        let mut stream = platform::connect(&self.socket_path).ok()?;
+        let mut stream = platform::connect(self.socket_path.as_deref()?).ok()?;
         stream.set_read_timeout(read_timeout).ok()?;
         stream.set_write_timeout(Some(TIMEOUT)).ok()?;
 
@@ -70,7 +74,7 @@ impl PlatformStateClient {
     }
 
     pub fn set_focus(&self, monitor_idx: usize) {
-        let Ok(mut stream) = platform::connect(&self.socket_path) else {
+        let Some(Ok(mut stream)) = self.socket_path.as_deref().map(platform::connect) else {
             return;
         };
         let _ = stream.set_write_timeout(Some(TIMEOUT));

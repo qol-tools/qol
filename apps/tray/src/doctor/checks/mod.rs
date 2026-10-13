@@ -35,6 +35,7 @@ mod rust_clippy;
 mod rust_formatting;
 #[cfg(feature = "dev")]
 mod single_source_guard;
+mod socket_paths;
 #[cfg(feature = "dev")]
 mod ttl_cell;
 
@@ -52,6 +53,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(install_identity::InstallIdentityCheck),
         Box::new(autostart_target::AutostartTargetCheck),
         Box::new(runtime_prereqs::PluginsDirCheck),
+        Box::new(socket_paths::SocketPathsCheck),
         Box::new(gpu_driver_sync::GpuDriverSyncCheck),
         Box::new(plugin_process_leaks::PluginProcessLeaksCheck),
         Box::new(hotkey_capture_backend::HotkeyCaptureBackendCheck),

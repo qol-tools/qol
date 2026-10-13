@@ -30,10 +30,6 @@ impl InstallerOps for Platform {
         unavailable()
     }
 
-    fn prepare_atomic_replace(&self, _installed_binary: &Path) -> Result<()> {
-        unavailable()
-    }
-
     fn should_bootstrap_current_install(&self, _binary_path: &Path) -> Result<bool> {
         Ok(false)
     }
@@ -49,4 +45,8 @@ impl InstallerOps for Platform {
     fn warn_system_install_conflict(&self) {}
 
     fn remove_legacy_install(&self) {}
+
+    fn uninstall(&self, _binary_path: &Path) -> Result<()> {
+        unavailable()
+    }
 }

@@ -101,7 +101,6 @@ impl SharedState {
         self.peers.get()
     }
 
-    #[cfg(any(unix, test))]
     pub(crate) fn peer_admin(
         &self,
         request: qol_peers::admin::Request,

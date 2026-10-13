@@ -16,7 +16,7 @@ default = true
 [field.pause_in_games]
 type = "boolean"
 label = "Pause in games"
-description = "Disable shake to grow while a Steam, Lutris, or GameMode game window is focused."
+description = "Disable shake to grow while a game window is focused: Steam, Lutris or GameMode on Linux; Steam, Xbox or Epic libraries and exclusive full-screen Direct3D on Windows."
 section = "shake_to_grow"
 default = true
 

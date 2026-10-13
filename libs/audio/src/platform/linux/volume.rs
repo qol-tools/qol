@@ -14,7 +14,7 @@ pub(crate) fn volume_percent(direction: Direction) -> Result<Option<u32>, AudioE
 pub(crate) fn set_volume_percent(direction: Direction, percent: u32) -> Result<(), AudioError> {
     super::with_connection(|connection| {
         let node = default_node(connection, direction)?
-            .ok_or_else(|| super::mute::no_default(direction))?;
+            .ok_or_else(|| AudioError::no_default(direction))?;
         let params = protocol::SetDeviceVolumeParams {
             device_index: Some(node.index),
             device_name: None,

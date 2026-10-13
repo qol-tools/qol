@@ -24,11 +24,11 @@ let serialPortDraft = null;
 let savingSerialPort = false;
 
 function parsePortPaths(value) {
-    return value.match(/\/dev\/[^,\s]+/g) || [];
+    return value.match(/\/dev\/[^,\s]+|\bCOM\d+\b/g) || [];
 }
 
 function parsePortDescriptions(value) {
-    return value.match(/\/dev\/[^,\s]+(?: \[[^\]]+\])?/g) || [];
+    return value.match(/(?:\/dev\/[^,\s]+|\bCOM\d+\b)(?: \[[^\]]+\])?/g) || [];
 }
 
 function coordinatorIssue() {

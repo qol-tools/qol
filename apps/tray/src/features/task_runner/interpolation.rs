@@ -4,42 +4,63 @@ pub(super) fn interpolate(template: &str, params: &HashMap<String, String>) -> S
     replace_template_vars(template, |key| params.get(key).cloned().unwrap_or_default())
 }
 
-pub(super) fn interpolate_shell(template: &str, params: &HashMap<String, String>) -> String {
-    replace_template_vars(template, |key| {
+pub(super) fn interpolate_shell(
+    template: &str,
+    params: &HashMap<String, String>,
+    mut quote: impl FnMut(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    let mut failure = None;
+    let script = replace_template_vars(template, |key| {
         let value = params.get(key).map(|item| item.as_str()).unwrap_or("");
-        shell_escape(value)
-    })
+        quote(value).unwrap_or_else(|error| {
+            failure.get_or_insert(format!("parameter {key}: {error}"));
+            String::new()
+        })
+    });
+    failure.map_or(Ok(script), Err)
 }
 
 fn replace_template_vars(template: &str, mut replacer: impl FnMut(&str) -> String) -> String {
     let mut result = String::with_capacity(template.len());
+    for part in template_parts(template) {
+        match part {
+            TemplatePart::Text(text) => result.push_str(text),
+            TemplatePart::Param(key) => result.push_str(&replacer(key)),
+        }
+    }
+    result
+}
+
+pub(super) enum TemplatePart<'a> {
+    Text(&'a str),
+    Param(&'a str),
+}
+
+pub(super) fn template_parts(template: &str) -> Vec<TemplatePart<'_>> {
+    let mut parts = Vec::new();
     let mut rest = template;
 
     while let Some(start) = rest.find("{{") {
-        result.push_str(&rest[..start]);
         let after_open = &rest[start + 2..];
 
         let Some(end) = after_open.find("}}") else {
-            result.push_str(&rest[start..]);
-            rest = "";
             break;
         };
 
         let key = &after_open[..end];
-        rest = &after_open[end + 2..];
+        let placeholder_end = start + 2 + end + 2;
 
-        if !valid_key(key) {
-            result.push_str("{{");
-            result.push_str(key);
-            result.push_str("}}");
-            continue;
+        if valid_key(key) {
+            parts.push(TemplatePart::Text(&rest[..start]));
+            parts.push(TemplatePart::Param(key));
+        } else {
+            parts.push(TemplatePart::Text(&rest[..placeholder_end]));
         }
-
-        result.push_str(&replacer(key));
+        rest = &rest[placeholder_end..];
     }
 
-    result.push_str(rest);
-    result
+    parts.push(TemplatePart::Text(rest));
+    parts
 }
 
 fn valid_key(key: &str) -> bool {
@@ -47,22 +68,6 @@ fn valid_key(key: &str) -> bool {
         && key
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-}
-
-fn shell_escape(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if is_shell_safe(value) {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-fn is_shell_safe(value: &str) -> bool {
-    value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || "-_@%+/=:,.".contains(ch))
 }
 
 #[cfg(test)]
@@ -251,36 +256,40 @@ mod tests {
     }
 
     #[test]
-    fn interpolate_shell_escapes_special_values() {
+    fn interpolate_shell_quotes_every_param() {
         let cases = [
-            ("echo {{missing}}", &[][..], "echo ''"),
+            ("echo {{missing}}", &[][..], "echo <>"),
             (
                 "echo {{msg}}",
                 &[("msg", "hello world")][..],
-                "echo 'hello world'",
+                "echo <hello world>",
             ),
-            (
-                "echo {{url}}",
-                &[("url", "https://example.com?q=1&x=2")][..],
-                "echo 'https://example.com?q=1&x=2'",
-            ),
-            (
-                "echo {{raw}}",
-                &[("raw", "safe_value-123")][..],
-                "echo safe_value-123",
-            ),
-            ("echo {{q}}", &[("q", "a'b")][..], "echo 'a'\"'\"'b'"),
+            ("{{a}}-{{a}}", &[("a", "x")][..], "<x>-<x>"),
+            ("echo {{bad-key}}", &[][..], "echo {{bad-key}}"),
         ];
 
         for (template, params, expected) in cases {
             let map = param_map(params);
             assert_eq!(
-                interpolate_shell(template, &map),
-                expected,
+                interpolate_shell(template, &map, |value| Ok(format!("<{value}>"))),
+                Ok(expected.to_string()),
                 "template: {:?}",
                 template
             );
         }
+    }
+
+    #[test]
+    fn interpolate_shell_names_the_param_its_quoter_rejects() {
+        let map = param_map(&[("ok", "fine"), ("msg", "bad")]);
+        let result = interpolate_shell("echo {{ok}} {{msg}}", &map, |value| {
+            if value == "bad" {
+                Err("rejected".to_string())
+            } else {
+                Ok(value.to_string())
+            }
+        });
+        assert_eq!(result, Err("parameter msg: rejected".to_string()));
     }
 
     proptest! {
@@ -296,66 +305,6 @@ mod tests {
             let template = format!("{prefix}{{{{{key}}}}}{suffix}");
             let map = [(key.clone(), value.clone())].into_iter().collect();
             prop_assert_eq!(interpolate(&template, &map), format!("{prefix}{value}{suffix}"));
-        }
-
-        #[test]
-        fn prop_interpolate_shell_keeps_safe_ascii(value in "[A-Za-z0-9_@%+/=:,.-]{1,32}") {
-            let map = [("value".to_string(), value.clone())].into_iter().collect();
-            prop_assert_eq!(interpolate_shell("{{value}}", &map), value);
-        }
-    }
-
-    #[cfg(unix)]
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(50))]
-
-        #[test]
-        fn prop_interpolate_shell_round_trips_through_bash(
-            value in "[\x20-\x7e]{0,40}".prop_filter("no NUL", |s| !s.contains('\0')),
-        ) {
-            let map = [("value".to_string(), value.clone())].into_iter().collect();
-            let escaped = interpolate_shell("{{value}}", &map);
-            let script = format!("printf '%s' {escaped}");
-            let output = std::process::Command::new("bash")
-                .arg("-c")
-                .arg(&script)
-                .output()
-                .expect("bash must run");
-            prop_assert!(
-                output.status.success(),
-                "bash failed for value={:?} escaped={:?} stderr={:?}",
-                value,
-                escaped,
-                String::from_utf8_lossy(&output.stderr),
-            );
-            let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-            prop_assert_eq!(
-                &stdout, &value,
-                "shell-escaped payload must round-trip; escaped={:?}",
-                escaped,
-            );
-        }
-
-        #[test]
-        fn prop_interpolate_shell_in_command_position_does_not_split_words(
-            value in "[\x20-\x7e]{1,40}".prop_filter("no NUL", |s| !s.contains('\0')),
-        ) {
-            let map = [("value".to_string(), value.clone())].into_iter().collect();
-            let escaped = interpolate_shell("{{value}}", &map);
-            let script = format!("set -- {escaped}; printf '%d' \"$#\"");
-            let output = std::process::Command::new("bash")
-                .arg("-c")
-                .arg(&script)
-                .output()
-                .expect("bash must run");
-            let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-            prop_assert_eq!(
-                &stdout, "1",
-                "escaped payload must be a single arg; value={:?} escaped={:?} got={:?}",
-                value,
-                escaped,
-                stdout,
-            );
         }
     }
 

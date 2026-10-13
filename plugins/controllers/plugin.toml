@@ -6,7 +6,7 @@ icon = "controllers"
 description = "Inspect connected game controllers and apply relevant driver-specific fixes"
 version = "0.47.1"
 author = "KMRH47"
-platforms = ["linux"]
+platforms = ["linux", "windows"]
 
 [runtime]
 command = "qol-controllers"

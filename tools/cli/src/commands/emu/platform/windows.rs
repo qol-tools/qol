@@ -1,6 +1,8 @@
 use std::ffi::c_void;
 use std::path::Path;
 
+use qol_platform::native::wide::wide_nul;
+
 type ModuleHandle = isize;
 type WhvGetCapability = unsafe extern "system" fn(i32, *mut c_void, u32, *mut u32) -> i32;
 
@@ -20,10 +22,7 @@ pub(crate) fn hypervisor_available() -> bool {
 }
 
 fn whpx_available() -> bool {
-    let library = "WinHvPlatform.dll"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+    let library = wide_nul("WinHvPlatform.dll");
     let module = unsafe { LoadLibraryW(library.as_ptr()) };
     if module == 0 {
         return false;

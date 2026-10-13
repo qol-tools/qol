@@ -1,10 +1,18 @@
 mod platform;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use qol_runtime::protocol::{DaemonRequest, NotificationLayout};
 
 const HOST_ARGUMENT: &str = "__qol-settings-surface-host";
+
+pub(crate) fn socket_path() -> PathBuf {
+    qol_runtime::local_ipc::socket_path(
+        &crate::paths::runtime_dir().join("sockets"),
+        std::ffi::OsStr::new(qol_conventions::SETTINGS_SURFACE_SOCKET_FILE),
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CoreTool {
@@ -147,7 +155,11 @@ mod tests {
 
     #[test]
     fn native_availability_matches_platform_dispatch() {
-        let expected = cfg!(any(target_os = "linux", target_os = "macos"));
+        let expected = cfg!(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows"
+        ));
         assert_eq!(super::native_available(), expected);
     }
 

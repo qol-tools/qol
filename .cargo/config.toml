@@ -7,6 +7,9 @@ setup = "install --path tools/cli --locked --force --debug"
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
 # macOS: libgit2-sys's openssl_init() (cfg unix+https) genuinely calls
 # openssl_sys::init() -> OPENSSL_init_ssl, so the probed system openssl gets
 # linked into the final binary. OPENSSL_STATIC embeds brew's libssl.a and

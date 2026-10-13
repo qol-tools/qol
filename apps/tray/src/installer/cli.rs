@@ -11,6 +11,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     )
 }
 
+pub fn uninstall() -> Result<()> {
+    let installed_binary = platform::install_dir()?.join(platform::binary_filename());
+    platform::uninstall(&installed_binary)?;
+    println!("QoL Tray was uninstalled.");
+    Ok(())
+}
+
 fn run_install(
     source_override: Option<&Path>,
     workspace_root: Option<&Path>,

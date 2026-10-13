@@ -114,6 +114,7 @@ pub(crate) fn open_cached(
             window,
             window_bounds.origin,
             window_bounds.size,
+            None,
         );
         window.focus(&view.focus_handle(cx));
         window.activate_window();

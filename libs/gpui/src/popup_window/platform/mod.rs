@@ -1,23 +1,26 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg_attr(windows, allow(dead_code))]
 mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 pub(super) trait PopupPresentation {
     fn present_topmost(title: &str);
     fn restore_composite(title: &str);
 }
 
-#[cfg(target_os = "windows")]
-use fallback as imp;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use fallback as imp;
 #[cfg(target_os = "linux")]
 use linux as imp;
 #[cfg(target_os = "macos")]
 use macos as imp;
+#[cfg(target_os = "windows")]
+use windows as imp;
 
 use imp::Platform as ActivePlatform;
 

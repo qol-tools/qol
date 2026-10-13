@@ -16,7 +16,7 @@ pub(super) fn known_window_ids_by_identity(
 }
 
 pub(super) fn process_identity(pid: i32) -> Option<ProcessIdentity> {
-    let start_time_us = qol_app_icon::process_start_time_us(pid)?;
+    let start_time_us = qol_process::process_start_time(u32::try_from(pid).ok()?)?;
     Some(ProcessIdentity { pid, start_time_us })
 }
 

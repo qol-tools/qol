@@ -4,19 +4,15 @@ mod platform;
 mod server;
 mod takeover;
 
-pub(crate) use checkout::find_executable;
+pub(crate) use checkout::{executable_on_path, find_executable};
 pub(crate) use config::{inspect as inspect_config, Config};
-
-pub(crate) fn is_executable(path: &std::path::Path) -> bool {
-    platform::is_executable(path)
-}
 
 pub(crate) fn open_settings() -> std::io::Result<()> {
     qol_apps::desktop_integration::open_plugin_settings_via_tray(env!("QOL_PLUGIN_ID"))
 }
 
 pub fn run() -> u8 {
-    platform::spawn_host_death_watchdog();
+    qol_runtime::spawn_host_death_watchdog();
     let config = config::Config::load();
     match server::serve(daemon_port(), config) {
         Ok(()) => 0,

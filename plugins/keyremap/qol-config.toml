@@ -15,7 +15,7 @@ default = true
 [field.excluded_apps]
 type = "string_array"
 label = "Excluded apps"
-description = "Bundle IDs where non-global remaps should be ignored."
+description = "Bundle IDs on macOS or executable names such as Code.exe on Windows where non-global remaps should be ignored."
 section = "general"
 card_description = "Apps where remaps stay off."
 item_label = "app"
@@ -125,7 +125,7 @@ global = "boolean"
 
 [section.modifier_keys]
 label = "Modifier keys"
-description = "Choose what each modifier key does, like the macOS Modifier Keys setting. Needs the keyboard helper."
+description = "Choose what each modifier key does, like the macOS Modifier Keys setting. Needs the keyboard helper on macOS. Windows has no Globe / fn key."
 
 [field.modifier_caps_lock]
 type = "select"

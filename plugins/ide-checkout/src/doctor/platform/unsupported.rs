@@ -5,5 +5,5 @@ pub(in crate::doctor) fn platform_supported_check() -> DoctorCheckResult {
         "platform_supported",
         format!("{} is not declared by IDE Checkout", std::env::consts::OS),
     )
-    .with_fix("Run IDE Checkout on Linux or macOS")
+    .with_fix("Run IDE Checkout on Linux, macOS or Windows")
 }

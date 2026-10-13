@@ -68,6 +68,9 @@ use std::{
 use strum::EnumIter;
 use uuid::Uuid;
 
+#[allow(missing_docs)]
+pub const SYNTHETIC_INPUT_TAG: u64 = 0x514f_4b52_0000_0000;
+
 pub use app_menu::*;
 pub use keyboard::*;
 pub use keystroke::*;

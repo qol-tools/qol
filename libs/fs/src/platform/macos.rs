@@ -26,3 +26,12 @@ pub(crate) fn prepare_file_removal(_: &Path) -> io::Result<()> {
 pub(crate) fn set_mode(file: &File, mode: u32) -> io::Result<()> {
     file.set_permissions(std::fs::Permissions::from_mode(mode))
 }
+
+pub fn file_identity(_: &Path, metadata: &std::fs::Metadata) -> Option<crate::FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    Some(crate::FileIdentity {
+        device: metadata.dev(),
+        index: u128::from(metadata.ino()),
+        links: metadata.nlink(),
+    })
+}

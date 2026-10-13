@@ -63,11 +63,6 @@ mod tests {
     use super::super::DoctorStatus;
     use super::*;
 
-    const EACCES: i32 = 13;
-    const EPERM: i32 = 1;
-    const ENOENT: i32 = 2;
-    const EBUSY: i32 = 16;
-
     struct MockProbe {
         outcome: io::Result<()>,
     }
@@ -85,8 +80,8 @@ mod tests {
         evaluate(&MockProbe { outcome })
     }
 
-    fn errno(code: i32) -> io::Result<()> {
-        Err(io::Error::from_raw_os_error(code))
+    fn failure(kind: io::ErrorKind) -> io::Result<()> {
+        Err(io::Error::from(kind))
     }
 
     #[test]
@@ -98,17 +93,20 @@ mod tests {
     }
 
     #[test]
-    fn eacces_maps_to_fail_with_grant_fix() {
-        let result = result_for(errno(EACCES));
+    fn permission_denied_maps_to_fail_with_grant_fix() {
+        let result = result_for(failure(io::ErrorKind::PermissionDenied));
         assert_eq!(result.status, DoctorStatus::Fail);
-        let fix = result.fix.expect("EACCES must carry a grant fix hint");
+        let fix = result
+            .fix
+            .expect("permission denied must carry a grant fix hint");
         assert!(fix.contains("udevadm control --reload-rules"));
         assert!(fix.contains("i2c group"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn eperm_maps_to_fail_with_grant_fix() {
-        let result = result_for(errno(EPERM));
+        let result = result_for(Err(io::Error::from_raw_os_error(libc::EPERM)));
         assert_eq!(result.status, DoctorStatus::Fail);
         let fix = result.fix.expect("EPERM must carry a grant fix hint");
         assert!(fix.contains("udevadm control --reload-rules"));
@@ -116,16 +114,18 @@ mod tests {
     }
 
     #[test]
-    fn enoent_maps_to_fail_with_modprobe_fix() {
-        let result = result_for(errno(ENOENT));
+    fn missing_device_maps_to_fail_with_modprobe_fix() {
+        let result = result_for(failure(io::ErrorKind::NotFound));
         assert_eq!(result.status, DoctorStatus::Fail);
-        let fix = result.fix.expect("ENOENT must carry a module fix hint");
+        let fix = result
+            .fix
+            .expect("a missing device must carry a module fix hint");
         assert!(fix.contains("modprobe i2c-dev"));
     }
 
     #[test]
-    fn ebusy_maps_to_warn_without_fix() {
-        let result = result_for(errno(EBUSY));
+    fn busy_device_maps_to_warn_without_fix() {
+        let result = result_for(failure(io::ErrorKind::ResourceBusy));
         assert_eq!(result.status, DoctorStatus::Warn);
         assert!(result.fix.is_none());
         assert!(result.message.contains("conflicting driver"));

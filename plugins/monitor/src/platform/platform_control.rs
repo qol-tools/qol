@@ -61,6 +61,10 @@ where
         self.brightness.set_brightness(handle, value)
     }
 
+    fn brightness_floor(&self, handle: &DisplayHandle) -> u8 {
+        self.brightness.brightness_floor(handle)
+    }
+
     fn set_brightness_with_tint(
         &self,
         handle: &DisplayHandle,
@@ -140,6 +144,10 @@ where
 
     fn restore(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
         self.brightness.restore(handle)
+    }
+
+    fn tint_capped(&self, handle: &DisplayHandle) -> bool {
+        self.brightness.tint_capped(handle)
     }
 }
 

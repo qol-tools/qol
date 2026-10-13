@@ -9,7 +9,7 @@ use gpui::{point, px, size, App, AppContext, AsyncApp, Bounds, Pixels, Size};
 use qol_window_state::{Monitor, Reopen, WindowState, WindowStateStore, SCHEMA_VERSION};
 use qol_windowing::{DisplayEnumerator, MonitorBounds, WindowRect};
 
-use crate::monitor::MonitorTracker;
+use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::placement::MonitorPlacement;
 
 mod platform;
@@ -47,7 +47,7 @@ impl WindowMemory {
 
 pub(crate) struct RestoredPlacement {
     pub(crate) bounds: Bounds<Pixels>,
-    pub(crate) monitor: Bounds<Pixels>,
+    pub(crate) monitor: ActiveMonitor,
 }
 
 pub(crate) struct Remembered {
@@ -99,16 +99,16 @@ impl Remembered {
             saved.bounds_on_monitor.width = content.width.to_f64();
             saved.bounds_on_monitor.height = content.height.to_f64();
         }
-        let monitors = current_monitors(cx);
-        let window = qol_window_state::resolve(&saved, &monitors)?;
-        let monitor = monitors
-            .iter()
-            .find(|monitor| contains(monitor.bounds, window))
-            .map(|monitor| monitor.bounds)?;
+        let (monitor, window) = resolved(&saved, cx)?;
         Some(RestoredPlacement {
             bounds: to_bounds(window),
-            monitor: to_bounds(rect_of(monitor)),
+            monitor,
         })
+    }
+
+    pub(crate) fn monitor(&self, cx: &App) -> Option<ActiveMonitor> {
+        let saved = self.last.borrow().clone()?;
+        resolved(&saved, cx).map(|(monitor, _)| monitor)
     }
 
     pub(crate) fn record_bounds(self: &Rc<Self>, bounds: Bounds<Pixels>, scale: f32, cx: &mut App) {
@@ -159,8 +159,12 @@ impl Remembered {
     }
 
     fn capture(&self, bounds: Bounds<Pixels>, scale: f32, open: bool, cx: &App) -> bool {
+        let monitors = current_monitors(cx)
+            .into_iter()
+            .map(|(monitor, _)| monitor)
+            .collect::<Vec<_>>();
         let Some((monitor, bounds_on_monitor)) =
-            qol_window_state::locate(rect_of_bounds(bounds), &current_monitors(cx))
+            qol_window_state::locate(rect_of_bounds(bounds), scale, &monitors)
         else {
             return false;
         };
@@ -233,16 +237,34 @@ fn install_flush_hooks(cx: &mut App) {
     platform::flush_on_termination(flush_all);
 }
 
-fn current_monitors(cx: &App) -> Vec<Monitor> {
+fn resolved(saved: &WindowState, cx: &App) -> Option<(ActiveMonitor, WindowRect)> {
+    let (monitors, natives): (Vec<_>, Vec<_>) = current_monitors(cx).into_iter().unzip();
+    let (monitor, window) = qol_window_state::resolve(saved, &monitors)?;
+    let index = monitors
+        .iter()
+        .position(|known| std::ptr::eq(known, monitor))?;
+    natives
+        .into_iter()
+        .nth(index)
+        .map(|native| (native, window))
+}
+
+fn current_monitors(cx: &App) -> Vec<(Monitor, ActiveMonitor)> {
     match qol_windowing::Platform.snapshot() {
         Ok(snapshots) if !snapshots.is_empty() => snapshots
             .into_iter()
-            .map(|snapshot| Monitor {
-                id: snapshot.handle.id().to_string(),
-                connector: snapshot.handle.connector().to_string(),
-                work_area: work_area(snapshot.bounds),
-                bounds: snapshot.bounds,
-                primary: snapshot.primary,
+            .map(|snapshot| {
+                let native = ActiveMonitor::from_bounds(snapshot.bounds);
+                let (bounds, work_area) = logical_areas(&native);
+                let monitor = Monitor {
+                    id: snapshot.handle.id().to_string(),
+                    connector: snapshot.handle.connector().to_string(),
+                    work_area,
+                    bounds,
+                    scale: native.scale(),
+                    primary: snapshot.primary,
+                };
+                (monitor, native)
             })
             .collect(),
         _ => MonitorTracker::start(cx)
@@ -250,14 +272,17 @@ fn current_monitors(cx: &App) -> Vec<Monitor> {
             .into_iter()
             .enumerate()
             .map(|(index, monitor)| {
-                let bounds = monitor_bounds(monitor.bounds());
-                Monitor {
-                    id: geometry_id(bounds),
-                    connector: geometry_id(bounds),
-                    work_area: work_area(bounds),
+                let id = geometry_id(monitor_bounds(monitor.bounds()));
+                let (bounds, work_area) = logical_areas(&monitor);
+                let known = Monitor {
+                    id: id.clone(),
+                    connector: id,
+                    work_area,
                     bounds,
+                    scale: monitor.scale(),
                     primary: index == 0,
-                }
+                };
+                (known, monitor)
             })
             .collect(),
     }
@@ -270,28 +295,11 @@ fn geometry_id(bounds: MonitorBounds) -> String {
     )
 }
 
-fn work_area(bounds: MonitorBounds) -> MonitorBounds {
-    crate::popup_window::work_area_within(to_bounds(rect_of(bounds)))
-        .map(monitor_bounds)
-        .unwrap_or(bounds)
-}
-
-fn contains(monitor: MonitorBounds, window: WindowRect) -> bool {
-    let x = window.x + window.width / 2.0;
-    let y = window.y + window.height / 2.0;
-    x >= f64::from(monitor.x)
-        && x < f64::from(monitor.x + monitor.width)
-        && y >= f64::from(monitor.y)
-        && y < f64::from(monitor.y + monitor.height)
-}
-
-fn rect_of(bounds: MonitorBounds) -> WindowRect {
-    WindowRect {
-        x: f64::from(bounds.x),
-        y: f64::from(bounds.y),
-        width: f64::from(bounds.width),
-        height: f64::from(bounds.height),
-    }
+fn logical_areas(monitor: &ActiveMonitor) -> (MonitorBounds, MonitorBounds) {
+    (
+        monitor_bounds(monitor.logical_bounds()),
+        monitor_bounds(monitor.logical_work_area()),
+    )
 }
 
 fn rect_of_bounds(bounds: Bounds<Pixels>) -> WindowRect {

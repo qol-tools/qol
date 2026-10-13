@@ -6,8 +6,9 @@ use qol_runtime::PlatformStateClient;
 
 /// Delivers a notification, push-first: sends it to the tray host over the
 /// runtime state socket when one is reachable, and falls back to the
-/// platform shell-out (`notify-send` on Linux, `osascript` on macOS) and
-/// finally to the process log when the push is unavailable or rejected.
+/// platform notifier (`notify-send` on Linux, `osascript` on macOS, a toast on
+/// Windows) and finally to the process log when the push is unavailable or
+/// rejected.
 /// Callers pass no urgency, so the push always carries
 /// [`NotificationLevel::Info`].
 pub fn send_notification(title: &str, message: &str) {

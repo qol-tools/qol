@@ -21,7 +21,7 @@ use crate::{Bounds, DevicePixels, DisplayId, Pixels, PlatformDisplay, logical_po
 pub(crate) struct WindowsDisplay {
     pub handle: HMONITOR,
     pub display_id: DisplayId,
-    scale_factor: f32,
+    pub scale_factor: f32,
     bounds: Bounds<Pixels>,
     physical_bounds: Bounds<DevicePixels>,
     uuid: Uuid,

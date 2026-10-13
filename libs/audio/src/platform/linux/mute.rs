@@ -13,7 +13,8 @@ pub(crate) fn is_muted(direction: Direction) -> Result<Option<bool>, AudioError>
 
 pub(crate) fn set_muted(direction: Direction, muted: bool) -> Result<(), AudioError> {
     super::with_connection(|connection| {
-        let node = default_node(connection, direction)?.ok_or_else(|| no_default(direction))?;
+        let node = default_node(connection, direction)?
+            .ok_or_else(|| AudioError::no_default(direction))?;
         let params = protocol::SetDeviceMuteParams {
             device_index: Some(node.index),
             device_name: None,
@@ -24,14 +25,4 @@ pub(crate) fn set_muted(direction: Direction, muted: bool) -> Result<(), AudioEr
             Direction::Input => protocol::Command::SetSourceMute(params),
         })
     })
-}
-
-pub(super) fn no_default(direction: Direction) -> AudioError {
-    AudioError::Operation(
-        match direction {
-            Direction::Output => "there is no default sound output",
-            Direction::Input => "there is no default microphone",
-        }
-        .to_owned(),
-    )
 }

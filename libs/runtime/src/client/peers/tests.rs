@@ -205,7 +205,7 @@ fn connection_failures_preserve_unsupported_and_credential_rejection() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[test]
 fn unsupported_transport_cannot_create_a_local_authority() {
     let client = PlatformStateClient::new(std::path::PathBuf::from("unused"));

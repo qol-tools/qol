@@ -19,7 +19,10 @@ pub fn required_binaries_check() -> DoctorCheckResult {
             crate::PLUGIN_ID
         ),
     )
-    .with_fix(format!("Run {} on Linux or macOS", crate::PLUGIN_ID))
+    .with_fix(format!(
+        "Run {} on Linux, macOS or Windows",
+        crate::PLUGIN_ID
+    ))
     .with_details(serde_json::json!({
         "platform": std::env::consts::OS,
         "executed": false,

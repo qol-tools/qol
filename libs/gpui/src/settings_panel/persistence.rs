@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use qol_conventions::DEFAULT_PORT;
 use qol_runtime::local_http::{Client, Method, Session};
 
 #[derive(serde::Deserialize)]
@@ -170,7 +169,7 @@ fn tray_client() -> anyhow::Result<Client> {
 
     let token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
         .context("tray HTTP authentication token is unavailable")?;
-    Ok(Client::new(DEFAULT_PORT, token).with_io_timeout(Duration::from_secs(2)))
+    Ok(Client::tray(token).with_io_timeout(Duration::from_secs(2)))
 }
 
 thread_local! {

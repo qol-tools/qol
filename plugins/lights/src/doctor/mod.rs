@@ -145,7 +145,7 @@ fn platform_supported_check() -> DoctorCheckResult {
         "platform_supported",
         format!("{} is not declared by Lights", metadata.name),
     )
-    .with_fix("Run Lights on Linux or macOS")
+    .with_fix("Run Lights on Linux, macOS or Windows")
     .with_details(details)
 }
 
@@ -222,7 +222,7 @@ fn serial_enumeration_warning(config: &PluginConfig, error: &str) -> DoctorCheck
         "coordinator_candidates",
         format!("Serial metadata enumeration is unavailable: {error}"),
     )
-    .with_fix("Inspect the configured coordinator path on Linux or macOS")
+    .with_fix("Reconnect the coordinator and check that its serial device is listed by the system")
     .with_details(json!({
         "configured_port": config.backend.serial_port,
         "serial_port_mode": serial_port_mode(&config.backend.serial_port),

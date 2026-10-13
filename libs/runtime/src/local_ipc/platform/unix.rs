@@ -22,6 +22,11 @@ pub(super) fn bind_listener(path: &Path) -> io::Result<LocalListener> {
     Ok(listener)
 }
 
+pub fn is_socket_file(path: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
+}
+
 pub(super) fn authorize_peer(stream: &LocalStream) -> io::Result<()> {
     let credential = peer_cred(stream)?;
     if is_same_uid(&credential) {
@@ -31,6 +36,15 @@ pub(super) fn authorize_peer(stream: &LocalStream) -> io::Result<()> {
         ErrorKind::PermissionDenied,
         "local IPC peer belongs to a different user",
     ))
+}
+
+pub fn peer_pid(stream: &LocalStream) -> io::Result<u32> {
+    peer_cred(stream)?.pid.ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::Unsupported,
+            "the local IPC peer's process id is unavailable",
+        )
+    })
 }
 
 #[cfg(test)]

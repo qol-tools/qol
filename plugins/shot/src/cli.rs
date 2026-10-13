@@ -222,8 +222,11 @@ fn plugin_config_paths() -> Result<Vec<PathBuf>> {
 }
 
 fn runtime_dirs_check() -> Result<DoctorCheckResult> {
-    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
-    check_runtime_dirs(&runtime_dirs_for_home(Path::new(&home)))
+    let videos = qol_apps::known_folder::videos_dir()
+        .ok_or_else(|| anyhow!("Videos folder is not known"))?;
+    let pictures = qol_apps::known_folder::pictures_dir()
+        .ok_or_else(|| anyhow!("Pictures folder is not known"))?;
+    check_runtime_dirs(&runtime_dirs(videos, pictures))
 }
 
 struct RuntimeDir {
@@ -231,15 +234,15 @@ struct RuntimeDir {
     path: PathBuf,
 }
 
-fn runtime_dirs_for_home(home: &Path) -> Vec<RuntimeDir> {
+fn runtime_dirs(videos: PathBuf, pictures: PathBuf) -> Vec<RuntimeDir> {
     vec![
         RuntimeDir {
             label: "Videos",
-            path: home.join("Videos"),
+            path: videos,
         },
         RuntimeDir {
             label: "Pictures",
-            path: home.join("Pictures"),
+            path: pictures,
         },
     ]
 }
@@ -262,7 +265,7 @@ fn check_runtime_dirs(dirs: &[RuntimeDir]) -> Result<DoctorCheckResult> {
             continue;
         }
 
-        if metadata.permissions().readonly() {
+        if crate::platform::directory_is_read_only(&metadata) {
             failures.push(format!("{} is read-only.", dir.path.display()));
         }
     }
@@ -396,7 +399,8 @@ mod tests {
         fs::create_dir(root.join("Videos")).unwrap();
         fs::write(root.join("Pictures"), "").unwrap();
 
-        let result = check_runtime_dirs(&runtime_dirs_for_home(&root)).unwrap();
+        let result =
+            check_runtime_dirs(&runtime_dirs(root.join("Videos"), root.join("Pictures"))).unwrap();
 
         assert_eq!(result.status, qol_headless::DoctorStatus::Fail);
         assert!(result.message.contains("Pictures"));

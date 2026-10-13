@@ -54,9 +54,9 @@ fn session_only_lifecycle_creates_no_credential_files() {
     assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 0);
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod persistent {
-    use std::{fs, os::unix::fs::symlink, path::Path, process::Command};
+    use std::{fs, path::Path, process::Command};
 
     use super::now;
     use qol_peers::service::{AuthorityError, PeerAuthority};
@@ -75,6 +75,22 @@ mod persistent {
         }
         assert_eq!(result.unwrap().projection().unwrap().name, "local");
         println!("authority-writer-probe:open");
+    }
+
+    #[cfg(unix)]
+    fn link_directory(link: &Path, target: &Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn link_directory(link: &Path, target: &Path) {
+        let made = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", link.display());
     }
 
     fn probe(root: &Path, expected: &str) {
@@ -102,7 +118,7 @@ mod persistent {
         let authority = PeerAuthority::create_persistent(&root, "local".into(), now()).unwrap();
         let clone = authority.clone();
         let alias = temporary.path().join("alias");
-        symlink(&parent, &alias).unwrap();
+        link_directory(&alias, &parent);
         let alias = alias.join("authority");
         assert!(matches!(
             PeerAuthority::open_persistent(&alias, now()),
@@ -119,7 +135,7 @@ mod persistent {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 #[test]
 fn persistence_is_explicitly_unsupported_without_creating_files() {
     use qol_peers::service::AuthorityError;

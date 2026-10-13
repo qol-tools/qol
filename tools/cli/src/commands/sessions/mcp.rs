@@ -750,7 +750,10 @@ fn tersify_sibling_lanes(
         let dir = reports_dir.join("sibling-reports");
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("failed to create sibling report dir {:?}: {error}", dir))?;
-        let base = format!("sibling-report-{}.md", sibling.session);
+        let base = format!(
+            "sibling-report-{}.md",
+            super::watch::sanitize_token(&sibling.session)
+        );
         let slug = super::watch::label_slug(
             labels
                 .get(&sibling.session)
@@ -2483,10 +2486,12 @@ mod tests {
         let report_file = siblings[0]["report_file"]
             .as_str()
             .expect("report_file path");
-        assert!(report_file.ends_with(&format!(
-            "sibling-reports/sibling-report-{}.md",
-            sibling_binding.token()
-        )));
+        assert!(std::path::Path::new(report_file).ends_with(
+            std::path::Path::new("sibling-reports").join(format!(
+                "sibling-report-{}.md",
+                super::super::watch::sanitize_token(&sibling_binding.token())
+            ))
+        ));
         assert_eq!(siblings[0]["report"], report_file);
         assert_eq!(
             std::fs::read_to_string(report_file).unwrap(),
@@ -3772,7 +3777,9 @@ mod tests {
         let first = &entries[0];
         assert_eq!(first["session"], "v1:kitty:lane-0:200");
         let report_file = first["report_file"].as_str().unwrap();
-        assert!(report_file.ends_with("sibling-reports/sibling-report-v1:kitty:lane-0:200.md"));
+        assert!(std::path::Path::new(report_file).ends_with(
+            std::path::Path::new("sibling-reports").join("sibling-report-v1_kitty_lane-0_200.md")
+        ));
         assert_eq!(first["report"], report_file);
         assert_eq!(
             std::fs::read_to_string(report_file).unwrap(),

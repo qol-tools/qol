@@ -583,6 +583,7 @@ fn recenter_single_ghost(inputs: &ListenerInputs, event: &RuntimeEvent, app_cx: 
                 window,
                 layout.bounds.origin,
                 layout.size,
+                placement.scale(),
             )
         })
         .unwrap_or(false);

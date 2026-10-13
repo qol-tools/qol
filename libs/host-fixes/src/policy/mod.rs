@@ -141,9 +141,15 @@ pub fn validate_owner_id(owner: &str) -> Result<()> {
 
 pub fn stable_host_owner(namespace: &str) -> Result<ResidencyOwnerId> {
     let machine_id = fs::read_to_string("/etc/machine-id")
-        .context("failed to read /etc/machine-id for the residency owner lineage")?
-        .trim()
-        .to_string();
+        .context("failed to read /etc/machine-id for the residency owner lineage")?;
+    host_owner_from_machine_id(namespace, &machine_id)
+}
+
+pub(crate) fn host_owner_from_machine_id(
+    namespace: &str,
+    machine_id: &str,
+) -> Result<ResidencyOwnerId> {
+    let machine_id = machine_id.trim();
     if machine_id.is_empty() || machine_id.len() > 64 {
         bail!("unusable machine-id for the residency owner lineage");
     }

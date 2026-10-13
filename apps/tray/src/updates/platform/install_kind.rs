@@ -10,11 +10,11 @@ impl InstallKind {
         super::detect_install_kind()
     }
 
-    pub(super) fn for_path(executable: &str, home: Option<&str>, user_app_bundle: bool) -> Self {
+    pub(super) fn for_path(executable: &str, home: Option<&str>, user_location: bool) -> Self {
         if executable.contains("target/debug/") || executable.contains("target/release/") {
             return Self::Development;
         }
-        if user_app_bundle {
+        if user_location {
             return Self::UserLocal;
         }
         if home.is_some_and(|home| executable.starts_with(&format!("{home}/.local/bin/"))) {
@@ -77,11 +77,11 @@ mod tests {
             ("/a/.local/bin/foo", None, false, InstallKind::SystemWide),
         ];
 
-        for (executable, home, user_app_bundle, expected) in cases {
+        for (executable, home, user_location, expected) in cases {
             assert_eq!(
-                InstallKind::for_path(executable, home, user_app_bundle),
+                InstallKind::for_path(executable, home, user_location),
                 expected,
-                "executable={executable} home={home:?} user_app_bundle={user_app_bundle}"
+                "executable={executable} home={home:?} user_location={user_location}"
             );
         }
     }

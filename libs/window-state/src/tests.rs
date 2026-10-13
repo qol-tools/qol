@@ -24,6 +24,7 @@ fn monitor(id: &str, connector: &str, bounds: MonitorBounds, primary: bool) -> M
         connector: connector.into(),
         bounds,
         work_area: bounds,
+        scale: 1.0,
         primary,
     }
 }
@@ -96,10 +97,38 @@ fn clamp_respects_an_offset_work_area() {
 
 #[test]
 fn locate_picks_the_monitor_holding_the_centre_and_stores_relative_bounds() {
-    let (on, relative) = locate(rect(2000.0, 100.0, 400.0, 300.0), &layout()).unwrap();
+    let (on, relative) = locate(rect(2000.0, 100.0, 400.0, 300.0), 1.0, &layout()).unwrap();
     assert_eq!(on.id, "right");
     assert_eq!(relative, rect(80.0, 100.0, 400.0, 300.0));
-    assert!(locate(rect(0.0, 0.0, 1.0, 1.0), &[]).is_none());
+    assert!(locate(rect(0.0, 0.0, 1.0, 1.0), 1.0, &[]).is_none());
+}
+
+#[test]
+fn locate_keeps_a_partly_visible_window_and_ignores_one_on_no_monitor() {
+    let (on, relative) = locate(rect(-300.0, 100.0, 400.0, 300.0), 1.0, &layout()).unwrap();
+    assert_eq!(on.id, "left");
+    assert_eq!(relative, rect(-300.0, 100.0, 400.0, 300.0));
+    let minimized_on_windows = rect(-31992.0, -31999.0, 1056.0, 704.0);
+    assert!(locate(minimized_on_windows, 1.0, &layout()).is_none());
+    assert!(locate(rect(4480.0, 0.0, 400.0, 300.0), 1.0, &layout()).is_none());
+}
+
+#[test]
+fn locate_tells_overlapping_scaled_monitors_apart_by_the_window_scale() {
+    let scaled = Monitor {
+        scale: 1.5,
+        ..monitor("scaled", "DP-2", area(853.3333, 0.0, 1280.0, 720.0), false)
+    };
+    let layout = vec![
+        monitor("plain", "DP-1", area(0.0, 0.0, 1280.0, 800.0), true),
+        scaled,
+    ];
+    let window = rect(900.0, 100.0, 200.0, 100.0);
+    let (on, _) = locate(window, 1.5, &layout).unwrap();
+    assert_eq!(on.id, "scaled");
+    let (on, relative) = locate(window, 1.0, &layout).unwrap();
+    assert_eq!(on.id, "plain");
+    assert_eq!(relative, window);
 }
 
 #[test]
@@ -112,10 +141,9 @@ fn resolve_follows_the_monitor_by_identity_after_it_moved() {
         monitor("right", "HDMI-1", area(0.0, 0.0, 2560.0, 1440.0), false),
         monitor("left", "DP-1", area(2560.0, 0.0, 1920.0, 1080.0), true),
     ];
-    assert_eq!(
-        resolve(&state, &swapped),
-        Some(rect(80.0, 100.0, 400.0, 300.0))
-    );
+    let (on, window) = resolve(&state, &swapped).unwrap();
+    assert_eq!(on.id, "right");
+    assert_eq!(window, rect(80.0, 100.0, 400.0, 300.0));
 }
 
 #[test]
@@ -124,10 +152,10 @@ fn resolve_falls_back_to_the_connector_when_the_identity_changed() {
         reference("old-edid", "HDMI-1", area(1920.0, 0.0, 2560.0, 1440.0)),
         rect(80.0, 100.0, 400.0, 300.0),
     );
-    assert_eq!(
-        resolve(&state, &layout()),
-        Some(rect(2000.0, 100.0, 400.0, 300.0))
-    );
+    let monitors = layout();
+    let (on, window) = resolve(&state, &monitors).unwrap();
+    assert_eq!(on.id, "right");
+    assert_eq!(window, rect(2000.0, 100.0, 400.0, 300.0));
 }
 
 #[test]
@@ -136,10 +164,10 @@ fn resolve_moves_to_the_nearest_monitor_when_the_saved_one_is_gone() {
         reference("gone", "DP-3", area(4480.0, 0.0, 1920.0, 1080.0)),
         rect(1700.0, 900.0, 400.0, 300.0),
     );
-    assert_eq!(
-        resolve(&state, &layout()),
-        Some(rect(3620.0, 900.0, 400.0, 300.0))
-    );
+    let monitors = layout();
+    let (on, window) = resolve(&state, &monitors).unwrap();
+    assert_eq!(on.id, "right");
+    assert_eq!(window, rect(3620.0, 900.0, 400.0, 300.0));
 }
 
 #[test]
@@ -152,7 +180,8 @@ fn resolve_prefers_the_primary_when_monitors_are_equally_near() {
         monitor("a", "DP-1", area(-1000.0, 0.0, 1000.0, 1000.0), false),
         monitor("b", "DP-2", area(0.0, 0.0, 1000.0, 1000.0), true),
     ];
-    let resolved = resolve(&state, &stacked).unwrap();
+    let (on, resolved) = resolve(&state, &stacked).unwrap();
+    assert_eq!(on.id, "b");
     assert_eq!(resolved, rect(0.0, 10.0, 400.0, 300.0));
     assert!(resolve(&state, &[]).is_none());
 }

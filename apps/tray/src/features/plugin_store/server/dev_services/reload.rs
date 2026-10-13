@@ -225,7 +225,7 @@ fn daemon_reload_ids(manager: &crate::plugins::PluginManager) -> Vec<String> {
     qol_dev_build::daemons_needing_restart(&spawned)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::plugins::PluginLoader;

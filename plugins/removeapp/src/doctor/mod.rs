@@ -46,7 +46,7 @@ fn platform_supported_check() -> Result<DoctorCheckResult> {
             "platform_supported",
             format!("{} is not declared by Remove App.", inspection.name),
         )
-        .with_fix("Run Remove App on Linux or macOS.")
+        .with_fix("Run Remove App on Linux, macOS or Windows.")
     };
     Ok(result.with_details(json!({
         "platform": inspection.name,
@@ -86,7 +86,7 @@ fn inventory_result(inspection: &PlatformInspection) -> Result<DoctorCheckResult
             "inventory_readable",
             "Application inventory inspection is unavailable on this platform.",
         )
-        .with_fix("Run Remove App on Linux or macOS.")
+        .with_fix("Run Remove App on Linux, macOS or Windows.")
         .with_details(details));
     }
 
@@ -154,7 +154,7 @@ fn removal_prerequisites_result(inspection: &PlatformInspection) -> Result<Docto
             "removal_prerequisites",
             "Trash and permanent-removal backends are unavailable on this platform.",
         )
-        .with_fix("Run Remove App on Linux or macOS.")
+        .with_fix("Run Remove App on Linux, macOS or Windows.")
         .with_details(details));
     }
 

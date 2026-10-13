@@ -10,8 +10,8 @@ pub(super) fn make_cursor_at_scale(
         return None;
     }
     let factor = scale;
-    let requested_width = scaled_dimension(base.width, factor)?;
-    let requested_height = scaled_dimension(base.height, factor)?;
+    let requested_width = scaled_dimension(base.width, factor, MAX_CURSOR_DIMENSION)?;
+    let requested_height = scaled_dimension(base.height, factor, MAX_CURSOR_DIMENSION)?;
     let (max_width, max_height) =
         best_cursor_size(display, root, requested_width, requested_height);
     let width = requested_width.min(max_width.max(1));
@@ -146,8 +146,8 @@ pub(super) fn scale_cursor_for_display(
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let requested_width = scaled_dimension(image.width, scale)?;
-    let requested_height = scaled_dimension(image.height, scale)?;
+    let requested_width = scaled_dimension(image.width, scale, MAX_CURSOR_DIMENSION)?;
+    let requested_height = scaled_dimension(image.height, scale, MAX_CURSOR_DIMENSION)?;
     let (max_width, max_height) =
         best_cursor_size(display, root, requested_width, requested_height);
     let width = requested_width.min(max_width.max(1));
@@ -198,25 +198,6 @@ pub(super) fn scale_cursor_for_display(
         source: Vec::new(),
     };
     Some(ScaledCursor { frames, applied })
-}
-
-pub(super) fn scaled_dimension(base: u32, factor: f32) -> Option<u32> {
-    let scaled = (base as f32 * factor).round();
-    if !scaled.is_finite() || scaled < 1.0 || scaled > i32::MAX as f32 {
-        return None;
-    }
-    Some((scaled as u32).clamp(1, MAX_CURSOR_DIMENSION))
-}
-
-pub(super) fn scaled_raster_hotspot(hotspot: u32, source_bound: u32, target_bound: u32) -> u32 {
-    if source_bound == 0 {
-        return 0;
-    }
-    let scaled = hotspot as f32 * target_bound as f32 / source_bound as f32;
-    if !scaled.is_finite() || scaled < 0.0 {
-        return 0;
-    }
-    (scaled.round() as u32).min(target_bound.saturating_sub(1))
 }
 
 pub(super) fn sanitize_hotspot(hotspot: u32, bound: u32) -> u32 {

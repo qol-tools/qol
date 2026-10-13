@@ -715,7 +715,7 @@ fn mode_control_result(
             "mode_control",
             format!("mode control is unsupported on {}.", support.name),
         )
-        .with_fix("Run the plugin on Linux or macOS.");
+        .with_fix("Run the plugin on Linux, macOS or Windows.");
     }
     if support.name == "macos" {
         return DoctorCheckResult::warn(
@@ -726,7 +726,10 @@ fn mode_control_result(
             "Change the resolution in System Settings; use `{PLUGIN_ID} arrange` for display positions."
         ));
     }
-    if server != crate::platform::DisplayServer::X11 {
+    if !matches!(
+        server,
+        crate::platform::DisplayServer::X11 | crate::platform::DisplayServer::Desktop
+    ) {
         return DoctorCheckResult::warn(
             "mode_control",
             "display configuration needs an X11 session; a Wayland session cannot change display \
@@ -752,7 +755,7 @@ fn mode_control_result(
     if !snapshots.iter().any(|snapshot| snapshot.primary) {
         return DoctorCheckResult::warn(
             "mode_control",
-            "RandR does not report a primary output; mode control may not apply",
+            "the display server does not report a primary output; mode control may not apply",
         );
     }
     let mut with_modes = 0usize;
@@ -1041,6 +1044,11 @@ fn display_server_result(server: crate::platform::DisplayServer) -> DoctorCheckR
              never assumed from protocol presence. DDC brightness is unaffected.",
         )
         .with_fix("Use DDC brightness, or run an X11 session for the gamma fallback."),
+        crate::platform::DisplayServer::Desktop => DoctorCheckResult::ok(
+            "display_server",
+            "native desktop session; gamma fallback runs through the device gamma ramp with \
+             write-plus-read-back verification",
+        ),
         crate::platform::DisplayServer::None => DoctorCheckResult::warn(
             "display_server",
             "no X11 or Wayland display server detected in the terminal environment; the gamma \
@@ -1060,7 +1068,7 @@ fn platform_supported_result(support: crate::platform::PlatformSupport) -> Docto
         "platform_supported",
         format!("{} is not declared by this plugin.", support.name),
     )
-    .with_fix("Run the plugin on Linux or macOS.")
+    .with_fix("Run the plugin on Linux, macOS or Windows.")
 }
 
 fn brightness_for(
@@ -1703,17 +1711,12 @@ mod tests {
         let cases = [
             ("linux", true, DoctorStatus::Ok, None),
             ("macos", true, DoctorStatus::Ok, None),
-            (
-                "windows",
-                false,
-                DoctorStatus::Fail,
-                Some("Run the plugin on Linux or macOS."),
-            ),
+            ("windows", true, DoctorStatus::Ok, None),
             (
                 "other",
                 false,
                 DoctorStatus::Fail,
-                Some("Run the plugin on Linux or macOS."),
+                Some("Run the plugin on Linux, macOS or Windows."),
             ),
         ];
 
@@ -2028,6 +2031,11 @@ mod tests {
         let none = display_server_result(crate::platform::DisplayServer::None);
         assert_eq!(none.status, DoctorStatus::Warn);
         assert!(none.message.contains("unavailable"));
+
+        let desktop = display_server_result(crate::platform::DisplayServer::Desktop);
+        assert_eq!(desktop.status, DoctorStatus::Ok);
+        assert!(desktop.message.contains("device gamma ramp"));
+        assert!(desktop.message.contains("write-plus-read-back"));
     }
 
     #[test]
@@ -2481,6 +2489,10 @@ mod tests {
         };
         let windows = crate::platform::PlatformSupport {
             name: "windows",
+            supported: true,
+        };
+        let freebsd = crate::platform::PlatformSupport {
+            name: "freebsd",
             supported: false,
         };
 
@@ -2532,10 +2544,19 @@ mod tests {
         assert!(mac.message.contains("gated"), "{}", mac.message);
         assert!(mac.message.contains("arrangement is available"));
 
+        let desktop =
+            mode_control_result(windows, crate::platform::DisplayServer::Desktop, &control);
+        assert_eq!(desktop.status, DoctorStatus::Ok);
+        assert!(
+            desktop.message.contains("2 of 2 displays"),
+            "{}",
+            desktop.message
+        );
+
         let unsupported =
-            mode_control_result(windows, crate::platform::DisplayServer::None, &control);
+            mode_control_result(freebsd, crate::platform::DisplayServer::None, &control);
         assert_eq!(unsupported.status, DoctorStatus::Fail);
-        assert!(unsupported.message.contains("windows"));
+        assert!(unsupported.message.contains("freebsd"));
     }
 
     #[test]

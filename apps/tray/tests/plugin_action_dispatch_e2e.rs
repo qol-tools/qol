@@ -186,17 +186,6 @@ impl Drop for FakeDaemon {
     }
 }
 
-fn wait_until<F: FnMut() -> bool>(mut predicate: F, deadline: Duration) -> bool {
-    let limit = Instant::now() + deadline;
-    while Instant::now() < limit {
-        if predicate() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    predicate()
-}
-
 fn loaded_manager() -> Arc<StdMutex<PluginManager>> {
     let mut manager = PluginManager::new();
     manager.load_plugins().expect("load_plugins after dev-link");
@@ -204,7 +193,7 @@ fn loaded_manager() -> Arc<StdMutex<PluginManager>> {
 }
 
 #[tokio::test]
-async fn action_dispatch_falls_back_to_runtime_when_daemon_replies_fallback() {
+async fn action_dispatch_does_not_reissue_through_runtime_when_daemon_replies_fallback() {
     let _serial = lock_tests().await;
     let plugin_id = "fallback-case";
     let marker = shared_root().path().join(format!("{plugin_id}.marker"));
@@ -214,15 +203,26 @@ async fn action_dispatch_falls_back_to_runtime_when_daemon_replies_fallback() {
     let _server = FakeDaemon::start(&socket_path, r#"{"status":"fallback"}"#);
 
     let manager = loaded_manager();
-    action_executor::execute_action(&manager, plugin_id, "do-thing");
+    let result = action_executor::try_execute_action_with_input_result(
+        &manager,
+        plugin_id,
+        "do-thing",
+        serde_json::Value::Null,
+    );
 
     assert!(
-        wait_until(|| marker.exists(), Duration::from_secs(5)),
-        "runtime fallback must run when daemon replies fallback (marker={})",
+        matches!(
+            result,
+            Err(action_executor::ActionExecutionError::ActionRejected(_))
+        ),
+        "a fallback reply after dispatch must be rejected, got {result:?}",
+    );
+    thread::sleep(Duration::from_millis(300));
+    assert!(
+        !marker.exists(),
+        "runtime must NOT run when daemon replies fallback (marker={})",
         marker.display(),
     );
-    let body = fs::read_to_string(&marker).expect("read marker");
-    assert_eq!(body, "hello", "runtime script must have written the marker");
 }
 
 #[tokio::test]

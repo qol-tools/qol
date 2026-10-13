@@ -136,7 +136,20 @@ impl WindowsKeyboardLayout {
                 b"040E" | // Hungarian
                 b"0424" | // Slovenian
                 b"041B" | // Slovak
-                b"0418" // Romanian
+                b"0418" | // Romanian
+                b"0406" | // Danish
+                b"0410" | // Italian
+                b"0416" | // Portuguese (Brazil)
+                b"040F" | // Icelandic
+                b"080C" | // French (Belgium)
+                b"0807" | // German (Switzerland)
+                b"100C" | // French (Switzerland)
+                b"041A" | // Croatian
+                b"0425" | // Estonian
+                b"0426" | // Latvian
+                b"0427" | // Lithuanian
+                b"0408" | // Greek
+                b"0402" // Bulgarian
             )
         } else {
             false
@@ -237,7 +250,7 @@ fn need_to_convert_to_shifted_key(vkey: VIRTUAL_KEY) -> bool {
 }
 
 fn get_shifted_key(vkey: VIRTUAL_KEY, scan_code: u32) -> Option<String> {
-    generate_key_char(vkey, scan_code, false, true, false)
+    to_unicode(vkey, scan_code, false, true, false).map(|(key, _)| key)
 }
 
 pub(crate) fn generate_key_char(
@@ -247,6 +260,17 @@ pub(crate) fn generate_key_char(
     shift: bool,
     alt: bool,
 ) -> Option<String> {
+    to_unicode(vkey, scan_code, control, shift, alt)
+        .and_then(|(key_char, dead)| (!dead).then_some(key_char))
+}
+
+fn to_unicode(
+    vkey: VIRTUAL_KEY,
+    scan_code: u32,
+    control: bool,
+    shift: bool,
+    alt: bool,
+) -> Option<(String, bool)> {
     let mut state = [0; 256];
     if control {
         state[VK_CONTROL.0 as usize] = 0x80;
@@ -266,8 +290,11 @@ pub(crate) fn generate_key_char(
             .ok()
             .filter(|candidate| {
                 !candidate.is_empty() && !candidate.chars().next().unwrap().is_control()
-            }),
-        len if len < 0 => String::from_utf16(&buffer[..(-len as usize)]).ok(),
+            })
+            .map(|candidate| (candidate, false)),
+        len if len < 0 => String::from_utf16(&buffer[..(-len as usize)])
+            .ok()
+            .map(|candidate| (candidate, true)),
         _ => None,
     }
 }

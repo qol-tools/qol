@@ -252,6 +252,7 @@ fn runtime_command(resolved: &ResolvedAction, command_path: &Path) -> std::proce
             qol_conventions::ENV_STATE_SOCKET,
             crate::dev_generation::state_socket_path(),
         );
+    qol_process::hide_console_window(&mut command);
     crate::features::theme::apply_accent_env(&mut command);
     crate::features::theme::apply_theme_name_env(&mut command);
     if let Some(socket_path) = &resolved.daemon_socket {
@@ -301,8 +302,10 @@ mod tests {
     fn dev_action_spawns_pipe_stderr_instead_of_inheriting_the_tray_pipe() {
         let root = tempfile::TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
-        let resolved = resolved();
-        let mut command = runtime_command(&resolved, Path::new("/usr/bin/true"));
+        let mut resolved = resolved();
+        resolved.plugin_dir = root.path().to_path_buf();
+        resolved.args = vec!["--exact".into(), "no-such-test".into()];
+        let mut command = runtime_command(&resolved, &std::env::current_exe().unwrap());
         let _patterns = configure_action_log_relay(&resolved, &mut command);
 
         let mut child = command.spawn().unwrap();

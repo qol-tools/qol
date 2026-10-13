@@ -49,6 +49,12 @@ impl ModeConfig {
     }
 }
 
+pub fn is_production_mode() -> bool {
+    ModeConfig::load()
+        .map(|config| !config.is_dev())
+        .unwrap_or(!cfg!(feature = "dev"))
+}
+
 impl ModeFlag {
     pub fn parse_cli(value: &str) -> Result<Self, String> {
         match value {

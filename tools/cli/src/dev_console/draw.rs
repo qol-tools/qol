@@ -761,7 +761,6 @@ mod tests {
     use crate::dev_console::testkit::*;
     use crate::dev_console::*;
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::mpsc::channel;
     use std::time::{Duration, Instant};
 
@@ -1263,7 +1262,7 @@ mod tests {
     #[test]
     fn reloading_state_drives_red_accent_and_status() {
         let mut dash = Dash::new(Vec::new());
-        let child = Command::new("true").spawn().unwrap();
+        let child = crate::platform::test_process::exiting().spawn().unwrap();
         let (_tx, rx) = channel();
         dash.reload = Reload::Running {
             child,
@@ -1281,7 +1280,7 @@ mod tests {
     #[test]
     fn reload_activity_sign_right_aligns_on_the_bottom_border() {
         let mut dash = Dash::new(Vec::new());
-        let child = Command::new("true").spawn().unwrap();
+        let child = crate::platform::test_process::exiting().spawn().unwrap();
         let (_tx, rx) = channel();
         let mut activity = ReloadProgress::new();
         assert!(activity.observe(&format!(
@@ -1563,7 +1562,7 @@ mod tests {
             "armed coexists with the divergent worktree flag: {crumb}"
         );
 
-        let child = Command::new("true").spawn().unwrap();
+        let child = crate::platform::test_process::exiting().spawn().unwrap();
         let (_tx, rx) = channel();
         dash.reload = Reload::Running {
             child,

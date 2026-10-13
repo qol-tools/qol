@@ -299,6 +299,10 @@ impl Surface {
         self
     }
 
+    pub(crate) fn remembered_monitor(&self, cx: &mut App) -> Option<ActiveMonitor> {
+        Remembered::new(self.memory.clone()?, self.placement, cx)?.monitor(cx)
+    }
+
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -388,9 +392,7 @@ impl Surface {
         let restored = remembered
             .as_ref()
             .and_then(|remembered| remembered.restore(self.size, constrains_size, cx));
-        let restored_monitor = restored
-            .as_ref()
-            .map(|restored| ActiveMonitor::from_gpui_bounds(restored.monitor));
+        let restored_monitor = restored.as_ref().map(|restored| restored.monitor.clone());
         let monitor = restored_monitor.as_ref().or(monitor);
         let bounds = restored
             .map(|restored| restored.bounds)
@@ -444,6 +446,7 @@ impl Surface {
             if applies_settings_identity {
                 crate::platform::apply_settings_surface_identity(window);
             }
+            dismiss_on_close_request(window, build_dismisser.clone(), cx);
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
                 let bounds_subscription = cx.observe_window_bounds(window, move |_, window, cx| {
@@ -589,8 +592,7 @@ impl Surface {
     }
 
     fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
-        self.placement
-            .bounds(placement_area(self.kind, monitor.bounds()), self.size)
+        placed_bounds(self.kind, self.placement, monitor, self.size)
     }
 
     fn window_kind(&self) -> WindowKind {
@@ -682,11 +684,31 @@ fn constrain_native_size(title: &str, size: Size<Pixels>) -> bool {
         || crate::popup_window::set_window_fixed_size_by_title(title, size)
 }
 
-fn placement_area(kind: SurfaceKind, monitor: Bounds<Pixels>) -> Bounds<Pixels> {
+fn placed_bounds(
+    kind: SurfaceKind,
+    placement: MonitorPlacement,
+    monitor: &ActiveMonitor,
+    size: Size<Pixels>,
+) -> Bounds<Pixels> {
     match kind {
-        SurfaceKind::Toast => crate::popup_window::work_area_within(monitor).unwrap_or(monitor),
-        SurfaceKind::Panel | SurfaceKind::OverlayPanel => monitor,
+        SurfaceKind::Toast => placement.bounds(monitor.logical_work_area(), size),
+        SurfaceKind::Panel => panel_bounds(
+            placement,
+            monitor.logical_bounds(),
+            monitor.logical_work_area(),
+            size,
+        ),
+        SurfaceKind::OverlayPanel => placement.bounds(monitor.logical_bounds(), size),
     }
+}
+
+fn panel_bounds(
+    placement: MonitorPlacement,
+    monitor: Bounds<Pixels>,
+    work_area: Bounds<Pixels>,
+    size: Size<Pixels>,
+) -> Bounds<Pixels> {
+    crate::placement::clamp_origin_to_monitor(work_area, placement.bounds(monitor, size), 0.0)
 }
 
 #[derive(Clone, Copy)]
@@ -1012,6 +1034,10 @@ impl<V> OpenedSurface<V> {
     pub(crate) fn placement(&self) -> MonitorPlacement {
         self.placement
     }
+
+    pub(crate) fn remembered_monitor(&self, cx: &App) -> Option<ActiveMonitor> {
+        self.dismisser.state.remembered.as_ref()?.monitor(cx)
+    }
 }
 
 impl<V: Render + 'static> OpenedSurface<V> {
@@ -1058,9 +1084,9 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 .and_then(|remembered| remembered.restore(self.size(), self.constrains_size, cx));
             let bounds = match (restored, self.kind, tracker.snapshot_monitor()) {
                 (Some(restored), _, _) => restored.bounds,
-                (None, _, Some(monitor)) => self
-                    .placement
-                    .bounds(placement_area(self.kind, monitor.bounds()), self.size()),
+                (None, _, Some(monitor)) => {
+                    placed_bounds(self.kind, self.placement, &monitor, self.size())
+                }
                 (None, SurfaceKind::Toast, None) => return false,
                 (None, SurfaceKind::Panel | SurfaceKind::OverlayPanel, None) => {
                     Bounds::centered(None, self.size(), cx)
@@ -1332,23 +1358,41 @@ fn schedule_dismiss(dismisser: SurfaceDismisser, timeout: Duration, cx: &mut App
     .detach();
 }
 
+fn dismiss_on_close_request(window: &Window, dismisser: SurfaceDismisser, cx: &App) {
+    window.on_window_should_close(cx, move |_, cx| {
+        dismisser.dismiss(cx);
+        false
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::platform::SurfacePlatform;
     use super::{
-        cancel_focus_reassert, resolved_app_id, reveal_cancelled, state_restore_needs_retry,
-        surface_look, DragGestureState, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
-        PANEL_FOCUS_GENERATION,
+        cancel_focus_reassert, panel_bounds, resolved_app_id, reveal_cancelled,
+        state_restore_needs_retry, surface_look, DragGestureState, RevealReadiness, Surface,
+        SurfaceDismisser, SurfaceKind, PANEL_FOCUS_GENERATION,
     };
     use crate::kit::WindowLook;
     use crate::placement::MonitorPlacement;
-    use gpui::{point, px, size, Pixels, WindowKind};
+    use gpui::{point, px, size, Bounds, Pixels, WindowKind};
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
 
     fn at(x: f32, y: f32) -> gpui::Point<Pixels> {
         point(px(x), px(y))
+    }
+
+    #[test]
+    fn a_panel_stays_out_of_the_taskbar() {
+        let monitor = Bounds::new(at(1280.0, 0.0), size(px(1280.0), px(720.0)));
+        let work_area = Bounds::new(at(1280.0, 0.0), size(px(1280.0), px(672.0)));
+        let centre = MonitorPlacement::center();
+        let tall = panel_bounds(centre, monitor, work_area, size(px(1056.0), px(672.0)));
+        assert_eq!(tall.origin, at(1392.0, 0.0));
+        let fitting = panel_bounds(centre, monitor, work_area, size(px(1056.0), px(624.0)));
+        assert_eq!(fitting.origin, at(1392.0, 32.0));
     }
 
     #[test]
@@ -1607,5 +1651,35 @@ mod tests {
 
         super::release_surface_title(&first);
         super::release_surface_title(&second);
+    }
+
+    #[gpui::test]
+    fn an_os_close_request_runs_the_surface_dismiss(cx: &mut gpui::TestAppContext) {
+        let dismisser = SurfaceDismisser::new(
+            false,
+            "Close Request Panel".into(),
+            size(px(100.0), px(100.0)),
+            false,
+            Rc::new(Cell::new(true)),
+            Rc::new(Cell::new(false)),
+            None,
+        );
+        let closes = Rc::new(Cell::new(0));
+        let counted = closes.clone();
+        dismisser
+            .state
+            .close
+            .replace(Some(Box::new(move |_| counted.set(counted.get() + 1))));
+        let (_, window) = cx.add_window_view(|window, cx| {
+            super::dismiss_on_close_request(window, dismisser.clone(), cx);
+            gpui::EmptyView
+        });
+
+        assert!(
+            !window.simulate_close(),
+            "the platform must leave the window to the surface's dismiss"
+        );
+        window.run_until_parked();
+        assert_eq!(closes.get(), 1);
     }
 }

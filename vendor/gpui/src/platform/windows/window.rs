@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     num::NonZeroIsize,
     path::PathBuf,
     rc::{Rc, Weak},
@@ -43,6 +43,7 @@ pub struct WindowsWindowState {
     pub callbacks: Callbacks,
     pub input_handler: Option<PlatformInputHandler>,
     pub pending_surrogate: Option<u16>,
+    pub pending_packet: bool,
     pub last_reported_modifiers: Option<Modifiers>,
     pub last_reported_capslock: Option<Capslock>,
     pub system_key_handled: bool,
@@ -74,6 +75,7 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) validation_number: usize,
     pub(crate) main_receiver: flume::Receiver<Runnable>,
     pub(crate) platform_window_handle: HWND,
+    pub(crate) released: Cell<bool>,
 }
 
 impl WindowsWindowState {
@@ -110,6 +112,7 @@ impl WindowsWindowState {
         let callbacks = Callbacks::default();
         let input_handler = None;
         let pending_surrogate = None;
+        let pending_packet = false;
         let last_reported_modifiers = None;
         let last_reported_capslock = None;
         let system_key_handled = false;
@@ -131,6 +134,7 @@ impl WindowsWindowState {
             callbacks,
             input_handler,
             pending_surrogate,
+            pending_packet,
             last_reported_modifiers,
             last_reported_capslock,
             system_key_handled,
@@ -231,7 +235,8 @@ impl WindowsWindowInner {
             validation_number: context.validation_number,
             main_receiver: context.main_receiver.clone(),
             platform_window_handle: context.platform_window_handle,
-            system_settings: RefCell::new(WindowsSystemSettings::new(context.display)),
+            system_settings: RefCell::new(WindowsSystemSettings::new()),
+            released: Cell::new(false),
         }))
     }
 
@@ -300,9 +305,20 @@ impl WindowsWindowInner {
     }
 
     fn set_window_placement(&self) -> Result<()> {
-        let Some(open_status) = self.state.borrow_mut().initial_placement.take() else {
+        let Some(mut open_status) = self.state.borrow_mut().initial_placement.take() else {
             return Ok(());
         };
+        let mut current = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        let moved_on_screen = unsafe {
+            GetWindowPlacement(self.hwnd, &mut current).is_ok()
+                && !MonitorFromRect(&current.rcNormalPosition, MONITOR_DEFAULTTONULL).is_invalid()
+        };
+        if moved_on_screen {
+            open_status.placement.rcNormalPosition = current.rcNormalPosition;
+        }
         match open_status.state {
             WindowOpenState::Maximized => unsafe {
                 SetWindowPlacement(self.hwnd, &open_status.placement)
@@ -392,7 +408,7 @@ impl WindowsWindow {
         );
 
         let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
-            (WS_EX_TOOLWINDOW, WINDOW_STYLE(0x0))
+            (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
         } else {
             let mut dwstyle = WS_SYSMENU;
 
@@ -406,6 +422,12 @@ impl WindowsWindow {
 
             (WS_EX_APPWINDOW, dwstyle)
         };
+        let owner = (params.kind == WindowKind::Floating)
+            .then(|| unsafe { GetActiveWindow() })
+            .filter(|owner| !owner.is_invalid());
+        if owner.is_some() {
+            dwexstyle &= !WS_EX_APPWINDOW;
+        }
         if !disable_direct_composition {
             dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
         }
@@ -436,17 +458,23 @@ impl WindowsWindow {
             disable_direct_composition,
             directx_devices,
         };
+        let bounds = if display.check_given_bounds(params.bounds) {
+            params.bounds
+        } else {
+            display.default_bounds()
+        }
+        .to_device_pixels(display.scale_factor);
         let creation_result = unsafe {
             CreateWindowExW(
                 dwexstyle,
                 WINDOW_CLASS_NAME,
                 &window_name,
                 dwstyle,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                None,
+                bounds.origin.x.0,
+                bounds.origin.y.0,
+                bounds.size.width.0,
+                bounds.size.height.0,
+                owner,
                 None,
                 Some(hinstance.into()),
                 Some(&context as *const _ as *const _),
@@ -461,16 +489,26 @@ impl WindowsWindow {
         register_drag_drop(&this)?;
         configure_dwm_dark_mode(hwnd, appearance);
         this.state.borrow_mut().border_offset.update(hwnd)?;
-        let placement = retrieve_window_placement(
-            hwnd,
-            display,
-            params.bounds,
-            this.state.borrow().scale_factor,
-            this.state.borrow().border_offset,
-        )?;
+        let placement = retrieve_window_placement(hwnd, bounds, this.state.borrow().border_offset)?;
         if params.show {
+            let mut placement = placement;
+            if !params.focus {
+                placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+            }
             unsafe { SetWindowPlacement(hwnd, &placement)? };
         } else {
+            let rect = placement.rcNormalPosition;
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                )?
+            };
             this.state.borrow_mut().initial_placement = Some(WindowOpenStatus {
                 placement,
                 state: WindowOpenState::Windowed,
@@ -500,6 +538,7 @@ impl rwh::HasDisplayHandle for WindowsWindow {
 
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
+        self.0.released.set(true);
         // clone this `Rc` to prevent early release of the pointer
         let this = self.0.clone();
         self.0
@@ -553,7 +592,7 @@ impl PlatformWindow for WindowsWindow {
                         bounds.origin.y.0,
                         rect.right - rect.left,
                         rect.bottom - rect.top,
-                        SWP_NOMOVE,
+                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
                     )
                     .context("unable to set window content size")
                     .log_err();
@@ -701,8 +740,13 @@ impl PlatformWindow for WindowsWindow {
                         ShowWindowAsync(hwnd, SW_RESTORE).ok().log_err();
                     }
 
-                    SetActiveWindow(hwnd).log_err();
-                    SetFocus(Some(hwnd)).log_err();
+                    for previous in [SetActiveWindow(hwnd), SetFocus(Some(hwnd))] {
+                        if let Err(error) = previous
+                            && error.code().is_err()
+                        {
+                            log::error!("{error}");
+                        }
+                    }
                 }
 
                 // premium ragebait by windows, this is needed because the window
@@ -710,29 +754,26 @@ impl PlatformWindow for WindowsWindow {
                 // so let's just simulate user input as that seems to be the most reliable way
                 // some more info: https://gist.github.com/Aetopia/1581b40f00cc0cadc93a0e8ccb65dc8c
                 // bonus: this bug also doesn't manifest if you have vs attached to the process
-                let inputs = [
-                    INPUT {
+                if unsafe { GetAsyncKeyState(VK_MENU.0 as i32) } >= 0 {
+                    let input = |key: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS| INPUT {
                         r#type: INPUT_KEYBOARD,
                         Anonymous: INPUT_0 {
                             ki: KEYBDINPUT {
-                                wVk: VK_MENU,
-                                dwFlags: KEYBD_EVENT_FLAGS(0),
+                                wVk: key,
+                                dwFlags: flags,
+                                dwExtraInfo: crate::SYNTHETIC_INPUT_TAG as usize,
                                 ..Default::default()
                             },
                         },
-                    },
-                    INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: VK_MENU,
-                                dwFlags: KEYEVENTF_KEYUP,
-                                ..Default::default()
-                            },
-                        },
-                    },
-                ];
-                unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                    };
+                    let inputs = [
+                        input(VK_MENU, KEYBD_EVENT_FLAGS(0)),
+                        input(MENU_MASK_KEY, KEYBD_EVENT_FLAGS(0)),
+                        input(MENU_MASK_KEY, KEYEVENTF_KEYUP),
+                        input(VK_MENU, KEYEVENTF_KEYUP),
+                    ];
+                    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                }
 
                 // todo(windows)
                 // crate `windows 0.56` reports true as Err
@@ -1111,6 +1152,8 @@ type Color = (u8, u8, u8, u8);
 pub(crate) struct WindowBorderOffset {
     pub(crate) width_offset: i32,
     pub(crate) height_offset: i32,
+    pub(crate) left_offset: i32,
+    pub(crate) top_offset: i32,
 }
 
 impl WindowBorderOffset {
@@ -1125,10 +1168,14 @@ impl WindowBorderOffset {
             GetClientRect(hwnd, &mut rect)?;
             rect
         };
+        let mut client_origin = POINT::default();
+        unsafe { ClientToScreen(hwnd, &mut client_origin) }.ok()?;
         self.width_offset =
             (window_rect.right - window_rect.left) - (client_rect.right - client_rect.left);
         self.height_offset =
             (window_rect.bottom - window_rect.top) - (client_rect.bottom - client_rect.top);
+        self.left_offset = client_origin.x - window_rect.left;
+        self.top_offset = client_origin.y - window_rect.top;
         Ok(())
     }
 }
@@ -1145,6 +1192,7 @@ enum WindowOpenState {
 }
 
 const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
+const MENU_MASK_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
 
 fn register_window_class(icon_handle: HICON) {
     static ONCE: Once = Once::new();
@@ -1262,8 +1310,8 @@ fn calculate_window_rect(bounds: Bounds<DevicePixels>, border_offset: WindowBord
         right: bounds.right().0,
         bottom: bounds.bottom().0,
     };
-    let left_offset = border_offset.width_offset / 2;
-    let top_offset = border_offset.height_offset / 2;
+    let left_offset = border_offset.left_offset;
+    let top_offset = border_offset.top_offset;
     let right_offset = border_offset.width_offset - left_offset;
     let bottom_offset = border_offset.height_offset - top_offset;
     rect.left -= left_offset;
@@ -1278,8 +1326,8 @@ fn calculate_client_rect(
     border_offset: WindowBorderOffset,
     scale_factor: f32,
 ) -> Bounds<Pixels> {
-    let left_offset = border_offset.width_offset / 2;
-    let top_offset = border_offset.height_offset / 2;
+    let left_offset = border_offset.left_offset;
+    let top_offset = border_offset.top_offset;
     let right_offset = border_offset.width_offset - left_offset;
     let bottom_offset = border_offset.height_offset - top_offset;
     let left = rect.left + left_offset;
@@ -1295,9 +1343,7 @@ fn calculate_client_rect(
 
 fn retrieve_window_placement(
     hwnd: HWND,
-    display: WindowsDisplay,
-    initial_bounds: Bounds<Pixels>,
-    scale_factor: f32,
+    bounds: Bounds<DevicePixels>,
     border_offset: WindowBorderOffset,
 ) -> Result<WINDOWPLACEMENT> {
     let mut placement = WINDOWPLACEMENT {
@@ -1305,13 +1351,6 @@ fn retrieve_window_placement(
         ..Default::default()
     };
     unsafe { GetWindowPlacement(hwnd, &mut placement)? };
-    // the bounds may be not inside the display
-    let bounds = if display.check_given_bounds(initial_bounds) {
-        initial_bounds
-    } else {
-        display.default_bounds()
-    };
-    let bounds = bounds.to_device_pixels(scale_factor);
     placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
     Ok(placement)
 }

@@ -40,6 +40,7 @@ x11rb = { workspace = true, features = [
 zbus = { version = "5.16.0", features = ["blocking-api"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+qol-process.workspace = true
 block2 = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.4.3", features = ["metal"] }
@@ -69,6 +70,9 @@ objc2-app-kit = { version = "0.3", features = [
   "NSGraphicsContext",
   "objc2-core-graphics",
 ] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+qol-process.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

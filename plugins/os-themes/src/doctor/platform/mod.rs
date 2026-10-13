@@ -22,7 +22,7 @@ use windows as imp;
 pub(super) struct PlatformMetadata {
     pub platform: &'static str,
     pub supported: bool,
-    pub gsettings: GsettingsMetadata,
+    pub gsettings: Option<GsettingsMetadata>,
     pub session: SessionMetadata,
     pub current_theme: CurrentThemeMetadata,
 }
@@ -40,7 +40,7 @@ pub(super) struct SessionMetadata {
     pub session_type: Option<String>,
     pub display_available: bool,
     pub wayland_available: bool,
-    pub dbus_available: bool,
+    pub dbus_available: Option<bool>,
     pub desktop_backend: Option<&'static str>,
     pub desktop_backend_supported: bool,
 }

@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
+pub mod native;
 mod permissions;
 mod platform;
+pub mod utf16;
+pub mod windows_path;
 
 pub use permissions::{permission_status, request_permission, Permission, PermissionState};
 use platform::PlatformApi;

@@ -107,7 +107,7 @@ pub(super) fn temp_root_check() -> DoctorCheckResult {
             .with_fix("Repair or remove the invalid IDE Checkout config file");
         }
     };
-    temp_root_result(&inspection.config.temp_dir)
+    temp_root_result(&inspection.config.checkout_root())
 }
 
 fn temp_root_result(path: &Path) -> DoctorCheckResult {

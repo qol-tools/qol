@@ -16,7 +16,10 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub(crate) use imp::{native_readback_position, native_scale_for, readback_matches};
+pub(crate) use imp::{
+    display_scale_factor, monitor_scale, native_readback_position, native_scale_for,
+    readback_matches,
+};
 
 pub fn is_modifier_held() -> bool {
     imp::is_modifier_held()
@@ -136,6 +139,14 @@ mod tests {
         assert_eq!(
             identity.display_name,
             qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME
+        );
+    }
+
+    #[test]
+    fn gpui_synthetic_input_carries_the_tag_key_remap_and_hotkeys_pass_through() {
+        assert_eq!(
+            qol_runtime::keyremap_marker::decode(gpui::SYNTHETIC_INPUT_TAG as i64),
+            Some(qol_runtime::keyremap_marker::KeyRemapMarker { mods: 0, key: 0 })
         );
     }
 }

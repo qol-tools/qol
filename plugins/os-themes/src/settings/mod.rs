@@ -1,8 +1,6 @@
-mod platform;
-
-use anyhow::Result;
-use platform::{Platform, SettingsPlatform};
+use anyhow::{Context, Result};
 
 pub(crate) fn open() -> Result<()> {
-    Platform.open()
+    qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::config::PLUGIN_ID)
+        .context("failed to open settings URL")
 }

@@ -33,12 +33,12 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
         ),
         DoctorCheck::new(
             CHECK_IDS[2],
-            "Inspect Kitty remote-control client metadata without running it.",
+            "Inspect the terminal session client (Kitty remote control or the Windows console) without running it.",
             required_binaries_check,
         ),
         DoctorCheck::new(
             CHECK_IDS[3],
-            "Query Kitty remote control for its current read-only session inventory.",
+            "Query the terminal session host for its current read-only session inventory.",
             external_services_check,
         ),
         DoctorCheck::new(
@@ -74,7 +74,7 @@ fn platform_supported_check() -> Result<DoctorCheckResult> {
             CHECK_IDS[0],
             format!("{} is not declared by CLI Sessions.", inspection.name),
         )
-        .with_fix("Run CLI Sessions on Linux or macOS.")
+        .with_fix("Run CLI Sessions on Linux, macOS or Windows.")
     };
     Ok(result.with_details(json!({
         "platform": inspection.name,
@@ -114,15 +114,23 @@ fn required_binaries_check() -> Result<DoctorCheckResult> {
     let details = json!({
         "platform": inspection.name,
         "kitten": inspection.kitten,
+        "windows_console": inspection.console,
         "executed": false,
         "remote_control_probed": false,
     });
+    if inspection.console {
+        return Ok(DoctorCheckResult::ok(
+            CHECK_IDS[2],
+            "Windows console sessions are read through the Win32 console API; no client binary is needed.",
+        )
+        .with_details(details));
+    }
     if !inspection.supported {
         return Ok(DoctorCheckResult::fail(
             CHECK_IDS[2],
             "Kitty session integration is unavailable on this platform.",
         )
-        .with_fix("Run CLI Sessions on Linux or macOS.")
+        .with_fix("Run CLI Sessions on Linux, macOS or Windows.")
         .with_details(details));
     }
     let Some(path) = inspection.kitten else {
@@ -145,6 +153,11 @@ fn required_binaries_check() -> Result<DoctorCheckResult> {
 
 fn external_services_check() -> Result<DoctorCheckResult> {
     let inspection = platform::inspect();
+    if inspection.console {
+        return Ok(console_services_result(
+            crate::host::system().discover().len(),
+        ));
+    }
     if !inspection.supported {
         return Ok(external_services_result(Err(
             "Kitty integration is unsupported on this platform".to_string(),
@@ -160,6 +173,19 @@ fn external_services_check() -> Result<DoctorCheckResult> {
         .map(|sessions| sessions.len())
         .map_err(|error| error.to_string());
     Ok(external_services_result(inventory))
+}
+
+fn console_services_result(count: usize) -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        CHECK_IDS[3],
+        format!("The Windows console host found {count} terminal session(s)."),
+    )
+    .with_details(json!({
+        "service": "windows_console",
+        "query": "session_inventory",
+        "session_count": count,
+        "mutated": false,
+    }))
 }
 
 fn external_services_result(inventory: Result<usize, String>) -> DoctorCheckResult {
@@ -478,5 +504,8 @@ mod tests {
             assert_eq!(details["mutated"], false);
             assert_eq!(details["session_count"].as_u64(), count);
         }
+        let console = console_services_result(3);
+        assert_eq!(console.status, DoctorStatus::Ok);
+        assert_eq!(console.details.unwrap()["service"], "windows_console");
     }
 }

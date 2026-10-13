@@ -1,30 +1,14 @@
-use std::io;
-use std::os::unix::net::UnixStream;
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
 
-use super::{ConnectResult, Connection};
-
-impl Connection for UnixStream {
-    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        UnixStream::set_read_timeout(self, timeout)
-    }
-
-    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        UnixStream::set_write_timeout(self, timeout)
-    }
-
-    fn try_clone(&self) -> io::Result<Box<dyn Connection>> {
-        Ok(Box::new(UnixStream::try_clone(self)?))
-    }
-
-    fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
-        UnixStream::shutdown(self, how)
-    }
-}
+use super::ConnectResult;
+use crate::local_ipc::LocalStream;
 
 pub(super) fn connect(path: &Path) -> ConnectResult {
-    let stream = UnixStream::connect(path)?;
+    let stream = LocalStream::connect(path)?;
     crate::local_ipc::authorize_peer(&stream)?;
     Ok(Box::new(stream))
+}
+
+pub(in crate::client) fn fallback_state_socket() -> Option<PathBuf> {
+    Some(PathBuf::from(qol_conventions::STATE_SOCKET_PATH))
 }

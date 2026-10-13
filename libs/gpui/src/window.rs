@@ -83,10 +83,14 @@ impl PopupPlacement {
         self.monitor.as_ref().map(ActiveMonitor::size)
     }
 
+    pub fn scale(&self) -> Option<f32> {
+        self.monitor.as_ref().map(ActiveMonitor::scale)
+    }
+
     pub fn origin(&self) -> Point<Pixels> {
         self.monitor
             .as_ref()
-            .map(|monitor| monitor.bounds().origin)
+            .map(|monitor| monitor.logical_bounds().origin)
             .unwrap_or(point(px(0.0), px(0.0)))
     }
 }
@@ -490,7 +494,12 @@ pub fn display_id_for_monitor(monitor: Option<&ActiveMonitor>, cx: &App) -> Opti
     let target_bounds = monitor.bounds();
     cx.displays()
         .into_iter()
-        .find(|display| bounds_match(&display.bounds(), &target_bounds))
+        .find(|display| {
+            bounds_match(
+                &ActiveMonitor::from_display(display.as_ref()).bounds(),
+                &target_bounds,
+            )
+        })
         .map(|display| display.id())
 }
 
@@ -510,9 +519,10 @@ fn coord_diff(a: i32, b: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_adjacent_bounds, non_target_keys, resolve_cursor_geometry, CursorAnchorError,
-        MonitorKey, ResolvedCursorPlacement,
+        bounds_match, cursor_adjacent_bounds, non_target_keys, resolve_cursor_geometry,
+        CursorAnchorError, MonitorKey, ResolvedCursorPlacement,
     };
+    use crate::monitor::multiplied;
     use gpui::{point, px, size, Bounds};
     use proptest::prelude::*;
     use qol_runtime::{CursorPos, MonitorBounds};
@@ -730,6 +740,17 @@ mod tests {
                 "logical={logical:?}"
             );
         }
+    }
+
+    #[test]
+    fn display_bounds_match_monitor_in_physical_pixels() {
+        let monitor = Bounds::new(point(px(1920.0), px(0.0)), size(px(2880.0), px(1620.0)));
+        let display = Bounds::new(point(px(1280.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let other = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        assert!(bounds_match(&multiplied(display, 1.5), &monitor));
+        assert!(!bounds_match(&multiplied(display, 1.0), &monitor));
+        assert!(!bounds_match(&multiplied(other, 1.5), &monitor));
+        assert!(bounds_match(&multiplied(other, 1.0), &other));
     }
 
     #[test]

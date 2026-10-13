@@ -24,7 +24,9 @@ use crate::ui::preview::{
 };
 use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
-use qol_gpui::window::{sync_cursor_window_layout, ResolvedCursorPlacement};
+use qol_gpui::window::{
+    display_id_for_monitor, sync_cursor_window_layout, ResolvedCursorPlacement,
+};
 use qol_gpui::window_options::PopupWindowOptions;
 
 const MIN_DIM: f32 = 48.0;
@@ -63,6 +65,7 @@ pub struct PinnedContent {
 struct PinnedWindowSpec {
     title: String,
     bounds: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
     dismiss: PinnedDismiss,
     border: bool,
     default_copy_action: CopyCommand,
@@ -123,6 +126,7 @@ fn create_parked(
     let spec = PinnedWindowSpec {
         title: title.clone(),
         bounds,
+        display_id: None,
         dismiss: PinnedDismiss::Remove,
         border: false,
         default_copy_action: crate::config::load().shortcuts.copy_command,
@@ -274,6 +278,10 @@ pub fn open(
     let spec = PinnedWindowSpec {
         title: title.clone(),
         bounds: placement.logical_bounds(),
+        display_id: display_id_for_monitor(
+            Some(&ActiveMonitor::from_bounds(placement.native_monitor())),
+            cx,
+        ),
         dismiss,
         border,
         default_copy_action: config.shortcuts.copy_command,
@@ -327,6 +335,7 @@ fn open_window(
 ) -> Option<WindowHandle<PinnedView>> {
     let options = PopupWindowOptions::new()
         .bounds(spec.bounds)
+        .display_id(spec.display_id)
         .decorations(WindowDecorations::Client)
         .kind(qol_gpui::popup_window::pinned_window_kind())
         .focus(spec.focus)
@@ -956,6 +965,7 @@ impl PinnedView {
             window,
             origin,
             size(px(PIN_CACHE_SIZE.0), px(PIN_CACHE_SIZE.1)),
+            None,
         );
         if !platform::prepare_pin_window(&self.title, (-100.0, -100.0)) {
             window.remove_window();
@@ -993,7 +1003,7 @@ impl PinnedView {
         let tracker = MonitorTracker::start(cx);
         let fallback_monitor = window
             .display(cx)
-            .map(|display| ActiveMonitor::from_gpui_bounds(display.bounds()));
+            .map(|display| ActiveMonitor::from_display(display.as_ref()));
         let reveal_generation = self.reveal_generation;
         qol_runtime::probe!("SHOT_EDIT", "phase=request surface=pinned");
         cx.spawn(async move |_view, cx| {

@@ -1427,7 +1427,7 @@ mod tests {
             Some("/tmp/h4")
         );
 
-        let home = std::path::PathBuf::from(std::env::var("HOME").expect("HOME is set"));
+        let home = dirs::home_dir().expect("home directory is known");
         let expected = home.join("h").to_string_lossy().into_owned();
         let tilde_ask = parse_args(&["--agent-home", "~/h", "query"]).expect("ask tilde parses");
         assert_eq!(

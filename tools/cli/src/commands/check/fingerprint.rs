@@ -348,7 +348,12 @@ mod tests {
         let repository = repository();
         let root = repository.path();
         let baseline = capture(root);
-        let odd = root.join("odd dir").join("a b\nc.rs");
+        let odd_name = if cfg!(windows) {
+            "a b  c.rs"
+        } else {
+            "a b\nc.rs"
+        };
+        let odd = root.join("odd dir").join(odd_name);
         fs::create_dir_all(odd.parent().unwrap()).unwrap();
         fs::write(&odd, "fn  main() {}\n").unwrap();
         let with_odd = capture(root);

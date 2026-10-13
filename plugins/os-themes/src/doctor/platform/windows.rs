@@ -1,22 +1,24 @@
-use super::{CurrentThemeMetadata, GsettingsMetadata, PlatformMetadata, SessionMetadata};
+use super::{CurrentThemeMetadata, PlatformMetadata, SessionMetadata};
+
+const DESKTOP: &str = "Windows";
 
 pub(super) fn inspect() -> PlatformMetadata {
+    let session_type = std::env::var("SESSIONNAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     PlatformMetadata {
         platform: "Windows",
-        supported: false,
-        gsettings: GsettingsMetadata {
-            path: None,
-            executable: false,
-            issue: Some("gsettings is not an OS Themes dependency on Windows".to_string()),
-        },
+        supported: true,
+        gsettings: None,
         session: SessionMetadata {
-            desktop: None,
-            session_type: None,
-            display_available: false,
+            desktop: Some(DESKTOP.to_string()),
+            display_available: qol_platform::native::session::interactive_session_id().is_some(),
+            session_type,
             wayland_available: false,
-            dbus_available: false,
-            desktop_backend: None,
-            desktop_backend_supported: false,
+            dbus_available: None,
+            desktop_backend: Some(DESKTOP),
+            desktop_backend_supported: true,
         },
         current_theme: CurrentThemeMetadata { gtk_theme: None },
     }

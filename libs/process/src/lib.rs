@@ -1,6 +1,9 @@
 mod bounded_output;
 mod observation;
 mod platform;
+mod tcp_table;
+
+pub use tcp_table::{tcp_connections, tcp_listeners, TcpConnectionEntry, TcpListenerEntry};
 
 pub use observation::{
     MemberObservation, NodeObservation, Observation, ProcessProvenance, ProcessStat,
@@ -13,12 +16,32 @@ pub use bounded_output::{
 };
 
 use std::io;
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub parent: u32,
+    pub exe: String,
+}
+
+pub fn processes() -> io::Result<Vec<ProcessEntry>> {
+    platform::processes()
+}
+
+pub fn process_image_path(pid: u32) -> io::Result<PathBuf> {
+    platform::process_image_path(pid)
+}
+
+pub fn hide_console_window(command: &mut Command) -> &mut Command {
+    platform::hide_console_window(command)
+}
 
 pub const PROCESS_TREE_GUARDIAN_COMMAND: &str = "__process-tree-guardian";
 
@@ -336,6 +359,22 @@ pub fn process_identity_matches(pid: u32, expected: &str) -> bool {
     process_identity(pid).is_ok_and(|actual| platform::process_identity_matches(&actual, expected))
 }
 
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    platform::process_start_time(pid)
+}
+
+pub fn request_stop_if_identity(pid: u32, expected: &str) -> io::Result<bool> {
+    platform::request_stop_if_identity(pid, expected)
+}
+
+pub fn system_command(program: &str) -> Command {
+    Command::new(system_program_path(program))
+}
+
+pub fn system_program_path(program: &str) -> PathBuf {
+    platform::system_program_path(program)
+}
+
 pub fn signal_term_pid(pid: u32) -> io::Result<()> {
     platform::signal_term_pid(pid)
 }
@@ -350,6 +389,14 @@ pub fn kill_pid(pid: u32) -> io::Result<()> {
 
 pub fn kill_group(pid: u32) -> io::Result<()> {
     platform::kill_group(pid)
+}
+
+pub fn wait_for_stop_request() -> io::Result<()> {
+    platform::wait_for_stop_request()
+}
+
+pub fn on_stop_request(hook: fn()) -> io::Result<()> {
+    platform::on_stop_request(hook)
 }
 
 pub fn try_wait_pid(pid: u32) -> io::Result<Option<ExitStatus>> {
@@ -417,6 +464,17 @@ where
     }
 }
 
+/// Ends `pid` together with this process: a kill-on-close job on Windows, whose
+/// own children break away so apps a daemon launches outlive it. Unix daemons
+/// watch their host themselves, so this is a no-op there.
+pub fn bind_to_host_lifetime(pid: u32) -> io::Result<()> {
+    platform::bind_to_host_lifetime(pid)
+}
+
+pub fn release_host_lifetime() -> io::Result<()> {
+    platform::release_host_lifetime()
+}
+
 /// Spawns a command without inherited standard streams or a parent-owned child
 /// process that needs later cleanup.
 pub fn spawn_detached(command: &mut Command) -> io::Result<()> {
@@ -454,6 +512,32 @@ mod tests {
         assert!(process_identity(0).is_err());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn process_start_time_is_stable_and_later_for_a_later_process() {
+        let own = process_start_time(std::process::id()).unwrap();
+        assert_eq!(process_start_time(std::process::id()), Some(own));
+        assert_eq!(process_start_time(0), None);
+
+        let (program, args): (&str, &[&str]) = if cfg!(windows) {
+            ("ping.exe", &["-n", "31", "127.0.0.1"])
+        } else {
+            ("sleep", &["30"])
+        };
+        let mut child = system_command(program)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = process_start_time(child.id());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(
+            started.is_some_and(|started| started >= own),
+            "{started:?} {own}"
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn process_identity_matches_the_persisted_linux_legacy_generation() {
@@ -481,7 +565,7 @@ mod tests {
         assert!(!token.escalation_requested());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn cancellation_signal_child_helper() {
         let Some(root) = std::env::var_os("QOL_PROCESS_CANCELLATION_TEST_ROOT") else {
@@ -507,7 +591,7 @@ mod tests {
         std::fs::write(root.join("escalated"), "escalated").unwrap();
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn installed_handler_turns_sigterm_into_observable_cancellation() {
         let temp = tempfile::tempdir().unwrap();
@@ -537,7 +621,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn second_signal_requests_escalation_after_graceful_cancellation() {
         let temp = tempfile::tempdir().unwrap();
@@ -561,13 +645,410 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn wait_for_path(path: &std::path::Path) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !path.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(path.exists(), "timed out waiting for {}", path.display());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn stop_request_child_helper() {
+        let Some(root) = std::env::var_os("QOL_PROCESS_STOP_TEST_ROOT") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        if let Some(mode) = std::env::var_os("QOL_PROCESS_STOP_TEST_DESCENDANT") {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", "tests::stop_request_child_helper"])
+                .env("QOL_PROCESS_STOP_TEST_ROOT", root.join("descendant"))
+                .env_remove("QOL_PROCESS_STOP_TEST_DESCENDANT");
+            if mode == "ignore" {
+                command.env("QOL_PROCESS_STOP_TEST_IGNORE", "1");
+            }
+            let descendant = command.spawn().unwrap();
+            wait_for_path(&root.join("descendant").join("ready"));
+            std::fs::write(root.join("descendant-pid"), descendant.id().to_string()).unwrap();
+        }
+        if std::env::var_os("QOL_PROCESS_STOP_TEST_IGNORE").is_some() {
+            CancellationToken::install().unwrap();
+            std::fs::write(root.join("ready"), "ready").unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        if std::env::var_os("QOL_PROCESS_STOP_TEST_HOOKS").is_some() {
+            on_stop_request(first_stop_hook).unwrap();
+            on_stop_request(second_stop_hook).unwrap();
+            std::fs::write(root.join("ready"), "ready").unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+        if let Some(lifetime) = std::env::var_os("QOL_PROCESS_LIFETIME_TEST") {
+            let bound = system_command("PING.EXE")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            bind_to_host_lifetime(bound.id()).unwrap();
+            if lifetime == "release" {
+                release_host_lifetime().unwrap();
+            }
+            let identity = process_identity(bound.id()).unwrap();
+            std::fs::write(root.join("bound"), format!("{}\n{identity}", bound.id())).unwrap();
+            std::fs::write(root.join("ready"), "ready").unwrap();
+            return;
+        }
+        CancellationToken::install().unwrap();
+        std::fs::write(root.join("ready"), "ready").unwrap();
+        wait_for_stop_request().unwrap();
+        std::fs::write(root.join("stopped"), "stopped").unwrap();
+    }
+
+    #[cfg(windows)]
+    fn record_stop_hook(name: &str) {
+        use std::io::Write;
+        let root = std::env::var_os("QOL_PROCESS_STOP_TEST_ROOT").unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&root).join("hooks"))
+            .unwrap();
+        writeln!(file, "{name}").unwrap();
+    }
+
+    #[cfg(windows)]
+    fn first_stop_hook() {
+        record_stop_hook("first");
+    }
+
+    #[cfg(windows)]
+    fn second_stop_hook() {
+        record_stop_hook("second");
+    }
+
+    #[cfg(windows)]
+    fn spawn_stop_helper(root: &std::path::Path, mode: &[(&str, &str)]) -> std::process::Child {
+        std::fs::create_dir_all(root.join("descendant")).unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "tests::stop_request_child_helper"])
+            .env("QOL_PROCESS_STOP_TEST_ROOT", root);
+        for (key, value) in mode {
+            command.env(key, value);
+        }
+        let child = command.spawn().unwrap();
+        wait_for_path(&root.join("ready"));
+        child
+    }
+
+    #[cfg(windows)]
+    fn descendant_pid(root: &std::path::Path) -> u32 {
+        wait_for_path(&root.join("descendant-pid"));
+        std::fs::read_to_string(root.join("descendant-pid"))
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn graceful_stop_cases() {
+        struct Case {
+            name: &'static str,
+            mode: &'static [(&'static str, &'static str)],
+            stop: fn(&mut std::process::Child, Duration),
+            grace: Duration,
+            exits_cleanly: bool,
+            waits_for_grace: bool,
+        }
+        let cases = [
+            Case {
+                name: "terminate_pid lets a listening child exit cleanly",
+                mode: &[],
+                stop: |child, grace| terminate_pid(child.id(), grace),
+                grace: Duration::from_secs(10),
+                exits_cleanly: true,
+                waits_for_grace: false,
+            },
+            Case {
+                name: "terminate_pid kills a child that ignores the request after the grace",
+                mode: &[("QOL_PROCESS_STOP_TEST_IGNORE", "1")],
+                stop: |child, grace| terminate_pid(child.id(), grace),
+                grace: Duration::from_millis(700),
+                exits_cleanly: false,
+                waits_for_grace: true,
+            },
+            Case {
+                name: "terminate_group lets a listening root exit cleanly",
+                mode: &[],
+                stop: |child, grace| terminate_group(child.id(), grace),
+                grace: Duration::from_secs(10),
+                exits_cleanly: true,
+                waits_for_grace: false,
+            },
+            Case {
+                name: "terminate_group kills a root that ignores the request after the grace",
+                mode: &[("QOL_PROCESS_STOP_TEST_IGNORE", "1")],
+                stop: |child, grace| terminate_group(child.id(), grace),
+                grace: Duration::from_millis(700),
+                exits_cleanly: false,
+                waits_for_grace: true,
+            },
+            Case {
+                name: "signal_term_pid reaches a listening child",
+                mode: &[],
+                stop: |child, _| signal_term_pid(child.id()).unwrap(),
+                grace: Duration::ZERO,
+                exits_cleanly: true,
+                waits_for_grace: false,
+            },
+        ];
+        for case in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let mut child = spawn_stop_helper(temp.path(), case.mode);
+            let started = Instant::now();
+            (case.stop)(&mut child, case.grace);
+            let status = child.wait().unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(status.success(), case.exits_cleanly, "{}", case.name);
+            assert_eq!(
+                temp.path().join("stopped").exists(),
+                case.exits_cleanly,
+                "{}",
+                case.name
+            );
+            if case.waits_for_grace {
+                assert!(
+                    elapsed + Duration::from_millis(100) >= case.grace,
+                    "{}: {elapsed:?}",
+                    case.name
+                );
+            } else {
+                assert!(
+                    elapsed < Duration::from_secs(5),
+                    "{}: {elapsed:?}",
+                    case.name
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn identity_guarded_stop_reaches_only_the_recorded_process() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = spawn_stop_helper(temp.path(), &[]);
+        let identity = process_identity(child.id()).unwrap();
+        assert!(!request_stop_if_identity(child.id(), "windows:1").unwrap());
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(request_stop_if_identity(child.id(), &identity).unwrap());
+        assert!(child.wait().unwrap().success());
+        assert!(temp.path().join("stopped").exists());
+        assert!(!request_stop_if_identity(child.id(), &identity).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_hooks_run_in_registration_order_before_the_process_exits() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = spawn_stop_helper(temp.path(), &[("QOL_PROCESS_STOP_TEST_HOOKS", "1")]);
+        signal_term_pid(child.id()).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("hooks")).unwrap(),
+            "first\nsecond\n"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_released_host_lifetime_lets_bound_processes_outlive_their_host() {
+        for (lifetime, survives) in [("keep", false), ("release", true)] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut child =
+                spawn_stop_helper(temp.path(), &[("QOL_PROCESS_LIFETIME_TEST", lifetime)]);
+            assert!(child.wait().unwrap().success(), "{lifetime}");
+            let bound = std::fs::read_to_string(temp.path().join("bound")).unwrap();
+            let (pid, identity) = bound.split_once('\n').unwrap();
+            let pid: u32 = pid.parse().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while process_identity_matches(pid, identity) && !survives && Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            let alive = process_identity_matches(pid, identity);
+            if alive {
+                kill_pid(pid).unwrap();
+            }
+            assert_eq!(alive, survives, "{lifetime}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn identity_guarded_stop_never_terminates_a_process_without_a_stop_event() {
+        let mut child = system_command("PING.EXE")
+            .args(["-n", "31", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let identity = process_identity(child.id()).unwrap();
+        assert!(!request_stop_if_identity(child.id(), &identity).unwrap());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(child.try_wait().unwrap().is_none());
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn identity_guarded_stop_signals_only_the_recorded_process() {
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        let identity = process_identity(child.id()).unwrap();
+        assert!(!request_stop_if_identity(child.id(), "stale-process-identity").unwrap());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(request_stop_if_identity(child.id(), &identity).unwrap());
+        assert!(!child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn system_command_runs_the_resolved_system_program() {
+        let program = if cfg!(windows) { "cmd.exe" } else { "sh" };
+        let path = system_program_path(program);
+        assert_eq!(system_command(program).get_program(), path.as_os_str());
+        if cfg!(windows) {
+            assert!(path.is_absolute(), "{}", path.display());
+            assert!(path.is_file(), "{}", path.display());
+        } else {
+            assert_eq!(path, PathBuf::from(program));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn terminate_owned_waits_for_a_listening_child_and_kills_one_that_ignores_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = spawn_stop_helper(temp.path(), &[]);
+        terminate_owned(&mut child, Duration::from_secs(10)).unwrap();
+        assert!(temp.path().join("stopped").exists());
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = spawn_stop_helper(temp.path(), &[("QOL_PROCESS_STOP_TEST_IGNORE", "1")]);
+        let started = Instant::now();
+        terminate_owned(&mut child, Duration::from_millis(700)).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(700));
+        assert!(!is_pid_alive(child.id()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn signal_term_pid_without_a_listener_terminates_at_once() {
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -n 31 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        signal_term_pid(child.id()).unwrap();
+        assert!(!child.wait().unwrap().success());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn terminate_pid_without_a_listener_kills_without_waiting_the_grace() {
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -n 31 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        let grace = Duration::from_secs(10);
+        let started = Instant::now();
+        terminate_pid(child.id(), grace);
+        assert!(!child.wait().unwrap().success());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn group_stops_reach_verified_descendants() {
+        struct Case {
+            name: &'static str,
+            descendant: &'static str,
+            stop: fn(u32),
+            root_exits_cleanly: bool,
+            descendant_exits_cleanly: bool,
+        }
+        let cases = [
+            Case {
+                name: "terminate_group kills an ignoring descendant after the grace",
+                descendant: "ignore",
+                stop: |pid| terminate_group(pid, Duration::from_secs(3)),
+                root_exits_cleanly: true,
+                descendant_exits_cleanly: false,
+            },
+            Case {
+                name: "terminate_group lets a listening descendant exit cleanly",
+                descendant: "listen",
+                stop: |pid| terminate_group(pid, Duration::from_secs(10)),
+                root_exits_cleanly: true,
+                descendant_exits_cleanly: true,
+            },
+            Case {
+                name: "kill_group kills the root and its descendant",
+                descendant: "ignore",
+                stop: |pid| kill_group(pid).unwrap(),
+                root_exits_cleanly: false,
+                descendant_exits_cleanly: false,
+            },
+            Case {
+                name: "signal_term_group reaches a listening descendant",
+                descendant: "listen",
+                stop: |pid| signal_term_group(pid).unwrap(),
+                root_exits_cleanly: true,
+                descendant_exits_cleanly: true,
+            },
+        ];
+        for case in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let mut root = spawn_stop_helper(
+                temp.path(),
+                &[("QOL_PROCESS_STOP_TEST_DESCENDANT", case.descendant)],
+            );
+            let descendant = descendant_pid(temp.path());
+            let identity = process_identity(descendant).unwrap();
+            (case.stop)(root.id());
+            assert_eq!(
+                root.wait().unwrap().success(),
+                case.root_exits_cleanly,
+                "{}",
+                case.name
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while process_identity_matches(descendant, &identity) && is_pid_alive(descendant) {
+                assert!(
+                    Instant::now() < deadline,
+                    "{}: descendant survived",
+                    case.name
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(
+                temp.path().join("descendant").join("stopped").exists(),
+                case.descendant_exits_cleanly,
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[test]

@@ -250,6 +250,7 @@ fn try_reuse_existing(
         all_titles: &all_titles,
         reverse: req.reverse,
         monitor_size: placement.monitor_size(),
+        scale: placement.scale(),
         show_id: req.show_id,
         rendering,
     };

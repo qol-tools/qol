@@ -2,6 +2,12 @@ use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
+const NONCE_BYTES: usize = 32;
+const NONCE_HEX_DIGITS: std::ops::RangeInclusive<usize> = 32..=128;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
     Delete,
@@ -32,6 +38,7 @@ pub struct Client {
     token: String,
     connect_timeout: Duration,
     io_timeout: Duration,
+    server_proof: bool,
 }
 
 impl Client {
@@ -41,7 +48,19 @@ impl Client {
             token: token.into(),
             connect_timeout: Duration::from_secs(2),
             io_timeout: Duration::from_secs(2),
+            server_proof: false,
         }
+    }
+
+    pub fn tray(token: impl Into<String>) -> Self {
+        Self::new(qol_conventions::DEFAULT_PORT, token).with_server_proof(
+            qol_config::http_auth_proof_path().is_some_and(|path| path.is_file()),
+        )
+    }
+
+    pub fn with_server_proof(mut self, required: bool) -> Self {
+        self.server_proof = required;
+        self
     }
 
     pub fn with_io_timeout(mut self, timeout: Duration) -> Self {
@@ -62,11 +81,41 @@ impl Client {
     }
 
     fn connect(&self) -> io::Result<TcpStream> {
-        let stream = TcpStream::connect_timeout(&self.socket_addr()?, self.connect_timeout)?;
+        let mut stream = TcpStream::connect_timeout(&self.socket_addr()?, self.connect_timeout)?;
         stream.set_read_timeout(Some(self.io_timeout))?;
         stream.set_write_timeout(Some(self.io_timeout))?;
         stream.set_nodelay(true)?;
+        if self.server_proof {
+            self.verify_server(&mut stream)?;
+        }
         Ok(stream)
+    }
+
+    fn verify_server(&self, stream: &mut TcpStream) -> io::Result<()> {
+        let mut bytes = [0u8; NONCE_BYTES];
+        getrandom::fill(&mut bytes)
+            .map_err(|error| io::Error::other(format!("could not draw a nonce: {error}")))?;
+        let nonce = hex(&bytes);
+        let request = format!(
+            "GET {}?nonce={nonce} HTTP/1.1\r\nHost: {}:{}\r\nConnection: keep-alive\r\n\r\n",
+            qol_conventions::HTTP_AUTH_PROOF_PATH,
+            qol_conventions::LOCAL_HOST,
+            self.port
+        );
+        stream.write_all(request.as_bytes())?;
+        let response = read_kept_alive_response(stream)?;
+        let proven = response.status == 200
+            && token_proof(&self.token, &nonce).is_some_and(|proof| proof == response.body.trim());
+        if proven {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "the server on port {} could not prove it is this account's QoL Tray, so the token was not sent",
+                self.port
+            ),
+        ))
     }
 
     fn socket_addr(&self) -> io::Result<SocketAddr> {
@@ -214,6 +263,21 @@ fn read_kept_alive_response(stream: &mut TcpStream) -> io::Result<Response> {
     let raw = String::from_utf8(raw[..body_start + length].to_vec())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     parse_response(&raw)
+}
+
+pub fn token_proof(token: &str, nonce: &str) -> Option<String> {
+    let well_formed = NONCE_HEX_DIGITS.contains(&nonce.len())
+        && nonce.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if !well_formed {
+        return None;
+    }
+    let mut mac = Hmac::<Sha256>::new_from_slice(token.as_bytes()).ok()?;
+    mac.update(nonce.as_bytes());
+    Some(hex(&mac.finalize().into_bytes()))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn find_header_end(raw: &[u8]) -> Option<usize> {
@@ -383,5 +447,99 @@ mod tests {
         let error = parse_response("not HTTP\r\n\r\nbad").unwrap_err();
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    use super::token_proof;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn a_token_proof_is_the_hmac_of_a_well_formed_nonce() {
+        assert_eq!(
+            token_proof("secret-token", "00112233445566778899aabbccddeeff").as_deref(),
+            Some("3a47ff6f960751be43e31c6cc0dd6446864b70efb49621854c644e361f467abf")
+        );
+        let too_long = "a".repeat(129);
+        for nonce in ["", "0011", "zz112233445566778899aabbccddeeff", &too_long] {
+            assert_eq!(token_proof("secret-token", nonce), None, "{nonce}");
+        }
+    }
+
+    fn read_head(stream: &mut TcpStream) -> String {
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            head.push(byte[0]);
+        }
+        String::from_utf8(head).unwrap()
+    }
+
+    fn nonce_of(head: &str) -> String {
+        let query = head.split("nonce=").nth(1).unwrap();
+        query.split_whitespace().next().unwrap().to_owned()
+    }
+
+    #[test]
+    fn the_token_is_sent_only_after_the_server_proves_it_holds_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let challenge = read_head(&mut stream);
+            let proof = token_proof("secret-token", &nonce_of(&challenge)).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{proof}",
+                proof.len()
+            )
+            .unwrap();
+            let request = read_head(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+            (challenge, request)
+        });
+
+        let response = Client::new(port, "secret-token")
+            .with_server_proof(true)
+            .request(Method::Get, "/api/config", None)
+            .unwrap();
+
+        let (challenge, request) = server.join().unwrap();
+        assert_eq!(
+            response,
+            Response {
+                status: 200,
+                body: "{}".to_owned()
+            }
+        );
+        assert!(!challenge.contains("secret-token"), "{challenge}");
+        assert!(request.contains("x-qol-token: secret-token"), "{request}");
+    }
+
+    #[test]
+    fn a_server_that_cannot_prove_the_token_never_receives_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let challenge = read_head(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nguess")
+                .unwrap();
+            let mut rest = String::new();
+            stream.read_to_string(&mut rest).unwrap();
+            challenge + &rest
+        });
+
+        let error = Client::new(port, "secret-token")
+            .with_server_proof(true)
+            .request(Method::Get, "/api/config", None)
+            .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let received = server.join().unwrap();
+        assert!(!received.contains("secret-token"), "{received}");
     }
 }

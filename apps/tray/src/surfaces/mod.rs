@@ -1,5 +1,6 @@
 pub mod native_notifications;
 
+use qol_plugin_daemon::notification::gate::NativeHandler;
 use qol_runtime::protocol::{DaemonRequest, NotificationLayout, NotificationLevel};
 
 #[allow(clippy::too_many_arguments)]
@@ -13,7 +14,8 @@ pub fn show_plugin_notification(
     layout: Option<NotificationLayout>,
     activate: Option<&DaemonRequest>,
 ) {
-    let toast_shown = !crate::features::notifications::use_system_notifications() && {
+    let handler = crate::features::notifications::native_handler();
+    let toast_shown = handler != NativeHandler::Os && {
         let (name, mark) = plugin_id.map_or_else(
             || (qol_conventions::TRAY_DISPLAY_NAME.to_string(), None),
             crate::plugins::name_and_icon,
@@ -34,7 +36,7 @@ pub fn show_plugin_notification(
         )
         .unwrap_or(false)
     };
-    if !toast_shown {
+    if !toast_shown || handler == NativeHandler::Both {
         native_notifications::show_plugin_notification(title, body, level, action);
     }
 }

@@ -56,7 +56,10 @@ mod tests {
         let config = dir.join("emu.toml");
         fs::write(
             &config,
-            format!("[images]\nregistered = \"{}\"\n", registered_file.display()),
+            format!(
+                "[images]\nregistered = {}\n",
+                toml::Value::String(registered_file.display().to_string())
+            ),
         )
         .unwrap();
 

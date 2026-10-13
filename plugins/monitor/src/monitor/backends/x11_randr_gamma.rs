@@ -10,7 +10,7 @@ use crate::monitor::night::Tint;
 use crate::monitor::{
     BrightnessSource, BrightnessState, DisplayCapabilities, DisplayControl, DisplayHandle,
     DisplayMode, GammaState, GammaStateControl, HdrState, MonitorError, RestoreOutcome,
-    GAMMA_CHANGED_UNDER_WRITE_REASON, HDR_REASON, MODES_REASON,
+    BRIGHTNESS_MIN, GAMMA_CHANGED_UNDER_WRITE_REASON, HDR_REASON, MODES_REASON,
 };
 use crate::session::{LutProvider, LutRestoreOutcome};
 
@@ -134,6 +134,7 @@ struct GammaSession {
     written_checksum: Option<u64>,
     written_value: Option<u8>,
     tint: Tint,
+    tint_capped: bool,
     mismatches: usize,
     warned: bool,
 }
@@ -148,6 +149,7 @@ impl Default for GammaSession {
             written_checksum: None,
             written_value: None,
             tint: Tint::NEUTRAL,
+            tint_capped: false,
             mismatches: 0,
             warned: false,
         }
@@ -176,6 +178,32 @@ impl<T: GammaTransport> GammaBackend<T> {
             .get(handle.id())
             .map(|entry| entry.tint_allowed)
             .unwrap_or(true)
+    }
+
+    fn floor_inner(&self, handle: &DisplayHandle) -> Result<u8, GammaError> {
+        let known = self.session().get(handle.id()).and_then(|entry| {
+            Some(display_color::brightness_floor(
+                entry.original.as_ref()?,
+                entry.compose_base.as_ref()?,
+                entry.foreign_base,
+                entry.tint,
+            ))
+        });
+        if let Some(floor) = known {
+            return Ok(floor);
+        }
+        let mut bus = self.transport.open()?;
+        let Some(crtc) = bus.crtc_for_connector(handle.connector())? else {
+            return Ok(BRIGHTNESS_MIN);
+        };
+        let current = bus.read_gamma(crtc)?;
+        let (base, verdict) = display_color::compose_base(&current);
+        Ok(display_color::brightness_floor(
+            &current,
+            &base,
+            verdict.base == classifier::BaseChoice::Neutral,
+            Tint::NEUTRAL,
+        ))
     }
 
     fn get_inner(&self, handle: &DisplayHandle) -> Result<u8, GammaError> {
@@ -292,6 +320,7 @@ impl<T: GammaTransport> GammaBackend<T> {
             entry.written_checksum = Some(target.checksum());
             entry.written_value = Some(value);
             entry.tint = tint;
+            entry.tint_capped = display_color::tint_capped(&base, value, tint);
         } else {
             entry.mismatches += 1;
             if entry.mismatches >= MISMATCH_WARN_AT {
@@ -437,6 +466,10 @@ impl<T: GammaTransport> DisplayControl for GammaBackend<T> {
             .map_err(|error| error.into_monitor("brightness"))
     }
 
+    fn brightness_floor(&self, handle: &DisplayHandle) -> u8 {
+        self.floor_inner(handle).unwrap_or(BRIGHTNESS_MIN)
+    }
+
     fn set_brightness_with_tint(
         &self,
         handle: &DisplayHandle,
@@ -516,6 +549,12 @@ impl<T: GammaTransport> GammaStateControl for GammaBackend<T> {
             .unwrap_or(false)
     }
 
+    fn tint_capped(&self, handle: &DisplayHandle) -> bool {
+        self.session()
+            .get(handle.id())
+            .is_some_and(|entry| entry.tint_capped)
+    }
+
     fn restore(&self, handle: &DisplayHandle) -> Result<RestoreOutcome, MonitorError> {
         self.restore_inner(handle)
             .map_err(|error| error.into_monitor("gamma"))
@@ -563,6 +602,7 @@ impl<T: GammaTransport> LutProvider for GammaBackend<T> {
                 last_tint,
             );
             entry.written_checksum = Some(target.checksum());
+            entry.tint_capped = display_color::tint_capped(&base, last_value, last_tint);
             entry.original = Some(original.clone());
             entry.compose_base = Some(base);
             entry.foreign_base = foreign_base;

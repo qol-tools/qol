@@ -42,5 +42,50 @@ pub(crate) fn create_shared() -> SharedPlatform {
     Arc::new(platform::create())
 }
 
+pub(crate) fn fingerprint_windows(
+    windows: impl IntoIterator<Item = u64>,
+    focused: Option<u64>,
+) -> u64 {
+    let seed = focused.map_or(0, |id| spread(id).rotate_left(32));
+    windows
+        .into_iter()
+        .fold(seed, |fingerprint, id| fingerprint ^ spread(id))
+}
+
+fn spread(id: u64) -> u64 {
+    let mixed = id.wrapping_mul(0x9E3779B97F4A7C15);
+    mixed ^ (mixed >> 32)
+}
+
 pub(crate) use ignore_pids::is_ignored_pid;
 pub(crate) use ignore_pids::{add_ignore_pid, remove_ignore_pid};
+
+#[cfg(test)]
+mod tests {
+    use super::fingerprint_windows;
+
+    #[test]
+    fn a_focus_change_alone_changes_the_fingerprint() {
+        let windows = [11, 22, 33];
+        assert_ne!(
+            fingerprint_windows(windows, Some(11)),
+            fingerprint_windows(windows, Some(22))
+        );
+    }
+
+    #[test]
+    fn focusing_a_listed_window_does_not_cancel_it_out() {
+        assert_ne!(
+            fingerprint_windows([11, 22], Some(11)),
+            fingerprint_windows([22], None)
+        );
+    }
+
+    #[test]
+    fn stacking_order_does_not_change_the_fingerprint() {
+        assert_eq!(
+            fingerprint_windows([11, 22, 33], Some(22)),
+            fingerprint_windows([33, 11, 22], Some(22))
+        );
+    }
+}

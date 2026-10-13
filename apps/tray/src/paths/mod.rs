@@ -272,7 +272,9 @@ pub fn runtime_dir() -> PathBuf {
     return TEST_RUNTIME_ROOT.with(|root| root.path().join(qol_config::NAMESPACE).join("runtime"));
 
     #[cfg(not(test))]
-    qol_config::runtime_dir().unwrap_or_else(|| PathBuf::from(qol_conventions::RUNTIME_DIR_PATH))
+    qol_config::runtime_dir()
+        .or_else(platform::fallback_runtime_dir)
+        .expect("no per-user runtime directory is available")
 }
 
 pub fn runtime_pids_dir() -> PathBuf {

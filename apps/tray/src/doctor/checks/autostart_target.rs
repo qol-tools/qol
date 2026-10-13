@@ -1,6 +1,7 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use crate::file_io;
+use crate::installer::autostart::AutostartState;
 use std::path::PathBuf;
 
 const ID: &str = "autostart_target";
@@ -39,14 +40,16 @@ fn check_dev(autostart_path: std::path::PathBuf) -> CheckReport {
             Ok(resolved) => resolved,
             Err(error) => return CheckReport::error(error.to_string(), ID),
         };
-    let actual = env.read_autostart_target().ok().flatten();
+    let actual = env.read_autostart_state().ok();
     let expected = file_io::canonical_or_original(target.binary());
     match actual {
-        Some(p) if file_io::canonical_or_original(&p) == expected => CheckReport::ok(format!(
-            "autostart target matches selected boot target ({})",
-            expected.display()
-        )),
-        Some(p) => warn_with_fix(
+        Some(AutostartState::Enabled(p)) if file_io::canonical_or_original(&p) == expected => {
+            CheckReport::ok(format!(
+                "autostart target matches selected boot target ({})",
+                expected.display()
+            ))
+        }
+        Some(AutostartState::Enabled(p)) => warn_with_fix(
             format!(
                 "autostart target points to {} instead of {}",
                 p.display(),
@@ -54,7 +57,8 @@ fn check_dev(autostart_path: std::path::PathBuf) -> CheckReport {
             ),
             target.binary().to_path_buf(),
         ),
-        None => warn_with_fix(
+        Some(AutostartState::DisabledByUser) => disabled_by_user_report(),
+        Some(AutostartState::Missing) | None => warn_with_fix(
             format!("autostart entry missing at {}", autostart_path.display()),
             target.binary().to_path_buf(),
         ),
@@ -67,7 +71,7 @@ fn check_prod(autostart_path: std::path::PathBuf) -> CheckReport {
         Ok(p) => p,
         Err(e) => return CheckReport::error(e.to_string(), ID),
     };
-    let target = match crate::installer::autostart::read_target() {
+    let state = match crate::installer::autostart::read_state() {
         Ok(t) => t,
         Err(e) => {
             return CheckReport::error(
@@ -80,11 +84,15 @@ fn check_prod(autostart_path: std::path::PathBuf) -> CheckReport {
             )
         }
     };
-    let Some(target_path) = target else {
-        return warn_with_fix(
-            format!("autostart entry missing at {}", autostart_path.display()),
-            expected,
-        );
+    let target_path = match state {
+        AutostartState::Enabled(target_path) => target_path,
+        AutostartState::DisabledByUser => return disabled_by_user_report(),
+        AutostartState::Missing => {
+            return warn_with_fix(
+                format!("autostart entry missing at {}", autostart_path.display()),
+                expected,
+            )
+        }
     };
     let expected_canon = file_io::canonical_or_original(&expected);
     let actual = file_io::canonical_or_original(&target_path);
@@ -102,6 +110,10 @@ fn check_prod(autostart_path: std::path::PathBuf) -> CheckReport {
         ),
         expected,
     )
+}
+
+fn disabled_by_user_report() -> CheckReport {
+    CheckReport::ok("autostart is turned off in Startup apps by the user; leaving it off")
 }
 
 fn warn_with_fix(message: String, expected: PathBuf) -> CheckReport {

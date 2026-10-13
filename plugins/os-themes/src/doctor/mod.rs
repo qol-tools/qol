@@ -66,7 +66,7 @@ fn platform_supported_result(metadata: &platform::PlatformMetadata) -> DoctorChe
         CHECK_IDS[0],
         format!("{} is not declared by OS Themes", metadata.platform),
     )
-    .with_fix("Run OS Themes on Linux")
+    .with_fix("Run OS Themes on Linux or Windows")
     .with_details(json!({
         "platform": metadata.platform,
         "declared": false,
@@ -107,41 +107,51 @@ fn gsettings_metadata_result(metadata: &platform::PlatformMetadata) -> DoctorChe
             CHECK_IDS[2],
             format!("gsettings is not used on {}", metadata.platform),
         )
-        .with_fix("Run OS Themes on Linux")
-        .with_details(gsettings_details(metadata));
+        .with_fix("Run OS Themes on Linux or Windows")
+        .with_details(gsettings_details(metadata.gsettings.as_ref()));
     }
 
-    if metadata.gsettings.executable {
+    let Some(gsettings) = metadata.gsettings.as_ref() else {
+        return DoctorCheckResult::ok(
+            CHECK_IDS[2],
+            format!(
+                "{} theme switching does not depend on gsettings",
+                metadata.platform
+            ),
+        )
+        .with_details(gsettings_details(None));
+    };
+
+    if gsettings.executable {
         return DoctorCheckResult::ok(
             CHECK_IDS[2],
             format!(
                 "Executable gsettings metadata is available at {}",
-                metadata
-                    .gsettings
+                gsettings
                     .path
                     .as_ref()
                     .expect("executable metadata must have a path")
                     .display()
             ),
         )
-        .with_details(gsettings_details(metadata));
+        .with_details(gsettings_details(Some(gsettings)));
     }
 
-    let message = metadata
-        .gsettings
+    let message = gsettings
         .issue
         .as_deref()
         .unwrap_or("gsettings was not found in PATH");
     DoctorCheckResult::fail(CHECK_IDS[2], message)
         .with_fix("Install the GLib gsettings command and make it executable in PATH")
-        .with_details(gsettings_details(metadata))
+        .with_details(gsettings_details(Some(gsettings)))
 }
 
-fn gsettings_details(metadata: &platform::PlatformMetadata) -> serde_json::Value {
+fn gsettings_details(gsettings: Option<&platform::GsettingsMetadata>) -> serde_json::Value {
     json!({
-        "path": metadata.gsettings.path,
-        "executable": metadata.gsettings.executable,
-        "issue": metadata.gsettings.issue,
+        "required": gsettings.is_some(),
+        "path": gsettings.and_then(|gsettings| gsettings.path.as_ref()),
+        "executable": gsettings.is_some_and(|gsettings| gsettings.executable),
+        "issue": gsettings.and_then(|gsettings| gsettings.issue.as_deref()),
         "inspection": "metadata_only",
         "process_started": false,
     })
@@ -156,7 +166,7 @@ fn session_metadata_result(metadata: &platform::PlatformMetadata) -> DoctorCheck
                 metadata.platform
             ),
         )
-        .with_fix("Run OS Themes on Linux")
+        .with_fix("Run OS Themes on Linux or Windows")
         .with_details(session_details(metadata));
     }
 
@@ -190,7 +200,7 @@ fn session_metadata_result(metadata: &platform::PlatformMetadata) -> DoctorCheck
     };
 
     if metadata.session.desktop_backend_supported
-        && (!metadata.session.display_available || !metadata.session.dbus_available)
+        && (!metadata.session.display_available || metadata.session.dbus_available == Some(false))
     {
         return DoctorCheckResult::warn(
             CHECK_IDS[3],
@@ -227,7 +237,7 @@ fn current_theme_metadata_result(metadata: &platform::PlatformMetadata) -> Docto
                 metadata.platform
             ),
         )
-        .with_fix("Run OS Themes on Linux")
+        .with_fix("Run OS Themes on Linux or Windows")
         .with_details(current_theme_details(metadata, "unavailable"));
     }
 
@@ -274,17 +284,17 @@ mod tests {
         PlatformMetadata {
             platform: "Linux",
             supported: true,
-            gsettings: GsettingsMetadata {
+            gsettings: Some(GsettingsMetadata {
                 path: Some(PathBuf::from("/usr/bin/gsettings")),
                 executable: true,
                 issue: None,
-            },
+            }),
             session: SessionMetadata {
                 desktop: Some("GNOME".to_string()),
                 session_type: Some("wayland".to_string()),
                 display_available: false,
                 wayland_available: true,
-                dbus_available: true,
+                dbus_available: Some(true),
                 desktop_backend: Some("GNOME"),
                 desktop_backend_supported: true,
             },
@@ -311,6 +321,68 @@ mod tests {
         assert_eq!(details["inspection"], "skipped");
         assert_eq!(details["gsettings_executed"], false);
         assert_eq!(details["settings_service_contacted"], false);
+    }
+
+    #[test]
+    fn gsettings_and_session_checks_follow_the_platform_backend() {
+        let mut windows = metadata();
+        windows.platform = "Windows";
+        windows.gsettings = None;
+        windows.session.desktop = Some("Windows".to_string());
+        windows.session.desktop_backend = Some("Windows");
+        windows.session.display_available = true;
+        windows.session.dbus_available = None;
+
+        let mut missing_gsettings = metadata();
+        missing_gsettings.gsettings = Some(GsettingsMetadata {
+            path: None,
+            executable: false,
+            issue: None,
+        });
+
+        let mut no_bus = metadata();
+        no_bus.session.display_available = true;
+        no_bus.session.dbus_available = Some(false);
+
+        let mut unsupported = metadata();
+        unsupported.platform = "macOS";
+        unsupported.supported = false;
+        unsupported.gsettings = None;
+
+        let cases = [
+            ("linux", metadata(), DoctorStatus::Ok, DoctorStatus::Warn),
+            ("windows", windows, DoctorStatus::Ok, DoctorStatus::Ok),
+            (
+                "missing gsettings",
+                missing_gsettings,
+                DoctorStatus::Fail,
+                DoctorStatus::Warn,
+            ),
+            (
+                "no session bus",
+                no_bus,
+                DoctorStatus::Ok,
+                DoctorStatus::Warn,
+            ),
+            (
+                "unsupported",
+                unsupported,
+                DoctorStatus::Fail,
+                DoctorStatus::Fail,
+            ),
+        ];
+        for (label, metadata, gsettings, session) in cases {
+            assert_eq!(
+                gsettings_metadata_result(&metadata).status,
+                gsettings,
+                "case={label}"
+            );
+            assert_eq!(
+                session_metadata_result(&metadata).status,
+                session,
+                "case={label}"
+            );
+        }
     }
 
     #[test]

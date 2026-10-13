@@ -1392,11 +1392,24 @@ mod tests {
         }
     }
 
+    fn script(unix: &str, windows: &str) -> Vec<String> {
+        let argv = if cfg!(windows) {
+            vec!["powershell", "-NoProfile", "-Command", windows]
+        } else {
+            vec!["sh", "-c", unix]
+        };
+        argv.into_iter().map(str::to_owned).collect()
+    }
+
+    fn shell_command(argv: &[String]) -> std::process::Command {
+        let mut command = std::process::Command::new(&argv[0]);
+        command.args(&argv[1..]);
+        command
+    }
+
     #[test]
     fn wait_with_timeout_kills_a_hung_child() {
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("exec sleep 60")
+        let mut child = shell_command(&script("exec sleep 60", "Start-Sleep 60"))
             .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
@@ -1408,12 +1421,13 @@ mod tests {
 
     #[test]
     fn wait_with_timeout_collects_large_output_without_deadlock() {
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("head -c 200000 /dev/zero | tr '\\0' x")
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child = shell_command(&script(
+            "head -c 200000 /dev/zero | tr '\\0' x",
+            "[Console]::Out.Write('x' * 200000)",
+        ))
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
         let output = wait_with_timeout(&mut child, Duration::from_secs(10)).unwrap();
         assert!(output.success);
         assert_eq!(output.stdout.len(), 200_000);
@@ -1421,15 +1435,16 @@ mod tests {
 
     #[test]
     fn system_runner_times_out_while_stdin_is_unread() {
+        let sleep = script("exec sleep 60", "Start-Sleep 60");
         let runner = SystemCommandRunner {
-            program: "sh".to_owned(),
+            program: sleep[0].clone(),
             timeout: Duration::from_millis(300),
         };
         let started = std::time::Instant::now();
         let error = runner
             .run(
                 &Endpoint::legacy(),
-                &["-c".to_owned(), "exec sleep 60".to_owned()],
+                &sleep[1..],
                 Some("x".repeat(100_000).as_str()),
             )
             .unwrap_err();

@@ -9,11 +9,17 @@ use super::{
 };
 
 pub fn run_cli(args: &[String]) -> i32 {
-    run_cli_with(args, escalate, &mut NoopPhaseRecorder)
+    run_cli_with(
+        args,
+        qol_host_fixes::privilege::is_elevated(),
+        escalate,
+        &mut NoopPhaseRecorder,
+    )
 }
 
 pub(super) fn run_cli_with<R>(
     args: &[String],
+    elevated: bool,
     escalate_command: impl FnOnce(&ResidentCommand) -> Result<()>,
     recorder: &mut R,
 ) -> i32
@@ -53,9 +59,7 @@ where
         emit_result(args, &carrier, outcome, &reason, recorder);
         return code;
     }
-    if matches!(command, ResidentCommand::Status | ResidentCommand::Help)
-        || qol_host_fixes::privilege::is_elevated()
-    {
+    if matches!(command, ResidentCommand::Status | ResidentCommand::Help) || elevated {
         return run_direct(args, &carrier, recorder);
     }
     match escalate_command(&command) {
@@ -73,10 +77,14 @@ where
 }
 
 pub fn run_hidden(raw_args: &[String]) -> i32 {
-    run_hidden_with(raw_args, &mut NoopPhaseRecorder)
+    run_hidden_with(
+        raw_args,
+        qol_host_fixes::privilege::is_elevated(),
+        &mut NoopPhaseRecorder,
+    )
 }
 
-pub(super) fn run_hidden_with<R>(raw_args: &[String], recorder: &mut R) -> i32
+pub(super) fn run_hidden_with<R>(raw_args: &[String], elevated: bool, recorder: &mut R) -> i32
 where
     R: PhaseRecorder,
 {
@@ -101,7 +109,7 @@ where
         );
         return 2;
     }
-    if !qol_host_fixes::privilege::is_elevated() {
+    if !elevated {
         eprintln!("hidden residency operation requires root");
         emit_result(
             raw_args,

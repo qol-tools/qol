@@ -336,13 +336,29 @@ mod tests {
         }
     }
 
+    fn shell(unix: &str, windows: &str) -> CommandSpec {
+        if cfg!(windows) {
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+            let powershell = Path::new(&root)
+                .join(r"System32\WindowsPowerShell\v1.0\powershell.exe")
+                .to_string_lossy()
+                .into_owned();
+            command(&powershell, &["-NoProfile", "-Command", windows])
+        } else {
+            command("/bin/sh", &["-c", unix])
+        }
+    }
+
     #[test]
     fn exec_returns_bounded_typed_output() {
         let mut manager = ProcessManager::new(|_| {});
         let result = manager
             .handle(RequestAction::Exec {
-                command: command("/bin/sh", &["-c", "printf hello; printf err >&2; exit 7"]),
-                timeout_ms: 1_000,
+                command: shell(
+                    "printf hello; printf err >&2; exit 7",
+                    "[Console]::Out.Write('hello'); [Console]::Error.Write('err'); exit 7",
+                ),
+                timeout_ms: 30_000,
             })
             .unwrap();
         let ResponseResult::Process { outcome } = result else {
@@ -359,7 +375,7 @@ mod tests {
         let mut manager = ProcessManager::new(|_| {});
         let ResponseResult::Spawned { process_id, .. } = manager
             .handle(RequestAction::Spawn {
-                command: command("/bin/sh", &["-c", "sleep 30"]),
+                command: shell("sleep 30", "Start-Sleep 30"),
             })
             .unwrap()
         else {

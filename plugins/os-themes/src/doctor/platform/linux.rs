@@ -9,13 +9,13 @@ pub(super) fn inspect() -> PlatformMetadata {
     let session_type = environment_value("XDG_SESSION_TYPE");
     let display_available = environment_value("DISPLAY").is_some();
     let wayland_available = environment_value("WAYLAND_DISPLAY").is_some();
-    let dbus_available = environment_value("DBUS_SESSION_BUS_ADDRESS").is_some();
+    let dbus_available = Some(environment_value("DBUS_SESSION_BUS_ADDRESS").is_some());
     let (desktop_backend, desktop_backend_supported) = classify_session_desktop(desktop.as_deref());
 
     PlatformMetadata {
         platform: "Linux",
         supported: true,
-        gsettings: inspect_gsettings(std::env::var_os("PATH")),
+        gsettings: Some(inspect_gsettings(std::env::var_os("PATH"))),
         session: SessionMetadata {
             desktop,
             session_type,

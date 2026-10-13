@@ -29,8 +29,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     # Must equal the tests workflow's RUSTFLAGS: they are part of the cache key.
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || '' }}
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +42,8 @@ jobs:
             plan: ubuntu
           - os: macos-latest
             plan: macos
+          - os: windows-latest
+            plan: windows
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,12 +56,17 @@ jobs:
           cache-key: ci-${{ matrix.os }}
           components: rustfmt, clippy
 
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.rust_setup.outputs.build-cache-hit != 'true'
+        with:
+          python-version: "3.12"
+
       - name: Workspace arguments
         id: workspace
         if: steps.rust_setup.outputs.build-cache-hit != 'true'
         env:
           BASE_SHA: ""
-        run: python3 .github/scripts/affected_crates.py
+        run: python .github/scripts/affected_crates.py
 
       - name: Install cargo-nextest
         if: steps.rust_setup.outputs.build-cache-hit != 'true'

@@ -363,6 +363,21 @@ mod tests {
         Path::new("/home/tester")
     }
 
+    fn at_home(relative: &str) -> String {
+        user_home().join(relative).to_string_lossy().into_owned()
+    }
+
+    fn pi_home() -> String {
+        Harness::Pi
+            .default_home(user_home())
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn transcripts_under(home: String, leaf: &str) -> String {
+        Path::new(&home).join(leaf).to_string_lossy().into_owned()
+    }
+
     fn write_registry(content: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join(REGISTRY_FILE_NAME);
@@ -374,17 +389,17 @@ mod tests {
     fn normalize_trims_expands_tilde_and_drops_trailing_separators() {
         let home = user_home();
         let cases = [
-            ("~", "/home/tester"),
-            ("~/", "/home/tester"),
-            ("~/work/", "/home/tester/work"),
-            ("~/work//", "/home/tester/work"),
-            ("  /opt/x  ", "/opt/x"),
-            ("/opt/x/", "/opt/x"),
-            ("/opt/x//", "/opt/x"),
-            ("relative/dir", "/home/tester/relative/dir"),
-            ("relative", "/home/tester/relative"),
-            ("/", "/"),
-            ("", ""),
+            ("~", "/home/tester".to_owned()),
+            ("~/", "/home/tester".to_owned()),
+            ("~/work/", at_home("work")),
+            ("~/work//", at_home("work")),
+            ("  /opt/x  ", "/opt/x".to_owned()),
+            ("/opt/x/", "/opt/x".to_owned()),
+            ("/opt/x//", "/opt/x".to_owned()),
+            ("relative/dir", at_home("relative/dir")),
+            ("relative", at_home("relative")),
+            ("/", "/".to_owned()),
+            ("", String::new()),
         ];
         for (input, expected) in cases {
             assert_eq!(normalize(input, home), expected, "input: {input}");
@@ -484,12 +499,12 @@ path = "/opt/kimi/"
         assert_eq!(
             ids,
             vec![
-                ("/home/tester/.claude-work".to_owned(), false, false, true),
+                (at_home(".claude-work"), false, false, true),
                 ("/opt/kimi".to_owned(), false, false, true),
-                ("/home/tester/.claude".to_owned(), false, true, false),
-                ("/home/tester/.codex".to_owned(), false, true, false),
-                ("/home/tester/.kimi-code".to_owned(), false, true, false),
-                ("/home/tester/.pi/agent".to_owned(), true, true, false),
+                (at_home(".claude"), false, true, false),
+                (at_home(".codex"), false, true, false),
+                (at_home(".kimi-code"), false, true, false),
+                (pi_home(), true, true, false),
             ]
         );
     }
@@ -524,7 +539,7 @@ default = true
         let builtin = registry
             .homes()
             .iter()
-            .find(|home| home.id == "/home/tester/.claude")
+            .find(|home| home.id == at_home(".claude"))
             .unwrap();
         assert!(!builtin.default);
         assert!(!builtin.declared);
@@ -549,13 +564,13 @@ path = "~/.claude-work"
         assert_eq!(
             claude,
             vec![
-                ("/home/tester/.claude-work".to_owned(), false, false, true),
-                ("/home/tester/.claude".to_owned(), true, false, false),
+                (at_home(".claude-work"), false, false, true),
+                (at_home(".claude"), true, false, false),
             ]
         );
         assert!(registry.is_partitioned());
-        assert!(registry.is_registered("/home/tester/.claude-work"));
-        assert!(registry.is_registered("/home/tester/.claude"));
+        assert!(registry.is_registered(&at_home(".claude-work")));
+        assert!(registry.is_registered(&at_home(".claude")));
     }
 
     #[test]
@@ -576,7 +591,7 @@ shared = true
             .cloned()
             .collect();
         assert_eq!(claude.len(), 1);
-        assert_eq!(claude[0].id, "/home/tester/.claude");
+        assert_eq!(claude[0].id, at_home(".claude"));
         assert!(claude[0].shared);
         assert!(claude[0].declared);
         assert!(claude[0].default);
@@ -606,7 +621,7 @@ path = "~/.claude-work"
         let registry = Registry::load_from(None, user_home(), &set);
         assert_eq!(
             registry.env_home(Harness::Claude),
-            Some("/home/tester/.claude-work")
+            Some(at_home(".claude-work").as_str())
         );
 
         let blank = env_from(&[("CLAUDE_CONFIG_DIR", "   ")]);
@@ -625,10 +640,10 @@ path = "work/claude"
         );
         let registry = Registry::load_from(Some(&path), user_home(), &env_from(&[]));
         let home = &registry.homes()[0];
-        assert_eq!(home.id, "/home/tester/work/claude");
-        assert_eq!(home.path, PathBuf::from("/home/tester/work/claude"));
+        assert_eq!(home.id, at_home("work/claude"));
+        assert_eq!(home.path, PathBuf::from(at_home("work/claude")));
         assert!(home.declared);
-        assert!(registry.is_registered("/home/tester/work/claude"));
+        assert!(registry.is_registered(&at_home("work/claude")));
     }
 
     #[test]
@@ -655,9 +670,9 @@ shared = true
         assert_eq!(claude.len(), 2);
         let work = claude
             .iter()
-            .find(|home| home.id == "/home/tester/.claude-work")
+            .find(|home| home.id == at_home(".claude-work"))
             .unwrap();
-        assert_eq!(work.id, "/home/tester/.claude-work");
+        assert_eq!(work.id, at_home(".claude-work"));
         assert!(!work.shared);
         assert!(work.declared);
     }
@@ -675,8 +690,8 @@ path = "~/.claude-work"
         let matching = env_from(&[("CLAUDE_CONFIG_DIR", "~/.claude-work/")]);
         let registry = Registry::load_from(Some(&path), user_home(), &matching);
         let current = registry.current(Harness::Claude);
-        assert_eq!(current.id, "/home/tester/.claude-work");
-        assert_eq!(current.path, PathBuf::from("/home/tester/.claude-work"));
+        assert_eq!(current.id, at_home(".claude-work"));
+        assert_eq!(current.path, PathBuf::from(at_home(".claude-work")));
         assert!(!current.default);
         assert!(!current.shared);
         assert!(current.declared);
@@ -701,10 +716,7 @@ path = "~/.claude-work"
     #[test]
     fn resolve_caller_normalizes_the_explicit_value_or_uses_the_current_claude_home() {
         let registry = Registry::load_from(None, user_home(), &env_from(&[]));
-        assert_eq!(
-            registry.resolve_caller(Some("~/work/")),
-            "/home/tester/work"
-        );
+        assert_eq!(registry.resolve_caller(Some("~/work/")), at_home("work"));
         assert_eq!(
             registry.resolve_caller(Some("  ")),
             registry.current(Harness::Claude).id
@@ -730,10 +742,10 @@ path = "~/.claude-work"
         assert_eq!(
             ids,
             vec![
-                "/home/tester/.claude-work".to_owned(),
-                "/home/tester/.claude".to_owned(),
-                "/home/tester/.codex".to_owned(),
-                "/home/tester/.pi/agent".to_owned(),
+                at_home(".claude-work"),
+                at_home(".claude"),
+                at_home(".codex"),
+                pi_home(),
             ]
         );
         let roots: Vec<String> = roots
@@ -743,10 +755,10 @@ path = "~/.claude-work"
         assert_eq!(
             roots,
             vec![
-                "/home/tester/.claude-work/projects".to_owned(),
-                "/home/tester/.claude/projects".to_owned(),
-                "/home/tester/.codex/sessions".to_owned(),
-                "/home/tester/.pi/agent/sessions".to_owned(),
+                transcripts_under(at_home(".claude-work"), "projects"),
+                transcripts_under(at_home(".claude"), "projects"),
+                transcripts_under(at_home(".codex"), "sessions"),
+                transcripts_under(pi_home(), "sessions"),
             ]
         );
     }
@@ -760,8 +772,8 @@ path = "~/.claude-work"
             .into_iter()
             .map(|(_, root)| root.to_string_lossy().into_owned())
             .collect();
-        assert!(roots.contains(&"/home/tester/relay-sessions".to_owned()));
-        assert!(!roots.contains(&"/home/tester/.pi/agent/sessions".to_owned()));
+        assert!(roots.contains(&at_home("relay-sessions")));
+        assert!(!roots.contains(&transcripts_under(pi_home(), "sessions")));
 
         let registry = Registry::load_from(None, user_home(), &env_from(&[]));
         let roots: Vec<String> = registry
@@ -769,6 +781,6 @@ path = "~/.claude-work"
             .into_iter()
             .map(|(_, root)| root.to_string_lossy().into_owned())
             .collect();
-        assert!(roots.contains(&"/home/tester/.pi/agent/sessions".to_owned()));
+        assert!(roots.contains(&transcripts_under(pi_home(), "sessions")));
     }
 }

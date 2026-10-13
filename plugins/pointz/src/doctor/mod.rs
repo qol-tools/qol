@@ -8,13 +8,14 @@ use qol_peers::pointz::PointzTransport;
 
 use crate::config::ServerConfig;
 
-const CHECK_IDS: [&str; 6] = [
+const CHECK_IDS: [&str; 7] = [
     "platform_supported",
     "config_readable",
     "permissions",
     "network_metadata",
     "runtime_endpoints",
     "phone_pairing",
+    "firewall",
 ];
 
 pub(crate) fn checks() -> Vec<DoctorCheck> {
@@ -49,6 +50,11 @@ pub(crate) fn checks() -> Vec<DoctorCheck> {
             "Ask qol-tray for phone pairing status without changing it or revealing a pairing code.",
             || Ok(phone_pairing_result(crate::app::pairing::status())),
         ),
+        DoctorCheck::new(
+            CHECK_IDS[6],
+            "Read whether the host firewall admits the PointZ UDP ports, without changing any rule.",
+            || Ok(crate::firewall::check(CHECK_IDS[6])),
+        ),
     ]
 }
 
@@ -81,7 +87,7 @@ fn platform_supported_result() -> DoctorCheckResult {
         CHECK_IDS[0],
         format!("{} is not a declared PointZ platform", support.name),
     )
-    .with_fix("Run PointZ on Linux or macOS")
+    .with_fix("Run PointZ on Linux, macOS or Windows")
     .with_details(details)
 }
 
@@ -143,7 +149,7 @@ fn permissions_result(readiness: crate::input::InputReadiness) -> DoctorCheckRes
     .with_fix(match readiness.platform {
         "macos" => "Enable PointZ in System Settings > Privacy & Security > Accessibility",
         "linux" => "Run PointZ in an authorized X11 session with the XTEST extension",
-        _ => "Run PointZ on Linux or macOS",
+        _ => "Run PointZ on Linux, macOS or Windows",
     })
     .with_details(details)
 }

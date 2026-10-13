@@ -529,6 +529,7 @@ fn safe_id_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::test_process::absolute;
 
     fn argv(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -548,15 +549,15 @@ mod tests {
     ) -> ChildLaunch<'a> {
         ChildLaunch {
             operation,
-            target: Path::new("/images/debian.qcow2"),
+            target: Path::new(absolute("/images/debian.qcow2")),
             environment_id: "linux/debian",
             run_id: "debian-lane-1",
             parent_lease,
             guest_adapter: Some(GuestAdapter::DebianNocloud),
             guest_image_revision: Some("debian-12-qol-1"),
-            payload_manifest: Some(Path::new("/runs/flow/payload/manifest.json")),
-            payload_image: Some(Path::new("/runs/flow/payload.iso")),
-            run_root: Some(Path::new("/runs/cases")),
+            payload_manifest: Some(Path::new(absolute("/runs/flow/payload/manifest.json"))),
+            payload_image: Some(Path::new(absolute("/runs/flow/payload.iso"))),
+            run_root: Some(Path::new(absolute("/runs/cases"))),
             image_kind: Some("qcow2"),
             display: DisplayMode::None,
             offline: true,
@@ -580,7 +581,7 @@ mod tests {
             argv(&[
                 "emu",
                 "up",
-                "/images/debian.qcow2",
+                absolute("/images/debian.qcow2"),
                 "--headless",
                 "--offline",
                 "--memory-mb",
@@ -598,11 +599,11 @@ mod tests {
                 "--guest-image-revision",
                 "debian-12-qol-1",
                 "--payload-manifest",
-                "/runs/flow/payload/manifest.json",
+                absolute("/runs/flow/payload/manifest.json"),
                 "--payload-image",
-                "/runs/flow/payload.iso",
+                absolute("/runs/flow/payload.iso"),
                 "--run-root",
-                "/runs/cases",
+                absolute("/runs/cases"),
                 "--image-kind",
                 "qcow2",
                 "--acceleration",
@@ -690,13 +691,13 @@ mod tests {
                 "--guest-image-revision",
                 "mint-22.3-qol-1",
                 "--payload-manifest",
-                "/runs/flow/payload/manifest.json",
+                absolute("/runs/flow/payload/manifest.json"),
                 "--payload-image",
-                "/runs/flow/payload.iso",
+                absolute("/runs/flow/payload.iso"),
                 "--environment-id",
                 "linux/mint",
                 "--run-root",
-                "/runs/mint",
+                absolute("/runs/mint"),
                 "--image-kind",
                 "qcow2",
                 "--acceleration",
@@ -714,15 +715,15 @@ mod tests {
                 "--guest-image-revision",
                 "mint-22.3-qol-1",
                 "--payload-image",
-                "/runs/flow/payload.iso",
+                absolute("/runs/flow/payload.iso"),
                 "--payload-manifest",
-                "/runs/flow/payload/manifest.json",
+                absolute("/runs/flow/payload/manifest.json"),
                 "--parent-lease",
                 "parent-flow",
                 "--run-id",
                 "lane_01",
                 "--run-root",
-                "/runs/mint",
+                absolute("/runs/mint"),
                 "--acceleration",
                 "hardware",
                 "--image-kind",
@@ -760,13 +761,16 @@ mod tests {
             );
             assert_eq!(
                 parsed.payload_manifest.as_deref(),
-                Some(Path::new("/runs/flow/payload/manifest.json"))
+                Some(Path::new(absolute("/runs/flow/payload/manifest.json")))
             );
             assert_eq!(
                 parsed.payload_image.as_deref(),
-                Some(Path::new("/runs/flow/payload.iso"))
+                Some(Path::new(absolute("/runs/flow/payload.iso")))
             );
-            assert_eq!(parsed.run_root.as_deref(), Some(Path::new("/runs/mint")));
+            assert_eq!(
+                parsed.run_root.as_deref(),
+                Some(Path::new(absolute("/runs/mint")))
+            );
             assert_eq!(parsed.image_kind, Some(BackendImageKind::Qcow2));
             assert_eq!(parsed.acceleration, AccelerationRequirement::Hardware);
             assert_eq!(parsed.arch, Some(GuestArch::X86_64));
@@ -776,18 +780,18 @@ mod tests {
 
     #[test]
     fn parses_and_forwards_an_explicit_usb_host_device() {
-        let parsed = parse(&["mint", "--usb-host", "/dev/bus/usb/001/007"]).unwrap();
+        let parsed = parse(&["mint", "--usb-host", absolute("/dev/bus/usb/001/007")]).unwrap();
         assert_eq!(
             parsed.usb_host.as_deref(),
-            Some(Path::new("/dev/bus/usb/001/007"))
+            Some(Path::new(absolute("/dev/bus/usb/001/007")))
         );
 
         let parent_lease = ParentLeaseClaim::parse("debian-batch-1").unwrap();
         let mut launch = child_launch(ChildOperation::Up, &parent_lease);
-        launch.usb_host = Some(Path::new("/dev/bus/usb/001/007"));
+        launch.usb_host = Some(Path::new(absolute("/dev/bus/usb/001/007")));
         let args = child_args(launch).unwrap();
         assert_eq!(args[args.len() - 2], "--usb-host");
-        assert_eq!(args[args.len() - 1], "/dev/bus/usb/001/007");
+        assert_eq!(args[args.len() - 1], absolute("/dev/bus/usb/001/007"));
     }
 
     #[test]
@@ -797,9 +801,9 @@ mod tests {
             "--parent-lease",
             "parent-flow",
             "--payload-manifest",
-            "/runs/flow/payload/manifest.json",
+            absolute("/runs/flow/payload/manifest.json"),
             "--payload-image",
-            "/runs/flow/payload.iso",
+            absolute("/runs/flow/payload.iso"),
         ];
         assert_eq!(
             parse(&payload).unwrap_err().to_string(),
