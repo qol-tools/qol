@@ -175,6 +175,9 @@ fn add_unloaded_plugins(
         }
         let resolved_root =
             plugin_paths::resolve_plugin_root_from_plugins_dir(plugins_dir, &raw_id);
+        if !plugin_paths::has_manifest(&resolved_root) {
+            continue;
+        }
         let id = PluginId::new(raw_id);
         plugins_by_id.insert(
             id.clone(),
@@ -467,5 +470,27 @@ mod availability_tests {
         cached.insert("qol-alt-tab".to_string(), "3.67.0-rc.9".to_string());
         let (_, update_available) = check_update(&cached, "qol-alt-tab", "3.67.0");
         assert!(!update_available);
+    }
+}
+
+#[cfg(test)]
+mod unloaded_tests {
+    use super::*;
+
+    #[test]
+    fn config_only_folder_is_not_listed_as_installed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config_only = temp.path().join("qol-unloaded-config-only");
+        let broken = temp.path().join("qol-unloaded-broken");
+        std::fs::create_dir_all(&config_only).unwrap();
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(config_only.join("config.json"), "{}").unwrap();
+        std::fs::write(broken.join("plugin.toml"), "not toml").unwrap();
+
+        let mut plugins_by_id = HashMap::new();
+        add_unloaded_plugins(temp.path(), &HashMap::new(), &mut plugins_by_id);
+
+        let ids: Vec<&str> = plugins_by_id.keys().map(PluginId::as_str).collect();
+        assert_eq!(ids, ["qol-unloaded-broken"]);
     }
 }
