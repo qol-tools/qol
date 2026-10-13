@@ -87,6 +87,7 @@ fn hold_gone_with(
     while polls_left > 0 {
         polls_left -= 1;
         if (probes.gone)() {
+            settle_polls = 0;
             if !seen_gone {
                 seen_gone = true;
                 polls_left = hold_polls;
@@ -103,10 +104,9 @@ fn hold_gone_with(
                 }
                 reapplied += 1;
                 settle_polls = REAPPLY_SETTLE_POLLS;
+                polls_left = polls_left.max(REAPPLY_SETTLE_POLLS + 1);
                 let _ = (probes.reapply)();
             }
-        } else {
-            settle_polls = 0;
         }
         (probes.pause)();
     }
@@ -154,6 +154,29 @@ mod tests {
             run(&[true, true, false, true, true], false),
             (HoldOutcome::Reapplied(1), 1)
         );
+    }
+
+    #[test]
+    fn every_separate_return_is_minimized_again_at_once() {
+        let returns = Cell::new(0);
+        let polls = Cell::new(0);
+        let outcome = hold_gone_with(
+            Probes {
+                gone: || {
+                    polls.set(polls.get() + 1);
+                    !matches!(polls.get(), 3 | 6)
+                },
+                reapply: || {
+                    returns.set(returns.get() + 1);
+                    true
+                },
+                user_acted: || false,
+                pause: || {},
+            },
+            7,
+            7,
+        );
+        assert_eq!((outcome, returns.get()), (HoldOutcome::Reapplied(2), 2));
     }
 
     #[test]
