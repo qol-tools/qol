@@ -1,6 +1,6 @@
 <div align="center">
 
-# Audio
+# Sound
 
 Choose where sound plays, which microphone every app hears, and how loud each is.
 
@@ -20,7 +20,7 @@ qol-sound levels
 qol-sound doctor
 ```
 
-Audio works from a terminal on its own. qol-tray is one way to use it, not a requirement.
+Sound works from a terminal on its own. qol-tray is one way to use it, not a requirement.
 
 ## Settings
 

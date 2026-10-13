@@ -1,5 +1,5 @@
 schema_version = 1
-title = "Audio"
+title = "Sound"
 description = "Where sound plays and which microphone every app hears on this computer."
 
 [section.output]

@@ -468,7 +468,7 @@ fn handled(result: anyhow::Result<()>) -> ReadResult<Command> {
 fn settings() -> ReadResult<Command> {
     match qol_apps::desktop_integration::open_plugin_settings_via_tray(crate::PLUGIN_ID) {
         Ok(()) => ReadResult::Handled,
-        Err(error) => ReadResult::Error(format!("failed to open the Audio settings: {error}")),
+        Err(error) => ReadResult::Error(format!("failed to open the Sound settings: {error}")),
     }
 }
 
@@ -614,9 +614,9 @@ mod tests {
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
         let config =
             qol_config::contract::parse_spec("qol-config.toml").expect("qol-config.toml invalid");
-        assert_eq!(manifest.plugin.name, "Audio");
-        assert_eq!(manifest.menu.label, "Audio");
-        assert_eq!(config.title.as_deref(), Some("Audio"));
+        assert_eq!(manifest.plugin.name, "Sound");
+        assert_eq!(manifest.menu.label, "Sound");
+        assert_eq!(config.title.as_deref(), Some("Sound"));
         let sections: Vec<&str> = config.sections.keys().map(String::as_str).collect();
         assert_eq!(sections, ["output", "input"]);
         let rows: Vec<(&str, Option<&str>)> = config
