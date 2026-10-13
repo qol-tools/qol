@@ -175,6 +175,7 @@ impl AltTabApp {
                             this.action_mode
                         );
                         this.focus_for_keys("focus-out/alt-held", None, window);
+                        picker::platform::hold_picker_focus(&this.picker_title);
                     }
                     FocusOutDecision::Dismiss => {
                         qol_runtime::probe!(
@@ -661,6 +662,7 @@ impl AltTabApp {
             return;
         }
         self._alt_poll_task = None;
+        picker::platform::cancel_picker_focus_reassert();
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
             *lock = None;

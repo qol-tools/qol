@@ -18,6 +18,10 @@ pub fn show_picker_window(target_title: &str, all_titles: &[String]) {
     qol_gpui::ghost::show_ghost_window(target_title, all_titles);
 }
 
+pub fn hold_picker_focus(_title: &str) {}
+
+pub fn cancel_picker_focus_reassert() {}
+
 pub fn reuse_hidden_picker_across_shows() -> bool {
     true
 }
