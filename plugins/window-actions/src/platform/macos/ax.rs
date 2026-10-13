@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use super::minimize_hold::{hold_gone, HoldOutcome};
 use super::objc::{
     ax_attr, ax_attr_result, cf_boolean_false, cf_boolean_true, cfstr, cfstring_to_string,
     cg_window_layer, cg_window_owner_pid, cls, dict_get_i32, msg_bool, msg_bool_usize, msg_i32,
@@ -502,8 +503,30 @@ pub(super) fn instant_minimize(pid: i32) -> bool {
         };
 
         trace_minimize_branch(pid, branch, visible, regular, ok);
+        if ok {
+            hold_minimized(pid, &ft, branch);
+        }
         ok
     })
+}
+
+fn hold_minimized(pid: i32, ft: &FrontTarget, branch: &str) {
+    let app = ft.app.as_ptr();
+    let outcome = if matches!(branch, "hide" | "hide-fallback") {
+        hold_gone(
+            || app_is_hidden(pid, app),
+            || {
+                let _ = set_ax_bool_attr(app, "AXHidden", true);
+                ns_hide_app(pid)
+            },
+        )
+    } else {
+        hold_gone(
+            || window_is_minimized(ft.win),
+            || set_ax_bool_attr(ft.win, "AXMinimized", true),
+        )
+    };
+    trace_minimize_hold(pid, branch, outcome);
 }
 
 fn minimize_then_hide(pid: i32, ft: &FrontTarget) -> (&'static str, bool) {
@@ -595,6 +618,20 @@ fn trace_minimize_branch(pid: i32, branch: &str, visible: usize, regular: bool, 
     );
     #[cfg(not(debug_assertions))]
     let _ = (pid, branch, visible, regular, ok);
+}
+
+fn trace_minimize_hold(pid: i32, branch: &str, outcome: HoldOutcome) {
+    if cfg!(debug_assertions) {
+        qol_runtime::probe!(
+            "WINACT_MINIMIZE_HOLD",
+            "pid={pid} branch={branch} outcome={} reapplied={}",
+            outcome.as_str(),
+            match outcome {
+                HoldOutcome::Reapplied(count) => count,
+                _ => 0,
+            },
+        );
+    }
 }
 
 fn app_is_regular(pid: i32) -> bool {

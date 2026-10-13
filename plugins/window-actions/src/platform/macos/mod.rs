@@ -1,6 +1,7 @@
 mod ax;
 mod doctor;
 mod geometry;
+mod minimize_hold;
 mod objc;
 mod screen;
 mod screen_cli;
