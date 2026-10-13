@@ -2212,6 +2212,13 @@ struct QemuArgsInput<'a> {
     firmware: Option<&'a Path>,
 }
 
+fn nic_model(adapter: Option<GuestAdapter>) -> &'static str {
+    match adapter {
+        Some(GuestAdapter::WindowsDesktop) => "e1000e",
+        _ => "virtio-net-pci",
+    }
+}
+
 fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
     let QemuArgsInput {
         environment,
@@ -2265,7 +2272,7 @@ fn qemu_args(input: QemuArgsInput<'_>) -> Vec<String> {
         if launch.offline {
             "none".to_string()
         } else {
-            "user,model=virtio-net-pci".to_string()
+            format!("user,model={}", nic_model(launch.guest_adapter))
         },
     ]);
     args.extend([
@@ -3190,6 +3197,16 @@ mod tests {
         );
         assert!(!joined.contains("pflash"), "unexpected pflash in: {joined}");
         assert!(joined.contains("-nic user,model=virtio-net-pci"));
+    }
+
+    #[test]
+    fn windows_guests_use_the_inbox_driver_nic() {
+        assert_eq!(nic_model(Some(GuestAdapter::WindowsDesktop)), "e1000e");
+        assert_eq!(
+            nic_model(Some(GuestAdapter::MintCinnamon)),
+            "virtio-net-pci"
+        );
+        assert_eq!(nic_model(None), "virtio-net-pci");
     }
 
     #[test]
