@@ -30,9 +30,10 @@ use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Int
 use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
-    apply_level_query, apply_runtime_query, filtered_list_items, level_query_names, merged_config,
-    query_flag_value, retire_number_holds, row_action, row_query_names, row_streams,
-    runtime_query_names, stream_gated, Row, RowControl, RowQueryState, RowSection, SliderHold,
+    answers_absent, apply_level_query, apply_runtime_query, filtered_list_items, level_query_names,
+    merged_config, query_flag_value, retire_number_holds, row_action, row_query_names, row_streams,
+    row_value_source, runtime_query_names, stream_gated, Row, RowControl, RowQueryState,
+    RowSection, SliderHold,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -139,6 +140,21 @@ fn rollup_query_state<'a>(
         }
     }
     rolled
+}
+
+/// A row that heard back but whose own value came back null controls
+/// something that is not there, so it is unavailable rather than at its default.
+fn absent_when_null(
+    state: RowQueryState,
+    row: &Row,
+    applied: &AppliedQueryPayloads,
+) -> RowQueryState {
+    let absent = row_value_source(&row.control)
+        .is_some_and(|(query, path)| applied.answered_absent(row.source, query, path));
+    if state == RowQueryState::Ready && absent {
+        return RowQueryState::Absent;
+    }
+    state
 }
 
 fn query_is_due(due: Option<std::time::Instant>, now: std::time::Instant) -> bool {
@@ -282,6 +298,9 @@ pub(super) struct SettingsPanelState {
     pub(super) sections: Vec<RowSection>,
     pub(super) sources: Vec<SourceState>,
     pub(super) query_states: std::collections::HashMap<(usize, String), RowQueryState>,
+    /// What the focused source answered while the panel was prepared, so a
+    /// row whose value came back null is unavailable from the first frame.
+    pub(super) opening_answers: Vec<(String, QueryResult)>,
     pub(super) height_cap: f32,
 }
 
@@ -440,7 +459,10 @@ impl SettingsPanelView {
             slider_pending: std::collections::HashSet::new(),
             slider_holds: std::collections::HashMap::new(),
             frame_paced_samples: None,
-            applied_query_payloads: AppliedQueryPayloads::default(),
+            applied_query_payloads: AppliedQueryPayloads::seeded(
+                focused_source,
+                state.opening_answers,
+            ),
             query_states: state.query_states,
             frame_pump_armed: false,
             motion_tick: None,
@@ -2105,7 +2127,14 @@ impl SettingsPanelView {
     }
 
     fn begin_edit(&mut self) {
-        let Some(row) = self.level().rows.get(self.level().selected) else {
+        let selected = self.level().selected;
+        if matches!(
+            self.row_query_state(selected),
+            RowQueryState::Unavailable(_) | RowQueryState::Absent
+        ) {
+            return;
+        }
+        let Some(row) = self.level().rows.get(selected) else {
             return;
         };
         let edit = match &row.control {
@@ -2812,12 +2841,13 @@ impl SettingsPanelView {
     }
 
     fn query_state_of(&self, row: &Row) -> RowQueryState {
-        rollup_query_state(
+        let state = rollup_query_state(
             row_query_names(row)
                 .into_iter()
                 .map(|query| self.query_states.get(&(row.source, query.to_string()))),
             row.source == self.materialized_source,
-        )
+        );
+        absent_when_null(state, row, &self.applied_query_payloads)
     }
 
     /// Replaces a query-backed value with a spinner or an unavailable marker
@@ -2840,12 +2870,15 @@ impl SettingsPanelView {
                 row,
                 self.kit,
             ))),
-            RowQueryState::Unavailable(_)
+            RowQueryState::Unavailable(_) | RowQueryState::Absent
                 if !matches!(self.level().rows[index].control, RowControl::Status { .. }) =>
             {
                 Some(cell().child(self.unavailable_indicator(index)))
             }
-            RowQueryState::Idle | RowQueryState::Ready | RowQueryState::Unavailable(_) => None,
+            RowQueryState::Idle
+            | RowQueryState::Ready
+            | RowQueryState::Unavailable(_)
+            | RowQueryState::Absent => None,
         }
     }
 
@@ -4653,6 +4686,18 @@ struct AppliedQueryPayloads {
 }
 
 impl AppliedQueryPayloads {
+    fn seeded(source: usize, answers: Vec<(String, QueryResult)>) -> Self {
+        Self {
+            source: Some(source),
+            payloads: answers.into_iter().collect(),
+        }
+    }
+
+    fn answered_absent(&self, source: usize, query: &str, path: Option<&str>) -> bool {
+        self.source == Some(source)
+            && matches!(self.payloads.get(query), Some(Ok(value)) if answers_absent(value, path))
+    }
+
     fn changes(&self, source: usize, query: &str, result: &QueryResult) -> bool {
         self.source != Some(source) || self.payloads.get(query) != Some(result)
     }
@@ -5168,18 +5213,19 @@ fn list_header_height(row: &Row) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_dispatch_plan, action_refresh_payload, action_shows_spinner, action_value_label,
-        adjacent_visible_row, apply_runtime_query, binary_state_label, clamp_selected,
-        color_display, complete_action, crumb_labels, due_query_indices, escape_step, focus_level,
-        format_number, header_is_redundant, horizontal_step_direction, intent, list_fit_updates,
-        live_card_level, live_card_sync, live_card_sync_back, live_number_dispatch_plan,
-        number_finish_plan, number_preview, number_unit, parsed_color, parsed_number, pop_level,
-        push_level, query_is_due, rail_group_breaks, release_slider_dispatch, row_body_height,
-        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
-        source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
-        transition_policy, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level,
-        LevelHeader, LiveNumberDispatch, NumberFinishPlan, ObjectArrayState, Row, RowControl,
-        RowSection, SettingsDestination, TransitionAction, TransitionTracker,
+        absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
+        action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
+        clamp_selected, color_display, complete_action, crumb_labels, due_query_indices,
+        escape_step, focus_level, format_number, header_is_redundant, horizontal_step_direction,
+        intent, list_fit_updates, live_card_level, live_card_sync, live_card_sync_back,
+        live_number_dispatch_plan, number_finish_plan, number_preview, number_unit, parsed_color,
+        parsed_number, pop_level, push_level, query_is_due, rail_group_breaks,
+        release_slider_dispatch, row_body_height, schedule_slider_generation, slider_fraction,
+        slider_generation_current, slider_protected, source_window_height_for, stepped_number,
+        text_or_placeholder, transition_in_flight, transition_policy, AppliedQueryPayloads,
+        EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan,
+        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, TransitionAction,
+        TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -5896,6 +5942,7 @@ action = "start"
             RowQueryState::Idle,
             RowQueryState::Loading,
             RowQueryState::Unavailable("query failed".into()),
+            RowQueryState::Absent,
             RowQueryState::Ready,
         ];
         for query_state in states {
@@ -5964,6 +6011,100 @@ active_value_from = "active"
                 rows[0].control
             );
         }
+    }
+
+    /// One query can drive several rows, so only the rows whose own value came
+    /// back null go unavailable, and they come back once the value does.
+    #[test]
+    fn a_row_whose_value_answers_null_is_absent_and_refuses_its_action() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.volume]
+type = "number"
+default = 0
+min = 0
+max = 100
+active_query = "volume"
+active_value_from = "volume"
+
+[field.output_mute]
+type = "action"
+action = "mute_output"
+active_action = "unmute_output"
+active_query = "mute_status"
+active_value_from = "output"
+
+[field.input_mute]
+type = "action"
+action = "mute_input"
+active_action = "unmute_input"
+active_query = "mute_status"
+active_value_from = "input"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        let row = |id: &str| rows.iter().find(|row| row.id == id).unwrap();
+        let state_of = |applied: &AppliedQueryPayloads, id: &str| {
+            absent_when_null(RowQueryState::Ready, row(id), applied)
+        };
+        let missing = AppliedQueryPayloads::seeded(
+            0,
+            vec![
+                ("volume".into(), Ok(serde_json::json!({"volume": null}))),
+                (
+                    "mute_status".into(),
+                    Ok(serde_json::json!({"output": null, "input": false})),
+                ),
+            ],
+        );
+        assert_eq!(state_of(&missing, "volume"), RowQueryState::Absent);
+        assert_eq!(state_of(&missing, "output_mute"), RowQueryState::Absent);
+        assert_eq!(state_of(&missing, "input_mute"), RowQueryState::Ready);
+        assert_eq!(
+            action_dispatch_plan(
+                &row("output_mute").control,
+                &state_of(&missing, "output_mute")
+            ),
+            None
+        );
+        assert_eq!(
+            action_dispatch_plan(
+                &row("input_mute").control,
+                &state_of(&missing, "input_mute")
+            ),
+            Some("mute_input")
+        );
+        let other_source = AppliedQueryPayloads::seeded(
+            1,
+            vec![("volume".into(), Ok(serde_json::json!({"volume": null})))],
+        );
+        assert_eq!(state_of(&other_source, "volume"), RowQueryState::Ready);
+        let mut back = missing;
+        back.record(0, "volume", &Ok(serde_json::json!({"volume": 40})));
+        back.record(
+            0,
+            "mute_status",
+            &Ok(serde_json::json!({"output": true, "input": false})),
+        );
+        for id in ["volume", "output_mute", "input_mute"] {
+            assert_eq!(state_of(&back, id), RowQueryState::Ready, "{id}");
+        }
+        assert_eq!(
+            absent_when_null(
+                RowQueryState::Unavailable("dead".into()),
+                row("volume"),
+                &AppliedQueryPayloads::seeded(
+                    0,
+                    vec![("volume".into(), Ok(serde_json::json!({"volume": null})))]
+                )
+            ),
+            RowQueryState::Unavailable("dead".into())
+        );
     }
 
     #[test]
@@ -7326,6 +7467,7 @@ mod query_state_tests {
                 RowQueryState::Loading => "loading",
                 RowQueryState::Ready => "ready",
                 RowQueryState::Unavailable(_) => "unavailable",
+                RowQueryState::Absent => "absent",
             };
             assert_eq!(actual, expected, "states: {states:?} polled: {polled}");
         }

@@ -191,6 +191,10 @@ pub(super) enum RowQueryState {
     Ready,
     /// The last sample failed or exceeded its budget.
     Unavailable(String),
+    /// The last sample succeeded but answered null for this row's value: what
+    /// the row controls does not exist, such as a sound output when none is
+    /// connected.
+    Absent,
 }
 
 pub(super) struct Row {
@@ -1208,6 +1212,25 @@ pub(super) fn retire_number_holds(
             .is_some_and(|dispatched| fresh == Some(dispatched));
         !confirmed && hold.until > now
     });
+}
+
+/// The query and path a row reads its own value from, when the row has one.
+pub(super) fn row_value_source(control: &RowControl) -> Option<(&str, Option<&str>)> {
+    match control {
+        RowControl::Number {
+            live: Some(live), ..
+        } => Some((live.query.as_str(), live.value_from.as_deref())),
+        RowControl::Action {
+            active_query: Some(query),
+            active_value_from,
+            ..
+        } => Some((query.as_str(), active_value_from.as_deref())),
+        _ => None,
+    }
+}
+
+pub(super) fn answers_absent(value: &serde_json::Value, path: Option<&str>) -> bool {
+    query_value(value, path).is_some_and(serde_json::Value::is_null)
 }
 
 fn query_flag(value: &serde_json::Value, path: Option<&str>) -> bool {

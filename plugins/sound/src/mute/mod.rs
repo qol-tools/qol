@@ -5,8 +5,8 @@ use crate::device::{Role, INPUT, OUTPUT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MuteStatus {
-    pub output: bool,
-    pub input: bool,
+    pub output: Option<bool>,
+    pub input: Option<bool>,
 }
 
 pub fn status() -> anyhow::Result<MuteStatus> {
@@ -16,10 +16,9 @@ pub fn status() -> anyhow::Result<MuteStatus> {
     })
 }
 
-fn is_muted(role: Role) -> anyhow::Result<bool> {
-    let muted = qol_audio::mute::is_muted(role.direction)
-        .with_context(|| format!("cannot read whether the {} is muted", role.noun))?;
-    Ok(muted.unwrap_or(false))
+fn is_muted(role: Role) -> anyhow::Result<Option<bool>> {
+    qol_audio::mute::is_muted(role.direction)
+        .with_context(|| format!("cannot read whether the {} is muted", role.noun))
 }
 
 pub fn set(role: Role, muted: bool) -> anyhow::Result<()> {
@@ -35,13 +34,13 @@ mod tests {
     #[test]
     fn the_status_is_an_object_the_toggles_read_by_direction() {
         let payload = serde_json::to_value(MuteStatus {
-            output: true,
-            input: false,
+            output: Some(true),
+            input: None,
         })
         .unwrap();
         assert_eq!(
             payload,
-            serde_json::json!({ "output": true, "input": false })
+            serde_json::json!({ "output": true, "input": null })
         );
     }
 }
