@@ -1,14 +1,13 @@
 use qol_color::{mix_rgb, rgba_from_rgb, with_alpha};
 use qol_theme::{
-    contrast_ratio, css, css_rgba_milli, dark_accent_preset, dark_theme,
-    dark_theme_with_accent_key, desktop_theme_preview, preset_accent_key, resolve_surface_override,
-    runtime_dark_theme, theme_for_native_key, web_theme_preview, Curve, Face, Grounds, Motion,
-    PickerSurfacePalette, TextStyle, ThemeMode, WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE,
-    DARK_SYSTEM, HEIGHT_BAND, HEIGHT_CONTROL, HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER,
-    HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW, LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM,
-    LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY, RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER,
-    STAY_BRIEF, STAY_ERROR, STAY_LONG, STAY_MESSAGE, STAY_MESSAGE_MOST, TEXT_SCALE,
-    THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
+    contrast_ratio, css, css_rgba_milli, dark_accent_preset, dark_theme, desktop_theme_preview,
+    preset_accent_key, resolve_surface_override, runtime_dark_theme, theme_for_native_key,
+    web_theme_preview, Curve, Face, Grounds, Motion, PickerSurfacePalette, TextStyle, ThemeMode,
+    WashPalette, DARK_ACCENT_PRESETS, DARK_REFERENCE, DARK_SYSTEM, HEIGHT_BAND, HEIGHT_CONTROL,
+    HEIGHT_HINT_BAR, HEIGHT_INLINE, HEIGHT_LADDER, HEIGHT_RULE_ROW, HEIGHT_SETTING_ROW,
+    LIGHT_ACCENT_PRESETS, LIGHT_REFERENCE, LIGHT_SYSTEM, LIST_ENTRY_HEIGHTS, PROD_ACCENT_KEY,
+    RADIUS_LADDER, SETTLE_INPUT, SPACE_GUTTER, SPACE_LADDER, STAY_BRIEF, STAY_ERROR, STAY_LONG,
+    STAY_MESSAGE, STAY_MESSAGE_MOST, TEXT_SCALE, THEME_COLOR_SENTINEL, WAIT_BEFORE_BUSY,
 };
 use std::{
     fs,
@@ -203,110 +202,9 @@ fn dark_css_emits_stable_token_names() {
 }
 
 #[test]
-fn plugin_lights_css_emits_component_token_names() {
-    let css = css::plugin_lights_css();
-    assert!(css.contains("    --qol-system-success-rgb: 74, 222, 128;\n"));
-    assert!(css.contains(&format!(
-        "    --qol-lights-bg-start: {};\n",
-        hex6(DARK_SYSTEM.surface_raised)
-    )));
-    assert!(css.contains(&format!(
-        "    --qol-lights-warning: {};\n",
-        hex6(DARK_SYSTEM.warning)
-    )));
-    assert!(css.contains(&format!(
-        "    --qol-lights-accent-btn-shadow: rgba({}, 0.3);\n",
-        rgb_triplet(DARK_SYSTEM.accent)
-    )));
-    assert!(css.contains("    --qol-lights-wheel-shadow: rgba(0, 0, 0, 0.5);\n"));
-    assert!(css.contains("    --qol-lights-wheel-thumb-stroke: #ffffff;\n"));
-    assert!(css.contains("    --qol-lights-wheel-brightness-floor: #0a0a0a;\n"));
-}
-
-#[test]
-fn plugin_keyremap_css_emits_component_token_names() {
-    let css = css::plugin_keyremap_css();
-    assert!(css.contains("    --qol-system-success-rgb: 74, 222, 128;\n"));
-    assert!(css.contains(&format!(
-        "    --qol-keyremap-bg-start: {};\n",
-        hex6(DARK_SYSTEM.surface_canvas)
-    )));
-    assert!(css.contains(&format!(
-        "    --qol-keyremap-accent: {};\n",
-        hex6(DARK_SYSTEM.accent)
-    )));
-    assert!(css.contains(&format!(
-        "    --qol-keyremap-accent-bg: rgba({}, 0.3);\n",
-        rgb_triplet(DARK_SYSTEM.accent)
-    )));
-    assert!(css.contains("    --qol-keyremap-shadow: rgba(0, 0, 0, 0.4);\n"));
-}
-
-#[test]
-fn web_plugin_css_emits_diffed_accent_override_blocks() {
-    let profiles = [
-        (
-            "plugin-lights",
-            css::plugin_lights_css(),
-            "--qol-lights-accent-btn",
-        ),
-        (
-            "plugin-keyremap",
-            css::plugin_keyremap_css(),
-            "--qol-keyremap-accent",
-        ),
-    ];
-
-    for preset in DARK_ACCENT_PRESETS {
-        if preset.key == PROD_ACCENT_KEY {
-            continue;
-        }
-        let theme = dark_theme_with_accent_key(preset.key);
-        let expected_rgb = rgb_triplet(theme.system.accent);
-        let expected_hex = hex6(theme.system.accent);
-
-        for (profile, css, accent_token) in &profiles {
-            let block = accent_block(css, preset.key)
-                .unwrap_or_else(|| panic!("{profile} missing {} override block", preset.key));
-            assert!(
-                block.contains(&format!("    --qol-system-accent-rgb: {expected_rgb};\n")),
-                "{profile} {} block must override system accent rgb",
-                preset.key
-            );
-            assert!(
-                block.contains(&format!("    {accent_token}: {expected_hex};\n")),
-                "{profile} {} block must override component accent token",
-                preset.key
-            );
-        }
-    }
-}
-
-#[test]
-fn web_plugin_css_skips_default_accent_override_block() {
-    for (profile, css) in [
-        ("plugin-lights", css::plugin_lights_css()),
-        ("plugin-keyremap", css::plugin_keyremap_css()),
-    ] {
-        assert!(
-            accent_block(&css, PROD_ACCENT_KEY).is_none(),
-            "{profile} must not emit an override block for default accent"
-        );
-    }
-}
-
-#[test]
 fn generated_artifacts_are_current() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifacts = [
-        (
-            "plugins/lights/ui/generated-theme-tokens.css",
-            css::plugin_lights_css(),
-        ),
-        (
-            "plugins/keyremap/ui/generated-theme-tokens.css",
-            css::plugin_keyremap_css(),
-        ),
         (
             "plugins/alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/generated-theme-tokens.js",
             css::alt_tab_cinnamon_js(),
@@ -320,89 +218,6 @@ fn generated_artifacts_are_current() {
         assert_eq!(
             actual, expected,
             "{artifact_path} must be regenerated with qol-theme-css"
-        );
-    }
-}
-
-#[test]
-fn plugin_css_profiles_exclude_tray_only_tokens() {
-    for (profile, css) in [
-        ("plugin-lights", css::plugin_lights_css()),
-        ("plugin-keyremap", css::plugin_keyremap_css()),
-    ] {
-        assert!(
-            !css.contains("--qol-tray-"),
-            "{profile} generated CSS must not include tray ramp tokens"
-        );
-        assert!(
-            !css.contains("--qol-accent-"),
-            "{profile} generated CSS must not include tray accent preset tokens"
-        );
-        assert!(
-            !css.contains("--qol-reference-"),
-            "{profile} generated CSS must not include tray reference aliases"
-        );
-    }
-}
-
-#[test]
-fn migrated_web_plugin_css_imports_generated_base() {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let migrated_plugins = [
-        (
-            "plugin-lights",
-            "plugins/lights/ui/style.css",
-            Some("rgb(var(--qol-system-success-rgb))"),
-            "var(--qol-lights-accent-btn-shadow)",
-        ),
-        (
-            "plugin-keyremap",
-            "plugins/keyremap/ui/style.css",
-            None,
-            "var(--qol-keyremap-card-bg)",
-        ),
-    ];
-
-    for (plugin, file, system_derivation, component_derivation) in migrated_plugins {
-        let plugin_css_path = workspace.join(file);
-        let plugin_css = fs::read_to_string(&plugin_css_path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", plugin_css_path.display()));
-        assert!(
-            plugin_css.starts_with("@import \"./generated-theme-tokens.css\";\n\n"),
-            "{plugin} CSS must import generated theme tokens before declarations"
-        );
-        if let Some(system_derivation) = system_derivation {
-            assert!(
-                plugin_css.contains(system_derivation),
-                "{plugin} CSS must derive matching system colors from generated theme tokens"
-            );
-        }
-        assert!(
-            plugin_css.contains(component_derivation),
-            "{plugin} CSS must derive component colors from generated theme tokens"
-        );
-    }
-}
-
-#[test]
-fn web_plugin_indexes_bootstrap_theme_accent() {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let files = [
-        ("plugin-lights", "plugins/lights/ui/index.html"),
-        ("plugin-keyremap", "plugins/keyremap/ui/index.html"),
-    ];
-
-    for (plugin, file) in files {
-        let index_path = workspace.join(file);
-        let index = fs::read_to_string(&index_path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", index_path.display()));
-        assert!(
-            index.contains("fetch('/api/theme/accent')"),
-            "{plugin} index.html must fetch current tray theme accent"
-        );
-        assert!(
-            index.contains("document.documentElement.dataset.qolAccent = body.key"),
-            "{plugin} index.html must write the accent key to the document dataset"
         );
     }
 }
@@ -424,12 +239,7 @@ fn cinnamon_extension_requires_generated_tokens() {
 fn migrated_css_and_js_have_no_raw_color_literals() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut violations = Vec::new();
-    let files = [
-        "plugins/lights/ui/style.css",
-        "plugins/lights/ui/components/hue-wheel.js",
-        "plugins/keyremap/ui/style.css",
-        "plugins/alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/extension.js",
-    ];
+    let files = ["plugins/alt-tab/shell/cinnamon/qol-alt-tab-preview-plane@qol-tools/extension.js"];
 
     for file in files {
         let path = workspace.join(file);
@@ -447,25 +257,6 @@ fn migrated_css_and_js_have_no_raw_color_literals() {
         "migrated CSS/JS must use generated tokens, not raw color literals:\n{}",
         violations.join("\n")
     );
-}
-
-fn hex6(color: u32) -> String {
-    format!("#{:06x}", color & 0x00ff_ffff)
-}
-
-fn rgb_triplet(color: u32) -> String {
-    let red = (color >> 16) & 0xff;
-    let green = (color >> 8) & 0xff;
-    let blue = color & 0xff;
-    format!("{red}, {green}, {blue}")
-}
-
-fn accent_block<'a>(css: &'a str, key: &str) -> Option<&'a str> {
-    let selector = format!(":root[data-qol-accent=\"{key}\"] {{\n");
-    let start = css.find(&selector)? + selector.len();
-    let rest = &css[start..];
-    let end = rest.find("}\n")?;
-    Some(&rest[..end])
 }
 
 fn env_lock() -> &'static Mutex<()> {
@@ -628,11 +419,7 @@ fn raw_color_scanner_allows_tokenized_and_dynamic_forms() {
 
 #[test]
 fn generated_css_tokens_are_namespaced() {
-    let profiles = [
-        ("core", css::dark_css()),
-        ("plugin-lights", css::plugin_lights_css()),
-        ("plugin-keyremap", css::plugin_keyremap_css()),
-    ];
+    let profiles = [("core", css::dark_css())];
 
     for (profile, css) in profiles {
         for line in css.lines() {

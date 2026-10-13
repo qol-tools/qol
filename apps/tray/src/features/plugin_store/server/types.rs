@@ -77,14 +77,14 @@ impl AppState {
         #[cfg(feature = "dev")] core_log_controls: Arc<
             std::sync::RwLock<HashMap<String, crate::logging::LogControl>>,
         >,
-    ) -> anyhow::Result<(Self, PathBuf)> {
+    ) -> anyhow::Result<Self> {
         let plugins_dir = PluginLoader::default_plugin_dir()?;
         let github_connect = Arc::new(crate::features::profile::sync::GitHubConnect::new(
             github_auth_service.clone(),
             sync_service.clone(),
         ));
         let state = Self {
-            plugins_dir: plugins_dir.clone(),
+            plugins_dir,
             #[cfg(feature = "dev")]
             plugin_cpu: DevPluginCpuService::start(plugin_manager.clone(), daemon.events.clone()),
             plugin_manager,
@@ -117,7 +117,7 @@ impl AppState {
                 log::error!("Failed to sync profile plugins lock on startup: {}", error);
             }
         }
-        Ok((state, plugins_dir))
+        Ok(state)
     }
 }
 
@@ -209,7 +209,6 @@ pub(super) struct InstalledPlugin {
     pub(super) loaded: bool,
     pub(super) load_error: Option<String>,
     pub(super) has_cover: bool,
-    pub(super) has_custom_ui: bool,
     pub(super) has_config: bool,
     pub(super) available_version: Option<String>,
     pub(super) update_available: bool,

@@ -53,12 +53,7 @@ fn app() -> HeadlessApp {
             "profiles_render",
             "Verify every built-in theme profile renders non-empty output.",
             || {
-                let profiles = [
-                    Profile::Core,
-                    Profile::PluginKeyremap,
-                    Profile::PluginLights,
-                    Profile::AltTabCinnamon,
-                ];
+                let profiles = [Profile::Core, Profile::AltTabCinnamon];
                 if profiles.iter().all(|profile| !render(*profile).is_empty()) {
                     return Ok(DoctorCheckResult::ok(
                         "profiles_render",
@@ -138,8 +133,6 @@ fn parse_profile(args: &mut Vec<std::ffi::OsString>) -> Result<Profile, CliError
     args.remove(0);
     match value.to_str() {
         Some("core") => Ok(Profile::Core),
-        Some("plugin-keyremap") => Ok(Profile::PluginKeyremap),
-        Some("plugin-lights") => Ok(Profile::PluginLights),
         Some("alt-tab-cinnamon") => Ok(Profile::AltTabCinnamon),
         _ => Err(CliError::Usage(usage())),
     }
@@ -174,15 +167,13 @@ fn write(profile: Profile, path: PathBuf) -> Result<(), CliError> {
 }
 
 fn usage() -> String {
-    "usage: qol-theme-css [--profile core|plugin-keyremap|plugin-lights|alt-tab-cinnamon] [--check <path> | --write <path>]"
+    "usage: qol-theme-css [--profile core|alt-tab-cinnamon] [--check <path> | --write <path>]"
         .to_string()
 }
 
 #[derive(Clone, Copy)]
 enum Profile {
     Core,
-    PluginKeyremap,
-    PluginLights,
     AltTabCinnamon,
 }
 
@@ -190,8 +181,6 @@ impl Profile {
     fn flag_hint(self) -> &'static str {
         match self {
             Self::Core => "",
-            Self::PluginKeyremap => "--profile plugin-keyremap ",
-            Self::PluginLights => "--profile plugin-lights ",
             Self::AltTabCinnamon => "--profile alt-tab-cinnamon ",
         }
     }
@@ -200,8 +189,6 @@ impl Profile {
 fn render(profile: Profile) -> String {
     match profile {
         Profile::Core => qol_theme::css::dark_css(),
-        Profile::PluginKeyremap => qol_theme::css::plugin_keyremap_css(),
-        Profile::PluginLights => qol_theme::css::plugin_lights_css(),
         Profile::AltTabCinnamon => qol_theme::css::alt_tab_cinnamon_js(),
     }
 }
