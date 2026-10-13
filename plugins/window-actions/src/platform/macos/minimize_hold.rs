@@ -7,6 +7,7 @@ const HOLD_POLL: Duration = Duration::from_millis(16);
 const LEAVE_POLLS: usize = 6;
 const HOLD_POLLS: usize = 25;
 const HOLD_REAPPLY_LIMIT: u8 = 3;
+const REAPPLY_SETTLE_POLLS: usize = 3;
 const HID_SYSTEM_STATE: i32 = 1;
 const LEFT_MOUSE_DOWN: u32 = 1;
 const RIGHT_MOUSE_DOWN: u32 = 3;
@@ -81,6 +82,7 @@ fn hold_gone_with(
 ) -> HoldOutcome {
     let mut seen_gone = false;
     let mut reapplied = 0;
+    let mut settle_polls = 0;
     let mut polls_left = leave_polls;
     while polls_left > 0 {
         polls_left -= 1;
@@ -93,11 +95,18 @@ fn hold_gone_with(
             if (probes.user_acted)() {
                 return HoldOutcome::Yielded;
             }
-            if reapplied >= HOLD_REAPPLY_LIMIT {
-                return HoldOutcome::Lost;
+            if settle_polls > 0 {
+                settle_polls -= 1;
+            } else {
+                if reapplied >= HOLD_REAPPLY_LIMIT {
+                    return HoldOutcome::Lost;
+                }
+                reapplied += 1;
+                settle_polls = REAPPLY_SETTLE_POLLS;
+                let _ = (probes.reapply)();
             }
-            reapplied += 1;
-            let _ = (probes.reapply)();
+        } else {
+            settle_polls = 0;
         }
         (probes.pause)();
     }
@@ -167,7 +176,7 @@ mod tests {
     #[test]
     fn an_app_that_keeps_coming_back_is_given_up_after_the_limit() {
         let mut states = vec![true];
-        states.extend(std::iter::repeat_n(false, 8));
+        states.extend(std::iter::repeat_n(false, 20));
         assert_eq!(
             run(&states, false),
             (HoldOutcome::Lost, usize::from(HOLD_REAPPLY_LIMIT))
