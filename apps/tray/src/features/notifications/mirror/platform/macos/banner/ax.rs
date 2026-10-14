@@ -15,6 +15,8 @@ const AX_SUCCESS: i32 = 0;
 const AX_VALUE_CG_POINT: u32 = 1;
 const CREATED: &str = "AXCreated";
 const WINDOW_CREATED: &str = "AXWindowCreated";
+const AX_PRESS: &str = "AXPress";
+const PRESS_DESCENT_LIMIT: usize = 10;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -29,6 +31,7 @@ extern "C" {
         attribute: CFStringRef,
         value: CFTypeRef,
     ) -> i32;
+    fn AXUIElementPerformAction(element: CFTypeRef, action: CFStringRef) -> i32;
     fn AXValueCreate(kind: u32, value: *const c_void) -> CFTypeRef;
     fn AXObserverCreate(pid: i32, callback: ObserverCallback, out: *mut CFTypeRef) -> i32;
     fn AXObserverAddNotification(
@@ -77,6 +80,56 @@ impl Element {
             return Some(self.clone());
         }
         self.attribute("AXWindow").map(Element)
+    }
+
+    pub(super) fn windows(&self) -> Vec<Element> {
+        let Some(windows) = self.attribute("AXWindows") else {
+            return Vec::new();
+        };
+        if windows.type_of() != CFArray::<CFType>::type_id() {
+            return Vec::new();
+        }
+        let array: CFArray<CFType> =
+            unsafe { CFArray::wrap_under_get_rule(windows.as_CFTypeRef() as CFArrayRef) };
+        array.iter().map(|child| Element(child.clone())).collect()
+    }
+
+    pub(super) fn application(pid: i32) -> Option<Self> {
+        let raw = unsafe { AXUIElementCreateApplication(pid) };
+        (!raw.is_null()).then(|| Self(unsafe { CFType::wrap_under_create_rule(raw) }))
+    }
+
+    pub(super) fn press_descendant(&self) -> Result<()> {
+        if self.press_descendant_at(0) {
+            return Ok(());
+        }
+        bail!("no AXPress-capable descendant found")
+    }
+
+    fn press_descendant_at(&self, depth: usize) -> bool {
+        if self.perform_action(AX_PRESS).is_ok() {
+            return true;
+        }
+        if depth >= PRESS_DESCENT_LIMIT {
+            return false;
+        }
+        for child in self.children() {
+            if child.press_descendant_at(depth + 1) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn perform_action(&self, action: &str) -> Result<()> {
+        let name = CFString::new(action);
+        let status =
+            unsafe { AXUIElementPerformAction(self.0.as_CFTypeRef(), name.as_concrete_TypeRef()) };
+        if status == AX_SUCCESS {
+            Ok(())
+        } else {
+            bail!("performing {action} failed with AX error {status}")
+        }
     }
 
     pub(super) fn move_to(&self, x: f64, y: f64) -> Result<()> {

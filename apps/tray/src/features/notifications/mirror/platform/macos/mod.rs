@@ -1,6 +1,7 @@
 mod app_name;
 mod banner;
 mod record;
+mod retained;
 mod signal;
 mod store;
 mod toast;
@@ -9,11 +10,23 @@ use std::io::{PipeReader, PipeWriter};
 use std::path::Path;
 use std::sync::Mutex;
 
-use super::super::MirrorAccess;
+use super::super::{ActivateOutcome, MirrorAccess};
 use signal::{Signal, Wake};
 use store::{Cursor, Session};
 
 static MIRROR: Mutex<Option<PipeWriter>> = Mutex::new(None);
+
+pub(in super::super) fn activate(id: &str) -> anyhow::Result<ActivateOutcome> {
+    Ok(match retained::activate(id)? {
+        retained::Outcome::Pressed => ActivateOutcome::Pressed,
+        retained::Outcome::Activated => ActivateOutcome::Activated,
+        retained::Outcome::Missing => ActivateOutcome::Missing,
+    })
+}
+
+pub(in super::super) fn is_safe_banner_id(id: &str) -> bool {
+    retained::is_safe_id(id)
+}
 
 pub(in super::super) fn sync(enabled: bool) {
     let mut running = MIRROR
@@ -98,7 +111,19 @@ fn show_rows(rows: Vec<store::Row>, mut cursor: Cursor) -> Cursor {
             if banner::claimed(&notification.title, &notification.body) {
                 continue;
             }
-            toast::show(&app_name::display_name(&notification.app_id), &notification);
+            let retained_id = retained::next_id();
+            retained::insert(
+                &retained_id,
+                retained::Entry {
+                    app: retained::AppRef::BundleId(notification.app_id.clone()),
+                    matcher: None,
+                },
+            );
+            toast::show(
+                &app_name::display_name(&notification.app_id),
+                &notification,
+                Some(&retained_id),
+            );
         }
     }
     cursor

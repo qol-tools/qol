@@ -7,7 +7,7 @@ pub(in crate::settings_surface) fn show_toast(
     _action: Option<(&str, &str)>,
     _artifact: Option<&str>,
     _layout: Option<qol_runtime::protocol::NotificationLayout>,
-    _activate: Option<(&str, &qol_runtime::protocol::DaemonRequest)>,
+    _activate: Option<super::super::ToastActivate<'_>>,
 ) -> anyhow::Result<bool> {
     Ok(false)
 }

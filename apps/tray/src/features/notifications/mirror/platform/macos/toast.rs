@@ -6,8 +6,10 @@ pub(super) struct Mirrored {
     pub(super) body: String,
 }
 
-pub(super) fn show(app_name: &str, notification: &Mirrored) {
+pub(super) fn show(app_name: &str, notification: &Mirrored, mirror_banner_id: Option<&str>) {
     let (title, body) = toast_text(app_name, notification);
+    let activate =
+        mirror_banner_id.map(|id| crate::settings_surface::ToastActivate::MirrorBanner { id });
     let shown = crate::settings_surface::show_toast(
         crate::settings_surface::ToastSource {
             group: &notification.app_id,
@@ -23,7 +25,7 @@ pub(super) fn show(app_name: &str, notification: &Mirrored) {
             style: Some("compact".to_string()),
             ..Default::default()
         }),
-        None,
+        activate,
     );
     match shown {
         Ok(true) => {}

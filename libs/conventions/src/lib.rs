@@ -107,6 +107,10 @@ pub mod api_routes {
     pub fn plugin_query(plugin_id: &str, query: &str) -> String {
         format!("/api/plugins/{plugin_id}/queries/{query}")
     }
+
+    pub fn notification_mirror_activate(id: &str) -> String {
+        format!("/api/notifications/mirror/activate/{id}")
+    }
 }
 
 pub mod dev_routes {
@@ -350,6 +354,32 @@ mod tests {
     #[test]
     fn base_url_uses_the_default_port() {
         assert_eq!(local_base_url(), "http://127.0.0.1:42700");
+    }
+
+    #[test]
+    fn api_route_builders_produce_the_expected_shapes() {
+        let cases = [
+            (
+                api_routes::plugin_action("qol-shot", "capture"),
+                "/api/plugins/qol-shot/actions/capture",
+            ),
+            (
+                api_routes::plugin_query("qol-shot", "latest"),
+                "/api/plugins/qol-shot/queries/latest",
+            ),
+            (
+                api_routes::plugin_settings("qol-shot"),
+                "/api/plugins/qol-shot/settings",
+            ),
+            (
+                api_routes::notification_mirror_activate("mb-0000000000000001"),
+                "/api/notifications/mirror/activate/mb-0000000000000001",
+            ),
+            (api_routes::shortcut("abc"), "/api/shortcuts/abc"),
+        ];
+        for (actual, expected) in cases {
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
