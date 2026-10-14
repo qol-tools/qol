@@ -136,9 +136,9 @@ fn required_binaries_check() -> Result<DoctorCheckResult> {
     let Some(path) = inspection.kitten else {
         return Ok(DoctorCheckResult::fail(
             CHECK_IDS[2],
-            "The `kitten` remote-control client is unavailable on PATH.",
+            "The `kitten` remote-control client is not on PATH or in a standard Kitty install location.",
         )
-        .with_fix("Install Kitty and make its `kitten` executable available on PATH.")
+        .with_fix("Install Kitty, or make its `kitten` executable available on PATH.")
         .with_details(details));
     };
     Ok(DoctorCheckResult::ok(
@@ -165,7 +165,7 @@ fn external_services_check() -> Result<DoctorCheckResult> {
     }
     if inspection.kitten.is_none() {
         return Ok(external_services_result(Err(
-            "The kitten remote-control client is unavailable on PATH".to_string(),
+            "The kitten remote-control client is not on PATH or in a standard Kitty install location".to_string(),
         )));
     }
     let inventory = qol_terminal_sessions::kitty::KittyBackend::default()

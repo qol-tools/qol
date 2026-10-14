@@ -5,6 +5,6 @@ pub(super) fn inspect() -> PlatformInspection {
         name: "macOS",
         supported: true,
         console: false,
-        kitten: super::unix::executable_on_path("kitten"),
+        kitten: qol_terminal_sessions::kitty::locate_kitten(),
     }
 }
