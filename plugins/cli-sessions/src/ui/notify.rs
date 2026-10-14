@@ -2,7 +2,7 @@ use crate::host::project_of;
 use crate::session::status::Status;
 use crate::session::tool::{is_generic, Tool};
 use qol_runtime::protocol::{DaemonRequest, NotificationLayout};
-use qol_terminal_sessions::park::ParkRecord;
+use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::SessionId;
 
 pub const FOCUS_ACTION: &str = "focus";
@@ -29,11 +29,28 @@ impl Notice {
         }
     }
 
+    pub fn for_park(record: &ParkRecord) -> Self {
+        if record.state == ParkState::Failed {
+            Self::failed_park(record)
+        } else {
+            Self::finished_park(record)
+        }
+    }
+
     /// The final message of a woken park whose tab closed; a click reopens the conversation.
     pub fn finished_park(record: &ParkRecord) -> Self {
-        let report = record.report.as_deref().unwrap_or_default().trim();
-        let mut body: String = report.chars().take(REPORT_MAX_CHARS).collect();
-        if body.len() < report.len() {
+        Self::park_notice(record, record.report.as_deref().unwrap_or_default())
+    }
+
+    pub fn failed_park(record: &ParkRecord) -> Self {
+        let reason = record.detail.as_deref().unwrap_or("no reason was recorded");
+        Self::park_notice(record, &format!("Could not resume: {reason}"))
+    }
+
+    fn park_notice(record: &ParkRecord, text: &str) -> Self {
+        let text = text.trim();
+        let mut body: String = text.chars().take(REPORT_MAX_CHARS).collect();
+        if body.len() < text.len() {
             body.push('\u{2026}');
         }
         Self {

@@ -200,6 +200,11 @@ pub fn unpark(id: &str) -> Result<String> {
         Ok(session) => session,
         Err(error) => {
             store.release(id);
+            if retry {
+                record.detail = Some(format!("{error:#}"));
+                record.notified = false;
+                store.record(&record)?;
+            }
             return Err(error);
         }
     };

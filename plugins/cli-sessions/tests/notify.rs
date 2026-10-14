@@ -94,3 +94,37 @@ fn a_finished_park_notice_falls_back_to_the_project_and_caps_the_report() {
     assert!(notice.body.ends_with('\u{2026}'));
     assert_eq!(notice.activate().input["park"], "park-1-2");
 }
+
+#[test]
+fn a_park_that_could_not_resume_says_why_and_retries_on_click() {
+    let record = qol_terminal_sessions::park::ParkRecord {
+        id: "park-3-4".to_owned(),
+        tool: "claude".to_owned(),
+        cwd: "/git/qol-monorepo".to_owned(),
+        external_id: "abc".to_owned(),
+        model: None,
+        effort: None,
+        title: Some("Mac bugs".to_owned()),
+        permission_mode: None,
+        claude_config_dir: Some("/Users/me/.claude-work".to_owned()),
+        session: String::new(),
+        command: vec![],
+        created_at: 0,
+        state: qol_terminal_sessions::park::ParkState::Failed,
+        runner_pid: None,
+        runner_identity: None,
+        caller_closed: true,
+        exit_code: Some(0),
+        resumed_session: None,
+        detail: Some("secret `claude-personal` cannot be read".to_owned()),
+        report: None,
+        notified: false,
+    };
+    let notice = Notice::for_park(&record);
+    assert_eq!(notice.title, "Mac bugs");
+    assert_eq!(
+        notice.body,
+        "Could not resume: secret `claude-personal` cannot be read"
+    );
+    assert_eq!(notice.activate().input["park"], "park-3-4");
+}
